@@ -59,8 +59,8 @@ pub use bootstrap::run_render_loop_current_thread_with_terminals;
 pub use bootstrap::{build_render_event_loop, run_render_loop, run_render_loop_current_thread};
 pub(crate) use lifecycle::PopupCommit;
 pub use startup::{
-    InitialWindowLifetime, InitialWindowReceiver, InitialWindowReply, InitialWindowSize,
-    RenderLoopError, RenderLoopExit,
+    InitialWindowLifetime, InitialWindowPreparation, InitialWindowReceiver, InitialWindowReply,
+    InitialWindowSize, RenderLoopError, RenderLoopExit,
 };
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{

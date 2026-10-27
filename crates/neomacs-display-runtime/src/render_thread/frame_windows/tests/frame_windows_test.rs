@@ -463,6 +463,7 @@ fn suspended_surface_cannot_retain_a_drawable_present_mapping() {
 #[test]
 fn zero_size_observation_stays_suspended_after_scale_refresh() {
     let mut window = GuiFrameWindowState {
+        visibility: crate::thread_comm::WindowVisibility::Visible,
         pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
             width: 800,
@@ -1313,6 +1314,48 @@ fn clear_primary_mapping_removes_adopted_primary_identity() {
 // =======================================================================
 
 #[test]
+fn primary_visibility_survives_pending_identity_adoption_and_detachment() {
+    let mut mgr = GuiFrameWindowManager::new();
+    mgr.set_primary_pending(GuiFrameWindowState {
+        visibility: WindowVisibility::Visible,
+        pending_scale_factor: None,
+        lifecycle: FrameLifecycle::Pending {
+            width: 800,
+            height: 600,
+            scale_factor: 1.0,
+            mouse_hidden_for_typing: false,
+            ime_enabled: false,
+            last_ime_cursor_area: None,
+            chrome: Default::default(),
+            geometry_hints: None,
+        },
+        render: GuiFrameRenderState::new_without_device(
+            42,
+            false,
+            neomacs_display_protocol::frame_time::observe_platform_now(),
+        ),
+    });
+    mgr.adopt_primary_frame_id(42);
+
+    // A visibility command can arrive before a native window exists. Its
+    // intent belongs to the logical frame, independently of native ownership.
+    assert!(mgr.set_visibility(42, WindowVisibility::Invisible));
+    let mut detached = mgr.take_primary_window().expect("adopted primary state");
+    assert_eq!(detached.visibility, WindowVisibility::Invisible);
+    assert!(detached.window().is_none());
+
+    detached.set_visibility(WindowVisibility::Iconified);
+    mgr.clear_primary_mapping();
+    mgr.set_primary_pending(detached);
+    mgr.adopt_primary_frame_id(42);
+
+    let primary = mgr.get(42).expect("restored primary state");
+    assert_eq!(primary.visibility, WindowVisibility::Iconified);
+    assert_eq!(primary.content_size(), (800, 600));
+    assert!(primary.window().is_none());
+}
+
+#[test]
 fn request_create_adds_to_pending() {
     let mut mgr = GuiFrameWindowManager::new();
     mgr.request_create(
@@ -1321,6 +1364,7 @@ fn request_create_adds_to_pending() {
         600,
         "Test Window".to_string(),
         default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates.len(), 1);
@@ -1339,6 +1383,7 @@ fn request_create_multiple_preserves_order() {
         600,
         "Window 1".to_string(),
         default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
     );
     mgr.request_create(
         2,
@@ -1346,6 +1391,7 @@ fn request_create_multiple_preserves_order() {
         768,
         "Window 2".to_string(),
         default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
     );
     mgr.request_create(
         3,
@@ -1353,6 +1399,7 @@ fn request_create_multiple_preserves_order() {
         1080,
         "Window 3".to_string(),
         default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates.len(), 3);
@@ -1364,7 +1411,14 @@ fn request_create_multiple_preserves_order() {
 #[test]
 fn request_create_does_not_modify_windows_map() {
     let mut mgr = GuiFrameWindowManager::new();
-    mgr.request_create(1, 800, 600, "Test".to_string(), default_geometry_hints());
+    mgr.request_create(
+        1,
+        800,
+        600,
+        "Test".to_string(),
+        default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
+    );
 
     // The window should NOT be in the windows map yet —
     // only in the pending queue until process_creates runs
@@ -1375,13 +1429,21 @@ fn request_create_does_not_modify_windows_map() {
 #[test]
 fn request_create_allows_duplicate_frame_ids() {
     let mut mgr = GuiFrameWindowManager::new();
-    mgr.request_create(1, 800, 600, "First".to_string(), default_geometry_hints());
+    mgr.request_create(
+        1,
+        800,
+        600,
+        "First".to_string(),
+        default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
+    );
     mgr.request_create(
         1,
         1024,
         768,
         "Duplicate".to_string(),
         default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
     );
 
     // Both are queued (process_creates will skip duplicates)
@@ -1391,7 +1453,14 @@ fn request_create_allows_duplicate_frame_ids() {
 #[test]
 fn request_create_zero_dimensions() {
     let mut mgr = GuiFrameWindowManager::new();
-    mgr.request_create(1, 0, 0, "Zero".to_string(), default_geometry_hints());
+    mgr.request_create(
+        1,
+        0,
+        0,
+        "Zero".to_string(),
+        default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
+    );
 
     assert_eq!(mgr.pending_creates.len(), 1);
     assert_eq!(mgr.pending_creates[0].width, 0);
@@ -1401,7 +1470,14 @@ fn request_create_zero_dimensions() {
 #[test]
 fn request_create_empty_title() {
     let mut mgr = GuiFrameWindowManager::new();
-    mgr.request_create(1, 800, 600, String::new(), default_geometry_hints());
+    mgr.request_create(
+        1,
+        800,
+        600,
+        String::new(),
+        default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
+    );
 
     assert_eq!(mgr.pending_creates[0].title, "");
 }
@@ -1416,6 +1492,7 @@ fn request_create_large_frame_id() {
         600,
         "Max ID".to_string(),
         default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
     );
 
     assert_eq!(mgr.pending_creates[0].emacs_frame_id, large_id);
@@ -1553,6 +1630,7 @@ fn pending_window_stores_all_fields() {
         height: 1080,
         title: "My Emacs Frame".to_string(),
         geometry_hints: default_geometry_hints(),
+        visibility: WindowVisibility::Visible,
     };
 
     assert_eq!(pw.emacs_frame_id, 123);
@@ -1569,6 +1647,7 @@ fn pending_window_unicode_title() {
         height: 600,
         title: "Emacs \u{2014} \u{1F680} Neomacs".to_string(),
         geometry_hints: default_geometry_hints(),
+        visibility: WindowVisibility::Visible,
     };
 
     assert!(pw.title.contains('\u{2014}')); // em dash
@@ -1583,8 +1662,22 @@ fn pending_window_unicode_title() {
 fn create_and_destroy_queues_are_independent() {
     let mut mgr = GuiFrameWindowManager::new();
 
-    mgr.request_create(1, 800, 600, "Win1".to_string(), default_geometry_hints());
-    mgr.request_create(2, 1024, 768, "Win2".to_string(), default_geometry_hints());
+    mgr.request_create(
+        1,
+        800,
+        600,
+        "Win1".to_string(),
+        default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
+    );
+    mgr.request_create(
+        2,
+        1024,
+        768,
+        "Win2".to_string(),
+        default_geometry_hints(),
+        crate::thread_comm::WindowVisibility::Visible,
+    );
     mgr.request_destroy(3);
     mgr.request_destroy(4);
 
@@ -1671,6 +1764,7 @@ fn many_pending_creates() {
             600,
             format!("Window {}", i),
             default_geometry_hints(),
+            crate::thread_comm::WindowVisibility::Visible,
         );
     }
     assert_eq!(mgr.pending_creates.len(), 1000);

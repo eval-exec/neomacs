@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 #[test]
@@ -69,6 +69,35 @@ fn caught_frame_creation_error_allows_normal_initial_frame_creation() {
     }
 }
 
+#[test]
+fn gnu_invisible_initial_frame_stays_unmapped_until_made_visible() {
+    check_case(
+        GuiBackend::LinuxX11,
+        Editor::Gnu,
+        StartupCase::InitiallyInvisible,
+    );
+}
+
+#[test]
+fn x11_invisible_initial_frame_stays_unmapped_until_made_visible() {
+    check_case(
+        GuiBackend::LinuxX11,
+        Editor::Neomacs,
+        StartupCase::InitiallyInvisible,
+    );
+}
+
+#[test]
+fn retiring_raw_invisible_frame_preserves_initial_window_readiness() {
+    for editor in [Editor::Gnu, Editor::Neomacs] {
+        check_case(
+            GuiBackend::LinuxX11,
+            editor,
+            StartupCase::RetireRawInvisibleBeforeInitial,
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Editor {
     Gnu,
@@ -82,6 +111,8 @@ enum StartupCase {
     ObserveEarlyInit,
     InvalidInitialFrame,
     RecoverableFrameError,
+    InitiallyInvisible,
+    RetireRawInvisibleBeforeInitial,
 }
 
 fn check_startup(backend: GuiBackend, editor: Editor) {
@@ -105,7 +136,16 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
     );
     let temporary = root.join("tmp");
     let init = temporary.join(&identity);
-    let artifacts = root.join("target/neomacs-gui-tests").join(&identity);
+    let artifacts = if matches!(
+        case,
+        StartupCase::InitiallyInvisible
+            | StartupCase::RetireRawInvisibleBeforeInitial
+            | StartupCase::InvalidInitialFrame
+    ) {
+        temporary.join("neomacs-gui-tests").join(&identity)
+    } else {
+        root.join("target/neomacs-gui-tests").join(&identity)
+    };
     fs::create_dir_all(&init).unwrap();
     fs::create_dir_all(&artifacts).unwrap();
     let fixture = root.join("crates/neomacs-gui-tests/fixtures/issue-417-startup");
@@ -114,7 +154,11 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
     }
     let trace = artifacts.join("startup-trace.json");
     let ready = artifacts.join("early-init-ready.json");
+    let invalid_frame_ready = artifacts.join("invalid-frame-ready.json");
     let release = temporary.join(format!("{identity}.release"));
+    let invisible_ready = artifacts.join("invisible-initial-ready.json");
+    let visible_ready = artifacts.join("visible-initial-ready.json");
+    let visible_ack = temporary.join(format!("{identity}.visible-ack"));
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .unwrap();
@@ -154,13 +198,37 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         StartupCase::ObserveEarlyInit => plan
             .with_env("NEOMACS_ISSUE_417_EARLY_READY", ready.to_string_lossy())
             .with_env("NEOMACS_ISSUE_417_EARLY_RELEASE", release.to_string_lossy()),
-        StartupCase::InvalidInitialFrame => {
-            plan.with_env("NEOMACS_ISSUE_417_INVALID_INITIAL_FRAME", "1")
-        }
+        StartupCase::InvalidInitialFrame => plan
+            .with_env("NEOMACS_ISSUE_417_INVALID_INITIAL_FRAME", "1")
+            .with_env(
+                "NEOMACS_ISSUE_417_INVALID_FRAME_READY",
+                invalid_frame_ready.to_string_lossy(),
+            ),
         StartupCase::RecoverableFrameError => {
             plan.with_env("NEOMACS_ISSUE_417_RECOVERABLE_FRAME_ERROR", "1")
         }
+        StartupCase::InitiallyInvisible | StartupCase::RetireRawInvisibleBeforeInitial => plan
+            .with_env("NEOMACS_ISSUE_417_INVISIBLE_INITIAL", "1")
+            .with_env(
+                "NEOMACS_ISSUE_417_INVISIBLE_READY",
+                invisible_ready.to_string_lossy(),
+            )
+            .with_env(
+                "NEOMACS_ISSUE_417_INVISIBLE_RELEASE",
+                release.to_string_lossy(),
+            )
+            .with_env(
+                "NEOMACS_ISSUE_417_VISIBLE_READY",
+                visible_ready.to_string_lossy(),
+            )
+            .with_env(
+                "NEOMACS_ISSUE_417_VISIBLE_ACK",
+                visible_ack.to_string_lossy(),
+            ),
     };
+    if matches!(case, StartupCase::RetireRawInvisibleBeforeInitial) {
+        plan = plan.with_env("NEOMACS_ISSUE_417_RETIRE_RAW_INVISIBLE", "1");
+    }
     let result = match case {
         StartupCase::ObserveEarlyInit => {
             run_at_early_init_barrier(plan, session.env(), &ready, &release)
@@ -168,7 +236,19 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         StartupCase::Complete | StartupCase::EarlyExit(_) | StartupCase::RecoverableFrameError => {
             run(plan)
         }
-        StartupCase::InvalidInitialFrame => run_with_timeout(plan, Duration::from_secs(10)),
+        StartupCase::InvalidInitialFrame => {
+            run_invalid_initial_frame_with_prompt_exit(plan, &invalid_frame_ready)
+        }
+        StartupCase::InitiallyInvisible | StartupCase::RetireRawInvisibleBeforeInitial => {
+            run_at_invisible_initial_frame_barrier(
+                plan,
+                session.env(),
+                &invisible_ready,
+                &release,
+                &visible_ready,
+                &visible_ack,
+            )
+        }
     };
     assert!(!result.timed_out, "{result:#?}");
     match case {
@@ -178,7 +258,9 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         ),
         StartupCase::Complete
         | StartupCase::ObserveEarlyInit
-        | StartupCase::RecoverableFrameError => {
+        | StartupCase::RecoverableFrameError
+        | StartupCase::InitiallyInvisible
+        | StartupCase::RetireRawInvisibleBeforeInitial => {
             assert_eq!(result.exit_code, Some(0), "{result:#?}")
         }
         StartupCase::EarlyExit(status) => {
@@ -192,7 +274,10 @@ fn check_case(backend: GuiBackend, editor: Editor, case: StartupCase) {
         .unwrap();
     eprintln!("startup trace {}: {events:#?}", trace.display());
     match case {
-        StartupCase::Complete | StartupCase::ObserveEarlyInit => assert_lifecycle(&events),
+        StartupCase::Complete
+        | StartupCase::ObserveEarlyInit
+        | StartupCase::InitiallyInvisible
+        | StartupCase::RetireRawInvisibleBeforeInitial => assert_lifecycle(&events),
         StartupCase::RecoverableFrameError => {
             assert_early_state(&events);
             let caught = &events[2];
@@ -234,6 +319,65 @@ fn run_with_timeout(plan: GuiTestPlan, timeout: Duration) -> GuiRunResult {
         GuiRunOptions::with_timeout(timeout),
     )
     .unwrap()
+}
+
+/// Cold terminal preload is outside the constructor's prompt-failure budget.
+fn run_invalid_initial_frame_with_prompt_exit(plan: GuiTestPlan, ready: &Path) -> GuiRunResult {
+    const STARTUP_BUDGET: Duration = Duration::from_secs(45);
+    const EXIT_BUDGET: Duration = Duration::from_secs(5);
+    thread::scope(|scope| {
+        let deadline = Instant::now() + STARTUP_BUDGET;
+        let runner = scope.spawn(move || {
+            let result = run_with_timeout(plan, STARTUP_BUDGET);
+            (SystemTime::now(), result)
+        });
+        let observation: Value = loop {
+            // The invalid constructor can fail before the observer is
+            // scheduled again, so accept its atomically published marker
+            // even when the owned runner has already finished.
+            if let Ok(contents) = fs::read(ready) {
+                break serde_json::from_slice(&contents).unwrap();
+            }
+            assert!(
+                !runner.is_finished(),
+                "editor exited before its invalid frame construction marker: {ready:?}"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "editor did not reach invalid frame construction: {ready:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        let events: Vec<Value> = serde_json::from_value(observation["events"].clone()).unwrap();
+        assert_early_state(&events);
+        assert_eq!(
+            events.len(),
+            2,
+            "unexpected pre-construction trace: {events:#?}"
+        );
+        assert_eq!(events[1]["tag"], "before-init");
+        assert_eq!(events[1]["selected_kind"], "tty");
+        assert_eq!(events[1]["frame_kinds"], json!(["tty"]));
+        observation["pid"].as_u64().expect("owned editor PID");
+
+        // The atomic file's timestamp also covers a descheduled observer:
+        // starting five seconds only when Rust notices the file could hide
+        // a slow exit that had already completed by then.
+        let published = fs::metadata(ready).unwrap().modified().unwrap();
+        while !runner.is_finished() {
+            assert!(
+                published.elapsed().unwrap() < EXIT_BUDGET,
+                "invalid initial frame did not terminate within {EXIT_BUDGET:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let (finished, result) = runner.join().expect("owned invalid-frame runner");
+        assert!(
+            finished.duration_since(published).unwrap() <= EXIT_BUDGET,
+            "invalid initial frame did not terminate promptly: {result:#?}"
+        );
+        result
+    })
 }
 
 struct ReleaseEarlyInit(PathBuf);
@@ -291,6 +435,130 @@ fn run_at_early_init_barrier(
             "unexpected owned window: {found:?}"
         );
         fs::write(release, b"release\n").unwrap();
+        runner.join().expect("owned GUI runner")
+    })
+}
+
+/// Observe actual X11 mapping while Lisp is paused after initialization.
+/// Logical invisibility alone cannot detect a prematurely exposed native window.
+fn run_at_invisible_initial_frame_barrier(
+    plan: GuiTestPlan,
+    display_env: &[(String, String)],
+    ready: &Path,
+    release: &Path,
+    visible_ready: &Path,
+    visible_ack: &Path,
+) -> GuiRunResult {
+    const BUDGET: Duration = Duration::from_secs(45);
+    thread::scope(|scope| {
+        // The first observation includes cold editor initialization. Share
+        // the owned process budget rather than imposing a shorter startup
+        // deadline that can expire before a valid after-init observation.
+        let deadline = Instant::now() + BUDGET;
+        let runner = scope.spawn(move || run_with_timeout(plan, BUDGET));
+        let _release_on_exit = ReleaseEarlyInit(release.to_owned());
+        let _acknowledge_on_exit = ReleaseEarlyInit(visible_ack.to_owned());
+        let read_observation = |file: &Path| {
+            loop {
+                assert!(
+                    !runner.is_finished(),
+                    "editor exited before barrier {file:?}"
+                );
+                if let Ok(contents) = fs::read(file) {
+                    break serde_json::from_slice::<Value>(&contents).unwrap();
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "startup barrier timed out: {file:?}"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let hidden = read_observation(ready);
+        assert_eq!(hidden["selected_kind"], "gui", "{hidden}");
+        assert_eq!(hidden["logical_visibility"], "nil", "{hidden}");
+        let pid = hidden["pid"]
+            .as_u64()
+            .expect("owned editor PID")
+            .to_string();
+        let tool = |arguments: &[&str]| {
+            Command::new("xdotool")
+                .args(arguments)
+                .envs(display_env.iter().cloned())
+                .env("TMPDIR", neomacs_infra::workspace_root().join("tmp"))
+                .output()
+                .expect("xdotool is required for the initial-frame mapping probe")
+        };
+        let display = tool(&["getdisplaygeometry"]);
+        assert!(display.status.success(), "display probe: {display:?}");
+
+        // Permit either an allocated unmapped window or deferred allocation.
+        // Wait for native startup to reach the window before inspecting it;
+        // otherwise a fast probe could miss the erroneous asynchronous mapping.
+        let allocation_deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let owned = tool(&["search", "--pid", &pid]);
+            assert!(
+                matches!(owned.status.code(), Some(0 | 1)),
+                "window probe: {owned:?}"
+            );
+            if owned.status.success() || Instant::now() >= allocation_deadline {
+                break;
+            }
+            assert!(!runner.is_finished(), "editor exited while invisible");
+            thread::sleep(Duration::from_millis(20));
+        }
+        let observation_deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            assert!(
+                !runner.is_finished(),
+                "editor exited while observing its invisible frame"
+            );
+            let mapped = tool(&["search", "--onlyvisible", "--pid", &pid]);
+            assert_eq!(
+                mapped.status.code(),
+                Some(1),
+                "initial-frame-alist visibility nil exposed a native window: {mapped:?}; {hidden}"
+            );
+            assert!(
+                mapped.stdout.is_empty(),
+                "unexpected visible window: {mapped:?}"
+            );
+            if Instant::now() >= observation_deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        fs::write(release, b"release\n").unwrap();
+        let shown = read_observation(visible_ready);
+        assert_eq!(shown["pid"], hidden["pid"], "{shown}");
+        assert_eq!(shown["logical_visibility"], "t", "{shown}");
+        let mapping_deadline = Instant::now() + Duration::from_secs(8);
+        let mapped = loop {
+            let mapped = tool(&["search", "--onlyvisible", "--pid", &pid]);
+            if mapped.status.success() && !mapped.stdout.is_empty() {
+                break mapped;
+            }
+            assert!(
+                !runner.is_finished(),
+                "editor exited before mapping its frame"
+            );
+            assert!(
+                Instant::now() < mapping_deadline,
+                "frame did not map after make-frame-visible: {mapped:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        fs::write(
+            ready.with_file_name("native-visibility-observation.json"),
+            json!({"pid": hidden["pid"], "initial_logical_visibility": "nil",
+                   "initial_native_visible": false, "shown_logical_visibility": "t",
+                   "shown_native_windows": String::from_utf8_lossy(&mapped.stdout)})
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(visible_ack, b"observed\n").unwrap();
         runner.join().expect("owned GUI runner")
     })
 }

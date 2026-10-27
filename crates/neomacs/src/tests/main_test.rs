@@ -2353,6 +2353,8 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
             width: 960,
             height: 640,
             title: LispString::from_utf8("Neomacs"),
+            visibility: FrameVisibility::Visible,
+            decorated: true,
             geometry_hints: GuiFrameGeometryHints {
                 base_width: 24,
                 base_height: 16,
@@ -2433,6 +2435,8 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
             width: 960,
             height: 640,
             title: LispString::from_utf8("Neomacs"),
+            visibility: FrameVisibility::Visible,
+            decorated: true,
             geometry_hints: GuiFrameGeometryHints {
                 base_width: 24,
                 base_height: 16,
@@ -3575,6 +3579,8 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
             width: 1068,
             height: 1386,
             title: LispString::from_utf8("Neomacs"),
+            visibility: FrameVisibility::Visible,
+            decorated: true,
             geometry_hints: GuiFrameGeometryHints {
                 base_width: 29,
                 base_height: 31,

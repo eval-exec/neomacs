@@ -1,6 +1,6 @@
 use super::*;
 use crate::emacs_core::display_host::InitialGuiFrameDefaults;
-use crate::window::{FrameDisplayIdentity, FrameId};
+use crate::window::{FrameDisplayIdentity, FrameId, FrameVisibility};
 use neomacs_display_protocol::{GraphicalBackend, GraphicalDisplayIdentity};
 
 fn initial_host() -> RecordingDisplayHost {
@@ -90,6 +90,8 @@ fn raw_visible_initial_frame_finishes_without_make_frame_wrapper() {
     assert_eq!(finished[0].frame_id, frame.id);
     assert_eq!((finished[0].width, finished[0].height), (745, 680));
     assert_eq!(finished[0].geometry_hints, frame.gui_geometry_hints());
+    assert_eq!(finished[0].visibility, FrameVisibility::Visible);
+    assert!(finished[0].decorated);
     assert_eq!(frame.char_height, 18.0);
 }
 
@@ -133,6 +135,10 @@ fn frame_creation_finish_observes_final_lisp_dimensions() {
         (frame.width, frame.height)
     );
     assert_eq!(finished[0].geometry_hints, frame.gui_geometry_hints());
+    // Geometry completion must retain the original invisible request; it
+    // does not authorize the native backend to expose this logical frame.
+    assert_eq!(finished[0].visibility, FrameVisibility::Invisible);
+    assert!(finished[0].decorated);
 }
 
 #[test]

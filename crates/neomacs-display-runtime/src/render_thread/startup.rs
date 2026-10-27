@@ -27,14 +27,23 @@ impl InitialWindowSize {
     }
 }
 
+/// Final logical intent for a native window that has not been allocated yet.
+/// Geometry observations may change size without resetting visibility or chrome.
+#[derive(Clone, Copy, Debug)]
+pub struct InitialWindowPreparation {
+    pub size: InitialWindowSize,
+    pub visibility: crate::thread_comm::WindowVisibility,
+    pub decorated: bool,
+}
+
 /// Consuming preparation reply. Success, failure and unwind all wake the native
 /// loop after publishing their outcome; an idle loop never needs a polling timer.
 pub struct InitialWindowReply {
-    sender: Option<Sender<Result<InitialWindowSize, String>>>,
+    sender: Option<Sender<Result<InitialWindowPreparation, String>>>,
     proxy: EventLoopProxy,
 }
 
-pub struct InitialWindowReceiver(Receiver<Result<InitialWindowSize, String>>);
+pub struct InitialWindowReceiver(Receiver<Result<InitialWindowPreparation, String>>);
 
 /// Retain on the evaluator stack until it exits. While surfaces are unavailable,
 /// the native loop must distinguish prepared geometry from a departed evaluator.
@@ -56,8 +65,8 @@ impl InitialWindowReply {
     }
 
     /// None means the native loop has already closed; abandon GUI installation.
-    pub fn ready(self, size: InitialWindowSize) -> Option<InitialWindowLifetime> {
-        self.sender.as_ref().unwrap().send(Ok(size)).ok()?;
+    pub fn ready(self, preparation: InitialWindowPreparation) -> Option<InitialWindowLifetime> {
+        self.sender.as_ref().unwrap().send(Ok(preparation)).ok()?;
         self.proxy.wake_up();
         Some(InitialWindowLifetime { _reply: self })
     }
@@ -97,8 +106,8 @@ pub enum RenderLoopExit {
 pub(super) enum InitialWindow {
     Waiting(InitialWindowReceiver),
     Ready {
-        size: InitialWindowSize,
-        evaluator: Option<Receiver<Result<InitialWindowSize, String>>>,
+        preparation: InitialWindowPreparation,
+        evaluator: Option<Receiver<Result<InitialWindowPreparation, String>>>,
     },
 }
 
@@ -124,19 +133,25 @@ impl Outcome {
         gpu_was_ready: bool,
         reason: Option<super::state::RenderShutdownReason>,
     ) -> bool {
-        // During GPU startup, Shutdown can precede the evaluator lifetime's
-        // disconnect. Once a GPU has run, preserve the native loop's result;
-        // teardown clears app.gpu, so the caller must capture it beforehand.
-        if !gpu_was_ready
-            && matches!(
-                reason,
-                Some(super::state::RenderShutdownReason::EvaluatorShutdown)
-            )
-        {
-            *self = Self::EvaluatorExited;
-            true
-        } else {
-            false
+        // Evaluator departure is a successful startup cancellation only while
+        // preparing. Running records history: recovery or teardown may remove
+        // the GPU without turning an established session back into startup.
+        match self {
+            Self::Preparing
+                if !gpu_was_ready
+                    && matches!(
+                        reason,
+                        Some(super::state::RenderShutdownReason::EvaluatorShutdown)
+                    ) =>
+            {
+                *self = Self::EvaluatorExited;
+                true
+            }
+            Self::Preparing
+            | Self::Running
+            | Self::EvaluatorExited
+            | Self::Failed(_)
+            | Self::GpuFailed(_) => false,
         }
     }
 
@@ -177,7 +192,7 @@ struct StartingApp<F> {
     shared_monitors: SharedMonitorInfo,
     can_create_surfaces: bool,
     outcome: Rc<RefCell<Outcome>>,
-    evaluator: Option<Receiver<Result<InitialWindowSize, String>>>,
+    evaluator: Option<Receiver<Result<InitialWindowPreparation, String>>>,
     gpu_cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -244,9 +259,9 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
                     }
                 };
                 match result {
-                    Ok(size) => {
+                    Ok(preparation) => {
                         *initial = InitialWindow::Ready {
-                            size,
+                            preparation,
                             evaluator: Some(receiver.0.clone()),
                         };
                     }
@@ -276,11 +291,21 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
                 return;
             }
             if let Phase::Preparing {
-                initial: InitialWindow::Ready { size, evaluator },
+                initial:
+                    InitialWindow::Ready {
+                        preparation,
+                        evaluator,
+                    },
                 create,
             } = std::mem::replace(&mut self.phase, Phase::Stopped)
             {
-                let mut app = Box::new(create(size));
+                let mut app = Box::new(create(preparation.size));
+                let primary = app
+                    .frame_windows
+                    .primary_window_mut()
+                    .expect("initial primary window state");
+                primary.set_visibility(preparation.visibility);
+                primary.set_decorations(preparation.decorated);
                 app.gpu_startup_cancelled = self.gpu_cancelled.clone();
                 app.can_create_surfaces(event_loop);
                 self.evaluator = evaluator;
@@ -357,6 +382,18 @@ mod tests {
         assert!(
             matches!(result, Err(RenderLoopError::EventLoop(error)) if error == "native dispatch failed")
         );
+    }
+
+    #[test]
+    fn gpu_recovery_shutdown_preserves_native_event_loop_failure() {
+        // A previously running GPU may be absent after failed device-loss
+        // recovery. Shutdown in that state is no longer initial preparation.
+        let mut outcome = Outcome::Running;
+        outcome.observe_evaluator_shutdown(false, Some(RenderShutdownReason::EvaluatorShutdown));
+
+        let result = outcome.finish(Err("native dispatch failed during device recovery"), false);
+        assert!(matches!(result, Err(RenderLoopError::EventLoop(error))
+                if error == "native dispatch failed during device recovery"));
     }
 
     #[test]

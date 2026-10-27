@@ -1354,6 +1354,7 @@ fn render_command_create_window() {
         height: 768,
         title: "New Frame".to_string(),
         geometry_hints,
+        visibility: WindowVisibility::Invisible,
     });
     match cmd {
         RenderCommand::Window(WindowCommand::CreateWindow {
@@ -1362,12 +1363,14 @@ fn render_command_create_window() {
             height,
             title,
             geometry_hints: actual_hints,
+            visibility,
         }) => {
             assert_eq!(frame.raw_id(), 99);
             assert_eq!(width, 1024);
             assert_eq!(height, 768);
             assert_eq!(title, "New Frame");
             assert_eq!(actual_hints, geometry_hints);
+            assert_eq!(visibility, WindowVisibility::Invisible);
         }
         other => panic!("Expected CreateWindow, got {:?}", other),
     }

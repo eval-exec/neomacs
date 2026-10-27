@@ -25,7 +25,7 @@ use super::value::{Value, ValueKind, VecLikeType};
 use super::window_cmds::{
     DeleteFrameMode, FRAME_TEXT_LINES_PARAM, FRAME_TOTAL_COLS_PARAM, FRAME_TOTAL_LINES_PARAM,
     FrameResizeRequest, FrameSizeParam, LIVE_GUI_RESIZE_ACK_TIMEOUT, MIN_FRAME_TEXT_LINES,
-    delete_frame_owned, ensure_selected_frame_id_in_state, expect_int,
+    OtherFramePurpose, delete_frame_owned, ensure_selected_frame_id_in_state, expect_int,
     flush_pending_live_gui_resize, frame_is_top_level_non_window, frame_name_parameter_value,
     frame_non_text_total_height_pixels, frame_non_text_total_width_pixels_in_state,
     frame_realized_lines, frame_size_param_to_cells, frame_size_param_to_pixels,
@@ -262,7 +262,7 @@ pub(crate) fn builtin_make_frame_invisible(
         )?
     };
     let force = args.get(1).copied().unwrap_or(Value::NIL).is_truthy();
-    if !force && !other_frames_in_state(eval, fid, false) {
+    if !force && !other_frames_in_state(eval, fid, OtherFramePurpose::MakeInvisible) {
         return Err(signal(
             "error",
             vec![Value::string(
@@ -2316,7 +2316,7 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
     request: FrameResizeRequest,
 ) -> Result<(), Flow> {
     let (text_width_px, text_height_px) = request.text_pixels(frames, fid)?;
-    let (total_width_px, total_height_px, title, geometry_hints) = {
+    let (total_width_px, total_height_px, title, geometry_hints, visibility, decorated) = {
         let frame = frames
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -2327,6 +2327,10 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
             text_height_px.saturating_add(non_text_height).max(1),
             frame.host_title_lisp_string(),
             frame.gui_geometry_hints(),
+            frame.visibility,
+            frame
+                .known_parameter(FrameParam::Undecorated)
+                .is_none_or(|value| value.is_nil()),
         )
     };
 
@@ -2351,6 +2355,8 @@ pub(crate) fn request_live_gui_frame_resize_and_keep_pending(
         height: total_height_px,
         title,
         geometry_hints,
+        visibility,
+        decorated,
         fullscreen: None,
     })
     .map_err(|message| signal("error", vec![Value::string(message)]))?;

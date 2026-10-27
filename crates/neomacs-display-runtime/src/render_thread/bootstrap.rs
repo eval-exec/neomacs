@@ -1,5 +1,6 @@
 use super::startup::{
-    self, InitialWindow, InitialWindowReceiver, InitialWindowSize, RenderLoopError,
+    self, InitialWindow, InitialWindowPreparation, InitialWindowReceiver, InitialWindowSize,
+    RenderLoopError,
 };
 use super::{RenderApp, SharedImageRenderState, SharedMonitorInfo, surface_readback};
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameNativeWindowState};
@@ -503,7 +504,11 @@ pub(crate) fn run_render_loop_with_event_loop(
         event_loop,
         comms,
         InitialWindow::Ready {
-            size: InitialWindowSize { width, height },
+            preparation: InitialWindowPreparation {
+                size: InitialWindowSize { width, height },
+                visibility: crate::thread_comm::WindowVisibility::Visible,
+                decorated: true,
+            },
             evaluator: None,
         },
         title,

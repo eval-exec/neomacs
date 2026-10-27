@@ -317,6 +317,22 @@ pub enum WindowVisibility {
     Invisible,
 }
 
+impl WindowVisibility {
+    pub(crate) const fn is_visible_or_iconified(self) -> bool {
+        matches!(self, Self::Visible | Self::Iconified)
+    }
+}
+
+impl From<neovm_core::window::FrameVisibility> for WindowVisibility {
+    fn from(visibility: neovm_core::window::FrameVisibility) -> Self {
+        match visibility {
+            neovm_core::window::FrameVisibility::Visible => Self::Visible,
+            neovm_core::window::FrameVisibility::Iconified => Self::Iconified,
+            neovm_core::window::FrameVisibility::Invisible => Self::Invisible,
+        }
+    }
+}
+
 /// Lifecycle commands for the render thread.
 #[derive(Debug)]
 pub enum LifecycleCommand {
@@ -397,6 +413,7 @@ pub enum WindowCommand {
         height: u32,
         title: String,
         geometry_hints: GuiFrameGeometryHints,
+        visibility: WindowVisibility,
     },
     /// Associate the already-created primary OS window with its real Emacs frame ID.
     AdoptPrimaryFrame { frame: FrameRef },

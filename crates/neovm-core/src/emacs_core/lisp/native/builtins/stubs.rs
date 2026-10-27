@@ -1024,16 +1024,7 @@ pub(crate) fn builtin_frame_after_make_frame(
         let request = eval.frames.get(frame_id).and_then(|frame| {
             (frame.effective_window_system().is_some()
                 && frame.parent_frame.as_frame_id().is_none())
-            .then(|| crate::emacs_core::eval::GuiFrameHostRequest {
-                frame_id,
-                width: frame.width,
-                height: frame.height,
-                title: frame.host_title_lisp_string(),
-                geometry_hints: frame.gui_geometry_hints(),
-                fullscreen: frame
-                    .known_parameter(crate::window::FrameParam::Fullscreen)
-                    .and_then(|value| crate::window::FrameFullscreen::from_symbol_value(&value)),
-            })
+            .then(|| crate::emacs_core::eval::GuiFrameHostRequest::for_frame(frame))
         });
         if let Some(request) = request
             && let Some(host) = eval.display_host.as_mut()

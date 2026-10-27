@@ -50,6 +50,7 @@ fn native_titlebar_is_not_a_menu_hit_and_popup_anchor_stays_frame_local() {
         surface.with_content_insets(ContentInsets::new(0, 56, 0, 0)),
     ));
     let window = GuiFrameWindowState {
+        visibility: crate::thread_comm::WindowVisibility::Visible,
         pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
             width: 1600,

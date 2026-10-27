@@ -135,14 +135,21 @@ impl RenderApp {
             .primary_window()
             .is_some_and(|ws| !ws.lifecycle.is_active());
         if needs_native && self.gpu_startup.is_none() {
-            let (width, height, title, decorations_enabled) = {
+            let (width, height, title, decorations_enabled, visibility) = {
                 let primary = self.frame_windows.primary_window().unwrap();
                 let (w, h) = primary.lifecycle.native_size();
                 let chrome = primary.lifecycle.chrome();
-                (w, h, chrome.title.clone(), chrome.decorations_enabled)
+                (
+                    w,
+                    h,
+                    chrome.title.clone(),
+                    chrome.decorations_enabled,
+                    primary.visibility,
+                )
             };
             let attrs = winit::window::WindowAttributes::default()
                 .with_title(&title)
+                .with_visible(visibility.is_visible_or_iconified())
                 .with_surface_size(window_size_from_emacs_pixels(width, height))
                 .with_decorations(decorations_enabled)
                 .with_transparent(true);
@@ -159,6 +166,9 @@ impl RenderApp {
             match event_loop.create_window(attrs) {
                 Ok(window) => {
                     let window: Arc<dyn winit::window::Window> = Arc::from(window);
+                    if matches!(visibility, crate::thread_comm::WindowVisibility::Iconified) {
+                        window.set_minimized(true);
+                    }
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
                     apply_option_key_policy(window.as_ref(), self.frame_windows.option_as_alt);
 

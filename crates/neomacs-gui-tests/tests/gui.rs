@@ -94,6 +94,9 @@ mod recenter_box_drawing;
 #[path = "interaction_geometry.rs"]
 mod interaction_geometry;
 
+#[path = "issue_417_startup.rs"]
+mod issue_417_startup;
+
 #[path = "issue_582_fullscreen.rs"]
 mod issue_582_fullscreen;
 

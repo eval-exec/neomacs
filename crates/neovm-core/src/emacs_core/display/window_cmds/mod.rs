@@ -5959,9 +5959,17 @@ pub(crate) fn resize_live_gui_frame(
         && !is_child_frame
         && let Some(host) = display_host.as_mut()
     {
-        let geometry_hints = frames
+        let (geometry_hints, visibility, decorated) = frames
             .get(fid)
-            .map(|frame| frame.gui_geometry_hints())
+            .map(|frame| {
+                (
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         tracing::debug!(
             "resize_live_gui_frame: notifying host fid={:?} size={}x{} title={:?}",
@@ -5976,6 +5984,8 @@ pub(crate) fn resize_live_gui_frame(
             height: total_height_px,
             title,
             geometry_hints,
+            visibility,
+            decorated,
             fullscreen: None,
         })
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -6041,9 +6051,17 @@ pub(crate) fn request_live_gui_frame_resize(
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
     if !is_child_frame && let Some(host) = display_host.as_mut() {
-        let geometry_hints = frames
+        let (geometry_hints, visibility, decorated) = frames
             .get(fid)
-            .map(|frame| frame.gui_geometry_hints())
+            .map(|frame| {
+                (
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.resize_gui_frame(super::eval::GuiFrameHostRequest {
             frame_id: fid,
@@ -6051,6 +6069,8 @@ pub(crate) fn request_live_gui_frame_resize(
             height: total_height_px,
             title,
             geometry_hints,
+            visibility,
+            decorated,
             fullscreen: None,
         })
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -7322,18 +7342,8 @@ pub(crate) fn builtin_x_create_frame(
         // delayed font/face parameters, so that path still publishes later.
         if opening_gui_frame {
             let request = eval.frames.get(frame_id).and_then(|frame| {
-                (frame.parent_frame.is_nil() && frame.visibility.is_visible()).then(|| {
-                    super::eval::GuiFrameHostRequest {
-                        frame_id,
-                        width: frame.width,
-                        height: frame.height,
-                        title: frame.host_title_lisp_string(),
-                        geometry_hints: frame.gui_geometry_hints(),
-                        fullscreen: frame
-                            .known_parameter(FrameParam::Fullscreen)
-                            .and_then(|value| FrameFullscreen::from_symbol_value(&value)),
-                    }
-                })
+                (frame.parent_frame.is_nil() && frame.visibility.is_visible())
+                    .then(|| super::eval::GuiFrameHostRequest::for_frame(frame))
             });
             if let Some(request) = request
                 && let Some(host) = eval.display_host.as_mut()
@@ -7705,9 +7715,19 @@ pub(crate) fn x_create_frame_impl(
     }
     super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
     if !is_child_frame && let Some(host) = display_host.as_mut() {
-        let (width, height, geometry_hints) = frames
+        let (width, height, geometry_hints, visibility, decorated) = frames
             .get(fid)
-            .map(|frame| (frame.width, frame.height, frame.gui_geometry_hints()))
+            .map(|frame| {
+                (
+                    frame.width,
+                    frame.height,
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.realize_gui_frame(super::eval::GuiFrameHostRequest {
             frame_id: fid,
@@ -7715,6 +7735,8 @@ pub(crate) fn x_create_frame_impl(
             height,
             title: host_title,
             geometry_hints,
+            visibility,
+            decorated,
             fullscreen: parsed.fullscreen,
         })
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -7769,19 +7791,39 @@ impl DeleteFrameMode {
     }
 }
 
+/// GNU other_frames distinguishes deleting a frame from merely hiding it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OtherFramePurpose {
+    MakeInvisible,
+    Delete { force_non_nil: bool },
+}
+
 pub(crate) fn other_frames_in_state(
     eval: &super::eval::Context,
-    deleting: crate::window::FrameId,
-    include_invisible: bool,
+    target: crate::window::FrameId,
+    purpose: OtherFramePurpose,
 ) -> bool {
+    let target_is_terminal = eval
+        .frames
+        .get(target)
+        .is_some_and(|frame| frame.effective_window_system().is_none());
     eval.frames
         .frame_list()
         .into_iter()
-        .filter(|frame_id| *frame_id != deleting)
+        .filter(|frame_id| *frame_id != target)
         .filter(|frame_id| eval.frames.frame_parent_id(*frame_id).is_none())
         .any(|frame_id| {
             eval.frames.get(frame_id).is_some_and(|frame| {
-                include_invisible || frame.visibility.is_visible_or_iconified()
+                frame.visibility.is_visible_or_iconified()
+                    || match purpose {
+                        OtherFramePurpose::MakeInvisible => false,
+                        OtherFramePurpose::Delete { force_non_nil } => {
+                            // GNU frame.c:other_frames permits retiring the
+                            // startup terminal for an invisible GUI frame.
+                            force_non_nil
+                                || (target_is_terminal && frame.effective_window_system().is_some())
+                        }
+                    }
             })
         })
 }
@@ -7806,7 +7848,9 @@ pub(crate) fn delete_frame_owned(
         return Ok(Value::NIL);
     }
     let force_non_nil = mode.force_non_nil();
-    if !mode.bypasses_only_frame_check() && !other_frames_in_state(eval, fid, force_non_nil) {
+    if !mode.bypasses_only_frame_check()
+        && !other_frames_in_state(eval, fid, OtherFramePurpose::Delete { force_non_nil })
+    {
         return Err(signal(
             "error",
             vec![Value::string(if force_non_nil {
@@ -7943,7 +7987,16 @@ pub(crate) fn delete_frame_owned(
             .get(frame_id)
             .is_none_or(|frame| frame.terminal_id != terminal_id)
     });
+    // The host owns its graphical connection independently of any frame.
+    // GNU toolkit backends likewise retain an empty display connection.
+    use crate::emacs_core::terminal::pure::TerminalOutputMethod;
+    let frame_owns_terminal =
+        match crate::emacs_core::terminal::pure::live_terminal_output_method_for_id(terminal_id) {
+            Some(TerminalOutputMethod::WindowSystem) => false,
+            Some(TerminalOutputMethod::Initial | TerminalOutputMethod::Termcap) | None => true,
+        };
     if mode.allows_terminal_cascade()
+        && frame_owns_terminal
         && terminal_is_empty
         && !eval.frames.frame_list().is_empty()
         && let Some(terminal) =
@@ -8445,3 +8498,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/selection_chrome_test.rs"]
 mod selection_chrome_tests;
+
+#[cfg(test)]
+#[path = "tests/terminal_frame_deletion.rs"]
+mod terminal_frame_deletion_tests;

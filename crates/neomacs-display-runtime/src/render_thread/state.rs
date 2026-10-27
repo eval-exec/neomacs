@@ -1096,6 +1096,7 @@ impl RenderApp {
     ) -> Self {
         let mut frame_windows = GuiFrameWindowManager::new();
         frame_windows.set_primary_pending(GuiFrameWindowState {
+            visibility: crate::thread_comm::WindowVisibility::Visible,
             pending_scale_factor: None,
             lifecycle: FrameLifecycle::Pending {
                 width,

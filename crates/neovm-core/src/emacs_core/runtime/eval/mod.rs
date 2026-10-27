@@ -2307,7 +2307,30 @@ pub struct GuiFrameHostRequest {
     pub height: u32,
     pub title: crate::heap_types::LispString,
     pub geometry_hints: crate::window::GuiFrameGeometryHints,
+    pub visibility: crate::window::FrameVisibility,
+    pub decorated: bool,
     pub fullscreen: Option<FrameFullscreen>,
+}
+
+impl GuiFrameHostRequest {
+    /// Snapshot final frame parameters without transferring evaluator-owned
+    /// values to the native thread. Callers retain their creation guards.
+    pub fn for_frame(frame: &crate::window::Frame) -> Self {
+        Self {
+            frame_id: frame.id,
+            width: frame.width,
+            height: frame.height,
+            title: frame.host_title_lisp_string(),
+            geometry_hints: frame.gui_geometry_hints(),
+            visibility: frame.visibility,
+            decorated: frame
+                .known_parameter(crate::window::FrameParam::Undecorated)
+                .is_none_or(|value| value.is_nil()),
+            fullscreen: frame
+                .known_parameter(crate::window::FrameParam::Fullscreen)
+                .and_then(|value| FrameFullscreen::from_symbol_value(&value)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

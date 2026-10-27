@@ -157,7 +157,7 @@ use neomacs_display_runtime::thread_comm::{
     AssetCommand, ClipboardCommand, ClipboardSelection, ConfigCommand, EmacsComms, FrameRef,
     FrameShaderAvailability, FrameShaderExecution, FrameShaderRequestId,
     InputEvent as DisplayInputEvent, LifecycleCommand, RenderCommand, SharedRenderCapabilities,
-    SurfaceSource, ThreadComms, UiCommand, WindowCommand, WindowFullscreenMode, WindowVisibility,
+    SurfaceSource, ThreadComms, UiCommand, WindowCommand, WindowFullscreenMode,
 };
 #[cfg(feature = "neo-term")]
 use neomacs_display_runtime::{
@@ -1518,6 +1518,20 @@ impl PrimaryWindowDisplayHost {
         service
     }
 
+    fn pending_primary_request_mut(
+        &mut self,
+        frame_id: FrameId,
+    ) -> Option<&mut GuiFrameHostRequest> {
+        if self.primary_frame.id() != Some(frame_id) {
+            return None;
+        }
+        let startup = self.gui_startup.as_mut()?;
+        if !startup.publisher.is_waiting() {
+            return None;
+        }
+        startup.pending_request.as_mut()
+    }
+
     fn frame_ref_for_gui_frame(&self, frame_id: FrameId) -> FrameRef {
         if self.primary_frame.is_awaiting() || self.primary_frame.id() == Some(frame_id) {
             FrameRef::Primary
@@ -1636,14 +1650,42 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             .primary_window_size
             .lock()
             .map_err(|error| error.to_string())? = size;
-        self.send_render_command(
-            RenderCommand::Window(WindowCommand::SetFrameGeometryHints {
+        // Publish only the surviving logical frame's final native intent.
+        // An abandoned raw constructor has not queued commands for a window
+        // that a later constructor might otherwise inherit.
+        for command in [
+            WindowCommand::SetWindowTitle {
+                title: request.title.as_utf8_str().unwrap_or("Neomacs").to_owned(),
+            },
+            WindowCommand::SetFrameGeometryHints {
                 frame: FrameRef::Primary,
                 geometry_hints: request.geometry_hints,
-            }),
-            "failed to finalize initial frame geometry hints",
-        )?;
-        startup.publisher.complete(size.width, size.height)
+            },
+            WindowCommand::AdoptPrimaryFrame {
+                frame: FrameRef::Frame(request.frame_id.0),
+            },
+            WindowCommand::SetWindowFullscreen {
+                frame: FrameRef::Primary,
+                mode: render_fullscreen_mode(
+                    request.fullscreen.unwrap_or(FrameFullscreen::Windowed),
+                ),
+            },
+        ] {
+            self.send_render_command(
+                RenderCommand::Window(command),
+                "failed to finalize initial GUI frame",
+            )?;
+        }
+        startup.publisher.complete(
+            neomacs_display_runtime::render_thread::InitialWindowPreparation {
+                size: neomacs_display_runtime::render_thread::InitialWindowSize {
+                    width: size.width,
+                    height: size.height,
+                },
+                visibility: request.visibility.into(),
+                decorated: request.decorated,
+            },
+        )
     }
 
     #[cfg(target_os = "macos")]
@@ -1693,42 +1735,48 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             title_string
         );
         if self.primary_frame.is_awaiting() {
-            let fullscreen_frame = FrameRef::Primary;
-            self.send_render_command(
-                RenderCommand::Window(WindowCommand::SetWindowTitle {
-                    title: title_string.clone(),
-                }),
-                "failed to update primary window title",
-            )?;
-            self.send_render_command(
-                RenderCommand::Window(WindowCommand::SetFrameGeometryHints {
-                    frame: FrameRef::Primary,
-                    geometry_hints: request.geometry_hints,
-                }),
-                "failed to update primary window geometry hints",
-            )?;
-            self.send_render_command(
-                RenderCommand::Window(WindowCommand::AdoptPrimaryFrame {
-                    frame: FrameRef::Frame(request.frame_id.0),
-                }),
-                "failed to adopt primary GUI frame",
-            )?;
             self.primary_frame = PrimaryFrame::Adopted(request.frame_id);
-            if let Some(startup) = &mut self.gui_startup {
+            let preparing = if let Some(startup) = &mut self.gui_startup
+                && startup.publisher.is_waiting()
+            {
                 *startup
                     .primary_frame
                     .lock()
                     .map_err(|error| error.to_string())? = Some(request.frame_id);
                 startup.pending_request = Some(request.clone());
-            }
-            if let Some(fullscreen) = request.fullscreen {
+                true
+            } else {
+                false
+            };
+            if !preparing {
                 self.send_render_command(
-                    RenderCommand::Window(WindowCommand::SetWindowFullscreen {
-                        frame: fullscreen_frame,
-                        mode: render_fullscreen_mode(fullscreen),
+                    RenderCommand::Window(WindowCommand::SetWindowTitle {
+                        title: title_string.clone(),
                     }),
-                    "failed to set primary GUI frame fullscreen mode",
+                    "failed to update primary window title",
                 )?;
+                self.send_render_command(
+                    RenderCommand::Window(WindowCommand::SetFrameGeometryHints {
+                        frame: FrameRef::Primary,
+                        geometry_hints: request.geometry_hints,
+                    }),
+                    "failed to update primary window geometry hints",
+                )?;
+                self.send_render_command(
+                    RenderCommand::Window(WindowCommand::AdoptPrimaryFrame {
+                        frame: FrameRef::Frame(request.frame_id.0),
+                    }),
+                    "failed to adopt primary GUI frame",
+                )?;
+                if let Some(fullscreen) = request.fullscreen {
+                    self.send_render_command(
+                        RenderCommand::Window(WindowCommand::SetWindowFullscreen {
+                            frame: FrameRef::Primary,
+                            mode: render_fullscreen_mode(fullscreen),
+                        }),
+                        "failed to set primary GUI frame fullscreen mode",
+                    )?;
+                }
             }
         } else {
             let fullscreen_frame = FrameRef::Frame(request.frame_id.0);
@@ -1739,6 +1787,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
                     height: request.height,
                     title: title_string,
                     geometry_hints: request.geometry_hints,
+                    visibility: request.visibility.into(),
                 }),
                 "failed to create additional GUI window",
             )?;
@@ -1875,16 +1924,29 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     }
 
     fn destroy_gui_frame(&mut self, frame_id: neovm_core::window::FrameId) -> Result<(), String> {
+        self.last_window_titles
+            .lock()
+            .map_err(|err| format!("failed to forget GUI frame title: {err}"))?
+            .remove(&frame_id);
         let frame = if self.primary_frame.id() == Some(frame_id) {
+            if let Some(startup) = self.gui_startup.as_mut()
+                && startup.publisher.is_waiting()
+            {
+                // No native window has been published. A later constructor
+                // can claim the same one-shot preparation capability.
+                *startup
+                    .primary_frame
+                    .lock()
+                    .map_err(|error| error.to_string())? = None;
+                startup.pending_request = None;
+                self.primary_frame = PrimaryFrame::Awaiting;
+                return Ok(());
+            }
             self.primary_frame = PrimaryFrame::Retired;
             FrameRef::Primary
         } else {
             FrameRef::Frame(frame_id.0)
         };
-        self.last_window_titles
-            .lock()
-            .map_err(|err| format!("failed to forget GUI frame title: {err}"))?
-            .remove(&frame_id);
         self.send_render_command(
             RenderCommand::Window(WindowCommand::DestroyWindow { frame }),
             "failed to destroy GUI frame window",
@@ -1963,14 +2025,14 @@ impl DisplayHost for PrimaryWindowDisplayHost {
     }
 
     fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
-        if let Some(startup) = &mut self.gui_startup
-            && startup.publisher.is_waiting()
-            && self.primary_frame.id() == Some(request.frame_id)
-        {
-            // GNU's faces wrapper applies its delayed font before exposing
-            // the frame. Retain that final geometry without allocating an
-            // intermediate native window or replaying provisional resizes.
-            startup.pending_request = Some(request);
+        if let Some(pending) = self.pending_primary_request_mut(request.frame_id) {
+            // Resize requests carry geometry; a staged fullscreen change
+            // remains part of this constructor until Lisp finalizes it.
+            let fullscreen = request.fullscreen.or(pending.fullscreen);
+            *pending = GuiFrameHostRequest {
+                fullscreen,
+                ..request
+            };
             return Ok(());
         }
         let frame = if self.primary_frame.id() == Some(request.frame_id) {
@@ -2002,14 +2064,9 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         frame_id: neovm_core::window::FrameId,
         geometry_hints: neovm_core::window::GuiFrameGeometryHints,
     ) -> Result<(), String> {
-        if let Some(startup) = &mut self.gui_startup
-            && startup.publisher.is_waiting()
-            && let Some(request) = startup
-                .pending_request
-                .as_mut()
-                .filter(|request| request.frame_id == frame_id)
-        {
+        if let Some(request) = self.pending_primary_request_mut(frame_id) {
             request.geometry_hints = geometry_hints;
+            return Ok(());
         }
         let frame = self.frame_ref_for_gui_frame(frame_id);
         self.send_render_command(
@@ -2027,6 +2084,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         frame_id: neovm_core::window::FrameId,
         fullscreen: FrameFullscreen,
     ) -> Result<(), String> {
+        if let Some(request) = self.pending_primary_request_mut(frame_id) {
+            request.fullscreen = Some(fullscreen);
+            return Ok(());
+        }
         let frame = self.frame_ref_for_gui_frame(frame_id);
         self.send_render_command(
             RenderCommand::Window(WindowCommand::SetWindowFullscreen {
@@ -2043,24 +2104,18 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         frame_id: neovm_core::window::FrameId,
         visibility: FrameVisibility,
     ) -> Result<(), String> {
-        if visibility.is_visible()
-            && self.primary_frame.id() == Some(frame_id)
-            && let Some(startup) = self
-                .gui_startup
-                .as_ref()
-                .filter(|startup| startup.publisher.is_waiting())
-            && let Some(request) = startup.pending_request.clone()
-        {
-            // The faces wrapper makes the frame visible after its delayed
-            // parameters; raw x-create-frame callers can expose it here too.
+        if let Some(request) = self.pending_primary_request_mut(frame_id) {
+            request.visibility = visibility;
+            if !visibility.is_visible() {
+                return Ok(());
+            }
+            // The faces wrapper exposes its frame after delayed parameters;
+            // raw constructors can explicitly complete preparation here too.
+            let request = request.clone();
             self.finish_gui_frame_creation(request)?;
         }
         let frame = self.frame_ref_for_gui_frame(frame_id);
-        let visibility = match visibility {
-            FrameVisibility::Visible => WindowVisibility::Visible,
-            FrameVisibility::Iconified => WindowVisibility::Iconified,
-            FrameVisibility::Invisible => WindowVisibility::Invisible,
-        };
+        let visibility = visibility.into();
         self.send_render_command(
             RenderCommand::Window(WindowCommand::SetWindowVisibility { frame, visibility }),
             "failed to update GUI frame visibility",
@@ -2122,9 +2177,13 @@ impl DisplayHost for PrimaryWindowDisplayHost {
 
     fn set_gui_frame_undecorated(
         &mut self,
-        _frame_id: neovm_core::window::FrameId,
+        frame_id: neovm_core::window::FrameId,
         undecorated: bool,
     ) -> Result<(), String> {
+        if let Some(request) = self.pending_primary_request_mut(frame_id) {
+            request.decorated = !undecorated;
+            return Ok(());
+        }
         self.send_render_command(
             RenderCommand::Window(WindowCommand::SetWindowDecorations {
                 decorated: !undecorated,
@@ -2151,6 +2210,10 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         cached_titles.insert(frame_id, title.clone());
         drop(cached_titles);
 
+        if let Some(request) = self.pending_primary_request_mut(frame_id) {
+            request.title = title;
+            return Ok(());
+        }
         let title_string = title.as_utf8_str().unwrap_or("Neomacs").to_owned();
         let frame = if self.primary_frame.id() == Some(frame_id) {
             FrameRef::Primary
@@ -3210,10 +3273,18 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
     {
         return Ok(());
     }
-    let Some((frame_id, width, height)) = eval
-        .frame_manager()
-        .selected_frame()
-        .map(|frame| (frame.id, frame.width, frame.height))
+    let Some((frame_id, width, height, visibility, decorated)) =
+        eval.frame_manager().selected_frame().map(|frame| {
+            (
+                frame.id,
+                frame.width,
+                frame.height,
+                frame.visibility,
+                frame
+                    .known_parameter(FrameParam::Undecorated)
+                    .is_none_or(|value| value.is_nil()),
+            )
+        })
     else {
         return Ok(());
     };
@@ -3247,6 +3318,8 @@ fn adopt_existing_primary_gui_frame(eval: &mut Context) -> Result<(), String> {
         height,
         title,
         geometry_hints,
+        visibility,
+        decorated,
         fullscreen,
     })
 }

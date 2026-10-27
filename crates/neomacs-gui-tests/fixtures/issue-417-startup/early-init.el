@@ -73,11 +73,27 @@
       (if (getenv "NEOMACS_ISSUE_417_INVALID_INITIAL_FRAME")
           '((background-color . "#00ff00") (alpha . 999))
         '((background-color . "#00ff00"))))
+;; An invisible opening frame still runs normal startup and frame hooks.
+;; The native backend must preserve this creation-time parameter as well.
+(when (getenv "NEOMACS_ISSUE_417_INVISIBLE_INITIAL")
+  (push '(visibility . nil) initial-frame-alist))
+
 (when (getenv "NEOMACS_ISSUE_417_INVALID_INITIAL_FRAME")
   ;; Do not catch the frame creation error: the real startup error boundary
   ;; must report it and terminate while native startup is still pending.
   (issue-417-write-json (getenv "NEOMACS_ISSUE_417_TRACE")
-                        (vconcat (reverse issue-417-events))))
+                        (vconcat (reverse issue-417-events)))
+  ;; GNU startup.el runs this hook after terminal/window-system preload,
+  ;; immediately before frame-initialize.  Measure constructor failure from
+  ;; here so cold source preload does not consume the prompt-exit budget.
+  (add-hook
+   'before-init-hook
+   (lambda ()
+     (issue-417-write-json
+      (getenv "NEOMACS_ISSUE_417_INVALID_FRAME_READY")
+      `((pid . ,(emacs-pid))
+        (events . ,(vconcat (reverse issue-417-events))))))
+   t))
 (when (getenv "NEOMACS_ISSUE_417_RECOVERABLE_FRAME_ERROR")
   ;; An error caught by Lisp is not a fatal startup failure.  Use the actual
   ;; constructor after window-system initialization, before the opening
@@ -95,6 +111,27 @@
         (push (cons 'error_condition (symbol-name (car err)))
               (car issue-417-events)))))
    t))
+(when (getenv "NEOMACS_ISSUE_417_RETIRE_RAW_INVISIBLE")
+  ;; A raw invisible frame can be retired before Lisp creates the opening
+  ;; frame.  Neither constructor hooks nor the later lifecycle trace should
+  ;; observe that discarded frame.
+  (add-hook
+   'before-init-hook
+   (lambda ()
+     (let ((frame (x-create-frame '((visibility . nil)))))
+       (unless (and (display-graphic-p frame)
+                    (null (frame-visible-p frame)))
+         (error "Raw frame was not an invisible graphical frame"))
+       ;; Pending native intents belong to this constructor.  Its replacement
+       ;; must keep its own visibility and ordinary window defaults.
+       (iconify-frame frame)
+       (set-frame-parameter frame 'fullscreen 'maximized)
+       (set-frame-parameter frame 'undecorated t)
+       (delete-frame frame))
+     (unless (and (eq (framep (selected-frame)) t)
+                  (equal (mapcar #'framep (frame-list)) '(t)))
+       (error "Retiring raw invisible frame did not restore terminal-only state")))
+   t))
 (add-hook 'before-init-hook (lambda () (issue-417-record "before-init")))
 (add-hook 'before-make-frame-hook
           (lambda () (issue-417-record "before-make-frame")))
@@ -102,6 +139,34 @@
           (lambda (frame) (issue-417-record "after-make-frame" frame)))
 (add-hook 'after-init-hook (lambda () (issue-417-record "after-init")))
 (add-hook 'emacs-startup-hook (lambda () (issue-417-record "emacs-startup")))
+
+(defun issue-417-await-initial-visibility-file (file)
+  (let ((deadline (+ (float-time) 20)))
+    (while (not (file-exists-p file))
+      (when (> (float-time) deadline)
+        (error "Invisible initial-frame native observation was not released"))
+      (sleep-for 0.01))))
+
+(defun issue-417-observe-invisible-initial-frame ()
+  (let ((frame (selected-frame)))
+    (issue-417-write-json
+     (getenv "NEOMACS_ISSUE_417_INVISIBLE_READY")
+     `((pid . ,(emacs-pid))
+       (selected_kind . ,(issue-417-kind (framep frame)))
+       (logical_visibility . ,(format "%S" (frame-visible-p frame)))))
+    (issue-417-await-initial-visibility-file
+     (getenv "NEOMACS_ISSUE_417_INVISIBLE_RELEASE"))
+    (make-frame-visible frame)
+    (issue-417-write-json
+     (getenv "NEOMACS_ISSUE_417_VISIBLE_READY")
+     `((pid . ,(emacs-pid))
+       (logical_visibility . ,(format "%S" (frame-visible-p frame)))))
+    ;; Keep the editor alive until Rust observes actual native mapping.
+    (issue-417-await-initial-visibility-file
+     (getenv "NEOMACS_ISSUE_417_VISIBLE_ACK"))))
+
+(when (getenv "NEOMACS_ISSUE_417_INVISIBLE_INITIAL")
+  (add-hook 'after-init-hook #'issue-417-observe-invisible-initial-frame t))
 
 (defun issue-417-finish ()
   (condition-case err

@@ -1,10 +1,10 @@
 //! One-shot preparation before the first native window exists.
 //!
 //! Font parsing/opening stays on the evaluator thread after its TLS is ready.
-//! The native thread receives only geometry, never Lisp values or font handles.
+//! The native thread receives only geometry and visibility, never Lisp values or font handles.
 
 use neomacs_display_runtime::render_thread::{
-    InitialWindowLifetime, InitialWindowReply, InitialWindowSize,
+    InitialWindowLifetime, InitialWindowPreparation, InitialWindowReply,
 };
 use std::{
     cell::RefCell,
@@ -52,9 +52,9 @@ impl InitialWindowPublisher {
             .is_some_and(|state| matches!(*state.borrow(), InitialWindowStatus::Waiting(_)))
     }
 
-    /// Publish final opened-font geometry exactly once. Later frame creation
+    /// Publish final opened-font geometry and visibility exactly once. Later frame creation
     /// does not replace the first window or its evaluator-owned lifetime.
-    pub(super) fn complete(&self, width: u32, height: u32) -> Result<(), String> {
+    pub(super) fn complete(&self, preparation: InitialWindowPreparation) -> Result<(), String> {
         let state = self
             .state
             .upgrade()
@@ -62,11 +62,9 @@ impl InitialWindowPublisher {
         let mut state = state.borrow_mut();
         match std::mem::replace(&mut *state, InitialWindowStatus::Closed) {
             InitialWindowStatus::Waiting(reply) => {
-                let lifetime = reply
-                    .ready(InitialWindowSize { width, height })
-                    .ok_or_else(|| {
-                        "native event loop closed before initial frame realization".to_owned()
-                    })?;
+                let lifetime = reply.ready(preparation).ok_or_else(|| {
+                    "native event loop closed before initial frame realization".to_owned()
+                })?;
                 *state = InitialWindowStatus::Running(lifetime);
                 Ok(())
             }
