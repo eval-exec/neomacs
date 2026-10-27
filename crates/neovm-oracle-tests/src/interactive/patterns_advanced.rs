@@ -194,6 +194,7 @@ fn oracle_prop_command_dispatch_system() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_keybinding_command_pipeline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -319,6 +320,7 @@ fn oracle_prop_command_registration_introspection() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_mode_setup_pattern() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

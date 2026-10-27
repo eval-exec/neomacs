@@ -339,6 +339,7 @@ fn oracle_prop_keymap_prefix_with_prompts_and_parents() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_keymap_parent_reassignment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

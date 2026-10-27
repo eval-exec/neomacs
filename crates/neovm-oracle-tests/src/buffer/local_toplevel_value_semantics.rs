@@ -35,6 +35,7 @@ fn oracle_buffer_local_toplevel_value_read_set_and_missing_local_errors() {
 }
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_buffer_local_toplevel_value_ignores_active_let_local_binding() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

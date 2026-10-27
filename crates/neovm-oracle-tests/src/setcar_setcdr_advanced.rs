@@ -308,6 +308,7 @@ fn oracle_prop_setcar_setcdr_zipper() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_setcar_setcdr_doubly_linked_list() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

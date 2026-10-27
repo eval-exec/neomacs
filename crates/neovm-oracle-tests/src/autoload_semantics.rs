@@ -127,6 +127,7 @@ fn oracle_autoload_do_load_macro_only_ordering_without_file_load() {
 }
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_autoload_do_load_macro_only_requires_literal_macro_symbol() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

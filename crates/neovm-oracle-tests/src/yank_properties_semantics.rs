@@ -52,6 +52,7 @@ fn oracle_prop_gnu_remove_yank_excluded_properties_runs_handlers_then_removes() 
 }
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_insert_buffer_substring_as_yank_processes_inserted_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

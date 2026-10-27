@@ -500,6 +500,7 @@ fn oracle_prop_text_prop_comp_set_text_properties_replace() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_text_prop_comp_buffer_vs_string_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

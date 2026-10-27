@@ -133,6 +133,7 @@ fn oracle_make_variable_buffer_local_leaves_per_buffer_slot_alone() {
 }
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_local_variable_if_set_auto_local_alias_and_forwarded_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

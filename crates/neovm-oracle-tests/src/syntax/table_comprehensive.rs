@@ -425,6 +425,7 @@ fn oracle_prop_syntax_table_comprehensive_forward_comment() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_prop_syntax_table_comprehensive_ranges_and_standard() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 

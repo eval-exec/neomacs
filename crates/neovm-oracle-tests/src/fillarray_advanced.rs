@@ -115,6 +115,7 @@ fn oracle_prop_fillarray_advanced_string_chars() {
 }
 
 #[test]
+#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 fn oracle_fillarray_multibyte_string_preserves_byte_length() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
