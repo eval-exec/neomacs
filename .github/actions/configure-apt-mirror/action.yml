@@ -1,9 +1,11 @@
 name: Configure fast APT mirror
 description: >-
   Speed-test Ubuntu mirrors and select a fast one before apt runs. GitHub's
-  Ubuntu images put azure.archive.ubuntu.com first; it is occasionally
-  throttled hard enough to turn a ~30 s dependency install into 14 minutes.
-  Runs only on Linux; a failed probe leaves the configured mirror in place.
+  Ubuntu images put azure.archive.ubuntu.com first, and that mirror stalls
+  often enough to turn a ~30 s dependency install into 20+ minutes. The
+  current mirror (normally Azure) is excluded from the comparison so a short
+  speed burst cannot keep it. Runs only on Linux; a failed probe leaves the
+  configured mirror in place.
 
 runs:
   using: 'composite'
@@ -12,10 +14,12 @@ runs:
       if: runner.os == 'Linux'
       uses: vegardit/fast-apt-mirror.sh@806c59276adfff2df420124ad5e4587f018c358a # 1.4.5
       with:
-        # Fewer/shorter probes than the action defaults: the shard matrix runs
-        # this in 60 jobs per CI run. A 512 KiB sample with a 2 s ceiling still
-        # rejects the ~80 KiB/s mirror that caused the 14-minute install.
-        healthchecks: "10"
-        speedtests: "5"
-        sample-size: "512"
-        sample-time: "2"
+        # Exclude the current mirror: on a fresh hosted runner that is Azure,
+        # and the probe's burst allowance can make it look healthy before the
+        # sustained download throttles. Use the action defaults rather than a
+        # shorter sample so the comparison measures sustained throughput.
+        healthchecks: "20"
+        speedtests: "10"
+        sample-size: "1024"
+        sample-time: "3"
+        exclude-current: "true"
