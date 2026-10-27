@@ -68,7 +68,7 @@ fn declared_string_aset_rejects_a_character_without_physical_storage() {
 
 #[test]
 fn declared_string_invalid_heads_and_short_tails_stay_in_character_domain() {
-    use crate::emacs_core::emacs_char::{EmacsChar, MAX_CHAR};
+    use crate::emacs_core::emacs_char::MAX_CHAR;
     for bytes in [
         &[0x80][..],
         &[0xbf][..],

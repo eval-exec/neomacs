@@ -2122,21 +2122,25 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
             let mut kept = Vec::with_capacity(bytes.len());
             let mut removed = 0;
             let mut pos = 0;
-            while pos < bytes.len() {
+            // GNU Fdelete traverses SCHARS, unlike symbol printing's SBYTES.
+            // Supplied counts may outlive the physical payload; decode their
+            // virtual tail without copying bytes outside initialized storage.
+            for _ in 0..string.schars() {
                 let (code, len) = match storage {
                     crate::heap_types::LispStringStorageKind::Unibyte => (u32::from(bytes[pos]), 1),
                     crate::heap_types::LispStringStorageKind::Multibyte => {
                         let (c, n) =
-                            crate::emacs_core::emacs_char::string_char_unchecked(&bytes[pos..]);
+                            crate::heap_types::decode_declared_multibyte_char(&bytes[pos..]);
                         (c.code(), n)
                     }
                 };
+                let next_pos = pos + len.min(bytes.len() - pos);
                 if i64::from(code) == target {
                     removed += 1;
                 } else {
-                    kept.extend_from_slice(&bytes[pos..pos + len]);
+                    kept.extend_from_slice(&bytes[pos..next_pos]);
                 }
-                pos += len;
+                pos = next_pos;
             }
             if removed == 0 {
                 return Ok(args[1]);
@@ -2146,10 +2150,23 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
                     crate::heap_types::LispString::from_unibyte(kept)
                 }
                 crate::heap_types::LispStringStorageKind::Multibyte => {
-                    crate::heap_types::LispString::from_emacs_bytes_with_chars(
-                        kept,
-                        string.schars() - removed,
-                    )
+                    let remaining = string.schars() - removed;
+                    match string.character_count_kind() {
+                        crate::heap_types::StringCharacterCountKind::Computed => {
+                            crate::heap_types::LispString::from_emacs_bytes_with_chars(
+                                kept, remaining,
+                            )
+                        }
+                        crate::heap_types::StringCharacterCountKind::Supplied => {
+                            let count = crate::heap_types::GnuDeclaredCharacterCount::try_from(
+                                remaining as i128,
+                            )
+                            .expect("deletion cannot increase a valid supplied count");
+                            crate::heap_types::LispString::from_emacs_bytes_with_declared_chars(
+                                kept, count,
+                            )
+                        }
+                    }
                 }
             };
             Ok(Value::heap_string(rebuilt))

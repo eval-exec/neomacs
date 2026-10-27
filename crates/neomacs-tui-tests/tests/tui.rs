@@ -182,3 +182,5 @@ mod font_coverage;
 #[path = "minibuffer_selected_window.rs"]
 mod minibuffer_selected_window;
 mod treesit_debug_mode_line;
+
+mod encoded_file;

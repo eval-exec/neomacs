@@ -3449,3 +3449,7 @@ mod raw_bytes_tests;
 #[cfg(test)]
 #[path = "tests/reader_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/shorthand_character_domain.rs"]
+mod shorthand_character_domain_tests;
