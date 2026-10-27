@@ -350,6 +350,17 @@ fn async_proc_start_process_shell_command() {
   (let ((proc (start-process-shell-command "neo-spsc-xxx" buf "echo hi && echo bye")))
     (set-process-query-on-exit-flag proc nil)
     (while (process-live-p proc) (accept-process-output proc 1))
+    ;; The process sentinel's message is delivered by the event loop after
+    ;; the process exits; wait for it so the transcript does not depend on
+    ;; whether the last accept-process-output ran the sentinel yet.
+    (let ((tries 0))
+      (while (and (< tries 100)
+                  (with-current-buffer buf
+                    (save-excursion
+                      (goto-char (point-min))
+                      (not (search-forward "finished" nil t)))))
+        (accept-process-output proc 0.05)
+        (setq tries (1+ tries))))
     (prog1 (with-current-buffer buf (buffer-string)) (kill-buffer buf))))"##,
         expect,
     );
