@@ -784,6 +784,15 @@ impl ResolvedFontAdvance {
                 // cell or inferring a width from its Unicode character.
                 if multiplier > 1.0 && (measured_advance_px / multiplier).round() == cell.get() {
                     multiplier * cell.get()
+                } else if multiplier == 1.0 && (measured_advance_px - cell.get()).abs() <= 1.0 {
+                    // A one-cell glyph whose hinted advance missed the cell by
+                    // up to a pixel (FreeType hints a Nerd Font icon to 6 px
+                    // at a 7 px cell) still occupies one cell.  GNU gives such
+                    // a glyph the face's cell width (xdisp.c:33684 uses
+                    // `font->space_width` whenever the per-char metric cannot
+                    // be used), and a monospace font's grid must not drift by
+                    // the hinting delta.
+                    cell.get()
                 } else {
                     measured_advance_px.round()
                 }
