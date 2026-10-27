@@ -7,9 +7,9 @@
 use super::*;
 
 /// The successful result view requested by an opcode's verified consumer.
-/// This compilation-local choice changes no shim ABI or runtime hint; legacy
-/// callers always select `TaggedLisp`, and opt selects `BoolFlag` only under
-/// its explicit Boolean pass.
+/// This compilation-local choice changes no shim ABI or runtime hint. Baseline
+/// callers retain `TaggedLisp`; verified immediate HOF branches and the opt
+/// Boolean pass can select `BoolFlag`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BoolResultMode {
     TaggedLisp,

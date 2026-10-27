@@ -10,6 +10,7 @@
 //! itself never runs Lisp; its slow guard reconstructs the callback through
 //! resumed_chain before an operation can admit threads, park, or collect.
 
+use super::boolean::BoolResultMode;
 use super::inline_frames::{Frames, HofChainState};
 use super::lowering::{self, RegionDeopt};
 use super::*;
@@ -412,6 +413,268 @@ fn emit_candidate(
     (tail, index, item)
 }
 
+/// The callback's four conditional stack effects. Flags never cross an edge:
+/// retained conditions acquire their exact tagged view before the I64 spill.
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+enum CallbackBranch {
+    PopOnNil,
+    PopOnNonNil,
+    KeepOnNil,
+    KeepOnNonNil,
+}
+
+/// The decoded callback instruction target, converted only at the existing
+/// CFG block-map boundary. This adds no field to Op or runtime metadata.
+#[derive(Debug)]
+struct CallbackTarget(u32);
+
+impl From<CallbackTarget> for usize {
+    fn from(target: CallbackTarget) -> Self {
+        target.0 as usize
+    }
+}
+
+impl CallbackBranch {
+    fn from_op(op: &Op) -> Option<(Self, CallbackTarget)> {
+        if let Op::GotoIfNil(target) = op {
+            Some((Self::PopOnNil, CallbackTarget(*target)))
+        } else if let Op::GotoIfNotNil(target) = op {
+            Some((Self::PopOnNonNil, CallbackTarget(*target)))
+        } else if let Op::GotoIfNilElsePop(target) = op {
+            Some((Self::KeepOnNil, CallbackTarget(*target)))
+        } else if let Op::GotoIfNotNilElsePop(target) = op {
+            Some((Self::KeepOnNonNil, CallbackTarget(*target)))
+        } else {
+            None
+        }
+    }
+
+    /// Apply the conditional's stack effect once, retaining its SSA condition
+    /// for branch emission even when its Lisp stack slot is popped.
+    fn consume_condition(
+        self,
+        stack: &mut Vec<ClifValue>,
+        reps: &mut Vec<SlotRep>,
+    ) -> Result<ClifValue, CompileError> {
+        let condition = *stack.last().ok_or(CompileError::StackUnderflow)?;
+        match self {
+            Self::PopOnNil | Self::PopOnNonNil => {
+                stack.pop();
+                reps.pop();
+            }
+            Self::KeepOnNil | Self::KeepOnNonNil => {}
+        }
+        Ok(condition)
+    }
+
+    fn successors(self, target: Block, fallthrough: Block) -> (Block, Block) {
+        match self {
+            Self::PopOnNil | Self::KeepOnNil => (fallthrough, target),
+            Self::PopOnNonNil | Self::KeepOnNonNil => (target, fallthrough),
+        }
+    }
+}
+
+/// A position in this callback's decoded opcode stream, not a GNU byte offset.
+#[derive(Clone, Copy, Debug)]
+struct CallbackPc(usize);
+
+#[derive(Debug)]
+struct CallbackBlockIndex(usize);
+
+/// Only the canonical CFG can delimit a callback block. A consumer which is a
+/// leader belongs to the next cursor and cannot be fused with this block.
+#[derive(Debug)]
+struct CallbackBlock<'code> {
+    first: CallbackPc,
+    end: CallbackPc,
+    ops: &'code [Op],
+}
+
+impl<'code> CallbackBlock<'code> {
+    fn new(ops: &'code [Op], cfg: &Cfg, index: CallbackBlockIndex) -> Result<Self, CompileError> {
+        let first = CallbackPc(*cfg.leaders.get(index.0).ok_or(CompileError::BadOperand)?);
+        let end = CallbackPc(cfg.leaders.get(index.0 + 1).copied().unwrap_or(ops.len()));
+        let ops = ops.get(first.0..end.0).ok_or(CompileError::BadOperand)?;
+        Ok(Self { first, end, ops })
+    }
+
+    fn into_steps(self) -> CallbackSteps<'code> {
+        CallbackSteps {
+            first: self.first,
+            ops: self.ops.iter().enumerate().peekable(),
+        }
+    }
+}
+
+/// This affine proof owns both adjacent operations in one canonical block.
+/// Its emitter consumes the flag immediately; no flag is returned to the
+/// ordinary callback iterator or exposed as a callback CFG edge value.
+#[derive(Debug)]
+#[must_use]
+struct FusedBranch<'code> {
+    producer_pc: CallbackPc,
+    producer: &'code Op,
+    branch: CallbackBranch,
+    target: CallbackTarget,
+    fallthrough: CallbackPc,
+}
+
+#[derive(Debug)]
+enum CallbackStep<'code> {
+    Materialized { pc: CallbackPc, op: &'code Op },
+    FusedBranch(FusedBranch<'code>),
+}
+
+#[derive(Debug)]
+struct CallbackSteps<'code> {
+    first: CallbackPc,
+    ops: std::iter::Peekable<std::iter::Enumerate<std::slice::Iter<'code, Op>>>,
+}
+
+impl<'code> Iterator for CallbackSteps<'code> {
+    type Item = CallbackStep<'code>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (offset, op) = self.ops.next()?;
+        let pc = CallbackPc(self.first.0 + offset);
+        if BoolResultMode::supports(op)
+            && let Some((branch, target)) = self
+                .ops
+                .peek()
+                .and_then(|(_, next)| CallbackBranch::from_op(next))
+        {
+            self.ops.next();
+            Some(CallbackStep::FusedBranch(FusedBranch {
+                producer_pc: pc,
+                producer: op,
+                branch,
+                target,
+                fallthrough: CallbackPc(pc.0 + 2),
+            }))
+        } else {
+            Some(CallbackStep::Materialized { pc, op })
+        }
+    }
+}
+
+/// The sole callback-edge writer accepts this materialized view. Construction
+/// uses the canonical stack conversion, including Boolean T/NIL projection.
+#[derive(Debug)]
+#[must_use]
+struct MaterializedCallbackEdge<'stack> {
+    stack: &'stack mut Vec<ClifValue>,
+    reps: &'stack mut Vec<SlotRep>,
+}
+
+impl<'stack> MaterializedCallbackEdge<'stack> {
+    fn new(
+        fb: &mut FunctionBuilder,
+        rt: &RtCtx,
+        stack: &'stack mut Vec<ClifValue>,
+        reps: &'stack mut Vec<SlotRep>,
+    ) -> Self {
+        lowering::materialize_model_stack(fb, Some(rt), stack, reps);
+        Self { stack, reps }
+    }
+
+    fn write_to_vars(self, fb: &mut FunctionBuilder, rt: &RtCtx, vars: &[Variable]) {
+        write_edge_stack_to_vars(
+            fb,
+            Some(rt),
+            vars,
+            self.stack,
+            self.reps,
+            &vec![false; vars.len()],
+        );
+    }
+
+    fn emit_tagged_branch(
+        self,
+        fb: &mut FunctionBuilder,
+        rt: &RtCtx,
+        vars: &[Variable],
+        branch: CallbackBranch,
+        target: Block,
+        fallthrough: Block,
+    ) -> Result<(), CompileError> {
+        let condition = branch.consume_condition(self.stack, self.reps)?;
+        self.write_to_vars(fb, rt, vars);
+        let (truthy, falsey) = branch.successors(target, fallthrough);
+        let nil = lowering::icmp_imm_p(fb, IntCC::Equal, condition, Value::NIL.bits() as i64);
+        fb.ins().brif(nil, falsey, &[], truthy, &[]);
+        Ok(())
+    }
+}
+
+/// Only the validated fused step can request a flag in this callback emitter.
+/// Both the producer guards and the conditional are emitted before returning.
+#[allow(clippy::too_many_arguments)]
+fn emit_fused_callback_branch(
+    fused: FusedBranch<'_>,
+    fb: &mut FunctionBuilder,
+    site: HofSite,
+    rt: &RtCtx,
+    constants: &[Value],
+    consts_base: Option<ClifValue>,
+    pending: &mut Vec<PendingDeopt>,
+    signal_exit: &mut Option<Block>,
+    reloc_base: Option<ClifValue>,
+    reloc_index: &HashMap<usize, u32>,
+    stack: &mut Vec<ClifValue>,
+    reps: &mut Vec<SlotRep>,
+    vars: &[Variable],
+    blocks: &HashMap<usize, Block>,
+) -> Result<(), CompileError> {
+    let pc = fused.producer_pc;
+    let op = fused.producer;
+    let mut dispatch = Vec::new();
+    lowering::lower_simple_op_with_store_proof_and_result(
+        fb,
+        pc.0,
+        pending,
+        signal_exit,
+        constants,
+        stack,
+        reps,
+        Some(rt),
+        &[],
+        &mut dispatch,
+        None,
+        op,
+        &HashSet::new(),
+        reloc_base,
+        reloc_index,
+        false,
+        None,
+        None,
+        site.prefix,
+        consts_base,
+        heap_inline::StoreProof::default(),
+        BoolResultMode::BoolFlag,
+    )?;
+    if !dispatch.is_empty() {
+        return Err(CompileError::UnsupportedOp("inline-hof-observer"));
+    }
+    match reps.last().ok_or(CompileError::StackUnderflow)? {
+        SlotRep::Bool => {}
+        SlotRep::Tagged | SlotRep::RawFixnum | SlotRep::Flonum { .. } => {
+            return Err(CompileError::BadOperand);
+        }
+    }
+    let flag = fused.branch.consume_condition(stack, reps)?;
+    // ElsePop keeps the Bool in its original stack slot until this canonical
+    // left-to-right conversion, preserving the previous boxing/root order.
+    MaterializedCallbackEdge::new(fb, rt, stack, reps).write_to_vars(fb, rt, vars);
+    let (truthy, falsey) = fused.branch.successors(
+        blocks[&usize::from(fused.target)],
+        blocks[&fused.fallthrough.0],
+    );
+    fb.ins().brif(flag, truthy, &[], falsey, &[]);
+    Ok(())
+}
+
 /// Lower the already-admitted callback with the ordinary arithmetic and heap
 /// guards. Its local stack is independent of the parent's SSA snapshots.
 #[allow(clippy::too_many_arguments)]
@@ -459,14 +722,45 @@ fn emit_callback(
         };
         let mut stack: Vec<_> = vars[..depth].iter().map(|&var| fb.use_var(var)).collect();
         let mut reps = vec![SlotRep::Tagged; depth];
-        let end = cfg
-            .leaders
-            .get(leader_index + 1)
-            .copied()
-            .unwrap_or(ops.len());
+        let block = CallbackBlock::new(ops, &cfg, CallbackBlockIndex(leader_index))?;
+        let end = block.end.0;
         let mut terminated = false;
-        for (off, op) in ops[leader..end].iter().enumerate() {
-            let pc = leader + off;
+        for step in block.into_steps() {
+            let (pc, op) = match step {
+                CallbackStep::Materialized { pc, op } => (pc.0, op),
+                CallbackStep::FusedBranch(fused) => {
+                    emit_fused_callback_branch(
+                        fused,
+                        fb,
+                        site,
+                        rt,
+                        &constants,
+                        consts_base,
+                        pending,
+                        signal_exit,
+                        reloc_base,
+                        reloc_index,
+                        &mut stack,
+                        &mut reps,
+                        &vars,
+                        &blocks,
+                    )?;
+                    terminated = true;
+                    break;
+                }
+            };
+            if let Some((branch, target)) = CallbackBranch::from_op(op) {
+                MaterializedCallbackEdge::new(fb, rt, &mut stack, &mut reps).emit_tagged_branch(
+                    fb,
+                    rt,
+                    &vars,
+                    branch,
+                    blocks[&usize::from(target)],
+                    blocks[&(pc + 1)],
+                )?;
+                terminated = true;
+                break;
+            }
             match op {
                 Op::Constant(_) if captures.constant(pc).is_some() => {
                     let cell = fb.use_var(captures.constant(pc).expect("matched capture"));
@@ -498,46 +792,9 @@ fn emit_callback(
                     break;
                 }
                 Op::Goto(target) => {
-                    write_edge_stack_to_vars(
-                        fb,
-                        Some(rt),
-                        &vars,
-                        &mut stack,
-                        &mut reps,
-                        &vec![false; cfg.max_depth],
-                    );
+                    MaterializedCallbackEdge::new(fb, rt, &mut stack, &mut reps)
+                        .write_to_vars(fb, rt, &vars);
                     fb.ins().jump(blocks[&(*target as usize)], &[]);
-                    terminated = true;
-                    break;
-                }
-                Op::GotoIfNil(target)
-                | Op::GotoIfNotNil(target)
-                | Op::GotoIfNilElsePop(target)
-                | Op::GotoIfNotNilElsePop(target) => {
-                    lowering::materialize_model_stack(fb, Some(rt), &mut stack, &mut reps);
-                    let condition = *stack.last().ok_or(CompileError::StackUnderflow)?;
-                    let preserve =
-                        matches!(op, Op::GotoIfNilElsePop(_) | Op::GotoIfNotNilElsePop(_));
-                    if !preserve {
-                        stack.pop();
-                        reps.pop();
-                    }
-                    write_edge_stack_to_vars(
-                        fb,
-                        Some(rt),
-                        &vars,
-                        &mut stack,
-                        &mut reps,
-                        &vec![false; cfg.max_depth],
-                    );
-                    let nil =
-                        lowering::icmp_imm_p(fb, IntCC::Equal, condition, Value::NIL.bits() as i64);
-                    let (yes, no) = if matches!(op, Op::GotoIfNil(_) | Op::GotoIfNilElsePop(_)) {
-                        (blocks[&(*target as usize)], blocks[&(pc + 1)])
-                    } else {
-                        (blocks[&(pc + 1)], blocks[&(*target as usize)])
-                    };
-                    fb.ins().brif(nil, yes, &[], no, &[]);
                     terminated = true;
                     break;
                 }
@@ -581,9 +838,10 @@ fn emit_callback(
                 }
                 other => {
                     let mut dispatch = Vec::new();
-                    // The constants' reloc indices were appended to the
-                    // physical leaf by the front, keyed by value bits.
-                    lowering::lower_simple_op(
+                    // Ordinary steps retain the original baseline entry: no
+                    // Boolean-wrapper scan is needed when no flag can escape
+                    // the separately consumed fused step.
+                    lowering::lower_simple_op_with_store_proof(
                         fb,
                         pc,
                         pending,
@@ -604,6 +862,7 @@ fn emit_callback(
                         None,
                         site.prefix,
                         consts_base,
+                        heap_inline::StoreProof::default(),
                     )?;
                     if !dispatch.is_empty() {
                         return Err(CompileError::UnsupportedOp("inline-hof-observer"));
@@ -612,14 +871,8 @@ fn emit_callback(
             }
         }
         if !terminated {
-            write_edge_stack_to_vars(
-                fb,
-                Some(rt),
-                &vars,
-                &mut stack,
-                &mut reps,
-                &vec![false; cfg.max_depth],
-            );
+            MaterializedCallbackEdge::new(fb, rt, &mut stack, &mut reps)
+                .write_to_vars(fb, rt, &vars);
             fb.ins().jump(blocks[&end], &[]);
         }
     }
