@@ -68,7 +68,13 @@ fn div_cx33_string_make_unibyte_data_loss_patterns() {
 #[test]
 fn div_cx33_process_kill_query_off_then_kill_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (nil (run open listen connect stop) run)""#]];
+    let expect = expect_test::expect![[r#""OK (nil run nil signal)""#]];
+    // `kill-buffer' sends SIGHUP to a buffer's process (GNU buffer.c:
+    // kill_buffer_processes -> process.c).  The status update is asynchronous,
+    // so reading `process-status' immediately races the reaping: one full run
+    // observed Neo `run' against GNU `signal' only because GNU happened to
+    // harvest the child first.  Pin the defined contract instead: the status
+    // is `run' at the call and `signal' once the death is observed.
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *neo-cx33-qo*")))
@@ -77,7 +83,9 @@ fn div_cx33_process_kill_query_off_then_kill_buffer() {
     (accept-process-output p 0.1)
     (set-process-query-on-exit-flag p nil)
     (kill-buffer buf)
-    (list (buffer-live-p buf) (process-live-p p) (process-status p))))
+    (let ((at-kill (process-status p)))
+      (neovm--oracle-settle-process p)
+      (list (buffer-live-p buf) at-kill (process-live-p p) (process-status p)))))
 "##,
         expect,
     );
