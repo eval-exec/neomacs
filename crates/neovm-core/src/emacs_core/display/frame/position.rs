@@ -99,13 +99,23 @@ impl FramePositionSpec {
 
 /// Resolve only after size/font changes, then publish numeric parent-local
 /// coordinates. Renderers never have to interpret Lisp position expressions.
+///
+/// Returns true when the resolved placement differs from the frame's previous
+/// one. Callers that own the evaluator must then mark the frame for redisplay:
+/// a GUI child frame's placement only reaches the compositor through the next
+/// published display state, and a position-only change leaves the redisplay
+/// signature untouched.  GNU instead moves the native window inside the same
+/// call (`set_frame_offset_hook`, src/frame.c:5366-5369); Neomacs composites
+/// child frames itself, so the publish is the move.
 pub(crate) fn apply_frame_position(
     frames: &mut FrameManager,
     fid: FrameId,
     left: Option<FramePositionSpec>,
     top: Option<FramePositionSpec>,
-) {
-    let Some(frame) = frames.get(fid) else { return };
+) -> bool {
+    let Some(frame) = frames.get(fid) else {
+        return false;
+    };
     let parent = frame
         .parent_frame
         .as_frame_id()
@@ -116,12 +126,16 @@ pub(crate) fn apply_frame_position(
     let frame = frames
         .get_mut(fid)
         .expect("position target was just resolved");
+    let mut moved = false;
     if let Some(left) = left {
+        moved |= frame.left_pos != left;
         frame.left_pos = left;
         frame.set_parameter(Value::symbol("left"), Value::fixnum(left));
     }
     if let Some(top) = top {
+        moved |= frame.top_pos != top;
         frame.top_pos = top;
         frame.set_parameter(Value::symbol("top"), Value::fixnum(top));
     }
+    moved
 }

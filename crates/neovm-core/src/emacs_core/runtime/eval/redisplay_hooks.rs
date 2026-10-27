@@ -526,6 +526,19 @@ impl Context {
         self.gnu_redisplay_hooks.windows.raise(PendingScope::Some);
     }
 
+    /// Whether a frame-level redisplay request is pending for `frame`
+    /// (GNU `fset_redisplay`'s set, src/xdisp.c:879).
+    pub(crate) fn frame_redisplay_pending(&self, frame: FrameId) -> bool {
+        self.gnu_redisplay_hooks.redisplay_frames.contains(&frame)
+    }
+
+    /// Forget pending frame-level redisplay requests. Test seam for callers
+    /// that must observe one mutation's contribution in isolation.
+    #[cfg(test)]
+    pub(crate) fn clear_frame_redisplay_marks(&mut self) {
+        self.gnu_redisplay_hooks.redisplay_frames.clear();
+    }
+
     /// FRAME_WINDOW_CHANGE is distinct from fset_redisplay (xdisp.c:879).
     pub(crate) fn gnu_mark_frame_window_change(&mut self, frame: FrameId) {
         if gnu_redisplay_hooks_enabled() {

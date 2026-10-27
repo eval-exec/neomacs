@@ -782,6 +782,13 @@ pub(crate) fn builtin_set_frame_height(
     {
         ctx.gnu_mark_frame_redisplay(fid);
         ctx.gnu_mark_frame_window_change(fid);
+        // A child frame's new size reaches the compositor only through the
+        // PARENT's published display state, and a parent's redisplay
+        // signature does not carry a child's geometry: under the legacy
+        // policy the resize would be skipped and the child would keep its
+        // old size on screen (the animation fixture's 12s resize never
+        // reached the render thread).  Bump the generation as a move does.
+        ctx.invalidate_redisplay();
     }
     Ok(Value::NIL)
 }
@@ -885,6 +892,13 @@ pub(crate) fn builtin_set_frame_width(
     {
         ctx.gnu_mark_frame_redisplay(fid);
         ctx.gnu_mark_frame_window_change(fid);
+        // A child frame's new size reaches the compositor only through the
+        // PARENT's published display state, and a parent's redisplay
+        // signature does not carry a child's geometry: under the legacy
+        // policy the resize would be skipped and the child would keep its
+        // old size on screen (the animation fixture's 12s resize never
+        // reached the render thread).  Bump the generation as a move does.
+        ctx.invalidate_redisplay();
     }
     Ok(Value::NIL)
 }
@@ -1021,8 +1035,31 @@ pub(crate) fn builtin_set_frame_size(
     {
         ctx.gnu_mark_frame_redisplay(fid);
         ctx.gnu_mark_frame_window_change(fid);
+        // A child frame's new size reaches the compositor only through the
+        // PARENT's published display state, and a parent's redisplay
+        // signature does not carry a child's geometry: under the legacy
+        // policy the resize would be skipped and the child would keep its
+        // old size on screen (the animation fixture's 12s resize never
+        // reached the render thread).  Bump the generation as a move does.
+        ctx.invalidate_redisplay();
     }
     Ok(Value::NIL)
+}
+
+/// Schedule the repaint a frame's changed geometry needs.
+///
+/// A GUI frame's placement and size only reach the compositor through the
+/// next published display state.  A moved frame changes neither its root
+/// window nor the parent's redisplay signature; GNU moves the native window
+/// inside the same call (`set_frame_offset_hook`, src/frame.c:5366-5369),
+/// while Neomacs composites child frames itself, so publishing IS the move.
+/// A resized child frame has the same problem: the size lives in the child's
+/// geometry, which no parent signature covers.  Both redisplay policies are
+/// covered: the per-frame GNU mark (fset_redisplay) and the generation bump
+/// the legacy engine's idle-skip test reads.
+fn mark_frame_geometry_changed(eval: &mut super::eval::Context, frame: FrameId) {
+    eval.gnu_mark_frame_redisplay(frame);
+    eval.invalidate_redisplay();
 }
 
 /// `(set-frame-position FRAME X Y)` -> t.
@@ -1049,8 +1086,11 @@ pub(crate) fn builtin_set_frame_position(
     };
     let x = FramePositionSpec::from_coordinate(args[1], origin)?;
     let y = FramePositionSpec::from_coordinate(args[2], origin)?;
-    if frame.effective_window_system().is_some() || frame.parent_frame.as_frame_id().is_some() {
-        apply_frame_position(frames, fid, Some(x), Some(y));
+    let positioned =
+        frame.effective_window_system().is_some() || frame.parent_frame.as_frame_id().is_some();
+    let moved = positioned && apply_frame_position(frames, fid, Some(x), Some(y));
+    if moved {
+        mark_frame_geometry_changed(eval, fid);
     }
     Ok(Value::T)
 }
@@ -1097,7 +1137,9 @@ pub(crate) fn builtin_set_frame_size_and_position_pixelwise(
 
     builtin_set_frame_size(eval, vec![args[0], args[1], args[2], Value::T])?;
     if uses_window_system_pixels || is_child_frame {
-        apply_frame_position(&mut eval.frames, fid, Some(left), Some(top));
+        if apply_frame_position(&mut eval.frames, fid, Some(left), Some(top)) {
+            mark_frame_geometry_changed(eval, fid);
+        }
     } else {
         let frame = eval
             .frames
@@ -2037,7 +2079,9 @@ pub(crate) fn builtin_modify_frame_parameters(
         eval.gnu_mark_frame_redisplay(fid);
         eval.gnu_mark_frame_window_change(fid);
     }
-    apply_frame_position(&mut eval.frames, fid, requested_left, requested_top);
+    if apply_frame_position(&mut eval.frames, fid, requested_left, requested_top) {
+        mark_frame_geometry_changed(eval, fid);
+    }
 
     Ok(Value::NIL)
 }
