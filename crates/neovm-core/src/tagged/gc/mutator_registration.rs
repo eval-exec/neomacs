@@ -30,6 +30,8 @@ pub use run_slice::{RunSlice, SliceRoot};
 mod rendezvous;
 mod summaries;
 mod symbol_authority;
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+mod symbol_diagnostics;
 #[cfg(test)]
 pub(crate) mod symbol_functions;
 #[cfg(test)]
