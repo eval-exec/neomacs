@@ -1,12 +1,26 @@
 use std::{path::PathBuf, process::Command};
 
-#[test]
-#[ignore = "requires release executable with matching pdump"]
-fn batch_error_exits_nonzero_and_reports_only_to_stderr() {
-    let root = neomacs_infra::crate_root!().join("../..");
-    let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+/// The release binary the release-pdump integration tests drive.  The feature
+/// means "this job prepared the environment", so a missing binary is a loud
+/// failure, not a skip.
+fn release_binary(root: &std::path::Path) -> PathBuf {
+    let path = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
+    assert!(
+        path.is_file(),
+        "release-pdump-tests needs a release neomacs at {}; build it with \
+         `cargo xtask fresh-build --release` or set NEOMACS_GUI_TEST_BINARY",
+        path.display(),
+    );
+    path
+}
+
+#[test]
+#[cfg(feature = "release-pdump-tests")]
+fn batch_error_exits_nonzero_and_reports_only_to_stderr() {
+    let root = neomacs_infra::crate_root!().join("../..");
+    let binary = release_binary(&root);
     let output = Command::new(binary)
         .current_dir(&root)
         .env("RUST_LOG", "off")

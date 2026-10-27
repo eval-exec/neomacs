@@ -1,6 +1,22 @@
 use super::*;
 use neomacs_display_protocol::TerminalColor;
 
+/// These cases drive the real Windows console.  CI runs this family in an
+/// owned console (`native-contract.yml`, CREATE_NEW_CONSOLE); a console-less
+/// runner reports the skip instead of panicking in `ScreenBuffer::current`.
+fn require_attached_console() -> bool {
+    use windows_sys::Win32::System::Console::GetConsoleWindow;
+    // SAFETY: GetConsoleWindow takes no arguments and returns a borrowed handle
+    // (NULL when the process has no console).
+    if unsafe { GetConsoleWindow() }.is_null() {
+        eprintln!(
+            "skipping: no attached Windows console; run this family in an owned console (CI uses CREATE_NEW_CONSOLE)"
+        );
+        return false;
+    }
+    true
+}
+
 #[test]
 fn legacy_palette_preserves_defaults_and_realized_inverse_colors() {
     let mut attrs = CellAttrs::default();
@@ -15,8 +31,10 @@ fn legacy_palette_preserves_defaults_and_realized_inverse_colors() {
 }
 
 #[test]
-#[ignore = "requires a native Windows console; CI runs in CREATE_NEW_CONSOLE"]
 fn native_vt_console_negotiates_renders_and_restores_output_mode() {
+    if !require_attached_console() {
+        return;
+    }
     let original = ScreenBuffer::current().unwrap();
     let original_mode = ConsoleMode::from(original.handle().clone()).mode().unwrap();
     let mut session = Session::new().unwrap();
@@ -44,8 +62,10 @@ fn native_vt_console_negotiates_renders_and_restores_output_mode() {
 }
 
 #[test]
-#[ignore = "requires a native Windows console; CI runs in CREATE_NEW_CONSOLE"]
 fn native_legacy_console_restores_the_original_screen_and_mode() {
+    if !require_attached_console() {
+        return;
+    }
     let mut session = Session::new().unwrap();
     let original = session.original.info().unwrap();
     let original_cursor = cursor_info::get(&session.original).unwrap();

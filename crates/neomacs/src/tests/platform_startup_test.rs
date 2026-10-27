@@ -91,7 +91,6 @@ fn check_in_isolated_catalog(case: CatalogCase) {
     fs::write(&config_path, config).unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args([
-            "--ignored",
             "--exact",
             // The probe's path in the test binary: the crate root's inline
             // `mod tests` lives in `src/tests/main_test.rs` now, so the
@@ -112,12 +111,14 @@ fn check_in_isolated_catalog(case: CatalogCase) {
 }
 
 #[test]
-#[ignore = "invoked by parent tests with a process-local native font catalog"]
 fn isolated_startup_font_probe() {
-    let case: CatalogCase = std::env::var("NEOMACS_TEST_FONT_CATALOG")
-        .unwrap()
-        .parse()
-        .unwrap();
+    // The catalog env var is the parent's marker: a normal suite run returns
+    // here, and the parent re-runs exactly this probe in a child process with
+    // its own FONTCONFIG_FILE and catalog (process-local font state).
+    let Ok(catalog) = std::env::var("NEOMACS_TEST_FONT_CATALOG") else {
+        return;
+    };
+    let case: CatalogCase = catalog.parse().unwrap();
     let (backend, observation, family, pixels) = match case {
         CatalogCase::AllWindowsFamilies => (
             GraphicalBackend::Windows,

@@ -10,9 +10,16 @@ fn root() -> PathBuf {
 }
 
 fn binary() -> PathBuf {
-    std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+    let path = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
-        .unwrap_or_else(|| root().join("target/release/neomacs"))
+        .unwrap_or_else(|| root().join("target/release/neomacs"));
+    assert!(
+        path.is_file(),
+        "release-pdump-tests needs a release neomacs at {}; build it with \
+         `cargo xtask fresh-build --release` or set NEOMACS_GUI_TEST_BINARY",
+        path.display(),
+    );
+    path
 }
 
 /// A byte-compiled hot loop, so the JIT compiles something, then `tail`.
@@ -41,7 +48,7 @@ fn report_lines(text: &str) -> Vec<&str> {
 }
 
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn jit_final_report_on_kill_emacs() {
     let out = run(
         &[("NEOVM_JIT_COMPILE_STATS", "1")],
@@ -68,7 +75,7 @@ fn jit_final_report_on_kill_emacs() {
 }
 
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn jit_final_report_on_batch_error_255() {
     let out = run(
         &[("NEOVM_JIT_COMPILE_STATS", "1")],
@@ -85,7 +92,7 @@ fn jit_final_report_on_batch_error_255() {
 }
 
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn jit_stats_file_sink() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("jit-report.txt");
@@ -106,7 +113,7 @@ fn jit_stats_file_sink() {
 }
 
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn jit_report_silent_without_knobs() {
     let out = run(&[], "(kill-emacs 0)");
     assert_eq!(out.status.code(), Some(0), "{out:?}");
@@ -118,7 +125,7 @@ fn jit_report_silent_without_knobs() {
 /// writes `/tmp/perf-<pid>.map`, and the JIT now declares each leaf under
 /// `lisp:<fn>#<id>:<tier>` instead of one shared anonymous name.
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn jit_perf_map_names_under_perf_buildid_dir() {
     let dir = tempfile::tempdir().expect("tempdir");
     let child = Command::new(binary())

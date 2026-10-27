@@ -52,6 +52,15 @@ jobs:
       - name: Verify build with cargo xtask fresh-build
         run: cargo xtask fresh-build --release
 
+      # The release-pdump integration tests spawn target/release/neomacs with
+      # the pdump fresh-build just produced; a debug-profile test harness is
+      # enough (the feature fails loudly if the release binary is missing).
+      - name: Run release-pdump integration tests
+        run: >-
+          cargo nextest run -p neomacs --features release-pdump-tests
+          -E 'test(batch_startup) or test(jit_observability) or test(main_stack_overflow)'
+          --no-fail-fast
+
       - name: Run unit tests for neovm-core
         run: cargo nextest run -p neovm-core --no-fail-fast
 

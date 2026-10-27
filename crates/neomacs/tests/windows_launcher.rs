@@ -23,12 +23,15 @@ fn launcher_is_gui_and_editor_remains_console() {
 // Reuse this test executable as a console-subsystem child. This observes the
 // launcher's public process boundary without linking editor initialization.
 #[test]
-#[ignore = "invoked only by launcher_preserves_arguments_and_hides_child_console"]
 fn launcher_child_probe() {
     use windows_sys::Win32::{
         System::Console::GetConsoleWindow, UI::WindowsAndMessaging::IsWindowVisible,
     };
-    let output = std::env::var_os("NEOMACS_LAUNCHER_PROBE").unwrap();
+    let Some(output) = std::env::var_os("NEOMACS_LAUNCHER_PROBE") else {
+        // Normal-suite run: the parent below spawns this probe with the
+        // marker and a result file.
+        return;
+    };
     // SAFETY: GetConsoleWindow returns a borrowed window handle accepted by
     // IsWindowVisible (including NULL when no console is associated).
     let visible = unsafe { IsWindowVisible(GetConsoleWindow()) != 0 };
@@ -63,7 +66,6 @@ fn launcher_preserves_arguments_and_hides_child_console() {
     let arguments = [
         "--exact",
         "launcher_child_probe",
-        "--ignored",
         "--nocapture",
         "--skip",
         "中文 with spaces",

@@ -5750,7 +5750,6 @@ fn gnu_startup_where_is_internal_finds_about_emacs_on_help_prefix() {
 }
 
 #[test]
-#[ignore = "startup echo helper blocks in this harness; message redisplay is covered in neovm-core"]
 fn gnu_startup_requests_redisplay_for_echo_area_message() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
@@ -5762,30 +5761,28 @@ fn gnu_startup_requests_redisplay_for_echo_area_message() {
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
-    let redisplay_rows = Arc::new(Mutex::new(Vec::<String>::new()));
-    let redisplay_rows_capture = Arc::clone(&redisplay_rows);
-    eval.redisplay_fn = Some(Box::new(move |eval: &mut Context| {
-        redisplay_rows_capture
-            .lock()
-            .expect("redisplay row buffer")
-            .push(eval.current_message_text().unwrap_or_default().to_string());
+    let redisplay_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let redisplay_calls_capture = Arc::clone(&redisplay_calls);
+    eval.redisplay_fn = Some(Box::new(move |_eval: &mut Context| {
+        redisplay_calls_capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }));
 
     let result = eval
         .eval_str("(display-startup-echo-area-message)")
         .expect("display-startup-echo-area-message should evaluate");
+    let expected = "For information about GNU Emacs and the GNU system, type C-h C-a.";
+    assert_eq!(result, Value::string(expected));
+
+    // GNU `Fmessage` (editfns.c message3 -> message3_nolog) stores the echo
+    // text and does NOT redisplay; the next natural redisplay cycle in
+    // read_char draws it.  The startup helper therefore *requests* the
+    // redisplay by leaving the message pending: the echo text is observable
+    // now, and an immediate redisplay was not forced.
+    assert_eq!(eval.current_message_text().as_deref(), Some(expected));
     assert_eq!(
-        result,
-        Value::string("For information about GNU Emacs and the GNU system, type C-h C-a.")
-    );
-
-    let rendered_rows = redisplay_rows.lock().expect("captured redisplay rows");
-
-    assert!(
-        rendered_rows
-            .iter()
-            .any(|row| row.contains("For information about GNU Emacs and the GNU system")),
-        "expected startup echo message during redisplay, got: {rendered_rows:?}"
+        redisplay_calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "message() must not call redisplay synchronously"
     );
 }
 

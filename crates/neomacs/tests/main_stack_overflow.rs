@@ -19,9 +19,16 @@ fn root() -> PathBuf {
 }
 
 fn binary() -> PathBuf {
-    std::env::var_os("NEOMACS_GUI_TEST_BINARY")
+    let path = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
-        .unwrap_or_else(|| root().join("target/release/neomacs"))
+        .unwrap_or_else(|| root().join("target/release/neomacs"));
+    assert!(
+        path.is_file(),
+        "release-pdump-tests needs a release neomacs at {}; build it with \
+         `cargo xtask fresh-build --release` or set NEOMACS_GUI_TEST_BINARY",
+        path.display(),
+    );
+    path
 }
 
 /// Run `neomacs -Q --batch --eval FORM` unrandomized, from the usual 8 MiB
@@ -86,7 +93,7 @@ fn line<'a>(text: &'a str, key: &str) -> &'a str {
 /// `overflow: (error "Bytecode stack overflow")`, `reached: 74884 levels`
 /// and `after: 500`.
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn batch_deep_compiled_recursion_signals_without_randomization() {
     let Some(output) = run_unrandomized(
         "(progn
@@ -118,7 +125,7 @@ fn batch_deep_compiled_recursion_signals_without_randomization() {
 /// it to a heap segment; past the main stack's end it must already be on
 /// one, so the recursion ends at `max-lisp-eval-depth`.
 #[test]
-#[ignore = "requires release executable with matching pdump"]
+#[cfg(feature = "release-pdump-tests")]
 fn batch_deep_interpreted_recursion_leaves_the_main_stack_in_time() {
     let Some(output) = run_unrandomized(
         "(progn

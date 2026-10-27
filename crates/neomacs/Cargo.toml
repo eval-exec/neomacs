@@ -12,6 +12,12 @@ autotests = false
 [features]
 # Windows distribution helpers; enabled by xtask on Windows only.
 windows-tools = []
+# End-to-end integration tests that spawn a RELEASE neomacs with its matching
+# pdump (batch startup, JIT observability reports, main-stack overflow).  The
+# default suite compiles them out; CI enables this feature in the job that has
+# just run `cargo xtask fresh-build --release` (linux.yml), and the tests fail
+# loudly when the binary is missing.
+release-pdump-tests = []
 # Linux production builds enable `video` through `cargo xtask fresh-build`.
 # Keep it out of Cargo defaults so this Linux packaging concern does not change
 # the established macOS/Windows feature surface.
