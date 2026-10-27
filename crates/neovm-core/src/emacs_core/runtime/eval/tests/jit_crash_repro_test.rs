@@ -1,5 +1,7 @@
-//! Repro / diagnosis harness for the reported pre-existing JIT heap-corruption
-//! crash (task `task3-jitcrash-diag`). DIAGNOSTIC only — NO fix here.
+//! Regression harness for the reported pre-existing JIT heap-corruption crash
+//! (task `task3-jitcrash-diag`).  The repros below run in the ordinary suite:
+//! each pins a call shape that once corrupted the heap, so a regression fails
+//! here instead of in the field.
 //!
 //! Hypothesis under test: a live heap `Value` in a force-tiered compiled body is
 //! not on a GC root across an allocating callee, so a GC during the callee's
@@ -70,7 +72,6 @@ fn assert_cons_1_2(r: Value) {
 ///
 /// (lambda (mkl) (let ((H (cons 1 2))) (funcall mkl 200 0) H))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_baseline_residual_cons_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -112,7 +113,6 @@ fn repro_baseline_residual_cons_generic() {
 ///
 /// (lambda (mkl) (let ((H (cons 1 2))) (funcall mkl 40 (cons 7 8)) H))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_baseline_heap_arg_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -157,7 +157,6 @@ fn repro_baseline_heap_arg_generic() {
 ///
 /// (lambda (x) (let ((H (cons 1 2))) (list 1 2 3) H))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_baseline_op_list_residual() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -196,7 +195,6 @@ fn repro_baseline_op_list_residual() {
 /// (lambda (mkl) (let ((H (cons (jitinc 41) 2))) (funcall mkl 200 0) H))
 /// with H = (cons 42 2).
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_mir_inlined_plus_residual_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -268,7 +266,6 @@ fn repro_mir_inlined_plus_residual_generic() {
 /// (defun f () (jitinc 41) (let ((X (make-list 1 7))) (gcchurn) X))
 /// (defun gcchurn () (garbage-collect) (make-list 4096 0))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_mir_any_typed_heap_residual_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -375,7 +372,6 @@ fn repro_mir_any_typed_heap_residual_generic() {
 /// (defun f () (let ((H (cons 1 2))) (gcchurn2) H))
 /// (defun gcchurn2 () (garbage-collect) (make-list 4096 0))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_baseline_heap_residual_survives_exact_gc() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -453,7 +449,6 @@ fn repro_baseline_heap_residual_survives_exact_gc() {
 ///
 /// (lambda (mul mkl) (let ((B (funcall mul BIG BIG))) (funcall mkl 200 0) B))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_baseline_bignum_residual_generic() {
     use crate::emacs_core::eval::{
         push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
@@ -517,7 +512,6 @@ fn repro_baseline_bignum_residual_generic() {
 ///
 /// (lambda (f) (let ((H (cons 1 2))) (funcall f 200) H))  ; f = jitalloc
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_jit_to_jit_residual_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -573,7 +567,6 @@ fn repro_jit_to_jit_residual_generic() {
 /// (lambda (n mkl) (let ((acc (cons 1 2))) (while (> n 0) (funcall mkl 40 0)
 ///                                            (setq n (1- n))) acc))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_loop_carried_cons_across_call() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -625,7 +618,6 @@ fn repro_loop_carried_cons_across_call() {
 /// (lambda (mkl) (let ((h1 (cons 1 2)) (h2 (cons 3 4)) (h3 (cons 5 6)))
 ///                 (funcall mkl 200 0) h3))
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn repro_deep_residual_three_conses() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -678,7 +670,6 @@ fn repro_deep_residual_three_conses() {
 /// (and which tier), so a "pass" means the JIT ran — not that the body silently
 /// stayed on the interpreter.
 #[test]
-#[ignore = "diagnostic JIT-rooting repro (gc_stress); run with --run-ignored"]
 fn diag_repro_bodies_compile() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -782,10 +773,9 @@ fn diag_repro_bodies_compile() {
 ///   * `NEOVM_JIT=0 NEOVM_GC_STRESS=1`            (JIT off) -> expect PASS
 ///
 /// If the JIT-on run crashed while JIT-off passed, that would be the real JIT
-/// bug. (Ignored by default: `runtime_startup_context` is heavy and this is a
-/// manual diagnosis probe.)
+/// bug.  Runs in the ordinary suite; `runtime_startup_context` keeps it inside
+/// the package's bootstrap budget.
 #[test]
-#[ignore = "manual diagnosis probe: run under NEOVM_JIT_THRESHOLD=1 NEOVM_GC_STRESS=1 vs NEOVM_JIT=0 NEOVM_GC_STRESS=1"]
 fn repro_warmctx_parse_partial_sexp_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -831,12 +821,14 @@ fn repro_warmctx_parse_partial_sexp_generic() {
     }
 }
 
-/// RED HERRING (documented, ignored): `parse-partial-sexp` over a bare
-/// `Context::new()` under `gc_stress` SEGFAULTS *with the JIT DISABLED too*
-/// (`NEOVM_JIT=0`) — it is a bare-context runtime rooting gap (missing syntax
-/// state / cold bootstrap), NOT the JIT bug. Kept only to document the confound.
+/// Former RED HERRING: `parse-partial-sexp` over a bare `Context::new()` under
+/// `gc_stress` used to panic with an invalid symbol id *with the JIT DISABLED
+/// too* (`NEOVM_JIT=0`).  The confound was the probe itself: it held the
+/// bytecode caller and the callee symbol only in Rust locals while `gc_stress`
+/// ran `eval_str`, so a collection mid-loop swept them.  The values are now
+/// rooted in `eval_temp_roots` (see the comment at the loop) and the probe runs
+/// in the ordinary suite as a bare-context rooting guard.
 #[test]
-#[ignore = "bare-context gc_stress artifact: crashes with NEOVM_JIT=0 too; NOT the JIT bug"]
 fn repro_redherring_parse_partial_sexp_bare_context() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -866,6 +858,13 @@ fn repro_redherring_parse_partial_sexp_bare_context() {
         true,
     ));
     let ppss = Value::symbol("parse-partial-sexp");
+    // gc_stress is on across the loop's eval_str calls, and the collector only
+    // scans roots the context knows about: the Rust locals below are invisible
+    // to it, so root them or a collection mid-loop frees the bytecode object
+    // and the symbol, and the next call reads a garbage symbol id (the panic
+    // this probe originally documented).
+    ev.eval_temp_roots.push(caller);
+    ev.eval_temp_roots.push(ppss);
     for _ in 0..100 {
         ev.eval_str("(goto-char (point-min))").unwrap();
         let _ = ev.funcall_general_untraced(caller, vec![ppss]);

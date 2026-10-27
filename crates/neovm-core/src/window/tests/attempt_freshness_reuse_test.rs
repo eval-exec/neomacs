@@ -171,15 +171,15 @@ fn distinct_buffer_attempt_keeps_two_independent_projections() {
 #[test]
 fn same_buffer_attempt_rechecks_after_fontifier_namespace_change() {
     // Removing this real canonical name must not disturb another test's
-    // process-global registry. Follow the existing ignored-child pattern.
+    // process-global registry. Follow the marker-spawned child pattern.
     let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
         .args([
             "--exact",
             "window::display::attempt_freshness_reuse_tests::same_buffer_namespace_change_child",
-            "--ignored",
             "--test-threads",
             "1",
         ])
+        .env(NAMESPACE_CHANGE_CHILD_ENV, "1")
         .env_remove("RUST_LOG")
         .output()
         .expect("run isolated namespace scenario");
@@ -192,9 +192,15 @@ fn same_buffer_attempt_rechecks_after_fontifier_namespace_change() {
     );
 }
 
+/// Marker for the fresh process `same_buffer_attempt_rechecks_after_fontifier_namespace_change`
+/// spawns; without it the child body returns at once.
+const NAMESPACE_CHANGE_CHILD_ENV: &str = "NEOVM_TEST_NAMESPACE_CHANGE_CHILD";
+
 #[test]
-#[ignore = "real canonical-name removal runs only in the isolated parent test"]
 fn same_buffer_namespace_change_child() {
+    if std::env::var_os(NAMESPACE_CHANGE_CHILD_ENV).is_none() {
+        return;
+    }
     use crate::emacs_core::display_when::DisplayWhenSite;
     use crate::emacs_core::intern::{intern, intern_call_names, reset_intern_calls};
     use crate::emacs_core::xdisp::{RedisplayFontificationOutcome, ensure_fontified_for_redisplay};

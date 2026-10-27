@@ -829,7 +829,7 @@ fn parked_root_buffer_reuses_its_allocation_across_peer_collections() {
 /// publication, channel transfer, resume) plus one iteration of the
 /// worker's interpreted `(while (null stop) (thread-yield))`.
 #[test]
-#[ignore = "callgrind micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn green_yield_switch_micro() {
     let n: usize = std::env::var("TGY_MICRO_N")
         .ok()
@@ -1322,10 +1322,19 @@ fn fd_readiness_wakes_a_green_select_while_a_peer_yields() {
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
 }
 
+/// Marker for the fresh process `a_worker_panic_aborts_the_process_and_never_hangs_main`
+/// spawns; without it the child body returns at once.
+const WORKER_PANIC_CHILD_ENV: &str = "NEOVM_TEST_GREEN_WORKER_PANIC_CHILD";
+
 /// The child of `a_worker_panic_aborts_the_process_and_never_hangs_main`.
+///
+/// The parent re-runs exactly this test in a fresh process with
+/// [`WORKER_PANIC_CHILD_ENV`] set; a normal suite run returns here.
 #[test]
-#[ignore = "run as a child process by a_worker_panic_aborts_the_process_and_never_hangs_main"]
 fn worker_panic_child() {
+    if std::env::var_os(WORKER_PANIC_CHILD_ENV).is_none() {
+        return;
+    }
     let mut ev = green();
     super::switch::PANIC_NEXT_WORKER.store(true, std::sync::atomic::Ordering::Relaxed);
     eval(&mut ev, "(thread-join (make-thread (lambda () 'never)))");
@@ -1341,10 +1350,10 @@ fn a_worker_panic_aborts_the_process_and_never_hangs_main() {
         .args([
             "--exact",
             "emacs_core::eval::green::switch_tests::worker_panic_child",
-            "--ignored",
             "--test-threads",
             "1",
         ])
+        .env(WORKER_PANIC_CHILD_ENV, "1")
         .env_remove("RUST_LOG")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -1441,7 +1450,7 @@ fn parking_traces_private_roots_without_world_cells() {
 /// Fixed wall-time wait with a runnable peer: report select parks and peer
 /// throughput independently of the peer's machine-dependent turn count.
 #[test]
-#[ignore = "wait throughput micro; run explicitly"]
+#[cfg(feature = "perf-probes")]
 fn green_select_wait_micro() {
     let millis: u64 = std::env::var("TGSELECT_MICRO_MS")
         .ok()

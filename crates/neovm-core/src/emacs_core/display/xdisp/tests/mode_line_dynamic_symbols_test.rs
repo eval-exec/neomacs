@@ -98,10 +98,16 @@ fn render_into(
 
 /// Like the existing exact-clock fixtures, run without unrelated registry
 /// writers. The SAME owned formatter state/accumulator survives both halves.
+/// Marker for the fresh process the exact-census fixture below spawns; the
+/// exact registry epoch/count values only hold in an otherwise-unwritten process.
+const P3SYM_MODE_LINE_CHILD_ENV: &str = "NEOVM_TEST_P3SYM_MODE_LINE_CHILD";
+
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[test]
-#[ignore = "exact process registry epoch/count; run alone"]
-fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth() {
+fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
+    if std::env::var_os(P3SYM_MODE_LINE_CHILD_ENV).is_none() {
+        return;
+    }
     use crate::emacs_core::intern::EpochCachedSymbol;
     const NAME: &str = "p3sym-c5-held-pass";
     let oracle: Vec<_> = include_str!(
@@ -226,6 +232,28 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth() {
             receipt.after.chunks - receipt.before.chunks
         );
     }
+}
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[test]
+fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth() {
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child",
+            "--test-threads",
+            "1",
+        ])
+        .env(P3SYM_MODE_LINE_CHILD_ENV, "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run the exact-census child");
+    assert!(
+        output.status.success(),
+        "exact-census child failed: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 #[test]

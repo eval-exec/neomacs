@@ -693,9 +693,17 @@ fn p3sym_c5_existing_intern_can_replace_its_name_home() {
     }
 }
 
+/// Marker for the fresh process the exact-census fixtures below spawn.
+///
+/// These tests assert exact process-global registry epoch/count values, so
+/// they only hold in a process no other test has written the registry in.
+const P3SYM_EXACT_CHILD_ENV: &str = "NEOVM_TEST_P3SYM_EXACT_CENSUS_CHILD";
+
 #[test]
-#[ignore = "exact process registry epoch/count fixture; run alone"]
-fn p3sym_c5_existing_id_preserves_registry_epoch_and_count() {
+fn p3sym_c5_existing_id_preserves_registry_epoch_and_count_child() {
+    if std::env::var_os(P3SYM_EXACT_CHILD_ENV).is_none() {
+        return;
+    }
     use crate::emacs_core::intern::parallel::identity_census_for_test;
     for kind in [
         PlainSymbolBacking::Unprojected,
@@ -710,6 +718,27 @@ fn p3sym_c5_existing_id_preserves_registry_epoch_and_count() {
             assert_eq!(identity_census_for_test(), before, "existing-name lookups never bump the registry epoch");
         }).unwrap();
     }
+}
+
+#[test]
+fn p3sym_c5_existing_id_preserves_registry_epoch_and_count() {
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "p3sym_c5_existing_id_preserves_registry_epoch_and_count_child",
+            "--test-threads",
+            "1",
+        ])
+        .env(P3SYM_EXACT_CHILD_ENV, "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run the exact-census child");
+    assert!(
+        output.status.success(),
+        "exact-census child failed: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 #[test]
@@ -733,8 +762,10 @@ fn p3sym_c5_fresh_id_reuses_an_existing_noncanonical_name_atom() {
 }
 
 #[test]
-#[ignore = "exact process registry epoch/count fixture; run alone"]
-fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
+fn p3sym_c5_fresh_id_advances_registry_epoch_once_child() {
+    if std::env::var_os(P3SYM_EXACT_CHILD_ENV).is_none() {
+        return;
+    }
     for kind in [
         PlainSymbolBacking::Unprojected,
         PlainSymbolBacking::VoidProjection,
@@ -743,6 +774,27 @@ fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
             fresh_intern(kind, query, true);
         }
     }
+}
+
+#[test]
+fn p3sym_c5_fresh_id_advances_registry_epoch_once() {
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "p3sym_c5_fresh_id_advances_registry_epoch_once_child",
+            "--test-threads",
+            "1",
+        ])
+        .env(P3SYM_EXACT_CHILD_ENV, "1")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run the exact-census child");
+    assert!(
+        output.status.success(),
+        "exact-census child failed: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 }
 
 mod failures;
