@@ -27,6 +27,8 @@
 //! | `NEOMACS_REDISPLAY_GNU_HOOKS` | `off` | `off`; `on`/`1`/`true`/`yes` | GNU redisplay transaction, owned pre targets, live hook order and core configuration-hook default; selected-mini preparation; renderer-inert snapshot positions |
 
 mod mode_line_append;
+mod mode_line_coding;
+use mode_line_coding::CodingAccess;
 #[path = "mode_line_flow.rs"]
 mod mode_line_flow_policy;
 mod mode_line_output;
@@ -1996,14 +1998,8 @@ pub(crate) fn format_mode_line_from_state(
 
     let format_val = args[0];
     let face_spec = resolve_mode_line_face_spec(&args);
-    let pctx = build_mode_line_percent_context(
-        frames,
-        &*buffers,
-        None,
-        vars,
-        args.get(2),
-        StoredTarget::NoProperties,
-    );
+    let pctx =
+        build_mode_line_percent_context(frames, &*buffers, args.get(2), StoredTarget::NoProperties);
     let mut result = ModeLineRendered::default();
     let needs_eval = format_mode_line_recursive_in_state(
         vars,
@@ -2188,8 +2184,6 @@ fn render_mode_line_target<T: mode_line_walk::WalkPolicy>(
     let mut pctx = build_mode_line_percent_context(
         &eval.frames,
         &eval.buffers,
-        Some(&eval.coding_systems),
-        eval.variables(),
         request.window,
         request.target,
     );
@@ -2198,10 +2192,7 @@ fn render_mode_line_target<T: mode_line_walk::WalkPolicy>(
     let mut rendered = ModeLineRendered::default();
     let _accumulator_roots = mode_line_gc::ScratchRoots::new();
     mode_line_walk::with_root_scope(eval, |eval| {
-        for value in [pctx.frame_name, pctx.eol_indicator, request.face.face]
-            .into_iter()
-            .flatten()
-        {
+        for value in [pctx.frame_name, request.face.face].into_iter().flatten() {
             eval.push_specpdl_root(value);
         }
         format_mode_line_for_target(
@@ -2465,15 +2456,13 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
         let pctx = build_mode_line_percent_context(
             frames,
             &*buffers,
-            None,
-            vars,
             args.get(2),
             StoredTarget::NoProperties,
         );
         if let Some(face) = face_spec.face {
             roots.pin(face);
         }
-        for value in [pctx.frame_name, pctx.eol_indicator].into_iter().flatten() {
+        for value in [pctx.frame_name].into_iter().flatten() {
             roots.pin(value);
         }
         let mut result = ModeLineRendered::default();
@@ -2710,17 +2699,9 @@ struct ModeLinePercentContext<T: TargetPolicy = StoredTarget<'static>> {
     window_end: usize,
     /// Frame name for `%F`.  GNU: `f->title` then `f->name` then "Emacs".
     frame_name: Option<Value>,
-    /// Buffer coding presentation for `%z`/`%Z`.
-    /// GNU deliberately displays a blank instead of any coding mnemonic when
-    /// the buffer is unibyte.  The enum makes that state impossible to confuse
-    /// with a multibyte coding system whose mnemonic happens to be a space.
-    buffer_coding: BufferCodingDisplay,
-    /// The frame-dependent prefix GNU places before the buffer mnemonic.
-    /// A closed enum prevents a TTY context from existing without both coding
-    /// systems and keeps their GNU-defined ordering out of call sites.
-    frame_coding_mnemonics: FrameCodingMnemonics,
-    /// EOL type string for `%Z` (`:`, `\`, `/`, or undecided).
-    eol_indicator: Option<Value>,
+    /// Immutable class of the original format frame, not today's selection.
+    /// Coding values themselves are read only at each native `%z`/`%Z` stop.
+    coding_frame: mode_line_coding::CodingFrame,
     /// GNU's closed `mode_line_target` state.  This controls the target-specific
     /// `%-` expansion without letting an untyped optional width conflate string
     /// formatting with direct display formatting.
@@ -2728,37 +2709,6 @@ struct ModeLinePercentContext<T: TargetPolicy = StoredTarget<'static>> {
     /// Context walks read live PT and the original window's shared counter;
     /// read-only split entry points retain their isolated native snapshot.
     point: mode_line_point::PointContext,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FrameCodingMnemonics {
-    WindowSystem,
-    Tty { keyboard: char, terminal: char },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BufferCodingDisplay {
-    Multibyte { mnemonic: char },
-    UnibyteBlank,
-}
-
-impl BufferCodingDisplay {
-    /// GNU `decode_mode_spec` emits keyboard, terminal, then buffer coding on a
-    /// non-window-system frame.  It calls the same helper for all three, and
-    /// that helper blanks every mnemonic when the current buffer is unibyte
-    /// (`src/xdisp.c:29238-29276`).
-    fn with_frame(self, frame: FrameCodingMnemonics) -> String {
-        match (self, frame) {
-            (Self::Multibyte { mnemonic }, FrameCodingMnemonics::WindowSystem) => {
-                mnemonic.to_string()
-            }
-            (Self::Multibyte { mnemonic }, FrameCodingMnemonics::Tty { keyboard, terminal }) => {
-                format!("{keyboard}{terminal}{mnemonic}")
-            }
-            (Self::UnibyteBlank, FrameCodingMnemonics::WindowSystem) => " ".to_owned(),
-            (Self::UnibyteBlank, FrameCodingMnemonics::Tty { .. }) => "   ".to_owned(),
-        }
-    }
 }
 
 impl Default for ModeLinePercentContext<StoredTarget<'static>> {
@@ -2774,9 +2724,7 @@ impl<T: TargetPolicy> ModeLinePercentContext<T> {
             window_start: 0,
             window_end: 0,
             frame_name: None,
-            buffer_coding: BufferCodingDisplay::Multibyte { mnemonic: '-' },
-            frame_coding_mnemonics: FrameCodingMnemonics::WindowSystem,
-            eol_indicator: None,
+            coding_frame: mode_line_coding::CodingFrame::WindowSystem,
             target,
             point: mode_line_point::PointContext::default(),
         }
@@ -2787,8 +2735,6 @@ impl<T: TargetPolicy> ModeLinePercentContext<T> {
 fn build_mode_line_percent_context<T: TargetPolicy>(
     frames: &crate::window::FrameManager,
     buffers: &crate::buffer::BufferManager,
-    coding_systems: Option<&crate::emacs_core::coding::CodingSystemManager>,
-    vars: VariableView<'_>,
     window_arg: Option<&Value>,
     target: T,
 ) -> ModeLinePercentContext<T> {
@@ -2796,6 +2742,7 @@ fn build_mode_line_percent_context<T: TargetPolicy>(
 
     // --- Frame name (GNU: f->title, f->name, "Emacs") ---
     if let Some(frame) = frames.selected_frame() {
+        ctx.coding_frame = mode_line_coding::CodingFrame::from(frame);
         let title = frame.title_value();
         if title.is_string() {
             ctx.frame_name = Some(title);
@@ -2869,60 +2816,6 @@ fn build_mode_line_percent_context<T: TargetPolicy>(
         ctx.window_end = buf.point_max_char_pos().get();
     }
 
-    // --- Coding system mnemonic (GNU: decode_mode_spec_coding) ---
-    let cs_name = context_buffer
-        .and_then(|b| b.buffer_local_value("buffer-file-coding-system"))
-        .and_then(|v| v.as_bare_symbol_id());
-    let coding_mnemonic = cs_name
-        .map(|name| coding_system_mnemonic_char(coding_systems, name))
-        .unwrap_or('-');
-    ctx.buffer_coding = if context_buffer.is_some_and(|buffer| !buffer.get_multibyte()) {
-        BufferCodingDisplay::UnibyteBlank
-    } else {
-        BufferCodingDisplay::Multibyte {
-            mnemonic: coding_mnemonic,
-        }
-    };
-    if let Some(name) = cs_name {
-        ctx.eol_indicator = coding_system_eol_indicator_value(vars, name);
-    }
-
-    // --- Terminal and keyboard coding mnemonics (TTY only) ---
-    // GNU `decode_mode_spec` emits keyboard, terminal, then buffer.
-    if frames
-        .selected_frame()
-        .is_some_and(|frame| frame.effective_window_system().is_none())
-    {
-        let (keyboard, terminal) = if let Some(coding_systems) = coding_systems {
-            (
-                coding_system_mnemonic_char(
-                    Some(coding_systems),
-                    coding_systems.keyboard_coding_sym(),
-                ),
-                coding_system_mnemonic_char(
-                    Some(coding_systems),
-                    coding_systems.terminal_coding_sym(),
-                ),
-            )
-        } else {
-            let term_cs = vars
-                .value_by_name("terminal-coding-system")
-                .and_then(|v| v.as_bare_symbol_id());
-            let kbd_cs = vars
-                .value_by_name("keyboard-coding-system")
-                .and_then(|v| v.as_bare_symbol_id());
-            (
-                kbd_cs
-                    .map(|name| coding_system_mnemonic_char(None, name))
-                    .unwrap_or('-'),
-                term_cs
-                    .map(|name| coding_system_mnemonic_char(None, name))
-                    .unwrap_or('-'),
-            )
-        };
-        ctx.frame_coding_mnemonics = FrameCodingMnemonics::Tty { keyboard, terminal };
-    }
-
     ctx
 }
 
@@ -2961,74 +2854,6 @@ fn resolve_mode_line_window<'a>(
     }
 
     None
-}
-
-/// Derive coding system mnemonic character from coding system name.
-///
-/// Matches GNU `decode_mode_spec_coding` heuristics for common systems.
-fn coding_system_mnemonic_char(
-    coding_systems: Option<&crate::emacs_core::coding::CodingSystemManager>,
-    cs_name: crate::emacs_core::intern::SymId,
-) -> char {
-    if let Some(mnemonic) = coding_systems.and_then(|manager| manager.mode_line_mnemonic(cs_name)) {
-        return mnemonic;
-    }
-    let cs_name = crate::emacs_core::intern::resolve_sym(cs_name);
-    let base = cs_name
-        .strip_suffix("-unix")
-        .or_else(|| cs_name.strip_suffix("-dos"))
-        .or_else(|| cs_name.strip_suffix("-mac"))
-        .unwrap_or(cs_name);
-    match base {
-        "utf-8"
-        | "utf-8-emacs"
-        | "utf-8-auto"
-        | "mule-utf-8"
-        | "utf-16"
-        | "utf-16-be"
-        | "utf-16-le"
-        | "utf-16be"
-        | "utf-16le"
-        | "utf-16be-with-signature"
-        | "utf-16le-with-signature" => 'U',
-        "undecided" | "prefer-utf-8" | "nil" => '-',
-        "raw-text" => '=',
-        "no-conversion" | "binary" => '=',
-        "us-ascii" | "ascii" => '.',
-        "iso-8859-1" | "iso-latin-1" | "latin-1" => '1',
-        "iso-8859-2" | "iso-latin-2" | "latin-2" => '2',
-        "iso-8859-3" | "latin-3" => '3',
-        "iso-8859-4" | "latin-4" => '4',
-        "iso-8859-5" | "latin-5" => '5',
-        "iso-2022-jp" | "junet" => 'J',
-        "euc-jp" => 'E',
-        "shift_jis" | "sjis" => 'S',
-        "iso-2022-kr" => 'K',
-        "euc-kr" => 'e',
-        "gb2312" | "euc-cn" | "cn-gb" => 'C',
-        "big5" => 'B',
-        _ => '-',
-    }
-}
-
-/// Derive EOL type indicator from coding system name, using the
-/// `eol-mnemonic-*` variables from the obarray (matches GNU semantics).
-fn coding_system_eol_indicator_value(
-    vars: VariableView<'_>,
-    cs_name: crate::emacs_core::intern::SymId,
-) -> Option<Value> {
-    let cs_name = crate::emacs_core::intern::resolve_sym(cs_name);
-    let var_name = if cs_name.ends_with("-dos") {
-        "eol-mnemonic-dos"
-    } else if cs_name.ends_with("-mac") {
-        "eol-mnemonic-mac"
-    } else if cs_name.ends_with("-unix") {
-        "eol-mnemonic-unix"
-    } else {
-        "eol-mnemonic-undecided"
-    };
-    vars.value_by_name(var_name)
-        .filter(|value| value.is_string() || value.as_char().is_some())
 }
 
 /// Check if a directory path looks like a Tramp remote path.
@@ -3500,12 +3325,16 @@ impl ModeLineRendered {
         ));
     }
 
+    fn append_lisp_string_text(&mut self, string: &crate::heap_types::LispString) {
+        self.multibyte |= string.is_multibyte();
+        self.text.extend(mode_line_string_char_codes(string));
+    }
+
     fn append_string_value_preserving_props(&mut self, value: &Value) {
         match value.as_lisp_string() {
             Some(string) => {
                 let char_offset = self.char_len();
-                self.multibyte |= string.is_multibyte();
-                self.text.extend(mode_line_string_char_codes(string));
+                self.append_lisp_string_text(string);
                 self.record_source_span(char_offset, self.char_len(), *value, 0);
                 with_mode_line_string_properties(*value, |props| {
                     self.append_properties(props, CharLen::new(char_offset));
@@ -4233,6 +4062,7 @@ fn append_mode_line_string_in_state<T: TargetPolicy>(
 ) {
     append_mode_line_string_with_point_access(
         vars,
+        CodingAccess::SplitState,
         dynamic,
         buffers,
         processes,
@@ -4349,6 +4179,7 @@ fn append_mode_line_string_in_eval_with_field_limit<T: TargetPolicy>(
     let mut access = mode_line_point::Access::Live(&mut eval.frames);
     append_mode_line_string_with_point_access(
         vars,
+        CodingAccess::Registry(&eval.coding_systems),
         &[],
         &eval.buffers,
         &eval.processes,
@@ -4365,6 +4196,7 @@ fn append_mode_line_string_in_eval_with_field_limit<T: TargetPolicy>(
 #[allow(clippy::too_many_arguments)]
 fn append_mode_line_string_with_point_access<T: TargetPolicy>(
     vars: VariableView<'_>,
+    coding: CodingAccess<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
@@ -4391,6 +4223,7 @@ fn append_mode_line_string_with_point_access<T: TargetPolicy>(
     } else {
         expand_mode_line_percent_in_state(
             vars,
+            coding,
             dynamic,
             buffers,
             processes,
@@ -4922,6 +4755,7 @@ fn append_unknown_mode_line_percent_spec(
 /// memo access cannot escape this per-field decoder call.
 struct NativeSpecInputs<'state, 'frame, T: TargetPolicy> {
     vars: VariableView<'state>,
+    coding: CodingAccess<'state>,
     dynamic: &'state [OrderedRuntimeBindingMap],
     buffers: &'state crate::buffer::BufferManager,
     processes: &'state crate::emacs_core::process::ProcessManager,
@@ -4948,6 +4782,7 @@ fn decode_one_native_spec<T: TargetPolicy, G: NativeGlobalPolicy>(
 ) -> NativeSpecAction<G::Request> {
     let NativeSpecInputs {
         vars,
+        coding,
         dynamic,
         buffers,
         processes,
@@ -5363,17 +5198,15 @@ fn decode_one_native_spec<T: TargetPolicy, G: NativeGlobalPolicy>(
             };
             append_mode_line_percent_string_spec(result, &text, props_at_percent(), field_width);
         }
-        Some('z') => {
-            // GNU xdisp.c:29494 — coding system mnemonic without EOL indicator.
-            // On TTY frames GNU includes terminal + keyboard + buffer coding
-            // mnemonics, regardless of MODE_LINE_STRING vs MODE_LINE_DISPLAY.
-            append_mode_line_percent_string_spec(
-                result,
-                &pctx.buffer_coding.with_frame(pctx.frame_coding_mnemonics),
-                props_at_percent(),
-                field_width,
-            );
-        }
+        Some('z') => coding.append_field(
+            mode_line_coding::CodingDetail::Mnemonic,
+            pctx.coding_frame,
+            vars,
+            buffers,
+            result,
+            props_at_percent(),
+            stored_width,
+        ),
         Some('@') => {
             // GNU xdisp.c:29477 — "@" if default-directory is remote, "-" otherwise.
             let remote = mode_line_fixed_symbol_value_in_state(
@@ -5391,18 +5224,15 @@ fn decode_one_native_spec<T: TargetPolicy, G: NativeGlobalPolicy>(
                 field_width,
             );
         }
-        Some('Z') => {
-            // GNU xdisp.c:29496 — coding system mnemonic WITH EOL indicator.
-            let mut segment =
-                ModeLineRendered::plain(pctx.buffer_coding.with_frame(pctx.frame_coding_mnemonics));
-            if let Some(eol_indicator) = pctx.eol_indicator {
-                segment.append_decoded_string_or_char_value_preserving_props(&eol_indicator);
-            } else {
-                segment.push_plain_char(':');
-            }
-            segment.overlay_property_map(props_at_percent().clone());
-            append_mode_line_rendered_segment(result, &segment, field_width, 0);
-        }
+        Some('Z') => coding.append_field(
+            mode_line_coding::CodingDetail::WithEndOfLine,
+            pctx.coding_frame,
+            vars,
+            buffers,
+            result,
+            props_at_percent(),
+            stored_width,
+        ),
         Some(c @ ('[' | ']')) => {
             let repeated = match (c, command_loop_depth.get()) {
                 ('[', depth) if depth > 5 => "[[[... ".to_string(),
@@ -5432,6 +5262,7 @@ fn decode_one_native_spec<T: TargetPolicy, G: NativeGlobalPolicy>(
 
 struct NativeAppendDriver<'input, 'dynamic, 'point, T: TargetPolicy, L> {
     vars: VariableView<'input>,
+    coding: CodingAccess<'input>,
     dynamic: &'dynamic [OrderedRuntimeBindingMap],
     buffers: &'input crate::buffer::BufferManager,
     processes: &'input crate::emacs_core::process::ProcessManager,
@@ -5487,6 +5318,7 @@ impl<T: TargetPolicy, L: ModeLineNativeFieldLimit> PercentAppendDriver
         match decode_one_native_spec::<T, LiteralGlobal>(
             NativeSpecInputs {
                 vars: self.vars,
+                coding: self.coding,
                 dynamic: self.dynamic,
                 buffers: self.buffers,
                 processes: self.processes,
@@ -5514,6 +5346,7 @@ impl<T: TargetPolicy, L: ModeLineNativeFieldLimit> PercentAppendDriver
 #[allow(clippy::too_many_arguments)]
 fn expand_mode_line_percent_in_state<T: TargetPolicy>(
     vars: VariableView<'_>,
+    coding: CodingAccess<'_>,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
     processes: &crate::emacs_core::process::ProcessManager,
@@ -5533,6 +5366,7 @@ fn expand_mode_line_percent_in_state<T: TargetPolicy>(
     };
     let mut driver = NativeAppendDriver {
         vars,
+        coding,
         dynamic,
         buffers,
         processes,

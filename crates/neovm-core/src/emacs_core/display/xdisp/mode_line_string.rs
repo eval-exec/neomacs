@@ -620,6 +620,7 @@ impl PercentAppendDriver for StoredAppendDriver<'_, '_, '_, '_> {
             decode_one_native_spec::<StoredTarget<'_>, RecursiveGlobal>(
                 NativeSpecInputs {
                     vars,
+                    coding: CodingAccess::Registry(&self.eval.coding_systems),
                     dynamic: &[],
                     buffers: &self.eval.buffers,
                     processes: &self.eval.processes,

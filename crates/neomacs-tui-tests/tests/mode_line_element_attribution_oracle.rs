@@ -1,6 +1,6 @@
 #![cfg(unix)]
 //! GNU authority after the original D29 W100 TTY scene; raw outputs are retained.
-//! Only bytecode documentation reached through property values is projected.
+//! Every property value is compared raw against the canonical GNU build.
 //! Run the owning test invocation through the campaign sandbox-run.sh.
 
 use std::path::{Path, PathBuf};
@@ -463,6 +463,18 @@ const POLICY: &str = r#"{
 }"#;
 
 const STRICT_PROBE: &str = r###"
+(defconst ep30-strict-output-count 22)
+(defun ep30-strict-targets ()
+  (let ((targets (list (list "full" mode-line-format))) (index 0))
+    (dolist (element mode-line-format)
+      (setq targets (append targets (list (list (format "element-%02d" index) element)))
+            index (1+ index)))
+    (append targets
+            (list (list "percent-specs" "[%l|%c|%p|%I]")
+                  (list "eval-constant" '(:eval (ep30-strict-counter)))
+                  (list "empty-string" "") (list "loop-control" "")))))
+(defun ep30-strict-format (form window buffer)
+  (format-mode-line form nil window buffer))
 (defvar ep30-strict-effects 0)
 (defun ep30-strict-counter ()
   (setq ep30-strict-effects (1+ ep30-strict-effects)) "EV")
@@ -483,29 +495,23 @@ const STRICT_PROBE: &str = r###"
                (= (point) gnugap-point) (= (buffer-size) gnugap-size))
     (error "Strict comparison requires the actual initialized TTY/W100 scene"))
   (let* ((window (selected-window)) (buffer (current-buffer))
-         (targets (list (list "full" mode-line-format)))
-         (index 0) (reference-file (getenv "EP30_REFERENCE"))
+         (targets (ep30-strict-targets))
+         (reference-file (getenv "EP30_REFERENCE"))
          (reference (when reference-file
                       (with-temp-buffer
                         (insert-file-contents reference-file)
                         (read (current-buffer)))))
          (observations nil) (reference-output nil)
          (raw-strict-passes 0))
-    (dolist (element mode-line-format)
-      (setq targets (append targets (list (list (format "element-%02d" index) element)))
-            index (1+ index)))
-    (setq targets
-          (append targets
-                  (list (list "percent-specs" "[%l|%c|%p|%I]")
-                        (list "eval-constant" '(:eval (ep30-strict-counter)))
-                        (list "empty-string" "") (list "loop-control" ""))))
-    (unless (= (length targets) 22) (error "Default target count changed"))
+    (unless (= (length targets) ep30-strict-output-count)
+      (error "Target count changed"))
     (when reference-file
-      (unless (= (length reference) 22) (error "GNU must supply all 22 outputs")))
+      (unless (= (length reference) ep30-strict-output-count)
+        (error "GNU must supply every output")))
     (dolist (target targets)
       (let* ((name (car target)) (form (cadr target))
              (effects-before ep30-strict-effects)
-             (value (format-mode-line form nil window buffer))
+             (value (ep30-strict-format form window buffer))
              (printed (ep30-strict-print value)) (roundtrip (read printed))
              (expected (assoc name reference)))
         (unless (and (stringp value) (stringp roundtrip)
@@ -539,16 +545,64 @@ const STRICT_PROBE: &str = r###"
     (with-temp-file (getenv "EP30_RESULT")
       (insert (json-serialize
                `((schema . "mode-line-element-attribution-w100-v1")
-                 (status . ,(if (= raw-strict-passes 22)
+                 (status . ,(if (= raw-strict-passes ep30-strict-output-count)
                                 "PASS_RAW_PROPERTIES"
                               "FAIL_RAW_PROPERTIES"))
                  (raw_strict_passes . ,raw-strict-passes)
                  (emacs_version . ,emacs-version)
                  (warmup_pairs . ,gnugap-pairs) (commands . ,gnugap-seq)
-                 (outputs . 22) (point . ,(point)) (window_start . ,(window-start))
+                 (outputs . ,ep30-strict-output-count) (point . ,(point)) (window_start . ,(window-start))
                  (width . ,(window-width)) (height . ,(window-height))
                  (entries . ,(vconcat (nreverse observations)))))))))
 (advice-add 'gnugap--finish :before #'ep30-strict-collect)
+"###;
+
+// GNU xdisp.c:29779-29812 resolves coding state at each percent stop, after
+// any preceding callback. The canonical oracle supplies all raw expectations.
+const CODING_MUTATIONS: &str = r###"
+(setq ep30-strict-output-count 8)
+(defvar ep35-coding-foreign nil)
+(defvar ep35-coding-unibyte nil)
+(defvar ep35-coding-global-calls 0)
+(defun ep30-strict-targets ()
+  (list
+   (list "buffer-coding" '("%Z" (:eval (progn (setq buffer-file-coding-system 'utf-8-dos) "")) "%Z"))
+   (list "eol-properties" '("%Z" (:eval (progn (setq eol-mnemonic-unix (propertize "EOL" 'face 'bold)) "")) "%Z"))
+   (list "keyboard-coding" '("%z" (:eval (progn (set-keyboard-coding-system-internal 'no-conversion) "")) "%z"))
+   (list "terminal-coding" '("%z" (:eval (progn (set-terminal-coding-system-internal 'utf-8-unix) "")) "%z"))
+   (list "same-string-global" "%Z%M%Z")
+   (list "foreign-multibyte" '(:eval (format-mode-line "%z|%Z" nil (selected-window) ep35-coding-foreign)))
+   (list "foreign-unibyte" '(:eval (format-mode-line "%z|%Z" nil (selected-window) ep35-coding-unibyte)))
+   (list "nested-mutation" '("%Z" (:eval (progn (format-mode-line '(:eval (progn (setq buffer-file-coding-system 'utf-8-dos) ""))) "")) "%Z"))))
+(defun ep30-strict-format (form window buffer)
+  (let ((saved-keyboard (keyboard-coding-system))
+        (saved-terminal (terminal-coding-system))
+        (buffer-file-coding-system 'utf-8-unix)
+        (eol-mnemonic-unix ":") (eol-mnemonic-dos "D")
+        (ep35-coding-global-calls 0)
+        (global-mode-string '((:eval (progn (setq ep35-coding-global-calls (1+ ep35-coding-global-calls)
+                                                buffer-file-coding-system 'utf-8-dos) ""))))
+        (ep35-coding-foreign (get-buffer-create "ep35-coding-foreign"))
+        (ep35-coding-unibyte (get-buffer-create "ep35-coding-unibyte")))
+    (unwind-protect
+        (progn
+          (set-keyboard-coding-system-internal 'utf-8-unix)
+          (set-terminal-coding-system-internal 'no-conversion)
+          (with-current-buffer ep35-coding-foreign
+            (setq buffer-file-coding-system 'utf-8-dos))
+          (with-current-buffer ep35-coding-unibyte
+            (set-buffer-multibyte nil)
+            (setq buffer-file-coding-system 'utf-8-dos))
+          (let ((value (format-mode-line form nil window buffer)))
+            (when (equal form "%Z%M%Z")
+              (unless (and (= ep35-coding-global-calls 1)
+                           (eq buffer-file-coding-system 'utf-8-dos))
+                (error "Global callback did not run and mutate coding exactly once")))
+            value))
+      (set-keyboard-coding-system-internal saved-keyboard)
+      (set-terminal-coding-system-internal saved-terminal)
+      (kill-buffer ep35-coding-foreign)
+      (kill-buffer ep35-coding-unibyte))))
 "###;
 
 struct Observation {
@@ -566,7 +620,34 @@ fn wait_for_file(session: &mut TuiSession, path: &Path) {
     );
 }
 
-fn run_probe(name: &str, program: PathBuf, reference: Option<&str>) -> Observation {
+#[derive(Clone, Copy)]
+enum ProbeKind {
+    DefaultW100,
+    CodingMutations,
+}
+
+impl ProbeKind {
+    fn output_count(self) -> usize {
+        match self {
+            Self::DefaultW100 => 22,
+            Self::CodingMutations => 8,
+        }
+    }
+
+    fn extra_source(self) -> &'static str {
+        match self {
+            Self::DefaultW100 => "",
+            Self::CodingMutations => CODING_MUTATIONS,
+        }
+    }
+}
+
+fn run_probe(
+    name: &str,
+    program: PathBuf,
+    reference: Option<&str>,
+    kind: ProbeKind,
+) -> Observation {
     let home = neomacs_tui_tests::TuiTempDirectory::new("neomacs-element-attribution-");
     let script = home.path().join("probe.el");
     let policy = home.path().join("policy.json");
@@ -575,8 +656,11 @@ fn run_probe(name: &str, program: PathBuf, reference: Option<&str>) -> Observati
     let release = home.path().join("release");
     let values = home.path().join("values.el");
     let result = home.path().join("result.json");
-    std::fs::write(&script, format!("{ORIGINAL_W100}\n{STRICT_PROBE}"))
-        .expect("write owned fixture");
+    std::fs::write(
+        &script,
+        format!("{ORIGINAL_W100}\n{STRICT_PROBE}\n{}", kind.extra_source()),
+    )
+    .expect("write owned fixture");
     std::fs::write(&policy, POLICY).expect("write original suppression policy");
     let mut launch = TuiLaunch::new(program.as_os_str()).arg("-nw").arg("-Q");
     if reference.is_none() {
@@ -637,15 +721,15 @@ fn run_probe(name: &str, program: PathBuf, reference: Option<&str>) -> Observati
     assert_eq!(
         result["status"],
         "PASS_RAW_PROPERTIES",
-        "{name} unfiltered property outcomes: {}",
+        "{name} unfiltered property outcomes: {}; raw GNU reference: {reference:?}",
         serde_json::to_string_pretty(&result).expect("readable strict outcome")
     );
     assert_eq!(result["warmup_pairs"], 100);
     assert_eq!(result["commands"], 200);
-    assert_eq!(result["outputs"], 22);
-    assert_eq!(result["raw_strict_passes"], 22);
+    assert_eq!(result["outputs"], kind.output_count());
+    assert_eq!(result["raw_strict_passes"], kind.output_count());
     let entries = result["entries"].as_array().expect("all target records");
-    assert_eq!(entries.len(), 22);
+    assert_eq!(entries.len(), kind.output_count());
     for entry in entries {
         assert_eq!(entry["strict_roundtrip"], true);
         assert_eq!(entry["source_equal_including_properties"], true);
@@ -659,7 +743,7 @@ fn mode_line_element_attribution_all_22_default_w100_outputs_equal_gnu_propertie
     let gnu_program = std::env::var_os("ORACLE_EMACS")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("emacs"));
-    let gnu = run_probe("GNU", gnu_program, None);
+    let gnu = run_probe("GNU", gnu_program, None, ProbeKind::DefaultW100);
     assert_eq!(gnu.result["emacs_version"], "31.1", "pinned GNU authority");
     let program = neomacs_tui_tests::neomacs_binary();
     assert!(
@@ -667,7 +751,12 @@ fn mode_line_element_attribution_all_22_default_w100_outputs_equal_gnu_propertie
         "Neomacs binary missing: {}",
         program.display()
     );
-    let neo = run_probe("Neomacs", program, Some(&gnu.values));
+    let neo = run_probe(
+        "Neomacs",
+        program,
+        Some(&gnu.values),
+        ProbeKind::DefaultW100,
+    );
     for key in [
         "warmup_pairs",
         "commands",
@@ -692,4 +781,25 @@ fn mode_line_element_attribution_all_22_default_w100_outputs_equal_gnu_propertie
         .map(|entry| entry["target"].as_str().unwrap())
         .collect();
     assert_eq!(neo_targets, gnu_targets, "all targets in original order");
+}
+
+#[test]
+fn mode_line_coding_fields_read_live_values_after_callbacks_equal_gnu_properties() {
+    let gnu_program = std::env::var_os("ORACLE_EMACS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("emacs"));
+    let gnu = run_probe("GNU coding", gnu_program, None, ProbeKind::CodingMutations);
+    assert_eq!(gnu.result["emacs_version"], "31.1", "pinned GNU authority");
+    let program = neomacs_tui_tests::neomacs_binary();
+    assert!(
+        program.exists(),
+        "Neomacs binary missing: {}",
+        program.display()
+    );
+    run_probe(
+        "Neomacs coding",
+        program,
+        Some(&gnu.values),
+        ProbeKind::CodingMutations,
+    );
 }
