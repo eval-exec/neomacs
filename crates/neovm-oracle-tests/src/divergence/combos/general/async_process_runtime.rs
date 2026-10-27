@@ -298,7 +298,9 @@ fn async_proc_process_send_region() {
                  :filter (lambda (_p s) (setq acc (concat acc s))))))
       (set-process-query-on-exit-flag proc nil)
       (process-send-region proc (point-min) (point-max)) (process-send-eof proc)
-      (while (process-live-p proc) (accept-process-output proc 1))
+      ;; A terminal status does not imply the final filter bytes arrived;
+      ;; the post-terminal observation drains them (GNU proc.c).
+      (neovm--oracle-settle-process proc)
       (list acc (length acc)))))"##,
         expect,
     );
@@ -349,10 +351,13 @@ fn async_proc_start_process_shell_command() {
         r##"(let ((buf (generate-new-buffer " neo-spsc-xxx")))
   (let ((proc (start-process-shell-command "neo-spsc-xxx" buf "echo hi && echo bye")))
     (set-process-query-on-exit-flag proc nil)
-    (while (process-live-p proc) (accept-process-output proc 1))
-    ;; The process sentinel's message is delivered by the event loop after
-    ;; the process exits; wait for it so the transcript does not depend on
-    ;; whether the last accept-process-output ran the sentinel yet.
+    ;; A terminal status does not imply the final pipe bytes or the default
+    ;; sentinel have been delivered; the post-terminal observation drains
+    ;; them (GNU proc.c).
+    (neovm--oracle-settle-process proc)
+    ;; Then wait for the sentinel's message itself: the event loop delivers
+    ;; it after the process exits, so the transcript must not depend on
+    ;; whether the last accept-process-output ran it yet.
     (let ((tries 0))
       (while (and (< tries 100)
                   (with-current-buffer buf

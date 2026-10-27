@@ -79,7 +79,9 @@ fn proc_buffer_textprop_marker_undo() {
     (buffer-enable-undo)
     (let ((proc (start-process "neo-cb1-xxx" buf "printf" "alpha beta gamma")))
       (set-process-query-on-exit-flag proc nil)
-      (while (process-live-p proc) (accept-process-output proc 1))
+      ;; The post-terminal observation drains the final output/sentinel;
+      ;; reading the buffer straight after the live-status loop races it.
+      (neovm--oracle-settle-process proc)
       (goto-char (point-min))
       (put-text-property (point-min) (point-max) 'face 'bold)
       (let ((m (copy-marker 7)))
