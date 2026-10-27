@@ -38,11 +38,12 @@ fn combo_deep_headline_nesting() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_deeply_nested_blocks() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (center-block src-block (src-block quote-block center-block section org-data))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -59,7 +60,7 @@ fn combo_deeply_nested_blocks() {
                 (org-element-type (org-element-at-point)))
          ;; Lineage at source block.
          (mapcar #'org-element-type
-                 (org-element-lineage (org-element-context) nil t))))))"##,
+                 (org-element-lineage (org-element-context) nil t)))))))"##,
         expect,
     );
 }
@@ -68,11 +69,11 @@ fn combo_deeply_nested_blocks() {
 // Mixed content stress tests
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_mixed_content_full_document() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (void-function org-export--get-export-attributes)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -179,7 +180,7 @@ This section is under development.
          (length (org-element-map tree 'target #'identity))
          ;; Export headline numbers.
          (mapcar (lambda (h) (org-export-get-headline-number h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -188,11 +189,12 @@ This section is under development.
 // Edge cases: empty, minimal, boundary
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_empty_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (org-data nil ((org-data (:standard-properties [1 1 1 1 1 0 nil org-data nil nil nil nil 1 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -202,16 +204,15 @@ fn combo_empty_buffer() {
         (list
          (org-element-type tree)
          (org-element-contents tree)
-         (org-element-map tree t #'identity)))))"##,
+         (org-element-map tree t #'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_single_character() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org-data 4 paragraph)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -223,7 +224,7 @@ fn combo_single_character() {
         (list
          (org-element-type tree)
          (length (org-element-map tree t #'identity))
-         (org-element-type (org-element-at-point))))))"##,
+         (org-element-type (org-element-at-point)))))))"##,
         expect,
     );
 }
@@ -249,11 +250,10 @@ fn combo_only_headline_no_body() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_only_blank_lines() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org-data 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -264,7 +264,7 @@ fn combo_only_blank_lines() {
       (let* ((tree (org-element-parse-buffer)))
         (list
          (org-element-type tree)
-         (length (org-element-map tree t #'identity))))))"##,
+         (length (org-element-map tree t #'identity)))))))"##,
         expect,
     );
 }
@@ -273,11 +273,12 @@ fn combo_only_blank_lines() {
 // Strict: org-element property contracts
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_headline_property_contract() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (1 \"TODO\" 65 (\"tag1\" \"tag2\") \"Headline\" t t t org-data t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -303,16 +304,17 @@ fn strict_headline_property_contract() {
          (org-element-type (org-element-property :parent hl))
          ;; :contents-begin and :contents-end.
          (numberp (org-element-property :contents-begin hl))
-         (numberp (org-element-property :contents-end hl))))))"##,
+         (numberp (org-element-property :contents-end hl)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_paragraph_property_contract() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (paragraph t t t section (plain-text bold plain-text italic plain-text))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -332,16 +334,17 @@ fn strict_paragraph_property_contract() {
          ;; Parent.
          (org-element-type (org-element-property :parent para))
          ;; Contents contain objects.
-         (mapcar #'org-element-type (org-element-contents para))))))"##,
+         (mapcar #'org-element-type (org-element-contents para)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_link_property_contract() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (link \"https\" \"//orgmode.org\" (#(\"Org mode\" 0 8 (:parent (link (:standard-properties [5 nil 28 36 39 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (paragraph (:standard-properties [1 1 1 52 52 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [1 1 1 52 52 0 nil first-section nil nil nil 1 52 nil #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 52 52 0 nil org-data nil nil nil 3 52 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) #10)]) #7)]) #(\"See \" 0 4 (:parent #7)) #4 #(\"for details.\\n\" 0 13 (:parent #7)))] :type \"https\" :type-explicit-p t :path \"//orgmode.org\" :format bracket :raw-link \"https://orgmode.org\" :application nil :search-option nil) #(\"Org mode\" 0 8 (:parent #4)))))) paragraph)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -361,7 +364,7 @@ fn strict_link_property_contract() {
          ;; Has description.
          (org-element-contents link)
          ;; Parent is paragraph.
-         (org-element-type (org-element-property :parent link))))))"##,
+         (org-element-type (org-element-property :parent link)))))))"##,
         expect,
     );
 }
@@ -404,11 +407,12 @@ fn strict_timestamp_property_contract() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_src_block_property_contract() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (src-block \"emacs-lisp\" \"-n -r\" \":results output :exports code\" \"(+ 1 2)\\n\" t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -431,7 +435,7 @@ fn strict_src_block_property_contract() {
          (org-element-property :value src)
          ;; Positions.
          (numberp (org-element-property :begin src))
-         (numberp (org-element-property :end src))))))"##,
+         (numberp (org-element-property :end src)))))))"##,
         expect,
     );
 }
@@ -440,11 +444,10 @@ fn strict_src_block_property_contract() {
 // Strict: org-element-map edge cases
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_map_with_first_match() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"H1\" (\"H1\" \"H2\" \"H3\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -459,16 +462,15 @@ fn strict_map_with_first_match() {
            (org-element-map tree 'headline #'identity nil t))
          ;; FIRST-MATCH = nil: list of results.
          (mapcar (lambda (h) (org-element-property :raw-value h))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_map_with_no_recursion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 0)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -481,16 +483,15 @@ fn strict_map_with_no_recursion() {
          ;; Without no-recursion: finds objects inside.
          (length (org-element-map tree 'bold #'identity))
          ;; With no-recursion on center-block: skips contents.
-         (length (org-element-map tree 'bold #'identity nil nil 'center-block))))))"##,
+         (length (org-element-map tree 'bold #'identity nil nil 'center-block)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_map_with_affiliated() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (0 0)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -503,7 +504,7 @@ fn strict_map_with_affiliated() {
          ;; Without affiliated: no bold found.
          (length (org-element-map tree 'bold #'identity))
          ;; With affiliated: finds bold in caption.
-         (length (org-element-map tree 'bold #'identity nil nil nil nil t))))))"##,
+         (length (org-element-map tree 'bold #'identity nil nil nil nil t)))))))"##,
         expect,
     );
 }
@@ -592,11 +593,11 @@ fn strict_interpret_roundtrip_list() {
 // Complex: multi-file-like structures
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_multiple_top_level_sections() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (5 4 6 ((1 \"H1\") (1 \"H2\") (2 \"H2.1\") (1 \"H3\")))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -616,16 +617,17 @@ fn combo_multiple_top_level_sections() {
          (mapcar (lambda (h) (list (org-element-property :level h)
                              (substring-no-properties
                               (org-element-property :raw-value h))))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_interleaved_blocks_and_headlines() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((src-block quote-block example-block center-block) (\"H1\" \"H2\" \"H3\") (section section section section))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -643,7 +645,7 @@ fn combo_interleaved_blocks_and_headlines() {
                  (org-element-map tree 'headline #'identity))
          ;; Each block has correct parent.
          (org-element-map tree '(src-block quote-block example-block center-block)
-           (lambda (el) (org-element-type (org-element-property :parent el))))))))"##,
+           (lambda (el) (org-element-type (org-element-property :parent el)))))))))"##,
         expect,
     );
 }
@@ -652,11 +654,10 @@ fn combo_interleaved_blocks_and_headlines() {
 // Strict: error conditions
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_incomplete_block_no_crash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org-data 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -669,16 +670,15 @@ fn strict_incomplete_block_no_crash() {
          ;; Should not crash; tree is still valid.
          (org-element-type tree)
          ;; Headline after incomplete block is still found.
-         (length (org-element-map tree 'headline #'identity))))))"##,
+         (length (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_malformed_link_no_crash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org-data 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -690,16 +690,15 @@ fn strict_malformed_link_no_crash() {
         (list
          (org-element-type tree)
          ;; Valid link is still found.
-         (length (org-element-map tree 'link #'identity))))))"##,
+         (length (org-element-map tree 'link #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_malformed_table_no_crash() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org-data 3)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -710,7 +709,7 @@ fn strict_malformed_table_no_crash() {
       (let* ((tree (org-element-parse-buffer)))
         (list
          (org-element-type tree)
-         (length (org-element-map tree 'table-row #'identity))))))"##,
+         (length (org-element-map tree 'table-row #'identity)))))))"##,
         expect,
     );
 }
@@ -802,11 +801,12 @@ fn combo_property_inheritance_chain() {
 // Complex: export with all option types
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_export_all_options() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"Options Test\" 0 12 (:parent (#(\"Options Test\" 0 12 (:parent #4)))))) (#(\"Author Name\" 0 11 (:parent (#(\"Author Name\" 0 11 (:parent #4)))))) \"author@example.org\" 2 t t t t t ((1) (1 1) (2)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -857,7 +857,7 @@ Content.")
          (plist-get info :with-emphasize)
          ;; Headline numbers.
          (mapcar (lambda (h) (org-export-get-headline-number h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -900,11 +900,10 @@ fn combo_list_operations() {
 // Complex: footnote nesting and references
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_footnote_nesting() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (4 3 (1 2 3 4) (t t t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -929,7 +928,7 @@ fn combo_footnote_nesting() {
                  (org-element-map tree 'footnote-reference #'identity))
          ;; First reference check.
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -977,11 +976,10 @@ fn combo_clock_logbook() {
 // Complex: dynamic blocks and column view
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_dynamic_block() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 \"clocktable\" 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -997,7 +995,7 @@ fn combo_dynamic_block() {
          (org-element-property :block-name
            (org-element-map tree 'dynamic-block #'identity nil t))
          ;; Clock found.
-         (length (org-element-map tree 'clock #'identity))))))"##,
+         (length (org-element-map tree 'clock #'identity)))))))"##,
         expect,
     );
 }
@@ -1006,11 +1004,10 @@ fn combo_dynamic_block() {
 // Complex: entities and LaTeX
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_entities_latex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 (\"alpha\" \"beta\") 2 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1028,7 +1025,7 @@ fn combo_entities_latex() {
          ;; LaTeX fragments.
          (length (org-element-map tree 'latex-fragment #'identity))
          ;; LaTeX environments.
-         (length (org-element-map tree 'latex-environment #'identity))))))"##,
+         (length (org-element-map tree 'latex-environment #'identity)))))))"##,
         expect,
     );
 }
@@ -1090,11 +1087,12 @@ fn combo_refile_targets() {
 // Complex: tag inheritance and matching
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_tag_inheritance_matching() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" (\"project\")) (\"Design\" (\"design\")) (\"UI\" (\"ui\")) (\"Wireframes\" nil) (\"Development\" (\"dev\")) (\"Backend\" (\"backend\")) (\"Frontend\" (\"frontend\"))) 7 3)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1113,7 +1111,7 @@ fn combo_tag_inheritance_matching() {
          ;; Tag matcher: find :project: tagged.
          (length (org-map-entries #'point "project"))
          ;; Tag matcher: find :dev: tagged.
-         (length (org-map-entries #'point "dev"))))))"##,
+         (length (org-map-entries #'point "dev")))))))"##,
         expect,
     );
 }
@@ -1158,11 +1156,12 @@ fn combo_export_backend_chain() {
 // Complex: org-cite citations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo_citations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (5 7 (nil nil \"style\" nil nil) (\"key1\" \"a\" \"b\" \"c\" \"key\" \"key\" \"key\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1182,7 +1181,7 @@ fn combo_citations() {
                  (org-element-map tree 'citation #'identity))
          ;; Keys.
          (mapcar (lambda (r) (org-element-property :key r))
-                 (org-element-map tree 'citation-reference #'identity))))))"##,
+                 (org-element-map tree 'citation-reference #'identity)))))))"##,
         expect,
     );
 }

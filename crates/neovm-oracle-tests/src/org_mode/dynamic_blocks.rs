@@ -39,12 +39,11 @@ fn org_custom_dynamic_block_insert_update_all_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_dblock_prepare_nested_content_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Not at a dynamic block\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -74,17 +73,17 @@ fn org_dblock_prepare_nested_content_combo() {
                 (lambda (e)
                   (list (org-element-type e)
                         (org-element-property :begin e)
-                        (org-element-property :end e))))))))"##,
+                        (org-element-property :end e)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clocktable_dblock_shift_steps_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""ERR (user-error \"Unknown ‘:step’ specification: daysteps\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -117,7 +116,7 @@ fn org_clocktable_dblock_shift_steps_combo() {
         (list steps-before
               after-update
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -192,12 +191,11 @@ fn org_columnview_dblock_filters_tblfm_links_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_custom_dblock_nested_table_rewrite_all_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Not at a dynamic block\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -279,7 +277,7 @@ fn org_custom_dblock_nested_table_rewrite_all_combo() {
               table-summaries
               ast
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -585,7 +583,6 @@ fn org_clocktable_columnview_custom_dblock_update_regen_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_dblock_clocktable_columnview_multi_update_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -637,7 +634,7 @@ fn org_dblock_clocktable_columnview_multi_update_edit_deep() {
               (list initial
                     after-ct
                     after-col
-                    after-mutate)))))))))"##,
+                    after-mutate))))))))"##,
         expect,
     );
 }

@@ -7,11 +7,12 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // Giga: org-element with all export option combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_option_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"Test\" 0 4 (:parent (#(\"Test\" 0 4 (:parent #4)))))) (#(\"Author\" 0 6 (:parent (#(\"Author\" 0 6 (:parent #4)))))) \"email@example.org\" 3 t t t t t t t t t t t t t t t t t nil t t)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -70,7 +71,7 @@ Body")
          (plist-get info :with-todo-keywords)
          (plist-get info :with-inlinetasks)
          (plist-get info :with-statistics-cookies)
-         (plist-get info :with-title)))))"##,
+         (plist-get info :with-title))))))"##,
         expect,
     );
 }
@@ -79,11 +80,12 @@ Body")
 // Giga: org-element with all export headline number combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_headline_number_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((1) (1 1) (1 1 1) (1 1 2) (1 2) (1 2 1) (2) (2 1) (2 1 1) (2 2) (3)) (1 2 3 3 2 3 1 2 3 2 1) (t t t t t t t t t t t) (nil nil nil nil nil nil nil nil nil nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -120,7 +122,7 @@ fn giga_all_export_headline_number_combinations() {
                  (org-element-map tree 'headline #'identity))
          ;; Low level?
          (mapcar (lambda (h) (org-export-low-level-p h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -129,11 +131,10 @@ fn giga_all_export_headline_number_combinations() {
 // Giga: org-element with all export footnote number combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_footnote_number_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((1 2 3 4 5 6) (t t t t t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -163,7 +164,7 @@ Body[fn:5:nested[fn:6]].
                  (org-element-map tree 'footnote-reference #'identity))
          ;; First reference?
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -172,11 +173,12 @@ Body[fn:5:nested[fn:6]].
 // Giga: org-element with all export tag combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_tag_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"tag1\") (\"tag2\") (\"tag3\") (\"tag1\" \"tag2\") (\"tag3\") (\"tag1\" \"tag3\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -198,7 +200,7 @@ fn giga_all_export_tag_combinations() {
         (list
          ;; Tags.
          (mapcar (lambda (h) (org-export-get-tags h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -207,11 +209,10 @@ fn giga_all_export_tag_combinations() {
 // Giga: org-element with all export category combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_category_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"project\" \"project\" \"work\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -234,7 +235,7 @@ fn giga_all_export_category_combinations() {
         (list
          ;; Categories.
          (mapcar (lambda (h) (org-export-get-category h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -243,11 +244,12 @@ fn giga_all_export_category_combinations() {
 // Giga: org-element with all export date combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_date_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"2024-01-15\" 0 10 (:parent (#(\"2024-01-15\" 0 10 (:parent #4)))))) nil nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -269,7 +271,7 @@ Body")
          ;; Title.
          (plist-get info :title)
          ;; Author.
-         (plist-get info :author)))))"##,
+         (plist-get info :author))))))"##,
         expect,
     );
 }
@@ -278,11 +280,10 @@ Body")
 // Giga: org-element with all export optional title combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_optional_title_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function org-export-get-optional-title)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -301,7 +302,7 @@ Body")
              (headline (car (org-element-map tree 'headline #'identity))))
         (list
          ;; Optional title.
-         (org-export-get-optional-title headline info)))))"##,
+         (org-export-get-optional-title headline info))))))"##,
         expect,
     );
 }
@@ -310,11 +311,10 @@ Body")
 // Giga: org-element with all export first/last sibling combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_first_last_sibling_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (2 . 2) 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -332,7 +332,7 @@ fn giga_all_export_first_last_sibling_combinations() {
          ;; First sibling?
          (mapcar #'org-export-first-sibling-p headlines)
          ;; Last sibling?
-         (mapcar #'org-export-last-sibling-p headlines)))))"##,
+         (mapcar #'org-export-last-sibling-p headlines))))))"##,
         expect,
     );
 }
@@ -341,11 +341,10 @@ fn giga_all_export_first_last_sibling_combinations() {
 // Giga: org-element with all export node property combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_node_property_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"myid\" \"2h\" \"work\" \"value\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -369,7 +368,7 @@ Body")
          (org-export-get-node-property :CATEGORY headline)
          (org-export-get-node-property :KEY headline)
          ;; Non-existent property.
-         (org-export-get-node-property :NONEXISTENT headline)))))"##,
+         (org-export-get-node-property :NONEXISTENT headline))))))"##,
         expect,
     );
 }
@@ -378,11 +377,12 @@ Body")
 // Giga: org-element with all export caption combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_caption_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((#(\"Short caption\" 0 13 (:parent (#(\"Short caption\" 0 13 (:parent #5))))) \" \" #(\"Long caption with \" 0 18 (:parent (#(\"Long caption with \" 0 18 (:parent #5)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #5]) #(\"bold\" 0 4 (:parent #6))) #(\"and \" 0 4 (:parent #5)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #5]) #(\"italic\" 0 6 (:parent #6)))))) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"Long caption with \" 0 18 (:parent (#(\"Long caption with \" 0 18 (:parent #9)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"bold\" 0 4 (:parent #10))) #(\"and \" 0 4 (:parent #9)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"italic\" 0 6 (:parent #10)))))) #3 #(\"and \" 0 4 (:parent (#(\"Long caption with \" 0 18 (:parent #9)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"bold\" 0 4 (:parent #10))) #(\"and \" 0 4 (:parent #9)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"italic\" 0 6 (:parent #10)))))) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #6]) #(\"italic\" 0 6 (:parent (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"Long caption with \" 0 18 (:parent #13)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #13]) #(\"bold\" 0 4 (:parent #14))) #(\"and \" 0 4 (:parent #13)) #10)]) #(\"italic\" 0 6 (:parent #10)))))))]) #(\"bold\" 0 4 (:parent (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"Long caption with \" 0 18 (:parent #9)) #6 #(\"and \" 0 4 (:parent #9)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"italic\" 0 6 (:parent #10))))]) #(\"bold\" 0 4 (:parent #6)))))) #(\"and \" 0 4 (:parent (#(\"Long caption with \" 0 18 (:parent #5)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #5]) #(\"bold\" 0 4 (:parent #6))) #(\"and \" 0 4 (:parent #5)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #5]) #(\"italic\" 0 6 (:parent #6)))))) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"Long caption with \" 0 18 (:parent (#(\"Long caption with \" 0 18 (:parent #9)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"bold\" 0 4 (:parent #10))) #(\"and \" 0 4 (:parent #9)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"italic\" 0 6 (:parent #10)))))) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #6]) #(\"bold\" 0 4 (:parent (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"Long caption with \" 0 18 (:parent #13)) #10 #(\"and \" 0 4 (:parent #13)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #13]) #(\"italic\" 0 6 (:parent #14))))]) #(\"bold\" 0 4 (:parent #10)))))) #(\"and \" 0 4 (:parent (#(\"Long caption with \" 0 18 (:parent #9)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"bold\" 0 4 (:parent #10))) #(\"and \" 0 4 (:parent #9)) (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"italic\" 0 6 (:parent #10)))))) #3)]) #(\"italic\" 0 6 (:parent (italic (:standard-properties [66 nil 67 73 74 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"Long caption with \" 0 18 (:parent #9)) (bold (:standard-properties [55 nil 56 60 62 1 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #9]) #(\"bold\" 0 4 (:parent #10))) #(\"and \" 0 4 (:parent #9)) #6)]) #(\"italic\" 0 6 (:parent #6))))))) (#(\"Only long caption\" 0 17 (:parent (#(\"Only long caption\" 0 17 (:parent #5)))))) (#(\"Long caption\" 0 12 (:parent (#(\"Long caption\" 0 12 (:parent #5))))))) (nil nil (#(\"short\" 0 5 (:parent (#(\"short\" 0 5 (:parent #5))))))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -405,7 +405,7 @@ fn giga_all_export_caption_combinations() {
          ;; Captions.
          (mapcar (lambda (t) (org-export-get-caption t)) tables)
          ;; Short captions.
-         (mapcar (lambda (t) (org-export-get-caption t t)) tables)))))"##,
+         (mapcar (lambda (t) (org-export-get-caption t t)) tables))))))"##,
         expect,
     );
 }
@@ -482,11 +482,10 @@ fn giga_all_export_backend_combinations() {
 // Giga: org-element with all export scope combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_scope_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"H1\" \"H2\" \"H3\" \"H4\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -513,7 +512,7 @@ Body 4")
                        (org-export--collect-tree-properties
                         tree (org-export-get-environment)))))
            (mapcar (lambda (h) (org-element-property :raw-value h))
-                   (org-element-map tree 'headline #'identity)))))))"##,
+                   (org-element-map tree 'headline #'identity))))))))"##,
         expect,
     );
 }
@@ -522,11 +521,10 @@ Body 4")
 // Giga: org-element with all export block/snippet combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_block_snippet_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 2 (\"HTML\" \"LATEX\") (\"html\" \"latex\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -554,7 +552,7 @@ fn giga_all_export_block_snippet_combinations() {
                  (org-element-map tree 'export-block #'identity))
          ;; Snippet backends.
          (mapcar (lambda (s) (org-element-property :back-end s))
-                 (org-element-map tree 'export-snippet #'identity))))))"##,
+                 (org-element-map tree 'export-snippet #'identity)))))))"##,
         expect,
     );
 }
@@ -563,11 +561,10 @@ fn giga_all_export_block_snippet_combinations() {
 // Giga: org-element with all export comment combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_comment_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -593,7 +590,7 @@ Body")
          ;; Comment blocks.
          (length (org-element-map tree 'comment-block #'identity))
          ;; Headlines (including commented).
-         (length (org-element-map tree 'headline #'identity))))))"##,
+         (length (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -602,11 +599,10 @@ Body")
 // Giga: org-element with all export include combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_include_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -622,7 +618,7 @@ Body")
          (length (org-element-map tree 'keyword
                    (lambda (k) (when (equal (org-element-property :key k) "INCLUDE") k))))
          ;; Headlines.
-         (length (org-element-map tree 'headline #'identity))))))"##,
+         (length (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -631,11 +627,10 @@ Body")
 // Giga: org-element with all export setupfile combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_setupfile_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -651,7 +646,7 @@ Body")
          (length (org-element-map tree 'keyword
                    (lambda (k) (when (equal (org-element-property :key k) "SETUPFILE") k))))
          ;; Headlines.
-         (length (org-element-map tree 'headline #'identity))))))"##,
+         (length (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -660,11 +655,10 @@ Body")
 // Giga: org-element with all export select-tags combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_select_tags_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"H1\" \"H2\" \"H3\" \"H4\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -688,7 +682,7 @@ Body 4")
                      tree (org-export-get-environment)))))
         ;; Only selected headlines.
         (mapcar (lambda (h) (org-element-property :raw-value h))
-                (org-element-map tree 'headline #'identity)))))"##,
+                (org-element-map tree 'headline #'identity))))))"##,
         expect,
     );
 }
@@ -697,11 +691,10 @@ Body 4")
 // Giga: org-element with all export exclude-tags combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_exclude_tags_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"H1\" \"H2\" \"H3\" \"H4\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -725,7 +718,7 @@ Body 4")
                      tree (org-export-get-environment)))))
         ;; Only non-excluded headlines.
         (mapcar (lambda (h) (org-element-property :raw-value h))
-                (org-element-map tree 'headline #'identity)))))"##,
+                (org-element-map tree 'headline #'identity))))))"##,
         expect,
     );
 }
@@ -734,11 +727,10 @@ Body 4")
 // Giga: org-element with all export body-only combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_body_only_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"H1\" \"H2\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -758,7 +750,7 @@ Body 2")
                      tree (org-export-get-environment)))))
         ;; Headlines in full document.
         (mapcar (lambda (h) (org-element-property :raw-value h))
-                (org-element-map tree 'headline #'identity)))))"##,
+                (org-element-map tree 'headline #'identity))))))"##,
         expect,
     );
 }
@@ -767,11 +759,10 @@ Body 2")
 // Giga: org-element with all export visible-only combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn giga_all_export_visible_only_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"H1\" \"H2\" \"H3\" \"H4\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -794,7 +785,7 @@ Body 4")
                      tree (org-export-get-environment)))))
         ;; Headlines in full document.
         (mapcar (lambda (h) (org-element-property :raw-value h))
-                (org-element-map tree 'headline #'identity)))))"##,
+                (org-element-map tree 'headline #'identity))))))"##,
         expect,
     );
 }

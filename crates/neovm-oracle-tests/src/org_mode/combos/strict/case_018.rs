@@ -6,11 +6,12 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_table_eval_formula() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 41)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (:result nil :buffer-after #(\"| 5 | 15 |   |\\n#+TBLFM: $2=$1*$2\\n\" 0 14 (face org-table) 14 15 (face org-table-row)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -23,16 +24,17 @@ fn strict_table_eval_formula() {
       (condition-case nil
           (let ((result (org-table-eval-formula nil "$1*$2" nil nil nil)))
             (list :result result :buffer-after (buffer-string)))
-        (error (list :eval-error t)))))))"##,
+        (error (list :eval-error t))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_element_type_on_all() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 6)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:bold nil) (:headline nil) (:org-data nil) (:nil nil) (:bold-elem bold))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -47,16 +49,15 @@ fn strict_element_type_on_all() {
    (list :bold-elem
          (org-element-type
           (org-element-create 'bold nil "test")))
-   )))"##,
+   ))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_footnote_goto_definition() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 15 25)""#]];
+    let expect = expect_test::expect![[r#""OK ((:goto-fbound t) (:point-after-goto 17))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -72,7 +73,7 @@ fn strict_footnote_goto_definition() {
             (progn (org-footnote-goto-definition "1")
                    (push (list :point-after-goto (point)) r))
           (error (push (list :goto-error t) r)))
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }

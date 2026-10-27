@@ -55,12 +55,13 @@ fn org_info_link_file_node_description_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_info_man_store_link_context_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"info:elisp.info#Symbols\" (:type \"info\" :file \"/usr/share/info/elisp.info\" :node \"Symbols\" :link \"info:elisp.info#Symbols\" :description \"elisp.info#Symbols\") (:type \"man\" :link \"man:printf\" :description \"Manpage for printf\") (:type \"man\" :link \"man:printf\" :description \"Manpage for printf\") \"printf\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ol)
@@ -82,12 +83,11 @@ fn org_info_man_store_link_context_combo() {
                     info-plist
                     man-link
                     org-store-link-plist
-                     (org-man-get-page-name))))))))"##,
+                     (org-man-get-page-name)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_abbrev_custom_follow_export_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -140,7 +140,7 @@ fn org_link_abbrev_custom_follow_export_deep_state_combo() {
               expanded-rfc
               followed
               has-github
-              has-rfc))))))"##,
+              has-rfc)))))"##,
         expect,
     );
 }

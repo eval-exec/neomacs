@@ -126,7 +126,6 @@ fn org_copied_files_dnd_file_link_and_attach_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_xds_direct_save_attach_and_file_link_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -176,17 +175,18 @@ fn org_xds_direct_save_attach_and_file_link_combo() {
                                (buffer-substring-no-properties
                                 (point-min) (point-max)))))))))))
       (when (get-file-buffer org-file) (kill-buffer (get-file-buffer org-file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_yank_adjusted_folded_subtree_visibility_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"** TODO Child\\nChild body\\n*** Grand\\nGrand body\\n\" \"* Target\\n** Existing\\nExisting body\\n\\n** TODO Child\\nChild body\\n*** Grand\\nGrand body\\n* Source\\n** TODO Child\\nChild body\\n*** Grand\\nGrand body\\n\" ((\"Target\" 1 nil nil) (\"Existing\" 2 nil nil) (\"Child body\" 2 nil nil) (\"Grand\" 3 nil nil) (\"Grand body\" 3 nil nil) (\"Source\" 1 nil nil)) nil ((1 nil \"Target\") (2 nil \"Existing\") (2 \"TODO\" \"Child\") (3 nil \"Grand\") (1 nil \"Source\") (2 \"TODO\" \"Child\") (3 nil \"Grand\")) \"* Target\\n** Existing\\nExisting body\\n\\n** TODO Child\\nChild body\\n*** Grand\\nGrand body\\n* Source\\n** TODO Child\\nChild body\\n*** Grand\\nGrand body\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -246,7 +246,7 @@ fn org_yank_adjusted_folded_subtree_visibility_combo() {
                           (org-element-property :todo-keyword h)
                           (org-element-property :raw-value h))))
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }

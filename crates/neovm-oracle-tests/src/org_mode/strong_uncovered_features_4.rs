@@ -537,11 +537,10 @@ fn uf4_element_lineage() {
 // org-element-contents
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn uf4_element_contents() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (section)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -549,7 +548,7 @@ fn uf4_element_contents() {
   (let* ((tree (org-element-parse-buffer))
          (h (car (org-element-map tree 'headline (lambda (h) h))))
          (children (mapcar 'org-element-type (org-element-contents h))))
-    children)"##,
+    children))"##,
         expect,
     );
 }
@@ -558,11 +557,10 @@ fn uf4_element_contents() {
 // org-element-type-p
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn uf4_element_type_p() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t nil t nil t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -575,7 +573,7 @@ fn uf4_element_type_p() {
           (org-element-type-p h 'paragraph)
           (org-element-type-p p 'paragraph)
           (org-element-type-p p 'headline)
-          (org-element-type-p pl 'plain-list)))"##,
+          (org-element-type-p pl 'plain-list))))"##,
         expect,
     );
 }

@@ -53,16 +53,15 @@ fn combo92_config_org_export_backends_available() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo92_config_org_babel_python_session() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp (:python-error t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (condition-case nil (require 'ob-python) (error nil))
  (let ((org-confirm-babel-evaluate nil)) (condition-case nil (insert "#+begin_src python :results output :session py91\nprint(1+2)\n#+end_src\n")
   (goto-char (point-min)) (search-forward "#+begin_src python") (push (org-babel-execute-src-block) nil) (list :python-ok t))
- (error (list :python-error t)))"##,
+ (error (list :python-error t))))"##,
         expect,
     );
 }

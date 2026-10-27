@@ -35,11 +35,12 @@ fn zeta2_headline_all_features() {
 // Zeta-2: org-element with complex planning + clock + property combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_planning_clock_property_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"TODO\" (nil (timestamp (:standard-properties [23 nil nil nil 43 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon +1w>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil :repeater-type cumulate :repeater-value 1 :repeater-unit week)) nil) 0 2 2 (closed closed) (\"1:30\" \"2:00\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -60,7 +61,7 @@ fn zeta2_planning_clock_property_combo() {
          (mapcar (lambda (c) (org-element-property :status c))
                  (org-element-map tree 'clock #'identity))
          (mapcar (lambda (c) (org-element-property :duration c))
-                 (org-element-map tree 'clock #'identity))))))"##,
+                 (org-element-map tree 'clock #'identity)))))))"##,
         expect,
     );
 }
@@ -69,11 +70,10 @@ fn zeta2_planning_clock_property_combo() {
 // Zeta-2: org-element with complex table + formula + export combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_table_formula_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org 6 0 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -92,7 +92,7 @@ fn zeta2_table_formula_export_combo() {
                  'table-cell #'identity))
          (org-element-map tree 'keyword
            (lambda (k) (when (equal (org-element-property :key k) "TBLFM")
-                     (org-element-property :value k))))))))"##,
+                     (org-element-property :value k)))))))))"##,
         expect,
     );
 }
@@ -101,11 +101,12 @@ fn zeta2_table_formula_export_combo() {
 // Zeta-2: org-element with complex list + checkbox + description combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_list_checkbox_description_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (8 2 (unordered unordered) (off on trans nil off on nil nil) (nil nil nil \"tag\" nil nil nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -125,7 +126,7 @@ fn zeta2_list_checkbox_description_combo() {
                    (when (org-element-property :tag i)
                      (substring-no-properties
                       (org-element-interpret-data (org-element-property :tag i)))))
-                 (org-element-map tree 'item #'identity))))))"##,
+                 (org-element-map tree 'item #'identity)))))))"##,
         expect,
     );
 }
@@ -134,11 +135,10 @@ fn zeta2_list_checkbox_description_combo() {
 // Zeta-2: org-element with complex link + footnote + citation combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_link_footnote_citation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 2 2 1 \"https\" \"//orgmode.org\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -157,7 +157,7 @@ fn zeta2_link_footnote_citation_combo() {
          (org-element-property :type
            (org-element-map tree 'link #'identity nil t))
          (org-element-property :path
-           (org-element-map tree 'link #'identity nil t))))))"##,
+           (org-element-map tree 'link #'identity nil t)))))))"##,
         expect,
     );
 }
@@ -166,11 +166,12 @@ fn zeta2_link_footnote_citation_combo() {
 // Zeta-2: org-element with complex block + drawer + property combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_block_drawer_property_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((org-data headline plain-text section property-drawer node-property drawer clock quote-block paragraph src-block) 1 1 2 0 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -185,7 +186,7 @@ fn zeta2_block_drawer_property_combo() {
          (length (org-element-map tree 'drawer #'identity))
          (length (org-element-map tree '(quote-block src-block) #'identity))
          (length (org-element-map tree 'keyword #'identity))
-         (length (org-element-map tree 'paragraph #'identity))))))"##,
+         (length (org-element-map tree 'paragraph #'identity)))))))"##,
         expect,
     );
 }
@@ -194,11 +195,10 @@ fn zeta2_block_drawer_property_combo() {
 // Zeta-2: org-element with complex inline markup combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_inline_markup_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 1 1 1 1 1 1 1 1 1 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -220,7 +220,7 @@ fn zeta2_inline_markup_combo() {
          (length (org-element-map tree 'link #'identity))
          (length (org-element-map tree 'footnote-reference #'identity))
          (length (org-element-map tree 'footnote-definition #'identity))
-         (length (org-element-map tree 'citation #'identity))))))"##,
+         (length (org-element-map tree 'citation #'identity)))))))"##,
         expect,
     );
 }
@@ -229,11 +229,12 @@ fn zeta2_inline_markup_combo() {
 // Zeta-2: org-element with complex timestamp + planning combos
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_timestamp_planning_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (5 (active active-range active-range inactive diary) (nil timerange daterange nil nil) ((nil nil nil) (nil nil nil) (nil nil nil) (nil nil nil) (nil nil nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -250,7 +251,7 @@ fn zeta2_timestamp_planning_combo() {
          (mapcar (lambda (ts) (list (org-element-property :repeater-type ts)
                               (org-element-property :repeater-value ts)
                               (org-element-property :repeater-unit ts)))
-                 timestamps)))))"##,
+                 timestamps))))))"##,
         expect,
     );
 }
@@ -294,11 +295,10 @@ fn zeta2_export_headline_features_combo() {
 // Zeta-2: org-element with complex export footnote edge cases combo
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_export_footnote_edge_cases_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((standard inline inline) (1 2 3) (t t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -318,7 +318,7 @@ fn zeta2_export_footnote_edge_cases_combo() {
          (mapcar (lambda (ref) (org-export-get-footnote-number ref info))
                  (org-element-map tree 'footnote-reference #'identity))
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -426,7 +426,6 @@ fn zeta2_property_inheritance_chain_combo() {
 // Zeta-2: org-element with complex element operations chain combo
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_element_operations_chain_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -457,7 +456,7 @@ fn zeta2_element_operations_chain_combo() {
                 (substring-no-properties after-extract)
                 (substring-no-properties after-swap)
                 (substring-no-properties (org-element-interpret-data doc))
-                (org-element-property :parent h2))))))))"##,
+                (org-element-property :parent h2)))))))"##,
         expect,
     );
 }
@@ -466,11 +465,10 @@ fn zeta2_element_operations_chain_combo() {
 // Zeta-2: org-element with complex deferred chain combo
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta2_deferred_chain_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (cl-assertion-failed (listp args))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -510,7 +508,7 @@ fn zeta2_deferred_chain_combo() {
                               nil (lambda (el)
                                     (org-element-deferred-create
                                      nil (lambda (_) 1)))))))
-     (org-element-property :foo el))))"##,
+     (org-element-property :foo el)))))"##,
         expect,
     );
 }

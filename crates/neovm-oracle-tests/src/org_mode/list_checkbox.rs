@@ -113,12 +113,13 @@ fn org_list_to_generic_html_org_delete_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_indent_outdent_checkbox_repair_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"- [ ] Parent [0/0]\\n- [ ] A\\n  - [ ] B\\n    - [ ] B child\\n- [ ] C\\n\" ((0 nil (1) nil 20) (19 nil (2) nil 28) (27 nil (3) (36) 52) (51 nil (4) nil 60)) (unordered (\"[ ] Parent [0/0]\") (\"[ ] A\") (\"[ ] B\" (unordered (\"[ ] B child\"))) (\"[ ] C\")) \"- [ ] Parent [0/0]\\n- [ ] A\\n- [ ] B\\n  - [ ] B child\\n- [ ] C\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -156,17 +157,16 @@ fn org_list_indent_outdent_checkbox_repair_combo() {
               items
               (org-list-to-lisp)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_insert_delete_move_description_items_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument number-or-marker-p nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -197,17 +197,16 @@ fn org_insert_delete_move_description_items_combo() {
               after-move
               (org-list-to-lisp)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_ordered_alpha_list_sort_renumber_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -244,7 +243,7 @@ fn org_ordered_alpha_list_sort_renumber_combo() {
               summary
               (org-list-to-lisp)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -310,12 +309,11 @@ fn org_list_descriptive_generic_roundtrip_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_checkbox_table_fold_element_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -442,17 +440,16 @@ fn org_list_checkbox_table_fold_element_lifecycle_combo() {
           (list (nreverse states)
                 (org-list-to-lisp)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_nested_counter_checkbox_repair_cycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -540,17 +537,16 @@ fn org_list_nested_counter_checkbox_repair_cycle_combo() {
                      :cbtrans "[mixed]"
                      :ifmt (lambda (_type contents) contents)))
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_struct_write_visibility_apply_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument consp nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -648,17 +644,18 @@ fn org_list_struct_write_visibility_apply_combo() {
               subtree-state
               (org-list-to-lisp)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_make_subtree_checkbox_counter_roundtrip_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((ordered (\"[@c] [X] Alpha :: first line\\ncontinuation alpha\" (descriptive (\"[ ] Alpha child :: child def\\nchild body\"))) (\"[-] Beta [1/2] :: second line\" (ordered (\"[X] Beta done\") (\"[ ] Beta todo\")))) \"* Parent [0/2]\\nIntro paragraph\\na. [@c] [X] Alpha :: first line\\n   continuation alpha\\n   - [ ] Alpha child :: child def\\n     child body\\nd. [-] Beta [1/2] :: second line\\n   1) [X] Beta done\\n   2) [ ] Beta todo\\n* Tail\\n\" ((1 nil \"Parent [0/0]\" nil 1 194) (2 \"DONE\" \"Alpha :: first line\" nil 32 122) (3 \"TODO\" \"Alpha child child def\" nil 79 122) (2 \"TODO\" \"Beta [0/0] :: second line\" nil 122 194) (3 \"DONE\" \"Beta done\" nil 156 175) (3 \"TODO\" \"Beta todo\" nil 175 194) (1 nil \"Tail\" nil 194 201)) nil \"* Parent [0/0]\\nIntro paragraph\\n** DONE Alpha :: first line\\ncontinuation alpha\\n*** TODO  Alpha child child def\\nchild body\\n** TODO Beta [0/0] :: second line\\n*** DONE Beta done\\n*** TODO Beta todo\\n* Tail\\n\" \"*** DONE Alpha :: first line\\ncontinuation alpha\\nTODO  Alpha child child def\\nchild body\\nTODO Beta [1/2] :: second line\\nDONE Beta done\\nTODO Beta todo\" \"* Parent [0/0]\\nIntro paragraph\\n*** DONE Alpha :: first line\\n continuation alpha\\n**** TODO  Alpha child child def\\n child body\\n* TODO Beta [0/0] :: second line\\n** DONE Beta done\\n** TODO Beta todo\\n* Tail\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -726,17 +723,16 @@ fn org_list_make_subtree_checkbox_counter_roundtrip_combo() {
                   items
                   converted
                   roundtrip-list
-                  after-level-edits))))))"##,
+                  after-level-edits)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_checkbox_dependency_sort_visibility_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument stringp nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -855,7 +851,7 @@ fn org_list_checkbox_dependency_sort_visibility_combo() {
                            (org-element-property :counter el)
                            (org-element-property :tag el))))))
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -1019,12 +1015,13 @@ fn org_list_send_item_struct_navigation_kill_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_checkbox_toggle_counter_stats_toggle_cycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 59 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"* Tasks [0/4]\\n- [-] Item A\\n  - [X] Sub A1\\n  - [ ] Sub A2\\n- [ ] Item B\\n  - [ ] Sub B1\\n- [ ] Item C\\n- [ ] Item D\\n\" ((trans nil) (on nil) (off nil) (off nil) (off nil) (off nil) (off nil))) (\"* Tasks [1/4]\\n- [X] Item A\\n  - [X] Sub A1\\n  - [X] Sub A2\\n- [ ] Item B\\n  - [ ] Sub B1\\n- [ ] Item C\\n- [ ] Item D\\n\" ((on nil) (on nil) (on nil) (off nil) (off nil) (off nil) (off nil))) (\"* Tasks [1/4]\\n- [X] Item A\\n  - [X] Sub A1\\n  - [X] Sub A2\\n- [ ] Item B\\n  - [ ] Sub B1\\n- [ ] Item C\\n- [ ] Item D\\n\" ((on nil) (on nil) (on nil) (off nil) (off nil) (off nil) (off nil))) (\"* Tasks [1/4]\\n- [X] Item A\\n  - [X] Sub A1\\n  - [X] Sub A2\\n- [ ] Item B\\n  - [ ] Sub B1\\n- [ ] Item C\\n- [ ] Item D\\n\" ((on nil) (on nil) (on nil) (off nil) (off nil) (off nil) (off nil))) (\"* Tasks [1/4]\\n- [X] Item A\\n  - [X] Sub A1\\n  - [X] Sub A2\\n- [ ] Item B\\n  - [ ] Sub B1\\n- [ ] Item C\\n- [ ] Item D\\n\" ((on nil) (on nil) (on nil) (off nil) (off nil) (off nil) (off nil))) (\"* Tasks [1/4]\\n- [X] Item A\\n  - [X] Sub A1\\n  - [X] Sub A2\\n- [ ] Item B\\n  - [ ] Sub B1\\n- [ ] Item C\\n- [ ] Item D\\n\" ((on nil) (on nil) (on nil) (off nil) (off nil) (off nil) (off nil))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1084,17 +1081,18 @@ fn org_checkbox_toggle_counter_stats_toggle_cycle_combo() {
                         after-count
                         after-b
                         after-c-cycle
-                          after-stats)))))))))))"##,
+                          after-stats))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_structure_indent_outdent_renumber_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 56 42)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"1. First\\n   - Child A\\n   - Child B\\n     - Grandchild\\n2. Second\\n   - [X] Checked\\n   - [ ] Unchecked\\n3. Third\\n\" ((\"1. \" nil nil 1) (\"- \" nil nil 10) (\"- \" nil nil 23) (\"- \" nil nil 36) (\"2. \" nil nil 54) (\"- \" on nil 64) (\"- \" off nil 81) (\"3. \" nil nil 100))) (\"1. First\\n   - Child A\\n     - Child B\\n     - Grandchild\\n2. Second\\n   - [X] Checked\\n   - [ ] Unchecked\\n3. Third\\n\" ((\"1. \" nil nil 1) (\"- \" nil nil 10) (\"- \" nil nil 23) (\"- \" nil nil 38) (\"2. \" nil nil 56) (\"- \" on nil 66) (\"- \" off nil 83) (\"3. \" nil nil 102))) (\"1. First\\n   - Child A\\n   - Child B\\n     - Grandchild\\n2. Second\\n   - [X] Checked\\n   - [ ] Unchecked\\n3. Third\\n\" ((\"1. \" nil nil 1) (\"- \" nil nil 10) (\"- \" nil nil 23) (\"- \" nil nil 36) (\"2. \" nil nil 54) (\"- \" on nil 64) (\"- \" off nil 81) (\"3. \" nil nil 100))) (\"1. First\\n   - Child A\\n   - Child B\\n     - Grandchild\\n2. Second\\n   - [X] Checked\\n   - [X] Unchecked\\n3. Third\\n\" ((\"1. \" nil nil 1) (\"- \" nil nil 10) (\"- \" nil nil 23) (\"- \" nil nil 36) (\"2. \" nil nil 54) (\"- \" on nil 64) (\"- \" on nil 81) (\"3. \" nil nil 100))) (\"1. First\\n   - Child A\\n   - Child B\\n     - Grandchild\\n2. Second\\n   - [X] Checked\\n   - [X] Unchecked\\n3. Third\\n\" ((\"1. \" nil nil 1) (\"- \" nil nil 10) (\"- \" nil nil 23) (\"- \" nil nil 36) (\"2. \" nil nil 54) (\"- \" on nil 64) (\"- \" on nil 81) (\"3. \" nil nil 100))) (\"1. Third\\n2. Second\\n   - [X] Checked\\n   - [X] Unchecked\\n3. First\\n   - Child A\\n   - Child B\\n     - Grandchild\\n\" ((\"1. \" nil nil 1) (\"2. \" nil nil 10) (\"- \" on nil 20) (\"- \" on nil 37) (\"3. \" nil nil 56) (\"- \" nil nil 65) (\"- \" nil nil 78) (\"- \" nil nil 91))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1151,17 +1149,18 @@ fn org_list_structure_indent_outdent_renumber_deep_state_combo() {
                       after-outdent
                       after-toggle
                       after-count
-                      after-sort))))))))))"##,
+                      after-sort)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_list_checkbox_toggle_update_sort_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 44 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"- [ ] Item alpha\\n- [ ] Item beta\\n- [X] Item gamma\\n- [ ] Item delta\\n  - [ ] Sub A\\n  - [X] Sub B\\n\" \"- [X] Item alpha\\n- [ ] Item beta\\n- [X] Item gamma\\n- [-] Item delta\\n  - [ ] Sub A\\n  - [X] Sub B\\n\" \"- [X] Item alpha\\n- [ ] Item beta\\n- [X] Item gamma\\n- [-] Item delta\\n  - [ ] Sub A\\n  - [X] Sub B\\n\" \"- [X] Item gamma\\n- [-] Item delta\\n  - [ ] Sub A\\n  - [X] Sub B\\n- [ ] Item beta\\n- [X] Item alpha\\n\" \"- [X] Item gamma\\n- [-] Item delta\\n  - [ ] Sub A\\n  - [X] Sub B\\n- [ ] Item beta\\n- [X] Item alpha\\n- [ ] Item epsilon\\n\" \"- [X] Item gamma\\n- [-] Item delta\\n  - [X] Sub A\\n  - [X] Sub B\\n- [X] Item beta\\n- [X] Item alpha\\n- [X] Item epsilon\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1206,7 +1205,7 @@ fn org_list_checkbox_toggle_update_sort_edit_deep() {
                         after-count
                         after-sort
                         after-edit
-                        after-replace))))))))))))"##,
+                        after-replace))))))))))"##,
         expect,
     );
 }

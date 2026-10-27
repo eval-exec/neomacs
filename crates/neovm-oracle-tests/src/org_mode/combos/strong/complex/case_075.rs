@@ -11,11 +11,10 @@ fn combo75_babel_ob_forth_screen() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo75_agenda_check_deadline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable r)""#]];
+    let expect = expect_test::expect![[r#""OK ((:deadline-entries 2) (:urgent-deadline 1))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (require 'org-agenda)
  (insert "* TODO A :work:\nDEADLINE: <2024-01-15 Mon>\n* TODO B :urgent:\nDEADLINE: <2024-01-10 Thu>\n")
@@ -23,7 +22,7 @@ fn combo75_agenda_check_deadline() {
   (push (list :deadline-entries (length (org-map-entries (lambda () (org-get-heading t t t t))
     "DEADLINE<>\"\""))) r)
   (push (list :urgent-deadline (length (org-map-entries (lambda () (org-get-heading t t t t))
-    "DEADLINE<=\"<2024-01-12>\""))) r))
+    "DEADLINE<=\"<2024-01-12>\""))) r)
  (nreverse r)))"##,
         expect,
     );
@@ -140,17 +139,16 @@ fn combo75_org_agenda_entry_text() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo75_org_export_to_buffer() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 5 5)""#]];
+    let expect = expect_test::expect![[r#""OK (:to-buffer-fbound t :export-ok t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (require 'ox) (require 'ox-ascii)
  (let ((org-export-show-temporary-export-buffer nil)) (insert "* X\n")
   (list :to-buffer-fbound (fboundp 'org-export-to-buffer)
    :export-ok (condition-case nil (let ((out (org-export-as 'ascii nil nil t))) (and out (> (length out) 0))) (error nil)))
-  )))"##,
+  ))"##,
         expect,
     );
 }

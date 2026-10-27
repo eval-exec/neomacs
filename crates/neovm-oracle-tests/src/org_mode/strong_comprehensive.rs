@@ -157,11 +157,10 @@ fn strong_cache_fixed_width_mod() {
 // Cache: post-blank preservation
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_cache_post_blank() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (drawer 0)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -172,7 +171,7 @@ fn strong_cache_post_blank() {
       (org-element-cache-map #'ignore :granularity 'element)
       (list
        (org-element-type (org-element-at-point))
-       (org-element-property :post-blank (org-element-at-point (point-min))))))"##,
+       (org-element-property :post-blank (org-element-at-point (point-min)))))))"##,
         expect,
     );
 }
@@ -726,11 +725,12 @@ fn strong_deadline_schedule_combined() {
 // Advanced: org-todo cycle through states
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_todo_cycle_through() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 44)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"* TODO H\" 0 8 (org-todo-head \"TODO\")) #(\"* DONE H\" 0 8 (org-todo-head \"TODO\")) #(\"* H\" 0 3 (org-todo-head \"TODO\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -744,7 +744,7 @@ fn strong_todo_cycle_through() {
         (org-todo 'done)
         (let ((s2 (buffer-string)))
           (org-todo nil)
-          (list s1 s2 (buffer-string))))))))"##,
+          (list s1 s2 (buffer-string)))))))"##,
         expect,
     );
 }
@@ -824,11 +824,10 @@ fn strong_promote_demote_subtree_roundtrip() {
 // Advanced: org-cycle-list-bullet various
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_cycle_list_bullet_various() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 44)""#]];
+    let expect = expect_test::expect![[r#""OK (\"+ item\" \"1. item\" \"1) item\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -841,7 +840,7 @@ fn strong_cycle_list_bullet_various() {
         (org-cycle-list-bullet)
         (let ((s2 (buffer-string)))
           (org-cycle-list-bullet)
-          (list s1 s2 (buffer-string))))))))"##,
+          (list s1 s2 (buffer-string)))))))"##,
         expect,
     );
 }
@@ -1825,11 +1824,10 @@ fn strong_export_headline_numbers() {
 // Advanced: export footnote numbers
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_footnote_numbers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((1 2) (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -1846,7 +1844,7 @@ fn strong_export_footnote_numbers() {
          (mapcar (lambda (ref) (org-export-get-footnote-number ref info))
                  (org-element-map tree 'footnote-reference #'identity))
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -1855,11 +1853,12 @@ fn strong_export_footnote_numbers() {
 // Advanced: export tags and categories
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_tags_categories() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"tag1\") (\"tag2\") nil) (\"work\" \"work\" \"work\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -1876,7 +1875,7 @@ fn strong_export_tags_categories() {
          (mapcar (lambda (h) (org-export-get-tags h info))
                  (org-element-map tree 'headline #'identity))
          (mapcar (lambda (h) (org-export-get-category h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -2045,11 +2044,10 @@ fn strong_export_optional_title() {
 // Advanced: export node property
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_node_property() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"myid\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -2059,7 +2057,7 @@ fn strong_export_node_property() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (hl (car (org-element-map tree 'headline #'identity))))
-        (org-export-get-node-property :CUSTOM_ID hl))))"##,
+        (org-export-get-node-property :CUSTOM_ID hl)))))"##,
         expect,
     );
 }
@@ -2361,11 +2359,10 @@ fn strong_table_roundtrips() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_timestamp_roundtrips() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (0 0 0 0 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2378,7 +2375,7 @@ fn strong_timestamp_roundtrips() {
      (string-match "\\[2012-03-29 .* 16:40\\]" (funcall f "[2012-03-29 thu. 16:40]"))
      (string-match "<2012-03-29 .* 16:40-16:41>" (funcall f "<2012-03-29 thu. 16:40-16:41>"))
      (string-match "<2012-03-29 .* \\+1y>" (funcall f "<2012-03-29 thu. +1y>"))
-     (equal "<%%(diary-float t 4 2)>\n" (funcall f "<%%(diary-float t 4 2)>"))))"##,
+     (equal "<%%(diary-float t 4 2)>\n" (funcall f "<%%(diary-float t 4 2)>")))))"##,
         expect,
     );
 }

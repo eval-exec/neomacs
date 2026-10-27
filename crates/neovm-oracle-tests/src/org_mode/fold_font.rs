@@ -264,12 +264,11 @@ fn org_cycle_hide_drawers_show_all_recovery_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_deep_heading_font_lock_after_level_edits_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (require 'org)
@@ -296,7 +295,7 @@ fn org_deep_heading_font_lock_after_level_edits_combo() {
                       (get-text-property (match-beginning 2) 'face))
                 out))
         (list (nreverse out)
-              (buffer-substring-no-properties (point-min) (point-max))))))"#,
+              (buffer-substring-no-properties (point-min) (point-max)))))))"#,
         expect,
     );
 }
@@ -342,12 +341,13 @@ fn org_global_cycle_deep_sibling_visibility_integrity_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_reveal_hidden_deep_heading_context_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A body\" nil) (\"B\" t) (\"B body\" nil) (\"C\" t) (\"C body\" nil) (\"D\" t) (\"D body\" nil) (\"E\" t) (\"E body\" nil)) \"* A\\nA body\\n** B\\nB body\\n*** C\\nC body\\n**** D\\nD body\\n* E\\nE body\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (require 'org)
@@ -372,12 +372,11 @@ fn org_reveal_hidden_deep_heading_context_combo() {
                   (list needle (not (null (org-invisible-p pos))))))
               '("A body" "B" "B body" "C" "C body" "D" "D body" "E" "E body"))))
         (list visibility
-              (buffer-substring-no-properties (point-min) (point-max))))))"#,
+              (buffer-substring-no-properties (point-min) (point-max)))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_mixed_cycle_deep_siblings_no_line_merge_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -429,12 +428,11 @@ fn org_mixed_cycle_deep_siblings_no_line_merge_combo() {
       (push (funcall snapshot 'all) states)
       (list (nreverse states)
             (count-matches "^\\*+ " (point-min) (point-max))
-            (buffer-substring-no-properties (point-min) (point-max))))))"#,
+            (buffer-substring-no-properties (point-min) (point-max)))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_region_boundaries_after_hidden_edit_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -483,17 +481,18 @@ fn org_fold_region_boundaries_after_hidden_edit_combo() {
       (list before
             after
             (mapcar probe '("B body" "D body" "Inserted" "Child body"))
-            (buffer-substring-no-properties (point-min) (point-max))))))"#,
+            (buffer-substring-no-properties (point-min) (point-max)))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_repeated_fold_hidden_boundary_complex_edit_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((alpha-cycle ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 t) (\"quoted alpha\" 9 t) (\"Alpha child\" 11 t) (\"Alpha L4\" 13 t) (\"Alpha L5\" 15 t) (\"Beta body\" 18 nil) (\"Beta child\" 22 nil) (\"Gamma body\" 25 nil) (\"Tail body\" 27 nil)) 9 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil))) (alpha-cycle ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 nil) (\"quoted alpha\" 9 nil) (\"Alpha child\" 11 t) (\"Alpha L4\" 13 t) (\"Alpha L5\" 15 t) (\"Beta body\" 18 nil) (\"Beta child\" 22 nil) (\"Gamma body\" 25 nil) (\"Tail body\" 27 nil)) 9 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil))) (alpha-cycle ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 nil) (\"quoted alpha\" 9 nil) (\"Alpha child\" 11 nil) (\"Alpha L4\" 13 nil) (\"Alpha L5\" 15 nil) (\"Beta body\" 18 nil) (\"Beta child\" 22 nil) (\"Gamma body\" 25 nil) (\"Tail body\" 27 nil)) 9 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil))) (after-hidden-insert ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 nil) (\"quoted alpha\" 9 nil) (\"Alpha child\" 11 nil) (\"Alpha L4\" 13 nil) (\"Alpha L5\" 15 nil) (\"Beta body\" 20 nil) (\"Beta child\" 24 nil) (\"Gamma body\" 27 nil) (\"Tail body\" 29 nil)) 9 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil))) (beta-cycle ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 nil) (\"quoted alpha\" 9 nil) (\"Alpha child\" 11 nil) (\"Alpha L4\" 13 nil) (\"Alpha L5\" 15 nil) (\"Beta body\" 20 t) (\"Beta child\" 24 t) (\"Gamma body\" 27 nil) (\"Tail body\" 29 nil)) 9 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil))) (beta-cycle ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 nil) (\"quoted alpha\" 9 nil) (\"Alpha child\" 11 nil) (\"Alpha L4\" 13 nil) (\"Alpha L5\" 15 nil) (\"Beta body\" 20 nil) (\"Beta child\" 24 t) (\"Gamma body\" 27 nil) (\"Tail body\" 29 nil)) 9 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil))) (after-show-all ((\"Root paragraph\" 5 nil) (\"Alpha body\" 7 nil) (\"quoted alpha\" 9 nil) (\"Alpha child\" 11 nil) (\"Alpha L4\" 13 nil) (\"Alpha L5\" 15 nil) (\"Beta body\" 20 nil) (\"Beta child\" 24 nil) (\"Gamma body\" 30 nil) (\"Tail body\" 32 nil)) 10 ((\"Alpha L4\" org-level-4 org-level-4 nil) (\"Alpha L5\" org-level-5 org-level-5 nil)))) nil ((\"** TODO Alpha\" 6 \"** TODO Alpha\") (\"***** TODO Alpha L5\" 15 \"***** TODO Alpha L5\") (\"Inserted under hidden L5\" 16 \"Inserted under hidden L5\") (\"** WAIT Beta\" 19 \"** WAIT Beta\") (\"*** TODO Beta inserted\" 26 \"*** TODO Beta inserted\") (\"** TODO Gamma\" 29 \"** TODO Gamma\") (\"* Tail\" 31 \"* Tail\")) \"* Root\\n:PROPERTIES:\\n:Owner: Ada\\n:END:\\nRoot paragraph.\\n** TODO Alpha\\nAlpha body\\n#+begin_quote\\nquoted alpha\\n#+end_quote\\n*** TODO Alpha child\\n- [ ] child task\\n**** TODO Alpha L4\\nL4 body\\n***** TODO Alpha L5\\nInserted under hidden L5\\n\\nL5 body\\n** WAIT Beta\\nBeta body\\n:LOGBOOK:\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 09:15] =>  0:15\\n:END:\\n*** TODO Beta child\\nBeta child body\\n*** TODO Beta inserted\\nInserted beta body\\n\\n** TODO Gamma\\nGamma body\\n* Tail\\nTail body\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -610,17 +609,16 @@ fn org_repeated_fold_hidden_boundary_complex_edit_combo() {
                    "Inserted under hidden L5" "** WAIT Beta"
                    "*** TODO Beta inserted" "** TODO Gamma" "* Tail"))
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_font_lock_deep_headings_after_cycle_and_edits_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (require 'org)
@@ -669,17 +667,18 @@ fn org_font_lock_deep_headings_after_cycle_and_edits_combo() {
                                          'font-lock-fontified))
                 out))
         (list (nreverse out)
-              (buffer-substring-no-properties (point-min) (point-max))))))"#,
+              (buffer-substring-no-properties (point-min) (point-max)))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_cycle_startup_visibility_archived_drawers_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"Active\" nil) (\":VISIBILITY:\" nil) (\"active body\" nil) (\"Child\" nil) (\"child body\" nil) (\"Grand\" nil) (\"body grand\" nil) (\"Archived\" nil) (\"archived body\" nil) (\"Hidden child\" nil) (\"hidden body\" nil) (\"Blocks\" nil) (\"quoted body\" nil)) ((\"Active\" nil) (\":VISIBILITY:\" nil) (\"active body\" nil) (\"Child\" nil) (\"child body\" 2) (\"Grand\" 2) (\"body grand\" nil) (\"Archived\" nil) (\"archived body\" nil) (\"Hidden child\" nil) (\"hidden body\" nil) (\"Blocks\" nil) (\"quoted body\" nil)) ((\"Active\" 2) (\":VISIBILITY:\" 2) (\"active body\" nil) (\"Child\" 2) (\"child body\" nil) (\"Grand\" 2) (\"body grand\" nil) (\"Archived\" nil) (\"archived body\" 2) (\"Hidden child\" 2) (\"hidden body\" nil) (\"Blocks\" 2) (\"quoted body\" 2)) ((\"Active\" nil) (\":VISIBILITY:\" nil) (\"active body\" nil) (\"Child\" nil) (\"child body\" nil) (\"Grand\" nil) (\"body grand\" nil) (\"Archived\" nil) (\"archived body\" nil) (\"Hidden child\" nil) (\"hidden body\" nil) (\"Blocks\" nil) (\"quoted body\" nil)) \"#+STARTUP: content\\n* Active\\n:PROPERTIES:\\n:VISIBILITY: children\\n:END:\\nactive body\\n** Child\\nchild body\\n*** Grand\\nbody grand\\n* Archived :ARCHIVE:\\narchived body\\n** Hidden child\\nhidden body\\n* Blocks\\n#+begin_quote\\nquoted body\\n#+end_quote\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -728,17 +727,18 @@ fn org_cycle_startup_visibility_archived_drawers_combo() {
                     after-global
                     (funcall snapshot)
                    (buffer-substring-no-properties
-                    (point-min) (point-max)))))))))"##,
+                    (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v60() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"IoT\" 1 nil 1 org-level-1 \"Nina\" \"devices\" nil) (\"Sensor\" 6 nil 2 org-level-2 \"Nina\" \"devices\" nil) (\"Gateway\" 16 nil 2 org-level-2 \"Nina\" \"devices\" \"medium\")) ((\"IoT\" 1 nil 1 org-level-1 \"Nina\" \"devices\" nil) (\"Sensor\" 6 2 2 org-level-2 \"Nina\" \"devices\" nil) (\"Gateway\" 16 2 2 org-level-2 \"Nina\" \"devices\" \"medium\")) ((\"IoT\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Sensor\" 13 2 2 org-level-2 nil \"???\" nil) (\"Gateway\" 23 2 2 org-level-2 nil \"???\" \"medium\")) ((\"IoT\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Sensor\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Gateway\" 23 nil 2 org-level-2 nil \"???\" \"medium\")) ((\"IoT\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Sensor\" 13 2 2 org-level-2 nil \"???\" nil) (\"Gateway\" 23 2 2 org-level-2 nil \"???\" \"medium\")) \"* TODO IoT :iot:\\n** WAIT Actuator :actuator:ml:\\n:PROPERTIES:\\n:Effort: 4h\\n:Accuracy: critical\\n:END:\\nActuator body.\\n\\n:PROPERTIES:\\n:Owner: Nina\\n:CATEGORY: devices\\n:END:\\n** DONE Sensor :sensor:core:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 01:00]--[2026-05-28 Wed 05:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 5h\\n:Accuracy: high\\n:END:\\nSensor body.\\n\\n** TODO Gateway :gateway:edge:\\n:PROPERTIES:\\n:Effort: 3h\\n:Accuracy: medium\\n:END:\\nGateway body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -774,7 +774,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v60() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("IoT" "Sensor" "Gateway")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "IoT")
@@ -788,17 +788,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v60() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v59() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Cloud\" 1 nil 1 org-level-1 \"Mike\" \"infra\" nil) (\"Compute\" 6 nil 2 org-level-2 \"Mike\" \"infra\" nil) (\"Storage\" 16 nil 2 org-level-2 \"Mike\" \"infra\" \"99.9\")) ((\"Cloud\" 1 nil 1 org-level-1 \"Mike\" \"infra\" nil) (\"Compute\" 6 2 2 org-level-2 \"Mike\" \"infra\" nil) (\"Storage\" 16 2 2 org-level-2 \"Mike\" \"infra\" \"99.9\")) ((\"Cloud\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Compute\" 13 2 2 org-level-2 nil \"???\" nil) (\"Storage\" 23 2 2 org-level-2 nil \"???\" \"99.9\")) ((\"Cloud\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Compute\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Storage\" 23 nil 2 org-level-2 nil \"???\" \"99.9\")) ((\"Cloud\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Compute\" 13 2 2 org-level-2 nil \"???\" nil) (\"Storage\" 23 2 2 org-level-2 nil \"???\" \"99.9\")) \"* TODO Cloud :cloud:\\n** WAIT Network :network:security:\\n:PROPERTIES:\\n:Effort: 6h\\n:SLA: 99.95\\n:END:\\nNetwork body.\\n\\n:PROPERTIES:\\n:Owner: Mike\\n:CATEGORY: infra\\n:END:\\n** DONE Compute :compute:core:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 02:00]--[2026-05-28 Wed 06:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 5h\\n:SLA: 99.99\\n:END:\\nCompute body.\\n\\n** TODO Storage :storage:edge:\\n:PROPERTIES:\\n:Effort: 3h\\n:SLA: 99.9\\n:END:\\nStorage body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -834,7 +835,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v59() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Cloud" "Compute" "Storage")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Cloud")
@@ -848,17 +849,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v59() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v58() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Search\" 1 nil 1 org-level-1 \"Larry\" \"engine\" nil) (\"Index\" 6 nil 2 org-level-2 \"Larry\" \"engine\" nil) (\"Crawl\" 16 nil 2 org-level-2 \"Larry\" \"engine\" \"high\")) ((\"Search\" 1 nil 1 org-level-1 \"Larry\" \"engine\" nil) (\"Index\" 6 2 2 org-level-2 \"Larry\" \"engine\" nil) (\"Crawl\" 16 2 2 org-level-2 \"Larry\" \"engine\" \"high\")) ((\"Search\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Index\" 13 2 2 org-level-2 nil \"???\" nil) (\"Crawl\" 23 2 2 org-level-2 nil \"???\" \"high\")) ((\"Search\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Index\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Crawl\" 23 nil 2 org-level-2 nil \"???\" \"high\")) ((\"Search\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Index\" 13 2 2 org-level-2 nil \"???\" nil) (\"Crawl\" 23 2 2 org-level-2 nil \"???\" \"high\")) \"* TODO Search :search:\\n** WAIT Rank :ranker:ml:\\n:PROPERTIES:\\n:Effort: 8h\\n:Relevance: high\\n:END:\\nRank body.\\n\\n:PROPERTIES:\\n:Owner: Larry\\n:CATEGORY: engine\\n:END:\\n** DONE Index :indexer:core:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 03:00]--[2026-05-28 Wed 07:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 6h\\n:Relevance: critical\\n:END:\\nIndex body.\\n\\n** TODO Crawl :spider:edge:\\n:PROPERTIES:\\n:Effort: 4h\\n:Relevance: high\\n:END:\\nCrawl body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -894,7 +896,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v58() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Search" "Index" "Crawl")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Search")
@@ -908,17 +910,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v58() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v57() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Data\" 1 nil 1 org-level-1 \"Kate\" \"analytics\" nil) (\"ETL\" 6 nil 2 org-level-2 \"Kate\" \"analytics\" nil) (\"Dashboard\" 16 nil 2 org-level-2 \"Kate\" \"analytics\" \"medium\")) ((\"Data\" 1 nil 1 org-level-1 \"Kate\" \"analytics\" nil) (\"ETL\" 6 2 2 org-level-2 \"Kate\" \"analytics\" nil) (\"Dashboard\" 16 2 2 org-level-2 \"Kate\" \"analytics\" \"medium\")) ((\"Data\" 1 nil 1 org-level-1 nil \"???\" nil) (\"ETL\" 13 2 2 org-level-2 nil \"???\" nil) (\"Dashboard\" 23 2 2 org-level-2 nil \"???\" \"medium\")) ((\"Data\" 1 nil 1 org-level-1 nil \"???\" nil) (\"ETL\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Dashboard\" 23 nil 2 org-level-2 nil \"???\" \"medium\")) ((\"Data\" 1 nil 1 org-level-1 nil \"???\" nil) (\"ETL\" 13 2 2 org-level-2 nil \"???\" nil) (\"Dashboard\" 23 2 2 org-level-2 nil \"???\" \"medium\")) \"* TODO Data :data:\\n** WAIT ML :ml:research:\\n:PROPERTIES:\\n:Effort: 10h\\n:Latency: high\\n:END:\\nML body.\\n\\n:PROPERTIES:\\n:Owner: Kate\\n:CATEGORY: analytics\\n:END:\\n** DONE ETL :pipeline:core:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 04:00]--[2026-05-28 Wed 08:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 5h\\n:Latency: low\\n:END:\\nETL body.\\n\\n** TODO Dashboard :viz:edge:\\n:PROPERTIES:\\n:Effort: 3h\\n:Latency: medium\\n:END:\\nDashboard body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -954,7 +957,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v57() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Data" "ETL" "Dashboard")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Data")
@@ -968,17 +971,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v57() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v56() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Backend\" 1 nil 1 org-level-1 \"Jack\" \"server\" nil) (\"Auth\" 6 nil 2 org-level-2 \"Jack\" \"server\" nil) (\"API\" 16 nil 2 org-level-2 \"Jack\" \"server\" \"high\")) ((\"Backend\" 1 nil 1 org-level-1 \"Jack\" \"server\" nil) (\"Auth\" 6 2 2 org-level-2 \"Jack\" \"server\" nil) (\"API\" 16 2 2 org-level-2 \"Jack\" \"server\" \"high\")) ((\"Backend\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Auth\" 13 2 2 org-level-2 nil \"???\" nil) (\"API\" 23 2 2 org-level-2 nil \"???\" \"high\")) ((\"Backend\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Auth\" 13 nil 2 org-level-2 nil \"???\" nil) (\"API\" 23 nil 2 org-level-2 nil \"???\" \"high\")) ((\"Backend\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Auth\" 13 2 2 org-level-2 nil \"???\" nil) (\"API\" 23 2 2 org-level-2 nil \"???\" \"high\")) \"* TODO Backend :backend:\\n** WAIT DB :database:persistence:\\n:PROPERTIES:\\n:Effort: 8h\\n:Severity: high\\n:END:\\nDB body.\\n\\n:PROPERTIES:\\n:Owner: Jack\\n:CATEGORY: server\\n:END:\\n** DONE Auth :security:core:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 05:00]--[2026-05-28 Wed 09:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 6h\\n:Severity: critical\\n:END:\\nAuth body.\\n\\n** TODO API :rest:edge:\\n:PROPERTIES:\\n:Effort: 4h\\n:Severity: high\\n:END:\\nAPI body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1014,7 +1018,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v56() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Backend" "Auth" "API")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Backend")
@@ -1028,17 +1032,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v56() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v55() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"System\" 1 nil 1 org-level-1 \"Irene\" \"core\" nil) (\"Component-A\" 6 nil 2 org-level-2 \"Irene\" \"core\" nil) (\"Component-B\" 16 nil 2 org-level-2 \"Irene\" \"core\" \"medium\")) ((\"System\" 1 nil 1 org-level-1 \"Irene\" \"core\" nil) (\"Component-A\" 6 2 2 org-level-2 \"Irene\" \"core\" nil) (\"Component-B\" 16 2 2 org-level-2 \"Irene\" \"core\" \"medium\")) ((\"System\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Component-A\" 13 2 2 org-level-2 nil \"???\" nil) (\"Component-B\" 23 2 2 org-level-2 nil \"???\" \"medium\")) ((\"System\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Component-A\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Component-B\" 23 nil 2 org-level-2 nil \"???\" \"medium\")) ((\"System\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Component-A\" 13 2 2 org-level-2 nil \"???\" nil) (\"Component-B\" 23 2 2 org-level-2 nil \"???\" \"medium\")) \"* TODO System :system:\\n** WAIT Component-C :infra:security:\\n:PROPERTIES:\\n:Effort: 3h\\n:Criticality: critical\\n:END:\\nComponent C body.\\n\\n:PROPERTIES:\\n:Owner: Irene\\n:CATEGORY: core\\n:END:\\n** DONE Component-A :infra:net:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 06:00]--[2026-05-28 Wed 10:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 5h\\n:Criticality: high\\n:END:\\nComponent A body.\\n\\n** TODO Component-B :infra:storage:\\n:PROPERTIES:\\n:Effort: 7h\\n:Criticality: medium\\n:END:\\nComponent B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1074,7 +1079,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v55() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("System" "Component-A" "Component-B")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "System")
@@ -1088,17 +1093,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v55() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v54() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Platform\" 1 nil 1 org-level-1 \"Hank\" \"infra\" nil) (\"Service-A\" 6 nil 2 org-level-2 \"Hank\" \"infra\" nil) (\"Service-B\" 16 nil 2 org-level-2 \"Hank\" \"infra\" \"99.5\")) ((\"Platform\" 1 nil 1 org-level-1 \"Hank\" \"infra\" nil) (\"Service-A\" 6 2 2 org-level-2 \"Hank\" \"infra\" nil) (\"Service-B\" 16 2 2 org-level-2 \"Hank\" \"infra\" \"99.5\")) ((\"Platform\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Service-A\" 13 2 2 org-level-2 nil \"???\" nil) (\"Service-B\" 23 2 2 org-level-2 nil \"???\" \"99.5\")) ((\"Platform\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Service-A\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Service-B\" 23 nil 2 org-level-2 nil \"???\" \"99.5\")) ((\"Platform\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Service-A\" 13 2 2 org-level-2 nil \"???\" nil) (\"Service-B\" 23 2 2 org-level-2 nil \"???\" \"99.5\")) \"* TODO Platform :platform:\\n** WAIT Service-C :microservice:auth:\\n:PROPERTIES:\\n:Effort: 3h\\n:SLA: 99.99\\n:END:\\nService C body.\\n\\n:PROPERTIES:\\n:Owner: Hank\\n:CATEGORY: infra\\n:END:\\n** DONE Service-A :microservice:core:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 07:00]--[2026-05-28 Wed 11:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 6h\\n:SLA: 99.9\\n:END:\\nService A body.\\n\\n** TODO Service-B :microservice:edge:\\n:PROPERTIES:\\n:Effort: 4h\\n:SLA: 99.5\\n:END:\\nService B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1134,7 +1140,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v54() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Platform" "Service-A" "Service-B")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Platform")
@@ -1148,17 +1154,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v54() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_tag_prop_clock_font_v53() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Product\" 1 nil 1 org-level-1 \"Gina\" \"eng\" nil) (\"API\" 6 nil 2 org-level-2 \"Gina\" \"eng\" nil) (\"UI\" 16 nil 2 org-level-2 \"Gina\" \"eng\" \"P1\")) ((\"Product\" 1 nil 1 org-level-1 \"Gina\" \"eng\" nil) (\"API\" 6 2 2 org-level-2 \"Gina\" \"eng\" nil) (\"UI\" 16 2 2 org-level-2 \"Gina\" \"eng\" \"P1\")) ((\"Product\" 1 nil 1 org-level-1 nil \"???\" nil) (\"API\" 13 2 2 org-level-2 nil \"???\" nil) (\"UI\" 23 2 2 org-level-2 nil \"???\" \"P1\")) ((\"Product\" 1 nil 1 org-level-1 nil \"???\" nil) (\"API\" 13 nil 2 org-level-2 nil \"???\" nil) (\"UI\" 23 nil 2 org-level-2 nil \"???\" \"P1\")) ((\"Product\" 1 nil 1 org-level-1 nil \"???\" nil) (\"API\" 13 2 2 org-level-2 nil \"???\" nil) (\"UI\" 23 2 2 org-level-2 nil \"???\" \"P1\")) \"* TODO Product :product:\\n** WAIT Docs :docs:writing:\\n:PROPERTIES:\\n:Effort: 3h\\n:Tier: P2\\n:END:\\nDocs body.\\n\\n:PROPERTIES:\\n:Owner: Gina\\n:CATEGORY: eng\\n:END:\\n** DONE API :backend:api:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 08:00]--[2026-05-28 Wed 12:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 5h\\n:Tier: P0\\n:END:\\nAPI body.\\n\\n** TODO UI :frontend:ui:\\n:PROPERTIES:\\n:Effort: 8h\\n:Tier: P1\\n:END:\\nUI body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1194,7 +1201,7 @@ fn org_fold_hide_all_edit_cycle_tag_prop_clock_font_v53() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Product" "API" "UI")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Product")
@@ -1208,17 +1215,18 @@ fn org_fold_hide_all_edit_cycle_tag_prop_clock_font_v53() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v52() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Board\" 1 nil 1 org-level-1 \"Frank\" \"kanban\" nil) (\"Card-A\" 6 nil 2 org-level-2 \"Frank\" \"kanban\" nil) (\"Card-B\" 16 nil 2 org-level-2 \"Frank\" \"kanban\" \"medium\")) ((\"Board\" 1 nil 1 org-level-1 \"Frank\" \"kanban\" nil) (\"Card-A\" 6 2 2 org-level-2 \"Frank\" \"kanban\" nil) (\"Card-B\" 16 2 2 org-level-2 \"Frank\" \"kanban\" \"medium\")) ((\"Board\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Card-A\" 13 2 2 org-level-2 nil \"???\" nil) (\"Card-B\" 23 2 2 org-level-2 nil \"???\" \"medium\")) ((\"Board\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Card-A\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Card-B\" 23 nil 2 org-level-2 nil \"???\" \"medium\")) ((\"Board\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Card-A\" 13 2 2 org-level-2 nil \"???\" nil) (\"Card-B\" 23 2 2 org-level-2 nil \"???\" \"medium\")) \"* TODO Board :board:\\n** WAIT Card-C :devops:deploy:\\n:PROPERTIES:\\n:Effort: 2h\\n:Weight: light\\n:END:\\nCard C body.\\n\\n:PROPERTIES:\\n:Owner: Frank\\n:CATEGORY: kanban\\n:END:\\n** DONE Card-A :backend:cache:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 10:00]--[2026-05-28 Wed 13:00] =>  3:00\\n:END:\\n:PROPERTIES:\\n:Effort: 4h\\n:Weight: heavy\\n:END:\\nCard A body.\\n\\n** TODO Card-B :frontend:ui:\\n:PROPERTIES:\\n:Effort: 6h\\n:Weight: medium\\n:END:\\nCard B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1254,7 +1262,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v52() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Board" "Card-A" "Card-B")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Board")
@@ -1268,17 +1276,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v52() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v51() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Release\" 1 nil 1 org-level-1 \"Eve\" \"ship\" nil) (\"Feature-X\" 6 nil 2 org-level-2 \"Eve\" \"ship\" nil) (\"Feature-Y\" 16 nil 2 org-level-2 \"Eve\" \"ship\" nil)) ((\"Release\" 1 nil 1 org-level-1 \"Eve\" \"ship\" nil) (\"Feature-X\" 6 2 2 org-level-2 \"Eve\" \"ship\" nil) (\"Feature-Y\" 16 2 2 org-level-2 \"Eve\" \"ship\" nil)) ((\"Release\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Feature-X\" 13 2 2 org-level-2 nil \"???\" nil) (\"Feature-Y\" 23 2 2 org-level-2 nil \"???\" nil)) ((\"Release\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Feature-X\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Feature-Y\" 23 nil 2 org-level-2 nil \"???\" nil)) ((\"Release\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Feature-X\" 13 2 2 org-level-2 nil \"???\" nil) (\"Feature-Y\" 23 2 2 org-level-2 nil \"???\" nil)) \"* TODO Release :release:\\n** WAIT Feature-Z :devops:infra:\\n:PROPERTIES:\\n:Effort: 3h\\n:Priority: medium\\n:END:\\nFeature Z body.\\n\\n:PROPERTIES:\\n:Owner: Eve\\n:CATEGORY: ship\\n:END:\\n** DONE Feature-X :backend:api:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 08:00]--[2026-05-28 Wed 12:00] =>  4:00\\n:END:\\n:PROPERTIES:\\n:Effort: 5h\\n:Priority: critical\\n:END:\\nFeature X body.\\n\\n** TODO Feature-Y :frontend:ux:\\n:PROPERTIES:\\n:Effort: 8h\\n:Priority: high\\n:END:\\nFeature Y body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1314,7 +1323,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v51() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Release" "Feature-X" "Feature-Y")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Release")
@@ -1328,17 +1337,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v51() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v50() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Campaign\" 1 nil 1 org-level-1 \"Dave\" \"marketing\" nil) (\"Email-Blast\" 6 nil 2 org-level-2 \"Dave\" \"marketing\" nil) (\"Social-Media\" 16 nil 2 org-level-2 \"Dave\" \"marketing\" \"medium\")) ((\"Campaign\" 1 nil 1 org-level-1 \"Dave\" \"marketing\" nil) (\"Email-Blast\" 6 2 2 org-level-2 \"Dave\" \"marketing\" nil) (\"Social-Media\" 16 2 2 org-level-2 \"Dave\" \"marketing\" \"medium\")) ((\"Campaign\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Email-Blast\" 13 2 2 org-level-2 nil \"???\" nil) (\"Social-Media\" 23 2 2 org-level-2 nil \"???\" \"medium\")) ((\"Campaign\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Email-Blast\" 13 nil 2 org-level-2 nil \"???\" nil) (\"Social-Media\" 23 nil 2 org-level-2 nil \"???\" \"medium\")) ((\"Campaign\" 1 nil 1 org-level-1 nil \"???\" nil) (\"Email-Blast\" 13 2 2 org-level-2 nil \"???\" nil) (\"Social-Media\" 23 2 2 org-level-2 nil \"???\" \"medium\")) \"* TODO Campaign :campaign:\\n** WAIT SEO-Optimization :seo:tech:\\n:PROPERTIES:\\n:Effort: 8h\\n:ROI: low\\n:END:\\nSEO body.\\n\\n:PROPERTIES:\\n:Owner: Dave\\n:CATEGORY: marketing\\n:END:\\n** DONE Email-Blast :email:perf:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 08:00]--[2026-05-28 Wed 10:30] =>  2:30\\n:END:\\n:PROPERTIES:\\n:Effort: 3h\\n:ROI: high\\n:END:\\nEmail blast body.\\n\\n** TODO Social-Media :social:\\n:PROPERTIES:\\n:Effort: 5h\\n:ROI: medium\\n:END:\\nSocial media body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1375,7 +1385,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v50() {
                              (list needle 'not-found nil nil nil nil nil nil))))
                      '("Campaign" "Email-Blast" "Social-Media")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Campaign")
@@ -1389,17 +1399,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v50() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v49() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Iteration\" 1 nil 1 org-level-1 \"Carol\" \"sprint\") (\"Item-A\" 6 nil 2 org-level-2 \"Carol\" \"sprint\") (\"Item-B\" 16 nil 2 org-level-2 \"Carol\" \"sprint\")) ((\"Iteration\" 1 nil 1 org-level-1 \"Carol\" \"sprint\") (\"Item-A\" 6 2 2 org-level-2 \"Carol\" \"sprint\") (\"Item-B\" 16 2 2 org-level-2 \"Carol\" \"sprint\")) ((\"Iteration\" 1 nil 1 org-level-1 nil \"???\") (\"Item-A\" 13 2 2 org-level-2 nil \"???\") (\"Item-B\" 23 2 2 org-level-2 nil \"???\")) ((\"Iteration\" 1 nil 1 org-level-1 nil \"???\") (\"Item-A\" 13 nil 2 org-level-2 nil \"???\") (\"Item-B\" 23 nil 2 org-level-2 nil \"???\")) ((\"Iteration\" 1 nil 1 org-level-1 nil \"???\") (\"Item-A\" 13 2 2 org-level-2 nil \"???\") (\"Item-B\" 23 2 2 org-level-2 nil \"???\")) \"* TODO Iteration :iter:\\n** WAIT Item-C :devops:\\n:PROPERTIES:\\n:Effort: 1h\\n:Complexity: low\\n:END:\\nItem C body.\\n\\n:PROPERTIES:\\n:Owner: Carol\\n:CATEGORY: sprint\\n:END:\\n** DONE Item-A :fe:perf:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 10:00]--[2026-05-28 Wed 12:00] =>  2:00\\n:END:\\n:PROPERTIES:\\n:Effort: 2h\\n:Complexity: high\\n:END:\\nItem A body.\\n\\n** TODO Item-B :be:\\n:PROPERTIES:\\n:Effort: 4h\\n:Complexity: medium\\n:END:\\nItem B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1434,7 +1445,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v49() {
                              (list needle 'not-found nil nil nil nil nil))))
                      '("Iteration" "Item-A" "Item-B")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Iteration")
@@ -1448,17 +1459,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_font_v49() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_tag_prop_v48() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Phase-1\" 1 nil 1 \"Bob\" \"phase1\" nil) (\"Task-A\" 6 nil 2 \"Bob\" \"phase1\" nil)) ((\"Phase-1\" 1 nil 1 \"Bob\" \"phase1\" nil) (\"Task-A\" 6 2 2 \"Bob\" \"phase1\" nil)) ((\"Phase-1\" 1 nil 1 nil \"???\" nil) (\"Task-A\" 13 2 2 nil \"???\" nil)) ((\"Phase-1\" 1 nil 1 nil \"???\" nil) (\"Task-A\" 13 nil 2 nil \"???\" nil)) ((\"Phase-1\" 1 nil 1 nil \"???\" nil) (\"Task-A\" 13 2 2 nil \"???\" nil)) \"* TODO Phase-1 :phase:\\n** WAIT Task-B :frontend:ux:\\n:PROPERTIES:\\n:Effort: 5h\\n:Priority: medium\\n:END:\\nTask B body.\\n\\n:PROPERTIES:\\n:Owner: Bob\\n:CATEGORY: phase1\\n:END:\\n** DONE Task-A :backend:perf:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 11:30] =>  2:30\\n:END:\\n:PROPERTIES:\\n:Effort: 3h\\n:Priority: high\\n:END:\\nTask A body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1487,7 +1499,7 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_v48() {
                            (list needle 'not-found nil nil nil nil nil))))
                    '("Phase-1" "Task-A")))))
       (let ((initial (funcall snap 'initial)))
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           (goto-char (point-min))
           (search-forward "Phase-1")
@@ -1500,17 +1512,18 @@ fn org_fold_hide_edit_show_cycle_clock_tag_prop_v48() {
               (let ((after-cycle (funcall snap 'cycle)))
                 (list initial after-hide after-edit after-show after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_font_face_v47() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Sprint\" 1 nil 1 org-level-1 \"Alice\") (\"Story-A\" 5 nil 2 org-level-2 \"Alice\") (\"Story-B\" 15 nil 2 org-level-2 \"Alice\")) ((\"Sprint\" 1 nil 1 org-level-1 \"Alice\") (\"Story-A\" 5 2 2 org-level-2 \"Alice\") (\"Story-B\" 15 2 2 org-level-2 \"Alice\")) ((\"Sprint\" 1 nil 1 org-level-1 nil) (\"Story-A\" 12 2 2 org-level-2 nil) (\"Story-B\" 22 2 2 org-level-2 nil)) ((\"Sprint\" 1 nil 1 org-level-1 nil) (\"Story-A\" 12 nil 2 org-level-2 nil) (\"Story-B\" 22 nil 2 org-level-2 nil)) ((\"Sprint\" 1 nil 1 org-level-1 nil) (\"Story-A\" 12 2 2 org-level-2 nil) (\"Story-B\" 22 2 2 org-level-2 nil)) \"* TODO Sprint :sprint:\\n** WAIT Story-C :devops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Points: 3\\n:END:\\nStory C body.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:END:\\n** DONE Story-A :fe:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 11:00] =>  2:00\\n:END:\\n:PROPERTIES:\\n:Effort: 3h\\n:Points: 5\\n:END:\\nStory A body.\\n\\n** TODO Story-B :be:\\n:PROPERTIES:\\n:Effort: 5h\\n:Points: 8\\n:END:\\nStory B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1545,7 +1558,7 @@ fn org_fold_hide_all_edit_cycle_font_face_v47() {
                              (list needle 'not-found nil nil nil nil))))
                      '("Sprint" "Story-A" "Story-B")))))
         (let ((initial (funcall snap 'initial)))
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide (funcall snap 'hide)))
             (goto-char (point-min))
             (search-forward "Sprint")
@@ -1559,17 +1572,18 @@ fn org_fold_hide_all_edit_cycle_font_face_v47() {
                 (let ((after-cycle (funcall snap 'cycle)))
                   (list initial after-hide after-edit after-show after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_multi_tag_prop_clock_v46() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Release-1.0\" 1 nil 1 \"Bob\" \"release\" nil) (\"Feature-A\" 6 nil 2 \"Bob\" \"release\" nil) (\"Feature-B\" 16 nil 2 \"Bob\" \"release\" \"medium\")) ((\"Release-1.0\" 1 nil 1 \"Bob\" \"release\" nil) (\"Feature-A\" 6 2 2 \"Bob\" \"release\" nil) (\"Feature-B\" 16 2 2 \"Bob\" \"release\" \"medium\")) ((\"Release-1.0\" 1 nil 1 nil \"???\" nil) (\"Feature-A\" 13 2 2 nil \"???\" nil) (\"Feature-B\" 23 2 2 nil \"???\" \"medium\")) ((\"Release-1.0\" 1 nil 1 nil \"???\" nil) (\"Feature-A\" 13 nil 2 nil \"???\" nil) (\"Feature-B\" 23 nil 2 nil \"???\" \"medium\")) ((\"Release-1.0\" 1 nil 1 nil \"???\" nil) (\"Feature-A\" 13 2 2 nil \"???\" nil) (\"Feature-B\" 23 2 2 nil \"???\" \"medium\")) \"* TODO Release-1.0 :release:\\n** WAIT Feature-C :devops:security:\\n:PROPERTIES:\\n:Effort: 3h\\n:Complexity: low\\n:END:\\nFeature C body.\\n\\n:PROPERTIES:\\n:Owner: Bob\\n:CATEGORY: release\\n:END:\\n** DONE Feature-A :backend:perf:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 12:00] =>  3:00\\n:END:\\n:PROPERTIES:\\n:Effort: 4h\\n:Complexity: high\\n:END:\\nFeature A body.\\n\\n** TODO Feature-B :frontend:\\n:PROPERTIES:\\n:Effort: 6h\\n:Complexity: medium\\n:END:\\nFeature B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1601,7 +1615,7 @@ fn org_fold_hide_all_edit_cycle_multi_tag_prop_clock_v46() {
                            (list needle 'not-found nil nil nil nil nil))))
                    '("Release-1.0" "Feature-A" "Feature-B")))))
       (let ((initial (funcall snap 'initial)))
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           (goto-char (point-min))
           (search-forward "Release-1.0")
@@ -1614,17 +1628,18 @@ fn org_fold_hide_all_edit_cycle_multi_tag_prop_clock_v46() {
               (let ((after-cycle (funcall snap 'cycle)))
                 (list initial after-hide after-edit after-show after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_tag_prop_clock_v45() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Epic-1\" 1 nil 1 \"Alice\" \"dev\" nil) (\"Story-A\" 6 nil 2 \"Alice\" \"dev\" nil) (\"Story-B\" 16 nil 2 \"Alice\" \"dev\" \"8\")) ((\"Epic-1\" 1 nil 1 \"Alice\" \"dev\" nil) (\"Story-A\" 6 2 2 \"Alice\" \"dev\" nil) (\"Story-B\" 16 2 2 \"Alice\" \"dev\" \"8\")) ((\"Epic-1\" 1 nil 1 nil \"???\" nil) (\"Story-A\" 13 2 2 nil \"???\" nil) (\"Story-B\" 23 2 2 nil \"???\" \"8\")) ((\"Epic-1\" 1 nil 1 nil \"???\" nil) (\"Story-A\" 13 nil 2 nil \"???\" nil) (\"Story-B\" 23 nil 2 nil \"???\" \"8\")) ((\"Epic-1\" 1 nil 1 nil \"???\" nil) (\"Story-A\" 13 2 2 nil \"???\" nil) (\"Story-B\" 23 2 2 nil \"???\" \"8\")) \"* TODO Epic-1 :epic:\\n** WAIT Story-C :devops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Points: 3\\n:END:\\nStory C body.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: dev\\n:END:\\n** DONE Story-A :frontend:urgent:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 11:30] =>  2:30\\n:END:\\n:PROPERTIES:\\n:Effort: 3h\\n:Points: 5\\n:END:\\nStory A body.\\n\\n** TODO Story-B :backend:\\n:PROPERTIES:\\n:Effort: 5h\\n:Points: 8\\n:END:\\nStory B body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1656,7 +1671,7 @@ fn org_fold_hide_all_edit_cycle_tag_prop_clock_v45() {
                            (list needle 'not-found nil nil nil nil nil))))
                    '("Epic-1" "Story-A" "Story-B")))))
       (let ((initial (funcall snap 'initial)))
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           (goto-char (point-min))
           (search-forward "Epic-1")
@@ -1669,17 +1684,18 @@ fn org_fold_hide_all_edit_cycle_tag_prop_clock_v45() {
               (let ((after-cycle (funcall snap 'cycle)))
                 (list initial after-hide after-edit after-show after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_tag_clock_v44() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Sprint-1\" 1 nil 1 \"Alice\" nil) (\"Story-A\" 5 nil 2 \"Alice\" nil) (\"Story-B\" 15 nil 2 \"Alice\" \"8\") (\"Story-C\" 22 nil 2 \"Alice\" \"3\")) ((\"Sprint-1\" 1 nil 1 \"Alice\" nil) (\"Story-A\" 5 2 2 \"Alice\" nil) (\"Story-B\" 15 2 2 \"Alice\" \"8\") (\"Story-C\" 22 2 2 \"Alice\" \"3\")) ((\"Sprint-1\" 1 nil 1 nil nil) (\"Story-A\" 12 2 2 nil nil) (\"Story-B\" 22 2 2 nil \"8\") (\"Story-C\" 29 2 2 nil \"3\")) ((\"Sprint-1\" 1 nil 1 nil nil) (\"Story-A\" 12 nil 2 nil nil) (\"Story-B\" 22 nil 2 nil \"8\") (\"Story-C\" 29 nil 2 nil \"3\")) ((\"Sprint-1\" 1 nil 1 nil nil) (\"Story-A\" 12 2 2 nil nil) (\"Story-B\" 22 2 2 nil \"8\") (\"Story-C\" 29 2 2 nil \"3\")) \"* TODO Sprint-1 :sprint:\\n** DONE Story-D :frontend:\\n:PROPERTIES:\\n:Effort: 1h\\n:Story-points: 2\\n:END:\\nStory D body.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:END:\\n** DONE Story-A :frontend:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 11:00] =>  2:00\\n:END:\\n:PROPERTIES:\\n:Effort: 3h\\n:Story-points: 5\\n:END:\\nStory A body.\\n\\n** TODO Story-B :backend:\\n:PROPERTIES:\\n:Effort: 5h\\n:Story-points: 8\\n:END:\\nStory B body.\\n\\n** WAIT Story-C :devops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Story-points: 3\\n:END:\\nStory C body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1714,7 +1730,7 @@ fn org_fold_hide_all_edit_cycle_tag_clock_v44() {
                    '("Sprint-1" "Story-A" "Story-B" "Story-C")))))
       (let ((initial (funcall snap 'initial)))
         ;; Hide all
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           ;; Edit: insert Story-D under hidden Sprint
           (goto-char (point-min))
@@ -1734,17 +1750,18 @@ fn org_fold_hide_all_edit_cycle_tag_clock_v44() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_prop_inherit_clock_v43() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" 1 nil 1 \"Alice\" \"work\") (\"Module A\" 6 nil 2 \"Alice\" \"work\") (\"Component X\" 13 nil 3 \"Alice\" \"work\") (\"Module B\" 19 nil 2 \"Alice\" \"work\") (\"Component Z\" 23 nil 3 \"Alice\" \"work\")) ((\"Project\" 1 nil 1 \"Alice\" \"work\") (\"Module A\" 6 2 2 \"Alice\" \"work\") (\"Component X\" 13 2 3 \"Alice\" \"work\") (\"Module B\" 19 2 2 \"Alice\" \"work\") (\"Component Z\" 23 2 3 \"Alice\" \"work\")) ((\"Project\" 1 nil 1 nil \"???\") (\"Module A\" 13 2 2 nil \"???\") (\"Component X\" 20 2 3 nil \"???\") (\"Module B\" 26 2 2 nil \"???\") (\"Component Z\" 30 2 3 nil \"???\")) ((\"Project\" 1 nil 1 nil \"???\") (\"Module A\" 13 nil 2 nil \"???\") (\"Component X\" 20 nil 3 nil \"???\") (\"Module B\" 26 nil 2 nil \"???\") (\"Component Z\" 30 nil 3 nil \"???\")) ((\"Project\" 1 nil 1 nil \"???\") (\"Module A\" 13 2 2 nil \"???\") (\"Component X\" 20 2 3 nil \"???\") (\"Module B\" 26 2 2 nil \"???\") (\"Component Z\" 30 2 3 nil \"???\")) \"* TODO Project :project:\\n** WAIT Module C\\n:PROPERTIES:\\n:Effort: 1h\\n:END:\\n*** Component W\\nBody W.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: work\\n:END:\\n** DONE Module A\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 10:30] =>  1:30\\n:END:\\n:PROPERTIES:\\n:Effort: 2h\\n:END:\\n*** Component X\\nBody X.\\n\\n*** Component Y\\nBody Y.\\n\\n** TODO Module B\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\n*** Component Z\\nBody Z.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1777,7 +1794,7 @@ fn org_fold_hide_all_edit_cycle_prop_inherit_clock_v43() {
                    '("Project" "Module A" "Component X" "Module B" "Component Z")))))
       (let ((initial (funcall snap 'initial)))
         ;; Hide all
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           ;; Edit: insert Module C under hidden Project
           (goto-char (point-min))
@@ -1797,17 +1814,18 @@ fn org_fold_hide_all_edit_cycle_prop_inherit_clock_v43() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_edit_show_cycle_clock_prop_v42() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" 1 nil 1 \"Alice\") (\"Task A\" 5 nil 2 \"Alice\") (\"Task B\" 14 nil 2 \"Alice\")) ((\"Project\" 1 2 1 \"Alice\") (\"Task A\" 5 2 2 \"Alice\") (\"Task B\" 14 2 2 \"Alice\")) ((\"Project\" 1 nil 1 nil) (\"Task A\" 11 2 2 nil) (\"Task B\" 20 2 2 nil)) ((\"Project\" 1 nil 1 nil) (\"Task A\" 11 nil 2 nil) (\"Task B\" 20 nil 2 nil)) ((\"Project\" 1 2 1 nil) (\"Task A\" 11 2 2 nil) (\"Task B\" 20 2 2 nil)) \"* TODO Project\\n** WAIT Task C\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\nBody C.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:END:\\n** DONE Task A\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 10:00] =>  1:00\\n:END:\\n:PROPERTIES:\\n:Effort: 2h\\n:END:\\nBody A.\\n\\n** TODO Task B\\nBody B.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1837,7 +1855,7 @@ fn org_fold_hide_edit_show_cycle_clock_prop_v42() {
                    '("Project" "Task A" "Task B")))))
       (let ((initial (funcall snap 'initial)))
         ;; Hide all
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           ;; Edit: insert Task C under hidden Project
           (goto-char (point-min))
@@ -1857,17 +1875,18 @@ fn org_fold_hide_edit_show_cycle_clock_prop_v42() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_subtree_scheduled_deadline_cycle_v41() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 57)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 1 nil 1) (\"Beta\" 5 nil 2) (\"Gamma\" 8 nil 3)) ((\"Alpha\" 1 2 1) (\"Beta\" 5 2 2) (\"Gamma\" 8 2 3)) ((\"Alpha\" 1 nil 1) (\"Beta\" 8 2 2) (\"Gamma\" 11 2 3)) ((\"Alpha\" 1 nil 1) (\"Beta\" 8 nil 2) (\"Gamma\" 11 nil 3)) ((\"Alpha\" 1 2 1) (\"Beta\" 8 2 2) (\"Gamma\" 11 2 3)) \"* TODO Alpha\\n** WAIT Delta\\nBody delta.\\n\\nSCHEDULED: <2026-05-28 Wed>\\nBody alpha.\\n\\n** DONE Beta\\nBody beta.\\n\\n*** TODO Gamma\\nBody gamma.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1916,17 +1935,18 @@ fn org_fold_hide_subtree_scheduled_deadline_cycle_v41() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_subtree_edit_cycle_prop_clock_v40() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 57)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" 1 nil 1 \"Alice\") (\"Task A\" 5 nil 2 \"Alice\") (\"Task B\" 14 nil 2 \"Alice\")) ((\"Project\" 1 nil 1 \"Alice\") (\"Task A\" 5 2 2 \"Alice\") (\"Task B\" 14 nil 2 \"Alice\")) ((\"Project\" 1 nil 1 nil) (\"Task A\" 11 2 2 nil) (\"Task B\" 20 nil 2 nil)) ((\"Project\" 1 nil 1 nil) (\"Task A\" 11 nil 2 nil) (\"Task B\" 20 nil 2 nil)) ((\"Project\" 1 2 1 nil) (\"Task A\" 11 2 2 nil) (\"Task B\" 20 2 2 nil)) \"* TODO Project\\n** WAIT Task C\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\nBody C.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:END:\\n** DONE Task A\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 10:00] =>  1:00\\n:END:\\n:PROPERTIES:\\n:Effort: 2h\\n:END:\\nBody A.\\n\\n** TODO Task B\\n:PROPERTIES:\\n:Effort: 1h\\n:END:\\nBody B.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1981,17 +2001,18 @@ fn org_fold_hide_subtree_edit_cycle_prop_clock_v40() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_prop_inherit_edit_cycle_v39() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" 1 nil 1 \"Alice\" \"work\") (\"Module A\" 6 nil 2 \"Alice\" \"work\") (\"Component X\" 10 nil 3 \"Alice\" \"work\") (\"Module B\" 16 nil 2 \"Alice\" \"work\") (\"Component Z\" 20 nil 3 \"Alice\" \"work\")) ((\"Project\" 1 nil 1 \"Alice\" \"work\") (\"Module A\" 6 2 2 \"Alice\" \"work\") (\"Component X\" 10 2 3 \"Alice\" \"work\") (\"Module B\" 16 2 2 \"Alice\" \"work\") (\"Component Z\" 20 2 3 \"Alice\" \"work\")) ((\"Project\" 1 nil 1 nil \"???\") (\"Module A\" 13 2 2 nil \"???\") (\"Component X\" 17 2 3 nil \"???\") (\"Module B\" 23 2 2 nil \"???\") (\"Component Z\" 27 2 3 nil \"???\")) ((\"Project\" 1 nil 1 nil \"???\") (\"Module A\" 13 nil 2 nil \"???\") (\"Component X\" 17 nil 3 nil \"???\") (\"Module B\" 23 nil 2 nil \"???\") (\"Component Z\" 27 nil 3 nil \"???\")) ((\"Project\" 1 nil 1 nil \"???\") (\"Module A\" 13 2 2 nil \"???\") (\"Component X\" 17 2 3 nil \"???\") (\"Module B\" 23 2 2 nil \"???\") (\"Component Z\" 27 2 3 nil \"???\")) \"* Project :project:\\n** Module C\\n:PROPERTIES:\\n:Effort: 1h\\n:END:\\n*** Component W\\nBody W.\\n\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: work\\n:END:\\n** Module A\\n:PROPERTIES:\\n:Effort: 2h\\n:END:\\n*** Component X\\nBody X.\\n\\n*** Component Y\\nBody Y.\\n\\n** Module B\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\n*** Component Z\\nBody Z.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2023,7 +2044,7 @@ fn org_fold_hide_all_prop_inherit_edit_cycle_v39() {
                    '("Project" "Module A" "Component X" "Module B" "Component Z")))))
       (let ((initial (funcall snap 'initial)))
         ;; Hide all
-        (org-fold-hide-all)
+        (org-fold-hide-sublevels 1)
         (let ((after-hide (funcall snap 'hide)))
           ;; Edit: insert under hidden Project
           (goto-char (point-min))
@@ -2043,17 +2064,18 @@ fn org_fold_hide_all_prop_inherit_edit_cycle_v39() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_subtree_prop_drawer_edit_cycle_show_v38() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 50 57)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 1 nil 1) (\"Beta\" 8 nil 2) (\"Gamma\" 14 nil 3)) ((\"Alpha\" 1 2 1) (\"Beta\" 8 2 2) (\"Gamma\" 14 2 3)) ((\"Alpha\" 1 nil 1) (\"Beta\" 14 2 2) (\"Gamma\" 20 2 3)) ((\"Alpha\" 1 nil 1) (\"Beta\" 14 nil 2) (\"Gamma\" 20 nil 3)) ((\"Alpha\" 1 2 1) (\"Beta\" 14 2 2) (\"Gamma\" 20 2 3)) \"* TODO Alpha\\n** WAIT Delta\\n:PROPERTIES:\\n:Effort: 45m\\n:END:\\nBody delta.\\n\\n:PROPERTIES:\\n:Effort: 2h\\n:CUSTOM_ID: alpha\\n:END:\\nBody alpha.\\n\\n** DONE Beta\\n:PROPERTIES:\\n:Effort: 1h\\n:END:\\nBody beta.\\n\\n*** TODO Gamma\\n:PROPERTIES:\\n:Effort: 30m\\n:END:\\nBody gamma.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2104,17 +2126,18 @@ fn org_fold_hide_subtree_prop_drawer_edit_cycle_show_v38() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_all_edit_cycle_font_face_v37() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (void-function org-fold-hide-all)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Project\" 1 nil 1 org-level-1) (\"Module A\" 2 nil 2 org-level-2) (\"Component X\" 3 nil 3 org-level-3) (\"Sub 1\" 4 nil 4 org-level-4) (\"Sub 2\" 6 nil 4 org-level-4) (\"Component Y\" 8 nil 3 org-level-3) (\"Module B\" 10 nil 2 org-level-2) (\"Component Z\" 11 nil 3 org-level-3)) ((\"Project\" 1 2 1 org-level-1) (\"Module A\" 2 2 2 org-level-2) (\"Component X\" 3 2 3 org-level-3) (\"Sub 1\" 4 2 4 org-level-4) (\"Sub 2\" 6 2 4 org-level-4) (\"Component Y\" 8 2 3 org-level-3) (\"Module B\" 10 2 2 org-level-2) (\"Component Z\" 11 2 3 org-level-3)) ((\"Project\" 1 nil 1 org-level-1) (\"Module A\" 5 2 2 org-level-2) (\"Component X\" 6 2 3 org-level-3) (\"Sub 1\" 7 2 4 org-level-4) (\"Sub 2\" 9 2 4 org-level-4) (\"Component Y\" 11 2 3 org-level-3) (\"Module B\" 13 2 2 org-level-2) (\"Component Z\" 14 2 3 org-level-3)) ((\"Project\" 1 nil 1 org-level-1) (\"Module A\" 5 nil 2 org-level-2) (\"Component X\" 6 nil 3 org-level-3) (\"Sub 1\" 7 nil 4 org-level-4) (\"Sub 2\" 9 nil 4 org-level-4) (\"Component Y\" 11 nil 3 org-level-3) (\"Module B\" 13 nil 2 org-level-2) (\"Component Z\" 14 nil 3 org-level-3)) ((\"Project\" 1 2 1 org-level-1) (\"Module A\" 5 2 2 org-level-2) (\"Component X\" 6 2 3 org-level-3) (\"Sub 1\" 7 2 4 org-level-4) (\"Sub 2\" 9 2 4 org-level-4) (\"Component Y\" 11 2 3 org-level-3) (\"Module B\" 13 2 2 org-level-2) (\"Component Z\" 14 2 3 org-level-3)) \"* TODO Project\\n** DONE New Module\\nNew body.\\n\\n** DONE Module A\\n*** TODO Component X\\n**** DONE Sub 1\\nBody 1.\\n**** TODO Sub 2\\nBody 2.\\n*** WAIT Component Y\\nBody Y.\\n** TODO Module B\\n*** DONE Component Z\\nBody Z.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2148,7 +2171,7 @@ fn org_fold_hide_all_edit_cycle_font_face_v37() {
                        "Sub 2" "Component Y" "Module B" "Component Z")))))
         (let ((initial (funcall snap 'initial)))
           ;; Hide all
-          (org-fold-hide-all)
+          (org-fold-hide-sublevels 1)
           (let ((after-hide-all (funcall snap 'hide-all)))
             ;; Edit under hidden Project
             (goto-char (point-min))
@@ -2169,17 +2192,18 @@ fn org_fold_hide_all_edit_cycle_font_face_v37() {
                         after-show
                         after-cycle
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_cycle_subtree_edit_show_all_v36() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 45 57)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 1 nil 1) (\"Beta\" 4 nil 2) (\"Gamma\" 7 nil 3) (\"Delta\" 10 nil 2)) ((\"Alpha\" 1 2 1) (\"Beta\" 4 2 2) (\"Gamma\" 7 2 3) (\"Delta\" 10 2 2)) ((\"Alpha\" 1 nil 1) (\"Beta\" 7 2 2) (\"Gamma\" 10 2 3) (\"Delta\" 13 2 2)) ((\"Alpha\" 1 nil 1) (\"Beta\" 7 nil 2) (\"Gamma\" 10 nil 3) (\"Delta\" 13 nil 2)) ((\"Alpha\" 1 2 1) (\"Beta\" 7 2 2) (\"Gamma\" 10 2 3) (\"Delta\" 13 2 2)) \"* Alpha\\n** Epsilon\\nBody epsilon.\\n\\nBody alpha.\\n\\n** Beta\\nBody beta.\\n\\n*** Gamma\\nBody gamma.\\n\\n** Delta\\nBody delta.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2225,7 +2249,7 @@ fn org_fold_cycle_subtree_edit_show_all_v36() {
                       after-show
                       after-cycle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
@@ -3798,12 +3822,13 @@ fn org_fold_subtree_edit_global_show_font_face_v10_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_todo_toggle_cycle_show_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 55 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2 org-level-2) (\"Beta\" 3 nil 3 org-level-3 org-level-3) (\"SIBLING\" 4 nil 2 org-level-2 org-level-2)) nil \"* TODO Root\\n** TODO Alpha\\n*** DONE Beta\\n** NEXT Sibling\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3859,17 +3884,18 @@ fn org_fold_font_face_after_todo_toggle_cycle_show_v2_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_edit_cycle_show_font_face_v9_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 3 nil 3 org-level-3) (\"Gamma\" 4 nil 4 org-level-4) (\"Inserted\" 5 nil 4 org-level-4) (\"SIBLING\" 8 nil 2 org-level-2)) nil \"* DONE Root\\n** TODO Alpha\\n*** DONE Beta\\n**** TODO Gamma\\n**** TODO Inserted under Gamma\\nInserted body.\\n\\n** NEXT Sibling\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3922,17 +3948,18 @@ fn org_fold_subtree_edit_cycle_show_font_face_v9_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_subtree_edit_cycle_show_font_face_v8_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 3 nil 3 org-level-3) (\"Gamma\" 4 nil 4 org-level-4) (\"SIBLING\" 5 nil 2 org-level-2) (\"Inserted\" 6 nil 2 org-level-2)) nil \"* TODO Root\\n** DONE Alpha\\n*** TODO Beta\\n**** WAIT Gamma\\n** NEXT Sibling\\n** DONE Inserted after Sibling\\nInserted body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3985,12 +4012,11 @@ fn org_fold_hide_subtree_edit_cycle_show_font_face_v8_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_sublevels_reveal_context_font_level_v4_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -4045,17 +4071,18 @@ fn org_fold_hide_sublevels_reveal_context_font_level_v4_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_subtree_edit_show_font_face_level_v7_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 3 nil 3 org-level-3) (\"Gamma\" 7 nil 4 org-level-4) (\"Inserted\" 4 nil 4 org-level-4) (\"SIBLING\" 8 nil 2 org-level-2)) nil \"* DONE Root\\n** TODO Alpha\\n*** DONE Beta\\n**** TODO Inserted under Beta\\nInserted body.\\n\\n**** TODO Gamma\\n** NEXT Sibling\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4105,17 +4132,18 @@ fn org_fold_hide_subtree_edit_show_font_face_level_v7_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_hide_edit_show_font_level_visibility_v6_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 6 nil 3 org-level-3) (\"Gamma\" 7 nil 4 org-level-4) (\"Inserted\" 3 nil 3 org-level-3) (\"SIBLING\" 8 nil 2 org-level-2)) nil \"* TODO Root\\n** DONE Alpha\\n*** TODO Inserted under Alpha\\nInserted body.\\n\\n*** TODO Beta\\n**** WAIT Gamma\\n** NEXT Sibling\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4164,17 +4192,18 @@ fn org_fold_subtree_hide_edit_show_font_level_visibility_v6_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_narrow_edit_widen_cycle_font_face_level_v4_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 3 nil 2 org-level-2) (\"Beta\" 5 nil 3 org-level-3) (\"Gamma\" 7 nil 4 org-level-4) (\"Inserted\" 8 nil 4 nil) (\"SIBLING\" 11 nil 2 org-level-2)) nil \"* Root\\nRoot body.\\n** Alpha\\nAlpha body.\\n*** Beta\\nBeta body.\\n**** Gamma\\nGamma body.*** Inserted in narrow\\nInserted body.\\n\\n** Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4227,12 +4256,11 @@ fn org_fold_narrow_edit_widen_cycle_font_face_level_v4_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_sublevels_reveal_font_face_level_v3_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -4286,17 +4314,18 @@ fn org_fold_hide_sublevels_reveal_font_face_level_v3_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_edit_show_global_font_level_v5_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 6 nil 3 org-level-3) (\"Gamma\" 7 nil 4 org-level-4) (\"Inserted\" 3 nil 3 org-level-3) (\"SIBLING\" 8 nil 2 org-level-2)) nil \"* TODO Root\\n** DONE Alpha\\n*** TODO Inserted under Alpha\\nInserted body.\\n\\n*** TODO Beta\\n**** WAIT Gamma\\n** NEXT Sibling\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4349,17 +4378,18 @@ fn org_fold_subtree_edit_show_global_font_level_v5_combo() {
           (list headings
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_export_html_after_cycle_font_state_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (3 1 6 3 1 t t \"<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">1.</span> <span class=\\\"todo TODO\\\">TODO</span> Root&nbsp;&nbsp;&nbsp<span class=\\\"tag\\\"><span class=\\\"root\\\">root</span></span></h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nRoot body with <b>bold</b>.\\n</p>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"orgHASH\\\"><span class=\\\"section-number-3\\\">1.1.</span> <span class=\\\"done DONE\\\">DONE</span> Alpha</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-1-1\\\">\\n<p>\\nAlpha body.\\n</p>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-4\\\">\\n<h4 id=\\\"orgHASH\\\"><span class=\\\"section-number-4\\\">1.1.1.</span> <span class=\\\"todo TODO\\\">TODO</span> Beta</h4>\\n<div class=\\\"outline-text-4\\\" id=\\\"text-1-1-1\\\">\\n<p>\\nBeta body.\\n</p>\\n</div>\\n</div>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"orgHASH\\\"><span class=\\\"section-number-3\\\">1.2.</span> NEXT Gamma</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-1-2\\\">\\n<p>\\nGamma body.\\n</p>\\n</div>\\n</div>\\n</div>\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4409,7 +4439,7 @@ fn org_fold_export_html_after_cycle_font_state_deep_combo() {
                  (replace-regexp-in-string
                   "sec:org[[:alnum:]-]+" "sec:org-id"
                   (replace-regexp-in-string
-                   "org[[:alnum:]-]\\{8,\\}" "orgHASH" html))))))))"##,
+                   "org[0-9a-f]\\{7\\}" "orgHASH" html)))))))))"##,
         expect,
     );
 }
@@ -4530,12 +4560,13 @@ fn org_fold_font_face_after_narrow_subtree_cycle_edit_v2_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_demote_subtree_show_all_v3_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" 0 1 org-level-1) (\"B\" 0 3 org-level-3) (\"C\" 0 4 org-level-4) (\"D\" 0 1 org-level-1) (\"E\" 0 1 org-level-1)) nil \"* A\\n*** B\\n**** C\\n* D\\n* E\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4585,7 +4616,7 @@ fn org_fold_font_face_after_demote_subtree_show_all_v3_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -4663,7 +4694,6 @@ fn org_fold_font_face_after_multiple_hidden_edits_global_show_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_promote_cycle_show_all_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -4725,17 +4755,18 @@ fn org_fold_font_face_after_promote_cycle_show_all_v2_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_demote_promote_cycle_global_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 53 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" 0 1 nil org-level-1) (\"B\" 0 1 nil nil) (\"C\" 0 3 nil org-level-3) (\"D\" 0 1 nil nil)) nil \"* A\\nbody A\\n** B\\nbody B\\n*** C\\nbody C\\n** D\\nbody D\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4789,17 +4820,18 @@ fn org_fold_font_face_after_demote_promote_cycle_global_v2_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_cut_paste_cycle_global_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" 1 nil 1 org-level-1) (\"B\" 2 nil 1 nil) (\"C\" 3 nil 2 org-level-2) (\"D\" 2 nil 1 nil)) nil \"* A\\nbody A\\n** C\\nbody C\\n** B\\nbody B\\n* D\\nbody D\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4852,17 +4884,18 @@ fn org_fold_font_face_after_cut_paste_cycle_global_v2_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_cut_paste_promote_demote_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 56 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" 0 1 org-level-1) (\"B\" 0 3 org-level-3) (\"C\" 0 1 org-level-1) (\"D\" 0 1 org-level-1) (\"E\" 0 2 org-level-2)) nil \"* A\\n*** B\\n* C\\n* D\\n** E\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4919,12 +4952,11 @@ fn org_fold_font_face_after_cut_paste_promote_demote_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_after_multiple_todo_toggle_show_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -4992,7 +5024,7 @@ fn org_fold_font_face_after_multiple_todo_toggle_show_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5070,12 +5102,13 @@ fn org_fold_font_face_after_todo_toggle_cycle_show_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_level_after_cut_paste_subtree_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" 1 nil 1 org-level-1) (\"B\" 2 nil 1 nil) (\"C\" 3 nil 2 org-level-2) (\"D\" 2 nil 1 nil) (\"E\" 9 nil 2 org-level-2)) nil \"* A\\nbody A\\n** C\\nbody C\\n** B\\nbody B\\n* D\\nbody D\\n** E\\nbody E\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5128,17 +5161,18 @@ fn org_fold_font_face_level_after_cut_paste_subtree_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_hide_edit_global_show_font_deep_v4_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 3 nil 3 org-level-3) (\"Gamma\" 4 nil 4 org-level-4) (\"SIBLING\" 5 nil 2 org-level-2) (\"Inserted S\" 6 nil 2 org-level-2)) nil \"* TODO Root\\n** DONE Alpha\\n*** TODO Beta\\n**** WAIT Gamma\\n** NEXT Sibling\\n** DONE Inserted S\\nInserted S body.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5191,17 +5225,18 @@ fn org_fold_subtree_hide_edit_global_show_font_deep_v4_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_sublevels_show_context_font_level_visibility_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 2 1 org-level-1) (\"Alpha\" 2 2 2 org-level-2) (\"Beta\" 4 2 3 org-level-3) (\"Gamma\" 6 2 4 org-level-4) (\"Delta\" 8 2 5 org-level-5) (\"Sibling\" 10 2 2 org-level-2)) ((\"Root\" 2 1) (\"Alpha\" nil 2) (\"Beta\" nil 3) (\"Gamma\" nil 4) (\"Delta\" nil 5) (\"Sibling\" 2 2)) nil \"* Root\\n** Alpha\\nAlpha body.\\n*** Beta\\nBeta body.\\n**** Gamma\\nGamma body.\\n***** Delta\\nDelta body.\\n** Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5268,7 +5303,7 @@ fn org_fold_sublevels_show_context_font_level_visibility_v2_combo() {
                   after-show
                   (nreverse merged)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -5349,12 +5384,13 @@ fn org_fold_multiple_subtree_hide_cycle_show_font_level_v5_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_level_visibility_after_multiple_cycles_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 64 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" nil 1 org-level-1) (\"Alpha\" nil 2 org-level-2) (\"Beta\" nil 3 org-level-3) (\"Gamma\" nil 4 org-level-4) (\"SIBLING\" nil 2 org-level-2)) nil t \"* TODO Root\\nRoot body.\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5419,12 +5455,11 @@ fn org_fold_font_level_visibility_after_multiple_cycles_v2_combo() {
               (nreverse merged)
               level-ok
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_overview_local_global_show_font_face_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -5493,17 +5528,18 @@ fn org_fold_overview_local_global_show_font_face_deep_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_hide_edit_show_all_font_face_level_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 57 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1 org-level-1) (\"Alpha\" 3 nil 2 org-level-2 org-level-2) (\"Beta\" 5 nil 3 org-level-3 org-level-3) (\"Gamma\" 10 nil 4 org-level-4 org-level-4) (\"Inserted under Beta\" 6 nil 4 org-level-4 org-level-4) (\"Sibling\" 12 nil 2 org-level-2 org-level-2)) nil \"* TODO Root\\nRoot body.\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\n**** TODO Inserted under Beta\\nInserted body.\\n\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5561,7 +5597,7 @@ fn org_fold_subtree_hide_edit_show_all_font_face_level_v2_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5645,12 +5681,13 @@ fn org_fold_hide_sublevels_reveal_cycle_font_level_deep_v3_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_repeated_global_cycle_show_all_font_level_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"L1\" nil 1 org-level-1) (\"L2\" nil 2 org-level-2) (\"L3\" nil 3 org-level-3) (\"L4\" nil 4 org-level-4) (\"L5\" nil 5 org-level-5) (\"L2b\" nil 2 org-level-2)) nil t \"* TODO L1\\n** DONE L2\\n*** TODO L3\\n**** WAIT L4\\n***** DONE L5\\n** NEXT L2b\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5705,7 +5742,7 @@ fn org_fold_repeated_global_cycle_show_all_font_level_v2_combo() {
               (nreverse merged)
               level-ok
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5769,7 +5806,6 @@ fn org_fold_narrow_subtree_show_all_widen_font_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_cycle_global_local_mixed_font_level_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -5839,17 +5875,18 @@ fn org_fold_cycle_global_local_mixed_font_level_integrity_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_hide_show_all_font_face_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2 org-level-2) (\"Beta\" 6 nil 3 org-level-3 org-level-3) (\"Gamma\" 7 nil 4 org-level-4 org-level-4) (\"Delta\" 8 nil 5 org-level-5 org-level-5) (\"Inserted under Alpha\" 3 nil 3 org-level-3 org-level-3) (\"Sibling\" 9 nil 2 org-level-2 org-level-2)) nil \"* TODO Root\\n** DONE Alpha\\n*** TODO Inserted under Alpha\\nInserted body.\\n\\n*** TODO Beta\\n**** WAIT Gamma\\n***** DONE Delta\\n** NEXT Sibling\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5904,17 +5941,18 @@ fn org_fold_subtree_hide_show_all_font_face_integrity_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_level_visibility_after_demote_promote_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"L1\" 0 1 org-level-1) (\"L2\" 0 2 org-level-2) (\"L3\" 0 4 org-level-4) (\"L4\" 0 4 org-level-4) (\"L5\" 0 5 org-level-5)) nil \"* L1\\n** L2\\n**** L3\\n**** L4\\n***** L5\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5964,7 +6002,7 @@ fn org_fold_font_level_visibility_after_demote_promote_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -6110,12 +6148,13 @@ fn org_fold_show_all_after_multiple_hidden_edits_font_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_hide_edit_reveal_font_level_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 56 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 4 nil 3 org-level-3) (\"Gamma\" 9 nil 4 org-level-4) (\"Inserted under Beta\" 5 nil 4 nil) (\"Sibling\" 11 nil 2 org-level-2)) nil \"* TODO Root\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\n**** TODO Inserted under Beta\\nInserted body.\\n\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6172,17 +6211,18 @@ fn org_fold_subtree_hide_edit_reveal_font_level_v2_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_indirect_buffer_decouple_font_level_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 67)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (ok ((\"Root\" 2 1) (\"Alpha\" nil 2) (\"Beta\" nil 3) (\"Gamma\" nil 4) (\"Sibling\" nil 2)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6231,17 +6271,18 @@ fn org_fold_indirect_buffer_decouple_font_level_v2_combo() {
                           '("Root" "Alpha" "Beta" "Gamma" "Sibling"))))
                     (kill-buffer clone)
                     (list 'ok clone-state)))
-              (error (list 'divergence (car err) (cdr err))))))))))"##,
+              (error (list 'divergence (car err) (cdr err)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_deep_level_cycle_hidden_edit_show_all_font_v3_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 81 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"L1\" 1 nil 1 org-level-1) (\"L2\" 2 nil 2 org-level-2) (\"L3\" 3 nil 3 org-level-3) (\"L4\" 4 nil 4 org-level-4) (\"L5\" 5 nil 5 org-level-5) (\"L6\" 9 nil 6 org-level-6) (\"L7\" 10 nil 7 org-level-7) (\"L8\" 14 nil 8 org-level-8) (\"L9\" 15 nil 9 org-level-1) (\"Inserted under L5\" 6 nil 5 org-level-5) (\"Inserted under L7\" 11 nil 7 org-level-7)) nil t \"* TODO L1\\n** DONE L2\\n*** TODO L3\\n**** WAIT L4\\n***** DONE L5\\n***** TODO Inserted under L5\\nInserted L5 body.\\n\\n****** TODO L6\\n******* WAIT L7\\n******* TODO Inserted under L7\\nInserted L7 body.\\n\\n******** DONE L8\\n********* TODO L9\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6323,17 +6364,18 @@ fn org_fold_deep_level_cycle_hidden_edit_show_all_font_v3_combo() {
               (nreverse merged)
               level-ok
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_narrow_widen_cycle_font_level_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" nil 2 org-level-2) (\"Alpha body\" nil 2 nil) (\"Beta\" 2 3 org-level-3) (\"Beta body\" 2 3 nil) (\"Gamma\" 2 4 org-level-4) (\"Gamma body\" 2 4 nil) (\"Root\" not-found nil nil nil) (\"Sibling\" not-found nil nil nil)) ((\"Alpha\" nil 2) (\"Beta\" nil 3) (\"Gamma\" nil 4) (\"Inserted\" nil 3) (\"Root\" not-found nil nil) (\"Sibling\" not-found nil nil)) \"** Alpha\\nAlpha body.\\n*** Beta\\nBeta body.\\n**** Gamma\\nGamma body.\\n*** Inserted in narrow\\nInserted body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6390,7 +6432,7 @@ fn org_fold_narrow_widen_cycle_font_level_integrity_combo() {
           (list narrowed-state
                 narrowed-show
                 (buffer-substring-no-properties
-                 (point-min) (point-max))))))))"##,
+                 (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -6480,12 +6522,13 @@ fn org_fold_overview_content_all_local_cycle_font_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_cut_paste_subtree_reexpand_font_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 60 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"A\" 1 nil 1 org-level-1) (\"body A\" 2 nil 1 nil) (\"B\" 2 nil 1 nil) (\"body B\" 4 nil 2 nil) (\"C\" 5 nil 2 org-level-2) (\"body C\" 6 nil 2 nil) (\"E\" 7 nil 1 org-level-1) (\"body E\" 8 nil 1 nil)) nil \"* A\\nbody A\\n** B\\nbody B\\n** C\\nbody C\\n* E\\nbody E\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6546,17 +6589,18 @@ fn org_fold_cut_paste_subtree_reexpand_font_integrity_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_startup_visibility_property_cycle_font_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 66 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" nil 1 org-level-1) (\"Root body\" nil 1 nil) (\"Alpha\" nil 2 org-level-2) (\"Alpha body\" nil 2 nil) (\"Beta\" nil 3 org-level-3) (\"Beta body\" nil 3 nil) (\"Gamma\" nil 4 org-level-4) (\"Gamma body\" nil 4 nil) (\"Sibling\" nil 2 org-level-2) (\"Sibling body\" nil 2 nil)) ((\"Root\" 2 1) (\"Alpha\" 2 2) (\"Beta\" 2 3) (\"Gamma\" 2 4) (\"Sibling\" 2 2)) nil \"* TODO Root\\n:PROPERTIES:\\n:VISIBILITY: children\\n:END:\\nRoot body.\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6623,12 +6667,11 @@ fn org_fold_startup_visibility_property_cycle_font_deep_combo() {
                   after-global
                   (nreverse merged)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_hide_sublevels_show_context_cycle_font_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -6690,7 +6733,7 @@ fn org_fold_hide_sublevels_show_context_cycle_font_deep_v2_combo() {
         (list state
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -6764,12 +6807,13 @@ fn org_fold_sublevels_reveal_context_font_state_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_hide_edit_show_all_font_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 65 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 3 nil 2 org-level-2) (\"Beta\" 5 nil 3 org-level-3) (\"Gamma\" 10 nil 4 org-level-4) (\"Inserted under Beta\" 6 nil 4 org-level-4) (\"Sibling\" 12 nil 2 org-level-2) (\"Inserted after Sibling\" 13 nil 2 org-level-2)) nil \"* TODO Root\\nRoot body.\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\n**** TODO Inserted under Beta\\nInserted body.\\n\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\n** DONE Inserted after Sibling\\nInserted sibling body.\\n\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6835,17 +6879,18 @@ fn org_fold_subtree_hide_edit_show_all_font_integrity_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_multiple_hidden_edits_global_cycle_font_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 79 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1 org-level-1) (\"Alpha\" 2 nil 2 org-level-2) (\"Beta\" 7 nil 3 org-level-3) (\"Gamma\" 9 nil 4 org-level-4) (\"Delta\" 11 nil 5 org-level-5) (\"Inserted under Alpha\" 3 nil 3 org-level-3) (\"Sibling\" 13 nil 2 org-level-2) (\"Inserted after Sibling\" 14 nil 2 org-level-2)) nil t \"* TODO Root\\n** DONE Alpha\\n*** TODO Inserted under Alpha\\nInserted Alpha body.\\n\\nAlpha body.\\n*** TODO Beta\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n***** DONE Delta\\nDelta body.\\n** NEXT Sibling\\n** DONE Inserted after Sibling\\nInserted Sibling body.\\n\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6925,17 +6970,18 @@ fn org_fold_multiple_hidden_edits_global_cycle_font_combo() {
               (nreverse merged)
               level-ok
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_visibility_after_promote_demote_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"L1\" 0 1 org-level-1 org-level-1) (\"L2\" 0 3 org-level-3 org-level-3) (\"L3\" 0 4 org-level-4 org-level-4) (\"L4\" 0 4 org-level-4 org-level-4) (\"L5\" 0 5 org-level-5 org-level-5)) nil \"* L1\\n*** L2\\n**** L3\\n**** L4\\n***** L5\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6985,17 +7031,18 @@ fn org_fold_font_face_visibility_after_promote_demote_combo() {
         (list headings
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_deep_heading_cycle_hidden_edit_font_regression_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 68 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"L1\" 1 nil 1 org-level-1) (\"L2\" 2 nil 2 org-level-2) (\"L3\" 3 nil 3 org-level-3) (\"L4\" 4 nil 4 org-level-4) (\"L5\" 5 nil 5 org-level-5) (\"L6\" 9 nil 6 org-level-6) (\"L7\" 10 nil 7 org-level-7) (\"L8\" 11 nil 8 org-level-8) (\"Inserted\" 6 nil 5 org-level-5)) nil t \"* TODO L1\\n** DONE L2\\n*** TODO L3\\n**** WAIT L4\\n***** DONE L5\\n***** TODO Inserted under L5\\nInserted body.\\n\\n****** TODO L6\\n******* WAIT L7\\n******** DONE L8\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7064,17 +7111,18 @@ fn org_fold_deep_heading_cycle_hidden_edit_font_regression_v2_combo() {
               (nreverse merged)
               level-ok
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_global_cycle_overview_content_all_font_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 57 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((overview ((\"Root\" 2 1 org-level-1 org-level-1) (\"Root body\" 2 1 nil nil) (\"Alpha\" 2 2 org-level-2 org-level-2) (\"Alpha body\" 2 2 nil nil) (\"Beta\" 2 3 org-level-3 org-level-3) (\"Beta body\" 2 3 nil nil) (\"Gamma\" 2 4 org-level-4 org-level-4) (\"Gamma body\" 2 4 nil nil) (\"Sibling\" 2 2 org-level-2 org-level-2) (\"Sibling body\" 2 2 nil nil))) (contents ((\"Root\" 2 1 org-level-1 org-level-1) (\"Root body\" 2 1 nil nil) (\"Alpha\" 2 2 org-level-2 org-level-2) (\"Alpha body\" 2 2 nil nil) (\"Beta\" 2 3 org-level-3 org-level-3) (\"Beta body\" 2 3 nil nil) (\"Gamma\" 2 4 org-level-4 org-level-4) (\"Gamma body\" 2 4 nil nil) (\"Sibling\" 2 2 org-level-2 org-level-2) (\"Sibling body\" 2 2 nil nil))) (all ((\"Root\" nil 1 org-level-1 org-level-1) (\"Root body\" nil 1 nil nil) (\"Alpha\" nil 2 org-level-2 org-level-2) (\"Alpha body\" nil 2 nil nil) (\"Beta\" nil 3 org-level-3 org-level-3) (\"Beta body\" nil 3 nil nil) (\"Gamma\" nil 4 org-level-4 org-level-4) (\"Gamma body\" nil 4 nil nil) (\"Sibling\" nil 2 org-level-2 org-level-2) (\"Sibling body\" nil 2 nil nil))) (overview ((\"Root\" 2 1 org-level-1 org-level-1) (\"Root body\" 2 1 nil nil) (\"Alpha\" 2 2 org-level-2 org-level-2) (\"Alpha body\" 2 2 nil nil) (\"Beta\" 2 3 org-level-3 org-level-3) (\"Beta body\" 2 3 nil nil) (\"Gamma\" 2 4 org-level-4 org-level-4) (\"Gamma body\" 2 4 nil nil) (\"Sibling\" 2 2 org-level-2 org-level-2) (\"Sibling body\" 2 2 nil nil))) (contents ((\"Root\" 2 1 org-level-1 org-level-1) (\"Root body\" 2 1 nil nil) (\"Alpha\" 2 2 org-level-2 org-level-2) (\"Alpha body\" 2 2 nil nil) (\"Beta\" 2 3 org-level-3 org-level-3) (\"Beta body\" 2 3 nil nil) (\"Gamma\" 2 4 org-level-4 org-level-4) (\"Gamma body\" 2 4 nil nil) (\"Sibling\" 2 2 org-level-2 org-level-2) (\"Sibling body\" 2 2 nil nil))) (all ((\"Root\" nil 1 org-level-1 org-level-1) (\"Root body\" nil 1 nil nil) (\"Alpha\" nil 2 org-level-2 org-level-2) (\"Alpha body\" nil 2 nil nil) (\"Beta\" nil 3 org-level-3 org-level-3) (\"Beta body\" nil 3 nil nil) (\"Gamma\" nil 4 org-level-4 org-level-4) (\"Gamma body\" nil 4 nil nil) (\"Sibling\" nil 2 org-level-2 org-level-2) (\"Sibling body\" nil 2 nil nil)))) ((\"Root\" nil 1 org-level-1 org-level-1) (\"Root body\" nil 1 nil nil) (\"Alpha\" nil 2 org-level-2 org-level-2) (\"Alpha body\" nil 2 nil nil) (\"Beta\" nil 3 org-level-3 org-level-3) (\"Beta body\" nil 3 nil nil) (\"Gamma\" nil 4 org-level-4 org-level-4) (\"Gamma body\" nil 4 nil nil) (\"Sibling\" nil 2 org-level-2 org-level-2) (\"Sibling body\" nil 2 nil nil)) nil \"* TODO Root\\nRoot body.\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7132,17 +7180,18 @@ fn org_fold_global_cycle_overview_content_all_font_deep_combo() {
                 final-state
                 (nreverse merged)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_narrow_subtree_cycle_edit_widen_font_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 88 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 1 nil 1) (\"Alpha\" 3 nil 2) (\"Beta\" 5 nil 3) (\"Gamma\" 7 nil 4) (\"Inserted\" 9 nil 3) (\"Sibling\" 12 nil 2)) nil \"* Root\\nRoot body.\\n** Alpha\\nAlpha body.\\n*** Beta\\nBeta body.\\n**** Gamma\\nGamma body.\\n*** Inserted in narrow\\nInserted body.\\n\\n** Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7231,12 +7280,11 @@ fn org_fold_narrow_subtree_cycle_edit_widen_font_combo() {
         (list after-widen
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_font_face_level_visibility_deep_state_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -7317,17 +7365,18 @@ fn org_fold_font_face_level_visibility_deep_state_v2_combo() {
                       after-show-all
                       (nreverse merged)
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_local_cycle_global_cycle_show_all_font_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 79 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" nil 1 org-level-1) (\"Root body\" nil 1 nil) (\"Alpha\" nil 2 org-level-2) (\"Alpha body\" nil 2 nil) (\"Beta\" nil 3 org-level-3) (\"Beta body\" nil 3 nil) (\"Gamma\" nil 4 org-level-4) (\"Gamma body\" nil 4 nil) (\"Sibling\" nil 2 org-level-2) (\"Sibling body\" nil 2 nil)) ((\"Root\" 2 1) (\"Alpha\" 2 2) (\"Beta\" 2 3) (\"Gamma\" 2 4) (\"Sibling\" 2 2)) ((\"Root\" nil 1 org-level-1) (\"Alpha\" nil 2 org-level-2) (\"Beta\" nil 3 org-level-3) (\"Gamma\" nil 4 org-level-4) (\"Sibling\" nil 2 org-level-2)) nil \"* TODO Root\\nRoot body.\\n** DONE Alpha\\nAlpha body.\\n*** TODO Beta\\nBeta body.\\n**** WAIT Gamma\\nGamma body.\\n** NEXT Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7407,7 +7456,7 @@ fn org_fold_local_cycle_global_cycle_show_all_font_combo() {
                   after-show
                   (nreverse merged)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -7485,7 +7534,6 @@ fn org_fold_hide_show_subtree_font_face_level_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_repeated_global_cycle_font_level_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -7544,17 +7592,18 @@ fn org_fold_repeated_global_cycle_font_level_integrity_combo() {
                 (nreverse merged)
                 level-consistent
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_cycle_cut_paste_subtree_expand_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 59 42)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((#(\"Alpha\" 0 5 (face org-level-1)) 1 1 nil org-level-1) (#(\"Beta\" 0 4 (face org-level-2)) 2 2 nil org-level-2) (#(\"Gamma\" 0 5 (face org-level-2)) 2 2 nil org-level-2) (#(\"Delta\" 0 5 (face org-level-1)) 1 1 nil org-level-1)) nil \"* Alpha\\nAlpha body.\\n** Beta\\nBeta body.\\n** Gamma\\nGamma body.\\n* Delta\\nDelta body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7614,7 +7663,7 @@ fn org_fold_cycle_cut_paste_subtree_expand_integrity_combo() {
       (list (nreverse headings)
             (nreverse merged)
             (buffer-substring-no-properties
-             (point-min) (point-max)))))))"##,
+             (point-min) (point-max))))))"##,
         expect,
     );
 }
@@ -7671,7 +7720,6 @@ fn org_font_lock_deep_heading_face_after_demote_promote_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_show_all_font_level_state_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -7723,7 +7771,7 @@ fn org_fold_subtree_show_all_font_level_state_deep_combo() {
         (list (nreverse headings)
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -7794,7 +7842,6 @@ fn org_fold_hide_sublevels_show_context_font_level_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_cycle_hidden_edit_global_font_state_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -7875,7 +7922,7 @@ fn org_fold_cycle_hidden_edit_global_font_state_deep_combo() {
                       (nreverse merged)
                       (search-forward "Inserted under hidden Fifth" nil t)
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
@@ -8040,12 +8087,11 @@ fn org_fold_font_face_level_visibility_deep_state_capture_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_repeated_deep_cycle_edit_fontify_no_merge_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8131,17 +8177,16 @@ fn org_repeated_deep_cycle_edit_fontify_no_merge_combo() {
                 (count-matches "^Inserted while L6 subtree hidden$"
                                (point-min) (point-max))
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_core_mixed_regions_recovery_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable offset-region)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8190,17 +8235,18 @@ fn org_fold_core_mixed_regions_recovery_combo() {
           (list hidden
                 shown
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_reveal_context_after_hidden_search_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Root\" 2) (\"root body\" 2) (\"Alpha\" 2) (\"alpha body\" 2) (\"Beta\" 2) (\"beta body\" 2) (\"Gamma\" 2) (\"needle body\" 2) (\"Sibling\" 2) (\"sibling body\" nil)) ((\"Root\" 2) (\"root body\" nil) (\"Alpha\" 2) (\"alpha body\" nil) (\"Beta\" 2) (\"beta body\" nil) (\"Gamma\" nil) (\"needle body\" nil) (\"Sibling\" 2) (\"sibling body\" nil)) ((\"Root\" nil) (\"root body\" nil) (\"Alpha\" nil) (\"alpha body\" nil) (\"Beta\" nil) (\"beta body\" nil) (\"Gamma\" nil) (\"needle body\" nil) (\"Sibling\" 2) (\"sibling body\" nil)) ((\"Root\" nil) (\"root body\" nil) (\"Alpha\" nil) (\"alpha body\" nil) (\"Beta\" nil) (\"beta body\" nil) (\"Gamma\" nil) (\"needle body\" nil) (\"Sibling\" nil) (\"sibling body\" nil)) \"* Root\\nroot body\\n** Alpha\\nalpha body\\n*** Beta\\nbeta body\\n**** Gamma\\nneedle body\\n** Sibling\\nsibling body\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8242,7 +8288,7 @@ fn org_fold_reveal_context_after_hidden_search_combo() {
                   after-reveal
                   (funcall visible)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -8325,12 +8371,13 @@ fn org_fontify_like_org_mode_deep_markup_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_indent_deep_cycle_prefix_properties_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"L1\" 1 \"\" #(\"* \" 0 2 (face org-indent)) org-level-1 nil) (\"body 1\" 1 #(\"  \" 0 2 (face org-indent)) #(\"  \" 0 2 (face org-indent)) nil nil) (\"L2\" 2 #(\"*\" 0 1 (face org-indent)) #(\"*** \" 0 1 (face org-indent) 1 4 (face org-indent)) org-hide nil) (\"body 2\" 2 #(\"    \" 0 4 (face org-indent)) #(\"    \" 0 4 (face org-indent)) nil nil) (\"L3\" 3 #(\"**\" 0 2 (face org-indent)) #(\"***** \" 0 2 (face org-indent) 2 6 (face org-indent)) org-hide nil) (\"body 3\" 3 #(\"      \" 0 6 (face org-indent)) #(\"      \" 0 6 (face org-indent)) nil nil) (\"L4\" 4 #(\"***\" 0 3 (face org-indent)) #(\"******* \" 0 3 (face org-indent) 3 8 (face org-indent)) org-hide nil) (\"body 4\" 4 #(\"        \" 0 8 (face org-indent)) #(\"        \" 0 8 (face org-indent)) nil nil) (\"L5\" 5 #(\"****\" 0 4 (face org-indent)) #(\"********* \" 0 4 (face org-indent) 4 10 (face org-indent)) org-hide nil) (\"body 5\" 5 #(\"          \" 0 10 (face org-indent)) #(\"          \" 0 10 (face org-indent)) nil nil) (\"L6\" 6 #(\"*****\" 0 5 (face org-indent)) #(\"*********** \" 0 5 (face org-indent) 5 12 (face org-indent)) org-hide nil) (\"body 6\" 6 #(\"            \" 0 12 (face org-indent)) #(\"            \" 0 12 (face org-indent)) nil nil)) \"* L1\\nbody 1\\n** L2\\nbody 2\\n*** L3\\nbody 3\\n**** L4\\nbody 4\\n***** L5\\nbody 5\\n****** L6\\nbody 6\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8365,7 +8412,7 @@ fn org_indent_deep_cycle_prefix_properties_combo() {
         (list (mapcar probe
                       '("L1" "body 1" "L2" "body 2" "L3" "body 3"
                         "L4" "body 4" "L5" "body 5" "L6" "body 6"))
-              (buffer-substring-no-properties (point-min) (point-max))))))"##,
+              (buffer-substring-no-properties (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -8541,7 +8588,6 @@ fn org_deep_visibility_property_cycle_recovery_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_repeated_deep_fold_expand_edit_no_heading_merge_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -8670,17 +8716,16 @@ fn org_repeated_deep_fold_expand_edit_no_heading_merge_combo() {
           (list (nreverse states)
                 (split-string
                  (buffer-substring-no-properties (point-min) (point-max))
-                 "\n" t))))))"##,
+                 "\n" t)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_move_reveal_deep_font_faces_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument integer-or-marker-p nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8823,7 +8868,7 @@ fn org_fold_move_reveal_deep_font_faces_combo() {
             (list (nreverse states)
                   (nreverse bad-lines)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }

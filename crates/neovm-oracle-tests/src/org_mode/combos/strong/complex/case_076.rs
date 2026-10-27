@@ -1,13 +1,13 @@
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo76_org_babel_check_evaluate_confirm() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 65)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (:confirm-eval-fbound t :eval-when-compare-fbound nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org) (require 'ob-core)
  (list :confirm-eval-fbound (fboundp 'org-babel-check-confirm-evaluate)
-  :eval-when-compare-fbound (boundp 'org-babel-check-evaluate))))"##,
+  :eval-when-compare-fbound (boundp 'org-babel-check-evaluate)))"##,
         expect,
     );
 }

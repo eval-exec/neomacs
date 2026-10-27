@@ -276,7 +276,6 @@ fn org_babel_tangle_noweb_comments_collect_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_export_inline_result_html_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -323,17 +322,16 @@ fn org_babel_export_inline_result_html_deep_state_combo() {
               (replace-regexp-in-string
                "org[[:alnum:]-]\\{8,\\}" "orgHASH"
                (replace-regexp-in-string
-                "sec:org[[:alnum:]-]+" "sec:org-id" html))))))))"##,
+                "sec:org[[:alnum:]-]+" "sec:org-id" html)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_tangle_edit_retangle_multi_block_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 42 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -376,7 +374,7 @@ fn org_babel_tangle_edit_retangle_multi_block_deep() {
                 (list tangled1 tangled2
                       (buffer-substring-no-properties
                        (point-min) (point-max))))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

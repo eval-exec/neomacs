@@ -116,11 +116,12 @@ fn combo68_element_parse_secondary_string() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo68_entities_replace() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 38)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:full \"α\" :ascii \"\\\\alpha\" :latex t :html \"&alpha;\") (:sum-ascii \"\\\\sum\" :sum-latex t))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -135,7 +136,7 @@ fn combo68_entities_replace() {
    ;; org-entity-get with math
    (let ((ent (org-entity-get "sum")))
      (list :sum-ascii (nth 1 ent)
-           :sum-latex (nth 2 ent))))))"##,
+           :sum-latex (nth 2 ent)))))"##,
         expect,
     );
 }

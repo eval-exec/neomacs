@@ -338,18 +338,19 @@ fn upcase_greek_cyrillic() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn capitalize_mixed_case_nonascii() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 6 35)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (:greek \"Αβγ\" :cyrillic \"Абв\" :mixed \"Foo_Bar\" :german \"Straße\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (list
    :greek (capitalize "αβγ")
    :cyrillic (capitalize "абв")
    :mixed (capitalize "foo_bar")
-   :german (capitalize "straße"))))"##,
+   :german (capitalize "straße")))"##,
         expect,
     );
 }
@@ -377,11 +378,10 @@ fn current_column_with_display_property() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn move_to_column_with_display() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 8 50)""#]];
+    let expect = expect_test::expect![[r#""OK (:point 6 :col 3)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (with-temp-buffer
@@ -390,16 +390,15 @@ fn move_to_column_with_display() {
     (put-text-property 1 4 'display "Y")
     (goto-char (point-min))
     (move-to-column 3)
-    (list :point (point) :col (current-column)))))"##,
+    (list :point (point) :col (current-column))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_column_after_alignment() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 10 62)""#]];
+    let expect = expect_test::expect![[r#""OK (:col 2 :at-table t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -410,7 +409,7 @@ fn org_table_column_after_alignment() {
     (org-table-align)
     (forward-line 1)
     (forward-char 2)
-    (list :col (current-column) :at-table (org-at-table-p)))))"##,
+    (list :col (current-column) :at-table (org-at-table-p))))"##,
         expect,
     );
 }
@@ -593,11 +592,10 @@ fn org_multibyte_buffer_string() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_set_buffer_multibyte() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function enable-multibyte-characters)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -607,7 +605,7 @@ fn org_set_buffer_multibyte() {
     (goto-char (point-min))
     (let ((before-multibyte (multibyte-string-p (buffer-string))))
       (list :before-multibyte before-multibyte
-            :enable-multibyte (enable-multibyte-characters))))"##,
+            :enable-multibyte (enable-multibyte-characters)))))"##,
         expect,
     );
 }

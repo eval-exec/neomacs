@@ -77,15 +77,14 @@ fn strict_config_adapt_indentation() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_config_property_inheritance_override() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 116)""#]];
+    let expect = expect_test::expect![[r#""OK (:color \"blue\" :size \"big\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org) (with-temp-buffer (org-mode)
  (let ((org-use-property-inheritance '("COLOR"))) (insert "* Root\n:PROPERTIES:\n:COLOR: blue\n:SIZE: big\n:END:\n** Leaf\n")
-  (goto-char (point-max)) (list :color (org-entry-get (point) "COLOR" t) :size (org-entry-get (point) "SIZE" t))))))"##,
+  (goto-char (point-max)) (list :color (org-entry-get (point) "COLOR" t) :size (org-entry-get (point) "SIZE" t)))))"##,
         expect,
     );
 }

@@ -10,11 +10,12 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_sparse_tree_case_fold() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:matched (\"Apple\" \"BANANA\" \"banana\" \"CHERRY\")) (:matched-apple (\"Apple\" \"APPLES\" \"BANANA\" \"banana\" \"CHERRY\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -34,16 +35,17 @@ fn strict_sparse_tree_case_fold() {
         (push (list :matched-apple (org-element-map (org-element-parse-buffer nil t) 'headline
                                       (lambda (h) (substring-no-properties (org-element-property :raw-value h))))) r)
         (org-remove-occur-highlights)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_at_table_item_position_sensitive() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 27 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:on-table t) (:on-table-cell t) (:on-item t) (:on-heading t) (:on-plain nil) (:on-plain-table nil) (:on-plain-item nil) (:on-property nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -71,7 +73,7 @@ fn strict_at_table_item_position_sensitive() {
         ;; at specific positions with property drawer
         (goto-char (point-min))
         (push (list :on-property (org-at-property-p)) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
@@ -109,7 +111,6 @@ fn strict_get_heading_all_args() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_toggle_pretty_entities_unicode() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -143,16 +144,17 @@ fn strict_toggle_pretty_entities_unicode() {
           (push (list :entities-after-toggle (length entities)) r)
           ;; entity names
           (push (list :entity-names (mapcar (lambda (e) (org-element-property :name e)) entities)) r))
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_cjk_heading_regexp_match() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:todo nil :priority nil :title \"日本語の見出し\" :tags \":タグ:\") (:todo \"TODO\" :priority \"[#A]\" :title \"中文标题\" :tags \":标签:\") (:todo \"DONE\" :priority nil :title \"한국어 제목\" :tags \":태그:\") (:count 3))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -170,12 +172,11 @@ fn strict_cjk_heading_regexp_match() {
                       :tags (match-string 5))
                 r))
         (push (list :count (length r)) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_match_any_p() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -198,16 +199,15 @@ fn strict_match_any_p() {
      (error :error))
    ;; case insensitive
    (let ((case-fold-search t))
-     (list :case-insensitive (org-match-any-p "Hello" "hello"))))))"##,
+     (list :case-insensitive (org-match-any-p "Hello" "hello")))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_re_property_extraction() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 49)""#]];
+    let expect = expect_test::expect![[r#""OK (:org-re-property :not-bound)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -221,7 +221,7 @@ fn strict_re_property_extraction() {
                                           (string-match-p "ID" org-re-property-key)
                                         :not-string))
                                      (t :not-bound))))
-        (t (list :org-re-property :not-bound)))))"##,
+        (t (list :org-re-property :not-bound))))"##,
         expect,
     );
 }
@@ -258,11 +258,12 @@ fn strict_find_exact_headline_in_buffer() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_get_level_face() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 53)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:fbound t) (:level-faces-length 8 :face-1 org-level-1 :face-2 org-level-2) (:level1-face-exists [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified]) (:level2-face-exists [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified]))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -277,16 +278,17 @@ fn strict_get_level_face() {
          (t :not-bound))
    ;; org-level-1 exists
    (list :level1-face-exists (facep 'org-level-1))
-   (list :level2-face-exists (facep 'org-level-2)))))"##,
+   (list :level2-face-exists (facep 'org-level-2))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_find_invisible_foreground() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 47)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:fbound t) (:result (:string t)) (:org-hide-exists [face unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified unspecified]))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -299,16 +301,17 @@ fn strict_find_invisible_foreground() {
          (list :result (if result (list :string (stringp result)) :nil)))
      (error :error))
    ;; check face existence
-   (list :org-hide-exists (facep 'org-hide)))))"##,
+   (list :org-hide-exists (facep 'org-hide))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_clock_in_with_logging() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 22 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:clocking-p t) (:clock-heading #(\"[0:00] (Task) \" 0 14 (face org-mode-line-clock))) (:clocking-after nil) (:logbook-count 1))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -331,12 +334,11 @@ fn strict_clock_in_with_logging() {
         ;; check logbook has note
         (push (list :logbook-count (length (org-element-map (org-element-parse-buffer) 'drawer
                                              (lambda (d) (when (equal "LOGBOOK" (org-element-property :drawer-name d)) d))))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_todo_dependencies_cycle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -371,7 +373,7 @@ fn strict_todo_dependencies_cycle() {
         ;; todo states
         (push (list :final-states (org-map-entries (lambda () (list (org-get-heading t t t t)
                                                                     (org-get-todo-state))))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }

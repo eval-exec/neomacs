@@ -511,11 +511,10 @@ fn yotta_all_shiftright_heading_combinations() {
 // Yotta: org-element with all org-beginning-of-line combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn yotta_all_beginning_of_line_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t (t t t) (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -536,7 +535,7 @@ fn yotta_all_beginning_of_line_combinations() {
        (goto-char (point-max))
        (let ((org-special-ctrl-a/e t))
          (list (progn (org-beginning-of-line) (looking-at-p "Item"))
-               (progn (org-beginning-of-line) (bolp)))))))"##,
+               (progn (org-beginning-of-line) (bolp))))))))"##,
         expect,
     );
 }
@@ -545,11 +544,10 @@ fn yotta_all_beginning_of_line_combinations() {
 // Yotta: org-element with all org-end-of-line combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn yotta_all_end_of_line_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -563,7 +561,7 @@ fn yotta_all_end_of_line_combinations() {
        (goto-char (point-min))
        (let ((org-special-ctrl-a/e t))
          (list (progn (org-end-of-line) (looking-back "Headline" nil))
-               (progn (org-end-of-line) (eolp)))))))"##,
+               (progn (org-end-of-line) (eolp))))))))"##,
         expect,
     );
 }

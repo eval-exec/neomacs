@@ -717,7 +717,6 @@ fn org_export_headline_numbering_edit_reexport_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_todo_tags_planning_edit_reexport_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -768,12 +767,11 @@ fn org_export_todo_tags_planning_edit_reexport_deep() {
           (let ((html (org-export-as 'html nil nil t '(:with-toc nil))))
             (list before after html
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_tags_property_planning_edit_reexport_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -828,17 +826,18 @@ fn org_export_tags_property_planning_edit_reexport_deep() {
             (let ((latex (org-export-as 'latex nil nil t '(:with-toc nil))))
               (list before after html latex
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_footnote_citation_edit_reexport_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 51)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"1\" nil) (\"2\" nil) (\"1\" nil)) ((\"Introduction\" 1) (\"Methods\" 1))) (((\"1\" nil) (\"2\" nil) (\"1\" nil) (\"3\" nil)) ((\"Introduction\" 1) (\"Methods\" 1))) \"<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">1.</span> Introduction</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nThis is a claim<sup><a id=\\\"fnr.1\\\" class=\\\"footref\\\" href=\\\"#fn.1\\\" role=\\\"doc-backlink\\\">1</a></sup> with evidence<sup><a id=\\\"fnr.2\\\" class=\\\"footref\\\" href=\\\"#fn.2\\\" role=\\\"doc-backlink\\\">2</a></sup>.\\n</p>\\n</div>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">2.</span> Methods</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-2\\\">\\n<p>\\nWe used approach<sup><a id=\\\"fnr.1.1\\\" class=\\\"footref\\\" href=\\\"#fn.1\\\" role=\\\"doc-backlink\\\">1</a></sup> as described. See also<sup><a id=\\\"fnr.3\\\" class=\\\"footref\\\" href=\\\"#fn.3\\\" role=\\\"doc-backlink\\\">3</a></sup>.\\n</p>\\n</div>\\n</div>\\n<div id=\\\"footnotes\\\">\\n<h2 class=\\\"footnotes\\\">Footnotes: </h2>\\n<div id=\\\"text-footnotes\\\">\\n\\n<div class=\\\"footdef\\\"><sup><a id=\\\"fn.1\\\" class=\\\"footnum\\\" href=\\\"#fnr.1\\\" role=\\\"doc-backlink\\\">1</a></sup> <div class=\\\"footpara\\\" role=\\\"doc-footnote\\\"><p class=\\\"footpara\\\">\\nFirst footnote text.\\n</p></div></div>\\n\\n<div class=\\\"footdef\\\"><sup><a id=\\\"fn.2\\\" class=\\\"footnum\\\" href=\\\"#fnr.2\\\" role=\\\"doc-backlink\\\">2</a></sup> <div class=\\\"footpara\\\" role=\\\"doc-footnote\\\"><p class=\\\"footpara\\\">\\nSecond footnote text.\\n</p></div></div>\\n\\n<div class=\\\"footdef\\\"><sup><a id=\\\"fn.3\\\" class=\\\"footnum\\\" href=\\\"#fnr.3\\\" role=\\\"doc-backlink\\\">3</a></sup> <div class=\\\"footpara\\\" role=\\\"doc-footnote\\\"><p class=\\\"footpara\\\">\\nThird footnote added later.\\n</p></div></div>\\n\\n\\n</div>\\n</div>\" \"#+TITLE: FootnoteExport\\n\\n* Introduction\\nThis is a claim[fn:1] with evidence[fn:2].\\n\\n* Methods\\nWe used approach[fn:1] as described. See also[fn:3].\\n\\n[fn:1] First footnote text.\\n[fn:2] Second footnote text.\\n\\n[fn:3] Third footnote added later.\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -871,15 +870,14 @@ fn org_export_footnote_citation_edit_reexport_deep() {
         (end-of-line)
         (insert " See also[fn:3].")
         (let ((after (funcall snap)))
-          (let ((html (org-export-as 'html nil nil t '(:with-toc nil))))
+          (let ((html (replace-regexp-in-string "org[0-9a-f]\\{7\\}" "orgHASH" (org-export-as 'html nil nil t '(:with-toc nil)))))
             (list before after html
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_todo_tag_property_planning_html_latex_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -929,12 +927,11 @@ fn org_export_todo_tag_property_planning_html_latex_deep() {
                 (latex (org-export-as 'latex nil nil t '(:with-toc nil))))
             (list before after html latex
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_separate_scheduled_deadline_html_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -977,7 +974,7 @@ fn org_export_separate_scheduled_deadline_html_deep() {
           (let ((html (org-export-as 'html nil nil t '(:with-toc nil))))
             (list before after html
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }

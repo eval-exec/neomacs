@@ -203,7 +203,6 @@ fn strict_outline_path_deep_hierarchy() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_structure_edit_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -255,7 +254,7 @@ fn strict_structure_edit_chain() {
               snapshots)
         ;; Final buffer content
         (push (list :buffer (buffer-substring-no-properties (point-min) (point-max))) snapshots)
-        (nreverse snapshots))))))"##,
+        (nreverse snapshots)))))"##,
         expect,
     );
 }
@@ -631,11 +630,12 @@ fn strict_set_element_deep_reparse() {
 // Strict: draw-or-files extraction and manipulation
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_drawer_insert_extract() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 29 28)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:buffer \":LOGBOOK:\\nCLOCK: [2024-01-01 Mon 10:00]--[2024-01-01 Mon 11:00] =>  1:00\\nNote taken on 2024-01-01.\\n\\n:END:\\n* Task\\n:PROPERTIES:\\n:STATUS:   in-progress\\n:ASSIGNEE: user\\n:END:\\n\") (:drawer-count 1) (:prop-drawer-count 1) (:status nil) (:assignee nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -665,7 +665,7 @@ fn strict_drawer_insert_extract() {
           ;; Get properties
           (push (list :status (org-entry-get nil "STATUS")) r)
           (push (list :assignee (org-entry-get nil "ASSIGNEE")) r)
-          (nreverse r)))))))"##,
+          (nreverse r))))))"##,
         expect,
     );
 }

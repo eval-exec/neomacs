@@ -1,12 +1,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_todo_dependency_blockers_and_noblocking_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t ok t ok nil ok \"* TODO Parent\\n** TODO Child A\\n** TODO Child B\\n* TODO Ordered\\n:PROPERTIES:\\n:ORDERED: t\\n:END:\\n** TODO First\\n** DONE Second\\n:PROPERTIES:\\n:NOBLOCKING: t\\n:END:\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -50,17 +51,18 @@ fn org_todo_dependency_blockers_and_noblocking_combo() {
                   second-unblocked
                   second-done-unblocked
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_checkbox_dependency_statistics_cookie_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t ok \"* TODO Checklist [3/3] [100%]\\n- [X] Done item\\n- [X] Open item\\n- [X] Partial item\\n  - [X] Nested done\\n  - [X] Nested open\\n\" nil ok \"* DONE Checklist [3/3] [100%]\\n- [X] Done item\\n- [X] Open item\\n- [X] Partial item\\n  - [X] Nested done\\n  - [X] Nested open\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -99,17 +101,18 @@ fn org_checkbox_dependency_statistics_cookie_combo() {
                 after-blocked
                 after-attempt
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_todo_state_tag_triggers_statistics_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Project [0/2]\\n** WAIT Alpha                                                       :waiting:\\n** TODO Beta :active:\\n\" (\"waiting\") \"* Project [1/2]\\n** DONE Alpha                                                          :done:\\n** TODO Beta :active:\\n\" (\"done\") ((nil \"Project [2/2]\" nil) (\"DONE\" \"Alpha\" (\"done\")) (\"CANCELED\" \"Beta\" (\"canceled\"))) \"* Project [2/2]\\n** DONE Alpha                                                          :done:\\n** CANCELED Beta                                                   :canceled:\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -151,7 +154,7 @@ fn org_todo_state_tag_triggers_statistics_combo() {
                           (org-element-property :raw-value h)
                           (org-element-property :tags h))))
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
@@ -330,7 +333,6 @@ fn org_todo_planning_tags_fold_cookie_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_ordered_region_statistics_hook_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -472,7 +474,7 @@ fn org_ordered_region_statistics_hook_combo() {
                 blocked-summary
                 after-first
                 region-summary
-                 final-summary))))))"##,
+                 final-summary)))))"##,
         expect,
     );
 }

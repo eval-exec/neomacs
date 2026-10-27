@@ -196,11 +196,11 @@ fn mo_link_attr_caption() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mo_planning_repeater_delay() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (((cumulate 1 week) nil) (nil (cumulate 1 month)))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -214,7 +214,7 @@ fn mo_planning_repeater_delay() {
                             (org-element-property :repeater-unit s)))
               (when d (list (org-element-property :repeater-type d)
                             (org-element-property :repeater-value d)
-                            (org-element-property :repeater-unit d)))))))"##,
+                            (org-element-property :repeater-unit d))))))))"##,
         expect,
     );
 }
@@ -418,27 +418,25 @@ fn mo_element_type_predicates() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mo_export_element_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (3 . 8) 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "* H\nBody\n- item\n| tbl |\n#+BEGIN_SRC\n(+ 1)\n#+END_SRC")
   (let* ((tree (org-element-parse-buffer))
          (types (org-element-map tree (lambda (el) (org-element-type el)))))
-    types)"##,
+    types))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mo_export_element_contents() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (headline)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -446,16 +444,15 @@ fn mo_export_element_contents() {
   (let* ((tree (org-element-parse-buffer))
          (h (car (org-element-map tree 'headline (lambda (h) h))))
          (children (mapcar 'org-element-type (org-element-contents h))))
-    children)"##,
+    children))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mo_export_element_ancestor() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (paragraph section headline headline)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -469,16 +466,15 @@ fn mo_export_element_ancestor() {
     (list (org-element-type para)
           (org-element-type h3)
           (org-element-type h2)
-          (org-element-type h1)))"##,
+          (org-element-type h1))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mo_export_element_lineage() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (section headline headline headline org-data)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -487,7 +483,7 @@ fn mo_export_element_lineage() {
   (search-forward "Body")
   (let* ((para (org-element-at-point))
          (lineage (org-element-lineage para)))
-    (mapcar 'org-element-type lineage))"##,
+    (mapcar 'org-element-type lineage)))"##,
         expect,
     );
 }

@@ -107,11 +107,12 @@ fn combo70_babel_session_sh() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo70_element_interpret_individual_links() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 6)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"[[https:example.com]]\" \"[[notes.org]]\" \"[[#target]]\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -131,7 +132,7 @@ fn combo70_element_interpret_individual_links() {
     (org-element-interpret-data
      (org-element-create 'link
        '(:type "custom-id" :path "target" :raw-link "#target"))))
-   )))"##,
+   ))"##,
         expect,
     );
 }
@@ -203,11 +204,12 @@ fn combo70_macro_replace_all_region() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo70_org_export_info_for_data() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 11 3)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (:backend nil :translate-alist-bound nil :export-options nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -219,7 +221,7 @@ fn combo70_org_export_info_for_data() {
        :backend (plist-get info :back-end)
        :translate-alist-bound (when (plist-get info :translate-alist) t)
        :export-options (plist-get info :export-options)))))
-  )"##,
+  "##,
         expect,
     );
 }

@@ -86,12 +86,13 @@ fn org_done_log_drawer_timestamp_normalized_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_inheritance_allowed_cycle_delete_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (user-error \"Allowed values for this property have not been defined\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -131,7 +132,7 @@ fn org_property_inheritance_allowed_cycle_delete_combo() {
               (org-entry-get-multivalued-property nil "Multi")
               (org-entry-member-in-multivalued-property nil "Multi" "y")
               (nreverse changes)
-              (buffer-substring-no-properties (point-min) (point-max))))))"##,
+              (buffer-substring-no-properties (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -172,12 +173,13 @@ fn org_property_values_global_delete_roundtrip_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_set_delete_allowed_values_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (user-error \"Allowed values for this property have not been defined\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -207,18 +209,19 @@ fn org_property_set_delete_allowed_values_combo() {
               org-last-set-property
               org-last-set-property-value
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_todo_done_note_log_drawer_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
+    let expect = expect_test::expect![[
+        r#""OK (\"[2026-06-15 Mon 12:00]\" \"* DONE Finished carefullyTask\\nCLOSED: [stamp]\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
   (with-temp-buffer
@@ -248,18 +251,19 @@ fn org_todo_done_note_log_drawer_combo() {
              "\\[[0-9][^]\n]+\\]"
              "[stamp]"
              (buffer-substring-no-properties
-              (point-min) (point-max))))))"##,
+              (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_log_repeat_reschedule_redeadline_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
+    let expect = expect_test::expect![[
+        r#""OK (\"[2026-06-15 Mon 12:00]\" \"* TODO Repeater\\nDEADLINE: <2026-06-11 Thu> SCHEDULED: <2026-06-10 Wed +1w>\\n:PROPERTIES:\\n:LAST_REPEAT: [stamp]\\n:END:\\nDEADLINE: <2026-06-11 Thu +2w>\\n\")""#
+    ]];
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
   (with-temp-buffer
@@ -281,17 +285,16 @@ fn org_log_repeat_reschedule_redeadline_combo() {
              "\\[[0-9][^]\n]+\\]"
              "[stamp]"
              (buffer-substring-no-properties
-              (point-min) (point-max))))))"##,
+              (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_clock_drawer_fold_element_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (search-failed \"CLOCK:\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -408,17 +411,18 @@ fn org_property_clock_drawer_fold_element_lifecycle_combo() {
                                    (org-get-heading t t t t)))))
                         org-clock-history)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_space_multivalue_cleanup_parse_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"CATEGORY\" . \"???\") (\"MULTI\" . \"alpha%20beta gamma delta%20value\") (\"OWNER\" . \"Ada Lovelace\")) (\"alpha%20beta\" \"gamma\" \"delta%20value\") (\"alpha_beta\" \"gamma\" \"delta_value\") (\"Ada Lovelace\" nil \"alpha%20beta gamma delta%20value\") nil ((\"CATEGORY\" . \"???\")) ((\"Local\" \"keep\")) \"* Parent\\n** Child\\n:PROPERTIES:\\n:Local: keep\\n:END:\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -468,18 +472,19 @@ fn org_property_space_multivalue_cleanup_parse_combo() {
                       (list (org-element-property :key node)
                             (org-element-property :value node))))
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_startup_log_options_todo_property_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
-    crate::common::assert_oracle_parity_expect(
+    let expect = expect_test::expect![[
+        r##""OK ((t note note nil time nil) \"Ada\" ((\"Ada\") (\"Bea\") (\"Cy\")) ((\"CATEGORY\" . \"???\") (\"LAST_REPEAT\" . \"[2026-06-15 Mon 12:00]\") (\"OWNER\" . \"Bea\")) 368 \"#+STARTUP: logdrawer lognotedone lognoterepeat nologreschedule logredeadline nologstatesreversed\\n#+PROPERTY: Owner_ALL Ada Bea Cy\\n* TODO Parent :project:\\n:PROPERTIES:\\n:Owner: Ada\\n:END:\\n** TODO Finished after reviewWaiting on reviewChild\\nDEADLINE: <2026-06-04 Thu> SCHEDULED: <2026-06-10 Wed +1w>\\n:PROPERTIES:\\n:Owner:    Bea\\n:LAST_REPEAT: [stamp]\\n:END:\\nDEADLINE: <2026-05-28 Thu>\\n\")""##
+    ]];
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
   (with-temp-buffer
@@ -540,17 +545,16 @@ fn org_startup_log_options_todo_property_combo() {
                  "\\[[0-9][^]\n]+\\]"
                  "[stamp]"
                  (buffer-substring-no-properties
-                  (point-min) (point-max))))))))"##,
+                  (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_inherit_literal_special_views_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument symbolp \"COLUMNS\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -608,17 +612,18 @@ fn org_property_inherit_literal_special_views_combo() {
               (org-entry-get nil "PRIORITY")
               (org-entry-get nil "NilLike" 'inherit 'literal-nil)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_separators_postprocess_global_cleanup_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((nil \"/a;/b;/c\" \"p|q|r\" nil (\"/c\") (\"r\") ((\"Ada\") (\"Bea\") (\"Cy\")) ((\"1\") (\"2\") (\"3\") (\"4\"))) (((\"CATEGORY\" . \"???\") (\"SCORE\" . \":: 6\") (\"OWNER\" . \":: BEA\") (\"LISTONE\" . \":: s|t\") (\"PATH\" . \":: /d\")) \":: BEA\" \":: 6\" nil \"/a;/b;:: /d\" \"p|q|:: s|t\" nil \"#+PROPERTY: Owner_ALL Ada Bea Cy\\n#+PROPERTY: Score_ALL 1 2 3 4\\n* Parent\\n:PROPERTIES:\\n:Tags: root;shared\\n:Path: /a;/b\\n:ListOne: p|q\\n:Score: 1\\n:END:\\n** Child\\n:PROPERTIES:\\n:Tags+: child\\n:Path+:      :: /d\\n:ListOne+:   :: s|t\\n:Owner:      :: BEA\\n:Score:      :: 6\\n:Tags:       :: delta%20value\\n:END:\\n\") (nil nil nil nil \"#+PROPERTY: Owner_ALL Ada Bea Cy\\n#+PROPERTY: Score_ALL 1 2 3 4\\n* Parent\\n:PROPERTIES:\\n:Tags: root;shared\\n:Score: 1\\n:END:\\n** Child\\n:PROPERTIES:\\n:Tags+: child\\n:Owner:      :: BEA\\n:Score:      :: 6\\n:Tags:       :: delta%20value\\n:END:\\n\") ((headline \"Parent\" nil nil 64 291) (headline \"Child\" nil nil 151 291)) nil \"#+PROPERTY: Owner_ALL Ada Bea Cy\\n#+PROPERTY: Score_ALL 1 2 3 4\\n* Parent\\n:PROPERTIES: ::\\n:Tags:       :: root;shared\\n:Score:      :: 1\\n:END:        ::\\n** Child\\n:PROPERTIES: ::\\n:Tags+:      :: child\\n:Owner:      :: :: BEA\\n:Score:      :: :: 6\\n:Tags:       :: :: delta%20value\\n:END:        ::\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -703,7 +708,7 @@ fn org_property_separators_postprocess_global_cleanup_combo() {
               ast
               (nreverse changes)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -903,12 +908,13 @@ fn org_property_set_delete_multivalue_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_inherit_clock_edit_delete_global_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 52)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"Alpha\" \"Alice\" \"100h\" \"2h\" \"Bob\") (\"Beta\" \"Alice\" \"100h\" \"3h\" nil) (\"Alpha\" nil \"100h\" \"2h\" \"Bob\" \"active\") (\"Beta\" nil \"100h\" \"3h\") \"* Project :project:\\n:PROPERTIES:\\n:Budget: 100h\\n:END:\\n** Task Alpha\\n:PROPERTIES:\\n:Effort: 2h\\n:Assigned: Bob\\n:Status:   active\\n:END:\\n:LOGBOOK:\\nCLOCK: [2026-05-28 Wed 09:00]--[2026-05-28 Wed 11:00] =>  2:00\\n:END:\\nBody alpha.\\n\\n** Task Beta\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\nBody beta.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -961,17 +967,18 @@ fn org_property_inherit_clock_edit_delete_global_deep() {
                        (org-entry-get nil "Effort"))))
              (list alpha beta alpha-after beta-after
                    (buffer-substring-no-properties
-                    (point-min) (point-max))))))))))"##,
+                    (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_block_tags_inherit_set_delete_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 49)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"Leaf A1\" \"Alice\" \"work\" nil nil nil) (\"Leaf B1\" \"Bob\" \"work\" nil nil nil) (\"Leaf A1\" \"Alice\" \"work\" nil nil nil) (\"Leaf B1\" \"Alice\" \"work\" nil nil nil) \"* Project :project:\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: work\\n:END:\\n** Sub A :alpha:\\n:PROPERTIES:\\n:Effort: 2h\\n:Priority: critical\\n:END:\\n*** Leaf A1\\nBody.\\n\\n** Sub B :beta:\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\n*** Leaf B1\\nBody.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1013,17 +1020,18 @@ fn org_property_block_tags_inherit_set_delete_deep() {
            (list leaf-a1 leaf-b1
                  leaf-a1-after leaf-b1-after
                  (buffer-substring-no-properties
-                  (point-min) (point-max)))))))))"##,
+                  (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_property_inherit_effort_category_set_multi_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"Sub A1\" \"Alice\" \"planning\" nil \"Bob\") (\"Sub B1\" \"Alice\" \"planning\" nil \"Carol\") (\"Step C\" \"Dave\" \"execution\" \"4h\" nil) (\"Sub A1\" \"Alice\" \"planning\" nil \"Bob\") (\"Sub B1\" \"Alice\" \"planning\" nil nil) (\"Step C\" \"Dave\" \"execution\" \"4h\" nil) \"* Phase 1\\n:PROPERTIES:\\n:CATEGORY: planning\\n:Owner: Alice\\n:END:\\n** Step A\\n:PROPERTIES:\\n:Effort: 2h\\n:Assigned: Bob\\n:Status:   active\\n:END:\\n*** Sub A1\\nBody.\\n\\n*** Sub A2\\nBody.\\n\\n** Step B\\n:PROPERTIES:\\n:Effort: 1h\\n:END:\\n*** Sub B1\\nBody.\\n\\n* Phase 2\\n:PROPERTIES:\\n:CATEGORY: execution\\n:Owner: Dave\\n:Priority: high\\n:END:\\n** Step C\\n:PROPERTIES:\\n:Effort: 4h\\n:END:\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1075,7 +1083,7 @@ fn org_property_inherit_effort_category_set_multi_deep() {
           (list sub-a1 sub-b1 step-c
                 sub-a1-after sub-b1-after step-c-after
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }

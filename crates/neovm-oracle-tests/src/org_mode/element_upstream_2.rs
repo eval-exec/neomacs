@@ -420,7 +420,6 @@ fn upstream_org_element_cache_list_structures() {
 
 // ── Cache: add/remove sensitive lines ────────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_element_cache_remove_sensitive_line() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -440,7 +439,7 @@ fn upstream_org_element_cache_remove_sensitive_line() {
       (forward-char)
       (delete-char 1)
       (search-forward "Para2")
-      (org-element-type (org-element-at-point))))))"##,
+      (org-element-type (org-element-at-point)))))"##,
         expect,
     );
 }
@@ -528,12 +527,13 @@ fn upstream_org_element_cache_drawer_end() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_cache_edit_reparse_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 1 (\"work\")) (\"Beta\" 2 nil) (\"Gamma\" 3 nil)) ((\"Alpha\" 1 (\"work\")) (\"Beta\" 2 nil) (\"Gamma\" 3 nil) (\"Delta\" 2 nil)) ((\"Alpha\" (\"work\" \"urgent\")) (\"Beta\" nil) (\"Gamma\" nil) (\"Delta\" nil)) \"* Alpha                                                         :work:urgent:\\nAlpha body.\\n** Beta\\nBeta body.\\n*** Gamma\\nGamma body.\\n\\n** Delta\\nDelta body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -569,7 +569,7 @@ fn org_element_parse_cache_edit_reparse_deep_state_combo() {
                           (org-element-property :tags h))))))
           (list headlines-1 headlines-2 headlines-3
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }

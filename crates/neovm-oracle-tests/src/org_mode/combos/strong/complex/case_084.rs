@@ -72,17 +72,16 @@ fn combo84_org_sparse_tree_prop_match() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo84_org_export_ignore_subtrees() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((:has-C 116))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (require 'ox-ascii)
  (let ((org-export-show-temporary-export-buffer nil))
   (insert "* A\n** B :ignore:\nBody B.\n** C\nBody C.\n")
   (let ((r '())) (let ((out (org-export-as 'ascii nil nil t)))
-   (push (list :has-C (and out (string-match-p "Body C" out))) r) (nreverse r))))"##,
+   (push (list :has-C (and out (string-match-p "Body C" out))) r) (nreverse r)))))"##,
         expect,
     );
 }

@@ -8,11 +8,12 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_entity_get_all_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 24 41)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:alpha \"α\") (:Alpha \"Α\") (:beta \"β\") (:sum \"∑\") (:int \"∫\") (:pi \"π\") (:pm \"±\") (:rarr \"→\") (:larr \"←\") (:harr \"↔\") (:hellip \"…\") (:frac12 \"½\") (:bogus nil) (:total 436))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -37,16 +38,15 @@ fn strict_entity_get_all_types() {
    ;; Non-existent returns nil
    (list :bogus (org-entity-get "bogus"))
    ;; Entity count
-   (list :total (length org-entities)))))"##,
+   (list :total (length org-entities))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_macro_initialize_templates() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 41)""#]];
+    let expect = expect_test::expect![[r#""OK (:init-fbound t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -59,16 +59,17 @@ fn strict_macro_initialize_templates() {
           (let ((templates (when (fboundp 'org-macro-initialize-templates)
                              (org-macro-initialize-templates))))
             (list :init-fbound (fboundp 'org-macro-initialize-templates)))
-        (error (list :init-error t)))))))"##,
+        (error (list :init-error t))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_cycle_internal_local() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 16 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:cycle-local-fbound t) (:after-fold-invis nil) (:after-show-headlines 2))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -85,16 +86,17 @@ fn strict_cycle_internal_local() {
         ;; show all
         (org-show-all)
         (push (list :after-show-headlines (length (org-element-map (org-element-parse-buffer) 'headline #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_return_indent() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:return-indent-fbound t) (:after-return \"* A\\n** B\\nBody B.\\n\\n\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -112,7 +114,7 @@ fn strict_return_indent() {
             (progn (org-return)
                    (push (list :after-return (buffer-string)) r))
           (error (push (list :return-error t) r)))
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
@@ -135,11 +137,11 @@ fn strict_timer_change_times_in_region() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_refile_cache_clear() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 9 29)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (:refile-fbound t :cache-clear-fbound t :cleared)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-refile)
@@ -149,16 +151,16 @@ fn strict_refile_cache_clear() {
    ;; try clearing cache
    (condition-case nil
        (progn (org-refile-cache-clear) :cleared)
-     (error :clear-error)))))"##,
+     (error :clear-error))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_confirm_evaluate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 29)""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((:confirm-fbound t) (:confirm-var-bound t) (:info-p t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -176,16 +178,16 @@ fn strict_babel_confirm_evaluate() {
            (goto-char (point-min))
            (let ((info (org-babel-get-src-block-info)))
              (list :info-p (and info (listp info))))))
-     (error :check-error)))))"##,
+     (error :check-error))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_export_data_low_level() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 25)""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((:org-export-data-fbound t) (:export-data-error t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -205,16 +207,17 @@ fn strict_export_data_low_level() {
                          (org-export-data para info))))
               (push (list :export-data-string (and out (stringp out))) r))
           (error (push (list :export-data-error t) r)))
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_normalize_contents_all_blocks() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 6)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((fixed-width nil \": line1\\n: line2\") (verse-block nil \"verse line1\\n verse indented\\n\\nverse line2\") (example-block nil \"example1\\n  example2\\nexample3\") (center-block nil \"centered\\ncentered2\") (quote-block nil \"quoted\\n  more quoted\\nback\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -234,7 +237,7 @@ fn strict_normalize_contents_all_blocks() {
    ;; Quote block
    (org-element-normalize-contents
     '(quote-block nil "  quoted\n    more quoted\n  back"))
-   )))"##,
+   ))"##,
         expect,
     );
 }

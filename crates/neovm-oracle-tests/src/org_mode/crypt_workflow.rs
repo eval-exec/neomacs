@@ -1,12 +1,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_crypt_stubbed_encrypt_decrypt_reuse_hook_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (epg-error \"no usable configuration\" OpenPGP)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -112,17 +111,16 @@ fn org_crypt_stubbed_encrypt_decrypt_reuse_hook_combo() {
                                              "BEGIN PGP MESSAGE"
                                              (nth 1 call)))
                                     call))
-                                (reverse calls)))))))))))"##,
+                                (reverse calls))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_crypt_decrypt_nested_headings_autosave_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range #<killed buffer> 1 64)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -261,17 +259,16 @@ fn org_crypt_decrypt_nested_headings_autosave_combo() {
                                      "BEGIN PGP MESSAGE"
                                      (nth 1 call))))
                              (_ call)))
-                         (reverse calls)))))))))))"##,
+                         (reverse calls))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_crypt_matcher_key_error_autosave_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument epg-context nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -426,7 +423,7 @@ fn org_crypt_matcher_key_error_autosave_combo() {
                   decrypt-error
                   corrupt-still-encrypted
                    policy-results
-                   (mapcar #'compact-call (reverse calls))))))))"##,
+                   (mapcar #'compact-call (reverse calls)))))))))"##,
         expect,
     );
 }

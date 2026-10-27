@@ -1,12 +1,11 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_entities_user_table_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument char-or-string-p \\\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -54,7 +53,7 @@ fn org_entities_user_table_export_combo() {
                       '("⇒" "Neo" "α" "–"))
               (mapcar (lambda (needle)
                         (not (null (string-match-p needle latex))))
-                      '("\\\\Rightarrow" "\\\\textsc{Neo}" "\\\\alpha" "--"))))))"##,
+                      '("\\\\Rightarrow" "\\\\textsc{Neo}" "\\\\alpha" "--")))))))"##,
         expect,
     );
 }
@@ -104,12 +103,13 @@ fn org_subsuperscript_parse_export_modes_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_pretty_entities_fontify_display_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((#(\"\\\\alpha\" 0 6 (composition ((6 . \"α\")) font-lock-fontified t)) nil ((6 . \"α\")) nil) (#(\"\\\\rightarrow\" 0 11 (composition ((11 . \"→\")) font-lock-fontified t)) nil ((11 . \"→\")) nil) (#(\"\\\\myheart{}\" 0 10 (composition ((10 . \"♥\")) font-lock-fontified t)) nil ((10 . \"♥\")) nil) (#(\"\\\\alpha\" 0 6 (composition ((6 . \"α\")) font-lock-fontified t)) nil ((6 . \"α\")) nil)) ((#(\"\\\\alpha\" 0 6 (font-lock-fontified t)) nil nil nil) (#(\"\\\\rightarrow\" 0 11 (font-lock-fontified t)) nil nil nil) (#(\"\\\\myheart{}\" 0 10 (font-lock-fontified t)) nil nil nil) (#(\"\\\\alpha\" 0 6 (font-lock-fontified t)) nil nil nil)) nil \"Alpha \\\\alpha, arrow \\\\rightarrow, custom \\\\myheart{}, escaped \\\\\\\\alpha.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -142,17 +142,18 @@ fn org_pretty_entities_fontify_display_combo() {
               (nreverse after)
               org-pretty-entities
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_markup_entities_fontlock_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((italic \"/italic \\\\alpha/ \") (entity \"alpha\") (bold \"*bold \\\\beta* \") (entity \"beta\") (underline \"_under \\\\gamma_\") (entity \"gamma\") (verbatim \"=code \\\\delta= \") (code \"~verb \\\\epsilon~ \") (strike-through \"+strike \\\\ndash+\") (entity \"ndash\") (link (\"https\" \"//example.org/a_b?x=1\" \"site \\\\rightarrow *not-bold*\")) (entity \"rightarrow\") (bold \"*not-bold*\") (entity \"brandx\")) ((\"/\" t nil nil nil t) (\"italic\" nil (italic) nil nil t) (\"\\\\alpha\" nil (italic) nil ((6 . \"α\")) t) (\"*\" nil org-level-1 nil nil nil) (\"bold\" nil (bold) nil nil t) (\"\\\\beta\" nil (bold) nil ((5 . \"β\")) t) (\"_\" t nil nil nil t) (\"under\" nil (underline) nil nil t) (\"=\" t nil nil nil t) (\"code\" nil (org-verbatim) nil nil t) (\"~\" t nil nil nil t) (\"verb\" nil (org-code) nil nil t) (\"+\" nil org-document-info-keyword nil nil nil) (\"strike\" nil ((:strike-through t)) nil nil t) (\"\\\\ndash\" nil ((:strike-through t)) nil ((6 . \"–\")) t) (\"\\\\brandx\" nil nil nil ((9 . \"𝕏\")) nil)) (t t t t t t t t t t t) (t t t nil nil t t t) (t t t nil nil t t t) (t t t t t t t t t t t))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -240,7 +241,7 @@ fn org_markup_entities_fontlock_export_combo() {
                         "\\\\uline{under" "\\\\texttt{code"
                         "\\\\texttt{verb" "\\\\sout{strike"
                         "\\\\alpha" "\\\\beta" "\\\\gamma"
-                        "--" "\\\\mathsf{X}"))))))"##,
+                        "--" "\\\\mathsf{X}")))))))"##,
         expect,
     );
 }

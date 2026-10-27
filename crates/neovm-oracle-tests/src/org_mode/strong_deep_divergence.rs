@@ -408,11 +408,12 @@ fn dd_property_inherit_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn dd_headline_inline_markup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"Title with *bold* and /italic/\" \"TODO\" 65 (\"tag\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -423,7 +424,7 @@ fn dd_headline_inline_markup() {
     (list (org-element-property :raw-value h)
           (org-element-property :todo-keyword h)
           (org-element-property :priority h)
-          (org-element-property :tags h)))"##,
+          (org-element-property :tags h))))"##,
         expect,
     );
 }

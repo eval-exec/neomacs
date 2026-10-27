@@ -216,12 +216,13 @@ fn org_icalendar_export_todo_schedule_deadline_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_region_emphasis_link_footnote_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 50)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((t t t nil nil nil t nil t t) (3 1 3 0 0 2 1) \"<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">1.</span> Section</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nText with <b>bold</b>, <i>italic</i>, <code>code</code>, <code>verbatim</code>, <span class=\\\"underline\\\">underline</span>.\\n</p>\\n\\n<p>\\nLink: <a href=\\\"https://example.org/path?q=1\\\">Example</a>.\\n</p>\\n\\n<p>\\nFootnote<sup><a id=\\\"fnr.1\\\" class=\\\"footref\\\" href=\\\"#fn.1\\\" role=\\\"doc-backlink\\\">1</a></sup> and inline<sup><a id=\\\"fnr.2\\\" class=\\\"footref\\\" href=\\\"#fn.2\\\" role=\\\"doc-backlink\\\">2</a></sup>.\\n</p>\\n\\n<table border=\\\"2\\\" cellspacing=\\\"0\\\" cellpadding=\\\"6\\\" rules=\\\"groups\\\" frame=\\\"hsides\\\">\\n\\n\\n<colgroup>\\n<col  class=\\\"org-right\\\" />\\n\\n<col  class=\\\"org-right\\\" />\\n</colgroup>\\n<thead>\\n<tr>\\n<th scope=\\\"col\\\" class=\\\"org-right\\\">A</th>\\n<th scope=\\\"col\\\" class=\\\"org-right\\\">B</th>\\n</tr>\\n</thead>\\n<tbody>\\n<tr>\\n<td class=\\\"org-right\\\">1</td>\\n<td class=\\\"org-right\\\">2</td>\\n</tr>\\n</tbody>\\n</table>\\n\\n<blockquote>\\n<p>\\nQuoted <b>text</b>.\\n</p>\\n</blockquote>\\n</div>\\n</div>\\n<div id=\\\"footnotes\\\">\\n<h2 class=\\\"footnotes\\\">Footnotes: </h2>\\n<div id=\\\"text-footnotes\\\">\\n\\n<div class=\\\"footdef\\\"><sup><a id=\\\"fn.1\\\" class=\\\"footnum\\\" href=\\\"#fnr.1\\\" role=\\\"doc-backlink\\\">1</a></sup> <div class=\\\"footpara\\\" role=\\\"doc-footnote\\\"><p class=\\\"footpara\\\">\\nDefinition with <code>code</code>.\\n</p></div></div>\\n\\n<div class=\\\"footdef\\\"><sup><a id=\\\"fn.2\\\" class=\\\"footnum\\\" href=\\\"#fnr.2\\\" role=\\\"doc-backlink\\\">2</a></sup> <div class=\\\"footpara\\\" role=\\\"doc-footnote\\\"><p class=\\\"footpara\\\">inline note</p></div></div>\\n\\n\\n</div>\\n</div>\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -258,8 +259,8 @@ fn org_export_region_emphasis_link_footnote_deep_state_combo() {
                     '("b" "i" "code" "pre" "u" "td" "blockquote"))
             (replace-regexp-in-string
              "sec:org[[:alnum:]-]+" "sec:org-id"
-             (replace-regexp-in-string "org[[:alnum:]-]\\{8,\\}" "orgHASH"
-                                       html)))))))"##,
+             (replace-regexp-in-string "org[0-9a-f]\\{7\\}" "orgHASH"
+                                       html))))))"##,
         expect,
     );
 }

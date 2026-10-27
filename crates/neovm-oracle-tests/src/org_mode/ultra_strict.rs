@@ -7,11 +7,10 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // Ultra: org-element with deeply nested inline markup
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_deeply_nested_inline_markup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (3 3 2 1 1 1 (plain-text))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -33,7 +32,7 @@ Nested *bold with _underline_ and /italic/ inside*.")
          ;; Nested markup.
          (let ((bold (car (org-element-map tree 'bold #'identity))))
            (mapcar #'org-element-type
-                   (org-element-contents bold)))))))"##,
+                   (org-element-contents bold))))))))"##,
         expect,
     );
 }
@@ -42,11 +41,10 @@ Nested *bold with _underline_ and /italic/ inside*.")
 // Ultra: org-element with complex table with mixed content
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_table_mixed_content() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (7 15 2 2 2 1 1 1 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -73,7 +71,7 @@ fn ultra_complex_table_mixed_content() {
          (length (org-element-map tree 'code #'identity))
          (length (org-element-map tree 'strike-through #'identity))
          ;; Links in cells.
-         (length (org-element-map tree 'link #'identity))))))"##,
+         (length (org-element-map tree 'link #'identity)))))))"##,
         expect,
     );
 }
@@ -82,11 +80,12 @@ fn ultra_complex_table_mixed_content() {
 // Ultra: org-element with complex list with mixed content
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_list_mixed_content() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (9 2 2 1 1 1 1 1 1 (nil off on trans nil nil nil nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -118,7 +117,7 @@ fn ultra_complex_list_mixed_content() {
          (length (org-element-map tree 'link #'identity))
          ;; Checkboxes.
          (mapcar (lambda (i) (org-element-property :checkbox i))
-                 (org-element-map tree 'item #'identity))))))"##,
+                 (org-element-map tree 'item #'identity)))))))"##,
         expect,
     );
 }
@@ -127,11 +126,12 @@ fn ultra_complex_list_mixed_content() {
 // Ultra: org-element with complex headline with all features
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_headline_all_features() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"TODO\" 65 (\"tag1\" \"tag2\") ((timestamp (:standard-properties [70 nil nil nil 94 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon +1w -3d>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil :repeater-type cumulate :repeater-value 1 :repeater-unit week :warning-type all :warning-value 3 :warning-unit day)) nil nil) 0 2 1 1 1 1 (section))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -179,7 +179,7 @@ Body with [[https://orgmode.org][link]] and [fn:1].
          ;; Inline markup in title.
          (mapcar #'org-element-type
                  (org-element-contents
-                  (org-element-map tree 'headline #'identity nil t)))))))"##,
+                  (org-element-map tree 'headline #'identity nil t))))))))"##,
         expect,
     );
 }
@@ -188,11 +188,12 @@ Body with [[https://orgmode.org][link]] and [fn:1].
 // Ultra: org-element with complex source block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_source_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (3 (\"emacs-lisp\" \"python\" \"shell\") (\"-n -r\" nil nil) (\":results output :exports code :noweb yes\" \":results value :session py\" \":results output\") (\"(message \\\"hello\\\")\\n(+ 1 2) ;; (ref:calc)\\n\" \"def hello():\\n    return \\\"world\\\"\\n\" \"echo \\\"hello\\\"\\n\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -224,7 +225,7 @@ echo \"hello\"
          ;; Parameters.
          (mapcar (lambda (b) (org-element-property :parameters b)) src-blocks)
          ;; Values (code content).
-         (mapcar (lambda (b) (org-element-property :value b)) src-blocks)))))"##,
+         (mapcar (lambda (b) (org-element-property :value b)) src-blocks))))))"##,
         expect,
     );
 }
@@ -233,11 +234,12 @@ echo \"hello\"
 // Ultra: org-element with complex export block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_export_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (3 (\"HTML\" \"LATEX\" \"ASCII\") (\"<p>HTML content with <b>bold</b> and <i>italic</i>.</p>\\n\" \"\\\\textbf{Bold} and \\\\textit{italic}.\\n\\\\begin{equation}\\nx^2 + y^2 = z^2\\n\\\\end{equation}\\n\" \"Plain text content.\\n\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -266,7 +268,7 @@ Plain text content.
          ;; Types.
          (mapcar (lambda (b) (org-element-property :type b)) export-blocks)
          ;; Values.
-         (mapcar (lambda (b) (org-element-property :value b)) export-blocks)))))"##,
+         (mapcar (lambda (b) (org-element-property :value b)) export-blocks))))))"##,
         expect,
     );
 }
@@ -275,11 +277,12 @@ Plain text content.
 // Ultra: org-element with complex example block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_example_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (2 (nil \"-n -r\") (\"Example text\\n  with indentation\\n    and more indentation\\n\" \"Numbered example\\n  with switches\\n\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -304,7 +307,7 @@ Numbered example
          ;; Switches.
          (mapcar (lambda (b) (org-element-property :switches b)) example-blocks)
          ;; Values.
-         (mapcar (lambda (b) (org-element-property :value b)) example-blocks)))))"##,
+         (mapcar (lambda (b) (org-element-property :value b)) example-blocks))))))"##,
         expect,
     );
 }
@@ -313,11 +316,10 @@ Numbered example
 // Ultra: org-element with complex quote block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_quote_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 1 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -340,7 +342,7 @@ Another quote.
          ;; Inline markup in quotes.
          (length (org-element-map tree 'bold #'identity))
          (length (org-element-map tree 'italic #'identity))
-         (length (org-element-map tree 'link #'identity)))))"##,
+         (length (org-element-map tree 'link #'identity)))))))"##,
         expect,
     );
 }
@@ -349,11 +351,10 @@ Another quote.
 // Ultra: org-element with complex center block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_center_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -374,7 +375,7 @@ Another centered paragraph.
          (length center-blocks)
          ;; Inline markup in center blocks.
          (length (org-element-map tree 'bold #'identity))
-         (length (org-element-map tree 'italic #'identity)))))"##,
+         (length (org-element-map tree 'italic #'identity)))))))"##,
         expect,
     );
 }
@@ -383,11 +384,10 @@ Another centered paragraph.
 // Ultra: org-element with complex verse block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_verse_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 (verse-block))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -406,7 +406,7 @@ Verse line 3
          ;; Number of verse blocks.
          (length verse-blocks)
          ;; Types.
-         (mapcar #'org-element-type verse-blocks)))))"##,
+         (mapcar #'org-element-type verse-blocks))))))"##,
         expect,
     );
 }
@@ -415,11 +415,10 @@ Verse line 3
 // Ultra: org-element with complex comment block scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_comment_block_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -438,7 +437,7 @@ It can contain multiple lines.
          ;; Comment blocks.
          (length (org-element-map tree 'comment-block #'identity))
          ;; Line comments.
-         (length (org-element-map tree 'comment #'identity))))))"##,
+         (length (org-element-map tree 'comment #'identity)))))))"##,
         expect,
     );
 }
@@ -447,11 +446,10 @@ It can contain multiple lines.
 // Ultra: org-element with complex fixed-width scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_fixed_width_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 (fixed-width))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -468,7 +466,7 @@ fn ultra_complex_fixed_width_scenarios() {
          (length (org-element-map tree 'fixed-width #'identity))
          ;; Types.
          (mapcar #'org-element-type
-                 (org-element-map tree 'fixed-width #'identity))))))"##,
+                 (org-element-map tree 'fixed-width #'identity)))))))"##,
         expect,
     );
 }
@@ -477,11 +475,12 @@ fn ultra_complex_fixed_width_scenarios() {
 // Ultra: org-element with complex keyword scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_keyword_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (17 (\"TITLE\" \"AUTHOR\" \"EMAIL\" \"DATE\" \"DESCRIPTION\" \"KEYWORDS\" \"LANGUAGE\" \"OPTIONS\" \"CATEGORY\" \"FILETAGS\" \"STARTUP\" \"TODO\" \"TAGS\" \"COLUMNS\" \"CONSTANTS\" \"LINK\" \"PRIORITIES\") (\"Test Document\" \"Test Author\" \"test@example.org\" \"2024-01-15\" \"A test document\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -514,7 +513,7 @@ fn ultra_complex_keyword_scenarios() {
          (mapcar (lambda (k) (org-element-property :key k)) keywords)
          ;; Keyword values (first 5).
          (mapcar (lambda (k) (org-element-property :value k))
-                 (take 5 keywords))))))"##,
+                 (take 5 keywords)))))))"##,
         expect,
     );
 }
@@ -523,11 +522,12 @@ fn ultra_complex_keyword_scenarios() {
 // Ultra: org-element with complex affiliated keyword scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_affiliated_keyword_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (0 1 1 (((#(\"A caption with \" 0 15 (:parent (#(\"A caption with \" 0 15 (:parent #6)) (bold (:standard-properties [27 nil 28 32 33 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #6]) #(\"bold\" 0 4 (:parent #7)))))) (bold (:standard-properties [27 nil 28 32 33 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil #3]) #(\"bold\" 0 4 (:parent (bold (:standard-properties [27 nil 28 32 33 0 nil nil nil nil nil nil nil nil #<killed buffer> nil nil (#(\"A caption with \" 0 15 (:parent #10)) #7)]) #(\"bold\" 0 4 (:parent #7))))))))) \"my-element\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -557,7 +557,7 @@ fn ultra_complex_affiliated_keyword_scenarios() {
            (car (org-element-map tree 'table #'identity)))
          ;; Name on table.
          (org-element-property :name
-           (car (org-element-map tree 'table #'identity)))))))"##,
+           (car (org-element-map tree 'table #'identity))))))))"##,
         expect,
     );
 }
@@ -566,11 +566,10 @@ fn ultra_complex_affiliated_keyword_scenarios() {
 // Ultra: org-element with complex paragraph scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_paragraph_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (4 1 1 1 1 1 1 1 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -602,7 +601,7 @@ Paragraph 3 with $x^2$ and \\alpha and {{{macro}}}.
          (length (org-element-map tree 'macro #'identity))
          ;; Footnotes.
          (length (org-element-map tree 'footnote-reference #'identity))
-         (length (org-element-map tree 'footnote-definition #'identity))))))"##,
+         (length (org-element-map tree 'footnote-definition #'identity)))))))"##,
         expect,
     );
 }
@@ -611,11 +610,12 @@ Paragraph 3 with $x^2$ and \\alpha and {{{macro}}}.
 // Ultra: org-element with complex section scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_section_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (5 5 5 ((1 \"H1\") (2 \"H2\") (3 \"H3\") (2 \"H2b\") (1 \"H1b\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -644,7 +644,7 @@ Paragraph 5.")
          (mapcar (lambda (h) (list (org-element-property :level h)
                              (substring-no-properties
                               (org-element-property :raw-value h))))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -653,11 +653,12 @@ Paragraph 5.")
 // Ultra: org-element with complex org-data scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_org_data_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (org-data ((section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) #2 (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #5] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #14]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #15] :key \"TITLE\" :value \"Test\"))) #11 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #14] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #15))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #15]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #16]) #(\"Body 2\" 0 6 (:parent #17))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #11))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #11]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"Body 1\\n\" 0 7 (:parent #13)))))))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #6]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #7]) #(\"Body 1\\n\" 0 7 (:parent (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #20]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #21] :key \"TITLE\" :value \"Test\"))) #17 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #20] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #21))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #21]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #22]) #(\"Body 2\" 0 6 (:parent #23))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #17))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) #14)]) #11)]) #(\"Body 1\\n\" 0 7 (:parent #11)))))))) (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #5] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #14]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #15] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #14] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #15))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #15]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #16]) #(\"Body 1\\n\" 0 7 (:parent #17))))) #11)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #11))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #11]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"Body 2\" 0 6 (:parent #13)))))))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #6]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #7]) #(\"Body 2\" 0 6 (:parent (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #20]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #21] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #20] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #21))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #21]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #22]) #(\"Body 1\\n\" 0 7 (:parent #23))))) #17)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #17))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) #14)]) #11)]) #(\"Body 2\" 0 6 (:parent #11)))))))))]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #2] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #5]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #6] :key \"TITLE\" :value \"Test\"))) #2 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #5] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #14]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #15] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #14] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #15))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #15]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #16]) #(\"Body 1\\n\" 0 7 (:parent #17))))) #11)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #11))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #11]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"Body 2\" 0 6 (:parent #13)))))))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #6]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #7]) #(\"Body 2\" 0 6 (:parent (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #20]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #21] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #20] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #21))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #21]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #22]) #(\"Body 1\\n\" 0 7 (:parent #23))))) #17)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #17))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) #14)]) #11)]) #(\"Body 2\" 0 6 (:parent #11)))))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #10]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #11] :key \"TITLE\" :value \"Test\"))) #7 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #10] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #11))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #11]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"Body 2\" 0 6 (:parent #13))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #7))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #7]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #8]) #(\"Body 1\\n\" 0 7 (:parent #9)))))))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #2]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #3]) #(\"Body 1\\n\" 0 7 (:parent (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #16]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #17] :key \"TITLE\" :value \"Test\"))) #13 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #16] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #17))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #17]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #18]) #(\"Body 2\" 0 6 (:parent #19))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #13))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) #10)]) #7)]) #(\"Body 1\\n\" 0 7 (:parent #7)))))))) (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #5]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #6] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #5] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #14]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #15] :key \"TITLE\" :value \"Test\"))) #11 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #14] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #15))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #15]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #16]) #(\"Body 2\" 0 6 (:parent #17))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #11))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #11]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"Body 1\\n\" 0 7 (:parent #13)))))))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #6]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #7]) #(\"Body 1\\n\" 0 7 (:parent (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #20]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #21] :key \"TITLE\" :value \"Test\"))) #17 (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil #20] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #21))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #21]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #22]) #(\"Body 2\" 0 6 (:parent #23))))))] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #17))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) #14)]) #11)]) #(\"Body 1\\n\" 0 7 (:parent #11)))))))) #2)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #10]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #11] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #10] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #11))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #11]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #12]) #(\"Body 1\\n\" 0 7 (:parent #13))))) #7)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #7))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #7]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #8]) #(\"Body 2\" 0 6 (:parent #9)))))))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil #2]) (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #3]) #(\"Body 2\" 0 6 (:parent (paragraph (:standard-properties [32 32 32 38 38 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil (section (:standard-properties [32 32 32 38 38 0 nil section nil nil nil 32 38 nil #<killed buffer> nil nil (headline (:standard-properties [27 27 32 38 38 0 (:title) nil nil nil nil 34 36 1 #<killed buffer> nil nil (org-data (:standard-properties [1 1 1 38 38 0 nil org-data nil nil nil 3 38 nil #<killed buffer> nil nil nil] :pre-blank 0 :path nil :CATEGORY nil) (section (:standard-properties [1 1 1 15 15 0 nil first-section nil nil nil 1 15 nil #<killed buffer> nil nil #16]) (keyword (:standard-properties [1 1 nil nil 15 0 nil top-comment nil nil nil nil nil nil #<killed buffer> nil nil #17] :key \"TITLE\" :value \"Test\"))) (headline (:standard-properties [15 15 20 27 27 0 (:title) nil nil nil nil 22 25 1 #<killed buffer> nil nil #16] :pre-blank 0 :raw-value \"H1\" :title (#(\"H1\" 0 2 (:parent #17))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) (section (:standard-properties [20 20 20 27 27 0 nil section nil nil nil 20 27 nil #<killed buffer> nil nil #17]) (paragraph (:standard-properties [20 20 20 27 27 0 nil planning nil nil nil nil nil nil #<killed buffer> nil nil #18]) #(\"Body 1\\n\" 0 7 (:parent #19))))) #13)] :pre-blank 0 :raw-value \"H2\" :title (#(\"H2\" 0 2 (:parent #13))) :level 1 :priority nil :tags nil :todo-keyword nil :todo-type nil :footnote-section-p nil :archivedp nil :commentedp nil) #10)]) #7)]) #(\"Body 2\" 0 6 (:parent #7))))))))) (section headline headline))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -676,7 +677,7 @@ Body 2")
          ;; Has contents.
          (org-element-contents tree)
          ;; Child types.
-         (mapcar #'org-element-type (org-element-contents tree))))))"##,
+         (mapcar #'org-element-type (org-element-contents tree)))))))"##,
         expect,
     );
 }
@@ -813,11 +814,12 @@ fn ultra_complex_property_raw_scenarios() {
 // Ultra: org-element with complex deferred scenarios
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ultra_complex_deferred_scenarios() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" org-element-property :foo el)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -877,7 +879,7 @@ fn ultra_complex_deferred_scenarios() {
                        nil (lambda (el)
                              (org-element-deferred-create
                               nil (lambda (_) 1)))))))
-     (org-element-property :foo el))))"##,
+     (org-element-property :foo el)))))"##,
         expect,
     );
 }

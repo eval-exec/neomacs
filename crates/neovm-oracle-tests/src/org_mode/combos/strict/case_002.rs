@@ -7,11 +7,12 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // Strict: org-element-parse-buffer granularity levels
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_parse_granularity_object() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((org-data headline plain-text section paragraph bold italic) 1 1 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -26,16 +27,16 @@ fn strict_parse_granularity_object() {
          ;; Counts.
          (length (org-element-map tree 'bold #'identity))
          (length (org-element-map tree 'italic #'identity))
-         (length (org-element-map tree 'headline #'identity))))))"##,
+         (length (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_parse_granularity_element() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((org-data headline plain-text section paragraph) 0 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -50,16 +51,17 @@ fn strict_parse_granularity_element() {
          ;; No objects found.
          (length (org-element-map tree 'bold #'identity))
          ;; Paragraphs found.
-         (length (org-element-map tree 'paragraph #'identity))))))"##,
+         (length (org-element-map tree 'paragraph #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_parse_granularity_greater_element() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((org-data headline plain-text section center-block paragraph) 1 1)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -74,7 +76,7 @@ fn strict_parse_granularity_greater_element() {
          ;; Center block found but not its contents.
          (length (org-element-map tree 'center-block #'identity))
          ;; No paragraphs inside center.
-         (length (org-element-map tree 'paragraph #'identity))))))"##,
+         (length (org-element-map tree 'paragraph #'identity)))))))"##,
         expect,
     );
 }
@@ -168,11 +170,12 @@ fn strict_context_in_headline() {
 // Strict: org-element lineage with various types
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_lineage_in_nested_structure() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((paragraph center-block section headline headline org-data) (bold paragraph center-block section headline headline org-data) (nil :standard-properties section) (nil :standard-properties paragraph) (nil :standard-properties plain-text))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -193,7 +196,7 @@ fn strict_lineage_in_nested_structure() {
          ;; Filtered: blocks only.
          (mapcar #'org-element-type (org-element-lineage bold 'center-block))
          ;; Filtered: with self.
-         (mapcar #'org-element-type (org-element-lineage bold '(bold paragraph) t))))))"##,
+         (mapcar #'org-element-type (org-element-lineage bold '(bold paragraph) t)))))))"##,
         expect,
     );
 }
@@ -202,11 +205,10 @@ fn strict_lineage_in_nested_structure() {
 // Strict: org-element-map with type lists
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_map_with_type_lists() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((bold italic underline) 14 1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -223,7 +225,7 @@ fn strict_map_with_type_lists() {
          (length (org-element-map tree t #'identity))
          ;; Map single type.
          (length (org-element-map tree 'bold #'identity))
-         (length (org-element-map tree 'italic #'identity))))))"##,
+         (length (org-element-map tree 'italic #'identity)))))))"##,
         expect,
     );
 }
@@ -712,11 +714,10 @@ fn strict_export_headline_features() {
 // Strict: export footnote edge cases
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_export_footnote_edge_cases() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((standard inline inline) (1 2 3) (t t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -739,7 +740,7 @@ fn strict_export_footnote_edge_cases() {
                  (org-element-map tree 'footnote-reference #'identity))
          ;; First reference?
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }

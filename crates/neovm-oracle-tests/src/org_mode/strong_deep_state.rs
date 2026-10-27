@@ -120,11 +120,10 @@ fn strong_property_inheritance_chain() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_property_set_get_delete_cycle() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"old\" \"new\" nil \"final\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -137,7 +136,7 @@ fn strong_property_set_get_delete_cycle() {
       (let ((v3 (org-entry-get nil "VAR")))
         (org-entry-put nil "VAR" "final")
         (let ((v4 (org-entry-get nil "VAR")))
-          (list v1 v2 v3 v4)))))"##,
+          (list v1 v2 v3 v4))))))"##,
         expect,
     );
 }

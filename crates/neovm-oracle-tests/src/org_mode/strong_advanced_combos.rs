@@ -39,11 +39,12 @@ fn strong_todo_workflow_state_logging() {
 // Advanced combo: nested blocks with results
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_nested_blocks_with_results() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" blocks (org-element-map tree 'src-block (lambda (b) (list (org-element-property :value b) (org-element-property :post-affiliated b)))) (results (org-element-map tree 'fixed-width (lambda (f) (org-element-property :value f)))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -56,7 +57,7 @@ fn strong_nested_blocks_with_results() {
          (results (org-element-map tree 'fixed-width
                     (lambda (f)
                       (org-element-property :value f)))))
-    (list blocks results)))"##,
+    (list blocks results))))"##,
         expect,
     );
 }

@@ -268,11 +268,10 @@ fn upstream_org_up_heading_safe() {
 
 // ── Navigation: org-goto-sibling ─────────────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_goto_sibling() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((t t nil t t) (t t) (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -304,7 +303,7 @@ fn upstream_org_goto_sibling() {
        (goto-char (point-min))
        (search-forward "Some text")
        (list (org-goto-sibling 'previous)
-             (looking-at-p "^\\*\\* Heading 1")))))"##,
+             (looking-at-p "^\\*\\* Heading 1"))))))"##,
         expect,
     );
 }

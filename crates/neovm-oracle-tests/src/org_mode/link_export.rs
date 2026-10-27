@@ -56,12 +56,13 @@ fn org_man_export_sections_markup_links_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_abbrev_radio_custom_reveal_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((initial 357 ((\"neomacs-ticket\" \"ABC-42\" \"Ticket *ABC*\" 83 123) (\"https\" \"//github.com/eval-exec/neomacs\" \"repo\" 123 154) (\"https\" \"//www.rfc-editor.org/rfc/rfc9110.txt\" \"RFC 9110\" 154 177) (\"fuzzy\" \"*Target Heading\" \"jump target\" 177 210) (\"neomacs-ticket\" \"XYZ-7\" nil 318 343)) ((\"Ticket\" 4 t org-link highlight \"LINK: neomacs-ticket:ABC-42\" t) (\"repo\" 4 t org-link highlight \"LINK: https://github.com/eval-exec/neomacs\" t) (\"RFC 9110\" 4 t org-link highlight \"LINK: https://www.rfc-editor.org/rfc/rfc9110.txt\" t) (\"jump target\" 4 t org-link highlight \"LINK: *Target Heading\" t) (\"Release Plan\" 3 nil (org-target org-target) nil nil nil) (\"Hidden body\" 9 nil nil nil nil nil) (\"XYZ-7\" 9 t org-link highlight \"LINK: neomacs-ticket:XYZ-7\" t)) \"#+TITLE: Link Matrix\\n* Intro\\nRadio target <<<Release Plan>>> appears here.\\nLinks: [[neomacs-ticket:ABC-42][Ticket *ABC*]] [[gh:eval-exec/neomacs][repo]] [[rfc:9110][RFC 9110]] [[*Target Heading][jump target]] and Release Plan reference.\\n* Target Heading\\n:PROPERTIES:\\n:CUSTOM_ID: target-heading\\n:END:\\nHidden body with [[neomacs-ticket:XYZ-7]] and /markup/.\\n\") (hidden-target 76 ((\"neomacs-ticket\" \"ABC-42\" \"Ticket *ABC*\" 83 123) (\"https\" \"//github.com/eval-exec/neomacs\" \"repo\" 123 154) (\"https\" \"//www.rfc-editor.org/rfc/rfc9110.txt\" \"RFC 9110\" 154 177) (\"fuzzy\" \"*Target Heading\" \"jump target\" 177 210) (\"neomacs-ticket\" \"XYZ-7\" nil 318 343)) ((\"Ticket\" 4 2 org-link highlight \"LINK: neomacs-ticket:ABC-42\" t) (\"repo\" 4 2 org-link highlight \"LINK: https://github.com/eval-exec/neomacs\" t) (\"RFC 9110\" 4 2 org-link highlight \"LINK: https://www.rfc-editor.org/rfc/rfc9110.txt\" t) (\"jump target\" 4 2 org-link highlight \"LINK: *Target Heading\" t) (\"Release Plan\" 3 2 (org-target org-target) nil nil nil) (\"Hidden body\" 9 nil nil nil nil nil) (\"XYZ-7\" 9 t org-link highlight \"LINK: neomacs-ticket:XYZ-7\" t)) \"#+TITLE: Link Matrix\\n* Intro\\nRadio target <<<Release Plan>>> appears here.\\nLinks: [[neomacs-ticket:ABC-42][Ticket *ABC*]] [[gh:eval-exec/neomacs][repo]] [[rfc:9110][RFC 9110]] [[*Target Heading][jump target]] and Release Plan reference.\\n* Target Heading\\n:PROPERTIES:\\n:CUSTOM_ID: target-heading\\n:END:\\nHidden body with [[neomacs-ticket:XYZ-7]] and /markup/.\\n\") (after-custom-open 99 ((\"neomacs-ticket\" \"ABC-42\" \"Ticket *ABC*\" 83 123) (\"https\" \"//github.com/eval-exec/neomacs\" \"repo\" 123 154) (\"https\" \"//www.rfc-editor.org/rfc/rfc9110.txt\" \"RFC 9110\" 154 177) (\"fuzzy\" \"*Target Heading\" \"jump target\" 177 210) (\"neomacs-ticket\" \"XYZ-7\" nil 318 343)) ((\"Ticket\" 4 2 org-link highlight \"LINK: neomacs-ticket:ABC-42\" t) (\"repo\" 4 2 org-link highlight \"LINK: https://github.com/eval-exec/neomacs\" t) (\"RFC 9110\" 4 2 org-link highlight \"LINK: https://www.rfc-editor.org/rfc/rfc9110.txt\" t) (\"jump target\" 4 2 org-link highlight \"LINK: *Target Heading\" t) (\"Release Plan\" 3 2 (org-target org-target) nil nil nil) (\"Hidden body\" 9 nil nil nil nil nil) (\"XYZ-7\" 9 t org-link highlight \"LINK: neomacs-ticket:XYZ-7\" t)) \"#+TITLE: Link Matrix\\n* Intro\\nRadio target <<<Release Plan>>> appears here.\\nLinks: [[neomacs-ticket:ABC-42][Ticket *ABC*]] [[gh:eval-exec/neomacs][repo]] [[rfc:9110][RFC 9110]] [[*Target Heading][jump target]] and Release Plan reference.\\n* Target Heading\\n:PROPERTIES:\\n:CUSTOM_ID: target-heading\\n:END:\\nHidden body with [[neomacs-ticket:XYZ-7]] and /markup/.\\n\") (after-heading-open 238 ((\"neomacs-ticket\" \"ABC-42\" \"Ticket *ABC*\" 83 123) (\"https\" \"//github.com/eval-exec/neomacs\" \"repo\" 123 154) (\"https\" \"//www.rfc-editor.org/rfc/rfc9110.txt\" \"RFC 9110\" 154 177) (\"fuzzy\" \"*Target Heading\" \"jump target\" 177 210) (\"neomacs-ticket\" \"XYZ-7\" nil 318 343)) ((\"Ticket\" 4 2 org-link highlight \"LINK: neomacs-ticket:ABC-42\" t) (\"repo\" 4 2 org-link highlight \"LINK: https://github.com/eval-exec/neomacs\" t) (\"RFC 9110\" 4 2 org-link highlight \"LINK: https://www.rfc-editor.org/rfc/rfc9110.txt\" t) (\"jump target\" 4 2 org-link highlight \"LINK: *Target Heading\" t) (\"Release Plan\" 3 2 (org-target org-target) nil nil nil) (\"Hidden body\" 9 nil nil nil nil nil) (\"XYZ-7\" 9 t org-link highlight \"LINK: neomacs-ticket:XYZ-7\" t)) \"#+TITLE: Link Matrix\\n* Intro\\nRadio target <<<Release Plan>>> appears here.\\nLinks: [[neomacs-ticket:ABC-42][Ticket *ABC*]] [[gh:eval-exec/neomacs][repo]] [[rfc:9110][RFC 9110]] [[*Target Heading][jump target]] and Release Plan reference.\\n* Target Heading\\n:PROPERTIES:\\n:CUSTOM_ID: target-heading\\n:END:\\nHidden body with [[neomacs-ticket:XYZ-7]] and /markup/.\\n\")) ((\"ABC-42\" nil)) \"https://github.com/eval-exec/neomacs\" \"https://www.rfc-editor.org/rfc/rfc9110.txt\" (t t t t t t) (t t t t) #(\"Target Heading\" 0 14 (face org-level-1)) \"#+TITLE: Link Matrix\\n* Intro\\nRadio target <<<Release Plan>>> appears here.\\nLinks: [[neomacs-ticket:ABC-42][Ticket *ABC*]] [[gh:eval-exec/neomacs][repo]] [[rfc:9110][RFC 9110]] [[*Target Heading][jump target]] and Release Plan reference.\\n* Target Heading\\n:PROPERTIES:\\n:CUSTOM_ID: target-heading\\n:END:\\nHidden body with [[neomacs-ticket:XYZ-7]] and /markup/.\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -168,12 +169,11 @@ fn org_link_abbrev_radio_custom_reveal_export_combo() {
                               "RFC 9110" "Release Plan"))
                     (org-get-heading t t t t)
                      (buffer-substring-no-properties
-                      (point-min) (point-max))))))))"##,
+                      (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_export_html_latex_structure_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -230,12 +230,11 @@ fn org_link_export_html_latex_structure_deep_state_combo() {
               html))
               (replace-regexp-in-string
               "sec:org[[:alnum:]-]+" "sec:org-id"
-              latex))))))"##,
+              latex)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_export_footnote_anchor_custom_id_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -287,7 +286,7 @@ fn org_link_export_footnote_anchor_custom_id_deep_state_combo() {
               (replace-regexp-in-string
                "sec:org[[:alnum:]-]+" "sec:org-id"
                (replace-regexp-in-string "org[[:alnum:]-]\\{8,\\}" "orgHASH"
-                                         html))))))))"##,
+                                         html)))))))"##,
         expect,
     );
 }

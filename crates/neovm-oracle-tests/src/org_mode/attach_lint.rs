@@ -454,7 +454,6 @@ fn org_attach_archive_delete_and_sync_empty_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_attach_new_delete_all_id_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -553,7 +552,7 @@ fn org_attach_new_delete_all_id_lifecycle_combo() {
       (when (and new-buffer (buffer-live-p new-buffer))
         (kill-buffer new-buffer))
       (when (get-file-buffer org-file) (kill-buffer (get-file-buffer org-file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))))"##,
         expect,
     );
 }

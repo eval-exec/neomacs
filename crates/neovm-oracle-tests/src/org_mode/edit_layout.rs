@@ -1,12 +1,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_indent_region_drawer_list_block_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Parent\\n  :PROPERTIES:\\n  :Effort:   1:00\\n  :END:\\n  Paragraph under parent.\\n  - item one\\n    continuation\\n    - item two\\n  #+begin_quote\\n  quoted\\n  #+end_quote\\n** Child\\n   Body\\n\" ((headline 1 178) (property-drawer 10 51) (plain-list 77 122) (plain-list 107 122) (quote-block 122 161) (headline 161 178)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -35,17 +36,18 @@ fn org_indent_region_drawer_list_block_combo() {
            (lambda (e)
              (list (org-element-type e)
                    (org-element-property :begin e)
-                   (org-element-property :end e))))))))"##,
+                   (org-element-property :end e)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fill_paragraph_item_timestamp_macro_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Fill\\nLong paragraph before\\n<2026-05-27 Wed 09:00> with\\n{{{macro(arg)}}} and enough words to wrap\\nacross several lines.\\n\\n- item with a timestamp <2026-05-28 Thu>\\n  and enough trailing words to wrap while\\n  staying inside the list item.\\n#+MACRO: macro value-$1\\n\" ((paragraph 8 123 nil nil nil) (timestamp 30 53 nil nil nil) (macro 58 75 \"macro\" \"{{{macro(arg)}}}\" nil) (item 123 238 nil nil nil) (paragraph 125 238 nil nil nil) (timestamp 147 163 nil nil nil) (keyword 238 262 \"MACRO\" \"macro value-$1\" nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -71,17 +73,18 @@ fn org_fill_paragraph_item_timestamp_macro_combo() {
                  (org-element-property :end e)
                  (org-element-property :key e)
                  (org-element-property :value e)
-                 (org-element-property :name e)))))))"##,
+                 (org-element-property :name e))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_comment_uncomment_heading_block_region_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"#+TITLE: Comments\\n* Alpha\\n# Body line one.\\n# Body line two.\\n#+begin_src emacs-lisp\\n(+ 1 2)\\n#+end_src\\n* Beta\\nBody beta.\\n\" \"#+TITLE: Comments\\n* Alpha\\nBody line one.\\nBody line two.\\n# \\n#+begin_src emacs-lisp\\n(+ 1 2)\\n#+end_src\\n* COMMENT Beta\\nBody beta.\\n\" ((headline 19 101 \"Alpha\") (comment 57 60 nil) (src-block 60 101 nil) (headline 101 127 \"Beta\")))""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -114,7 +117,7 @@ fn org_comment_uncomment_heading_block_region_combo() {
                   (list (org-element-type e)
                         (org-element-property :begin e)
                         (org-element-property :end e)
-                        (org-element-property :raw-value e))))))))"##,
+                        (org-element-property :raw-value e)))))))))"##,
         expect,
     );
 }

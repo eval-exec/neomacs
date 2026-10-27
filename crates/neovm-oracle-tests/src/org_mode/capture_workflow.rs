@@ -350,12 +350,11 @@ fn org_capture_kill_finalize_goto_marker_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_capture_prompt_placeholders_history_tags_props_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable org-time-was-given)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -411,7 +410,7 @@ fn org_capture_prompt_placeholders_history_tags_props_combo() {
                 (nreverse prompts)
                 (gethash "Title" org-capture--prompt-history-table)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
@@ -867,12 +866,11 @@ fn org_capture_template_expand_body_placeholders_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_capture_insert_todo_edit_clock_refile_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -924,7 +922,7 @@ fn org_capture_insert_todo_edit_clock_refile_deep() {
                 (list before-refile
                       target-after
                       refile-after))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

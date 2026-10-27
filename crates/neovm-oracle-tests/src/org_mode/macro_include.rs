@@ -86,12 +86,11 @@ fn org_macro_html_export_markup_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_include_location_only_contents_footnotes_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -125,17 +124,16 @@ fn org_include_location_only_contents_footnotes_combo() {
                       (lambda (f) (org-element-property :label f)))
                     (buffer-substring-no-properties
                      (point-min) (point-max)))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_include_literal_blocks_lines_parse_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -164,7 +162,7 @@ fn org_include_literal_blocks_lines_parse_combo() {
                     parsed-example
                     (buffer-substring-no-properties
                      (point-min) (point-max)))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -198,7 +196,6 @@ fn org_macro_counter_nested_replacement_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_include_nested_macro_footnote_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -261,12 +258,11 @@ fn org_include_nested_macro_footnote_export_combo() {
                     (not (null (string-match-p "<i>Inner value</i>" html)))
                     (not (null (string-match-p "footnotes" html)))
                     html)))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_macro_builtin_property_date_env_include_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -361,17 +357,16 @@ fn org_macro_builtin_property_date_env_include_combo() {
       (if old-env
           (setenv "ORG_ORACLE_INCLUDE_ROOT" old-env)
         (setenv "ORG_ORACLE_INCLUDE_ROOT" nil))
-      (delete-directory root t))))"##,
+      (delete-directory root t))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_include_export_environment_reference_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 73 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox-html)
@@ -445,7 +440,7 @@ fn org_include_export_environment_reference_combo() {
                       "org[[:alnum:]]+"
                       "org-id"
                       (org-export-as 'html nil nil t nil)))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -527,12 +522,11 @@ fn org_macro_chained_nested_expansion_divergence() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_include_file_lines_blocks_export_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 55 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -588,7 +582,7 @@ fn org_include_file_lines_blocks_export_deep_state_combo() {
                         src-blocks
                         has-code
                         html))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

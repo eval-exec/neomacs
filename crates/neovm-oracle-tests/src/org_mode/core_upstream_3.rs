@@ -504,11 +504,10 @@ fn upstream_org_fuzzy_links() {
 
 // ── Beginning-of-line ────────────────────────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_beginning_of_line() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t (t t t) (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -529,18 +528,17 @@ fn upstream_org_beginning_of_line() {
        (goto-char (point-max))
        (let ((org-special-ctrl-a/e t))
          (list (progn (org-beginning-of-line) (looking-at-p "Item"))
-               (progn (org-beginning-of-line) (bolp)))))))"##,
+               (progn (org-beginning-of-line) (bolp))))))))"##,
         expect,
     );
 }
 
 // ── End-of-line ──────────────────────────────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_end_of_line() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (t (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -554,7 +552,7 @@ fn upstream_org_end_of_line() {
        (goto-char (point-min))
        (let ((org-special-ctrl-a/e t))
          (list (progn (org-end-of-line) (looking-back "Headline" nil))
-               (progn (org-end-of-line) (eolp)))))))"##,
+               (progn (org-end-of-line) (eolp))))))))"##,
         expect,
     );
 }
@@ -625,11 +623,10 @@ fn upstream_org_combo_headline_properties_planning() {
 
 // ── Combo: table + formulas + export ─────────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_combo_table_formula_export() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (org 6 0 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -652,18 +649,17 @@ fn upstream_org_combo_table_formula_export() {
          ;; Has TBLFM.
          (org-element-map tree 'keyword
            (lambda (k) (when (equal (org-element-property :key k) "TBLFM")
-                     (org-element-property :value k))))))))"##,
+                     (org-element-property :value k)))))))))"##,
         expect,
     );
 }
 
 // ── Combo: links + citations + footnotes ─────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_combo_links_citations_footnotes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 2 2 2 \"https\" \"//orgmode.org\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -689,18 +685,19 @@ fn upstream_org_combo_links_citations_footnotes() {
            (org-element-map tree 'link #'identity nil t))
          ;; Link path.
          (org-element-property :path
-           (org-element-map tree 'link #'identity nil t))))))"##,
+           (org-element-map tree 'link #'identity nil t)))))))"##,
         expect,
     );
 }
 
 // ── Combo: blocks + drawers + properties ─────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_combo_blocks_drawers_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((org-data headline plain-text section property-drawer node-property drawer clock quote-block paragraph src-block) 1 1 2 0 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -721,18 +718,19 @@ fn upstream_org_combo_blocks_drawers_properties() {
          ;; Keywords.
          (length (org-element-map tree 'keyword #'identity))
          ;; Paragraphs.
-         (length (org-element-map tree 'paragraph #'identity))))))"##,
+         (length (org-element-map tree 'paragraph #'identity)))))))"##,
         expect,
     );
 }
 
 // ── Combo: todo + tags + priorities ──────────────────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_combo_todo_tags_priorities() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"TODO\" \"DONE\" nil nil \"TODO\") (65 66 67 nil 65) ((\"work\" \"urgent\") (\"home\") (\"work\" \"waiting\") nil (\"work\")) 2 2)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -754,7 +752,7 @@ fn upstream_org_combo_todo_tags_priorities() {
                    (lambda (h) (when (equal (org-element-property :todo-keyword h) "TODO") h))))
          ;; Only high priority.
          (length (org-element-map tree 'headline
-                   (lambda (h) (when (equal (org-element-property :priority h) ?A) h))))))))"##,
+                   (lambda (h) (when (equal (org-element-property :priority h) ?A) h)))))))))"##,
         expect,
     );
 }
@@ -804,11 +802,12 @@ fn upstream_org_combo_timestamps_planning() {
 
 // ── Combo: export options + headlines + sections ─────────────────────
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn upstream_org_combo_export_headlines() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"Test Document\" 0 13 (:parent (#(\"Test Document\" 0 13 (:parent #4)))))) (#(\"Test\" 0 4 (:parent (#(\"Test\" 0 4 (:parent #4)))))) ((1) (1 1) (1 2) (2) (2 1) (2 1 1)) (1 2 2 1 2 3) (t t t t t t))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -838,7 +837,7 @@ fn upstream_org_combo_export_headlines() {
          ;; Numbered?
          (mapcar (lambda (h)
                    (org-export-numbered-headline-p h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }

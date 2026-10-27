@@ -8,11 +8,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_results_list_table() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 25)""#]];
+    let expect = expect_test::expect![[r#""OK ((a b c d e) ((1 2) (3 4)) (:table-count 1))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -27,12 +26,11 @@ fn strict_babel_results_list_table() {
         (search-forward "#+begin_src emacs-lisp :results table")
         (push (org-babel-execute-src-block) r)
         (push (list :table-count (length (org-element-map (org-element-parse-buffer) 'table #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_timestamp_from_time() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -53,7 +51,7 @@ fn strict_timestamp_from_time() {
    (let ((ts (org-timestamp-from-string "<2024-03-15 Fri>")))
      (list :format-short (org-timestamp-format ts "%d/%m")
            :format-iso (org-timestamp-format ts "%Y-%m-%d")
-           :format-long (org-timestamp-format ts "%B %d, %Y %A"))))))"##,
+           :format-long (org-timestamp-format ts "%B %d, %Y %A")))))"##,
         expect,
     );
 }
@@ -77,11 +75,12 @@ fn strict_plot_data_extraction() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_cache_invalidation() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 25)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (30 (:after1 \"#+begin_src emacs-lisp :results value :cache yes\\n(+ 10 20)\\n#+end_src\\n\\n#+RESULTS[f1b888f20db84f8f395f324acf22e29bdc33ed3c]:\\n: 30\\n\") 30 (:after2 \"#+begin_src emacs-lisp :results value :cache yes\\n(+ 10 20)\\n#+end_src\\n\\n#+RESULTS[f1b888f20db84f8f395f324acf22e29bdc33ed3c]:\\n: 30\\n\") (:result-count 0))""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -99,16 +98,15 @@ fn strict_babel_cache_invalidation() {
         (push (org-babel-execute-src-block) r)
         (push (list :after2 (buffer-string)) r)
         (push (list :result-count (length (org-element-map (org-element-parse-buffer) 'result #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_macro_no_args_expansion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 25)""#]];
+    let expect = expect_test::expect![[r#""OK ((:has-heart 22) (:interpreted-length t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -122,16 +120,16 @@ fn strict_macro_no_args_expansion() {
              (r '()))
         (push (list :has-heart (string-match-p "\u2665" interpreted)) r)
         (push (list :interpreted-length (> (length interpreted) 0)) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_element_text_looks_like_markup() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 18 25)""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((:bold-count 1) (:italic-count 1) (:verbatim-count 0))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -150,12 +148,11 @@ fn strict_element_text_looks_like_markup() {
         (push (list :bold-count (length bolds)) r)
         (push (list :italic-count (length italics)) r)
         (push (list :verbatim-count (length verbatims)) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_session_value_persistence() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -175,16 +172,15 @@ fn strict_babel_session_value_persistence() {
         (push (org-babel-execute-src-block) r)
         (search-forward "#+begin_src emacs-lisp :results value :session strict17")
         (push (org-babel-execute-src-block) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_element_parse_secondary_string_text() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 82)""#]];
+    let expect = expect_test::expect![[r#""OK ((:type cons :length 1) (:has-bold t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -198,16 +194,17 @@ fn strict_element_parse_secondary_string_text() {
    ;; parse-secondary-string for bold
    (let ((result (org-element-parse-secondary-string
                   "*bold* text" '(bold italic))))
-     (list :has-bold (> (length (org-element-map result 'bold #'identity)) 0))))))"##,
+     (list :has-bold (> (length (org-element-map result 'bold #'identity)) 0)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_org_table_hline_movement() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 16 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:move-hline-fbound t) (:kill-row-fbound t) (:insert-hline-fbound t) (:row-count 4))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -224,7 +221,7 @@ fn strict_org_table_hline_movement() {
         (push (list :insert-hline-fbound (fboundp 'org-table-insert-hline)) r)
         ;; count rows
         (push (list :row-count (length (org-element-map (org-element-parse-buffer) 'table-row #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }

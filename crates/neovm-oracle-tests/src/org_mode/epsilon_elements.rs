@@ -471,11 +471,10 @@ fn epsilon_src_block_with_parameters() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_quote_block() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -484,16 +483,15 @@ fn epsilon_quote_block() {
       (insert "#+BEGIN_QUOTE\nQuoted text.\n#+END_QUOTE")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'quote-block #'identity)))))"##,
+        (length (org-element-map tree 'quote-block #'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_center_block() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -502,16 +500,15 @@ fn epsilon_center_block() {
       (insert "#+BEGIN_CENTER\nCentered.\n#+END_CENTER")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'center-block #'identity)))))"##,
+        (length (org-element-map tree 'center-block #'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_example_block() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -520,7 +517,7 @@ fn epsilon_example_block() {
       (insert "#+BEGIN_EXAMPLE\nExample.\n#+END_EXAMPLE")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'example-block #'identity)))))"##,
+        (length (org-element-map tree 'example-block #'identity))))))"##,
         expect,
     );
 }
@@ -543,11 +540,10 @@ fn epsilon_export_block_html() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_verse_block() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -556,16 +552,15 @@ fn epsilon_verse_block() {
       (insert "#+BEGIN_VERSE\nLine one\nLine two\n#+END_VERSE")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'verse-block #'identity)))))"##,
+        (length (org-element-map tree 'verse-block #'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_comment_block() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -574,7 +569,7 @@ fn epsilon_comment_block() {
       (insert "#+BEGIN_COMMENT\nComment.\n#+END_COMMENT")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'comment-block #'identity)))))"##,
+        (length (org-element-map tree 'comment-block #'identity))))))"##,
         expect,
     );
 }
@@ -583,11 +578,10 @@ fn epsilon_comment_block() {
 // Epsilon: org-element with complex lists
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_list_unordered() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 5)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -597,16 +591,15 @@ fn epsilon_list_unordered() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
         (list (length (org-element-map tree 'plain-list #'identity))
-              (length (org-element-map tree 'item #'identity))))))"##,
+              (length (org-element-map tree 'item #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_list_ordered() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (ordered)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -616,16 +609,15 @@ fn epsilon_list_ordered() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (lists (org-element-map tree 'plain-list #'identity)))
-        (mapcar (lambda (l) (org-element-property :type l)) lists))))"##,
+        (mapcar (lambda (l) (org-element-property :type l)) lists)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_list_description() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"tag1\" \"tag2\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -638,16 +630,15 @@ fn epsilon_list_description() {
         (mapcar (lambda (i)
                   (substring-no-properties
                    (org-element-interpret-data (org-element-property :tag i))))
-                items))))"##,
+                items)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_list_checkboxes() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (off on trans nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -657,7 +648,7 @@ fn epsilon_list_checkboxes() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (items (org-element-map tree 'item #'identity)))
-        (mapcar (lambda (i) (org-element-property :checkbox i)) items))))"##,
+        (mapcar (lambda (i) (org-element-property :checkbox i)) items)))))"##,
         expect,
     );
 }
@@ -666,11 +657,10 @@ fn epsilon_list_checkboxes() {
 // Epsilon: org-element with complex tables
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_table_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 2 4)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -681,16 +671,15 @@ fn epsilon_table_basic() {
       (let* ((tree (org-element-parse-buffer)))
         (list (length (org-element-map tree 'table #'identity))
               (length (org-element-map tree 'table-row #'identity))
-              (length (org-element-map tree 'table-cell #'identity))))))"##,
+              (length (org-element-map tree 'table-cell #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_table_with_separator() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (standard rule standard)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -700,7 +689,7 @@ fn epsilon_table_with_separator() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (rows (org-element-map tree 'table-row #'identity)))
-        (mapcar (lambda (r) (org-element-property :type r)) rows))))"##,
+        (mapcar (lambda (r) (org-element-property :type r)) rows)))))"##,
         expect,
     );
 }
@@ -800,11 +789,10 @@ fn epsilon_link_custom_id() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_link_plain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -814,7 +802,7 @@ fn epsilon_link_plain() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (links (org-element-map tree 'link #'identity)))
-        (length links))))"##,
+        (length links)))))"##,
         expect,
     );
 }
@@ -823,11 +811,10 @@ fn epsilon_link_plain() {
 // Epsilon: org-element with complex timestamps
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_timestamp_active() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK active""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -837,16 +824,15 @@ fn epsilon_timestamp_active() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (ts (car (org-element-map tree 'timestamp #'identity))))
-        (org-element-property :type ts))))"##,
+        (org-element-property :type ts)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_timestamp_inactive() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK inactive""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -856,7 +842,7 @@ fn epsilon_timestamp_inactive() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (ts (car (org-element-map tree 'timestamp #'identity))))
-        (org-element-property :type ts))))"##,
+        (org-element-property :type ts)))))"##,
         expect,
     );
 }
@@ -961,11 +947,10 @@ fn epsilon_timestamp_with_warning() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_timestamp_diary() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK diary""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -975,7 +960,7 @@ fn epsilon_timestamp_diary() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (ts (car (org-element-map tree 'timestamp #'identity))))
-        (org-element-property :type ts))))"##,
+        (org-element-property :type ts)))))"##,
         expect,
     );
 }
@@ -1020,11 +1005,10 @@ fn epsilon_entity_beta() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_entity_with_braces() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1034,7 +1018,7 @@ fn epsilon_entity_with_braces() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (entities (org-element-map tree 'entity #'identity)))
-        (length entities))))"##,
+        (length entities)))))"##,
         expect,
     );
 }
@@ -1043,11 +1027,10 @@ fn epsilon_entity_with_braces() {
 // Epsilon: org-element with complex LaTeX
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_latex_fragment_inline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1057,16 +1040,15 @@ fn epsilon_latex_fragment_inline() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (fragments (org-element-map tree 'latex-fragment #'identity)))
-        (length fragments))))"##,
+        (length fragments)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_latex_fragment_display() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1076,16 +1058,15 @@ fn epsilon_latex_fragment_display() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (fragments (org-element-map tree 'latex-fragment #'identity)))
-        (length fragments))))"##,
+        (length fragments)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_latex_environment_equation() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1095,7 +1076,7 @@ fn epsilon_latex_environment_equation() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (envs (org-element-map tree 'latex-environment #'identity)))
-        (length envs))))"##,
+        (length envs)))))"##,
         expect,
     );
 }
@@ -1104,11 +1085,10 @@ fn epsilon_latex_environment_equation() {
 // Epsilon: org-element with complex footnotes
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_footnote_standard() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1118,16 +1098,15 @@ fn epsilon_footnote_standard() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
         (list (length (org-element-map tree 'footnote-reference #'identity))
-              (length (org-element-map tree 'footnote-definition #'identity))))))"##,
+              (length (org-element-map tree 'footnote-definition #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_footnote_inline() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (inline)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1137,16 +1116,15 @@ fn epsilon_footnote_inline() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (refs (org-element-map tree 'footnote-reference #'identity)))
-        (mapcar (lambda (r) (org-element-property :type r)) refs))))"##,
+        (mapcar (lambda (r) (org-element-property :type r)) refs)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_footnote_anonymous() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (inline)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1156,7 +1134,7 @@ fn epsilon_footnote_anonymous() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (refs (org-element-map tree 'footnote-reference #'identity)))
-        (mapcar (lambda (r) (org-element-property :type r)) refs))))"##,
+        (mapcar (lambda (r) (org-element-property :type r)) refs)))))"##,
         expect,
     );
 }
@@ -1165,11 +1143,10 @@ fn epsilon_footnote_anonymous() {
 // Epsilon: org-element with complex targets
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_target_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1179,16 +1156,15 @@ fn epsilon_target_basic() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (targets (org-element-map tree 'target #'identity)))
-        (length targets))))"##,
+        (length targets)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_radio_target() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1198,7 +1174,7 @@ fn epsilon_radio_target() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (targets (org-element-map tree 'radio-target #'identity)))
-        (length targets))))"##,
+        (length targets)))))"##,
         expect,
     );
 }
@@ -1207,11 +1183,10 @@ fn epsilon_radio_target() {
 // Epsilon: org-element with complex statistics cookies
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_statistics_cookie_fraction() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"[1/3]\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1221,16 +1196,15 @@ fn epsilon_statistics_cookie_fraction() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (cookies (org-element-map tree 'statistics-cookie #'identity)))
-        (mapcar (lambda (c) (org-element-property :value c)) cookies))))"##,
+        (mapcar (lambda (c) (org-element-property :value c)) cookies)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_statistics_cookie_percent() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"[50%]\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1240,7 +1214,7 @@ fn epsilon_statistics_cookie_percent() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (cookies (org-element-map tree 'statistics-cookie #'identity)))
-        (mapcar (lambda (c) (org-element-property :value c)) cookies))))"##,
+        (mapcar (lambda (c) (org-element-property :value c)) cookies)))))"##,
         expect,
     );
 }
@@ -1249,11 +1223,10 @@ fn epsilon_statistics_cookie_percent() {
 // Epsilon: org-element with complex macros
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_macro_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1263,16 +1236,15 @@ fn epsilon_macro_basic() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (macros (org-element-map tree 'macro #'identity)))
-        (length macros))))"##,
+        (length macros)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_macro_with_args() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"{{{test(arg1,arg2)}}}\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1282,7 +1254,7 @@ fn epsilon_macro_with_args() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (macros (org-element-map tree 'macro #'identity)))
-        (mapcar (lambda (m) (org-element-property :value m)) macros))))"##,
+        (mapcar (lambda (m) (org-element-property :value m)) macros)))))"##,
         expect,
     );
 }
@@ -1291,11 +1263,10 @@ fn epsilon_macro_with_args() {
 // Epsilon: org-element with complex export snippets
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_export_snippet_html() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"html\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1305,16 +1276,15 @@ fn epsilon_export_snippet_html() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (snippets (org-element-map tree 'export-snippet #'identity)))
-        (mapcar (lambda (s) (org-element-property :back-end s)) snippets))))"##,
+        (mapcar (lambda (s) (org-element-property :back-end s)) snippets)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_export_snippet_latex() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"latex\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1324,7 +1294,7 @@ fn epsilon_export_snippet_latex() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (snippets (org-element-map tree 'export-snippet #'identity)))
-        (mapcar (lambda (s) (org-element-property :back-end s)) snippets))))"##,
+        (mapcar (lambda (s) (org-element-property :back-end s)) snippets)))))"##,
         expect,
     );
 }
@@ -1333,11 +1303,10 @@ fn epsilon_export_snippet_latex() {
 // Epsilon: org-element with complex inlinetasks
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_inlinetask_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"TODO\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1349,7 +1318,7 @@ fn epsilon_inlinetask_basic() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (tasks (org-element-map tree 'inlinetask #'identity)))
-        (mapcar (lambda (t) (org-element-property :todo-keyword t)) tasks))))"##,
+        (mapcar (lambda (t) (org-element-property :todo-keyword t)) tasks)))))"##,
         expect,
     );
 }
@@ -1358,11 +1327,10 @@ fn epsilon_inlinetask_basic() {
 // Epsilon: org-element with complex diary sexps
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_diary_sexp_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1372,7 +1340,7 @@ fn epsilon_diary_sexp_basic() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (sexps (org-element-map tree 'diary-sexp #'identity)))
-        (length sexps))))"##,
+        (length sexps)))))"##,
         expect,
     );
 }
@@ -1381,11 +1349,10 @@ fn epsilon_diary_sexp_basic() {
 // Epsilon: org-element with complex horizontal rules
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_horizontal_rule_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1395,7 +1362,7 @@ fn epsilon_horizontal_rule_basic() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (rules (org-element-map tree 'horizontal-rule #'identity)))
-        (length rules))))"##,
+        (length rules)))))"##,
         expect,
     );
 }
@@ -1404,11 +1371,10 @@ fn epsilon_horizontal_rule_basic() {
 // Epsilon: org-element with complex line breaks
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn epsilon_line_break_basic() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1418,7 +1384,7 @@ fn epsilon_line_break_basic() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (breaks (org-element-map tree 'line-break #'identity)))
-        (length breaks))))"##,
+        (length breaks)))))"##,
         expect,
     );
 }

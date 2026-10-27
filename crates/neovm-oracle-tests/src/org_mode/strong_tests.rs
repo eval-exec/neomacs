@@ -1094,11 +1094,10 @@ fn strong_export_headline_numbers() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_footnote_numbers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((1 2) (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -1115,16 +1114,17 @@ fn strong_export_footnote_numbers() {
          (mapcar (lambda (ref) (org-export-get-footnote-number ref info))
                  (org-element-map tree 'footnote-reference #'identity))
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_tags_and_categories() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"tag1\") (\"tag2\") nil) (\"work\" \"work\" \"work\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -1141,7 +1141,7 @@ fn strong_export_tags_and_categories() {
          (mapcar (lambda (h) (org-export-get-tags h info))
                  (org-element-map tree 'headline #'identity))
          (mapcar (lambda (h) (org-export-get-category h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -1341,7 +1341,6 @@ fn strong_element_property_inherited() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_element_operations_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1363,7 +1362,7 @@ fn strong_element_operations_chain() {
         (org-element-swap-A-B h1 h3)
         (let ((after-swap (substring-no-properties (org-element-interpret-data doc))))
           (list after-adopt after-extract after-swap
-                (org-element-property :parent h2))))))))"##,
+                (org-element-property :parent h2)))))))"##,
         expect,
     );
 }

@@ -355,7 +355,6 @@ fn ed5_block_multiple_languages() {
 // Edge: drawer boundary conditions
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ed5_drawer_empty_content() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -366,7 +365,7 @@ fn ed5_drawer_empty_content() {
   (insert "* Test\n:PROPERTIES:\n:END:")
   (let* ((tree (org-element-parse-buffer))
          (drawer (car (org-element-map tree 'drawer (lambda (d) d)))))
-    (org-element-property :drawer-name drawer))"##,
+    (org-element-property :drawer-name drawer)))"##,
         expect,
     );
 }
@@ -734,18 +733,17 @@ fn ed5_comment_multiple_lines() {
 // Edge: fixed-width boundary conditions
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ed5_fixed_width_single() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"Fixed width\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert ": Fixed width")
   (let* ((tree (org-element-parse-buffer))
          (fw (car (org-element-map tree 'fixed-width (lambda (f) f)))))
-    (org-element-property :value fw))"##,
+    (org-element-property :value fw)))"##,
         expect,
     );
 }

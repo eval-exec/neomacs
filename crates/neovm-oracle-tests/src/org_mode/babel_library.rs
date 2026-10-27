@@ -115,12 +115,13 @@ fn org_babel_ref_remote_table_headline_index_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_sbe_table_formula_literal_header_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"#+NAME: combine\\n#+begin_src emacs-lisp :var label=\\\"\\\" :var n=0 :results value\\n(format \\\"%s:%s\\\" label (* n n))\\n#+end_src\\n\\n| label | n | result  |\\n|-------+---+---------|\\n| alpha | 3 | alpha:9 |\\n| beta  | 4 | beta:16 |\\n#+TBLFM: $3='(org-sbe \\\"combine\\\" (label $$1) (n $2))\\n\" \"line1...\" \"single\" \"#+NAME: combine\\n#+begin_src emacs-lisp :var label=\\\"\\\" :var n=0 :results value\\n(format \\\"%s:%s\\\" label (* n n))\\n#+end_src\\n\\n| label | n | result  |\\n|-------+---+---------|\\n| alpha | 3 | alpha:9 |\\n| beta  | 5 | beta:25 |\\n#+TBLFM: $3='(org-sbe \\\"combine\\\" (label $$1) (n $2))\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -155,7 +156,7 @@ fn org_babel_sbe_table_formula_literal_header_combo() {
               (org-babel-table-truncate-at-newline "line1\nline2")
               (org-babel-table-truncate-at-newline "single")
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -464,7 +465,6 @@ fn org_babel_execute_buffer_call_inline_remove_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_session_dir_noweb_file_tangle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -545,17 +545,16 @@ fn org_babel_session_dir_noweb_file_tangle_combo() {
                       (buffer-substring-no-properties
                        (point-min) (point-max))))))
              (kill-buffer)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_cache_file_var_result_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 76 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -632,17 +631,18 @@ fn org_babel_cache_file_var_result_lifecycle_combo() {
                               (or file-content "no-file")
                               after-re-exec))))))))
             (kill-buffer)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_result_value_insertion_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 61 39)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"(list :sum (+ a b) :product (* a b) :diff (- a b))\\n\" \"(princ (format \\\"item1=%s item2=%s\\\" 42 99))\\n\" \"'((\\\"X\\\" \\\"Y\\\") hline (1 2) (3 4) (5 6))\\n\" (\"| :sum | 3 | :product | 2 | :diff | -1 |\\n\" \": item1=42 item2=99\\n\" \"| X | Y |\\n|---+---|\\n| 1 | 2 |\\n| 3 | 4 |\\n| 5 | 6 |\\n\") ((\"adder\" \"emacs-lisp\" \":var a=1 b=2 :results value replace\") (\"lister\" \"emacs-lisp\" \":results output replace\") (\"tabler\" \"emacs-lisp\" \":results value table replace\")) \"#+NAME: adder\\n#+begin_src emacs-lisp :var a=1 b=2 :results value replace\\n(list :sum (+ a b) :product (* a b) :diff (- a b))\\n#+end_src\\n\\n#+RESULTS: adder\\n| :sum | 3 | :product | 2 | :diff | -1 |\\n\\n#+NAME: lister\\n#+begin_src emacs-lisp :results output replace\\n(princ (format \\\"item1=%s item2=%s\\\" 42 99))\\n#+end_src\\n\\n#+RESULTS: lister\\n: item1=42 item2=99\\n\\n#+NAME: tabler\\n#+begin_src emacs-lisp :results value table replace\\n'((\\\"X\\\" \\\"Y\\\") hline (1 2) (3 4) (5 6))\\n#+end_src\\n\\n#+RESULTS: tabler\\n| X | Y |\\n|---+---|\\n| 1 | 2 |\\n| 3 | 4 |\\n| 5 | 6 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -704,7 +704,7 @@ fn org_babel_execute_result_value_insertion_deep_state_combo() {
                         (list (org-element-property :name sb)
                               (org-element-property :language sb)
                               (org-element-property :parameters sb))))
-                    tabler-buf))))))))))"##,
+                    tabler-buf))))))))"##,
         expect,
     );
 }
@@ -760,7 +760,6 @@ fn org_babel_dir_default_dir_header_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_buffer_inline_call_remove_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -829,17 +828,18 @@ fn org_babel_execute_buffer_inline_call_remove_deep_state_combo() {
                   inline-result
                   elements
                   after-remove
-                   after-remove-block)))))))))"##,
+                   after-remove-block)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_var_table_output_header_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 47 35)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"(cons '(\\\"X\\\" \\\"Y\\\" \\\"Product\\\")\\n      (cons 'hline\\n            (mapcar (lambda (row)\\n                      (list (car row) (cadr row) (* (cadr row) factor)))\\n                    tbl)))\\n)\\n\" \"#+NAME: data\\n| X | Y |\\n|---+---|\\n| 1 | 10 |\\n| 2 | 20 |\\n| 3 | 30 |\\n\\n#+NAME: compute\\n#+begin_src emacs-lisp :var tbl=data factor=2 :results value table replace\\n(cons '(\\\"X\\\" \\\"Y\\\" \\\"Product\\\")\\n      (cons 'hline\\n            (mapcar (lambda (row)\\n                      (list (car row) (cadr row) (* (cadr row) factor)))\\n                    tbl)))\\n)\\n#+end_src\\n\\n#+RESULTS: compute\\n| X |  Y | Product |\\n|---+----+---------|\\n| 1 | 10 |      20 |\\n| 2 | 20 |      40 |\\n| 3 | 30 |      60 |\\n\\n#+begin_src emacs-lisp :results output replace\\n(dotimes (i 3)\\n  (princ (format \\\"line %d\\\\n\\\" i)))\\n#+end_src\\n\\n\" \"(dotimes (i 3)\\n  (princ (format \\\"line %d\\\\n\\\" i)))\\n\" \"#+NAME: data\\n| X | Y |\\n|---+---|\\n| 1 | 10 |\\n| 2 | 20 |\\n| 3 | 30 |\\n\\n#+NAME: compute\\n#+begin_src emacs-lisp :var tbl=data factor=2 :results value table replace\\n(cons '(\\\"X\\\" \\\"Y\\\" \\\"Product\\\")\\n      (cons 'hline\\n            (mapcar (lambda (row)\\n                      (list (car row) (cadr row) (* (cadr row) factor)))\\n                    tbl)))\\n)\\n#+end_src\\n\\n#+RESULTS: compute\\n| X |  Y | Product |\\n|---+----+---------|\\n| 1 | 10 |      20 |\\n| 2 | 20 |      40 |\\n| 3 | 30 |      60 |\\n\\n#+begin_src emacs-lisp :results output replace\\n(dotimes (i 3)\\n  (princ (format \\\"line %d\\\\n\\\" i)))\\n#+end_src\\n\\n#+RESULTS:\\n: line 0\\n: line 1\\n: line 2\\n\\n\" ((src-block \"(cons '(\\\"X\\\" \\\"Y\\\" \\\"Product\\\")\\n      (cons 'hline\\n            (mapcar (lambda (row)\\n                      (list (car row) (cadr row) (* (cadr row) factor)))\\n                    tbl)))\\n)\\n\") (src-block \"(dotimes (i 3)\\n  (princ (format \\\"line %d\\\\n\\\" i)))\\n\") (fixed-width \"line 0\\nline 1\\nline 2\")))""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -887,17 +887,16 @@ fn org_babel_execute_var_table_output_header_deep_state_combo() {
                  after-compute
                  output-result
                  after-output
-                 results-els)))))))"##,
+                 results-els))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_header_arg_merge_property_inherit_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 57 41)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -955,12 +954,11 @@ fn org_babel_header_arg_merge_property_inherit_deep_state_combo() {
                            (or file-content "no-file"))
                           (buffer-substring-no-properties
                            (point-min) (point-max))))))))
-           (delete-directory root t))))))"##,
+           (delete-directory root t)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_result_type_handling_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1006,17 +1004,18 @@ fn org_babel_execute_result_type_handling_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_header_override_noweb_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 31)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"(let ((m (progn <<config>> multiplier)))\\n  (* x m))\\n\" \"#+NAME: config\\n#+begin_src emacs-lisp\\n(defconst multiplier 3)\\n#+end_src\\n\\n#+NAME: compute\\n#+begin_src emacs-lisp :var x=5 :noweb yes :results value replace\\n(let ((m (progn <<config>> multiplier)))\\n  (* x m))\\n#+end_src\\n\\n#+RESULTS: compute\\n: 15\\n\\n#+begin_src emacs-lisp :results output replace :var val=compute\\n(princ (format \\\"result=%s\\\" val))\\n#+end_src\\n\\n\" \"(princ (format \\\"result=%s\\\" val))\\n\" \"#+NAME: config\\n#+begin_src emacs-lisp\\n(defconst multiplier 3)\\n#+end_src\\n\\n#+NAME: compute\\n#+begin_src emacs-lisp :var x=5 :noweb yes :results value replace\\n(let ((m (progn <<config>> multiplier)))\\n  (* x m))\\n#+end_src\\n\\n#+RESULTS: compute\\n: 15\\n\\n#+begin_src emacs-lisp :results output replace :var val=compute\\n(princ (format \\\"result=%s\\\" val))\\n#+end_src\\n\\n#+RESULTS:\\n: result=15\\n\\n\" ((src-block \"config\" \"(defconst multiplier 3)\\n\") (src-block \"compute\" \"(let ((m (progn <<config>> multiplier)))\\n  (* x m))\\n\") (fixed-width nil \"15\") (src-block nil \"(princ (format \\\"result=%s\\\" val))\\n\") (fixed-width nil \"result=15\")))""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1063,17 +1062,18 @@ fn org_babel_execute_header_override_noweb_deep_state_combo() {
                  after-compute
                  output-result
                  after-output
-                 results)))))))"##,
+                 results))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multiple_blocks_result_chain_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 49)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":x\" 1) (\":y\" 2) (\":z\" 3)) ((\":x\" 10) (\":y\" 20) (\":z\" 30)) \":x=10\\n:y=20\\n:z=30\") ((src-block \"producer\" \"'((:x 1) (:y 2) (:z 3))\\n\") (src-block \"consumer\" \"(mapcar (lambda (item)\\n          (list (car item) (* 10 (cadr item))))\\n        data)\\n\") (src-block \"final\" \"(dolist (item data)\\n  (princ (format \\\"%s=%s\\\\n\\\" (car item) (cadr item))))\\n\") (fixed-width nil \":x=10\\n:y=20\\n:z=30\")) \"#+NAME: producer\\n#+begin_src emacs-lisp :results value replace\\n'((:x 1) (:y 2) (:z 3))\\n#+end_src\\n\\n#+RESULTS: producer\\n| :x | 1 |\\n| :y | 2 |\\n| :z | 3 |\\n\\n#+NAME: consumer\\n#+begin_src emacs-lisp :var data=producer :results value replace\\n(mapcar (lambda (item)\\n          (list (car item) (* 10 (cadr item))))\\n        data)\\n#+end_src\\n\\n#+RESULTS: consumer\\n| :x | 10 |\\n| :y | 20 |\\n| :z | 30 |\\n\\n#+NAME: final\\n#+begin_src emacs-lisp :var data=consumer :results output replace\\n(dolist (item data)\\n  (princ (format \\\"%s=%s\\\\n\\\" (car item) (cadr item))))\\n#+end_src\\n\\n#+RESULTS: final\\n: :x=10\\n: :y=20\\n: :z=30\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1122,17 +1122,18 @@ fn org_babel_execute_multiple_blocks_result_chain_deep_state_combo() {
            (list (nreverse results)
                  elements
                  (buffer-substring-no-properties
-                  (point-min) (point-max)))))))))"##,
+                  (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_rank_edit_reexecute_v19() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"a\" 180) (\"b\" 165) (\"c\" 190) (\"d\" 155) (\"e\" 175)) ((1 \"c\" 190) (2 \"a\" 180) (3 \"e\" 175) (4 \"b\" 165) (5 \"d\" 155)) ((\"a\" 180) (\"b\" 165) (\"c\" 190) (\"d\" 195) (\"e\" 175)) ((1 \"d\" 195) (2 \"c\" 190) (3 \"a\" 180) (4 \"e\" 175) (5 \"b\" 165)) \"#+NAME: heights\\n#+begin_src emacs-lisp :results value replace\\n'((a 180) (b 165) (c 190) (d 195) (e 175))\\n#+end_src\\n\\n#+RESULTS: heights\\n| a | 180 |\\n| b | 165 |\\n| c | 190 |\\n| d | 195 |\\n| e | 175 |\\n\\n#+NAME: ranked\\n#+begin_src emacs-lisp :var data=heights :results value replace\\n(let ((sorted (sort (copy-sequence data) (lambda (x y) (> (cadr x) (cadr y))))))\\n  (let ((i 0))\\n    (mapcar (lambda (r) (setq i (1+ i)) (list i (car r) (cadr r))) sorted)))\\n#+end_src\\n\\n#+RESULTS: ranked\\n| 1 | d | 195 |\\n| 2 | c | 190 |\\n| 3 | a | 180 |\\n| 4 | e | 175 |\\n| 5 | b | 165 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1185,17 +1186,18 @@ fn org_babel_two_stage_rank_edit_reexecute_v19() {
             (let ((ranked2 (org-babel-read-result)))
               (list heights1 ranked1 heights2 ranked2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_weighted_avg_edit_reexecute_v18() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"t1\" 10 2) (\"t2\" 20 3) (\"t3\" 15 1) (\"t4\" 25 4) (\"t5\" 5 1)) ((\"t1\" 10 2 5.0) (\"t2\" 20 3 6.666666666666667) (\"t3\" 15 1 15.0) (\"t4\" 25 4 6.25) (\"t5\" 5 1 5.0)) ((\"t1\" 10 2) (\"t2\" 20 3) (\"t3\" 15 1) (\"t4\" 25 2) (\"t5\" 5 1)) ((\"t1\" 10 2 5.0) (\"t2\" 20 3 6.666666666666667) (\"t3\" 15 1 15.0) (\"t4\" 25 2 12.5) (\"t5\" 5 1 5.0)) \"#+NAME: measures\\n#+begin_src emacs-lisp :results value replace\\n'((t1 10 2) (t2 20 3) (t3 15 1) (t4 25 2) (t5 5 1))\\n#+end_src\\n\\n#+RESULTS: measures\\n| t1 | 10 | 2 |\\n| t2 | 20 | 3 |\\n| t3 | 15 | 1 |\\n| t4 | 25 | 2 |\\n| t5 |  5 | 1 |\\n\\n#+NAME: wavg\\n#+begin_src emacs-lisp :var data=measures :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (caddr r) (/ (* 1.0 (cadr r)) (caddr r)))) data)\\n#+end_src\\n\\n#+RESULTS: wavg\\n| t1 | 10 | 2 |               5.0 |\\n| t2 | 20 | 3 | 6.666666666666667 |\\n| t3 | 15 | 1 |              15.0 |\\n| t4 | 25 | 2 |              12.5 |\\n| t5 |  5 | 1 |               5.0 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1248,17 +1250,18 @@ fn org_babel_two_stage_weighted_avg_edit_reexecute_v18() {
             (let ((wavg2 (org-babel-read-result)))
               (list measures1 wavg1 measures2 wavg2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_interest_edit_reexecute_v17() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"p1\" 1000) (\"p2\" 2000) (\"p3\" 1500) (\"p4\" 3000) (\"p5\" 500)) ((\"p1\" 1000 1050.0) (\"p2\" 2000 2100.0) (\"p3\" 1500 1575.0) (\"p4\" 3000 3150.0) (\"p5\" 500 525.0)) ((\"p1\" 1000) (\"p2\" 2000) (\"p3\" 1500) (\"p4\" 5000) (\"p5\" 500)) ((\"p1\" 1000 1050.0) (\"p2\" 2000 2100.0) (\"p3\" 1500 1575.0) (\"p4\" 5000 5250.0) (\"p5\" 500 525.0)) \"#+NAME: principals\\n#+begin_src emacs-lisp :results value replace\\n'((p1 1000) (p2 2000) (p3 1500) (p4 5000) (p5 500))\\n#+end_src\\n\\n#+RESULTS: principals\\n| p1 | 1000 |\\n| p2 | 2000 |\\n| p3 | 1500 |\\n| p4 | 5000 |\\n| p5 |  500 |\\n\\n#+NAME: interest\\n#+begin_src emacs-lisp :var data=principals :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* 1.05 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: interest\\n| p1 | 1000 | 1050.0 |\\n| p2 | 2000 | 2100.0 |\\n| p3 | 1500 | 1575.0 |\\n| p4 | 5000 | 5250.0 |\\n| p5 |  500 |  525.0 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1311,17 +1314,18 @@ fn org_babel_two_stage_interest_edit_reexecute_v17() {
             (let ((interest2 (org-babel-read-result)))
               (list principals1 interest1 principals2 interest2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_grade_edit_reexecute_v16() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"s1\" 92) (\"s2\" 78) (\"s3\" 85) (\"s4\" 67) (\"s5\" 95)) ((\"s1\" 92 \"A\") (\"s2\" 78 \"C\") (\"s3\" 85 \"B\") (\"s4\" 67 \"D\") (\"s5\" 95 \"A\")) ((\"s1\" 92) (\"s2\" 78) (\"s3\" 85) (\"s4\" 82) (\"s5\" 95)) ((\"s1\" 92 \"A\") (\"s2\" 78 \"C\") (\"s3\" 85 \"B\") (\"s4\" 82 \"B\") (\"s5\" 95 \"A\")) \"#+NAME: scores\\n#+begin_src emacs-lisp :results value replace\\n'((s1 92) (s2 78) (s3 85) (s4 82) (s5 95))\\n#+end_src\\n\\n#+RESULTS: scores\\n| s1 | 92 |\\n| s2 | 78 |\\n| s3 | 85 |\\n| s4 | 82 |\\n| s5 | 95 |\\n\\n#+NAME: graded\\n#+begin_src emacs-lisp :var data=scores :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r)\\n  (cond ((>= (cadr r) 90) \\\"A\\\")\\n        ((>= (cadr r) 80) \\\"B\\\")\\n        ((>= (cadr r) 70) \\\"C\\\")\\n        (t \\\"D\\\")))) data)\\n#+end_src\\n\\n#+RESULTS: graded\\n| s1 | 92 | A |\\n| s2 | 78 | C |\\n| s3 | 85 | B |\\n| s4 | 82 | B |\\n| s5 | 95 | A |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1374,17 +1378,18 @@ fn org_babel_two_stage_grade_edit_reexecute_v16() {
             (let ((graded2 (org-babel-read-result)))
               (list scores1 graded1 scores2 graded2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_tax_edit_reexecute_v15() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"w1\" 50000) (\"w2\" 75000) (\"w3\" 60000) (\"w4\" 90000) (\"w5\" 45000)) ((\"w1\" 50000 37500.0) (\"w2\" 75000 56250.0) (\"w3\" 60000 45000.0) (\"w4\" 90000 67500.0) (\"w5\" 45000 33750.0)) ((\"w1\" 50000) (\"w2\" 75000) (\"w3\" 60000) (\"w4\" 120000) (\"w5\" 45000)) ((\"w1\" 50000 37500.0) (\"w2\" 75000 56250.0) (\"w3\" 60000 45000.0) (\"w4\" 120000 90000.0) (\"w5\" 45000 33750.0)) \"#+NAME: incomes\\n#+begin_src emacs-lisp :results value replace\\n'((w1 50000) (w2 75000) (w3 60000) (w4 120000) (w5 45000))\\n#+end_src\\n\\n#+RESULTS: incomes\\n| w1 |  50000 |\\n| w2 |  75000 |\\n| w3 |  60000 |\\n| w4 | 120000 |\\n| w5 |  45000 |\\n\\n#+NAME: taxed\\n#+begin_src emacs-lisp :var data=incomes :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* 0.75 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: taxed\\n| w1 |  50000 | 37500.0 |\\n| w2 |  75000 | 56250.0 |\\n| w3 |  60000 | 45000.0 |\\n| w4 | 120000 | 90000.0 |\\n| w5 |  45000 | 33750.0 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1437,17 +1442,18 @@ fn org_babel_two_stage_tax_edit_reexecute_v15() {
             (let ((taxed2 (org-babel-read-result)))
               (list incomes1 taxed1 incomes2 taxed2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_ratio_edit_reexecute_v14() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"a\" 60) (\"b\" 80) (\"c\" 45) (\"d\" 90) (\"e\" 70)) ((\"a\" 60 17.391304347826086) (\"b\" 80 23.18840579710145) (\"c\" 45 13.043478260869565) (\"d\" 90 26.08695652173913) (\"e\" 70 20.28985507246377)) ((\"a\" 60) (\"b\" 80) (\"c\" 100) (\"d\" 90) (\"e\" 70)) ((\"a\" 60 15.0) (\"b\" 80 20.0) (\"c\" 100 25.0) (\"d\" 90 22.5) (\"e\" 70 17.5)) \"#+NAME: nums\\n#+begin_src emacs-lisp :results value replace\\n'((a 60) (b 80) (c 100) (d 90) (e 70))\\n#+end_src\\n\\n#+RESULTS: nums\\n| a |  60 |\\n| b |  80 |\\n| c | 100 |\\n| d |  90 |\\n| e |  70 |\\n\\n#+NAME: ratios\\n#+begin_src emacs-lisp :var data=nums :results value replace\\n(let ((total (apply #'+ (mapcar #'cadr data))))\\n  (mapcar (lambda (r) (list (car r) (cadr r) (/ (* 100.0 (cadr r)) total))) data))\\n#+end_src\\n\\n#+RESULTS: ratios\\n| a |  60 | 15.0 |\\n| b |  80 | 20.0 |\\n| c | 100 | 25.0 |\\n| d |  90 | 22.5 |\\n| e |  70 | 17.5 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1500,17 +1506,18 @@ fn org_babel_two_stage_ratio_edit_reexecute_v14() {
             (let ((ratios2 (org-babel-read-result)))
               (list nums1 ratios1 nums2 ratios2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_discount_edit_reexecute_v13() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"item1\" 100) (\"item2\" 200) (\"item3\" 150) (\"item4\" 300) (\"item5\" 50)) ((\"item1\" 100 80.0) (\"item2\" 200 160.0) (\"item3\" 150 120.0) (\"item4\" 300 240.0) (\"item5\" 50 40.0)) ((\"item1\" 100) (\"item2\" 200) (\"item3\" 150) (\"item4\" 500) (\"item5\" 50)) ((\"item1\" 100 80.0) (\"item2\" 200 160.0) (\"item3\" 150 120.0) (\"item4\" 500 400.0) (\"item5\" 50 40.0)) \"#+NAME: prices\\n#+begin_src emacs-lisp :results value replace\\n'((item1 100) (item2 200) (item3 150) (item4 500) (item5 50))\\n#+end_src\\n\\n#+RESULTS: prices\\n| item1 | 100 |\\n| item2 | 200 |\\n| item3 | 150 |\\n| item4 | 500 |\\n| item5 |  50 |\\n\\n#+NAME: discounted\\n#+begin_src emacs-lisp :var data=prices :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* 0.8 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: discounted\\n| item1 | 100 |  80.0 |\\n| item2 | 200 | 160.0 |\\n| item3 | 150 | 120.0 |\\n| item4 | 500 | 400.0 |\\n| item5 |  50 |  40.0 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1563,17 +1570,18 @@ fn org_babel_two_stage_discount_edit_reexecute_v13() {
             (let ((discounted2 (org-babel-read-result)))
               (list prices1 discounted1 prices2 discounted2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_percent_edit_reexecute_v12() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"s1\" 80) (\"s2\" 65) (\"s3\" 90) (\"s4\" 45) (\"s5\" 70)) ((\"s1\" 80 80.0) (\"s2\" 65 65.0) (\"s3\" 90 90.0) (\"s4\" 45 45.0) (\"s5\" 70 70.0)) ((\"s1\" 80) (\"s2\" 65) (\"s3\" 90) (\"s4\" 88) (\"s5\" 70)) ((\"s1\" 80 80.0) (\"s2\" 65 65.0) (\"s3\" 90 90.0) (\"s4\" 88 88.0) (\"s5\" 70 70.0)) \"#+NAME: scores\\n#+begin_src emacs-lisp :results value replace\\n'((s1 80) (s2 65) (s3 90) (s4 88) (s5 70))\\n#+end_src\\n\\n#+RESULTS: scores\\n| s1 | 80 |\\n| s2 | 65 |\\n| s3 | 90 |\\n| s4 | 88 |\\n| s5 | 70 |\\n\\n#+NAME: pct\\n#+begin_src emacs-lisp :var data=scores :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (/ (* 100.0 (cadr r)) 100))) data)\\n#+end_src\\n\\n#+RESULTS: pct\\n| s1 | 80 | 80.0 |\\n| s2 | 65 | 65.0 |\\n| s3 | 90 | 90.0 |\\n| s4 | 88 | 88.0 |\\n| s5 | 70 | 70.0 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1626,17 +1634,18 @@ fn org_babel_two_stage_percent_edit_reexecute_v12() {
             (let ((pct2 (org-babel-read-result)))
               (list scores1 pct1 scores2 pct2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_cumulative_edit_reexecute_v11() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"a\" 100) (\"b\" 250) (\"c\" 75) (\"d\" 300) (\"e\" 150)) ((\"a\" 100 100) (\"b\" 250 350) (\"c\" 75 425) (\"d\" 300 725) (\"e\" 150 875)) ((\"a\" 100) (\"b\" 250) (\"c\" 200) (\"d\" 300) (\"e\" 150)) ((\"a\" 100 100) (\"b\" 250 350) (\"c\" 200 550) (\"d\" 300 850) (\"e\" 150 1000)) \"#+NAME: amounts\\n#+begin_src emacs-lisp :results value replace\\n'((a 100) (b 250) (c 200) (d 300) (e 150))\\n#+end_src\\n\\n#+RESULTS: amounts\\n| a | 100 |\\n| b | 250 |\\n| c | 200 |\\n| d | 300 |\\n| e | 150 |\\n\\n#+NAME: cumulative\\n#+begin_src emacs-lisp :var data=amounts :results value replace\\n(let ((sum 0))\\n  (mapcar (lambda (r) (setq sum (+ sum (cadr r))) (list (car r) (cadr r) sum)) data))\\n#+end_src\\n\\n#+RESULTS: cumulative\\n| a | 100 |  100 |\\n| b | 250 |  350 |\\n| c | 200 |  550 |\\n| d | 300 |  850 |\\n| e | 150 | 1000 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1689,17 +1698,18 @@ fn org_babel_two_stage_cumulative_edit_reexecute_v11() {
             (let ((cumulative2 (org-babel-read-result)))
               (list amounts1 cumulative1 amounts2 cumulative2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_mapcar_edit_reexecute_v10() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"a\" 2) (\"b\" 5) (\"c\" 8) (\"d\" 3) (\"e\" 7)) ((\"a\" 2 4) (\"b\" 5 25) (\"c\" 8 64) (\"d\" 3 9) (\"e\" 7 49)) ((\"a\" 2) (\"b\" 5) (\"c\" 8) (\"d\" 12) (\"e\" 7)) ((\"a\" 2 4) (\"b\" 5 25) (\"c\" 8 64) (\"d\" 12 144) (\"e\" 7 49)) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'((a 2) (b 5) (c 8) (d 12) (e 7))\\n#+end_src\\n\\n#+RESULTS: raw\\n| a |  2 |\\n| b |  5 |\\n| c |  8 |\\n| d | 12 |\\n| e |  7 |\\n\\n#+NAME: squared\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* (cadr r) (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: squared\\n| a |  2 |   4 |\\n| b |  5 |  25 |\\n| c |  8 |  64 |\\n| d | 12 | 144 |\\n| e |  7 |  49 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1752,17 +1762,18 @@ fn org_babel_two_stage_mapcar_edit_reexecute_v10() {
             (let ((squared2 (org-babel-read-result)))
               (list raw1 squared1 raw2 squared2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_three_format_execute_edit_reexecute_v9() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 53 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((50 (\"Alice\" \"Bob\" \"Carol\" \"Dave\") ((\"X\" \"Y\") hline (1 2) (3 4) (5 6))) (100 (\"Eve\" \"Frank\") ((\"X\" \"Y\") hline (1 2) (3 4) (5 6))) \"#+NAME: sum\\n#+begin_src emacs-lisp :results scalar replace\\n(apply #'+ (mapcar #'cadr '((a 10) (b 20) (c 30) (d 40))))\\n#+end_src\\n\\n#+RESULTS: sum\\n: 100\\n\\n#+NAME: names\\n#+begin_src emacs-lisp :results list replace\\n'(\\\"Eve\\\" \\\"Frank\\\")\\n#+end_src\\n\\n#+RESULTS: names\\n- Eve\\n- Frank\\n\\n#+NAME: data\\n#+begin_src emacs-lisp :results table replace\\n(list '(\\\"X\\\" \\\"Y\\\") 'hline '(1 2) '(3 4) '(5 6))\\n#+end_src\\n\\n#+RESULTS: data\\n| X | Y |\\n|---+---|\\n| 1 | 2 |\\n| 3 | 4 |\\n| 5 | 6 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1816,17 +1827,18 @@ fn org_babel_three_format_execute_edit_reexecute_v9() {
             (push (org-babel-read-result) r2))
           (list (nreverse r1) (nreverse r2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_weighted_sum_edit_reexecute_v8() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"x\" 10) (\"y\" 20) (\"z\" 30) (\"w\" 40)) ((\"x\" 10 30 130) (\"y\" 20 60 160) (\"z\" 30 90 190) (\"w\" 40 120 220)) ((\"x\" 10) (\"y\" 20) (\"z\" 50) (\"w\" 40)) ((\"x\" 10 30 130) (\"y\" 20 60 160) (\"z\" 50 150 250) (\"w\" 40 120 220)) \"#+NAME: vals\\n#+begin_src emacs-lisp :results value replace\\n'((x 10) (y 20) (z 50) (w 40))\\n#+end_src\\n\\n#+RESULTS: vals\\n| x | 10 |\\n| y | 20 |\\n| z | 50 |\\n| w | 40 |\\n\\n#+NAME: weighted\\n#+begin_src emacs-lisp :var data=vals :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* 3 (cadr r)) (+ 100 (* 3 (cadr r))))) data)\\n#+end_src\\n\\n#+RESULTS: weighted\\n| x | 10 |  30 | 130 |\\n| y | 20 |  60 | 160 |\\n| z | 50 | 150 | 250 |\\n| w | 40 | 120 | 220 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1879,17 +1891,18 @@ fn org_babel_two_stage_weighted_sum_edit_reexecute_v8() {
             (let ((weighted2 (org-babel-read-result)))
               (list vals1 weighted1 vals2 weighted2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_map_edit_reexecute_v7() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"p\" 3 4) (\"q\" 1 7) (\"r\" 5 2) (\"s\" 8 6)) ((\"p\" 3 4 7) (\"q\" 1 7 8) (\"r\" 5 2 7) (\"s\" 8 6 14)) ((\"p\" 3 4) (\"q\" 1 7) (\"r\" 5 10) (\"s\" 8 6)) ((\"p\" 3 4 7) (\"q\" 1 7 8) (\"r\" 5 10 15) (\"s\" 8 6 14)) \"#+NAME: coords\\n#+begin_src emacs-lisp :results value replace\\n'((p 3 4) (q 1 7) (r 5 10) (s 8 6))\\n#+end_src\\n\\n#+RESULTS: coords\\n| p | 3 |  4 |\\n| q | 1 |  7 |\\n| r | 5 | 10 |\\n| s | 8 |  6 |\\n\\n#+NAME: computed\\n#+begin_src emacs-lisp :var data=coords :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (caddr r) (+ (cadr r) (caddr r)))) data)\\n#+end_src\\n\\n#+RESULTS: computed\\n| p | 3 |  4 |  7 |\\n| q | 1 |  7 |  8 |\\n| r | 5 | 10 | 15 |\\n| s | 8 |  6 | 14 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1942,17 +1955,18 @@ fn org_babel_two_stage_map_edit_reexecute_v7() {
             (let ((computed2 (org-babel-read-result)))
               (list coords1 computed1 coords2 computed2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_sort_index_edit_reexecute_v6() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"c\" 30) (\"a\" 10) (\"d\" 40) (\"b\" 20)) ((1 \"a\" 10) (2 \"b\" 20) (3 \"c\" 30) (4 \"d\" 40)) ((\"c\" 5) (\"a\" 10) (\"d\" 40) (\"b\" 20)) ((1 \"c\" 5) (2 \"a\" 10) (3 \"b\" 20) (4 \"d\" 40)) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'((c 5) (a 10) (d 40) (b 20))\\n#+end_src\\n\\n#+RESULTS: raw\\n| c |  5 |\\n| a | 10 |\\n| d | 40 |\\n| b | 20 |\\n\\n#+NAME: indexed\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(let ((sorted (sort (copy-sequence data) (lambda (x y) (< (cadr x) (cadr y))))))\\n  (let ((i 0))\\n    (mapcar (lambda (r) (setq i (1+ i)) (list i (car r) (cadr r))) sorted)))\\n#+end_src\\n\\n#+RESULTS: indexed\\n| 1 | c |  5 |\\n| 2 | a | 10 |\\n| 3 | b | 20 |\\n| 4 | d | 40 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2007,17 +2021,18 @@ fn org_babel_two_stage_sort_index_edit_reexecute_v6() {
             (let ((indexed2 (org-babel-read-result)))
               (list raw1 indexed1 raw2 indexed2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_filter_edit_reexecute_v5() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"Red\" 5) (\"Blue\" 12) (\"Green\" 3) (\"Yellow\" 8) (\"Purple\" 15)) ((\"Blue\" 12) (\"Yellow\" 8) (\"Purple\" 15)) ((\"Red\" 5) (\"Blue\" 12) (\"Green\" 10) (\"Yellow\" 8) (\"Purple\" 15)) ((\"Blue\" 12) (\"Green\" 10) (\"Yellow\" 8) (\"Purple\" 15)) \"#+NAME: items\\n#+begin_src emacs-lisp :results value replace\\n'((\\\"Red\\\" 5) (\\\"Blue\\\" 12) (\\\"Green\\\" 10) (\\\"Yellow\\\" 8) (\\\"Purple\\\" 15))\\n#+end_src\\n\\n#+RESULTS: items\\n| Red    |  5 |\\n| Blue   | 12 |\\n| Green  | 10 |\\n| Yellow |  8 |\\n| Purple | 15 |\\n\\n#+NAME: big\\n#+begin_src emacs-lisp :var data=items :results value replace\\n(seq-filter (lambda (r) (> (cadr r) 6)) data)\\n#+end_src\\n\\n#+RESULTS: big\\n| Blue   | 12 |\\n| Green  | 10 |\\n| Yellow |  8 |\\n| Purple | 15 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2070,17 +2085,18 @@ fn org_babel_two_stage_filter_edit_reexecute_v5() {
             (let ((big2 (org-babel-read-result)))
               (list items1 big1 items2 big2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_double_edit_reexecute_v4() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"n1\" 4) (\"n2\" 7) (\"n3\" 2) (\"n4\" 9) (\"n5\" 5)) ((\"n1\" 4 14 8) (\"n2\" 7 17 14) (\"n3\" 2 12 4) (\"n4\" 9 19 18) (\"n5\" 5 15 10)) ((\"n1\" 4) (\"n2\" 7) (\"n3\" 20) (\"n4\" 9) (\"n5\" 5)) ((\"n1\" 4 14 8) (\"n2\" 7 17 14) (\"n3\" 20 30 40) (\"n4\" 9 19 18) (\"n5\" 5 15 10)) \"#+NAME: nums\\n#+begin_src emacs-lisp :results value replace\\n'((n1 4) (n2 7) (n3 20) (n4 9) (n5 5))\\n#+end_src\\n\\n#+RESULTS: nums\\n| n1 |  4 |\\n| n2 |  7 |\\n| n3 | 20 |\\n| n4 |  9 |\\n| n5 |  5 |\\n\\n#+NAME: comp\\n#+begin_src emacs-lisp :var data=nums :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (+ 10 (cadr r)) (* 2 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: comp\\n| n1 |  4 | 14 |  8 |\\n| n2 |  7 | 17 | 14 |\\n| n3 | 20 | 30 | 40 |\\n| n4 |  9 | 19 | 18 |\\n| n5 |  5 | 15 | 10 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2133,12 +2149,11 @@ fn org_babel_two_stage_double_edit_reexecute_v4() {
             (let ((comp2 (org-babel-read-result)))
               (list nums1 comp1 nums2 comp2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_intermediate_read_edit_reexecute_v3() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -2196,17 +2211,18 @@ fn org_babel_two_stage_intermediate_read_edit_reexecute_v3() {
             (let ((result2 (org-babel-read-result)))
               (list data1 result1 data2 result2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_four_stage_intermediate_read_back_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 51)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"a\" 3) (\"b\" 7) (\"c\" 1) (\"d\" 9)) ((\"a\" 6) (\"b\" 14) (\"c\" 2) (\"d\" 18)) ((\"a\" 6 106) (\"b\" 14 114) (\"c\" 2 102) (\"d\" 18 118)) ((\"a\" 106) (\"b\" 114) (\"c\" 102) (\"d\" 118))) (((\"a\" 3) (\"b\" 7) (\"c\" 20) (\"d\" 9)) ((\"a\" 6) (\"b\" 14) (\"c\" 40) (\"d\" 18)) ((\"a\" 6 106) (\"b\" 14 114) (\"c\" 40 140) (\"d\" 18 118)) ((\"a\" 106) (\"b\" 114) (\"c\" 140) (\"d\" 118))) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'((a 3) (b 7) (c 20) (d 9))\\n#+end_src\\n\\n#+RESULTS: raw\\n| a |  3 |\\n| b |  7 |\\n| c | 20 |\\n| d |  9 |\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(mapcar (lambda (r) (list (car r) (* 2 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| a |  6 |\\n| b | 14 |\\n| c | 40 |\\n| d | 18 |\\n\\n#+NAME: added\\n#+begin_src emacs-lisp :var data=doubled :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (+ 100 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: added\\n| a |  6 | 106 |\\n| b | 14 | 114 |\\n| c | 40 | 140 |\\n| d | 18 | 118 |\\n\\n#+NAME: final\\n#+begin_src emacs-lisp :var data=added :results value replace\\n(mapcar (lambda (r) (list (car r) (caddr r))) data)\\n#+end_src\\n\\n#+RESULTS: final\\n| a | 106 |\\n| b | 114 |\\n| c | 140 |\\n| d | 118 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2261,17 +2277,18 @@ fn org_babel_four_stage_intermediate_read_back_edit_deep() {
           (let ((results2 (funcall snap)))
             (list results1 results2
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_three_stage_intermediate_read_back_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 66 60)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"m\" 4) (\"n\" 7) (\"o\" 2) (\"p\" 9)) ((\"m\" 8) (\"n\" 14) (\"o\" 4) (\"p\" 18)) ((\"m\" 8 58) (\"n\" 14 64) (\"o\" 4 54) (\"p\" 18 68)) ((\"m\" 4) (\"n\" 7) (\"o\" 15) (\"p\" 9)) ((\"m\" 8) (\"n\" 14) (\"o\" 30) (\"p\" 18)) ((\"m\" 8 58) (\"n\" 14 64) (\"o\" 30 80) (\"p\" 18 68)) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'((m 4) (n 7) (o 15) (p 9))\\n#+end_src\\n\\n#+RESULTS: raw\\n| m |  4 |\\n| n |  7 |\\n| o | 15 |\\n| p |  9 |\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(mapcar (lambda (r) (list (car r) (* 2 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| m |  8 |\\n| n | 14 |\\n| o | 30 |\\n| p | 18 |\\n\\n#+NAME: added\\n#+begin_src emacs-lisp :var data=doubled :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (+ 50 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: added\\n| m |  8 | 58 |\\n| n | 14 | 64 |\\n| o | 30 | 80 |\\n| p | 18 | 68 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2338,17 +2355,18 @@ fn org_babel_three_stage_intermediate_read_back_edit_deep() {
                   (list raw1 doubled1 added1
                         raw2 doubled2 added2
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_intermediate_read_edit_reexecute_v2() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 54)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"p\" 2) (\"q\" 5) (\"r\" 8) (\"s\" 3) (\"t\" 7)) ((\"p\" 102) (\"q\" 105) (\"r\" 108) (\"s\" 103) (\"t\" 107)) ((\"p\" 2) (\"q\" 5) (\"r\" 20) (\"s\" 3) (\"t\" 7)) ((\"p\" 102) (\"q\" 105) (\"r\" 120) (\"s\" 103) (\"t\" 107)) \"#+NAME: gen\\n#+begin_src emacs-lisp :results value replace\\n'((p 2) (q 5) (r 20) (s 3) (t 7))\\n#+end_src\\n\\n#+RESULTS: gen\\n| p |  2 |\\n| q |  5 |\\n| r | 20 |\\n| s |  3 |\\n| t |  7 |\\n\\n#+NAME: xform\\n#+begin_src emacs-lisp :var data=gen :results value replace\\n(mapcar (lambda (r) (list (car r) (+ 100 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: xform\\n| p | 102 |\\n| q | 105 |\\n| r | 120 |\\n| s | 103 |\\n| t | 107 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2403,17 +2421,18 @@ fn org_babel_two_stage_intermediate_read_edit_reexecute_v2() {
               (list gen-result xform-result
                     gen-result2 xform-result2
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_two_stage_intermediate_results_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 51)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"x\" 10) (\"y\" 20) (\"z\" 30) (\"w\" 40)) ((\"x\" 10 100) (\"y\" 20 400) (\"z\" 30 900) (\"w\" 40 1600))) ((\"x\" 10) (\"y\" 20) (\"z\" 30) (\"w\" 40)) (((\"x\" 10) (\"y\" 25) (\"z\" 30) (\"w\" 40)) ((\"x\" 10 100) (\"y\" 25 625) (\"z\" 30 900) (\"w\" 40 1600))) \"#+NAME: pairs\\n#+begin_src emacs-lisp :results value replace\\n'((x 10) (y 25) (z 30) (w 40))\\n#+end_src\\n\\n#+RESULTS: pairs\\n| x | 10 |\\n| y | 25 |\\n| z | 30 |\\n| w | 40 |\\n\\n#+NAME: computed\\n#+begin_src emacs-lisp :var data=pairs :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* (cadr r) (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: computed\\n| x | 10 |  100 |\\n| y | 25 |  625 |\\n| z | 30 |  900 |\\n| w | 40 | 1600 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2465,17 +2484,18 @@ fn org_babel_two_stage_intermediate_results_edit_deep() {
                   pairs-result
                   (nreverse results2)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_four_stage_chain_filter_sort_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 55 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Alice\" 85) (\"Bob\" 92) (\"Carol\" 78) (\"Dave\" 95) (\"Eve\" 88)) ((\"Dave\" 95) (\"Bob\" 92) (\"Eve\" 88) (\"Alice\" 85) (\"Carol\" 78)) ((1 \"Dave\" 95) (2 \"Bob\" 92) (3 \"Eve\" 88) (4 \"Alice\" 85) (5 \"Carol\" 78)) ((1 \"Dave\" 95) (2 \"Bob\" 92) (3 \"Eve\" 88))) (((\"Alice\" 85) (\"Bob\" 92) (\"Carol\" 99) (\"Dave\" 95) (\"Eve\" 88)) ((\"Carol\" 99) (\"Dave\" 95) (\"Bob\" 92) (\"Eve\" 88) (\"Alice\" 85)) ((1 \"Carol\" 99) (2 \"Dave\" 95) (3 \"Bob\" 92) (4 \"Eve\" 88) (5 \"Alice\" 85)) ((1 \"Carol\" 99) (2 \"Dave\" 95) (3 \"Bob\" 92))) \"#+NAME: scores\\n#+begin_src emacs-lisp :results value replace\\n'((\\\"Alice\\\" 85) (\\\"Bob\\\" 92) (\\\"Carol\\\" 99) (\\\"Dave\\\" 95) (\\\"Eve\\\" 88))\\n#+end_src\\n\\n#+RESULTS: scores\\n| Alice | 85 |\\n| Bob   | 92 |\\n| Carol | 99 |\\n| Dave  | 95 |\\n| Eve   | 88 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=scores :results value replace\\n(sort (copy-sequence data) (lambda (x y) (> (cadr x) (cadr y))))\\n#+end_src\\n\\n#+RESULTS: sorted\\n| Carol | 99 |\\n| Dave  | 95 |\\n| Bob   | 92 |\\n| Eve   | 88 |\\n| Alice | 85 |\\n\\n#+NAME: ranked\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(let ((i 0))\\n  (mapcar (lambda (r) (setq i (1+ i)) (list i (car r) (cadr r))) data))\\n#+end_src\\n\\n#+RESULTS: ranked\\n| 1 | Carol | 99 |\\n| 2 | Dave  | 95 |\\n| 3 | Bob   | 92 |\\n| 4 | Eve   | 88 |\\n| 5 | Alice | 85 |\\n\\n#+NAME: top3\\n#+begin_src emacs-lisp :var data=ranked :results value replace\\n(seq-take data 3)\\n#+end_src\\n\\n#+RESULTS: top3\\n| 1 | Carol | 99 |\\n| 2 | Dave  | 95 |\\n| 3 | Bob   | 92 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2531,17 +2551,18 @@ fn org_babel_four_stage_chain_filter_sort_edit_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_three_stage_chain_edit_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 50 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"a\" 3) (\"b\" 7) (\"c\" 1) (\"d\" 9) (\"e\" 5)) ((\"c\" 1) (\"a\" 3) (\"e\" 5) (\"b\" 7) (\"d\" 9)) ((1 \"c\" 1) (2 \"a\" 3) (3 \"e\" 5) (4 \"b\" 7) (5 \"d\" 9))) (((\"a\" 3) (\"b\" 7) (\"c\" 10) (\"d\" 9) (\"e\" 5)) ((\"a\" 3) (\"e\" 5) (\"b\" 7) (\"d\" 9) (\"c\" 10)) ((1 \"a\" 3) (2 \"e\" 5) (3 \"b\" 7) (4 \"d\" 9) (5 \"c\" 10))) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'((a 3) (b 7) (c 10) (d 9) (e 5))\\n#+end_src\\n\\n#+RESULTS: raw\\n| a |  3 |\\n| b |  7 |\\n| c | 10 |\\n| d |  9 |\\n| e |  5 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(sort (copy-sequence data) (lambda (x y) (< (cadr x) (cadr y))))\\n#+end_src\\n\\n#+RESULTS: sorted\\n| a |  3 |\\n| e |  5 |\\n| b |  7 |\\n| d |  9 |\\n| c | 10 |\\n\\n#+NAME: indexed\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(let ((i 0))\\n  (mapcar (lambda (r) (setq i (1+ i)) (list i (car r) (cadr r))) data))\\n#+end_src\\n\\n#+RESULTS: indexed\\n| 1 | a |  3 |\\n| 2 | e |  5 |\\n| 3 | b |  7 |\\n| 4 | d |  9 |\\n| 5 | c | 10 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2592,17 +2613,18 @@ fn org_babel_three_stage_chain_edit_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_scalar_list_table_edit_reexecute_chain_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((60 (\"alpha\" \"beta\" \"gamma\" \"delta\" \"epsilon\") ((\"X\" \"Y\" \"Z\") hline (1 2 3) (4 5 6) (7 8 9))) (300 (\"one\" \"two\" \"three\") ((\"X\" \"Y\" \"Z\") hline (1 2 3) (4 5 6) (7 8 9))) \"#+NAME: count\\n#+begin_src emacs-lisp :results scalar replace\\n(+ 100 200)\\n#+end_src\\n\\n#+RESULTS: count\\n: 300\\n\\n#+NAME: items\\n#+begin_src emacs-lisp :results list replace\\n'(one two three)\\n#+end_src\\n\\n#+RESULTS: items\\n- one\\n- two\\n- three\\n\\n#+NAME: matrix\\n#+begin_src emacs-lisp :results table replace\\n(list '(\\\"X\\\" \\\"Y\\\" \\\"Z\\\") 'hline '(1 2 3) '(4 5 6) '(7 8 9))\\n#+end_src\\n\\n#+RESULTS: matrix\\n| X | Y | Z |\\n|---+---+---|\\n| 1 | 2 | 3 |\\n| 4 | 5 | 6 |\\n| 7 | 8 | 9 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2657,17 +2679,18 @@ fn org_babel_scalar_list_table_edit_reexecute_chain_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_nested_variable_chain_edit_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 56 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"a\" 5) (\"b\" 10) (\"c\" 15) (\"d\" 20) (\"e\" 25)) ((\"a\" 10) (\"b\" 20) (\"c\" 30) (\"d\" 40) (\"e\" 50)) ((\"a\" 110) (\"b\" 120) (\"c\" 130) (\"d\" 140) (\"e\" 150)) ((\"b\" 120) (\"c\" 130) (\"d\" 140) (\"e\" 150))) (((\"a\" 5) (\"b\" 10) (\"c\" 50) (\"d\" 20) (\"e\" 25)) ((\"a\" 10) (\"b\" 20) (\"c\" 100) (\"d\" 40) (\"e\" 50)) ((\"a\" 110) (\"b\" 120) (\"c\" 200) (\"d\" 140) (\"e\" 150)) ((\"b\" 120) (\"c\" 200) (\"d\" 140) (\"e\" 150))) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'((a 5) (b 10) (c 50) (d 20) (e 25))\\n#+end_src\\n\\n#+RESULTS: raw\\n| a |  5 |\\n| b | 10 |\\n| c | 50 |\\n| d | 20 |\\n| e | 25 |\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(mapcar (lambda (r) (list (car r) (* 2 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| a |  10 |\\n| b |  20 |\\n| c | 100 |\\n| d |  40 |\\n| e |  50 |\\n\\n#+NAME: shifted\\n#+begin_src emacs-lisp :var data=doubled :results value replace\\n(mapcar (lambda (r) (list (car r) (+ 100 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: shifted\\n| a | 110 |\\n| b | 120 |\\n| c | 200 |\\n| d | 140 |\\n| e | 150 |\\n\\n#+NAME: filtered\\n#+begin_src emacs-lisp :var data=shifted :results value replace\\n(seq-filter (lambda (r) (> (cadr r) 110)) data)\\n#+end_src\\n\\n#+RESULTS: filtered\\n| b | 120 |\\n| c | 200 |\\n| d | 140 |\\n| e | 150 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2724,17 +2747,18 @@ fn org_babel_nested_variable_chain_edit_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_multi_format_results_edit_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 55 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((15 (\"a\" \"b\" \"c\" \"d\" \"e\") ((\"X\" \"Y\") hline (1 2) (3 4) (5 6))) (60 (\"x\" \"y\" \"z\") ((\"X\" \"Y\") hline (1 2) (3 4) (5 6))) \"#+NAME: scalar\\n#+begin_src emacs-lisp :results scalar replace\\n(+ 10 20 30)\\n#+end_src\\n\\n#+RESULTS: scalar\\n: 60\\n\\n#+NAME: list-res\\n#+begin_src emacs-lisp :results list replace\\n'(x y z)\\n#+end_src\\n\\n#+RESULTS: list-res\\n- x\\n- y\\n- z\\n\\n#+NAME: table-res\\n#+begin_src emacs-lisp :results table replace\\n(list '(\\\"X\\\" \\\"Y\\\") 'hline '(1 2) '(3 4) '(5 6))\\n#+end_src\\n\\n#+RESULTS: table-res\\n| X | Y |\\n|---+---|\\n| 1 | 2 |\\n| 3 | 4 |\\n| 5 | 6 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2790,17 +2814,18 @@ fn org_babel_multi_format_results_edit_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_list_results_chain_edit_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"Alice\" \"Bob\" \"Carol\" \"Dave\" \"Eve\") (\"Alice\\n5\" \"Bob\\n3\" \"Carol\\n5\" \"Dave\\n4\" \"Eve\\n3\")) ((\"X\" \"Y\" \"Z\") (\"X\\n1\" \"Y\\n1\" \"Z\\n1\")) \"#+NAME: names\\n#+begin_src emacs-lisp :results value list replace\\n'(\\\"X\\\" \\\"Y\\\" \\\"Z\\\")\\n#+end_src\\n\\n#+RESULTS: names\\n- X\\n- Y\\n- Z\\n\\n#+NAME: scored\\n#+begin_src emacs-lisp :var names=names :results value list replace\\n(mapcar (lambda (n) (list n (length (format \\\"%s\\\" n)))) names)\\n#+end_src\\n\\n#+RESULTS: scored\\n- X\\n  1\\n- Y\\n  1\\n- Z\\n  1\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2817,7 +2842,7 @@ fn org_babel_list_results_chain_edit_reexecute_deep() {
       ;; Transform: add score
       (insert "#+NAME: scored\n")
       (insert "#+begin_src emacs-lisp :var names=names :results value list replace\n")
-      (insert "(mapcar (lambda (n) (list n (random 100))) names)\n")
+      (insert "(mapcar (lambda (n) (list n (length (format \"%s\" n)))) names)\n")
       (insert "#+end_src\n\n")
       ;; Execute chain
       (dolist (name '("names" "scored"))
@@ -2847,17 +2872,18 @@ fn org_babel_list_results_chain_edit_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_results_edit_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 56 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Name\" \"Score\") hline (\"Alice\" 85) (\"Bob\" 92) (\"Carol\" 78)) ((\"Name\" \"Score\" \"Grade\") hline)) (((\"Name\" \"Score\") hline (\"Alice\" 85) (\"Bob\" 95) (\"Carol\" 78)) ((\"Name\" \"Score\" \"Grade\") hline)) \"#+NAME: gen-table\\n#+begin_src emacs-lisp :results value table replace\\n(list '(\\\"Name\\\" \\\"Score\\\")\\n      'hline\\n      '(\\\"Alice\\\" 85)\\n      '(\\\"Bob\\\" 95)\\n      '(\\\"Carol\\\" 78))\\n#+end_src\\n\\n#+RESULTS: gen-table\\n| Name  | Score |\\n|-------+-------|\\n| Alice |    85 |\\n| Bob   |    95 |\\n| Carol |    78 |\\n\\n#+NAME: graded\\n#+begin_src emacs-lisp :var data=gen-table :results value table replace\\n(cons '(\\\"Name\\\" \\\"Score\\\" \\\"Grade\\\")\\n      (cons 'hline\\n            (mapcar (lambda (r)\\n                      (list (car r) (cadr r)\\n                            (if (>= (cadr r) 90) \\\"A\\\"\\n                              (if (>= (cadr r) 80) \\\"B\\\" \\\"C\\\"))))\\n                    (cdr (memq 'hline data)))))\\n#+end_src\\n\\n#+RESULTS: graded\\n| Name | Score | Grade |\\n|------+-------+-------|\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2914,17 +2940,18 @@ fn org_babel_execute_table_results_edit_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_header_args_results_format_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((15 (\"a\" \"b\" \"c\" \"d\" \"e\")) (60 (\"a\" \"b\" \"c\" \"d\" \"e\")) \"#+NAME: scalar-out\\n#+begin_src emacs-lisp :results value scalar replace\\n(+ 10 20 30)\\n#+end_src\\n\\n#+RESULTS: scalar-out\\n: 60\\n\\n#+NAME: list-out\\n#+begin_src emacs-lisp :results value list replace\\n'(a b c d e)\\n#+end_src\\n\\n#+RESULTS: list-out\\n- a\\n- b\\n- c\\n- d\\n- e\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2971,17 +2998,18 @@ fn org_babel_header_args_results_format_edit_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_variable_propagation_edit_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"x\" 10) (\"y\" 20) (\"z\" 30)) ((\"x\" 20) (\"y\" 40) (\"z\" 60)) ((\"x\" 120) (\"y\" 140) (\"z\" 160))) (((\"x\" 5) (\"y\" 15) (\"z\" 25)) ((\"x\" 10) (\"y\" 30) (\"z\" 50)) ((\"x\" 110) (\"y\" 130) (\"z\" 150))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'((x 5) (y 15) (z 25))\\n#+end_src\\n\\n#+RESULTS: seed\\n| x |  5 |\\n| y | 15 |\\n| z | 25 |\\n\\n#+NAME: transform-a\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(mapcar (lambda (r) (list (car r) (* 2 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: transform-a\\n| x | 10 |\\n| y | 30 |\\n| z | 50 |\\n\\n#+NAME: transform-b\\n#+begin_src emacs-lisp :var data=transform-a :results value replace\\n(mapcar (lambda (r) (list (car r) (+ 100 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: transform-b\\n| x | 110 |\\n| y | 130 |\\n| z | 150 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3033,17 +3061,18 @@ fn org_babel_variable_propagation_edit_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_edit_code_reexecute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 45 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"a\" 1) (\"b\" 2) (\"c\" 3) (\"d\" 4) (\"e\" 5)) ((\"a\" 2) (\"b\" 4) (\"c\" 6) (\"d\" 8) (\"e\" 10))) (((\"a\" 1) (\"b\" 2) (\"c\" 3) (\"d\" 4) (\"e\" 5)) ((\"a\" 10) (\"b\" 20) (\"c\" 30) (\"d\" 40) (\"e\" 50))) \"#+NAME: data\\n#+begin_src emacs-lisp :results value replace\\n'((a 1) (b 2) (c 3) (d 4) (e 5))\\n#+end_src\\n\\n#+RESULTS: data\\n| a | 1 |\\n| b | 2 |\\n| c | 3 |\\n| d | 4 |\\n| e | 5 |\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=data :results value replace\\n(mapcar (lambda (r) (list (car r) (* 10 (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| a | 10 |\\n| b | 20 |\\n| c | 30 |\\n| d | 40 |\\n| e | 50 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3089,17 +3118,18 @@ fn org_babel_execute_edit_code_reexecute_deep() {
           (list (nreverse results1)
                 (nreverse results2)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_fifteen_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 36 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9 10)) ((1 1) (2 3) (3 6) (4 10) (5 15) (6 21) (7 28) (8 36) (9 45) (10 55))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(10 5 8 3 7 1 9 2 6 4)\\n#+end_src\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |\\n\\n#+NAME: running\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(let ((sum 0))\\n  (mapcar (lambda (x) (setq sum (+ sum x)) (list x sum)) data))\\n#+end_src\\n\\n#+RESULTS: running\\n|  1 |  1 |\\n|  2 |  3 |\\n|  3 |  6 |\\n|  4 | 10 |\\n|  5 | 15 |\\n|  6 | 21 |\\n|  7 | 28 |\\n|  8 | 36 |\\n|  9 | 45 |\\n| 10 | 55 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3136,17 +3166,18 @@ fn org_babel_execute_fifteen_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_fourteen_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9)) ((1 1) (2 2) (3 3) (4 4) (5 5) (6 6) (7 7) (8 8) (9 9)) ((1 1 1) (2 2 4) (3 3 9) (4 4 16) (5 5 25) (6 6 36) (7 7 49) (8 8 64) (9 9 81))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(4 7 2 9 1 5 8 3 6)\\n#+end_src\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |\\n\\n#+NAME: indexed\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(let ((i 0))\\n  (mapcar (lambda (x) (setq i (1+ i)) (list i x)) data))\\n#+end_src\\n\\n#+RESULTS: indexed\\n| 1 | 1 |\\n| 2 | 2 |\\n| 3 | 3 |\\n| 4 | 4 |\\n| 5 | 5 |\\n| 6 | 6 |\\n| 7 | 7 |\\n| 8 | 8 |\\n| 9 | 9 |\\n\\n#+NAME: squared\\n#+begin_src emacs-lisp :var data=indexed :results value replace\\n(mapcar (lambda (r) (list (car r) (cadr r) (* (cadr r) (cadr r)))) data)\\n#+end_src\\n\\n#+RESULTS: squared\\n| 1 | 1 |  1 |\\n| 2 | 2 |  4 |\\n| 3 | 3 |  9 |\\n| 4 | 4 | 16 |\\n| 5 | 5 | 25 |\\n| 6 | 6 | 36 |\\n| 7 | 7 | 49 |\\n| 8 | 8 | 64 |\\n| 9 | 9 | 81 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3188,17 +3219,18 @@ fn org_babel_execute_fourteen_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_thirteen_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9)) ((1 2 3) (4 5 6) (7 8 9)) ((6 15 24))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(6 2 8 1 9 3 7 4 5)\\n#+end_src\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |\\n\\n#+NAME: partitioned\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(seq-partition data 3)\\n#+end_src\\n\\n#+RESULTS: partitioned\\n| 1 | 2 | 3 |\\n| 4 | 5 | 6 |\\n| 7 | 8 | 9 |\\n\\n#+NAME: sums\\n#+begin_src emacs-lisp :var data=partitioned :results value replace\\n(mapcar (lambda (g) (apply #'+ g)) data)\\n#+end_src\\n\\n#+RESULTS: sums\\n| 6 | 15 | 24 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3240,17 +3272,18 @@ fn org_babel_execute_thirteen_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_twelve_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((8 5 9 6 7)) ((8 64) (5 25) (9 81) (6 36) (7 49)) ((9 81) (8 64) (7 49) (6 36) (5 25))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(8 3 5 1 9 6 2 7 4)\\n#+end_src\\n\\n#+NAME: filtered\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(cl-remove-if-not (lambda (x) (> x 4)) data)\\n#+end_src\\n\\n#+RESULTS: filtered\\n| 8 | 5 | 9 | 6 | 7 |\\n\\n#+NAME: mapped\\n#+begin_src emacs-lisp :var data=filtered :results value replace\\n(mapcar (lambda (x) (list x (* x x))) data)\\n#+end_src\\n\\n#+RESULTS: mapped\\n| 8 | 64 |\\n| 5 | 25 |\\n| 9 | 81 |\\n| 6 | 36 |\\n| 7 | 49 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=mapped :results value replace\\n(sort (copy-sequence data) (lambda (a b) (> (cadr a) (cadr b))))\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 9 | 81 |\\n| 8 | 64 |\\n| 7 | 49 |\\n| 6 | 36 |\\n| 5 | 25 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3292,17 +3325,18 @@ fn org_babel_execute_twelve_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_eleven_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((3 7 1 9 4 8 2 6 5)) ((1 2 3 4 5 6 7 8 9)) ((1 1) (2 4) (3 9) (4 16) (5 25) (6 36) (7 49) (8 64) (9 81)) ((5 25) (6 36) (7 49) (8 64) (9 81))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(3 7 1 9 4 8 2 6 5)\\n#+end_src\\n\\n#+NAME: unique\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(seq-uniq data)\\n#+end_src\\n\\n#+RESULTS: unique\\n| 3 | 7 | 1 | 9 | 4 | 8 | 2 | 6 | 5 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=unique :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |\\n\\n#+NAME: mapped\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(mapcar (lambda (x) (list x (* x x))) data)\\n#+end_src\\n\\n#+RESULTS: mapped\\n| 1 |  1 |\\n| 2 |  4 |\\n| 3 |  9 |\\n| 4 | 16 |\\n| 5 | 25 |\\n| 6 | 36 |\\n| 7 | 49 |\\n| 8 | 64 |\\n| 9 | 81 |\\n\\n#+NAME: filtered\\n#+begin_src emacs-lisp :var data=mapped :results value replace\\n(cl-remove-if-not (lambda (r) (> (cadr r) 20)) data)\\n#+end_src\\n\\n#+RESULTS: filtered\\n| 5 | 25 |\\n| 6 | 36 |\\n| 7 | 49 |\\n| 8 | 64 |\\n| 9 | 81 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3349,17 +3383,18 @@ fn org_babel_execute_eleven_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_ten_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((12 14 16 18 20)) ((6 7 8 9 10)) ((10 9 8 7 6)) 40) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(2 4 6 8 10 12 14 16 18 20)\\n#+end_src\\n\\n#+NAME: filtered\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(cl-remove-if-not (lambda (x) (> x 10)) data)\\n#+end_src\\n\\n#+RESULTS: filtered\\n| 12 | 14 | 16 | 18 | 20 |\\n\\n#+NAME: halved\\n#+begin_src emacs-lisp :var data=filtered :results value replace\\n(mapcar (lambda (x) (/ x 2)) data)\\n#+end_src\\n\\n#+RESULTS: halved\\n| 6 | 7 | 8 | 9 | 10 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=halved :results value replace\\n(sort (copy-sequence data) #'>)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 10 | 9 | 8 | 7 | 6 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 40\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3406,17 +3441,18 @@ fn org_babel_execute_ten_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_nine_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 3 5 7 9)) ((1 27 125 343 729)) ((125 343 729)) ((729 343 125)) 1197) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5 6 7 8 9 10)\\n#+end_src\\n\\n#+NAME: odds\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(seq-remove #'evenp data)\\n#+end_src\\n\\n#+RESULTS: odds\\n| 1 | 3 | 5 | 7 | 9 |\\n\\n#+NAME: cubed\\n#+begin_src emacs-lisp :var data=odds :results value replace\\n(mapcar (lambda (x) (* x x x)) data)\\n#+end_src\\n\\n#+RESULTS: cubed\\n| 1 | 27 | 125 | 343 | 729 |\\n\\n#+NAME: big\\n#+begin_src emacs-lisp :var data=cubed :results value replace\\n(cl-remove-if-not (lambda (x) (> x 100)) data)\\n#+end_src\\n\\n#+RESULTS: big\\n| 125 | 343 | 729 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=big :results value replace\\n(sort (copy-sequence data) #'>)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 729 | 343 | 125 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 1197\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3468,17 +3504,18 @@ fn org_babel_execute_nine_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_eight_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9)) ((2 4 6 8 10 12 14 16 18)) ((10 12 14 16 18)) ((18 16 14 12 10)) 70) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(5 3 8 1 9 2 7 4 6)\\n#+end_src\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(mapcar (lambda (x) (* x 2)) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| 2 | 4 | 6 | 8 | 10 | 12 | 14 | 16 | 18 |\\n\\n#+NAME: big\\n#+begin_src emacs-lisp :var data=doubled :results value replace\\n(cl-remove-if-not (lambda (x) (> x 8)) data)\\n#+end_src\\n\\n#+RESULTS: big\\n| 10 | 12 | 14 | 16 | 18 |\\n\\n#+NAME: reversed\\n#+begin_src emacs-lisp :var data=big :results value replace\\n(reverse data)\\n#+end_src\\n\\n#+RESULTS: reversed\\n| 18 | 16 | 14 | 12 | 10 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=reversed :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 70\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3530,17 +3567,18 @@ fn org_babel_execute_eight_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_seven_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((3 1 4 5 9 2 6)) ((1 2 3 4 5 6 9)) ((2 4 6 8 10 12 18)) ((8 10 12 18)) 48) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(3 1 4 1 5 9 2 6 5 3)\\n#+end_src\\n\\n#+NAME: unique\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(seq-uniq data)\\n#+end_src\\n\\n#+RESULTS: unique\\n| 3 | 1 | 4 | 5 | 9 | 2 | 6 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=unique :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 9 |\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(mapcar (lambda (x) (* x 2)) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| 2 | 4 | 6 | 8 | 10 | 12 | 18 |\\n\\n#+NAME: filtered\\n#+begin_src emacs-lisp :var data=doubled :results value replace\\n(cl-remove-if-not (lambda (x) (> x 6)) data)\\n#+end_src\\n\\n#+RESULTS: filtered\\n| 8 | 10 | 12 | 18 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=filtered :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 48\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3592,17 +3630,18 @@ fn org_babel_execute_seven_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_six_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((2 4 6 8 10)) ((6 8 10)) ((10 8 6)) 24 8) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5)\\n#+end_src\\n\\n#+NAME: doubled\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(mapcar (lambda (x) (* x 2)) data)\\n#+end_src\\n\\n#+RESULTS: doubled\\n| 2 | 4 | 6 | 8 | 10 |\\n\\n#+NAME: filtered\\n#+begin_src emacs-lisp :var data=doubled :results value replace\\n(cl-remove-if-not (lambda (x) (> x 4)) data)\\n#+end_src\\n\\n#+RESULTS: filtered\\n| 6 | 8 | 10 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=filtered :results value replace\\n(sort (copy-sequence data) #'>)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 10 | 8 | 6 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 24\\n\\n#+NAME: avg\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(/ (apply #'+ data) (length data))\\n#+end_src\\n\\n#+RESULTS: avg\\n: 8\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3654,17 +3693,18 @@ fn org_babel_execute_six_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_five_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((2 4 6 8 10)) ((4 16 36 64 100)) ((100 64 36 16 4)) 220) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5 6 7 8 9 10)\\n#+end_src\\n\\n#+NAME: evens\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(seq-filter #'evenp data)\\n#+end_src\\n\\n#+RESULTS: evens\\n| 2 | 4 | 6 | 8 | 10 |\\n\\n#+NAME: squared\\n#+begin_src emacs-lisp :var data=evens :results value replace\\n(mapcar (lambda (x) (* x x)) data)\\n#+end_src\\n\\n#+RESULTS: squared\\n| 4 | 16 | 36 | 64 | 100 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=squared :results value replace\\n(sort (copy-sequence data) #'>)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 100 | 64 | 36 | 16 | 4 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 220\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3711,17 +3751,18 @@ fn org_babel_execute_five_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_four_block_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 4 9 16 25)) ((16 25)) 41) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5)\\n#+end_src\\n\\n#+NAME: squared\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(mapcar (lambda (x) (* x x)) data)\\n#+end_src\\n\\n#+RESULTS: squared\\n| 1 | 4 | 9 | 16 | 25 |\\n\\n#+NAME: big\\n#+begin_src emacs-lisp :var data=squared :results value replace\\n(cl-remove-if-not (lambda (x) (> x 10)) data)\\n#+end_src\\n\\n#+RESULTS: big\\n| 16 | 25 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=big :results value replace\\n(apply #'+ data)\\n#+end_src\\n\\n#+RESULTS: total\\n: 41\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3763,17 +3804,18 @@ fn org_babel_execute_four_block_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_three_table_join_aggregate_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"((Eng . 15) (Mkt . 5))\") \"#+NAME: depts\\n| ID | Name |\\n|----+------|\\n| A | Eng |\\n| B | Mkt |\\n\\n#+NAME: workers\\n| ID | Name | Dept |\\n|----+------+------|\\n| 1 | W1 | A |\\n| 2 | W2 | B |\\n| 3 | W3 | A |\\n\\n#+NAME: hours\\n| ID | Hrs |\\n|----+-----|\\n| 1 | 8 |\\n| 2 | 5 |\\n| 3 | 7 |\\n\\n#+NAME: dept-hrs\\n#+begin_src emacs-lisp :var d=depts w=workers h=hours :results value replace\\n(let ((groups nil))\\n  (dolist (hour h)\\n    (let* ((wid (car hour))\\n           (hrs (cadr hour))\\n           (wk (assoc wid w))\\n           (did (caddr wk))\\n           (dept (assoc did d))\\n           (dname (cadr dept)))\\n      (let ((entry (assoc dname groups)))\\n        (if entry\\n            (setcdr entry (+ (cdr entry) hrs))\\n            (push (cons dname hrs) groups)))))\\n  (sort groups (lambda (a b) (string< (car a) (car b)))))\\n#+end_src\\n\\n#+RESULTS: dept-hrs\\n: ((Eng . 15) (Mkt . 5))\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3785,20 +3827,20 @@ fn org_babel_execute_three_table_join_aggregate_deep_combo() {
       ;; Departments
       (insert "#+NAME: depts\n")
       (insert "| ID | Name |\n")
-      (insert("|----+------|\n")
+      (insert "|----+------|\n")
       (insert "| A | Eng |\n")
       (insert "| B | Mkt |\n\n")
       ;; Workers
       (insert "#+NAME: workers\n")
       (insert "| ID | Name | Dept |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | W1 | A |\n")
       (insert "| 2 | W2 | B |\n")
       (insert "| 3 | W3 | A |\n\n")
       ;; Hours
       (insert "#+NAME: hours\n")
       (insert "| ID | Hrs |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 8 |\n")
       (insert "| 2 | 5 |\n")
       (insert "| 3 | 7 |\n\n")
@@ -3831,17 +3873,16 @@ fn org_babel_execute_three_table_join_aggregate_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_two_table_join_sort_aggregate_deep_v3_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3853,14 +3894,14 @@ fn org_babel_execute_two_table_join_sort_aggregate_deep_v3_combo() {
       ;; Teams
       (insert "#+NAME: teams\n")
       (insert "| ID | Name | Team |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | T1 | A |\n")
       (insert "| 2 | T2 | B |\n")
       (insert "| 3 | T3 | A |\n\n")
       ;; Scores
       (insert "#+NAME: scores\n")
       (insert "| ID | Pts |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 90 |\n")
       (insert "| 2 | 75 |\n")
       (insert "| 3 | 85 |\n\n")
@@ -3900,7 +3941,7 @@ fn org_babel_execute_two_table_join_sort_aggregate_deep_v3_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -3956,12 +3997,13 @@ fn org_babel_execute_two_table_join_sort_aggregate_deep_v2_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_two_table_join_aggregate_chain_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"((A . 15) (B . 5))\") \"#+NAME: workers\\n| ID | Name | Dept |\\n|----+------+------|\\n| 1 | W1 | A |\\n| 2 | W2 | B |\\n| 3 | W3 | A |\\n\\n#+NAME: hours\\n| ID | Hrs |\\n|----+-----|\\n| 1 | 8 |\\n| 2 | 5 |\\n| 3 | 7 |\\n\\n#+NAME: dept-hrs\\n#+begin_src emacs-lisp :var w=workers h=hours :results value replace\\n(let ((groups nil))\\n  (dolist (hour h)\\n    (let* ((id (car hour))\\n           (hrs (cadr hour))\\n           (wk (assoc id w))\\n           (dept (caddr wk)))\\n      (let ((entry (assoc dept groups)))\\n        (if entry\\n            (setcdr entry (+ (cdr entry) hrs))\\n            (push (cons dept hrs) groups)))))\\n  (sort groups (lambda (a b) (string< (car a) (car b)))))\\n#+end_src\\n\\n#+RESULTS: dept-hrs\\n: ((A . 15) (B . 5))\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -3973,14 +4015,14 @@ fn org_babel_execute_two_table_join_aggregate_chain_deep_v2_combo() {
       ;; Workers
       (insert "#+NAME: workers\n")
       (insert "| ID | Name | Dept |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | W1 | A |\n")
       (insert "| 2 | W2 | B |\n")
       (insert "| 3 | W3 | A |\n\n")
       ;; Hours
       (insert "#+NAME: hours\n")
       (insert "| ID | Hrs |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 8 |\n")
       (insert "| 2 | 5 |\n")
       (insert "| 3 | 7 |\n\n")
@@ -4011,17 +4053,18 @@ fn org_babel_execute_two_table_join_aggregate_chain_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_two_table_join_sort_chain_deep_v3_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Ada\" 92) (\"Cal\" 85) (\"Bob\" 78))) \"#+NAME: students\\n| ID | Name |\\n|----+------|\\n| 1 | Ada |\\n| 2 | Bob |\\n| 3 | Cal |\\n\\n#+NAME: grades\\n| SID | Score |\\n|-----+-------|\\n| 1 | 92 |\\n| 2 | 78 |\\n| 3 | 85 |\\n\\n#+NAME: ranked\\n#+begin_src emacs-lisp :var s=students g=grades :results value replace\\n(sort\\n (mapcar\\n  (lambda (grade)\\n    (let* ((sid (car grade))\\n           (score (cadr grade))\\n           (stu (assoc sid s))\\n           (name (cadr stu)))\\n      (list name score)))\\n  g)\\n (lambda (a b) (> (cadr a) (cadr b))))\\n#+end_src\\n\\n#+RESULTS: ranked\\n| Ada | 92 |\\n| Cal | 85 |\\n| Bob | 78 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4033,14 +4076,14 @@ fn org_babel_execute_two_table_join_sort_chain_deep_v3_combo() {
       ;; Students
       (insert "#+NAME: students\n")
       (insert "| ID | Name |\n")
-      (insert("|----+------|\n")
+      (insert "|----+------|\n")
       (insert "| 1 | Ada |\n")
       (insert "| 2 | Bob |\n")
       (insert "| 3 | Cal |\n\n")
       ;; Grades
       (insert "#+NAME: grades\n")
       (insert "| SID | Score |\n")
-      (insert("|-----+-------|\n")
+      (insert "|-----+-------|\n")
       (insert "| 1 | 92 |\n")
       (insert "| 2 | 78 |\n")
       (insert "| 3 | 85 |\n\n")
@@ -4070,17 +4113,18 @@ fn org_babel_execute_two_table_join_sort_chain_deep_v3_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_table_join_sort_deep_v3_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Pb\" 5 8 40) (\"Pa\" 3 12 36) (\"Pc\" 2 15 30))) \"#+NAME: items\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | Pa | 12 |\\n| 2 | Pb | 8 |\\n| 3 | Pc | 15 |\\n\\n#+NAME: ords\\n| PID | Qty |\\n|-----+-----|\\n| 1 | 3 |\\n| 2 | 5 |\\n| 3 | 2 |\\n\\n#+NAME: bills\\n#+begin_src emacs-lisp :var i=items o=ords :results value replace\\n(sort\\n (mapcar\\n  (lambda (ord)\\n    (let* ((pid (car ord))\\n           (qty (cadr ord))\\n           (itm (assoc pid i))\\n           (name (cadr itm))\\n           (price (caddr itm)))\\n      (list name qty price (* qty price))))\\n  o)\\n (lambda (a b) (> (cadddr a) (cadddr b))))\\n#+end_src\\n\\n#+RESULTS: bills\\n| Pb | 5 |  8 | 40 |\\n| Pa | 3 | 12 | 36 |\\n| Pc | 2 | 15 | 30 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4092,14 +4136,14 @@ fn org_babel_execute_multi_table_join_sort_deep_v3_combo() {
       ;; Items
       (insert "#+NAME: items\n")
       (insert "| ID | Name | Price |\n")
-      (insert("|----+------+-------|\n")
+      (insert "|----+------+-------|\n")
       (insert "| 1 | Pa | 12 |\n")
       (insert "| 2 | Pb | 8 |\n")
       (insert "| 3 | Pc | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: ords\n")
       (insert "| PID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 3 |\n")
       (insert "| 2 | 5 |\n")
       (insert "| 3 | 2 |\n\n")
@@ -4130,17 +4174,16 @@ fn org_babel_execute_multi_table_join_sort_deep_v3_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_two_table_join_sort_chain_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4152,14 +4195,14 @@ fn org_babel_execute_two_table_join_sort_chain_deep_v2_combo() {
       ;; Teams
       (insert "#+NAME: teams\n")
       (insert "| ID | Name | Dept |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | T1 | A |\n")
       (insert "| 2 | T2 | B |\n")
       (insert "| 3 | T3 | A |\n\n")
       ;; Scores
       (insert "#+NAME: scores\n")
       (insert "| ID | Pts |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 90 |\n")
       (insert "| 2 | 75 |\n")
       (insert "| 3 | 85 |\n\n")
@@ -4189,17 +4232,18 @@ fn org_babel_execute_two_table_join_sort_chain_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_two_table_join_sort_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"W1\" 8) (\"W3\" 7) (\"W2\" 5))) \"#+NAME: workers\\n| ID | Name | Dept |\\n|----+------+------|\\n| 1 | W1 | A |\\n| 2 | W2 | B |\\n| 3 | W3 | A |\\n\\n#+NAME: hours\\n| ID | Hrs |\\n|----+-----|\\n| 1 | 8 |\\n| 2 | 5 |\\n| 3 | 7 |\\n\\n#+NAME: ranked\\n#+begin_src emacs-lisp :var w=workers h=hours :results value replace\\n(sort\\n (mapcar\\n  (lambda (hour)\\n    (let* ((id (car hour))\\n           (hrs (cadr hour))\\n           (wk (assoc id w))\\n           (name (cadr wk)))\\n      (list name hrs)))\\n  h)\\n (lambda (a b) (> (cadr a) (cadr b))))\\n#+end_src\\n\\n#+RESULTS: ranked\\n| W1 | 8 |\\n| W3 | 7 |\\n| W2 | 5 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4211,14 +4255,14 @@ fn org_babel_execute_two_table_join_sort_deep_combo() {
       ;; Workers
       (insert "#+NAME: workers\n")
       (insert "| ID | Name | Dept |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | W1 | A |\n")
       (insert "| 2 | W2 | B |\n")
       (insert "| 3 | W3 | A |\n\n")
       ;; Hours
       (insert "#+NAME: hours\n")
       (insert "| ID | Hrs |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 8 |\n")
       (insert "| 2 | 5 |\n")
       (insert "| 3 | 7 |\n\n")
@@ -4248,17 +4292,18 @@ fn org_babel_execute_two_table_join_sort_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_block_chain_aggregate_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((4 16 36 64 100)) ((\":count\" 5 \":total\" 220 \":avg\" 44))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5 6 7 8 9 10)\\n#+end_src\\n\\n#+NAME: squares\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(mapcar (lambda (x) (* x x))\\n        (seq-filter #'evenp data))\\n#+end_src\\n\\n#+RESULTS: squares\\n| 4 | 16 | 36 | 64 | 100 |\\n\\n#+NAME: agg\\n#+begin_src emacs-lisp :var data=squares :results value replace\\n(list :count (length data)\\n      :total (apply #'+ data)\\n      :avg (/ (apply #'+ data) (length data)))\\n#+end_src\\n\\n#+RESULTS: agg\\n| :count | 5 | :total | 220 | :avg | 44 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4298,7 +4343,7 @@ fn org_babel_execute_multi_block_chain_aggregate_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -4350,12 +4395,13 @@ fn org_babel_execute_multi_block_chain_table_var_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_join_filter_sort_chain_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Z\" 4 15 60) (\"X\" 3 10 30))) \"#+NAME: items\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | X | 10 |\\n| 2 | Y | 25 |\\n| 3 | Z | 15 |\\n\\n#+NAME: orders\\n| IID | Qty |\\n|-----+-----|\\n| 1 | 3 |\\n| 2 | 1 |\\n| 3 | 4 |\\n\\n#+NAME: big\\n#+begin_src emacs-lisp :var i=items o=orders :results value replace\\n(let* ((big-orders (cl-remove-if-not\\n                   (lambda (r) (>= (cadr r) 3))\\n                   o))\\n       (bills (mapcar\\n               (lambda (order)\\n                 (let* ((iid (car order))\\n                        (qty (cadr order))\\n                        (item (assoc iid i))\\n                        (name (cadr item))\\n                        (price (caddr item)))\\n                   (list name qty price (* qty price))))\\n               big-orders)))\\n  (sort bills (lambda (a b) (> (cadddr a) (cadddr b)))))\\n#+end_src\\n\\n#+RESULTS: big\\n| Z | 4 | 15 | 60 |\\n| X | 3 | 10 | 30 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4367,14 +4413,14 @@ fn org_babel_execute_table_join_filter_sort_chain_deep_v2_combo() {
       ;; Items
       (insert "#+NAME: items\n")
       (insert "| ID | Name | Price |\n")
-      (insert("|----+------+-------|\n")
+      (insert "|----+------+-------|\n")
       (insert "| 1 | X | 10 |\n")
       (insert "| 2 | Y | 25 |\n")
       (insert "| 3 | Z | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| IID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 3 |\n")
       (insert "| 2 | 1 |\n")
       (insert "| 3 | 4 |\n\n")
@@ -4407,17 +4453,18 @@ fn org_babel_execute_table_join_filter_sort_chain_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_join_compute_sort_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Pa\" 5 10 50) (\"Pc\" 3 15 45) (\"Pb\" 1 20 20))) \"#+NAME: parts\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | Pa | 10 |\\n| 2 | Pb | 20 |\\n| 3 | Pc | 15 |\\n\\n#+NAME: orders\\n| PID | Qty |\\n|-----+-----|\\n| 1 | 5 |\\n| 2 | 1 |\\n| 3 | 3 |\\n\\n#+NAME: bills\\n#+begin_src emacs-lisp :var p=parts o=orders :results value replace\\n(sort\\n (mapcar\\n  (lambda (order)\\n    (let* ((pid (car order))\\n           (qty (cadr order))\\n           (part (assoc pid p))\\n           (name (cadr part))\\n           (price (caddr part)))\\n      (list name qty price (* qty price))))\\n  o)\\n (lambda (a b) (> (cadddr a) (cadddr b))))\\n#+end_src\\n\\n#+RESULTS: bills\\n| Pa | 5 | 10 | 50 |\\n| Pc | 3 | 15 | 45 |\\n| Pb | 1 | 20 | 20 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4429,14 +4476,14 @@ fn org_babel_execute_table_join_compute_sort_deep_v2_combo() {
       ;; Parts
       (insert "#+NAME: parts\n")
       (insert "| ID | Name | Price |\n")
-      (insert("|----+------+-------|\n")
+      (insert "|----+------+-------|\n")
       (insert "| 1 | Pa | 10 |\n")
       (insert "| 2 | Pb | 20 |\n")
       (insert "| 3 | Pc | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| PID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 5 |\n")
       (insert "| 2 | 1 |\n")
       (insert "| 3 | 3 |\n\n")
@@ -4467,17 +4514,18 @@ fn org_babel_execute_table_join_compute_sort_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_table_join_aggregate_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":rows\" \"((Pa 3 5 15) (Pb 2 10 20) (Pc 4 15 60))\" \":total\" 95))) \"#+NAME: prices\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | Pa | 5 |\\n| 2 | Pb | 10 |\\n| 3 | Pc | 15 |\\n\\n#+NAME: orders\\n| ID | Qty |\\n|----+-----|\\n| 1 | 3 |\\n| 2 | 2 |\\n| 3 | 4 |\\n\\n#+NAME: invoices\\n#+begin_src emacs-lisp :var p=prices o=orders :results value replace\\n(let ((rows (mapcar\\n              (lambda (order)\\n                (let* ((id (car order))\\n                       (qty (cadr order))\\n                       (prod (assoc id p))\\n                       (name (cadr prod))\\n                       (price (caddr prod)))\\n                  (list name qty price (* qty price))))\\n              o)))\\n  (list :rows rows\\n        :total (apply #'+ (mapcar #'cadddr rows))))\\n#+end_src\\n\\n#+RESULTS: invoices\\n| :rows | ((Pa 3 5 15) (Pb 2 10 20) (Pc 4 15 60)) | :total | 95 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4489,14 +4537,14 @@ fn org_babel_execute_list_table_join_aggregate_deep_v2_combo() {
       ;; Prices
       (insert "#+NAME: prices\n")
       (insert "| ID | Name | Price |\n")
-      (insert("|----+------+-------|\n")
+      (insert "|----+------+-------|\n")
       (insert "| 1 | Pa | 5 |\n")
       (insert "| 2 | Pb | 10 |\n")
       (insert "| 3 | Pc | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| ID | Qty |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 3 |\n")
       (insert "| 2 | 2 |\n")
       (insert "| 3 | 4 |\n\n")
@@ -4527,7 +4575,7 @@ fn org_babel_execute_list_table_join_aggregate_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -4917,12 +4965,13 @@ fn org_babel_execute_mapcar_table_chain_simple_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_join_sort_chain_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Z\" 5 15 75) (\"Y\" 2 25 50) (\"X\" 4 10 40))) \"#+NAME: items\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | X | 10 |\\n| 2 | Y | 25 |\\n| 3 | Z | 15 |\\n\\n#+NAME: orders\\n| IID | Qty |\\n|-----+-----|\\n| 1 | 4 |\\n| 2 | 2 |\\n| 3 | 5 |\\n\\n#+NAME: bills\\n#+begin_src emacs-lisp :var i=items o=orders :results value replace\\n(sort\\n (mapcar\\n  (lambda (order)\\n    (let* ((iid (car order))\\n           (qty (cadr order))\\n           (item (assoc iid i))\\n           (name (cadr item))\\n           (price (caddr item)))\\n      (list name qty price (* qty price))))\\n  o)\\n (lambda (a b) (> (cadddr a) (cadddr b))))\\n#+end_src\\n\\n#+RESULTS: bills\\n| Z | 5 | 15 | 75 |\\n| Y | 2 | 25 | 50 |\\n| X | 4 | 10 | 40 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4934,14 +4983,14 @@ fn org_babel_execute_table_join_sort_chain_deep_v2_combo() {
       ;; Items
       (insert "#+NAME: items\n")
       (insert "| ID | Name | Price |\n")
-      (insert("|----+------+-------|\n")
+      (insert "|----+------+-------|\n")
       (insert "| 1 | X | 10 |\n")
       (insert "| 2 | Y | 25 |\n")
       (insert "| 3 | Z | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| IID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 4 |\n")
       (insert "| 2 | 2 |\n")
       (insert "| 3 | 5 |\n\n")
@@ -4972,17 +5021,18 @@ fn org_babel_execute_table_join_sort_chain_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_table_join_sort_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Pc\" 6 5 30) (\"Pa\" 3 8 24) (\"Pb\" 1 12 12))) \"#+NAME: prods\\n| ID | Name | Cost |\\n|----+------+------|\\n| 1 | Pa | 8 |\\n| 2 | Pb | 12 |\\n| 3 | Pc | 5 |\\n\\n#+NAME: ords\\n| PID | Qty |\\n|-----+-----|\\n| 1 | 3 |\\n| 2 | 1 |\\n| 3 | 6 |\\n\\n#+NAME: invoices\\n#+begin_src emacs-lisp :var p=prods o=ords :results value replace\\n(sort\\n (mapcar\\n  (lambda (order)\\n    (let* ((pid (car order))\\n           (qty (cadr order))\\n           (prod (assoc pid p))\\n           (name (cadr prod))\\n           (cost (caddr prod)))\\n      (list name qty cost (* qty cost))))\\n  o)\\n (lambda (a b) (> (cadddr a) (cadddr b))))\\n#+end_src\\n\\n#+RESULTS: invoices\\n| Pc | 6 |  5 | 30 |\\n| Pa | 3 |  8 | 24 |\\n| Pb | 1 | 12 | 12 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -4994,14 +5044,14 @@ fn org_babel_execute_multi_table_join_sort_chain_deep_combo() {
       ;; Products
       (insert "#+NAME: prods\n")
       (insert "| ID | Name | Cost |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | Pa | 8 |\n")
       (insert "| 2 | Pb | 12 |\n")
       (insert "| 3 | Pc | 5 |\n\n")
       ;; Orders
       (insert "#+NAME: ords\n")
       (insert "| PID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 3 |\n")
       (insert "| 2 | 1 |\n")
       (insert "| 3 | 6 |\n\n")
@@ -5032,7 +5082,7 @@ fn org_babel_execute_multi_table_join_sort_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5086,12 +5136,13 @@ fn org_babel_execute_mapcar_filter_sort_chain_deep_v2_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_join_sort_aggregate_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"S1\" 90) (\"S3\" 85) (\"S2\" 75))) \"#+NAME: students\\n| ID | Name |\\n|----+------|\\n| 1 | S1 |\\n| 2 | S2 |\\n| 3 | S3 |\\n\\n#+NAME: grades\\n| SID | Score |\\n|-----+-------|\\n| 1 | 90 |\\n| 2 | 75 |\\n| 3 | 85 |\\n\\n#+NAME: ranked\\n#+begin_src emacs-lisp :var s=students g=grades :results value replace\\n(let ((rows (mapcar\\n              (lambda (grade)\\n                (let* ((sid (car grade))\\n                       (score (cadr grade))\\n                       (student (assoc sid s))\\n                       (name (cadr student)))\\n                  (list name score)))\\n              g)))\\n  (sort rows (lambda (a b) (> (cadr a) (cadr b)))))\\n#+end_src\\n\\n#+RESULTS: ranked\\n| S1 | 90 |\\n| S3 | 85 |\\n| S2 | 75 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5103,14 +5154,14 @@ fn org_babel_execute_table_join_sort_aggregate_deep_v2_combo() {
       ;; Students
       (insert "#+NAME: students\n")
       (insert "| ID | Name |\n")
-      (insert("|----+------|\n")
+      (insert "|----+------|\n")
       (insert "| 1 | S1 |\n")
       (insert "| 2 | S2 |\n")
       (insert "| 3 | S3 |\n\n")
       ;; Grades
       (insert "#+NAME: grades\n")
       (insert "| SID | Score |\n")
-      (insert("|-----+-------|\n")
+      (insert "|-----+-------|\n")
       (insert "| 1 | 90 |\n")
       (insert "| 2 | 75 |\n")
       (insert "| 3 | 85 |\n\n")
@@ -5139,17 +5190,16 @@ fn org_babel_execute_table_join_sort_aggregate_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_join_filter_aggregate_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments cons 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5161,7 +5211,7 @@ fn org_babel_execute_table_join_filter_aggregate_deep_combo() {
       ;; Workers
       (insert "#+NAME: workers\n")
       (insert "| ID | Name | Dept |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | W1 | Eng |\n")
       (insert "| 2 | W2 | Mkt |\n")
       (insert "| 3 | W3 | Eng |\n")
@@ -5169,7 +5219,7 @@ fn org_babel_execute_table_join_filter_aggregate_deep_combo() {
       ;; Hours
       (insert "#+NAME: hours\n")
       (insert "| ID | Hrs |\n")
-      (insert("|----+-----|\n")
+      (insert "|----+-----|\n")
       (insert "| 1 | 8 |\n")
       (insert "| 2 | 6 |\n")
       (insert "| 3 | 7 |\n")
@@ -5201,17 +5251,18 @@ fn org_babel_execute_table_join_filter_aggregate_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_table_column_chain_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Pc\" 8 15 120) (\"Pa\" 5 10 50) (\"Pb\" 2 20 40))) \"#+NAME: prods\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | Pa | 10 |\\n| 2 | Pb | 20 |\\n| 3 | Pc | 15 |\\n\\n#+NAME: orders\\n| PID | Qty |\\n|-----+-----|\\n| 1 | 5 |\\n| 2 | 2 |\\n| 3 | 8 |\\n\\n#+NAME: invoices\\n#+begin_src emacs-lisp :var p=prods o=orders :results value replace\\n(let ((bills\\n       (mapcar\\n        (lambda (order)\\n          (let* ((pid (car order))\\n                 (qty (cadr order))\\n                 (prod (assoc pid p))\\n                 (name (cadr prod))\\n                 (price (caddr prod)))\\n            (list name qty price (* qty price))))\\n        o)))\\n  (sort bills (lambda (a b) (> (cadddr a) (cadddr b)))))\\n#+end_src\\n\\n#+RESULTS: invoices\\n| Pc | 8 | 15 | 120 |\\n| Pa | 5 | 10 |  50 |\\n| Pb | 2 | 20 |  40 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5223,14 +5274,14 @@ fn org_babel_execute_mapcar_table_column_chain_deep_v2_combo() {
       ;; Products
       (insert "#+NAME: prods\n")
       (insert "| ID | Name | Price |\n")
-      (insert("|----+------+-------|\n")
+      (insert "|----+------+-------|\n")
       (insert "| 1 | Pa | 10 |\n")
       (insert "| 2 | Pb | 20 |\n")
       (insert "| 3 | Pc | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| PID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 5 |\n")
       (insert "| 2 | 2 |\n")
       (insert "| 3 | 8 |\n\n")
@@ -5261,7 +5312,7 @@ fn org_babel_execute_mapcar_table_column_chain_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5448,12 +5499,13 @@ fn org_babel_execute_table_column_chain_aggregate_deep_v3_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_seq_group_by_partition_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 29 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"nil\" 1 3 5 7) (\"t\" 2 4 6 8))) \"#+begin_src emacs-lisp :results value replace\\n(seq-group-by #'evenp '(1 2 3 4 5 6 7 8))\\n#+end_src\\n\\n#+RESULTS:\\n| nil | 1 | 3 | 5 | 7 |\\n| t   | 2 | 4 | 6 | 8 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(seq-partition '(a b c d e f g h i) 3)\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5483,17 +5535,18 @@ fn org_babel_execute_seq_group_by_partition_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_filter_map_reduce_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9 10))) \"#+NAME: data\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5 6 7 8 9 10)\\n#+end_src\\n\\n#+RESULTS: data\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |\\n\\n#+NAME: result\\n#+begin_src emacs-lisp :var data=data :results value replace\\n(let* ((evens (seq-filter #'evenp data))\\n       (squares (mapcar (lambda (x) (* x x)) evens))\\n       (total (apply #'+ squares)))\\n  (list :evens evens :squares squares :total total))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5528,17 +5581,18 @@ fn org_babel_execute_list_filter_map_reduce_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_join_sort_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"C\" \"X\" 6 50 300) (\"A\" \"X\" 4 50 200) (\"B\" \"Y\" 2 80 160) (\"D\" \"Z\" 3 30 90))) \"#+NAME: rates\\n| Svc | Rate |\\n|-----+------|\\n| X | 50 |\\n| Y | 80 |\\n| Z | 30 |\\n\\n#+NAME: usage\\n| Client | Svc | Hrs |\\n|--------+-----+-----|\\n| A | X | 4 |\\n| B | Y | 2 |\\n| C | X | 6 |\\n| D | Z | 3 |\\n\\n#+NAME: bills\\n#+begin_src emacs-lisp :var r=rates u=usage :results value replace\\n(let ((bills (mapcar\\n              (lambda (row)\\n                (let* ((client (car row))\\n                       (svc (cadr row))\\n                       (hrs (caddr row))\\n                       (rate (cadr (assoc svc r)))\\n                       (cost (* hrs rate)))\\n                  (list client svc hrs rate cost)))\\n              u)))\\n  (sort bills (lambda (a b) (> (nth 4 a) (nth 4 b)))))\\n#+end_src\\n\\n#+RESULTS: bills\\n| C | X | 6 | 50 | 300 |\\n| A | X | 4 | 50 | 200 |\\n| B | Y | 2 | 80 | 160 |\\n| D | Z | 3 | 30 |  90 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5550,14 +5604,14 @@ fn org_babel_execute_table_join_sort_chain_deep_combo() {
       ;; Rates
       (insert "#+NAME: rates\n")
       (insert "| Svc | Rate |\n")
-      (insert("|-----+------|\n")
+      (insert "|-----+------|\n")
       (insert "| X | 50 |\n")
       (insert "| Y | 80 |\n")
       (insert "| Z | 30 |\n\n")
       ;; Usage
       (insert "#+NAME: usage\n")
       (insert "| Client | Svc | Hrs |\n")
-      (insert("|--------+-----+-----|\n")
+      (insert "|--------+-----+-----|\n")
       (insert "| A | X | 4 |\n")
       (insert "| B | Y | 2 |\n")
       (insert "| C | X | 6 |\n")
@@ -5588,7 +5642,7 @@ fn org_babel_execute_table_join_sort_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5744,12 +5798,13 @@ fn org_babel_execute_table_column_compute_chain_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_table_join_compute_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":lines\" \"((Pa 4 8 32) (Pb 2 12 24) (Pc 6 5 30))\" \":total\" 86))) \"#+NAME: products\\n| ID | Name | Cost |\\n|----+------+------|\\n| 1 | Pa | 8 |\\n| 2 | Pb | 12 |\\n| 3 | Pc | 5 |\\n\\n#+NAME: orders\\n| PID | Qty |\\n|-----+-----|\\n| 1 | 4 |\\n| 2 | 2 |\\n| 3 | 6 |\\n\\n#+NAME: invoices\\n#+begin_src emacs-lisp :var prods=products ords=orders :results value replace\\n(let ((lines (mapcar\\n              (lambda (order)\\n                (let* ((pid (car order))\\n                       (qty (cadr order))\\n                       (prod (assoc pid prods))\\n                       (name (cadr prod))\\n                       (cost (caddr prod)))\\n                  (list name qty cost (* qty cost))))\\n              ords)))\\n  (list :lines lines\\n        :total (apply #'+ (mapcar #'cadddr lines))))\\n#+end_src\\n\\n#+RESULTS: invoices\\n| :lines | ((Pa 4 8 32) (Pb 2 12 24) (Pc 6 5 30)) | :total | 86 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5761,14 +5816,14 @@ fn org_babel_execute_list_table_join_compute_chain_deep_combo() {
       ;; Products
       (insert "#+NAME: products\n")
       (insert "| ID | Name | Cost |\n")
-      (insert("|----+------+------|\n")
+      (insert "|----+------+------|\n")
       (insert "| 1 | Pa | 8 |\n")
       (insert "| 2 | Pb | 12 |\n")
       (insert "| 3 | Pc | 5 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| PID | Qty |\n")
-      (insert("|-----+-----|\n")
+      (insert "|-----+-----|\n")
       (insert "| 1 | 4 |\n")
       (insert "| 2 | 2 |\n")
       (insert "| 3 | 6 |\n\n")
@@ -5799,7 +5854,7 @@ fn org_babel_execute_list_table_join_compute_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -5856,12 +5911,13 @@ fn org_babel_execute_table_column_aggregate_deep_v2_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_table_assoc_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"X\" 3 5 15) (\"Y\" 1 10 10) (\"Z\" 2 15 30))) \"#+NAME: prices\\n| Item | Price |\\n|------+-------|\\n| X | 5 |\\n| Y | 10 |\\n| Z | 15 |\\n\\n#+NAME: orders\\n| Item | Qty |\\n|------+-----|\\n| X | 3 |\\n| Y | 1 |\\n| Z | 2 |\\n\\n#+NAME: lines\\n#+begin_src emacs-lisp :var p=prices o=orders :results value replace\\n(mapcar (lambda (order)\\n          (let* ((item (car order))\\n                 (qty (cadr order))\\n                 (price (cadr (assoc item p))))\\n            (list item qty price (* qty price))))\\n        o)\\n#+end_src\\n\\n#+RESULTS: lines\\n| X | 3 |  5 | 15 |\\n| Y | 1 | 10 | 10 |\\n| Z | 2 | 15 | 30 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -5873,14 +5929,14 @@ fn org_babel_execute_mapcar_table_assoc_chain_deep_combo() {
       ;; Prices
       (insert "#+NAME: prices\n")
       (insert "| Item | Price |\n")
-      (insert("|------+-------|\n")
+      (insert "|------+-------|\n")
       (insert "| X | 5 |\n")
       (insert "| Y | 10 |\n")
       (insert "| Z | 15 |\n\n")
       ;; Orders
       (insert "#+NAME: orders\n")
       (insert "| Item | Qty |\n")
-      (insert("|------+-----|\n")
+      (insert "|------+-----|\n")
       (insert "| X | 3 |\n")
       (insert "| Y | 1 |\n")
       (insert "| Z | 2 |\n\n")
@@ -5906,7 +5962,7 @@ fn org_babel_execute_mapcar_table_assoc_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -6063,12 +6119,11 @@ fn org_babel_execute_table_group_aggregate_deep_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_column_join_compute_deep_v2_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (setting-constant t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6080,14 +6135,14 @@ fn org_babel_execute_table_column_join_compute_deep_v2_combo() {
       ;; Teams table
       (insert "#+NAME: teams\n")
       (insert "| Member | Team |\n")
-      (insert("|--------+------|\n")
+      (insert "|--------+------|\n")
       (insert "| X | A |\n")
       (insert "| Y | B |\n")
       (insert "| Z | A |\n\n")
       ;; Tasks table
       (insert "#+NAME: tasks\n")
       (insert "| Assignee | Task | Points |\n")
-      (insert("|----------+------+\n")
+      (insert "|----------+------+\n")
       (insert "| X | T1 | 3 |\n")
       (insert "| Y | T2 | 5 |\n")
       (insert "| Z | T3 | 2 |\n\n")
@@ -6118,7 +6173,7 @@ fn org_babel_execute_table_column_join_compute_deep_v2_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -6230,12 +6285,13 @@ fn org_babel_execute_table_join_compute_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_table_join_aggregate_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":rows\" \"((A 3 10 30) (B 1 20 20) (C 5 15 75))\" \":total\" 125))) \"#+NAME: products\\n| ID | Name | Price |\\n|----+------+-------|\\n| 1 | A | 10 |\\n| 2 | B | 20 |\\n| 3 | C | 15 |\\n\\n#+NAME: orders\\n| ProductID | Qty |\\n|-----------+-----|\\n| 1 | 3 |\\n| 2 | 1 |\\n| 3 | 5 |\\n\\n#+NAME: revenue\\n#+begin_src emacs-lisp :var prods=products ords=orders :results value replace\\n(let ((rows (mapcar\\n              (lambda (order)\\n                (let* ((pid (car order))\\n                       (qty (cadr order))\\n                       (prod (assoc pid prods))\\n                       (name (cadr prod))\\n                       (price (caddr prod)))\\n                  (list name qty price (* qty price))))\\n              ords)))\\n  (list :rows rows\\n        :total (apply #'+ (mapcar #'cadddr rows))))\\n#+end_src\\n\\n#+RESULTS: revenue\\n| :rows | ((A 3 10 30) (B 1 20 20) (C 5 15 75)) | :total | 125 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6285,17 +6341,18 @@ fn org_babel_execute_multi_table_join_aggregate_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_map_reduce_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((3 4 5.0) (5 12 13.0) (8 15 17.0))) \"#+NAME: data\\n| X | Y |\\n|---+---|\\n| 3 | 4 |\\n| 5 | 12 |\\n| 8 | 15 |\\n\\n#+NAME: dists\\n#+begin_src emacs-lisp :var tbl=data :results value replace\\n(mapcar (lambda (row)\\n          (let ((x (car row)) (y (cadr row)))\\n            (list x y (sqrt (+ (* x x) (* y y))))))\\n        tbl)\\n#+end_src\\n\\n#+RESULTS: dists\\n| 3 |  4 |  5.0 |\\n| 5 | 12 | 13.0 |\\n| 8 | 15 | 17.0 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6331,17 +6388,18 @@ fn org_babel_execute_table_map_reduce_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_table_join_aggregate_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":rows\" \"((A 5 4 20) (B 8 2 16) (C 3 7 21))\" \":grand\" 57))) \"#+NAME: prices\\n| Item | Price |\\n|------+-------|\\n| A | 5 |\\n| B | 8 |\\n| C | 3 |\\n\\n#+NAME: qtys\\n| Item | Qty |\\n|------+-----|\\n| A | 4 |\\n| B | 2 |\\n| C | 7 |\\n\\n#+NAME: agg\\n#+begin_src emacs-lisp :var p=prices q=qtys :results value replace\\n(let* ((rows (mapcar\\n               (lambda (row)\\n                 (let* ((item (car row))\\n                        (price (cadr row))\\n                        (qty (cadr (assoc item q)))\\n                        (total (* price (or qty 0))))\\n                   (list item price (or qty 0) total)))\\n               p))\\n       (grand (apply #'+ (mapcar #'cadddr rows))))\\n  (list :rows rows :grand grand))\\n#+end_src\\n\\n#+RESULTS: agg\\n| :rows | ((A 5 4 20) (B 8 2 16) (C 3 7 21)) | :grand | 57 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6390,17 +6448,18 @@ fn org_babel_execute_list_table_join_aggregate_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_column_join_stats_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 51 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Eng\" \"Ada\" 2 220 110) (\"Mkt\" \"Bob\" 1 90 90) (\"Sales\" \"Cal\" 1 110 110))) \"#+NAME: depts\\n| Dept | Head |\\n|------+------|\\n| Eng | Ada |\\n| Mkt | Bob |\\n| Sales | Cal |\\n\\n#+NAME: emps\\n| Name | Dept | Salary |\\n|------+--------|\\n| X1 | Eng | 100 |\\n| X2 | Eng | 120 |\\n| X3 | Mkt | 90 |\\n| X4 | Sales | 110 |\\n\\n#+NAME: stats\\n#+begin_src emacs-lisp :var d=depts e=emps :results value replace\\n(mapcar\\n (lambda (dept-row)\\n   (let* ((dept (car dept-row))\\n          (head (cadr dept-row))\\n          (members (cl-remove-if-not\\n                    (lambda (r) (string= (cadr r) dept))\\n                    e))\\n          (salaries (mapcar #'caddr members)))\\n     (list dept head (length members)\\n           (apply #'+ salaries)\\n           (/ (apply #'+ salaries) (max 1 (length members))))))\\n d)\\n#+end_src\\n\\n#+RESULTS: stats\\n| Eng   | Ada | 2 | 220 | 110 |\\n| Mkt   | Bob | 1 |  90 |  90 |\\n| Sales | Cal | 1 | 110 | 110 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6452,17 +6511,18 @@ fn org_babel_execute_table_column_join_stats_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_table_assoc_compute_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Ada\" 95 \"A\") (\"Bob\" 78 \"C\") (\"Cal\" 92 \"A\") (\"Dee\" 85 \"B\"))) \"#+NAME: input\\n| Name | Score |\\n|------+-------|\\n| Ada | 95 |\\n| Bob | 78 |\\n| Cal | 92 |\\n| Dee | 85 |\\n\\n#+NAME: graded\\n#+begin_src emacs-lisp :var tbl=input :results value replace\\n(mapcar (lambda (row)\\n          (let* ((name (car row))\\n                 (score (cadr row))\\n                 (grade (cond ((>= score 90) 'A)\\n                              ((>= score 80) 'B)\\n                              ((>= score 70) 'C)\\n                              (t 'D))))\\n            (list name score grade)))\\n        tbl)\\n#+end_src\\n\\n#+RESULTS: graded\\n| Ada | 95 | A |\\n| Bob | 78 | C |\\n| Cal | 92 | A |\\n| Dee | 85 | B |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6504,17 +6564,18 @@ fn org_babel_execute_mapcar_table_assoc_compute_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_pcase_cond_cl_case_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"b\" 6 \"(key val)\"))) \"#+begin_src emacs-lisp :results value replace\\n(list (pcase 2 (1 'a) (2 'b) (3 'c))\\n      (pcase '(1 2 3)\\n        (`(,x ,y ,z) (+ x y z))\\n        (_ 0))\\n      (pcase '(key . val)\\n        (`(,k . ,v) (list k v))))\\n#+end_src\\n\\n#+RESULTS:\\n| b | 6 | (key val) |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((x 5))\\n  (cond ((< x 3) 'small)\\n        ((< x 7) 'medium)\\n        (t 'large)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6552,17 +6613,18 @@ fn org_babel_execute_pcase_cond_cl_case_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_table_join_stats_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":rows\" \"((N A 10 50) (S B 20 160) (N B 15 120) (E A 25 125))\" \":total-rev\" 455 \":n-regions\" 3))) \"#+NAME: sales\\n| Region | Product | Qty |\\n|--------+---------+-----|\\n| N | A | 10 |\\n| S | B | 20 |\\n| N | B | 15 |\\n| E | A | 25 |\\n\\n#+NAME: prices\\n| Product | Price |\\n|---------+-------|\\n| A | 5 |\\n| B | 8 |\\n\\n#+NAME: revenue\\n#+begin_src emacs-lisp :var s=sales p=prices :results value replace\\n(let ((rows (mapcar\\n              (lambda (row)\\n                (let* ((region (car row))\\n                       (product (cadr row))\\n                       (qty (caddr row))\\n                       (price (cadr (assoc product p))))\\n                  (list region product qty (* qty price))))\\n              s)))\\n  (list :rows rows\\n        :total-rev (apply #'+ (mapcar #'cadddr rows))\\n        :n-regions (length (seq-uniq (mapcar #'car s))))))\\n#+end_src\\n\\n#+RESULTS: revenue\\n| :rows | ((N A 10 50) (S B 20 160) (N B 15 120) (E A 25 125)) | :total-rev | 455 | :n-regions | 3 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6612,17 +6674,18 @@ fn org_babel_execute_multi_table_join_stats_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_map_filter_reduce_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9 10)) ((4 16 36 64 100)) ((\":count\" 5 \":total\" 220 \":avg\" 44))) \"#+NAME: raw\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5 6 7 8 9 10)\\n#+end_src\\n\\n#+RESULTS: raw\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |\\n\\n#+NAME: squares\\n#+begin_src emacs-lisp :var data=raw :results value replace\\n(let ((evens (seq-filter #'evenp data)))\\n  (mapcar (lambda (x) (* x x)) evens))\\n#+end_src\\n\\n#+RESULTS: squares\\n| 4 | 16 | 36 | 64 | 100 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=squares :results value replace\\n(list :count (length data)\\n      :total (apply #'+ data)\\n      :avg (/ (apply #'+ data) (length data)))\\n#+end_src\\n\\n#+RESULTS: total\\n| :count | 5 | :total | 220 | :avg | 44 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6662,17 +6725,18 @@ fn org_babel_execute_list_map_filter_reduce_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_row_sort_filter_compute_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":sorted\" \"((A 10) (B 40) (M 20) (Z 30))\" \":big\" \"((B 40) (M 20) (Z 30))\" \":big-total\" 90))) \"#+NAME: data\\n| Name | Val |\\n|------+-----|\\n| Z | 30 |\\n| A | 10 |\\n| M | 20 |\\n| B | 40 |\\n\\n#+NAME: result\\n#+begin_src emacs-lisp :var tbl=data :results value replace\\n(let* ((sorted (sort (copy-sequence tbl)\\n                     (lambda (a b) (string< (car a) (car b)))))\\n       (big (cl-remove-if-not (lambda (r) (>= (cadr r) 20)) sorted)))\\n  (list :sorted sorted\\n        :big big\\n        :big-total (apply #'+ (mapcar #'cadr big))))\\n#+end_src\\n\\n#+RESULTS: result\\n| :sorted | ((A 10) (B 40) (M 20) (Z 30)) | :big | ((B 40) (M 20) (Z 30)) | :big-total | 90 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6711,17 +6775,18 @@ fn org_babel_execute_table_row_sort_filter_compute_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_filter_chain_table_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 42 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"X\" \"Y\" \"X+Y\" \"X*Y\") hline (2 7 9 14) (8 1 9 8) (4 9 13 36))) \"#+NAME: raw\\n| X | Y |\\n|---+---|\\n| 2 | 7 |\\n| 5 | 3 |\\n| 8 | 1 |\\n| 4 | 9 |\\n\\n#+NAME: computed\\n#+begin_src emacs-lisp :var tbl=raw :results value table replace\\n(let ((filtered (cl-remove-if-not\\n                 (lambda (row) (evenp (car row)))\\n                 tbl)))\\n  (cons '(\\\"X\\\" \\\"Y\\\" \\\"X+Y\\\" \\\"X*Y\\\")\\n        (cons 'hline\\n              (mapcar (lambda (r)\\n                        (list (car r) (cadr r)\\n                              (+ (car r) (cadr r))\\n                              (* (car r) (cadr r))))\\n                      filtered))))\\n#+end_src\\n\\n#+RESULTS: computed\\n| X | Y | X+Y | X*Y |\\n|---+---+-----+-----|\\n| 2 | 7 |   9 |  14 |\\n| 8 | 1 |   9 |   8 |\\n| 4 | 9 |  13 |  36 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6764,17 +6829,18 @@ fn org_babel_execute_mapcar_filter_chain_table_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_letrec_named_let_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"t\" \"t\" \"nil\" \"nil\"))) \"#+begin_src emacs-lisp :results value replace\\n(letrec ((is-even (lambda (n) (if (= n 0) t (funcall is-odd (1- n)))))\\n         (is-odd (lambda (n) (if (= n 0) nil (funcall is-even (1- n))))))\\n  (list (funcall is-even 4) (funcall is-odd 5)\\n        (funcall is-even 7) (funcall is-odd 2)))\\n#+end_src\\n\\n#+RESULTS:\\n| t | t | nil | nil |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let loop ((i 0) (acc nil))\\n  (if (> i 5)\\n      (nreverse acc)\\n      (loop (1+ i) (cons (* i i) acc))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6810,17 +6876,18 @@ fn org_babel_execute_letrec_named_let_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_column_join_compute_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Item\" \"Cost\" \"Qty\" \"Total\") hline (\"A\" 5 4 20) (\"B\" 8 2 16) (\"C\" 3 7 21))) \"#+NAME: prices\\n| Item | Cost |\\n|------+------|\\n| A | 5 |\\n| B | 8 |\\n| C | 3 |\\n\\n#+NAME: qtys\\n| Item | N |\\n|------+---|\\n| A | 4 |\\n| B | 2 |\\n| C | 7 |\\n\\n#+NAME: joined\\n#+begin_src emacs-lisp :var p=prices q=qtys :results value table replace\\n(cons '(\\\"Item\\\" \\\"Cost\\\" \\\"Qty\\\" \\\"Total\\\")\\n      (cons 'hline\\n            (mapcar (lambda (row)\\n                      (let* ((item (car row))\\n                             (cost (cadr row))\\n                             (qty (cadr (assoc item q))))\\n                        (list item cost qty (* cost qty))))\\n                    p)))\\n#+end_src\\n\\n#+RESULTS: joined\\n| Item | Cost | Qty | Total |\\n|------+------+-----+-------|\\n| A    |    5 |   4 |    20 |\\n| B    |    8 |   2 |    16 |\\n| C    |    3 |   7 |    21 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6867,17 +6934,18 @@ fn org_babel_execute_table_column_join_compute_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_block_var_chain_table_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((5 3 8 1 9 2 7 4 6)) ((1 2 3 4 5 6 7 8 9)) ((\":first\" 1 \":last\" 9 \":mid\" 5 \":sum\" 45))) \"#+NAME: nums\\n#+begin_src emacs-lisp :results value replace\\n'(5 3 8 1 9 2 7 4 6)\\n#+end_src\\n\\n#+RESULTS: nums\\n| 5 | 3 | 8 | 1 | 9 | 2 | 7 | 4 | 6 |\\n\\n#+NAME: sorted\\n#+begin_src emacs-lisp :var data=nums :results value replace\\n(sort (copy-sequence data) #'<)\\n#+end_src\\n\\n#+RESULTS: sorted\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |\\n\\n#+NAME: stats\\n#+begin_src emacs-lisp :var data=sorted :results value replace\\n(list :first (car data)\\n      :last (car (last data))\\n      :mid (nth (/ (length data) 2) data)\\n      :sum (apply #'+ data))\\n#+end_src\\n\\n#+RESULTS: stats\\n| :first | 1 | :last | 9 | :mid | 5 | :sum | 45 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6917,17 +6985,18 @@ fn org_babel_execute_multi_block_var_chain_table_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_row_filter_map_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"A\" 10 3 30) (\"B\" 20 1 20) (\"D\" 15 2 30))) \"#+NAME: items\\n| Name | Price | Qty |\\n|------+-------+-----|\\n| A | 10 | 3 |\\n| B | 20 | 1 |\\n| C | 5 | 8 |\\n| D | 15 | 2 |\\n\\n#+NAME: expensive\\n#+begin_src emacs-lisp :var tbl=items :results value replace\\n(let ((filtered (cl-remove-if-not\\n                 (lambda (row) (>= (cadr row) 10))\\n                 tbl)))\\n  (mapcar (lambda (row)\\n            (list (car row) (cadr row) (caddr row)\\n                  (* (cadr row) (caddr row))))\\n          filtered))\\n#+end_src\\n\\n#+RESULTS: expensive\\n| A | 10 | 3 | 30 |\\n| B | 20 | 1 | 20 |\\n| D | 15 | 2 | 30 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -6967,17 +7036,18 @@ fn org_babel_execute_table_row_filter_map_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_column_stats_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 42 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":x\" \"(2 3 4)\" \":y\" \"(5 7 9)\" \":z\" \"(1 5 8)\"))) ((\"X\" \"Y\" \"Z\") hline (\"2\" \"5\" \"8\") (\"3\" \"7\" \"1\") (\"4\" \"9\" \"6\")) \"#+NAME: data\\n| X | Y | Z |\\n|---+---+---|\\n| 2 | 5 | 8 |\\n| 3 | 7 | 1 |\\n| 4 | 9 | 6 |\\n\\n#+NAME: stats\\n#+begin_src emacs-lisp :var tbl=data :results value replace\\n(let ((xs (mapcar #'car tbl))\\n      (ys (mapcar #'cadr tbl))\\n      (zs (mapcar #'caddr tbl)))\\n  (list :x (list (apply #'min xs) (/ (apply #'+ xs) (length xs)) (apply #'max xs))\\n        :y (list (apply #'min ys) (/ (apply #'+ ys) (length ys)) (apply #'max ys))\\n        :z (list (apply #'min zs) (/ (apply #'+ zs) (length zs)) (apply #'max zs))))\\n#+end_src\\n\\n#+RESULTS: stats\\n| :x | (2 3 4) | :y | (5 7 9) | :z | (1 5 8) |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7020,17 +7090,18 @@ fn org_babel_execute_table_column_stats_deep_state_combo() {
           (list (nreverse results)
                 table-lisp
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_assoc_list_transform_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"(((x . 10) (y . 20) (z . 30)) ((x . 20) (y . 40) (z . 60)) (y . 20) (z . 60) (10 20 30))\") \"#+begin_src emacs-lisp :results value replace\\n(let* ((al (list (cons 'x 10) (cons 'y 20) (cons 'z 30)))\\n       (doubled (mapcar (lambda (p) (cons (car p) (* 2 (cdr p)))) al)))\\n  (list al\\n        doubled\\n        (assq 'y al)\\n        (assoc 'z doubled)\\n        (mapcar #'cdr al)))\\n#+end_src\\n\\n#+RESULTS:\\n: (((x . 10) (y . 20) (z . 30)) ((x . 20) (y . 40) (z . 60)) (y . 20) (z . 60) (10 20 30))\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((db (list (cons 'users (list (cons 'a 1) (cons 'b 2)))\\n               (cons 'scores (list 10 20 30)))))\\n  (list (cdr (assoc 'users db))\\n        (cdr (assoc 'scores db))\\n        (cdr (assoc 'a (cdr (assoc 'users db))))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7070,17 +7141,18 @@ fn org_babel_execute_assoc_list_transform_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_cl_loop_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 1 1) (2 1 2) (2 2 4) (3 1 3) (3 2 6) (3 3 9) (4 1 4) (4 2 8) (4 3 12) (4 4 16))) \"#+begin_src emacs-lisp :results value replace\\n(cl-loop for i from 1 to 4\\n         append (cl-loop for j from 1 to i\\n                         collect (list i j (* i j))))\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 1 |  1 |\\n| 2 | 1 |  2 |\\n| 2 | 2 |  4 |\\n| 3 | 1 |  3 |\\n| 3 | 2 |  6 |\\n| 3 | 3 |  9 |\\n| 4 | 1 |  4 |\\n| 4 | 2 |  8 |\\n| 4 | 3 | 12 |\\n| 4 | 4 | 16 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(cl-loop for x in '(a b c)\\n         for y in '(1 2 3)\\n         collect (cons x y) into result\\n         finally return result)\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7115,17 +7187,18 @@ fn org_babel_execute_mapcar_cl_loop_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_map_assoc_chain_table_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Ada\" 95 \"A\") (\"Bob\" 87 \"B\") (\"Cal\" 92 \"A\")) ((\":count\" 3 \":a-count\" 2 \":b-count\" 1 \":avg\" 91))) \"#+NAME: input\\n| Name | Score |\\n|------+-------|\\n| Ada | 95 |\\n| Bob | 87 |\\n| Cal | 92 |\\n\\n#+NAME: graded\\n#+begin_src emacs-lisp :var tbl=input :results value replace\\n(mapcar (lambda (row)\\n          (let* ((name (car row))\\n                 (score (cadr row))\\n                 (grade (cond ((>= score 90) 'A)\\n                              ((>= score 80) 'B)\\n                              (t 'C))))\\n            (list name score grade)))\\n        tbl)\\n#+end_src\\n\\n#+RESULTS: graded\\n| Ada | 95 | A |\\n| Bob | 87 | B |\\n| Cal | 92 | A |\\n\\n#+NAME: agg\\n#+begin_src emacs-lisp :var data=graded :results value replace\\n(let ((grades (mapcar #'caddr data)))\\n  (list :count (length grades)\\n        :a-count (cl-count 'A grades)\\n        :b-count (cl-count 'B grades)\\n        :avg (/ (apply #'+ (mapcar #'cadr data)) (length data))))\\n#+end_src\\n\\n#+RESULTS: agg\\n| :count | 3 | :a-count | 2 | :b-count | 1 | :avg | 91 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7175,17 +7248,18 @@ fn org_babel_execute_map_assoc_chain_table_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_table_column_compute_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":math\" \"(78 87 95)\" \":lang\" \"(85 88 92)\" \":sci\" \"(80 88 95)\"))) \"#+NAME: scores\\n| Student | Math | Lang | Sci |\\n|---------+--------+------|\\n| Ada | 95 | 88 | 92 |\\n| Bob | 78 | 85 | 80 |\\n| Cal | 90 | 92 | 88 |\\n| Dee | 85 | 90 | 95 |\\n\\n#+NAME: stats\\n#+begin_src emacs-lisp :var tbl=scores :results value replace\\n(let ((math (mapcar #'cadr tbl))\\n      (lang (mapcar #'caddr tbl))\\n      (sci (mapcar #'cadddr tbl)))\\n  (list :math (list (apply #'min math) (/ (apply #'+ math) (length math)) (apply #'max math))\\n        :lang (list (apply #'min lang) (/ (apply #'+ lang) (length lang)) (apply #'max lang))\\n        :sci (list (apply #'min sci) (/ (apply #'+ sci) (length sci)) (apply #'max sci))))\\n#+end_src\\n\\n#+RESULTS: stats\\n| :math | (78 87 95) | :lang | (85 88 92) | :sci | (80 88 95) |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7224,17 +7298,18 @@ fn org_babel_execute_mapcar_table_column_compute_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_map_tree_assoc_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"((name . Project) (tasks (a 1 2 3) (b 4 5 6) (c 7 8 9)))\" ((\":name\" \"Project\" \":sums\" \"((a . 6) (b . 15) (c . 24))\" \":total\" 45))) \"#+NAME: data\\n#+begin_src emacs-lisp :results value replace\\n'((name . \\\"Project\\\")\\n  (tasks . ((a 1 2 3)\\n            (b 4 5 6)\\n            (c 7 8 9))))\\n#+end_src\\n\\n#+RESULTS: data\\n: ((name . Project) (tasks (a 1 2 3) (b 4 5 6) (c 7 8 9)))\\n\\n#+NAME: proc\\n#+begin_src emacs-lisp :var d=data :results value replace\\n(let* ((tasks (cdr (assoc 'tasks d)))\\n       (sums (mapcar (lambda (item)\\n                       (cons (car item)\\n                             (apply #'+ (cdr item))))\\n                     tasks)))\\n  (list :name (cdr (assoc 'name d))\\n        :sums sums\\n        :total (apply #'+ (mapcar #'cdr sums))))\\n#+end_src\\n\\n#+RESULTS: proc\\n| :name | Project | :sums | ((a . 6) (b . 15) (c . 24)) | :total | 45 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7276,17 +7351,18 @@ fn org_babel_execute_map_tree_assoc_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_tree_map_reduce_pipeline_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"dept-a\" \"(emp . 10)\" \"(budget . 100)\") (\"dept-b\" \"(emp . 20)\" \"(budget . 200)\") (\"dept-c\" \"(emp . 15)\" \"(budget . 150)\")) ((\"dept-a\" 10 100 10) (\"dept-b\" 20 200 10) (\"dept-c\" 15 150 10)) ((\":total-emp\" 45 \":total-budget\" 450 \":avg-per-person\" 10))) \"#+NAME: tree\\n#+begin_src emacs-lisp :results value replace\\n'((dept-a . ((emp . 10) (budget . 100)))\\n  (dept-b . ((emp . 20) (budget . 200)))\\n  (dept-c . ((emp . 15) (budget . 150))))\\n#+end_src\\n\\n#+RESULTS: tree\\n| dept-a | (emp . 10) | (budget . 100) |\\n| dept-b | (emp . 20) | (budget . 200) |\\n| dept-c | (emp . 15) | (budget . 150) |\\n\\n#+NAME: mapped\\n#+begin_src emacs-lisp :var data=tree :results value replace\\n(mapcar (lambda (dept)\\n          (let ((name (car dept))\\n                (emp (cdr (assoc 'emp (cdr dept))))\\n                (budget (cdr (assoc 'budget (cdr dept)))))\\n            (list name emp budget (/ budget emp))))\\n        data)\\n#+end_src\\n\\n#+RESULTS: mapped\\n| dept-a | 10 | 100 | 10 |\\n| dept-b | 20 | 200 | 10 |\\n| dept-c | 15 | 150 | 10 |\\n\\n#+NAME: agg\\n#+begin_src emacs-lisp :var data=mapped :results value replace\\n(let ((emps (mapcar #'cadr data))\\n      (budgets (mapcar #'caddr data)))\\n  (list :total-emp (apply #'+ emps)\\n        :total-budget (apply #'+ budgets)\\n        :avg-per-person (/ (apply #'+ budgets)\\n                          (apply #'+ emps))))\\n#+end_src\\n\\n#+RESULTS: agg\\n| :total-emp | 45 | :total-budget | 450 | :avg-per-person | 10 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7335,17 +7411,18 @@ fn org_babel_execute_tree_map_reduce_pipeline_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_table_var_chain_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 47 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Item\" \"Cost\" \"Qty\" \"Total\") hline (\"A\" 10 3 30) (\"B\" 20 1 20) (\"C\" 30 5 150))) \"#+NAME: prices\\n| Item | Cost |\\n|------+------|\\n| A | 10 |\\n| B | 20 |\\n| C | 30 |\\n\\n#+NAME: quantities\\n| Item | Qty |\\n|------+-----|\\n| A | 3 |\\n| B | 1 |\\n| C | 5 |\\n\\n#+NAME: totals\\n#+begin_src emacs-lisp :var p=prices q=quantities :results value table replace\\n(cons '(\\\"Item\\\" \\\"Cost\\\" \\\"Qty\\\" \\\"Total\\\")\\n      (cons 'hline\\n            (mapcar (lambda (row)\\n                      (let* ((item (car row))\\n                             (cost (cadr row))\\n                             (qty-row (assoc item q))\\n                             (qty (if qty-row (cadr qty-row) 0)))\\n                        (list item cost qty (* cost qty))))\\n                    p)))\\n#+end_src\\n\\n#+RESULTS: totals\\n| Item | Cost | Qty | Total |\\n|------+------+-----+-------|\\n| A    |   10 |   3 |    30 |\\n| B    |   20 |   1 |    20 |\\n| C    |   30 |   5 |   150 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7393,17 +7470,18 @@ fn org_babel_execute_multi_table_var_chain_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_sequence_slice_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"a\" \"b\" \"c\" \"\" \"\" \"\" \"\" \"\") (\"f\" \"g\" \"h\" \"\" \"\" \"\" \"\" \"\") (\"b\" \"c\" \"d\" \"\" \"\" \"\" \"\" \"\") (\"c\" \"d\" \"e\" \"f\" \"g\" \"h\" \"\" \"\") (\"a\" \"b\" \"c\" \"d\" \"e\" \"f\" \"g\" \"h\") (\"d\" \"e\" \"f\" \"g\" \"h\" \"\" \"\" \"\"))) \"#+begin_src emacs-lisp :results value replace\\n(let ((s '(a b c d e f g h)))\\n  (list (seq-take s 3) (seq-drop s 5)\\n        (seq-subseq s 1 4) (seq-subseq s 2)\\n        (seq-take-while #'symbolp s)\\n        (seq-drop-while (lambda (x) (not (eq x 'd))) s)))\\n#+end_src\\n\\n#+RESULTS:\\n| a | b | c |   |   |   |   |   |\\n| f | g | h |   |   |   |   |   |\\n| b | c | d |   |   |   |   |   |\\n| c | d | e | f | g | h |   |   |\\n| a | b | c | d | e | f | g | h |\\n| d | e | f | g | h |   |   |   |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((s '(3 1 4 1 5 9 2 6 5 3 5)))\\n  (list (seq-find (lambda (x) (> x 4)) s)\\n        (seq-count (lambda (x) (= x 5)) s)\\n        (seq-contains-p s 9)\\n        (seq-contains-p s 0)\\n        (seq-positions s 5)\\n        (seq-uniq s)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7443,17 +7521,18 @@ fn org_babel_execute_sequence_slice_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_io_process_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 42 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"hello\"))) \"#+begin_src emacs-lisp :results value replace\\n(with-temp-buffer\\n  (insert \\\"hello\\\\nworld\\\\nfoo\\\\n\\\")\\n  (list (buffer-string)\\n        (count-lines (point-min) (point-max))\\n        (progn (goto-char (point-min))\\n               (search-forward \\\"world\\\")\\n               (line-number-at-pos))))\\n#+end_src\\n\\n#+RESULTS:\\n| hello |\\nworld\\nfoo\\n| 3 | 2 |\\nworld\\nfoo\\n| 3 | 2 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((f \\\"[SESSION-TMPDIR]/org-babel-io/test.txt\\\"))\\n  (with-temp-file f (insert \\\"line1\\\\nline2\\\\n\\\"))\\n  (list (file-exists-p f)\\n        (with-temp-buffer\\n          (insert-file-contents f)\\n          (buffer-string))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7473,8 +7552,9 @@ fn org_babel_execute_io_process_deep_state_combo() {
       (insert "               (line-number-at-pos))))\n")
       (insert "#+end_src\n\n")
       ;; File operations
-      (let* ((root (make-temp-file "org-babel-io" t))
+      (let* ((root (expand-file-name "org-babel-io" temporary-file-directory))
              (tmp (expand-file-name "test.txt" root)))
+        (make-directory root t)
         (insert "#+begin_src emacs-lisp :results value replace\n")
         (insert "(let ((f \"" tmp "\"))\n")
         (insert "  (with-temp-file f (insert \"line1\\nline2\\n\"))\n")
@@ -7496,17 +7576,18 @@ fn org_babel_execute_io_process_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_vector_operations_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((10 50 5 \"[1 2 3]\" \"(10 20 30 40 50)\"))) \"#+begin_src emacs-lisp :results value replace\\n(let ((v [10 20 30 40 50]))\\n  (list (aref v 0) (aref v 4) (length v)\\n        (seq-into '(1 2 3) 'vector)\\n        (append v nil)))\\n#+end_src\\n\\n#+RESULTS:\\n| 10 | 50 | 5 | [1 2 3] | (10 20 30 40 50) |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((v1 [1 2 3]) (v2 [4 5 6]))\\n  (list (vconcat v1 v2)\\n        (mapcar (lambda (x) (* x 2)) (append v1 nil))\\n        (seq-sort #'< (vconcat v2 v1))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7542,17 +7623,18 @@ fn org_babel_execute_vector_operations_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_type_check_coerce_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"integer\" \"float\" \"string\" \"cons\" \"vector\" \"symbol\" \"symbol\" \"hash-table\"))) \"#+begin_src emacs-lisp :results value replace\\n(list (type-of 42) (type-of 3.14) (type-of \\\"hi\\\")\\n      (type-of '(1 2)) (type-of [1 2]) (type-of t)\\n      (type-of nil) (type-of (make-hash-table)))\\n#+end_src\\n\\n#+RESULTS:\\n| integer | float | string | cons | vector | symbol | symbol | hash-table |\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (string-to-number \\\"42\\\") (string-to-number \\\"3.14\\\")\\n      (number-to-string 42) (number-to-string 3.14)\\n      (int-to-string 42) (string-to-int \\\"42\\\")\\n      (float 42) (truncate 3.7) (round 3.7))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7587,17 +7669,18 @@ fn org_babel_execute_type_check_coerce_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_string_predicates_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"t\" \"nil\" \"t\" \"nil\" \"t\" \"t\" \"t\" \"t\" 3))) \"#+begin_src emacs-lisp :results value replace\\n(list (stringp \\\"hello\\\") (stringp 42)\\n      (string-empty-p \\\"\\\") (string-empty-p \\\"x\\\")\\n      (string< \\\"a\\\" \\\"b\\\") (string> \\\"z\\\" \\\"a\\\")\\n      (string-prefix-p \\\"Hel\\\" \\\"Hello\\\")\\n      (string-suffix-p \\\"lo\\\" \\\"Hello\\\")\\n      (string-match-p \\\"[0-9]+\\\" \\\"abc123\\\"))\\n#+end_src\\n\\n#+RESULTS:\\n| t | nil | t | nil | t | t | t | t | 3 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((s \\\"  Hello World  \\\"))\\n  (list (string-trim s)\\n        (string-trim-left s)\\n        (string-trim-right s)\\n        (string-pad \\\"hi\\\" 5)\\n        (string-fill \\\"Hello World\\\" 5)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7637,17 +7720,18 @@ fn org_babel_execute_string_predicates_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_number_predicates_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"t\" \"t\" \"t\" \"t\" \"t\" \"t\" \"t\" \"t\" \"t\" \"t\"))) \"#+begin_src emacs-lisp :results value replace\\n(list (numberp 42) (integerp 42) (floatp 3.14)\\n      (natnump 0) (wholenump 5) (zerop 0)\\n      (plusp 1) (minusp -1) (oddp 3) (evenp 4))\\n#+end_src\\n\\n#+RESULTS:\\n| t | t | t | t | t | t | t | t | t | t |\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (/ 10 3) (% 10 3) (mod 10 3)\\n      (abs -7) (max 1 3 2) (min 5 2 8)\\n      (expt 2 10) (sqrt 144) (log 100 10))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7681,12 +7765,11 @@ fn org_babel_execute_number_predicates_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_map_tree_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -7732,17 +7815,18 @@ fn org_babel_execute_list_map_tree_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_seq_count_position_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((4 3))) \"#+begin_src emacs-lisp :results value replace\\n(list (seq-count #'evenp '(1 2 3 4 5 6 7 8))\\n      (seq-count (lambda (x) (> x 5)) '(1 2 3 4 5 6 7 8)))\\n#+end_src\\n\\n#+RESULTS:\\n| 4 | 3 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((s '(a b c d e f)))\\n  (list (seq-position s 'c)\\n        (seq-position s 'z)\\n        (seq-index-of s 'e)\\n        (seq-contains-p s 'd)\\n        (seq-contains-p s 'g)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7778,17 +7862,18 @@ fn org_babel_execute_seq_count_position_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_seq_partition_flatten_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 32 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3) (4 5 6) (7 8 9))) \"#+begin_src emacs-lisp :results value replace\\n(seq-partition '(1 2 3 4 5 6 7 8 9) 3)\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 2 | 3 |\\n| 4 | 5 | 6 |\\n| 7 | 8 | 9 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((nested '((1 2) (3 (4 5)) (6))))\\n  (list (apply #'append nested)\\n        (cl-loop for x in nested append x)\\n        (seq-uniq (apply #'append (apply #'append nested)))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7821,17 +7906,18 @@ fn org_babel_execute_seq_partition_flatten_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_map_assoc_sort_reverse_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"(3 . 9)\" \"(1 . 1)\" \"(4 . 16)\" \"(1 . 1)\" \"(5 . 25)\" \"(9 . 81)\" \"(2 . 4)\" \"(6 . 36)\") (\"(1 . 1)\" \"(1 . 1)\" \"(2 . 4)\" \"(3 . 9)\" \"(4 . 16)\" \"(5 . 25)\" \"(6 . 36)\" \"(9 . 81)\") (\"(9 . 81)\" \"(6 . 36)\" \"(5 . 25)\" \"(4 . 16)\" \"(3 . 9)\" \"(2 . 4)\" \"(1 . 1)\" \"(1 . 1)\"))) \"#+begin_src emacs-lisp :results value replace\\n(let ((data (mapcar (lambda (x) (cons x (* x x)))\\n                    '(3 1 4 1 5 9 2 6))))\\n  (list data\\n        (sort (copy-sequence data) (lambda (a b) (< (cdr a) (cdr b))))\\n        (reverse (sort (copy-sequence data) (lambda (a b) (< (cdr a) (cdr b)))))))\\n#+end_src\\n\\n#+RESULTS:\\n| (3 . 9)  | (1 . 1)  | (4 . 16) | (1 . 1)  | (5 . 25) | (9 . 81) | (2 . 4)  | (6 . 36) |\\n| (1 . 1)  | (1 . 1)  | (2 . 4)  | (3 . 9)  | (4 . 16) | (5 . 25) | (6 . 36) | (9 . 81) |\\n| (9 . 81) | (6 . 36) | (5 . 25) | (4 . 16) | (3 . 9)  | (2 . 4)  | (1 . 1)  | (1 . 1)  |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((matrix (mapcar (lambda (row)\\n                        (mapcar (lambda (cell) (* cell cell))\\n                                row))\\n                      '((1 2 3) (4 5 6) (7 8 9)))))\\n  (list matrix\\n        (apply #'+ (mapcar (lambda (row) (apply #'+ row)) matrix))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7870,17 +7956,18 @@ fn org_babel_execute_map_assoc_sort_reverse_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_string_replace_concat_length_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Hello Elisp Foo Bar\" \"XXXXX XXXXX XXX XXX\" 19))) \"#+begin_src emacs-lisp :results value replace\\n(let ((s \\\"Hello World Foo Bar\\\"))\\n  (list (replace-regexp-in-string \\\"World\\\" \\\"Elisp\\\" s)\\n        (replace-regexp-in-string \\\"[A-Z]\\\" \\\"X\\\" s)\\n        (length s)))\\n#+end_src\\n\\n#+RESULTS:\\n| Hello Elisp Foo Bar | XXXXX XXXXX XXX XXX | 19 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (concat \\\"a\\\" \\\"-\\\" \\\"b\\\" \\\"-\\\" \\\"c\\\")\\n      (format \\\"%05d\\\" 42)\\n      (format \\\"%.3f\\\" 3.14159)\\n      (format \\\"%-10s|\\\" \\\"left\\\"))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7916,17 +8003,18 @@ fn org_babel_execute_string_replace_concat_length_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_var_header_chain_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 42 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"((a . 5) (b . 10) (c . 15))\" ((\"a\" 5 10) (\"b\" 10 20) (\"c\" 15 30)) ((\":count\" 3 \":sum\" 30 \":min\" 5 \":max\" 15))) \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'((a . 5) (b . 10) (c . 15))\\n#+end_src\\n\\n#+RESULTS: seed\\n: ((a . 5) (b . 10) (c . 15))\\n\\n#+NAME: xform\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(mapcar (lambda (pair)\\n          (cons (car pair) (list (cdr pair) (* (cdr pair) 2))))\\n        data)\\n#+end_src\\n\\n#+RESULTS: xform\\n| a |  5 | 10 |\\n| b | 10 | 20 |\\n| c | 15 | 30 |\\n\\n#+NAME: agg\\n#+begin_src emacs-lisp :var data=xform :results value replace\\n(let ((vals (mapcar #'cadr data)))\\n  (list :count (length vals)\\n        :sum (apply #'+ vals)\\n        :min (apply #'min vals)\\n        :max (apply #'max vals)))\\n#+end_src\\n\\n#+RESULTS: agg\\n| :count | 3 | :sum | 30 | :min | 5 | :max | 15 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -7969,17 +8057,18 @@ fn org_babel_execute_multi_var_header_chain_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_row_col_access_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 45 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":names\" \"(Ada Bob Cal)\" \":math-avg\" 86 \":sci-avg\" 89 \":best-math\" 95 \":best-sci\" 92))) ((\"Name\" \"Math\" \"Sci\") hline (\"Ada\" \"95\" \"90\") (\"Bob\" \"87\" \"92\") (\"Cal\" \"78\" \"85\")) \"#+NAME: scores\\n| Name | Math | Sci |\\n|------+-----------|\\n| Ada | 95 | 90 |\\n| Bob | 87 | 92 |\\n| Cal | 78 | 85 |\\n\\n#+NAME: analyze\\n#+begin_src emacs-lisp :var tbl=scores :results value replace\\n(let ((names (mapcar #'car tbl))\\n      (math (mapcar #'cadr tbl))\\n      (sci (mapcar #'caddr tbl)))\\n  (list :names names\\n        :math-avg (/ (apply #'+ math) (length math))\\n        :sci-avg (/ (apply #'+ sci) (length sci))\\n        :best-math (car (sort (copy-sequence math) #'>))\\n        :best-sci (car (sort (copy-sequence sci) #'>))))\\n#+end_src\\n\\n#+RESULTS: analyze\\n| :names | (Ada Bob Cal) | :math-avg | 86 | :sci-avg | 89 | :best-math | 95 | :best-sci | 92 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8025,17 +8114,18 @@ fn org_babel_execute_table_row_col_access_deep_state_combo() {
           (list (nreverse results)
                 table-lisp
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_plist_alist_transform_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"((:a . 1) (:b . 4) (:c . 9) (:d . 16))\") \"#+begin_src emacs-lisp :results value replace\\n(let ((pl (list :a 1 :b 2 :c 3 :d 4)))\\n  (cl-loop for (k v) on pl by #'cddr\\n           collect (cons k (* v v))))\\n#+end_src\\n\\n#+RESULTS:\\n: ((:a . 1) (:b . 4) (:c . 9) (:d . 16))\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((al '((x . 10) (y . 20) (z . 30) (w . 40))))\\n  (cl-loop for (k . v) in al\\n           when (> v 15)\\n           collect (cons k (list v (* v 2)))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8070,17 +8160,18 @@ fn org_babel_execute_mapcar_plist_alist_transform_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_seq_union_intersection_diff_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5))) \"#+begin_src emacs-lisp :results value replace\\n(seq-uniq (append '(1 2 3) '(2 3 4 5)))\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 2 | 3 | 4 | 5 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(seq-intersection '(1 2 3 4 5) '(3 4 5 6 7))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(seq-difference '(1 2 3 4 5) '(2 4))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8114,17 +8205,18 @@ fn org_babel_execute_seq_union_intersection_diff_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_map_table_reduce_pipeline_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 45 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"X\" \"Y\" \"Product\") hline (2 3 6) (4 5 20) (6 7 42)) nil) ((\"X\" \"Y\") hline (\"2\" \"3\") (\"4\" \"5\") (\"6\" \"7\")) \"#+NAME: raw\\n| X | Y |\\n|---+---|\\n| 2 | 3 |\\n| 4 | 5 |\\n| 6 | 7 |\\n\\n#+NAME: products\\n#+begin_src emacs-lisp :var data=raw :results value table replace\\n(cons '(\\\"X\\\" \\\"Y\\\" \\\"Product\\\")\\n      (cons 'hline\\n            (mapcar (lambda (r) (list (car r) (cadr r) (* (car r) (cadr r)))) data)))\\n#+end_src\\n\\n#+RESULTS: products\\n| X | Y | Product |\\n|---+---+---------|\\n| 2 | 3 |       6 |\\n| 4 | 5 |      20 |\\n| 6 | 7 |      42 |\\n\\n#+NAME: total\\n#+begin_src emacs-lisp :var data=products :results value replace\\n#+end_src\\n\\n#+RESULTS: total\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8170,17 +8262,18 @@ fn org_babel_execute_map_table_reduce_pipeline_deep_combo() {
           (list (nreverse results)
                 raw-lisp
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_struct_access_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Ada\" 30 \"elisp\" \"t\" \"t\"))) \"#+begin_src emacs-lisp :results value replace\\n(progn\\n  (cl-defstruct person name age lang)\\n  (let ((p (make-person :name \\\"Ada\\\" :age 30 :lang \\\"elisp\\\")))\\n    (list (person-name p) (person-age p) (person-lang p)\\n          (person-p p) (cl-typep p 'person))))\\n#+end_src\\n\\n#+RESULTS:\\n| Ada | 30 | elisp | t | t |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((data (list (cons 'users (list (cons 'name \\\"Ada\\\") (cons 'age 30)))\\n                 (cons 'scores (list 95 87 92))\\n                 (cons 'meta (list (cons 'v 2) (cons 'ts \\\"now\\\"))))))\\n  (list (cdr (assoc 'name (cdr (assoc 'users data))))\\n        (cdr (assoc 'scores data))\\n        (cdr (assoc 'v (cdr (assoc 'meta data))))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8218,17 +8311,18 @@ fn org_babel_execute_struct_access_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_catch_throw_block_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((5) \"#+begin_src emacs-lisp :results value replace\\n(catch 'done\\n  (dotimes (i 10)\\n    (when (= i 5) (throw 'done i))))\\n#+end_src\\n\\n#+RESULTS:\\n: 5\\n\\n#+begin_src emacs-lisp :results value replace\\n(list\\n  (catch 'a (throw 'a 42))\\n  (catch 'b (+ 1 2 3))\\n  (catch 'c (throw 'c (list 'x 'y))))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(catch 'outer\\n  (catch 'inner\\n    (throw 'outer 'escaped))\\n  'not-reached)\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8262,17 +8356,18 @@ fn org_babel_execute_catch_throw_block_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_cl_loop_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 4 9 16 25))) \"#+begin_src emacs-lisp :results value replace\\n(cl-loop for i from 1 to 5 collect (* i i))\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 4 | 9 | 16 | 25 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(cl-loop for x in '(10 20 30 40 50) sum x)\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(cl-loop for i from 1 to 10\\n         when (evenp i)\\n         collect i into evens\\n         finally (return (list evens (length evens))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8306,17 +8401,18 @@ fn org_babel_execute_cl_loop_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_type_result_chain_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((60 \"total=60\" ((8 \"TOTAL=60\" \"total=60!\")) \"8\\nTOTAL=60\\ntotal=60!\") \"#+NAME: num\\n#+begin_src emacs-lisp :results value replace\\n(+ 10 20 30)\\n#+end_src\\n\\n#+RESULTS: num\\n: 60\\n\\n#+NAME: str\\n#+begin_src emacs-lisp :var n=num :results value replace\\n(format \\\"total=%d\\\" n)\\n#+end_src\\n\\n#+RESULTS: str\\n: total=60\\n\\n#+NAME: lst\\n#+begin_src emacs-lisp :var s=str :results value replace\\n(list (length s) (upcase s) (concat s \\\"!\\\"))\\n#+end_src\\n\\n#+RESULTS: lst\\n| 8 | TOTAL=60 | total=60! |\\n\\n#+NAME: out\\n#+begin_src emacs-lisp :var data=lst :results output replace\\n(dolist (item data)\\n  (princ (format \\\"%s\\\\n\\\" item)))\\n#+end_src\\n\\n#+RESULTS: out\\n: 8\\n: TOTAL=60\\n: total=60!\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8358,17 +8454,18 @@ fn org_babel_execute_multi_type_result_chain_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_list_append_reverse_sort_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 47 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5) (3 2 1 \"\" \"\") (1 2 3 \"\" \"\") (1 2 3 \"\" \"\"))) \"#+begin_src emacs-lisp :results value replace\\n(let ((l (list 1 2 3)))\\n  (list (append l '(4 5))\\n        (reverse l)\\n        (append nil l)\\n        (append l nil)))\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 2 | 3 | 4 | 5 |\\n| 3 | 2 | 1 |   |   |\\n| 1 | 2 | 3 |   |   |\\n| 1 | 2 | 3 |   |   |\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (sort '(3 1 4 1 5 9 2 6) #'<)\\n      (sort '(\\\"banana\\\" \\\"apple\\\" \\\"cherry\\\") #'string<)\\n      (sort '((b . 2) (a . 1) (c . 3))\\n            (lambda (x y) (< (cdr x) (cdr y))))))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let* ((a '(1 2 3))\\n       (b '(4 5 6))\\n       (c (append a b)))\\n  (list (length c)\\n        (nth 3 c)\\n        (last c 2)\\n        (butlast c 2)\\n        (subseq c 1 4)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8416,17 +8513,18 @@ fn org_babel_execute_list_append_reverse_sort_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_condition_case_unwind_protect_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((3) \"#+begin_src emacs-lisp :results value replace\\n(condition-case err\\n    (+ 1 2)\\n  (error (list :err (cdr err))))\\n#+end_src\\n\\n#+RESULTS:\\n: 3\\n\\n#+begin_src emacs-lisp :results value replace\\n(condition-case err\\n    (/ 1 0)\\n  (error (list :caught t :msg (error-message-string err))))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((result nil) (cleanup nil))\\n  (unwind-protect\\n      (progn (setq result 42) result)\\n    (setq cleanup t))\\n  (list result cleanup))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8464,17 +8562,18 @@ fn org_babel_execute_condition_case_unwind_protect_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multi_block_dependency_chain_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 39 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 1) (2 4) (3 9) (4 16) (5 25)) \"((1 . 101) (2 . 104) (3 . 109) (4 . 116) (5 . 125))\" \"(:count 5 :first (1 . 101) :last (5 . 125) :total 555)\") \"#+NAME: gen\\n#+begin_src emacs-lisp :results value replace\\n(mapcar (lambda (i) (list i (* i i))) (number-sequence 1 5))\\n#+end_src\\n\\n#+RESULTS: gen\\n| 1 |  1 |\\n| 2 |  4 |\\n| 3 |  9 |\\n| 4 | 16 |\\n| 5 | 25 |\\n\\n#+NAME: xform\\n#+begin_src emacs-lisp :var data=gen :results value replace\\n(mapcar (lambda (r) (cons (car r) (+ (cadr r) 100))) data)\\n#+end_src\\n\\n#+RESULTS: xform\\n: ((1 . 101) (2 . 104) (3 . 109) (4 . 116) (5 . 125))\\n\\n#+NAME: summary\\n#+begin_src emacs-lisp :var data=xform :results value replace\\n(list :count (length data)\\n      :first (car data)\\n      :last (car (last data))\\n      :total (apply #'+ (mapcar #'cdr data)))\\n#+end_src\\n\\n#+RESULTS: summary\\n: (:count 5 :first (1 . 101) :last (5 . 125) :total 555)\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8514,17 +8613,18 @@ fn org_babel_execute_multi_block_dependency_chain_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_seq_sort_group_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5 6 7 8 9))) \"#+begin_src emacs-lisp :results value replace\\n(seq-sort #'< '(5 2 8 1 9 3 7 4 6))\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(seq-group-by #'evenp '(1 2 3 4 5 6 7 8 9 10))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((s '(1 2 3 4 5 6 7 8 9 10)))\\n  (list (seq-take s 3) (seq-drop s 7)\\n        (seq-take-while #'< (list 1 2 3 0 4 5))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8560,17 +8660,18 @@ fn org_babel_execute_seq_sort_group_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_hash_table_operations_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 43 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"Ada\" 30 \"default\" 3 \"nil\" 2))) \"#+begin_src emacs-lisp :results value replace\\n(let ((ht (make-hash-table :test #'equal)))\\n  (puthash \\\"name\\\" \\\"Ada\\\" ht)\\n  (puthash \\\"age\\\" 30 ht)\\n  (puthash \\\"lang\\\" \\\"elisp\\\" ht)\\n  (list (gethash \\\"name\\\" ht)\\n        (gethash \\\"age\\\" ht)\\n        (gethash \\\"missing\\\" ht \\\"default\\\")\\n        (hash-table-count ht)\\n        (remhash \\\"age\\\" ht)\\n        (hash-table-count ht)))\\n#+end_src\\n\\n#+RESULTS:\\n| Ada | 30 | default | 3 | nil | 2 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((ht (make-hash-table)))\\n  (puthash 'x 10 ht) (puthash 'y 20 ht) (puthash 'z 30 ht)\\n  (let ((al nil))\\n    (maphash (lambda (k v) (push (cons k v) al)) ht)\\n    (sort al (lambda (a b) (string< (symbol-name (car a))\\n                                      (symbol-name (car b))))))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8614,17 +8715,18 @@ fn org_babel_execute_hash_table_operations_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_property_list_alist_conversion_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"((:a . 1) (:b . 2) (:c . 3))\" 2 \"(:c 3)\"))) \"#+begin_src emacs-lisp :results value replace\\n(let ((pl (list :a 1 :b 2 :c 3)))\\n  (list (cl-loop for (k v) on pl by #'cddr collect (cons k v))\\n        (plist-get pl :b)\\n        (plist-member pl :c)))\\n#+end_src\\n\\n#+RESULTS:\\n| ((:a . 1) (:b . 2) (:c . 3)) | 2 | (:c 3) |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((al '((x . 10) (y . 20) (z . 30))))\\n  (list (apply #'append al)\\n        (cdr (assq 'y al))\\n        (assoc 'w al)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8660,12 +8762,11 @@ fn org_babel_execute_property_list_alist_conversion_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_number_theory_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -8706,17 +8807,18 @@ fn org_babel_execute_number_theory_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_string_split_join_match_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"hello\" \"world\" \"foo\" \"bar\"))) \"#+begin_src emacs-lisp :results value replace\\n(split-string \\\"hello world foo bar\\\" \\\" \\\")\\n#+end_src\\n\\n#+RESULTS:\\n| hello | world | foo | bar |\\n\\n#+begin_src emacs-lisp :results value replace\\n(mapconcat #'upcase '(\\\"hello\\\" \\\"world\\\") \\\"-\\\")\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (string-match \\\"[0-9]+\\\" \\\"abc123def456\\\")\\n      (match-string 0 \\\"abc123def456\\\")\\n      (replace-regexp-in-string \\\"[0-9]+\\\" \\\"#\\\" \\\"a1b2c3\\\"))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8752,17 +8854,18 @@ fn org_babel_execute_string_split_join_match_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_setq_let_star_dolist_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((10 20 30))) \"#+begin_src emacs-lisp :results value replace\\n(progn (setq a 10 b 20 c 30) (list a b c))\\n#+end_src\\n\\n#+RESULTS:\\n| 10 | 20 | 30 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let* ((x 5) (y (* x 2)) (z (+ x y)))\\n  (list x y z))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((acc nil))\\n  (dolist (item '(a b c d e))\\n    (push (symbol-name item) acc))\\n  (nreverse acc))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8796,17 +8899,18 @@ fn org_babel_execute_setq_let_star_dolist_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_char_alist_plist_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 35 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"A\" 66 67 \"α\"))) \"#+begin_src emacs-lisp :results value replace\\n(list (char-to-string 65) (string-to-char \\\"B\\\") ?C (char-to-string 945))\\n#+end_src\\n\\n#+RESULTS:\\n| A | 66 | 67 | α |\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((al '((x . 10) (y . 20) (z . 30))))\\n  (list (assq 'y al) (rassoc 30 al) (length al)))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((pl (list :name \\\"Ada\\\" :age 30 :lang \\\"elisp\\\")))\\n  (list (plist-get pl :name) (plist-get pl :age) (plist-member pl :lang)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8842,17 +8946,18 @@ fn org_babel_execute_char_alist_plist_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_recursive_fib_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 31 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((0 1 1 2 3 5 8 13 21 34 55)) ((1 1 2 6 24 120 720 5040 40320))) \"#+NAME: fib\\n#+begin_src emacs-lisp :results value replace\\n(progn\\n  (defun fib (n)\\n    (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))\\n  (mapcar #'fib '(0 1 2 3 4 5 6 7 8 9 10)))\\n#+end_src\\n\\n#+RESULTS: fib\\n| 0 | 1 | 1 | 2 | 3 | 5 | 8 | 13 | 21 | 34 | 55 |\\n\\n#+NAME: fact\\n#+begin_src emacs-lisp :results value replace\\n(progn\\n  (defun fact (n) (if (<= n 1) 1 (* n (fact (1- n)))))\\n  (mapcar #'fact '(0 1 2 3 4 5 6 7 8)))\\n#+end_src\\n\\n#+RESULTS: fact\\n| 1 | 1 | 2 | 6 | 24 | 120 | 720 | 5040 | 40320 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8884,17 +8989,18 @@ fn org_babel_execute_recursive_fib_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_type_coercion_boundary_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":zero\" 0 \":neg\" -1 \":float\" 3.14 \":big\" 9999999999))) \"#+begin_src emacs-lisp :results value replace\\n(list :zero 0 :neg -1 :float 3.14 :big 9999999999)\\n#+end_src\\n\\n#+RESULTS:\\n| :zero | 0 | :neg | -1 | :float | 3.14 | :big | 9999999999 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(list :nil nil :empty-list '() :empty-str \\\"\\\" :empty-vec [])\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (cons 'a nil) (cons nil 'b) (list nil nil nil))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8928,17 +9034,18 @@ fn org_babel_execute_type_coercion_boundary_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_mapcar_filter_reduce_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 4 9 16 25))) \"#+begin_src emacs-lisp :results value replace\\n(mapcar (lambda (x) (* x x)) '(1 2 3 4 5))\\n#+end_src\\n\\n#+RESULTS:\\n| 1 | 4 | 9 | 16 | 25 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(seq-filter (lambda (x) (> x 10)) '(5 12 8 20 3 15))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(seq-reduce #'+ '(1 2 3 4 5) 0)\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let* ((data '(1 2 3 4 5 6 7 8 9 10))\\n       (evens (seq-filter #'evenp data))\\n       (squares (mapcar (lambda (x) (* x x)) evens))\\n       (total (seq-reduce #'+ squares 0)))\\n  (list :evens evens :squares squares :total total))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -8980,12 +9087,11 @@ fn org_babel_execute_mapcar_filter_reduce_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_file_output_tangle_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -9046,16 +9152,17 @@ fn org_babel_execute_file_output_tangle_deep_state_combo() {
                        (or el-content "no-el"))
                       (buffer-substring-no-properties
                        (point-min) (point-max))))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_string_list_table_mixed_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"Hello World\" ((11 \"HELLO WORLD\" \"hello world\")) ((\"Metric\" \"Value\") hline (\"integer\" 11) (\"string\" \"HELLO WORLD\") (\"string\" \"hello world\"))) \"#+NAME: str\\n#+begin_src emacs-lisp :results value replace\\n(concat \\\"Hello\\\" \\\" \\\" \\\"World\\\")\\n#+end_src\\n\\n#+RESULTS: str\\n: Hello World\\n\\n#+NAME: lst\\n#+begin_src emacs-lisp :var s=str :results value replace\\n(list (length s) (upcase s) (downcase s))\\n#+end_src\\n\\n#+RESULTS: lst\\n| 11 | HELLO WORLD | hello world |\\n\\n#+NAME: tbl\\n#+begin_src emacs-lisp :var data=lst :results value table replace\\n(cons '(\\\"Metric\\\" \\\"Value\\\")\\n      (cons 'hline\\n            (mapcar (lambda (v) (list (type-of v) v)) data)))\\n#+end_src\\n\\n#+RESULTS: tbl\\n| Metric  | Value       |\\n|---------+-------------|\\n| integer | 11          |\\n| string  | HELLO WORLD |\\n| string  | hello world |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9094,17 +9201,18 @@ fn org_babel_execute_string_list_table_mixed_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_let_lambda_defun_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((30) \"#+begin_src emacs-lisp :results value replace\\n(let ((a 10) (b 20))\\n  (+ a b))\\n#+end_src\\n\\n#+RESULTS:\\n: 30\\n\\n#+begin_src emacs-lisp :results value replace\\n(funcall (lambda (x y) (+ (* x x) (* y y))) 3 4)\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(progn\\n  (defun factorial (n)\\n    (if (<= n 1) 1 (* n (factorial (1- n)))))\\n  (factorial 10))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9138,17 +9246,18 @@ fn org_babel_execute_let_lambda_defun_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_cond_assoc_lookup_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"medium\") \"#+begin_src emacs-lisp :results value replace\\n(let ((x 5))\\n  (cond ((< x 3) 'small)\\n        ((< x 10) 'medium)\\n        (t 'large)))\\n#+end_src\\n\\n#+RESULTS:\\n: medium\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((table '((a . 1) (b . 2) (c . 3))))\\n  (list (cdr (assoc 'b table))\\n        (assoc 'd table)\\n        (assq 'a table)))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((acc 0))\\n  (dotimes (i 10) (setq acc (+ acc i)))\\n  acc)\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9182,17 +9291,18 @@ fn org_babel_execute_cond_assoc_lookup_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_arithmetic_comparison_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":add\" 6 \":mul\" 20 \":div\" 3 \":mod\" 1))) \"#+begin_src emacs-lisp :results value replace\\n(list :add (+ 1 2 3) :mul (* 4 5) :div (/ 10 3) :mod (% 10 3))\\n#+end_src\\n\\n#+RESULTS:\\n| :add | 6 | :mul | 20 | :div | 3 | :mod | 1 |\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (< 1 2 3) (> 3 2 1) (= 5 5) (<= 3 3) (>= 4 3))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(list (abs -5) (max 1 3 2) (min 5 2 8) (expt 2 10) (sqrt 144))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9226,17 +9336,18 @@ fn org_babel_execute_arithmetic_comparison_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_string_concat_format_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"Hello World !\") \"#+begin_src emacs-lisp :results value replace\\n(concat \\\"Hello\\\" \\\" \\\" \\\"World\\\" \\\" \\\" \\\"!\\\")\\n#+end_src\\n\\n#+RESULTS:\\n: Hello World !\\n\\n#+begin_src emacs-lisp :results value replace\\n(format \\\"name=%s age=%d score=%.2f\\\" \\\"Ada\\\" 30 95.678)\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((s \\\"Hello World\\\"))\\n  (list (upcase s) (downcase s) (length s) (substring s 0 5)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9271,17 +9382,18 @@ fn org_babel_execute_string_concat_format_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_map_accumulate_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5)) ((1 1 1) (2 4 8) (3 9 27) (4 16 64) (5 25 125)) ((\":total-squares\" 55 \":total-cubes\" 225 \":count\" 5)) \"squares=55 cubes=225 n=5\") \"#+NAME: seed\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5)\\n#+end_src\\n\\n#+RESULTS: seed\\n| 1 | 2 | 3 | 4 | 5 |\\n\\n#+NAME: mapper\\n#+begin_src emacs-lisp :var data=seed :results value replace\\n(mapcar (lambda (x) (list x (* x x) (* x x x))) data)\\n#+end_src\\n\\n#+RESULTS: mapper\\n| 1 |  1 |   1 |\\n| 2 |  4 |   8 |\\n| 3 |  9 |  27 |\\n| 4 | 16 |  64 |\\n| 5 | 25 | 125 |\\n\\n#+NAME: accumulator\\n#+begin_src emacs-lisp :var data=mapper :results value replace\\n(list :total-squares (apply #'+ (mapcar #'cadr data))\\n      :total-cubes (apply #'+ (mapcar #'caddr data))\\n      :count (length data))\\n#+end_src\\n\\n#+RESULTS: accumulator\\n| :total-squares | 55 | :total-cubes | 225 | :count | 5 |\\n\\n#+NAME: displayer\\n#+begin_src emacs-lisp :var acc=accumulator :results output replace\\n(princ (format \\\"squares=%d cubes=%d n=%d\\\"\\n               (plist-get acc :total-squares)\\n               (plist-get acc :total-cubes)\\n               (plist-get acc :count)))\\n#+end_src\\n\\n#+RESULTS: displayer\\n: squares=55 cubes=225 n=5\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9328,17 +9440,18 @@ fn org_babel_execute_map_accumulate_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_complex_list_structure_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\"users\" \"(name . Ada)\" \"(age . 30)\" \"\" \"\") (\"scores\" 95 87 92 88) (\"meta\" \"(created . 2026-05-27)\" \"(version . 2)\" \"\" \"\"))) \"#+begin_src emacs-lisp :results value replace\\n'((users . ((name . \\\"Ada\\\") (age . 30)))\\n  (scores . (95 87 92 88))\\n  (meta . ((created . \\\"2026-05-27\\\") (version . 2))))\\n#+end_src\\n\\n#+RESULTS:\\n| users  | (name . Ada)           | (age . 30)    |    |    |\\n| scores | 95                     | 87            | 92 | 88 |\\n| meta   | (created . 2026-05-27) | (version . 2) |    |    |\\n\\n#+begin_src emacs-lisp :var data=src_1 :results value replace\\n(list :user-name (cdr (assoc 'name (cdr (assoc 'users data))))\\n      :avg-score (/ (apply #'+ (cdr (assoc 'scores data)))\\n                    (length (cdr (assoc 'scores data))))\\n      :version (cdr (assoc 'version (cdr (assoc 'meta data)))))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9373,17 +9486,18 @@ fn org_babel_execute_complex_list_structure_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_result_type_boolean_vector_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"t\") \"#+begin_src emacs-lisp :results value replace\\nt\\n#+end_src\\n\\n#+RESULTS:\\n: t\\n\\n#+begin_src emacs-lisp :results value replace\\nnil\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n[1 2 3 4 5]\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n(let ((ht (make-hash-table)))\\n  (puthash 'a 1 ht)\\n  (puthash 'b 2 ht)\\n  ht)\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9421,17 +9535,18 @@ fn org_babel_execute_result_type_boolean_vector_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_block_var_ref_result_order_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"((a . 10) (b . 20) (c . 30))\" \"((a . 20) (b . 40) (c . 60))\" 120) \"#+NAME: producer\\n#+begin_src emacs-lisp :results value replace\\n'((a . 10) (b . 20) (c . 30))\\n#+end_src\\n\\n#+RESULTS: producer\\n: ((a . 10) (b . 20) (c . 30))\\n\\n#+NAME: consumer\\n#+begin_src emacs-lisp :var data=producer :results value replace\\n(mapcar (lambda (pair)\\n          (cons (car pair) (* 2 (cdr pair))))\\n        data)\\n#+end_src\\n\\n#+RESULTS: consumer\\n: ((a . 20) (b . 40) (c . 60))\\n\\n#+NAME: aggregator\\n#+begin_src emacs-lisp :var data=consumer :results value replace\\n(apply #'+ (mapcar #'cdr data))\\n#+end_src\\n\\n#+RESULTS: aggregator\\n: 120\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9470,17 +9585,18 @@ fn org_babel_execute_block_var_ref_result_order_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_named_result_header_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 55 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":count\" 3 \":sum\" 274 \":avg\" 91 \":max\" 95 \":min\" 87)) \"n=3 sum=274 avg=91 max=95 min=87\") ((\"Name\" \"Score\") hline (\"Alice\" \"95\") (\"Bob\" \"87\") (\"Carol\" \"92\")) \"#+NAME: scores\\n| Name | Score |\\n|------+-------|\\n| Alice | 95 |\\n| Bob | 87 |\\n| Carol | 92 |\\n\\n#+NAME: analysis\\n#+begin_src emacs-lisp :var tbl=scores :results value replace\\n(let ((scores (mapcar #'cadr tbl)))\\n  (list :count (length scores)\\n        :sum (apply #'+ scores)\\n        :avg (/ (apply #'+ scores) (length scores))\\n        :max (apply #'max scores)\\n        :min (apply #'min scores)))\\n#+end_src\\n\\n#+RESULTS: analysis\\n| :count | 3 | :sum | 274 | :avg | 91 | :max | 95 | :min | 87 |\\n\\n#+NAME: report\\n#+begin_src emacs-lisp :var stats=analysis :results output replace\\n(princ (format \\\"n=%d sum=%d avg=%d max=%d min=%d\\\"\\n               (plist-get stats :count)\\n               (plist-get stats :sum)\\n               (plist-get stats :avg)\\n               (plist-get stats :max)\\n               (plist-get stats :min)))\\n#+end_src\\n\\n#+RESULTS: report\\n: n=3 sum=274 avg=91 max=95 min=87\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9536,17 +9652,18 @@ fn org_babel_execute_table_named_result_header_deep_combo() {
           (list (nreverse results)
                 table-lisp
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_result_insert_update_replace_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"#+NAME: counter\\n#+begin_src emacs-lisp :results value replace\\n(progn (setq neo-oracle-babel-counter (1+ (if (boundp 'neo-oracle-babel-counter) neo-oracle-babel-counter 0))) neo-oracle-babel-counter)\\n#+end_src\\n\\n#+RESULTS: counter\\n: 1\\n\\n\" nil \"#+NAME: counter\\n#+begin_src emacs-lisp :results value replace\\n(progn (setq neo-oracle-babel-counter (1+ (if (boundp 'neo-oracle-babel-counter) neo-oracle-babel-counter 0))) neo-oracle-babel-counter)\\n#+end_src\\n\\n#+RESULTS: counter\\n: 2\\n\\n\" nil \"#+NAME: counter\\n#+begin_src emacs-lisp :results value replace\\n(progn (setq neo-oracle-babel-counter (1+ (if (boundp 'neo-oracle-babel-counter) neo-oracle-babel-counter 0))) neo-oracle-babel-counter)\\n#+end_src\\n\\n\" \"#+NAME: counter\\n#+begin_src emacs-lisp :results value replace\\n(progn (setq neo-oracle-babel-counter (1+ (if (boundp 'neo-oracle-babel-counter) neo-oracle-babel-counter 0))) neo-oracle-babel-counter)\\n#+end_src\\n\\n#+RESULTS: counter\\n: 3\\n\\n\" nil)""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9558,7 +9675,7 @@ fn org_babel_execute_result_insert_update_replace_deep_combo() {
       ;; Block with placeholder result
       (insert "#+NAME: counter\n")
       (insert "#+begin_src emacs-lisp :results value replace\n")
-      (insert "(random 1000)\n")
+      (insert "(progn (setq neo-oracle-babel-counter (1+ (if (boundp 'neo-oracle-babel-counter) neo-oracle-babel-counter 0))) neo-oracle-babel-counter)\n")
       (insert "#+end_src\n\n")
       (insert "#+RESULTS: counter\n")
       (insert ": placeholder\n\n")
@@ -9595,17 +9712,18 @@ fn org_babel_execute_result_insert_update_replace_deep_combo() {
                     (integerp result-2)
                     after-remove
                     after-new
-                    (integerp result-3))))))))))"##,
+                    (integerp result-3)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_result_type_string_number_list_deep_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((42) \"#+begin_src emacs-lisp :results value replace\\n42\\n#+end_src\\n\\n#+RESULTS:\\n: 42\\n\\n#+begin_src emacs-lisp :results value replace\\n\\\"hello world\\\"\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n'((name . \\\"Ada\\\") (age . 30) (lang . \\\"elisp\\\"))\\n#+end_src\\n\\n#+begin_src emacs-lisp :results value replace\\n'((a 1) (b (2 3)) (c (d 4)))\\n#+end_src\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9643,17 +9761,18 @@ fn org_babel_execute_result_type_string_number_list_deep_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_nested_var_reference_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((1 2 3 4 5)) ((\":count\" 5 \":sum\" 15 \":avg\" 3)) \"count=5 sum=15 avg=3\") \"#+NAME: numbers\\n#+begin_src emacs-lisp :results value replace\\n'(1 2 3 4 5)\\n#+end_src\\n\\n#+RESULTS: numbers\\n| 1 | 2 | 3 | 4 | 5 |\\n\\n#+NAME: stats\\n#+begin_src emacs-lisp :var nums=numbers :results value replace\\n(list :count (length nums)\\n      :sum (apply #'+ nums)\\n      :avg (/ (apply #'+ nums) (length nums)))\\n#+end_src\\n\\n#+RESULTS: stats\\n| :count | 5 | :sum | 15 | :avg | 3 |\\n\\n#+NAME: display\\n#+begin_src emacs-lisp :var s=stats :results output replace\\n(princ (format \\\"count=%d sum=%d avg=%d\\\"\\n               (plist-get s :count)\\n               (plist-get s :sum)\\n               (plist-get s :avg)))\\n#+end_src\\n\\n#+RESULTS: display\\n: count=5 sum=15 avg=3\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9695,17 +9814,18 @@ fn org_babel_execute_nested_var_reference_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_output_format_string_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 31 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"line-0\\nline-1\\nline-2\\nline-3\\nline-4\" \"key=test val=42 pi=3.14\") \"#+NAME: multiline\\n#+begin_src emacs-lisp :results output replace\\n(dotimes (i 5)\\n  (princ (format \\\"line-%d\\\\n\\\" i)))\\n#+end_src\\n\\n#+RESULTS: multiline\\n: line-0\\n: line-1\\n: line-2\\n: line-3\\n: line-4\\n\\n#+NAME: formatted\\n#+begin_src emacs-lisp :results output replace\\n(princ (format \\\"key=%s val=%d pi=%.2f\\\" \\\"test\\\" 42 3.14159))\\n#+end_src\\n\\n#+RESULTS: formatted\\n: key=test val=42 pi=3.14\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9737,17 +9857,18 @@ fn org_babel_execute_output_format_string_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_multiple_named_results_order_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 33 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"first-val\" ((\"first-val\" \"second-val\")) \"chain=(\\\"first-val\\\" second-val)\") \"#+NAME: first\\n#+begin_src emacs-lisp :results value replace\\n'first-val\\n#+end_src\\n\\n#+RESULTS: first\\n: first-val\\n\\n#+NAME: second\\n#+begin_src emacs-lisp :var prev=first :results value replace\\n(list prev 'second-val)\\n#+end_src\\n\\n#+RESULTS: second\\n| first-val | second-val |\\n\\n#+NAME: third\\n#+begin_src emacs-lisp :var prev=second :results output replace\\n(princ (format \\\"chain=%S\\\" prev))\\n#+end_src\\n\\n#+RESULTS: third\\n: chain=(\\\"first-val\\\" second-val)\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9781,17 +9902,18 @@ fn org_babel_execute_multiple_named_results_order_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_noweb_var_chain_output_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((30 \"val=30\") \"#+NAME: config\\n#+begin_src emacs-lisp\\n(defconst base-val 10)\\n#+end_src\\n\\n#+NAME: compute\\n#+begin_src emacs-lisp :var x=3 :noweb yes :results value replace\\n(let ((b (progn <<config>> base-val)))\\n  (* x b))\\n#+end_src\\n\\n#+RESULTS: compute\\n: 30\\n\\n#+NAME: displayer\\n#+begin_src emacs-lisp :var val=compute :results output replace\\n(princ (format \\\"val=%d\\\" val))\\n#+end_src\\n\\n#+RESULTS: displayer\\n: val=30\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9829,17 +9951,18 @@ fn org_babel_execute_noweb_var_chain_output_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_table_var_format_spec_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":row-count\" 3 \":x-sum\" 9 \":y-sum\" 12)) \"rows=3 x=9 y=12\") ((\"X\" \"Y\") hline (\"1\" \"2\") (\"3\" \"4\") (\"5\" \"6\")) \"#+NAME: data\\n| X | Y |\\n|---+---|\\n| 1 | 2 |\\n| 3 | 4 |\\n| 5 | 6 |\\n\\n#+NAME: summer\\n#+begin_src emacs-lisp :var tbl=data :results value replace\\n(list :row-count (length tbl)\\n      :x-sum (apply #'+ (mapcar #'car tbl))\\n      :y-sum (apply #'+ (mapcar #'cadr tbl)))\\n#+end_src\\n\\n#+RESULTS: summer\\n| :row-count | 3 | :x-sum | 9 | :y-sum | 12 |\\n\\n#+NAME: formatter\\n#+begin_src emacs-lisp :var stats=summer :results output replace\\n(princ (format \\\"rows=%d x=%d y=%d\\\"\\n               (plist-get stats :row-count)\\n               (plist-get stats :x-sum)\\n               (plist-get stats :y-sum)))\\n#+end_src\\n\\n#+RESULTS: formatter\\n: rows=3 x=9 y=12\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9886,12 +10009,11 @@ fn org_babel_execute_table_var_format_spec_deep_state_combo() {
           (list (nreverse results)
                 table-lisp
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_header_arg_inherit_override_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -9950,17 +10072,18 @@ fn org_babel_execute_header_arg_inherit_override_deep_state_combo() {
                          (regexp-quote root) "<root>"
                          (buffer-substring-no-properties
                           (point-min) (point-max))))))
-          (delete-directory root t))))))"##,
+          (delete-directory root t)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_assign_header_var_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 37 45)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((((\":input\" 5 \":doubled\" 10 \":squared\" 25)) ((\":input\" 10 \":tripled\" 30 \":squared\" 100)) ((\":input\" 20 \":doubled\" 40 \":squared\" 400))) \"#+NAME: doubler\\n#+begin_src emacs-lisp :var n=5 :results value replace\\n(list :input n :doubled (* n 2) :squared (* n n))\\n#+end_src\\n\\n#+RESULTS: doubler\\n| :input | 5 | :doubled | 10 | :squared | 25 |\\n\\n#+NAME: tripler\\n#+begin_src emacs-lisp :var n=10 :results value replace\\n(list :input n :tripled (* n 3) :squared (* n n))\\n#+end_src\\n\\n#+RESULTS: tripler\\n| :input | 10 | :tripled | 30 | :squared | 100 |\\n\\n#+CALL: doubler(n=20) :results value replace\\n\\n#+RESULTS:\\n| :input | 20 | :doubled | 40 | :squared | 400 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -9998,7 +10121,7 @@ fn org_babel_execute_assign_header_var_deep_state_combo() {
           (push (org-babel-read-result) results))
         (list (nreverse results)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -10062,12 +10185,13 @@ fn org_babel_execute_error_handling_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_result_insert_replace_remove_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 37)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"#+NAME: calc\\n#+begin_src emacs-lisp :results value replace\\n(list :a 1 :b 2 :c 3)\\n#+end_src\\n\\n#+RESULTS: calc\\n| :a | 1 | :b | 2 | :c | 3 |\\n:placeholder\\n\\n\" \"(list :a 1 :b 2 :c 3)\\n\" \"#+NAME: calc\\n#+begin_src emacs-lisp :results value replace\\n(list :a 1 :b 2 :c 3)\\n#+end_src\\n:placeholder\\n\\n\" \"#+NAME: calc\\n#+begin_src emacs-lisp :results value replace\\n(list :a 1 :b 2 :c 3)\\n#+end_src\\n\\n#+RESULTS: calc\\n| :a | 1 | :b | 2 | :c | 3 |\\n\\n:placeholder\\n\\n\" \"(list :a 1 :b 2 :c 3)\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -10106,17 +10230,18 @@ fn org_babel_execute_result_insert_replace_remove_deep_state_combo() {
                    result-val
                    after-remove
                    after-reexec
-                   reexec-val))))))))"##,
+                   reexec-val)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_babel_execute_output_var_list_table_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 47 48)""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"line-0\\nline-1\\nline-2\" ((\"x\" 1) (\"y\" 2) (\"z\" 3)) ((\"Key\" \"Val\") hline (\"x\" 10) (\"y\" 20) (\"z\" 30))) ((src-block \"out\" \"(dotimes (i 3)\\n  (princ (format \\\"line-%d\\\\n\\\" i)))\\n\") (fixed-width nil \"line-0\\nline-1\\nline-2\") (src-block \"lst\" \"'((x 1) (y 2) (z 3))\\n\") (src-block \"tbl\" \"(cons '(\\\"Key\\\" \\\"Val\\\")\\n      (cons 'hline\\n            (mapcar (lambda (r) (list (car r) (* 10 (cadr r)))) data)))\\n\")) \"#+NAME: out\\n#+begin_src emacs-lisp :results output replace\\n(dotimes (i 3)\\n  (princ (format \\\"line-%d\\\\n\\\" i)))\\n#+end_src\\n\\n#+RESULTS: out\\n: line-0\\n: line-1\\n: line-2\\n\\n#+NAME: lst\\n#+begin_src emacs-lisp :results value replace\\n'((x 1) (y 2) (z 3))\\n#+end_src\\n\\n#+RESULTS: lst\\n| x | 1 |\\n| y | 2 |\\n| z | 3 |\\n\\n#+NAME: tbl\\n#+begin_src emacs-lisp :var data=lst :results value table replace\\n(cons '(\\\"Key\\\" \\\"Val\\\")\\n      (cons 'hline\\n            (mapcar (lambda (r) (list (car r) (* 10 (cadr r)))) data)))\\n#+end_src\\n\\n#+RESULTS: tbl\\n| Key | Val |\\n|-----+-----|\\n| x   |  10 |\\n| y   |  20 |\\n| z   |  30 |\\n\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -10164,7 +10289,7 @@ fn org_babel_execute_output_var_list_table_deep_state_combo() {
           (list (nreverse results)
                 elements
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }

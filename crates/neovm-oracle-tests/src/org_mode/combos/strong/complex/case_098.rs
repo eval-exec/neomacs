@@ -38,15 +38,14 @@ fn combo98_org_todo_state_with_logging() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo98_org_entities_user_math() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 3 77)""#]];
+    let expect = expect_test::expect![[r#""OK (:times \"×\" :div \"÷\" :pm \"±\" :infty \"∞\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (require 'org-entities) (list
  :times (nth 6 (org-entity-get "times")) :div (nth 6 (org-entity-get "div"))
- :pm (nth 6 (org-entity-get "pm")) :infty (nth 6 (org-entity-get "infty")))))"##,
+ :pm (nth 6 (org-entity-get "pm")) :infty (nth 6 (org-entity-get "infty"))))"##,
         expect,
     );
 }

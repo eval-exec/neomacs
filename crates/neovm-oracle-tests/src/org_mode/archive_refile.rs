@@ -56,12 +56,11 @@ fn org_archive_subtree_file_context_properties_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_refile_copy_with_logbook_and_bookmark_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 28 55)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -90,7 +89,7 @@ fn org_refile_copy_with_logbook_and_bookmark_combo() {
                    (buffer-substring-no-properties
                     (point-min) (point-max)))))))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (when (file-exists-p file) (delete-file file)))))"##,
+      (when (file-exists-p file) (delete-file file))))"##,
         expect,
     );
 }
@@ -134,12 +133,13 @@ fn org_sparse_tree_match_visibility_and_map_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_refile_targets_cache_new_child_outline_path_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"One\" \"<one>\" nil) (\"One/Projects\" \"<one>\" t) (\"One/Projects/Alpha\" \"<one>\" t) (\"One/Projects/Alpha/Leaf\" \"<one>\" t) (\"One/Inbox\" \"<one>\" t) (\"Two\" \"<two>\" nil) (\"Two/Areas\" \"<two>\" t) (\"Two/Areas/Beta\" \"<two>\" t)) ((\"One\" \"<one>\" nil) (\"One/Projects\" \"<one>\" t) (\"One/Projects/Alpha\" \"<one>\" t) (\"One/Projects/Alpha/Leaf\" \"<one>\" t) (\"One/Inbox\" \"<one>\" t) (\"Two\" \"<two>\" nil) (\"Two/Areas\" \"<two>\" t) (\"Two/Areas/Beta\" \"<two>\" t)) \"#+TITLE: Two\\n* Areas\\n** Beta :home:\\n\\n*** Gamma :new:\\n\" t)""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -202,17 +202,16 @@ fn org_refile_targets_cache_new_child_outline_path_combo() {
                             "^\\*\\{1,3\\}[ \t]")))))
       (dolist (file (list one two))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (when (file-exists-p file) (delete-file file)))))"##,
+      (when (file-exists-p file) (delete-file file))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_capture_refile_to_file_headline_then_archive_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (search-failed \"New task from capture\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -302,7 +301,7 @@ fn org_capture_refile_to_file_headline_then_archive_combo() {
                                  (regexp-quote root) "<root>" s))
                               org-stored-links)
                       "\n")))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))))"##,
         expect,
     );
 }
@@ -811,12 +810,11 @@ Task B body
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_refile_multi_target_edit_refile_back_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 54 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -871,7 +869,7 @@ fn org_refile_multi_target_edit_refile_back_deep() {
       (dolist (f (list file-a file-b))
         (when (get-file-buffer f) (kill-buffer (get-file-buffer f)))
         (when (file-exists-p f) (delete-file f)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

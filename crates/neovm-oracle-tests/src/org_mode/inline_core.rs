@@ -1460,7 +1460,6 @@ fn org_attach_copy_list_and_tag_mutation_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_planning_property_timestamp_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1506,7 +1505,7 @@ fn org_element_planning_property_timestamp_combo() {
                  (org-element-property :value element)
                  (funcall timestamp-summary element))
            out)))
-      (nreverse out))))"#,
+      (nreverse out)))"#,
         expect,
     );
 }

@@ -145,12 +145,11 @@ fn org_mobile_move_capture_apply_edit_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_mobile_olp_locate_edit_refile_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -197,7 +196,7 @@ fn org_mobile_olp_locate_edit_refile_combo() {
                     (buffer-substring-no-properties
                      (point-min) (point-max)))))))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -272,12 +271,11 @@ fn org_mobile_escape_compare_timestamp_checksum_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_mobile_push_agenda_index_checksums_hooks_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 85 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -363,7 +361,7 @@ fn org_mobile_push_agenda_index_checksums_hooks_combo() {
       (dolist (file (list tasks inbox))
         (when (get-file-buffer file) (kill-buffer (get-file-buffer file))))
       (when (get-buffer "*SUMO*") (kill-buffer "*SUMO*"))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

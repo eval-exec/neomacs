@@ -217,11 +217,11 @@ fn mes_link_attr_caption() {
 // Planning repeater delay
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mes_planning_repeater() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (((cumulate 1 week) nil) (nil (cumulate 1 month)))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -235,7 +235,7 @@ fn mes_planning_repeater() {
                             (org-element-property :repeater-unit s)))
               (when d (list (org-element-property :repeater-type d)
                             (org-element-property :repeater-value d)
-                            (org-element-property :repeater-unit d)))))))"##,
+                            (org-element-property :repeater-unit d))))))))"##,
         expect,
     );
 }
@@ -387,11 +387,12 @@ fn mes_affiliated() {
 // Element map with info
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mes_element_map_info() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (wrong-number-of-arguments (closure (t) (h info) (list (org-element--property :raw-value h nil nil) (plist-get info :first-match))) 1)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -402,7 +403,7 @@ fn mes_element_map_info() {
                      (list (org-element-property :raw-value h)
                            (plist-get info :first-match)))
                    nil 'first-match)))
-    result)"##,
+    result))"##,
         expect,
     );
 }

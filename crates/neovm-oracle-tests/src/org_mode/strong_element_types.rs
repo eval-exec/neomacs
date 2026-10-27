@@ -175,7 +175,6 @@ fn et_example_block_properties() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_quote_block_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -186,12 +185,11 @@ fn et_quote_block_properties() {
   (insert "#+BEGIN_QUOTE\nQuoted text\n#+END_QUOTE")
   (let* ((tree (org-element-parse-buffer))
          (b (car (org-element-map tree 'quote-block (lambda (b) b)))))
-    (org-element-property :value b))"##,
+    (org-element-property :value b)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_center_block_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -202,16 +200,15 @@ fn et_center_block_properties() {
   (insert "#+BEGIN_CENTER\nCentered text\n#+END_CENTER")
   (let* ((tree (org-element-parse-buffer))
          (b (car (org-element-map tree 'center-block (lambda (b) b)))))
-    (org-element-property :value b))"##,
+    (org-element-property :value b)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_plain_list_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (unordered 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -219,16 +216,15 @@ fn et_plain_list_properties() {
   (let* ((tree (org-element-parse-buffer))
          (pl (car (org-element-map tree 'plain-list (lambda (l) l)))))
     (list (org-element-property :type pl)
-          (length (org-element-contents pl))))"##,
+          (length (org-element-contents pl)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_item_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"- \" on) (\"- \" nil) (\"- \" off))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -238,7 +234,7 @@ fn et_item_properties() {
                   (lambda (it)
                     (list (org-element-property :bullet it)
                           (org-element-property :checkbox it))))))
-    items)"##,
+    items))"##,
         expect,
     );
 }
@@ -262,11 +258,10 @@ fn et_drawer_properties() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_footnote_reference_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"1\" standard) (\"2\" standard))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -276,16 +271,15 @@ fn et_footnote_reference_properties() {
                  (lambda (f)
                    (list (org-element-property :label f)
                          (org-element-property :type f))))))
-    refs)"##,
+    refs))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_footnote_definition_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"1\" 13 37))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -296,16 +290,15 @@ fn et_footnote_definition_properties() {
                    (list (org-element-property :label d)
                          (org-element-property :begin d)
                          (org-element-property :end d))))))
-    defs)"##,
+    defs))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_radio_target_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"my target\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -313,16 +306,15 @@ fn et_radio_target_properties() {
   (let* ((tree (org-element-parse-buffer))
          (targets (org-element-map tree 'radio-target
                     (lambda (rt) (org-element-property :value rt)))))
-    targets)"##,
+    targets))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_statistics_cookie_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"[2/3]\" 8))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -332,16 +324,15 @@ fn et_statistics_cookie_properties() {
                     (lambda (sc)
                       (list (org-element-property :value sc)
                             (org-element-property :begin sc))))))
-    cookies)"##,
+    cookies))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_horizontal_rule_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (7)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -349,16 +340,15 @@ fn et_horizontal_rule_properties() {
   (let* ((tree (org-element-parse-buffer))
          (hrs (org-element-map tree 'horizontal-rule
                 (lambda (hr) (org-element-property :begin hr)))))
-    hrs)"##,
+    hrs))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_table_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"$3=$1+$2\") 2)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -366,16 +356,15 @@ fn et_table_properties() {
   (let* ((tree (org-element-parse-buffer))
          (tbl (car (org-element-map tree 'table (lambda (t) t)))))
     (list (org-element-property :tblfm tbl)
-          (length (org-element-contents tbl))))"##,
+          (length (org-element-contents tbl)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_table_row_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((standard 2) (rule 0) (standard 2))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -385,12 +374,11 @@ fn et_table_row_properties() {
                  (lambda (tr)
                    (list (org-element-property :type tr)
                          (length (org-element-contents tr)))))))
-    rows)"##,
+    rows))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_table_cell_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -402,12 +390,11 @@ fn et_table_cell_properties() {
   (let* ((tree (org-element-parse-buffer))
          (cells (org-element-map tree 'table-cell
                   (lambda (c) (org-element-property :value c)))))
-    cells)"##,
+    cells))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_bold_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -418,12 +405,11 @@ fn et_bold_properties() {
   (insert "Text *bold* more")
   (let* ((tree (org-element-parse-buffer))
          (bold (car (org-element-map tree 'bold (lambda (b) b)))))
-    (org-element-property :value bold))"##,
+    (org-element-property :value bold)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_italic_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -434,12 +420,11 @@ fn et_italic_properties() {
   (insert "Text /italic/ more")
   (let* ((tree (org-element-parse-buffer))
          (italic (car (org-element-map tree 'italic (lambda (i) i)))))
-    (org-element-property :value italic))"##,
+    (org-element-property :value italic)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_code_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -450,12 +435,11 @@ fn et_code_properties() {
   (insert "Text =code= more")
   (let* ((tree (org-element-parse-buffer))
          (code (car (org-element-map tree 'code (lambda (c) c)))))
-    (org-element-property :value code))"##,
+    (org-element-property :value code)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_verbatim_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -466,12 +450,11 @@ fn et_verbatim_properties() {
   (insert "Text ~verbatim~ more")
   (let* ((tree (org-element-parse-buffer))
          (verb (car (org-element-map tree 'verbatim (lambda (v) v)))))
-    (org-element-property :value verb))"##,
+    (org-element-property :value verb)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_underline_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -482,12 +465,11 @@ fn et_underline_properties() {
   (insert "Text _underlined_ more")
   (let* ((tree (org-element-parse-buffer))
          (u (car (org-element-map tree 'underline (lambda (u) u)))))
-    (org-element-property :value u))"##,
+    (org-element-property :value u)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_strikethrough_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -498,12 +480,11 @@ fn et_strikethrough_properties() {
   (insert "Text +strikethrough+ more")
   (let* ((tree (org-element-parse-buffer))
          (s (car (org-element-map tree 'strike (lambda (s) s)))))
-    (org-element-property :value s))"##,
+    (org-element-property :value s)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_superscript_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -514,12 +495,11 @@ fn et_superscript_properties() {
   (insert "Text^{super} more")
   (let* ((tree (org-element-parse-buffer))
          (sup (car (org-element-map tree 'superscript (lambda (s) s)))))
-    (org-element-property :value sup))"##,
+    (org-element-property :value sup)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_subscript_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -530,16 +510,15 @@ fn et_subscript_properties() {
   (insert "Text_{sub} more")
   (let* ((tree (org-element-parse-buffer))
          (sub (car (org-element-map tree 'subscript (lambda (s) s)))))
-    (org-element-property :value sub))"##,
+    (org-element-property :value sub)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_entity_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"alpha\" nil) (\"beta\" nil) (\"gamma\" nil))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -549,32 +528,30 @@ fn et_entity_properties() {
                      (lambda (e)
                        (list (org-element-property :name e)
                              (org-element-property :value e))))))
-    entities)"##,
+    entities))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_latex_fragment_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"$E=mc^2$\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "Text $E=mc^2$ more")
   (let* ((tree (org-element-parse-buffer))
          (frag (car (org-element-map tree 'latex-fragment (lambda (f) f)))))
-    (org-element-property :value frag))"##,
+    (org-element-property :value frag)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_macro_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"greet\" \"{{{greet}}}\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -583,16 +560,15 @@ fn et_macro_properties() {
          (mac (car (org-element-map tree 'macro (lambda (m) m)))))
     (list (org-element-property :key mac)
           (org-element-property :value mac)
-          (org-element-property :args mac)))"##,
+          (org-element-property :args mac))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_export_snippet_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"html\" \"<b>bold</b>\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -600,16 +576,15 @@ fn et_export_snippet_properties() {
   (let* ((tree (org-element-parse-buffer))
          (snippet (car (org-element-map tree 'export-snippet (lambda (s) s)))))
     (list (org-element-property :back-end snippet)
-          (org-element-property :value snippet)))"##,
+          (org-element-property :value snippet))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_export_block_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"HTML\" \"<b>bold</b>\\n\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -617,16 +592,15 @@ fn et_export_block_properties() {
   (let* ((tree (org-element-parse-buffer))
          (block (car (org-element-map tree 'export-block (lambda (b) b)))))
     (list (org-element-property :type block)
-          (org-element-property :value block)))"##,
+          (org-element-property :value block))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_call_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"my-func\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -634,16 +608,17 @@ fn et_call_properties() {
   (let* ((tree (org-element-parse-buffer))
          (call (car (org-element-map tree 'babel-call (lambda (c) c)))))
     (list (org-element-property :call call)
-          (org-element-property :inside-header call)))"##,
+          (org-element-property :inside-header call))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn test_clock_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((timestamp (:standard-properties [22 nil nil nil 61 1 nil nil nil nil nil nil nil nil nil nil nil nil] :type inactive-range :range-type daterange :raw-value \"[2026-01-10 10:00]--[2026-01-10 11:00]\" :year-start 2026 :month-start 1 :day-start 10 :hour-start 10 :minute-start 0 :year-end 2026 :month-end 1 :day-end 10 :hour-end 11 :minute-end 0)) \"1:00\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -651,16 +626,15 @@ fn test_clock_properties() {
   (let* ((tree (org-element-parse-buffer))
          (clock (car (org-element-map tree 'clock (lambda (c) c)))))
     (list (org-element-property :value clock)
-          (org-element-property :duration clock)))"##,
+          (org-element-property :duration clock))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_comment_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"Comment line\\nAnother comment\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -668,16 +642,15 @@ fn et_comment_properties() {
   (let* ((tree (org-element-parse-buffer))
          (comments (org-element-map tree 'comment
                      (lambda (c) (org-element-property :value c)))))
-    comments)"##,
+    comments))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_fixed_width_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"Fixed width\\nAnother line\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -685,28 +658,26 @@ fn et_fixed_width_properties() {
   (let* ((tree (org-element-parse-buffer))
          (fw (org-element-map tree 'fixed-width
                (lambda (f) (org-element-property :value f)))))
-    fw)"##,
+    fw))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_diary_sexp_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"%%(diary-float 1 2 3)\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert "%%(diary-float 1 2 3)")
   (let* ((tree (org-element-parse-buffer))
          (sexp (car (org-element-map tree 'diary-sexp (lambda (s) s)))))
-    (org-element-property :value sexp))"##,
+    (org-element-property :value sexp)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_inlinetask_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -723,16 +694,15 @@ fn et_inlinetask_properties() {
                       (list (org-element-property :raw-value h)
                             (org-element-property :todo-keyword h)
                             (org-element-property :level h)))))))
-    tasks)"##,
+    tasks))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_property_drawer_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (5 36)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -740,16 +710,15 @@ fn et_property_drawer_properties() {
   (let* ((tree (org-element-parse-buffer))
          (pd (car (org-element-map tree 'property-drawer (lambda (pd) pd)))))
     (list (org-element-property :begin pd)
-          (org-element-property :end pd)))"##,
+          (org-element-property :end pd))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn et_node_property_properties() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((\"A\" \"1\") (\"B\" \"2\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -759,7 +728,7 @@ fn et_node_property_properties() {
                   (lambda (np)
                     (list (org-element-property :key np)
                           (org-element-property :value np))))))
-    props)"##,
+    props))"##,
         expect,
     );
 }

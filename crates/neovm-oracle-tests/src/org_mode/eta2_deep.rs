@@ -116,11 +116,10 @@ Under development.
 // Eta-2: org-element with complex export round-trip (all features)
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_export_roundtrip_all_features() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"\" ((1) (1 1) (2)) (1 2 1))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -150,7 +149,7 @@ Paragraph with *bold* and /italic/.
          (mapcar (lambda (h) (org-export-get-headline-number h info))
                  (org-element-map tree 'headline #'identity))
          (mapcar (lambda (h) (org-export-get-relative-level h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -186,7 +185,6 @@ fn eta2_property_inheritance_4_levels() {
 // Eta-2: org-element with complex element operations chain
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_element_operations_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -217,7 +215,7 @@ fn eta2_element_operations_chain() {
                 (substring-no-properties after-extract)
                 (substring-no-properties after-swap)
                 (substring-no-properties (org-element-interpret-data doc))
-                (org-element-property :parent h2))))))))"##,
+                (org-element-property :parent h2)))))))"##,
         expect,
     );
 }
@@ -226,11 +224,10 @@ fn eta2_element_operations_chain() {
 // Eta-2: org-element with complex deferred chain
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_deferred_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (cl-assertion-failed (listp args))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -270,7 +267,7 @@ fn eta2_deferred_chain() {
                               nil (lambda (el)
                                     (org-element-deferred-create
                                      nil (lambda (_) 1)))))))
-     (org-element-property :foo el))))"##,
+     (org-element-property :foo el)))))"##,
         expect,
     );
 }
@@ -636,11 +633,12 @@ Body")
 // Eta-2: org-element with complex export headline numbers (all levels)
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_export_headline_numbers_all_levels() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((1) (1 1) (1 1 1) (1 1 2) (1 2) (1 2 1) (2) (2 1) (2 1 1) (2 2)) (1 2 3 3 2 3 1 2 3 2) (t t t t t t t t t t) (nil nil nil nil nil nil nil nil nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -672,7 +670,7 @@ fn eta2_export_headline_numbers_all_levels() {
          (mapcar (lambda (h) (org-export-numbered-headline-p h info))
                  (org-element-map tree 'headline #'identity))
          (mapcar (lambda (h) (org-export-low-level-p h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -681,11 +679,10 @@ fn eta2_export_headline_numbers_all_levels() {
 // Eta-2: org-element with complex export footnote numbers (all types)
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_export_footnote_numbers_all_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((1 2 3 4 5 6) (t t t t t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -713,7 +710,7 @@ Body[fn:5:nested[fn:6]].
          (mapcar (lambda (ref) (org-export-get-footnote-number ref info))
                  (org-element-map tree 'footnote-reference #'identity))
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -722,11 +719,12 @@ Body[fn:5:nested[fn:6]].
 // Eta-2: org-element with complex export tags/categories
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_export_tags_categories() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"tag1\") (\"tag2\") (\"tag3\") (\"tag1\" \"tag2\") (\"tag3\") (\"tag1\" \"tag3\")) (\"work\" \"work\" \"work\" \"work\" \"work\" \"work\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -750,7 +748,7 @@ fn eta2_export_tags_categories() {
          (mapcar (lambda (h) (org-export-get-tags h info))
                  (org-element-map tree 'headline #'identity))
          (mapcar (lambda (h) (org-export-get-category h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -759,11 +757,10 @@ fn eta2_export_tags_categories() {
 // Eta-2: org-element with complex export first/last sibling
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_export_first_last_sibling() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-number-of-arguments (2 . 2) 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -775,7 +772,7 @@ fn eta2_export_first_last_sibling() {
              (headlines (org-element-map tree 'headline #'identity)))
         (list
          (mapcar #'org-export-first-sibling-p headlines)
-         (mapcar #'org-export-last-sibling-p headlines)))))"##,
+         (mapcar #'org-export-last-sibling-p headlines))))))"##,
         expect,
     );
 }
@@ -932,11 +929,10 @@ fn eta2_export_optional_title() {
 // Eta-2: org-element with complex export node property
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn eta2_export_node_property() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"myid\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -946,7 +942,7 @@ fn eta2_export_node_property() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (headline (car (org-element-map tree 'headline #'identity))))
-        (org-export-get-node-property :CUSTOM_ID headline))))"##,
+        (org-export-get-node-property :CUSTOM_ID headline)))))"##,
         expect,
     );
 }

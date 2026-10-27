@@ -52,12 +52,13 @@ fn org_html_export_drawer_special_footnote_filter_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_html_export_visible_subtree_planning_filter_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (user-error \"Org export aborted.  Unable to resolve link: \\\"export-me\\\"\\nSee ‘org-export-with-broken-links’\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -151,7 +152,7 @@ fn org_html_export_visible_subtree_planning_filter_combo() {
                 (replace-regexp-in-string
                  "org[[:alnum:]]+"
                  "org-id"
-                 html))))))"##,
+                 html)))))))"##,
         expect,
     );
 }
@@ -325,12 +326,13 @@ fn org_export_data_entities_footnote_numbers_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_filter_pipeline_order_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((plain html t) (plain html nil) (link html t) (plain html nil) (plain html nil) (plain html nil) (plain html nil) (plain html nil) (headline html (#(\"Filters\" 0 7 (:parent (#(\"Filters\" 0 7 (:parent #6))))))) (final html t)) t t t \"<div id=\\\"outline-container-org-id\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"org-id\\\"><span class=\\\"section-number-2\\\">1.</span> Alpha</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nPLAIN <a href=\\\"https://example.org\\\">link</a> <!--link-filter-->and <i>italic</i> text.\\n</p>\\n<blockquote>\\n<p>\\nquoted text\\n</p>\\n</blockquote>\\n</div>\\n</div>\\n\\n<!--final-filter-->\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox-html)
@@ -379,7 +381,7 @@ fn org_export_filter_pipeline_order_combo() {
                 (replace-regexp-in-string
                  "org[[:alnum:]]+"
                  "org-id"
-                 html))))))"##,
+                 html)))))))"##,
         expect,
     );
 }
@@ -435,7 +437,6 @@ fn org_export_collect_options_references_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_derived_backend_transcoder_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -454,7 +455,7 @@ fn org_export_derived_backend_transcoder_combo() {
     :filters-alist
     '((:filter-final-output
        . (lambda (output backend info)
-           (concat output "\n<!--oracle-html-->")))))
+           (concat output "\n<!--oracle-html-->"))))
   (with-temp-buffer
     (org-mode)
     (insert "#+TITLE: Derived\n")
@@ -473,17 +474,18 @@ fn org_export_derived_backend_transcoder_combo() {
                  (replace-regexp-in-string
                   "org[[:alnum:]]+"
                   "org-id"
-                  html))))))"##,
+                  html)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_headline_number_tags_todo_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 38 64)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (6 3 1 2 2 5 0 t t \"<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">1.</span> <span class=\\\"todo TODO\\\">TODO</span> Alpha&nbsp;&nbsp;&nbsp<span class=\\\"tag\\\"><span class=\\\"work\\\">work</span></span></h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nAlpha body.\\n</p>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"orgHASH\\\"><span class=\\\"section-number-3\\\">1.1.</span> <span class=\\\"done DONE\\\">DONE</span> Sub Alpha</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-1-1\\\">\\n<p>\\nSub alpha body.\\n</p>\\n</div>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"orgHASH\\\"><span class=\\\"section-number-3\\\">1.2.</span> WAIT Sub Alpha2</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-1-2\\\">\\n<p>\\nSub alpha2 body.\\n</p>\\n</div>\\n</div>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">2.</span> Beta&nbsp;&nbsp;&nbsp<span class=\\\"tag\\\"><span class=\\\"home\\\">home</span></span></h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-2\\\">\\n<p>\\nBeta body.\\n</p>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"orgHASH\\\"><span class=\\\"section-number-3\\\">2.1.</span> <span class=\\\"todo TODO\\\">TODO</span> Sub Beta</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-2-1\\\">\\n<p>\\nSub beta body.\\n</p>\\n</div>\\n</div>\\n</div>\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -522,17 +524,18 @@ fn org_export_headline_number_tags_todo_deep_state_combo() {
               (replace-regexp-in-string
                "sec:org[[:alnum:]-]+" "sec:org-id"
                (replace-regexp-in-string
-                "org[[:alnum:]-]\\{8,\\}" "orgHASH" html))))))))"##,
+                "org[0-9a-f]\\{7\\}" "orgHASH" html)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_latex_math_table_footnote_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 63)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (1 1 1 0 1 nil t t \"\\\\section{Section}\\n\\\\label{sec:org-id}\\nFormula \\\\(x^2 + y^2 = z^2\\\\) inline.\\n\\nDisplay equation:\\n\\\\[E = mc^2\\\\]\\n\\n\\\\begin{center}\\n\\\\begin{tabular}{rrr}\\nA & B & Sum\\\\\\\\\\n\\\\hline\\n1 & 2 & 3\\\\\\\\\\n4 & 5 & 9\\\\\\\\\\n\\\\end{tabular}\\n\\\\end{center}\\n\\nFootnote\\\\footnote{Definition with \\\\(\\\\alpha\\\\) math.} reference.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -567,17 +570,18 @@ fn org_export_latex_math_table_footnote_deep_state_combo() {
               (not (null (string-match-p "z\\^2" latex)))
               (not (null (string-match-p "E = mc" latex)))
               (replace-regexp-in-string
-               "sec:org[[:alnum:]-]+" "sec:org-id" latex)))))))"##,
+               "sec:org[[:alnum:]-]+" "sec:org-id" latex))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_options_tags_toc_num_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 44 50)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (3 nil 151 154 264 206 842 \"<div id=\\\"table-of-contents\\\" role=\\\"doc-toc\\\">\\n<h2>Table of Contents</h2>\\n<div id=\\\"text-table-of-contents\\\" role=\\\"doc-toc\\\">\\n<ul>\\n<li><a href=\\\"#orgHASH\\\">1. Section One</a>\\n<ul>\\n<li><a href=\\\"#orgHASH\\\">1.1. Sub 1.1</a></li>\\n</ul>\\n</li>\\n<li><a href=\\\"#orgHASH\\\">2. Section Two</a></li>\\n</ul>\\n</div>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">1.</span> Section One</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nFirst section.\\n</p>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"orgHASH\\\"><span class=\\\"section-number-3\\\">1.1.</span> Sub 1.1</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-1-1\\\">\\n<p>\\nSub content.\\n</p>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-4\\\">\\n<h4 id=\\\"orgHASH\\\"><span class=\\\"section-number-4\\\">1.1.1.</span> Sub 1.1.1</h4>\\n<div class=\\\"outline-text-4\\\" id=\\\"text-1-1-1\\\">\\n<p>\\nDeep content.\\n</p>\\n</div>\\n</div>\\n</div>\\n</div>\\n<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">2.</span> Section Two</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-2\\\">\\n<p>\\nSecond section.\\n</p>\\n</div>\\n</div>\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -621,18 +625,19 @@ fn org_export_options_tags_toc_num_deep_state_combo() {
             toc-has-1-1-1
             (replace-regexp-in-string
              "sec:org[[:alnum:]-]+" "sec:org-id"
-             (replace-regexp-in-string "org[[:alnum:]-]\\{8,\\}" "orgHASH"
-                                       html)))))))"##,
+             (replace-regexp-in-string "org[0-9a-f]\\{7\\}" "orgHASH"
+                                       html))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_filter_babel_call_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 44 64)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (nil ((\"emacs-lisp\" \"(+ 1 2)\\n\")) (\"Quoted.\\n\") 154 502 380 \"<div id=\\\"table-of-contents\\\" role=\\\"doc-toc\\\">\\n<h2>Table of Contents</h2>\\n<div id=\\\"text-table-of-contents\\\" role=\\\"doc-toc\\\">\\n<ul>\\n<li><a href=\\\"#org-id\\\">1. Section</a></li>\\n</ul>\\n</div>\\n</div>\\n<div id=\\\"outline-container-org-id\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"org-id\\\"><span class=\\\"section-number-2\\\">1.</span> Section</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<div class=\\\"org-src-container\\\">\\n<pre class=\\\"src src-emacs-lisp\\\"><code>(+ 1 2)\\n</code></pre>\\n</div>\\n\\n<p>\\nParagraph.\\n</p>\\n\\n<blockquote>\\n<p>\\nQuoted.\\n</p>\\n</blockquote>\\n</div>\\n</div>\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -677,7 +682,7 @@ fn org_export_filter_babel_call_deep_state_combo() {
               (replace-regexp-in-string
                "org[[:alnum:]]+" "org-id"
                (replace-regexp-in-string
-                "sec:org[[:alnum:]-]+" "sec:org-id" html))))))))"##,
+                "sec:org[[:alnum:]-]+" "sec:org-id" html)))))))"##,
         expect,
     );
 }
@@ -765,12 +770,13 @@ fn org_org_export_native_planning_macro_footnote_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_export_hooks_parse_tree_navigation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((processing html \"#+TITLE: Hooked\") (parsing html \"#+TITLE: Hooked\") (options html (#(\"Hooked\" 0 6 (:parent (#(\"Hooked\" 0 6 (:parent #6)))))) t) (tree html (\"Keep\" \"Added\") 0)) nil nil \"???\" \"???\" t t t t t t \"<div id=\\\"outline-container-org-id\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"org-id\\\"><span class=\\\"section-number-2\\\">1.</span> Keep</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nFirst paragraph with Before-macro.\\nSecond paragraph inserted before parsing.\\n</p>\\n\\n<strong>raw html</strong>\\n</div>\\n</div>\\n<div id=\\\"outline-container-org-id\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"org-id\\\"><span class=\\\"section-number-2\\\">2.</span> Added</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-2\\\">\\n<p>\\nAdded paragraph with <a href=\\\"https://example.org\\\">link</a>.\\n</p>\\n</div>\\n</div>\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox-html)
@@ -864,7 +870,7 @@ fn org_export_hooks_parse_tree_navigation_combo() {
                 (replace-regexp-in-string
                  "org[[:alnum:]]+"
                  "org-id"
-                 html))))))"##,
+                 html)))))))"##,
         expect,
     );
 }

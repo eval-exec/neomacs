@@ -385,7 +385,6 @@ fn org_beamer_export_columns_blocks_againframe_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_html_export_detailed_structure_link_image_table_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -452,17 +451,18 @@ fn org_html_export_detailed_structure_link_image_table_combo() {
          (while (string-match "<td" html s)
            (setq s (match-end 0) td-count (1+ td-count)))
          td-count)
-        normalized)))))"##,
+        normalized))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_multi_backend_export_structure_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 59 58)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((2 2 4 1 0 4 1 1) (1 1 1 0 2 1 1 2) (nil t t nil) \"<div id=\\\"outline-container-orgHASH\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"orgHASH\\\"><span class=\\\"section-number-2\\\">1.</span> Section One&nbsp;&nbsp;&nbsp<span class=\\\"tag\\\"><span class=\\\"tag1\\\">tag1</span></span></h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nParagraph with <b>bold</b>, <i>italic</i>, <code>code</code>, and <code>verbatim</code>.\\n</p>\\n\\n<ul class=\\\"org-ul\\\">\\n<li class=\\\"on\\\"><code>[X]</code> Done item</li>\\n<li class=\\\"off\\\"><code>[&nbsp;]</code> Todo item</li>\\n</ul>\\n\\n<table border=\\\"2\\\" cellspacing=\\\"0\\\" cellpadding=\\\"6\\\" rules=\\\"groups\\\" frame=\\\"hsides\\\">\\n\\n\\n<colgroup>\\n<col  class=\\\"org-left\\\" />\\n\\n<col  class=\\\"org-right\\\" />\\n</colgroup>\\n<thead>\\n<tr>\\n<th scope=\\\"col\\\" class=\\\"org-left\\\">Name</th>\\n<th scope=\\\"col\\\" class=\\\"org-right\\\">Val</th>\\n</tr>\\n</thead>\\n<tbody>\\n<tr>\\n<td class=\\\"org-left\\\">A</td>\\n<td class=\\\"org-right\\\">1</td>\\n</tr>\\n\\n<tr>\\n<td class=\\\"org-left\\\">B</td>\\n<td class=\\\"org-right\\\">2</td>\\n</tr>\\n</tbody>\\n</table>\\n\\n<blockquote>\\n<p>\\nQuoted text.\\n</p>\\n</blockquote>\\n</div>\\n<div id=\\\"outline-container-my-id\\\" class=\\\"outline-3\\\">\\n<h3 id=\\\"my-id\\\"><span class=\\\"section-number-3\\\">1.1.</span> Subsection</h3>\\n<div class=\\\"outline-text-3\\\" id=\\\"text-my-id\\\">\\n<p>\\nSee <a href=\\\"https://example.org\\\">Example</a>.\\n</p>\\n</div>\\n</div>\\n</div>\\n\" \"\\\\section{Section One\\\\hfill{}\\\\textsc{tag1}}\\n\\\\label{sec:org-id}\\nParagraph with \\\\textbf{bold}, \\\\emph{italic}, \\\\texttt{code}, and \\\\texttt{verbatim}.\\n\\n\\\\begin{itemize}\\n\\\\item[{$\\\\boxtimes$}] Done item\\n\\\\item[{$\\\\square$}] Todo item\\n\\\\end{itemize}\\n\\n\\\\begin{center}\\n\\\\begin{tabular}{lr}\\nName & Val\\\\\\\\\\n\\\\hline\\nA & 1\\\\\\\\\\nB & 2\\\\\\\\\\n\\\\end{tabular}\\n\\\\end{center}\\n\\n\\\\begin{quote}\\nQuoted text.\\n\\\\end{quote}\\n\\\\subsection{Subsection}\\n\\\\label{sec:org-id}\\nSee \\\\href{https://example.org}{Example}.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox-html)
@@ -519,10 +519,10 @@ fn org_multi_backend_export_structure_deep_state_combo() {
          ;; Full outputs (normalized)
          (replace-regexp-in-string
           "sec:org[[:alnum:]-]+" "sec:org-id"
-          (replace-regexp-in-string "org[[:alnum:]-]\\{8,\\}" "orgHASH"
+          (replace-regexp-in-string "org[0-9a-f]\\{7\\}" "orgHASH"
                                     html))
          (replace-regexp-in-string
-          "sec:org[[:alnum:]-]+" "sec:org-id" latex)))))))"##,
+          "sec:org[[:alnum:]-]+" "sec:org-id" latex))))))"##,
         expect,
     );
 }

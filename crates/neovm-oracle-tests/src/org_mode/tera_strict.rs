@@ -405,11 +405,10 @@ fn tera_all_org_element_secondary_p_combinations() {
 // Tera: org-element with all org-element-map combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn tera_all_org_element_map_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (16 1 1 (bold italic) \"H1\" 0 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -434,7 +433,7 @@ fn tera_all_org_element_map_combinations() {
          ;; Map with no-recursion.
          (length (org-element-map tree 'bold #'identity nil nil 'paragraph))
          ;; Map with affiliated.
-         (length (org-element-map tree 'bold #'identity nil nil nil nil t))))))"##,
+         (length (org-element-map tree 'bold #'identity nil nil nil nil t)))))))"##,
         expect,
     );
 }

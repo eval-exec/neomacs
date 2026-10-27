@@ -734,11 +734,12 @@ fn int_export_opts_attr() {
 // Integration: element hierarchy
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn int_element_hier() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((1 \"L1\" 2) (2 \"L2a\" 2) (3 \"L3a\" 0) (3 \"L3b\" 0) (2 \"L2b\" 1) (3 \"L3c\" 2) (4 \"L4a\" 0) (4 \"L4b\" 0) (1 \"L1b\" 1) (2 \"L2c\" 0))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -747,7 +748,7 @@ fn int_element_hier() {
     (lambda (h)
       (list (org-element-property :level h)
             (org-element-property :raw-value h)
-            (length (org-element-contents h)))))"##,
+            (length (org-element-contents h))))))"##,
         expect,
     );
 }
@@ -1191,11 +1192,12 @@ fn int_property_inherit() {
 // Integration: hierarchy
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn int_hierarchy() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((1 \"L1\" 2) (2 \"L2a\" 2) (3 \"L3a\" 0) (3 \"L3b\" 0) (2 \"L2b\" 0) (1 \"L1b\" 0))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -1204,7 +1206,7 @@ fn int_hierarchy() {
     (lambda (h)
       (list (org-element-property :level h)
             (org-element-property :raw-value h)
-            (length (org-element-contents h)))))"##,
+            (length (org-element-contents h))))))"##,
         expect,
     );
 }

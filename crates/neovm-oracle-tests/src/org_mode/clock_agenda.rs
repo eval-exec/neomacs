@@ -55,12 +55,11 @@ DEADLINE: <2026-05-28 Thu>
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clock_three_project_report_edit_add_remove_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 60 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -121,7 +120,7 @@ fn org_clock_three_project_report_edit_add_remove_deep() {
                           (buffer-substring-no-properties
                            (point-min) (point-max))))))))))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -312,12 +311,13 @@ fn org_clock_cancel_history_goto_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clock_resolve_open_clock_ranges_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((#(\"Open\" 0 4 (:clock-mins 20)) 20) (#(\"Closed\" 0 6 (:clock-mins 45)) 45)) 45 \"* TODO Open\\nCLOCK: [2026-05-27 Wed 09:00]--[2026-05-27 Wed 09:20] =>  0:20\\n* TODO Closed\\nCLOCK: [2026-05-27 Wed 08:00]--[2026-05-27 Wed 08:45] =>  0:45\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -346,17 +346,16 @@ fn org_clock_resolve_open_clock_ranges_combo() {
         (list (nreverse props)
               (org-clock-sum-current-item "2026-05-27")
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clocktable_shift_special_range_regenerate_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument fixnump nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -424,7 +423,7 @@ fn org_clocktable_shift_special_range_regenerate_combo() {
                         "2026-W22" "2026-Q2"))
               (nreverse states)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -644,7 +643,6 @@ fn org_clock_interrupt_resume_state_history_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clocktable_agenda_custom_formatter_regenerate_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -772,7 +770,7 @@ fn org_clocktable_agenda_custom_formatter_regenerate_combo() {
                                direct))))))))))
       (dolist (file (list file-a file-b))
         (when (get-file-buffer file) (kill-buffer (get-file-buffer file))))
-      (when (file-directory-p root) (delete-directory root t)))))"##,
+      (when (file-directory-p root) (delete-directory root t)))"##,
         expect,
     );
 }
@@ -847,7 +845,6 @@ fn org_clock_get_table_data_multi_file_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clock_log_agenda_timestamp_filter_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -907,7 +904,7 @@ fn org_clock_log_agenda_timestamp_filter_deep_state_combo() {
                       agenda-text))))))
       (when (get-buffer org-agenda-buffer-name)
         (kill-buffer org-agenda-buffer-name))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -968,12 +965,11 @@ fn org_clock_report_custom_columns_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clock_agenda_filter_tag_effort_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 57 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1031,17 +1027,16 @@ fn org_clock_agenda_filter_tag_effort_deep_state_combo() {
                     (list initial work-filter effort-filter clock-count))))))))
       (when (get-buffer org-agenda-buffer-name)
         (kill-buffer org-agenda-buffer-name))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clock_agenda_multi_file_scope_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 46 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1088,7 +1083,7 @@ fn org_clock_agenda_multi_file_scope_deep_state_combo() {
             (list (nth 1 table-a) rows-a (nth 1 table-b) rows-b))))
       (dolist (f (list file-a file-b))
         (when (get-file-buffer f) (kill-buffer (get-file-buffer f))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -1153,12 +1148,11 @@ fn org_clock_logbook_edit_report_table_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_clock_multi_task_report_edit_recompute_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 56 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1215,7 +1209,7 @@ fn org_clock_multi_task_report_edit_recompute_deep() {
                           (buffer-substring-no-properties
                            (point-min) (point-max))))))))))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

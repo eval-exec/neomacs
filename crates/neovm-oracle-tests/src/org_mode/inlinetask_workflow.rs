@@ -1,12 +1,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_inlinetask_region_insert_promote_demote_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Parent\\nBefore text\\n***** TODO \\nBody line one\\nBody line two\\n\\n***** END\\n\\nAfter text\\n\" 22 73 nil 5 \"* Parent\\nBefore text\\n***** TODO \\nBody line one\\nBody line two\\n\\n***** END\\n\\nAfter text\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -43,7 +44,7 @@ fn org_inlinetask_region_insert_promote_demote_combo() {
               (org-inlinetask-at-task-p)
               (org-inlinetask-get-task-level)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -95,12 +96,13 @@ fn org_inlinetask_element_export_archive_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_inlinetask_visibility_and_remove_end_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((t t 4) org-fold-outline nil \"* Parent\\n**** TODO Inline\\nHidden body\\n\\n** Child\\nBody\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -129,17 +131,18 @@ fn org_inlinetask_visibility_and_remove_end_combo() {
                 folded
                 (org-fold-folded-p (line-end-position) 'headline)
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_inlinetask_fontify_edit_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((\"Inline Alpha\" t org-inlinetask t) (\"Inline Beta\" t org-inlinetask t) (\"bold\" t org-warning t) (\"link\" t org-warning t)) (org-fold-outline 2) ((\"DONE\" \"Inline Alpha\" (\"new\") (timestamp (:standard-properties [128 nil nil nil 144 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2026-05-27 Wed>\" :year-start 2026 :month-start 5 :day-start 27 :hour-start nil :minute-start nil :year-end 2026 :month-end 5 :day-end 27 :hour-end nil :minute-end nil))) (\"WAIT\" \"Inline Beta\" nil nil)) t t t \"<div id=\\\"outline-container-org-id\\\" class=\\\"outline-2\\\">\\n<h2 id=\\\"org-id\\\"><span class=\\\"section-number-2\\\">1.</span> Parent</h2>\\n<div class=\\\"outline-text-2\\\" id=\\\"text-1\\\">\\n<p>\\nBefore.\\n</p>\\n<div class=\\\"inlinetask\\\">\\n<b><span class=\\\"done DONE\\\">DONE</span> Inline Alpha&nbsp;&nbsp;&nbsp<span class=\\\"tag\\\"><span class=\\\"new\\\">new</span></span></b><br />\\n<p>\\nBody with <b>bold</b> and <a href=\\\"https://example.org\\\">link</a>.\\n</p>\\n</div>\\n<div class=\\\"inlinetask\\\">\\n<b><span class=\\\"todo WAIT\\\">WAIT</span> Inline Beta</b><br />\\n<p>\\nBeta body.\\n</p>\\n</div>\\n</div>\\n</div>\\n\" \"#+TITLE: Inline Font\\n* Parent\\nBefore.\\n**** DONE Inline Alpha                                                  :new:\\nSCHEDULED: <2026-05-27 Wed>\\nBody with *bold* and [[https://example.org][link]].\\n**** END\\n**** WAIT Inline Beta\\n:PROPERTIES:\\n:Effort: 0:10\\n:END:\\nBeta body.\\n**** END\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -209,17 +212,16 @@ fn org_inlinetask_fontify_edit_export_combo() {
                   (not (null (string-match-p "new" html)))
                   html
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_inlinetask_cycle_hook_odd_levels_error_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Not in an inline task\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -295,17 +297,16 @@ fn org_inlinetask_cycle_hook_odd_levels_error_combo() {
                 after-demote
                 after-promote
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_inlinetask_adjacent_boundary_cut_paste_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (search-failed \"After\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -416,7 +417,7 @@ fn org_inlinetask_adjacent_boundary_cut_paste_combo() {
                     cut-start
                     (nreverse states)
                     (buffer-substring-no-properties
-                     (point-min) (point-max))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }

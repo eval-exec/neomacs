@@ -231,11 +231,10 @@ fn combo61_clock_effort_property_interaction() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo61_sort_by_clock_sum() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 29)""#]];
+    let expect = expect_test::expect![[r#""OK :sort-error""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -253,7 +252,7 @@ fn combo61_sort_by_clock_sum() {
                (list :after-sort
                      (mapcar (lambda (h) (substring-no-properties (org-element-property :raw-value h)))
                              (org-element-map (org-element-parse-buffer) 'headline #'identity))))
-      (error :sort-error)))))"##,
+      (error :sort-error))))"##,
         expect,
     );
 }

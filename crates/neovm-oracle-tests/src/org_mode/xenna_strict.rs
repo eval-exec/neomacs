@@ -127,11 +127,10 @@ Under development.
 // Xenna: org-element with complex export round-trip
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xenna_complex_export_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"\" ((1) (1 1) (2)) (1 2 1))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -164,7 +163,7 @@ Paragraph with *bold* and /italic/.
                  (org-element-map tree 'headline #'identity))
          ;; Relative levels.
          (mapcar (lambda (h) (org-export-get-relative-level h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -207,7 +206,6 @@ fn xenna_complex_property_inheritance_chain() {
 // Xenna: org-element with complex element operations chain
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xenna_complex_element_operations_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -243,7 +241,7 @@ fn xenna_complex_element_operations_chain() {
                 (substring-no-properties after-swap)
                 (substring-no-properties (org-element-interpret-data doc))
                 ;; h2 has no parent after extract.
-                (org-element-property :parent h2))))))))"##,
+                (org-element-property :parent h2)))))))"##,
         expect,
     );
 }
@@ -252,11 +250,12 @@ fn xenna_complex_element_operations_chain() {
 // Xenna: org-element with complex deferred chain
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn xenna_complex_deferred_chain() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" org-element-property :foo el)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -304,7 +303,7 @@ fn xenna_complex_deferred_chain() {
                               nil (lambda (el)
                                     (org-element-deferred-create
                                      nil (lambda (_) 1)))))))
-     (org-element-property :foo el))))"##,
+     (org-element-property :foo el)))))"##,
         expect,
     );
 }

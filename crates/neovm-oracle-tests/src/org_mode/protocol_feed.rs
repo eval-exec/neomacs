@@ -56,12 +56,13 @@ fn org_protocol_parse_store_open_source_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_protocol_custom_handler_dispatch_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (wrong-type-argument symbolp (closure (t) (plist) (push (list 'normal plist) calls) (plist-get plist :file)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -124,7 +125,7 @@ fn org_protocol_custom_handler_dispatch_combo() {
                t)
               (org-protocol-assign-parameters
                '("https://example.org/old" "Old Title" "body" "extra" "value")
-               '(:url :title :body))))))"##,
+               '(:url :title :body)))))))"##,
         expect,
     );
 }
@@ -254,7 +255,6 @@ fn org_protocol_rewrite_greedy_sanitize_matrix_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_protocol_capture_template_finalize_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -319,7 +319,7 @@ fn org_protocol_capture_template_finalize_combo() {
                      "CAPTURE-org-protocol-capture.org"))
         (when (get-buffer buf) (kill-buffer buf)))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -376,12 +376,11 @@ fn org_feed_rss_parse_entry_insert_filter_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_feed_parse_format_status_add_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -430,7 +429,7 @@ fn org_feed_parse_format_status_add_combo() {
                      (point-min) (point-max)))))))
       (when (get-buffer rss) (kill-buffer rss))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

@@ -352,11 +352,12 @@ fn strong_macro_expand_then_check() {
 // Multi-step: cycle todo then check
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_todo_cycle_then_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 60)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"* TODO H\" 0 8 (org-todo-head \"TODO\")) #(\"* DONE H\" 0 8 (org-todo-head \"TODO\")) #(\"* H\" 0 3 (org-todo-head \"TODO\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -370,7 +371,7 @@ fn strong_todo_cycle_then_check() {
         (org-todo 'done)
         (let ((after-done (buffer-string)))
           (org-todo nil)
-          (list after-todo after-done (buffer-string))))))))"##,
+          (list after-todo after-done (buffer-string)))))))"##,
         expect,
     );
 }
@@ -445,11 +446,10 @@ fn strong_promote_demote_subtree() {
 // Multi-step: cycle list bullet then check
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_cycle_bullet_then_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 52)""#]];
+    let expect = expect_test::expect![[r#""OK (\"+ item\" \"1. item\" \"1) item\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -462,7 +462,7 @@ fn strong_cycle_bullet_then_check() {
         (org-cycle-list-bullet)
         (let ((after2 (buffer-string)))
           (org-cycle-list-bullet)
-          (list after1 after2 (buffer-string))))))))"##,
+          (list after1 after2 (buffer-string)))))))"##,
         expect,
     );
 }
@@ -967,11 +967,12 @@ fn strong_deadline_schedule_combined() {
 // Multi-step: todo cycle through states
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_todo_cycle_through() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 44)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"* TODO H\" 0 8 (org-todo-head \"TODO\")) #(\"* DONE H\" 0 8 (org-todo-head \"TODO\")) #(\"* H\" 0 3 (org-todo-head \"TODO\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -985,7 +986,7 @@ fn strong_todo_cycle_through() {
         (org-todo 'done)
         (let ((s2 (buffer-string)))
           (org-todo nil)
-          (list s1 s2 (buffer-string))))))))"##,
+          (list s1 s2 (buffer-string)))))))"##,
         expect,
     );
 }
@@ -1065,11 +1066,10 @@ fn strong_promote_demote_subtree_roundtrip() {
 // Multi-step: cycle list bullet various
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_cycle_list_bullet_various() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 44)""#]];
+    let expect = expect_test::expect![[r#""OK (\"+ item\" \"1. item\" \"1) item\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1082,7 +1082,7 @@ fn strong_cycle_list_bullet_various() {
         (org-cycle-list-bullet)
         (let ((s2 (buffer-string)))
           (org-cycle-list-bullet)
-          (list s1 s2 (buffer-string))))))))"##,
+          (list s1 s2 (buffer-string)))))))"##,
         expect,
     );
 }
@@ -2045,11 +2045,10 @@ fn strong_export_headline_numbers() {
 // Multi-step: export footnote numbers
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_footnote_numbers() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((1 2) (t t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -2066,7 +2065,7 @@ fn strong_export_footnote_numbers() {
          (mapcar (lambda (ref) (org-export-get-footnote-number ref info))
                  (org-element-map tree 'footnote-reference #'identity))
          (mapcar (lambda (ref) (org-export-footnote-first-reference-p ref info))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -2075,11 +2074,12 @@ fn strong_export_footnote_numbers() {
 // Multi-step: export tags and categories
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_export_tags_categories() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"tag1\") (\"tag2\") nil) (\"work\" \"work\" \"work\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -2096,7 +2096,7 @@ fn strong_export_tags_categories() {
          (mapcar (lambda (h) (org-export-get-tags h info))
                  (org-element-map tree 'headline #'identity))
          (mapcar (lambda (h) (org-export-get-category h info))
-                 (org-element-map tree 'headline #'identity))))))"##,
+                 (org-element-map tree 'headline #'identity)))))))"##,
         expect,
     );
 }
@@ -2581,11 +2581,10 @@ fn strong_table_roundtrips() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_timestamp_roundtrips() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (0 0 0 0 t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -2598,7 +2597,7 @@ fn strong_timestamp_roundtrips() {
      (string-match "\\[2012-03-29 .* 16:40\\]" (funcall f "[2012-03-29 thu. 16:40]"))
      (string-match "<2012-03-29 .* 16:40-16:41>" (funcall f "<2012-03-29 thu. 16:40-16:41>"))
      (string-match "<2012-03-29 .* \\+1y>" (funcall f "<2012-03-29 thu. +1y>"))
-     (equal "<%%(diary-float t 4 2)>\n" (funcall f "<%%(diary-float t 4 2)>"))))"##,
+     (equal "<%%(diary-float t 4 2)>\n" (funcall f "<%%(diary-float t 4 2)>")))))"##,
         expect,
     );
 }

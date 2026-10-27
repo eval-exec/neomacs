@@ -607,11 +607,10 @@ fn gamma_granularity_headline() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn gamma_granularity_greater_element() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -623,16 +622,15 @@ fn gamma_granularity_greater_element() {
       (let ((tree (org-element-parse-buffer 'greater-element)))
         (list (length (org-element-map tree 'center-block 'identity))
               (length (org-element-map tree 'paragraph 'identity))
-              (org-element-map tree 'entity 'identity)))))"##,
+              (org-element-map tree 'entity 'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn gamma_granularity_element() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (2 nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -643,16 +641,15 @@ fn gamma_granularity_element() {
       (goto-char (point-min))
       (let ((tree (org-element-parse-buffer 'element)))
         (list (length (org-element-map tree 'paragraph 'identity))
-              (org-element-map tree 'entity 'identity)))))"##,
+              (org-element-map tree 'entity 'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn gamma_granularity_object() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -662,7 +659,7 @@ fn gamma_granularity_object() {
       (insert "* Head 1\n** Head 2\n#+BEGIN_CENTER\nCentered paragraph.\n#+END_CENTER\nParagraph \\alpha.")
       (goto-char (point-min))
       (let ((tree (org-element-parse-buffer 'object)))
-        (length (org-element-map tree 'entity 'identity)))))"##,
+        (length (org-element-map tree 'entity 'identity))))))"##,
         expect,
     );
 }

@@ -80,13 +80,13 @@ fn combo113_org_timer_set_timer_time() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo113_org_todo_sequence_with_fast_access() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (\"TODO\" #(\"DONE\" 0 4 (org-todo-head \"TODO\")))""#]];
     crate::common::assert_oracle_parity_expect(
-        r##"(with-temp-buffer(org-mode)(let((org-todo-keywords'((sequence"TODO(t)""WAIT(w)""|""DONE(d)""CANCELED(c)"))))(insert"* TODO Task\n")(goto-char(point-min))(let((r()))(push(org-get-todo-state)r)(org-todo)(push(org-get-todo-state)r)(nreverse r)))"##,
+        r##"(with-temp-buffer(org-mode)(let((org-todo-keywords'((sequence"TODO(t)""WAIT(w)""|""DONE(d)""CANCELED(c)"))))(insert"* TODO Task\n")(goto-char(point-min))(let((r()))(push(org-get-todo-state)r)(org-todo)(push(org-get-todo-state)r)(nreverse r))))"##,
         expect,
     );
 }

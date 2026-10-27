@@ -166,12 +166,11 @@ fn org_columns_allowed_value_cycle_and_update_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_format_store_insert_delete_move_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (wrong-type-argument consp \"Status\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -206,7 +205,7 @@ fn org_columns_format_store_insert_delete_move_combo() {
               compiled-edited
               line-with-overlays
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -273,12 +272,13 @@ fn org_duration_parse_format_summary_matrix_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_property_inheritance_compute_mutation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (user-error \"Allowed values for this property have not been defined\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -358,17 +358,16 @@ fn org_columns_property_inheritance_compute_mutation_combo() {
                         (list (org-element-property :key node)
                               (org-element-property :value node))))
                     (buffer-substring-no-properties
-                     (point-min) (point-max))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_dblock_property_summary_refresh_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Not at a dynamic block\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -455,17 +454,18 @@ fn org_columns_dblock_property_summary_refresh_combo() {
                    "%22ITEM(Task) %TODO(State) %Owner %Effort{:} %Score{+;%.1f} %Done{X%}"
                    nil)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_overlay_row_move_recompute_allowed_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"Allowed values for this property have not been defined\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -508,7 +508,7 @@ fn org_columns_overlay_row_move_recompute_allowed_combo() {
                                 (line-number-at-pos))))
                       '("Project" "Alpha" "Beta" "Beta child"))
                      (buffer-substring-no-properties
-                      (point-min) (point-max)))))))
+                      (point-min) (point-max))))))
         (push (funcall snapshot 'initial) states)
         (goto-char (point-min))
         (search-forward "Beta child")
@@ -583,17 +583,16 @@ fn org_columns_overlay_row_move_recompute_allowed_combo() {
                       overlay-after-redo
                       project-computed
                       content-after
-                       (nreverse states))))))))"##,
+                       (nreverse states))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_columns_compute_all_dblock_insert_refresh_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"Unknown \\\":sum\\\" operator\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -642,7 +641,7 @@ fn org_columns_compute_all_dblock_insert_refresh_combo() {
                 project-score
                 content-after
                 dblock-content
-                table-lisp)))))"##,
+                table-lisp))))))"##,
         expect,
     );
 }

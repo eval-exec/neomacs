@@ -128,12 +128,13 @@ fn org_datetree_month_and_day_find_existing_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_datetree_dual_tree_cleanup_level_matrix_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((1 \"Daily\") (2 \"2026\") (3 \"2026-05 May\") (4 \"2026-05-27 Wednesday\") (4 \"2026-05-28 Thursday\") (5 \"Day A\") (4 \"2026-05-29 Friday\") (5 \"Day B\") (1 \"Weekly\") (2 \"2026\") (3 \"2026-W22\") (4 \"Week entry\") (4 \"2026-05-27 Wednesday\") (1 \"Loose\")) ((\"Daily\" 1) (\"2026\" 2) (\"2026-05 May\" 3) (\"2026-05-28 Thursday\" 4) (\"Day A\" 5) (\"Weekly\" 1) (\"2026-W22\" 3) (\"Week entry\" 4) (\"Loose\" 1)) \"* Daily\\n:PROPERTIES:\\n:DATE_TREE: t\\n:END:\\n** 2026\\n*** 2026-05 May\\n**** 2026-05-27 Wednesday\\n<2026-05-27 Wed>\\n**** 2026-05-28 Thursday\\n<2026-05-28 Thu>\\n***** Day A\\nMove marker <2026-05-28 Thu>\\n\\nBody A\\n\\n**** 2026-05-29 Friday\\n<2026-05-29 Fri>\\n\\n***** Day B\\n<2026-05-29 Fri>\\n* Weekly\\n:PROPERTIES:\\n:WEEK_TREE: t\\n:END:\\n** 2026\\n*** 2026-W22\\n\\n**** Week entry\\n**** 2026-05-27 Wednesday\\n<2026-05-27 Wed>\\n\\n* Loose\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (require 'org)
@@ -177,17 +178,16 @@ fn org_datetree_dual_tree_cleanup_level_matrix_combo() {
                         "2026-05-28 Thursday" "Day A"
                         "Weekly" "2026-W22" "Week entry" "Loose"))
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"#,
+               (point-min) (point-max)))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_datetree_narrow_cleanup_sort_timestamp_shift_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (search-failed \"2026-05-27 Wed 20:00\")""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(progn
   (require 'org)
@@ -282,12 +282,11 @@ fn org_datetree_narrow_cleanup_sort_timestamp_shift_combo() {
                         "2026-05-28 Thursday"
                         "** Morning"))
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"#,
+               (point-min) (point-max)))))))"#,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_datetree_keep_restriction_subtree_property_matrix_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -389,7 +388,7 @@ fn org_datetree_keep_restriction_subtree_property_matrix_combo() {
                 not-heading-error
                 (count-matches "^\\*+ " (point-min) (point-max))
                  (buffer-substring-no-properties
-                  (point-min) (point-max))))))))"#,
+                  (point-min) (point-max)))))))"#,
         expect,
     );
 }
@@ -456,12 +455,13 @@ fn org_datetree_insert_find_cleanup_structure_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_datetree_find_insert_edit_multi_date_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 34 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"2026\" 1) (\"2026-05 May\" 2) (\"2026-05-27 Wednesday\" 3) (\"Extra under May 27\" 2) (\"2026-05-28 Thursday\" 3) (\"2026-06 June\" 2) (\"2026-06-01 Monday\" 3)) 7 7 \"2026-05-28 Thursday\" \"\\n* 2026\\n** 2026-05 May\\nEntry for May 27.\\n*** 2026-05-27 Wednesday\\nEntry for May 28.\\n*** 2026-05-28 Thursday\\n\\n** Extra under May 27\\nExtra body.\\n\\n*** 2026-05-28 Thursday\\n** 2026-06 June\\nEntry for June 1.\\n*** 2026-06-01 Monday\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -496,7 +496,7 @@ fn org_datetree_find_insert_edit_multi_date_deep() {
               found-pos
               found-heading
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }

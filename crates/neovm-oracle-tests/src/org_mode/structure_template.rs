@@ -1,12 +1,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_insert_structure_template_region_src_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Heading\\n#+begin_src emacs-lisp\\n(message \\\"*not a headline*\\\")\\n,,#+already escaped\\n#+end_src\\n\" 122 \"* Heading\\n#+begin_src emacs-lisp\\n(message \\\"*not a headline*\\\")\\n,,#+already escaped\\n#+end_src\\nRaw HTML\\n#+BEGIN_EXPORT html\\n#+END_EXPORT\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -31,7 +32,7 @@ fn org_insert_structure_template_region_src_export_combo() {
         (list after-src
               (point)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -295,12 +296,11 @@ fn org_tempo_duplicate_update_include_abort_ast_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_convert_transpose_move_copy_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (user-error \"Cannot move row further\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -331,7 +331,7 @@ fn org_table_convert_transpose_move_copy_combo() {
         (list after-convert
               after-mutations
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -470,12 +470,13 @@ fn org_structure_edit_special_export_context_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_tempo_block_expand_edit_src_exit_writeback_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 61 41)""#]];
+    let expect = expect_test::expect![[
+        r##""OK (\"#+begin_src \\n\\n#+end_src\" \"#+begin_src \\n(+ 1 2)\\n(message \\\"hello\\\")\\n\\n#+end_src\" fundamental-mode \"(+ 1 2)\\n(message \\\"hello\\\")\\n\\n\" \"#+begin_src \\n  (+ 10 20)\\n  (message \\\"modified\\\")\\n#+end_src\" \"#+begin_src \\n  (+ 10 20)\\n  (message \\\"modified\\\")\\n#+end_src\\n#+begin_quote\\nQuoted text.\\n\\n#+end_quote\" \"#+begin_src \\n  (+ 10 20)\\n  (message \\\"modified\\\")\\n#+end_src\\n#+begin_quote\\nQuoted text.\\n\\n#+end_quote\\n#+begin_example\\nExample text.\\n\\n#+end_example\" ((src-block nil \"  (+ 10 20)\\n  (message \\\"modified\\\")\\n\" 1) (quote-block nil nil 59) (example-block nil \"Example text.\\n\\n\" 99)))""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -537,7 +538,7 @@ fn org_tempo_block_expand_edit_src_exit_writeback_combo() {
                         after-exit
                         after-quote
                         after-example
-                        blocks)))))))))))"##,
+                        blocks))))))))))"##,
         expect,
     );
 }

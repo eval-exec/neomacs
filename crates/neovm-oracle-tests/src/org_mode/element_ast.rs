@@ -1,12 +1,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_ast_adopt_extract_set_interpret_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"* TODO Alpha\\nFirst paragraph with *bold*.\\n* Beta\\nSecond paragraph.\\n\" 13 34 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #9 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Second paragraph.\\n\" 0 18 (:parent #15))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #6)]) #3)]) #(\"Replacement with \" 0 17 (:parent #3)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"italic\" 0 6 (:parent #4))) #(\" and =literal= text.\\n\" 0 21 (:parent #3)))) 35 39 (:parent (bold (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil]) #(\"bold\" 0 4 (:parent #3)))) 40 42 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #9 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Second paragraph.\\n\" 0 18 (:parent #15))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #6)]) #3)]) #(\"Replacement with \" 0 17 (:parent #3)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"italic\" 0 6 (:parent #4))) #(\" and =literal= text.\\n\" 0 21 (:parent #3)))) 49 67 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Replacement with \" 0 17 (:parent #15)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #15]) #(\"italic\" 0 6 (:parent #16))) #(\" and =literal= text.\\n\" 0 21 (:parent #15))))) #9)] :level 1 :raw-value \"Beta\" :title (\"Beta\")) #6)]) #3)]) #(\"Second paragraph.\\n\" 0 18 (:parent #3))))) #(\"* TODO Alpha\\nFirst paragraph with .\\n* Beta\\nSecond paragraph.\\n\" 13 34 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #9 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Second paragraph.\\n\" 0 18 (:parent #15))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #6)]) #3)]) #(\"Replacement with \" 0 17 (:parent #3)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"italic\" 0 6 (:parent #4))) #(\" and =literal= text.\\n\" 0 21 (:parent #3)))) 34 36 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #9 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Second paragraph.\\n\" 0 18 (:parent #15))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #6)]) #3)]) #(\"Replacement with \" 0 17 (:parent #3)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"italic\" 0 6 (:parent #4))) #(\" and =literal= text.\\n\" 0 21 (:parent #3)))) 43 61 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Replacement with \" 0 17 (:parent #15)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #15]) #(\"italic\" 0 6 (:parent #16))) #(\" and =literal= text.\\n\" 0 21 (:parent #15))))) #9)] :level 1 :raw-value \"Beta\" :title (\"Beta\")) #6)]) #3)]) #(\"Second paragraph.\\n\" 0 18 (:parent #3))))) (org-data nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #1] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #2]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"Replacement with \" 0 17 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #13 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #16] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #17]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #18]) #(\"Second paragraph.\\n\" 0 18 (:parent #19))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #10)]) #7)]) #(\"Replacement with \" 0 17 (:parent #7)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #7]) #(\"italic\" 0 6 (:parent #8))) #(\" and =literal= text.\\n\" 0 21 (:parent #7))))) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #4]) #(\"italic\" 0 6 (:parent (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #17 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #20] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #21]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #22]) #(\"Second paragraph.\\n\" 0 18 (:parent #23))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #14)]) #11)]) #(\"Replacement with \" 0 17 (:parent #11)) #8 #(\" and =literal= text.\\n\" 0 21 (:parent #11)))]) #(\"italic\" 0 6 (:parent #8)))))) #(\" and =literal= text.\\n\" 0 21 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #13 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #16] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #17]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #18]) #(\"Second paragraph.\\n\" 0 18 (:parent #19))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #10)]) #7)]) #(\"Replacement with \" 0 17 (:parent #7)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #7]) #(\"italic\" 0 6 (:parent #8))) #(\" and =literal= text.\\n\" 0 21 (:parent #7)))))))) (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #1] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #2]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"Second paragraph.\\n\" 0 18 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #16] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #17]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #18]) #(\"Replacement with \" 0 17 (:parent #19)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #19]) #(\"italic\" 0 6 (:parent #20))) #(\" and =literal= text.\\n\" 0 21 (:parent #19))))) #13)] :level 1 :raw-value \"Beta\" :title (\"Beta\")) #10)]) #7)]) #(\"Second paragraph.\\n\" 0 18 (:parent #7))))))))) ((\"Alpha\" 1 (section)) (\"Beta\" 1 (section))) #(\"* TODO Alpha\\nReplacement with /italic/ and =literal= text.\\n* Beta\\nSecond paragraph.\\n\" 13 30 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #9 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Second paragraph.\\n\" 0 18 (:parent #15))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #6)]) #3)]) #(\"Replacement with \" 0 17 (:parent #3)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"italic\" 0 6 (:parent #4))) #(\" and =literal= text.\\n\" 0 21 (:parent #3)))) 31 37 (:parent (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #12 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #15] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #16]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #17]) #(\"Second paragraph.\\n\" 0 18 (:parent #18))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #9)]) #6)]) #(\"Replacement with \" 0 17 (:parent #6)) #3 #(\" and =literal= text.\\n\" 0 21 (:parent #6)))]) #(\"italic\" 0 6 (:parent #3)))) 38 59 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil #9 (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Beta\" :title (\"Beta\")) (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Second paragraph.\\n\" 0 18 (:parent #15))))))] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") #6)]) #3)]) #(\"Replacement with \" 0 17 (:parent #3)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #3]) #(\"italic\" 0 6 (:parent #4))) #(\" and =literal= text.\\n\" 0 21 (:parent #3)))) 66 84 (:parent (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil (org-data nil (headline (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #12] :level 1 :raw-value \"Alpha\" :title (\"Alpha\") :todo-keyword \"TODO\") (section (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #13]) (paragraph (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #14]) #(\"Replacement with \" 0 17 (:parent #15)) (italic (:standard-properties [nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil #15]) #(\"italic\" 0 6 (:parent #16))) #(\" and =literal= text.\\n\" 0 21 (:parent #15))))) #9)] :level 1 :raw-value \"Beta\" :title (\"Beta\")) #6)]) #3)]) #(\"Second paragraph.\\n\" 0 18 (:parent #3))))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -53,7 +54,7 @@ fn org_element_ast_adopt_extract_set_interpret_combo() {
                           (mapcar #'org-element-type
                                   (org-element-contents headline))))
                   (org-element-map doc 'headline #'identity))
-          (org-element-interpret-data doc)))"##,
+          (org-element-interpret-data doc))))"##,
         expect,
     );
 }
@@ -108,12 +109,13 @@ fn org_element_parse_lineage_skip_affiliated_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_buffer_context_swap_refresh_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (paragraph (paragraph section headline org-data) \"* Alpha\\nquoted\\n\\n#+BEGIN_QUOTE\\nFirst paragraph with *bold*.\\n#+END_QUOTE\\n\\n* Beta\\nSecond paragraph with /italic/.\\n\" paragraph paragraph \"* Alpha\\nquoted\\n\\n#+BEGIN_QUOTE\\nFirst paragraph with *bold*.\\n#+END_QUOTE\\n\\n* Beta\\nSecond paragraph now has [[https://gnu.org][GNU]].\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -150,7 +152,7 @@ fn org_element_buffer_context_swap_refresh_combo() {
                 (org-element-type context-after)
                 (org-element-type (org-element-context))
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
@@ -578,12 +580,13 @@ fn org_element_parse_scheduled_deadline_closed_clock_divergence() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_single_scheduled_single_deadline_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 29 42)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 1 \"TODO\") (\"Beta\" 1 \"DONE\")) ((nil nil) (nil nil)) \"* TODO Alpha\\nSCHEDULED: <2026-05-28 Wed>\\nBody alpha.\\n\\n* DONE Beta\\nDEADLINE: <2026-06-01 Mon>\\nBody beta.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -613,17 +616,18 @@ fn org_element_parse_single_scheduled_single_deadline_deep() {
                                       (org-element-property :year-start ts)))))))))
       (list headlines planning
             (buffer-substring-no-properties
-             (point-min) (point-max)))))))"##,
+             (point-min) (point-max))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_property_drawer_set_delete_reparse_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 43 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Alpha\" 1 \"TODO\" nil) (\"Beta\" 2 \"DONE\" nil)) (((\"Effort\" \"2h\") (\"CUSTOM_ID\" \"alpha\") (\"Owner\" \"Alice\")) ((\"Effort\" \"1h\") (\"Owner\" \"Bob\")))) (((\"Alpha\" 1 \"TODO\" nil) (\"Beta\" 2 \"DONE\" nil)) (((\"Effort\" \"2h\") (\"CUSTOM_ID\" \"alpha\") (\"Owner\" \"Alice\") (\"Status\" \"active\")) ((\"Effort\" \"1h\") (\"Owner\" \"Bob\") (\"Priority\" \"high\")))) (((\"Alpha\" 1 \"TODO\" nil) (\"Beta\" 2 \"DONE\" nil)) (((\"Effort\" \"2h\") (\"CUSTOM_ID\" \"alpha\") (\"Status\" \"active\")) ((\"Effort\" \"1h\") (\"Owner\" \"Bob\") (\"Priority\" \"high\")))) \"* TODO Alpha\\n:PROPERTIES:\\n:Effort: 2h\\n:CUSTOM_ID: alpha\\n:Status:   active\\n:END:\\nBody alpha.\\n\\n** DONE Beta\\n:PROPERTIES:\\n:Effort: 1h\\n:Owner: Bob\\n:Priority: high\\n:END:\\nBody beta.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -667,7 +671,7 @@ fn org_element_parse_property_drawer_set_delete_reparse_deep() {
           (let ((after-delete (funcall snap)))
             (list initial after-set after-delete
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -788,12 +792,13 @@ fn org_element_parse_scheduled_deadline_clock_no_closed() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_tag_property_drawer_edit_reparse_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 45 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Alpha\" 1 \"TODO\" (\"work\" \"important\")) (\"Beta\" 2 \"DONE\" (\"home\")) (\"WAIT Gamma\" 3 nil (\"work\" \"urgent\"))) (((\"Effort\" \"2h\") (\"CUSTOM_ID\" \"alpha\") (\"Owner\" \"Alice\")) ((\"Effort\" \"1h\") (\"Owner\" \"Bob\")) ((\"Effort\" \"30m\")))) (((\"Alpha\" 1 \"TODO\" (\"work\" \"important\" \"review\")) (\"Beta\" 2 \"DONE\" (\"home\")) (\"WAIT Gamma\" 3 nil (\"work\" \"urgent\"))) (((\"Effort\" \"2h\") (\"CUSTOM_ID\" \"alpha\")) ((\"Effort\" \"1h\") (\"Owner\" \"Bob\") (\"Status\" \"verified\")) ((\"Effort\" \"30m\")))) \"* TODO Alpha                                          :work:important:review:\\n:PROPERTIES:\\n:Effort: 2h\\n:CUSTOM_ID: alpha\\n:END:\\nBody alpha.\\n\\n** DONE Beta :home:\\n:PROPERTIES:\\n:Effort: 1h\\n:Owner: Bob\\n:Status:   verified\\n:END:\\nBody beta.\\n\\n*** WAIT Gamma :work:urgent:\\n:PROPERTIES:\\n:Effort: 30m\\n:END:\\nBody gamma.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -839,17 +844,18 @@ fn org_element_parse_tag_property_drawer_edit_reparse_deep() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_separate_scheduled_deadline_clock_edit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 53 51)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Alpha\" 1 \"TODO\") (\"Beta\" 2 \"DONE\") (\"Gamma\" 2 \"TODO\")) ((nil nil) (nil nil) (nil nil)) (((\"Effort\" \"2h\")) ((\"Effort\" \"1h\")))) (((\"Alpha\" 1 \"TODO\") (\"Beta\" 2 \"DONE\") (\"Gamma\" 2 \"TODO\")) ((nil nil) (nil nil) (nil nil)) (((\"Effort\" \"2h\")) ((\"Effort\" \"1h\")))) (((\"Alpha\" 1 \"TODO\") (\"Beta\" 2 \"DONE\") (\"Gamma\" 2 \"TODO\")) ((nil nil) (nil nil) (nil nil)) (((\"Effort\" \"2h\")) ((\"Effort\" \"1h\") (\"Status\" \"verified\")))) \"* TODO Alpha                                                           :work:\\nSCHEDULED: <2026-05-28 Wed>\\n:PROPERTIES:\\n:Effort: 2h\\n:END:\\nBody alpha.\\n\\n** DONE Beta\\nDEADLINE: <2026-06-01 Mon>\\n:PROPERTIES:\\n:Effort: 1h\\n:Status:   verified\\n:END:\\nBody beta.\\n\\n** TODO Gamma\\nSCHEDULED: <2026-05-29 Thu>\\nBody gamma.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -903,17 +909,18 @@ fn org_element_parse_separate_scheduled_deadline_clock_edit() {
           (let ((after-prop (funcall snap)))
             (list initial after-tag after-prop
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_clock_logbook_edit_reparse_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 43 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Alpha\" 1 \"TODO\" nil) (\"Beta\" 2 \"DONE\" nil) (\"Gamma\" 3 \"TODO\" (\"work\" \"urgent\"))) (((\"Effort\" \"3h\")) ((\"Effort\" \"2h\") (\"Owner\" \"Bob\")) ((\"Effort\" \"1h\")))) (((\"Alpha\" 1 \"TODO\" (\"review\")) (\"Beta\" 2 \"DONE\" nil) (\"Gamma\" 3 \"TODO\" (\"work\" \"urgent\"))) (((\"Effort\" \"3h\")) ((\"Effort\" \"2h\") (\"Owner\" \"Bob\")) ((\"Effort\" \"1h\") (\"Status\" \"in-progress\")))) \"* TODO Alpha                                                         :review:\\n:PROPERTIES:\\n:Effort: 3h\\n:END:\\nBody alpha.\\n\\n** DONE Beta\\n:PROPERTIES:\\n:Effort: 2h\\n:Owner: Bob\\n:END:\\nBody beta.\\n\\n*** TODO Gamma :work:urgent:\\n:PROPERTIES:\\n:Effort: 1h\\n:Status:   in-progress\\n:END:\\nBody gamma.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -957,17 +964,18 @@ fn org_element_parse_clock_logbook_edit_reparse_deep() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_multi_heading_tag_prop_edit_reparse() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"A\" 1 \"TODO\" (\"work\")) (\"B\" 2 \"DONE\" (\"home\")) (\"C\" 3 \"TODO\" (\"work\" \"urgent\")) (\"NEXT D\" 1 nil (\"errands\"))) (((\"Effort\" \"2h\") (\"Owner\" \"X\")) ((\"Effort\" \"1h\") (\"Owner\" \"Y\")) ((\"Effort\" \"30m\")) ((\"Effort\" \"45m\") (\"Owner\" \"Z\")))) (((\"A\" 1 \"TODO\" (\"work\" \"review\")) (\"B\" 2 \"DONE\" (\"home\")) (\"C\" 3 \"TODO\" (\"work\" \"urgent\")) (\"NEXT D\" 1 nil (\"errands\"))) (((\"Effort\" \"2h\") (\"Owner\" \"X\")) ((\"Effort\" \"1h\")) ((\"Effort\" \"30m\")) ((\"Effort\" \"45m\") (\"Owner\" \"Z\") (\"Status\" \"pending\")))) \"* TODO A                                                        :work:review:\\n:PROPERTIES:\\n:Effort: 2h\\n:Owner: X\\n:END:\\nBody A.\\n\\n** DONE B :home:\\n:PROPERTIES:\\n:Effort: 1h\\n:END:\\nBody B.\\n\\n*** TODO C :work:urgent:\\n:PROPERTIES:\\n:Effort: 30m\\n:END:\\nBody C.\\n\\n* NEXT D :errands:\\n:PROPERTIES:\\n:Effort: 45m\\n:Owner: Z\\n:Status:   pending\\n:END:\\nBody D.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1017,17 +1025,18 @@ fn org_element_parse_multi_heading_tag_prop_edit_reparse() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_four_heading_tag_prop_edit_reparse_v2() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 49 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"P\" 1 \"TODO\" (\"project\")) (\"S1\" 2 \"DONE\" (\"backend\")) (\"S2\" 2 \"TODO\" (\"frontend\")) (\"WAIT S3\" 2 nil (\"devops\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"dev\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\") (\"Assigned\" \"Bob\")))) (((\"P\" 1 \"TODO\" (\"project\" \"review\")) (\"S1\" 2 \"DONE\" (\"backend\")) (\"S2\" 2 \"TODO\" (\"frontend\")) (\"WAIT S3\" 2 nil (\"devops\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"dev\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\") (\"Status\" \"blocked\")))) \"* TODO P                                                     :project:review:\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: dev\\n:END:\\nBody P.\\n\\n** DONE S1 :backend:\\n:PROPERTIES:\\n:Effort: 3h\\n:Tier: P0\\n:END:\\nBody S1.\\n\\n** TODO S2 :frontend:\\n:PROPERTIES:\\n:Effort: 5h\\n:Tier: P1\\n:END:\\nBody S2.\\n\\n** WAIT S3 :devops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Tier: P2\\n:Status:   blocked\\n:END:\\nBody S3.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1077,17 +1086,18 @@ fn org_element_parse_four_heading_tag_prop_edit_reparse_v2() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_five_heading_tag_prop_edit_reparse_v3() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 55 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Root\" 1 \"TODO\" (\"root\")) (\"Branch-A\" 2 \"DONE\" (\"fe\")) (\"Branch-B\" 2 \"TODO\" (\"be\")) (\"WAIT Branch-C\" 2 nil (\"ops\")) (\"NEXT Branch-D\" 2 nil (\"qa\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"main\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\") (\"Owner\" \"Bob\")) ((\"Effort\" \"4h\") (\"Tier\" \"P1\") (\"Owner\" \"Carol\")))) (((\"Root\" 1 \"TODO\" (\"root\" \"review\")) (\"Branch-A\" 2 \"DONE\" (\"fe\")) (\"Branch-B\" 2 \"TODO\" (\"be\")) (\"WAIT Branch-C\" 2 nil (\"ops\")) (\"NEXT Branch-D\" 2 nil (\"qa\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"main\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\")) ((\"Effort\" \"4h\") (\"Tier\" \"P1\") (\"Owner\" \"Carol\") (\"Status\" \"active\")))) \"* TODO Root                                                     :root:review:\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: main\\n:END:\\nBody Root.\\n\\n** DONE Branch-A :fe:\\n:PROPERTIES:\\n:Effort: 3h\\n:Tier: P0\\n:END:\\nBody A.\\n\\n** TODO Branch-B :be:\\n:PROPERTIES:\\n:Effort: 5h\\n:Tier: P1\\n:END:\\nBody B.\\n\\n** WAIT Branch-C :ops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Tier: P2\\n:END:\\nBody C.\\n\\n** NEXT Branch-D :qa:\\n:PROPERTIES:\\n:Effort: 4h\\n:Tier: P1\\n:Owner: Carol\\n:Status:   active\\n:END:\\nBody D.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1143,17 +1153,18 @@ fn org_element_parse_five_heading_tag_prop_edit_reparse_v3() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_six_heading_tag_prop_edit_reparse_v4() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 58 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Root\" 1 \"TODO\" (\"root\")) (\"S1\" 2 \"DONE\" (\"fe\")) (\"S2\" 2 \"TODO\" (\"be\")) (\"WAIT S3\" 2 nil (\"ops\")) (\"NEXT S4\" 2 nil (\"qa\")) (\"CANCEL S5\" 2 nil (\"docs\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"main\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\") (\"Owner\" \"Bob\")) ((\"Effort\" \"4h\") (\"Tier\" \"P1\") (\"Owner\" \"Carol\")) ((\"Effort\" \"1h\") (\"Tier\" \"P3\")))) (((\"Root\" 1 \"TODO\" (\"root\" \"review\")) (\"S1\" 2 \"DONE\" (\"fe\")) (\"S2\" 2 \"TODO\" (\"be\")) (\"WAIT S3\" 2 nil (\"ops\")) (\"NEXT S4\" 2 nil (\"qa\")) (\"CANCEL S5\" 2 nil (\"docs\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"main\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\")) ((\"Effort\" \"4h\") (\"Tier\" \"P1\") (\"Owner\" \"Carol\") (\"Status\" \"active\")) ((\"Effort\" \"1h\") (\"Tier\" \"P3\")))) \"* TODO Root                                                     :root:review:\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: main\\n:END:\\nBody Root.\\n\\n** DONE S1 :fe:\\n:PROPERTIES:\\n:Effort: 3h\\n:Tier: P0\\n:END:\\nBody S1.\\n\\n** TODO S2 :be:\\n:PROPERTIES:\\n:Effort: 5h\\n:Tier: P1\\n:END:\\nBody S2.\\n\\n** WAIT S3 :ops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Tier: P2\\n:END:\\nBody S3.\\n\\n** NEXT S4 :qa:\\n:PROPERTIES:\\n:Effort: 4h\\n:Tier: P1\\n:Owner: Carol\\n:Status:   active\\n:END:\\nBody S4.\\n\\n** CANCEL S5 :docs:\\n:PROPERTIES:\\n:Effort: 1h\\n:Tier: P3\\n:END:\\nBody S5.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1212,17 +1223,18 @@ fn org_element_parse_six_heading_tag_prop_edit_reparse_v4() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_seven_heading_tag_prop_edit_reparse_v5() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 61 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Epic\" 1 \"TODO\" (\"epic\")) (\"S-A\" 2 \"DONE\" (\"fe\")) (\"S-B\" 2 \"TODO\" (\"be\")) (\"WAIT S-C\" 2 nil (\"ops\")) (\"NEXT S-D\" 2 nil (\"qa\")) (\"CANCEL S-E\" 2 nil (\"docs\")) (\"Feature\" 1 \"TODO\" (\"feature\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"dev\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\") (\"Owner\" \"Bob\")) ((\"Effort\" \"4h\") (\"Tier\" \"P1\") (\"Owner\" \"Carol\")) ((\"Effort\" \"1h\") (\"Tier\" \"P3\")) ((\"Owner\" \"Dave\") (\"CATEGORY\" \"product\")))) (((\"Epic\" 1 \"TODO\" (\"epic\" \"review\")) (\"S-A\" 2 \"DONE\" (\"fe\")) (\"S-B\" 2 \"TODO\" (\"be\")) (\"WAIT S-C\" 2 nil (\"ops\")) (\"NEXT S-D\" 2 nil (\"qa\")) (\"CANCEL S-E\" 2 nil (\"docs\")) (\"Feature\" 1 \"TODO\" (\"feature\"))) (((\"Owner\" \"Alice\") (\"CATEGORY\" \"dev\")) ((\"Effort\" \"3h\") (\"Tier\" \"P0\")) ((\"Effort\" \"5h\") (\"Tier\" \"P1\")) ((\"Effort\" \"2h\") (\"Tier\" \"P2\")) ((\"Effort\" \"4h\") (\"Tier\" \"P1\") (\"Owner\" \"Carol\") (\"Status\" \"active\")) ((\"Effort\" \"1h\") (\"Tier\" \"P3\")) ((\"Owner\" \"Dave\") (\"CATEGORY\" \"product\")))) \"* TODO Epic                                                     :epic:review:\\n:PROPERTIES:\\n:Owner: Alice\\n:CATEGORY: dev\\n:END:\\nBody Epic.\\n\\n** DONE S-A :fe:\\n:PROPERTIES:\\n:Effort: 3h\\n:Tier: P0\\n:END:\\nBody A.\\n\\n** TODO S-B :be:\\n:PROPERTIES:\\n:Effort: 5h\\n:Tier: P1\\n:END:\\nBody B.\\n\\n** WAIT S-C :ops:\\n:PROPERTIES:\\n:Effort: 2h\\n:Tier: P2\\n:END:\\nBody C.\\n\\n** NEXT S-D :qa:\\n:PROPERTIES:\\n:Effort: 4h\\n:Tier: P1\\n:Owner: Carol\\n:Status:   active\\n:END:\\nBody D.\\n\\n** CANCEL S-E :docs:\\n:PROPERTIES:\\n:Effort: 1h\\n:Tier: P3\\n:END:\\nBody E.\\n\\n* TODO Feature :feature:\\n:PROPERTIES:\\n:Owner: Dave\\n:CATEGORY: product\\n:END:\\nBody Feature.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1284,17 +1296,18 @@ fn org_element_parse_seven_heading_tag_prop_edit_reparse_v5() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_eight_heading_tag_prop_edit_reparse_v6() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 64 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Company\" 1 \"TODO\" (\"company\")) (\"Eng\" 2 \"DONE\" (\"eng\")) (\"Product\" 2 \"TODO\" (\"product\")) (\"WAIT Design\" 2 nil (\"design\")) (\"NEXT Marketing\" 2 nil (\"marketing\")) (\"CANCEL Ops\" 2 nil (\"ops\")) (\"Sales\" 2 \"TODO\" (\"sales\")) (\"Q1-Goal\" 1 \"DONE\" (\"goal\"))) (((\"Owner\" \"CEO\") (\"CATEGORY\" \"org\")) ((\"Effort\" \"40h\") (\"Budget\" \"100k\")) ((\"Effort\" \"20h\") (\"Budget\" \"50k\")) ((\"Effort\" \"15h\") (\"Budget\" \"30k\") (\"Owner\" \"ArtDir\")) ((\"Effort\" \"25h\") (\"Budget\" \"80k\") (\"Owner\" \"CMO\")) ((\"Effort\" \"10h\") (\"Budget\" \"20k\")) ((\"Effort\" \"30h\") (\"Budget\" \"60k\") (\"Owner\" \"VP-Sales\")) ((\"Owner\" \"CEO\") (\"CATEGORY\" \"planning\")))) (((\"Company\" 1 \"TODO\" (\"company\" \"review\")) (\"Eng\" 2 \"DONE\" (\"eng\")) (\"Product\" 2 \"TODO\" (\"product\")) (\"WAIT Design\" 2 nil (\"design\")) (\"NEXT Marketing\" 2 nil (\"marketing\")) (\"CANCEL Ops\" 2 nil (\"ops\")) (\"Sales\" 2 \"TODO\" (\"sales\")) (\"Q1-Goal\" 1 \"DONE\" (\"goal\"))) (((\"Owner\" \"CEO\") (\"CATEGORY\" \"org\")) ((\"Effort\" \"40h\") (\"Budget\" \"100k\")) ((\"Effort\" \"20h\") (\"Budget\" \"50k\")) ((\"Effort\" \"15h\") (\"Budget\" \"30k\")) ((\"Effort\" \"25h\") (\"Budget\" \"80k\") (\"Owner\" \"CMO\") (\"Status\" \"active\")) ((\"Effort\" \"10h\") (\"Budget\" \"20k\")) ((\"Effort\" \"30h\") (\"Budget\" \"60k\") (\"Owner\" \"VP-Sales\")) ((\"Owner\" \"CEO\") (\"CATEGORY\" \"planning\")))) \"* TODO Company                                               :company:review:\\n:PROPERTIES:\\n:Owner: CEO\\n:CATEGORY: org\\n:END:\\nBody Company.\\n\\n** DONE Eng :eng:\\n:PROPERTIES:\\n:Effort: 40h\\n:Budget: 100k\\n:END:\\nBody Eng.\\n\\n** TODO Product :product:\\n:PROPERTIES:\\n:Effort: 20h\\n:Budget: 50k\\n:END:\\nBody Product.\\n\\n** WAIT Design :design:\\n:PROPERTIES:\\n:Effort: 15h\\n:Budget: 30k\\n:END:\\nBody Design.\\n\\n** NEXT Marketing :marketing:\\n:PROPERTIES:\\n:Effort: 25h\\n:Budget: 80k\\n:Owner: CMO\\n:Status:   active\\n:END:\\nBody Marketing.\\n\\n** CANCEL Ops :ops:\\n:PROPERTIES:\\n:Effort: 10h\\n:Budget: 20k\\n:END:\\nBody Ops.\\n\\n** TODO Sales :sales:\\n:PROPERTIES:\\n:Effort: 30h\\n:Budget: 60k\\n:Owner: VP-Sales\\n:END:\\nBody Sales.\\n\\n* DONE Q1-Goal :goal:\\n:PROPERTIES:\\n:Owner: CEO\\n:CATEGORY: planning\\n:END:\\nBody Q1.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1359,17 +1372,18 @@ fn org_element_parse_eight_heading_tag_prop_edit_reparse_v6() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_nine_heading_tag_prop_edit_reparse_v7() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 67 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Org\" 1 \"TODO\" (\"org\")) (\"RnD\" 2 \"DONE\" (\"rnd\")) (\"Sales\" 2 \"TODO\" (\"sales\")) (\"WAIT Support\" 2 nil (\"support\")) (\"NEXT Finance\" 2 nil (\"finance\")) (\"CANCEL Legal\" 2 nil (\"legal\")) (\"HR\" 2 \"TODO\" (\"hr\")) (\"IT\" 2 \"DONE\" (\"it\")) (\"Vision\" 1 \"TODO\" (\"vision\"))) (((\"CEO\" \"Alice\") (\"CATEGORY\" \"corp\")) ((\"Effort\" \"100h\") (\"Budget\" \"500k\")) ((\"Effort\" \"80h\") (\"Budget\" \"300k\")) ((\"Effort\" \"40h\") (\"Budget\" \"100k\") (\"Owner\" \"Bob\")) ((\"Effort\" \"60h\") (\"Budget\" \"200k\") (\"Owner\" \"Carol\")) ((\"Effort\" \"20h\") (\"Budget\" \"50k\")) ((\"Effort\" \"30h\") (\"Budget\" \"80k\") (\"Owner\" \"Dave\")) ((\"Effort\" \"50h\") (\"Budget\" \"150k\") (\"Owner\" \"Eve\")) ((\"CEO\" \"Alice\") (\"CATEGORY\" \"strategy\")))) (((\"Org\" 1 \"TODO\" (\"org\" \"review\")) (\"RnD\" 2 \"DONE\" (\"rnd\")) (\"Sales\" 2 \"TODO\" (\"sales\")) (\"WAIT Support\" 2 nil (\"support\")) (\"NEXT Finance\" 2 nil (\"finance\")) (\"CANCEL Legal\" 2 nil (\"legal\")) (\"HR\" 2 \"TODO\" (\"hr\")) (\"IT\" 2 \"DONE\" (\"it\")) (\"Vision\" 1 \"TODO\" (\"vision\"))) (((\"CEO\" \"Alice\") (\"CATEGORY\" \"corp\")) ((\"Effort\" \"100h\") (\"Budget\" \"500k\")) ((\"Effort\" \"80h\") (\"Budget\" \"300k\")) ((\"Effort\" \"40h\") (\"Budget\" \"100k\")) ((\"Effort\" \"60h\") (\"Budget\" \"200k\") (\"Owner\" \"Carol\") (\"Status\" \"active\")) ((\"Effort\" \"20h\") (\"Budget\" \"50k\")) ((\"Effort\" \"30h\") (\"Budget\" \"80k\") (\"Owner\" \"Dave\")) ((\"Effort\" \"50h\") (\"Budget\" \"150k\") (\"Owner\" \"Eve\")) ((\"CEO\" \"Alice\") (\"CATEGORY\" \"strategy\")))) \"* TODO Org                                                       :org:review:\\n:PROPERTIES:\\n:CEO: Alice\\n:CATEGORY: corp\\n:END:\\nBody Org.\\n\\n** DONE RnD :rnd:\\n:PROPERTIES:\\n:Effort: 100h\\n:Budget: 500k\\n:END:\\nBody RnD.\\n\\n** TODO Sales :sales:\\n:PROPERTIES:\\n:Effort: 80h\\n:Budget: 300k\\n:END:\\nBody Sales.\\n\\n** WAIT Support :support:\\n:PROPERTIES:\\n:Effort: 40h\\n:Budget: 100k\\n:END:\\nBody Support.\\n\\n** NEXT Finance :finance:\\n:PROPERTIES:\\n:Effort: 60h\\n:Budget: 200k\\n:Owner: Carol\\n:Status:   active\\n:END:\\nBody Finance.\\n\\n** CANCEL Legal :legal:\\n:PROPERTIES:\\n:Effort: 20h\\n:Budget: 50k\\n:END:\\nBody Legal.\\n\\n** TODO HR :hr:\\n:PROPERTIES:\\n:Effort: 30h\\n:Budget: 80k\\n:Owner: Dave\\n:END:\\nBody HR.\\n\\n** DONE IT :it:\\n:PROPERTIES:\\n:Effort: 50h\\n:Budget: 150k\\n:Owner: Eve\\n:END:\\nBody IT.\\n\\n* TODO Vision :vision:\\n:PROPERTIES:\\n:CEO: Alice\\n:CATEGORY: strategy\\n:END:\\nBody Vision.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1437,17 +1451,18 @@ fn org_element_parse_nine_heading_tag_prop_edit_reparse_v7() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_parse_ten_heading_tag_prop_edit_reparse_v8() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 70 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"Enterprise\" 1 \"TODO\" (\"enterprise\")) (\"Engineering\" 2 \"DONE\" (\"eng\")) (\"Sales\" 2 \"TODO\" (\"sales\")) (\"WAIT Support\" 2 nil (\"support\")) (\"NEXT Finance\" 2 nil (\"finance\")) (\"CANCEL Legal\" 2 nil (\"legal\")) (\"HR\" 2 \"TODO\" (\"hr\")) (\"IT\" 2 \"DONE\" (\"it\")) (\"Marketing\" 2 \"TODO\" (\"marketing\")) (\"Vision\" 1 \"DONE\" (\"vision\"))) (((\"CEO\" \"Alice\") (\"CATEGORY\" \"biz\")) ((\"Effort\" \"200h\") (\"Budget\" \"2M\")) ((\"Effort\" \"150h\") (\"Budget\" \"1M\")) ((\"Effort\" \"80h\") (\"Budget\" \"500k\") (\"Owner\" \"Bob\")) ((\"Effort\" \"100h\") (\"Budget\" \"800k\") (\"Owner\" \"Carol\")) ((\"Effort\" \"40h\") (\"Budget\" \"200k\")) ((\"Effort\" \"60h\") (\"Budget\" \"300k\") (\"Owner\" \"Dave\")) ((\"Effort\" \"120h\") (\"Budget\" \"600k\") (\"Owner\" \"Eve\")) ((\"Effort\" \"90h\") (\"Budget\" \"400k\") (\"Owner\" \"Frank\")) ((\"CEO\" \"Alice\") (\"CATEGORY\" \"strategy\")))) (((\"Enterprise\" 1 \"TODO\" (\"enterprise\" \"review\")) (\"Engineering\" 2 \"DONE\" (\"eng\")) (\"Sales\" 2 \"TODO\" (\"sales\")) (\"WAIT Support\" 2 nil (\"support\")) (\"NEXT Finance\" 2 nil (\"finance\")) (\"CANCEL Legal\" 2 nil (\"legal\")) (\"HR\" 2 \"TODO\" (\"hr\")) (\"IT\" 2 \"DONE\" (\"it\")) (\"Marketing\" 2 \"TODO\" (\"marketing\")) (\"Vision\" 1 \"DONE\" (\"vision\"))) (((\"CEO\" \"Alice\") (\"CATEGORY\" \"biz\")) ((\"Effort\" \"200h\") (\"Budget\" \"2M\")) ((\"Effort\" \"150h\") (\"Budget\" \"1M\")) ((\"Effort\" \"80h\") (\"Budget\" \"500k\")) ((\"Effort\" \"100h\") (\"Budget\" \"800k\") (\"Owner\" \"Carol\") (\"Status\" \"active\")) ((\"Effort\" \"40h\") (\"Budget\" \"200k\")) ((\"Effort\" \"60h\") (\"Budget\" \"300k\") (\"Owner\" \"Dave\")) ((\"Effort\" \"120h\") (\"Budget\" \"600k\") (\"Owner\" \"Eve\")) ((\"Effort\" \"90h\") (\"Budget\" \"400k\") (\"Owner\" \"Frank\")) ((\"CEO\" \"Alice\") (\"CATEGORY\" \"strategy\")))) \"* TODO Enterprise                                         :enterprise:review:\\n:PROPERTIES:\\n:CEO: Alice\\n:CATEGORY: biz\\n:END:\\nBody Enterprise.\\n\\n** DONE Engineering :eng:\\n:PROPERTIES:\\n:Effort: 200h\\n:Budget: 2M\\n:END:\\nBody Eng.\\n\\n** TODO Sales :sales:\\n:PROPERTIES:\\n:Effort: 150h\\n:Budget: 1M\\n:END:\\nBody Sales.\\n\\n** WAIT Support :support:\\n:PROPERTIES:\\n:Effort: 80h\\n:Budget: 500k\\n:END:\\nBody Support.\\n\\n** NEXT Finance :finance:\\n:PROPERTIES:\\n:Effort: 100h\\n:Budget: 800k\\n:Owner: Carol\\n:Status:   active\\n:END:\\nBody Finance.\\n\\n** CANCEL Legal :legal:\\n:PROPERTIES:\\n:Effort: 40h\\n:Budget: 200k\\n:END:\\nBody Legal.\\n\\n** TODO HR :hr:\\n:PROPERTIES:\\n:Effort: 60h\\n:Budget: 300k\\n:Owner: Dave\\n:END:\\nBody HR.\\n\\n** DONE IT :it:\\n:PROPERTIES:\\n:Effort: 120h\\n:Budget: 600k\\n:Owner: Eve\\n:END:\\nBody IT.\\n\\n** TODO Marketing :marketing:\\n:PROPERTIES:\\n:Effort: 90h\\n:Budget: 400k\\n:Owner: Frank\\n:END:\\nBody Marketing.\\n\\n* DONE Vision :vision:\\n:PROPERTIES:\\n:CEO: Alice\\n:CATEGORY: strategy\\n:END:\\nBody Vision.\\n\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-element)
@@ -1518,7 +1533,7 @@ fn org_element_parse_ten_heading_tag_prop_edit_reparse_v8() {
         (let ((after-edit (funcall snap)))
           (list initial after-edit
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }

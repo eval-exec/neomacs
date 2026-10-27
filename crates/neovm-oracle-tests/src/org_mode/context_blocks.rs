@@ -51,12 +51,13 @@ fn org_context_mixed_positions_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_block_map_next_previous_restricted_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK (((quote-block 2 \"#+begin_quote\") (src-block 6 \"#+begin_src emacs-lisp\") (example-block 10 \"#+begin_example\") (verse-block 15 \"#+begin_verse\")) ((next1 2 quote-block) (next2 10 example-block) (prev1 6 src-block)) ((15 verse-block)) \"* Blocks\\n#+begin_quote\\nquote\\n#+end_quote\\n\\n#+begin_src emacs-lisp\\n(+ 1 2)\\n#+end_src\\n\\n#+begin_example\\nexample\\n#+end_example\\n\\n** Child\\n#+begin_verse\\nverse\\n#+end_verse\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -106,7 +107,7 @@ fn org_block_map_next_previous_restricted_combo() {
               (nreverse moves)
               (nreverse restricted)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -158,12 +159,13 @@ fn org_between_regexps_nested_blocks_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_context_drawer_timestamp_comment_latex_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"TITLE\" 1 nil keyword t nil nil nil nil nil nil nil nil nil nil nil nil nil nil) (\"TODO Node\" 18 (:headline :headline-stars) headline nil t nil nil nil nil nil nil nil nil nil nil nil nil nil) (\"09:30\" 61 nil planning nil nil t nil nil nil nil nil nil nil nil nil minute minute nil) (\"DEADLINE\" 30 (:keyword) planning nil nil t nil nil nil nil nil nil nil nil nil nil nil nil) (\"Effort\" 108 (:keyword) node-property nil nil nil nil t nil nil nil nil nil nil nil nil nil nil) (\"CUSTOM_ID\" 122 (:keyword) node-property nil nil nil nil t nil nil nil nil nil nil nil nil nil nil) (\"LOGBOOK\" 145 nil drawer nil nil nil nil nil t nil nil nil nil nil nil nil nil nil) (\"09:25\" 206 nil clock nil nil nil nil nil nil t nil nil nil nil nil nil minute nil) (\"Comment\" 224 nil comment nil nil nil nil nil nil nil t nil nil nil nil nil nil nil) (\"Quote has\" 270 nil paragraph nil nil nil nil nil nil nil nil nil \"quote\" nil nil nil nil nil) (\"2026-05-28\" 290 (:timestamp) timestamp nil nil nil nil nil nil nil nil nil \"quote\" day day day day nil) (\"x_1+y\" 307 (:latex-fragment) latex-fragment nil nil nil nil nil nil nil nil nil \"quote\" nil nil nil nil (latex-fragment latex-environment)) (\"src_emacs-lisp\" 350 nil inline-src-block nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil) (\"self\" 374 (:link) link nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil) (\"alpha\" 388 nil entity nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -228,7 +230,7 @@ fn org_context_drawer_timestamp_comment_latex_combo() {
          ("x_1+y")
          ("src_emacs-lisp")
          ("self")
-          ("alpha")))))"##,
+          ("alpha"))))))"##,
         expect,
     );
 }

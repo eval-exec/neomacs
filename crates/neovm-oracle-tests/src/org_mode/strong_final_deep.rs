@@ -214,11 +214,11 @@ fn fd_link_attr() {
 // Final: planning repeaters
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn fd_planning_repeaters() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (((cumulate 1 week) nil) (nil (cumulate 1 month)))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -232,7 +232,7 @@ fn fd_planning_repeaters() {
                             (org-element-property :repeater-unit s)))
               (when d (list (org-element-property :repeater-type d)
                             (org-element-property :repeater-value d)
-                            (org-element-property :repeater-unit d)))))))"##,
+                            (org-element-property :repeater-unit d))))))))"##,
         expect,
     );
 }

@@ -8,11 +8,12 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_collect_keywords() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 14 59)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:title ((\"TITLE\" \"My Title\"))) (:author+date ((\"AUTHOR\" \"Alice\") (\"DATE\" \"2024\"))) (:filetags ((\"FILETAGS\" \":proj:\"))) (:bogus nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -27,12 +28,11 @@ fn strict_collect_keywords() {
        ;; collect filetags
        (list :filetags (org-collect-keywords '("FILETAGS")))
        ;; collect non-existent
-       (list :bogus (org-collect-keywords '("BOGUS"))))))))"##,
+       (list :bogus (org-collect-keywords '("BOGUS")))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_tag_string_to_alist_roundtrip() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -52,12 +52,11 @@ fn strict_tag_string_to_alist_roundtrip() {
      (list :alist alist))
    ;; tags sort
    (let ((tags '("c" "a" "b")))
-     (list :sorted (sort (copy-sequence tags) #'string-lessp))))))"##,
+     (list :sorted (sort (copy-sequence tags) #'string-lessp)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_priority_to_value() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -78,16 +77,17 @@ fn strict_priority_to_value() {
    (let ((saved-default org-default-priority))
      (list :default-priority (when (boundp 'org-default-priority) org-default-priority)
            :highest (when (boundp 'org-highest-priority) org-highest-priority)
-           :lowest (when (boundp 'org-lowest-priority) org-lowest-priority))))))"##,
+           :lowest (when (boundp 'org-lowest-priority) org-lowest-priority)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_set_regexps_and_options() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 19 71)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (:todo-keywords ((sequence \"TODO\" \"DONE\")) :done-keywords (\"DONE\" \"CANCELED\") :todo-keyword-regexp (:string \"\\\\(CANCELED\\\\|DONE\\\\|TODO\\\\|WAIT\\\\)\") :not-done-keywords (\"TODO\" \"WAIT\") :num-flag nil)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -107,16 +107,17 @@ fn strict_set_regexps_and_options() {
                                            :not-string))
                   :not-done-keywords (when (boundp 'org-not-done-keywords) org-not-done-keywords)
                   :num-flag (when (boundp 'org-export-with-section-numbers) org-export-with-section-numbers)))
-        (error (list :error "org-set-regexps-and-options failed")))))))"##,
+        (error (list :error "org-set-regexps-and-options failed"))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_insert_heading_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 36 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:after-respect-content (\"A\" \"Respect Content Heading\" \"B\")) (:after-end-insert (\"A\" \"Respect Content Heading\" \"B\" \"End Heading\")) (:after-subheading ((1 \"A\") (1 \"Respect Content Heading\") (1 \"B\") (1 \"End Heading\"))) (:total-headlines 4))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -153,16 +154,17 @@ fn strict_insert_heading_variants() {
                             (org-element-map (org-element-parse-buffer) 'headline #'identity))) r)
         ;; headline count
         (push (list :total-headlines (length (org-element-map (org-element-parse-buffer) 'headline #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_emphasize_region() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 31 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:after-bold \"Some text ** to emphasize.\\n\") (:after-italic \"Some text ** to emphasize //.\\n\") (:bold-count 0) (:italic-count 0))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -194,12 +196,11 @@ fn strict_emphasize_region() {
               (italics (length (org-element-map (org-element-parse-buffer) 'italic #'identity))))
           (push (list :bold-count bolds) r)
           (push (list :italic-count italics) r))
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_today_current_time() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -224,7 +225,7 @@ fn strict_today_current_time() {
           (ts (org-timestamp-from-string ts-str))
           (ft (org-2ft ts)))
      (list :org-2ft-numberp (numberp ft)
-           :org-2ft-positive (> ft 0))))))"##,
+           :org-2ft-positive (> ft 0)))))"##,
         expect,
     );
 }
@@ -249,11 +250,10 @@ fn strict_file_contents() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_log_state_settings() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 16 36)""#]];
+    let expect = expect_test::expect![[r#""OK (:error t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -270,12 +270,11 @@ fn strict_log_state_settings() {
                   :log-note-clock-out (when (boundp 'org-log-note-clock-out) org-log-note-clock-out)
                   :extract (org-extract-log-state-settings
                             (org-entry-get nil "LOGGING"))))
-        (error (list :error t)))))))"##,
+        (error (list :error t))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_latex_packages() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -298,7 +297,7 @@ fn strict_latex_packages() {
    (cond ((fboundp 'org-format-latex-header)
           (let ((header (org-format-latex-header "" "" "")))
             (list :header-nonempty (> (length header) 0))))
-         (t :not-available)))))"##,
+         (t :not-available))))"##,
         expect,
     );
 }

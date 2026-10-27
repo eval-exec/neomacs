@@ -341,11 +341,12 @@ fn zeta_export_caption() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_export_caption_short() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((#(\"long caption\" 0 12 (:parent (#(\"long caption\" 0 12 (:parent #4)))))) (#(\"short\" 0 5 (:parent (#(\"short\" 0 5 (:parent #4)))))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -356,7 +357,7 @@ fn zeta_export_caption_short() {
       (let* ((tree (org-element-parse-buffer))
              (table (car (org-element-map tree 'table #'identity))))
         (list (org-export-get-caption table)
-              (org-export-get-caption table t)))))"##,
+              (org-export-get-caption table t))))))"##,
         expect,
     );
 }
@@ -389,11 +390,10 @@ fn zeta_export_first_last_sibling() {
 // Zeta: org-element with complex export node property
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_export_node_property() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"myid\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -403,7 +403,7 @@ fn zeta_export_node_property() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (headline (car (org-element-map tree 'headline #'identity))))
-        (org-export-get-node-property :CUSTOM_ID headline))))"##,
+        (org-export-get-node-property :CUSTOM_ID headline)))))"##,
         expect,
     );
 }
@@ -591,11 +591,10 @@ fn zeta_export_get_all_filters() {
 // Zeta: org-element with complex export blocks/snippets
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_export_block_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"HTML\" \"LATEX\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -605,16 +604,15 @@ fn zeta_export_block_types() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (blocks (org-element-map tree 'export-block #'identity)))
-        (mapcar (lambda (b) (org-element-property :type b)) blocks))))"##,
+        (mapcar (lambda (b) (org-element-property :type b)) blocks)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_export_snippet_types() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"html\" \"latex\" \"ascii\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -624,7 +622,7 @@ fn zeta_export_snippet_types() {
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer))
              (snippets (org-element-map tree 'export-snippet #'identity)))
-        (mapcar (lambda (s) (org-element-property :back-end s)) snippets))))"##,
+        (mapcar (lambda (s) (org-element-property :back-end s)) snippets)))))"##,
         expect,
     );
 }
@@ -633,11 +631,10 @@ fn zeta_export_snippet_types() {
 // Zeta: org-element with complex export comments
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_export_comments() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 1""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -646,16 +643,15 @@ fn zeta_export_comments() {
       (insert "# Comment 1\n# Comment 2\n\n* H\nBody")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'comment #'identity)))))"##,
+        (length (org-element-map tree 'comment #'identity))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_export_comment_tree() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK 2""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox)
@@ -664,7 +660,7 @@ fn zeta_export_comment_tree() {
       (insert "* COMMENT Hidden\nBody\n* Visible\nBody")
       (goto-char (point-min))
       (let* ((tree (org-element-parse-buffer)))
-        (length (org-element-map tree 'headline #'identity)))))"##,
+        (length (org-element-map tree 'headline #'identity))))))"##,
         expect,
     );
 }
@@ -705,11 +701,11 @@ fn zeta_export_read_attribute() {
 // Zeta: org-element with complex collect-keywords
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn zeta_collect_keywords() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (((\"TITLE\" \"My Title\") (\"AUTHOR\" \"Me\")) nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -724,7 +720,7 @@ fn zeta_collect_keywords() {
      (with-temp-buffer (org-mode)
        (insert "#+begin_example\n#+foo: bar\n#+end_example")
        (goto-char (point-min))
-       (org-collect-keywords '("FOO")))))"##,
+       (org-collect-keywords '("FOO"))))))"##,
         expect,
     );
 }

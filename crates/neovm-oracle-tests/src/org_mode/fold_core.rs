@@ -432,12 +432,13 @@ fn org_fold_drawer_block_hide_show_all_recovery_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_fold_subtree_edit_hidden_body_reveal_font_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 64 45)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"Alpha\" 1 nil 1) (\"Beta\" 3 nil 2) (\"Gamma\" 8 2 3) (\"Delta\" 10 2 4) (\"Inserted\" 4 nil 2) (\"Sibling\" 12 nil 1)) ((\"Alpha\" 1 nil 1) (\"Beta\" 3 nil 2) (\"Gamma\" 8 nil 3) (\"Delta\" 10 nil 4) (\"Inserted\" 4 nil 2) (\"Sibling\" 12 nil 1)) nil \"* Alpha\\nAlpha body.\\n** Beta\\n** Inserted after Beta\\nInserted body.\\n\\nBeta body.\\n*** Gamma\\nGamma body.\\n**** Delta\\nDelta body.\\n* Sibling\\nSibling body.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -502,7 +503,7 @@ fn org_fold_subtree_edit_hidden_body_reveal_font_combo() {
               after-show
               (nreverse merged)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }

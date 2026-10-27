@@ -177,12 +177,11 @@ fn org_id_store_parent_context_and_open_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_store_link_custom_id_and_id_policy_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 36 47)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -219,17 +218,16 @@ fn org_store_link_custom_id_and_id_policy_combo() {
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
       (delete-file file)
       (when (file-exists-p org-id-locations-file)
-        (delete-file org-id-locations-file)))))"##,
+        (delete-file org-id-locations-file))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_id_encoding_paste_tracker_lookup_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 58 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -288,7 +286,7 @@ fn org_id_encoding_paste_tracker_lookup_combo() {
                     missing-file
                     missing-id)))))
       (when (get-file-buffer file) (kill-buffer (get-file-buffer file)))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -634,12 +632,11 @@ fn org_id_link_move_reload_visibility_navigation_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_id_create_find_open_cross_file_deep_state_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 59 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -699,7 +696,7 @@ fn org_id_create_find_open_cross_file_deep_state_combo() {
                             (org-element-property :path link-ctx))
                       (buffer-substring-no-properties
                        (point-min) (point-max))))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

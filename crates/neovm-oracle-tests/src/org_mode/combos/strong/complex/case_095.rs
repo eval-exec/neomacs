@@ -1,5 +1,4 @@
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo95_full_document_parse_interpret_compare() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -16,7 +15,7 @@ fn combo95_full_document_parse_interpret_compare() {
   (push (list :stable (and (= (length (org-element-map t 'headline #'identity))
    (length (org-element-map t2 'headline #'identity)))
    (= (length (org-element-map t 'bold #'identity))
-   (length (org-element-map t2 'bold #'identity)))))) r) (nreverse r))))"##,
+   (length (org-element-map t2 'bold #'identity)))))) r) (nreverse r)))"##,
         expect,
     );
 }

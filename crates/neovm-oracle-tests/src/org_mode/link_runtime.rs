@@ -387,12 +387,13 @@ fn org_link_store_props_mail_date_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_navigation_toggle_context_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((first 9 link \"https\" \"//example.org/a\" \"https://example.org/a\" t org-link nil) (second 48 link \"https\" \"//example.org/b\" \"https://example.org/b\" t nil nil) (third 70 link \"file\" \"/tmp/demo.txt\" \"file:/tmp/demo.txt::12\" t org-link nil) (back 48 link \"https\" \"//example.org/b\" \"https://example.org/b\" t nil nil) (toggle 48 link \"https\" \"//example.org/b\" \"https://example.org/b\" nil nil nil) \"* Links\\n[[https://example.org/a][Alpha]] plain https://example.org/b\\n[[file:/tmp/demo.txt::12][File line]] and [[#target][Target]]\\n* Target\\n:PROPERTIES:\\n:CUSTOM_ID: target\\n:END:\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -434,7 +435,7 @@ fn org_link_navigation_toggle_context_combo() {
                       back
                       after-toggle
                       (buffer-substring-no-properties
-                       (point-min) (point-max))))))))))"##,
+                       (point-min) (point-max)))))))))))"##,
         expect,
     );
 }
@@ -564,12 +565,13 @@ fn org_link_id_custom_fuzzy_radio_runtime_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_abbrev_expand_open_from_string_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"https://bugs.example/123\" \"https://docs.example/topic\" \"https://hex.example/a%20b%2Fc\" \"plain:x\") ((\"from-string\" (4))) \"Destination\" \"<<radio target>> and [[probe-open:value%20x][open me]].\" \"* H\\nSee <<radio target>> and [[probe-open:value%20x][open me]].\\n* Destination\\n:PROPERTIES:\\n:CUSTOM_ID: dest\\n:END:\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -604,7 +606,7 @@ fn org_link_abbrev_expand_open_from_string_combo() {
               custom
               radio
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -656,12 +658,13 @@ fn org_link_store_region_file_context_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_precise_target_region_named_heading_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r##""OK ((\"| a | b |\" nil 12) (\"#custom-target\" \"Target\" 32) (\"#custom-target\" \"Target\" 32) \"*Target\" \"*TODO [#B] Other :x:y:\" \"#+NAME: tbl\\n| a | b |\\n| 1 | 2 |\\n* TODO [#A] Target :tag:\\n:PROPERTIES:\\n:CUSTOM_ID: custom-target\\n:END:\\nBody region words here.\\n\")""##
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -694,7 +697,7 @@ fn org_link_precise_target_region_named_heading_combo() {
                   (org-link-heading-search-string
                    "TODO [#B] Other [33%] :x:y:")
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -1379,12 +1382,13 @@ fn org_link_attachment_custom_export_visibility_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_abbrev_safety_legacy_follow_matrix_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((\"https://local.example/a b\" \"https://hex.local/a%20b%2Fc\" \"https://global.example/g h\" \"symbol:tag value\" \"https://plain.example/tail\" \"https://safe.example/safe:abc\" \"unsafe:secret\" \"unsafe:again\" \"missing:value\" \"https://local.example/\") (((\"local\" . \"https://local.example/%s\") (\"hexlocal\" . \"https://hex.local/%h\") (\"safe\" . \"https://safe.example/%(oracle-link-safe)\")) ((\"global\" . \"https://global.example/%s\") (\"symbol\" . oracle-link-symbol) (\"plain\" . \"https://plain.example/\")) (\"Disabling unsafe link abbrev: https://unsafe.example/%(oracle-link-unsafe)\\nYou may mark function safe via (put 'oracle-link-unsafe 'org-link-abbrev-safe t)\")) ((\"Legacy\" org-link highlight t) (\"Modern\" org-link highlight t)) ((\"legacy-follow\" \"old/path\" \"legacy-follow:old/path\" \"Legacy\") (\"modern-follow\" \"new/path\" \"modern-follow:new/path\" \"Modern\")) ((\"from-string\" one-arg) (\"from-string\" (16) two-arg)) \"* Links\\n[[legacy-follow:old/path][Legacy]]\\n[[modern-follow:new/path][Modern]]\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -1474,12 +1478,11 @@ fn org_link_abbrev_safety_legacy_follow_matrix_combo() {
                   links
                   (nreverse follow-calls)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_stored_insert_edit_search_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1536,12 +1539,11 @@ fn org_link_stored_insert_edit_search_deep() {
                   after-search-line
                   links2
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_link_id_radio_custom_export_parse_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1596,7 +1598,7 @@ fn org_link_id_radio_custom_export_parse_deep() {
             links2
             html2-has-renamed
             (buffer-substring-no-properties
-             (point-min) (point-max)))))))"##,
+             (point-min) (point-max))))))"##,
         expect,
     );
 }

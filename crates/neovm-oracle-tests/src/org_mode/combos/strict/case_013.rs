@@ -9,11 +9,10 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_datetree_insertion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 15 45)""#]];
+    let expect = expect_test::expect![[r#""OK (:datetree-error t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -29,12 +28,11 @@ fn strict_datetree_insertion() {
              :headlines (length (org-element-map (org-element-parse-buffer) 'headline #'identity))
              :levels (mapcar (lambda (h) (org-element-property :level h))
                              (org-element-map (org-element-parse-buffer) 'headline #'identity))))
-        (error (list :datetree-error t)))))))"##,
+        (error (list :datetree-error t))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_shebang_prologue() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -61,16 +59,17 @@ fn strict_babel_shebang_prologue() {
             (push (org-babel-execute-src-block) r)
           (error (push (list :prologue-error (car e)) r)))
         (push (list :result-count (length (org-element-map (org-element-parse-buffer) 'result #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_table_copy_down() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 15 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:copy-error t) (:to-lisp ((\"a\" \"b\") (\"1\" \"2\") (\"\" \"\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -86,12 +85,11 @@ fn strict_table_copy_down() {
           (error (push (list :copy-error t) r)))
         (goto-char (point-min))
         (push (list :to-lisp (org-table-to-lisp)) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_footnote_action_edge() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -121,16 +119,17 @@ fn strict_footnote_action_edge() {
         ;; renumber remaining
         (org-footnote-renumber-fn-n)
         (push (list :remaining-refs (length (org-element-map (org-element-parse-buffer) 'footnote-reference #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_insert_structure_template() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 20 19)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:template-keys (\"s\" \"e\" \"q\" \"v\" \"c\")) (:template-types (\"src\" \"example\" \"quote\" \"verse\" \"center\")) (:template-s-error t))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -151,7 +150,7 @@ fn strict_insert_structure_template() {
           (progn (org-try-structure-completion)
                  (push (list :template-s (buffer-string)) r))
         (error (push (list :template-s-error t) r))))
-    (nreverse r))))"##,
+    (nreverse r)))"##,
         expect,
     );
 }
@@ -184,11 +183,10 @@ fn strict_entities_help_function() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_results_scalar_vector() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 17 25)""#]];
+    let expect = expect_test::expect![[r#""OK (\"42\" (1 2 3) (a b c) (:result-count 0))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -206,12 +204,11 @@ fn strict_babel_results_scalar_vector() {
         (search-forward "#+begin_src emacs-lisp :results value")
         (push (org-babel-execute-src-block) r)
         (push (list :result-count (length (org-element-map (org-element-parse-buffer) 'result #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_table_formula_debugger() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -233,16 +230,17 @@ fn strict_table_formula_debugger() {
         ;; get cell
         (goto-char (point-min)) (forward-line 1)
         (push (list :cell-c (org-table-get "c" nil)) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_element_cache_reset() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 24 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:before-headlines 3) (:cache-reset t) (:after-headlines 4) (:after-raw (\"A\" \"B\" \"C\" \"D\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -267,12 +265,11 @@ fn strict_element_cache_reset() {
           (push (list :after-headlines (length (org-element-map t2 'headline #'identity))) r)
           (push (list :after-raw (mapcar (lambda (h) (substring-no-properties (org-element-property :raw-value h)))
                                          (org-element-map t2 'headline #'identity))) r))
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_timestamp_dayname_variants() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -296,16 +293,15 @@ fn strict_timestamp_dayname_variants() {
            :year-end (org-element-property :year-end ts)))
    ;; inactive
    (let ((ts (org-timestamp-from-string "[2024-12-25 Wed]")))
-     (list :inactive-type (org-element-property :type ts))))))"##,
+     (list :inactive-type (org-element-property :type ts)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_babel_ref_resolve() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 11 37)""#]];
+    let expect = expect_test::expect![[r#""OK (:ref-resolved t :ref-type cons)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -317,16 +313,17 @@ fn strict_babel_ref_resolve() {
         (let ((val (org-babel-ref-resolve "alpha")))
           (list :ref-resolved (and val (listp val))
                 :ref-type (type-of val)))
-      (error (list :ref-error t))))))"##,
+      (error (list :ref-error t)))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_org_table_export_to_csv() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 15 25)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:to-lisp ((\"a\" \"b\" \"c\") (\"1\" \"2\" \"3\") (\"4\" \"5\" \"6\"))) (:export-fbound t) (:cell-count 9) (:row-count 3))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -342,7 +339,7 @@ fn strict_org_table_export_to_csv() {
         ;; cell count
         (push (list :cell-count (length (org-element-map (org-element-parse-buffer) 'table-cell #'identity))) r)
         (push (list :row-count (length (org-element-map (org-element-parse-buffer) 'table-row #'identity))) r)
-        (nreverse r))))))"##,
+        (nreverse r)))))"##,
         expect,
     );
 }

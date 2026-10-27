@@ -352,11 +352,12 @@ fn strong_macro_expand_then_check() {
 // Multi-step: cycle todo then check
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_todo_cycle_then_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 13 60)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (#(\"* TODO H\" 0 8 (org-todo-head \"TODO\")) #(\"* DONE H\" 0 8 (org-todo-head \"TODO\")) #(\"* H\" 0 3 (org-todo-head \"TODO\")))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -370,7 +371,7 @@ fn strong_todo_cycle_then_check() {
         (org-todo 'done)
         (let ((after-done (buffer-string)))
           (org-todo nil)
-          (list after-todo after-done (buffer-string))))))))"##,
+          (list after-todo after-done (buffer-string)))))))"##,
         expect,
     );
 }
@@ -445,11 +446,10 @@ fn strong_promote_demote_subtree() {
 // Multi-step: cycle list bullet then check
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strong_cycle_bullet_then_check() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 12 52)""#]];
+    let expect = expect_test::expect![[r#""OK (\"+ item\" \"1. item\" \"1) item\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -462,7 +462,7 @@ fn strong_cycle_bullet_then_check() {
         (org-cycle-list-bullet)
         (let ((after2 (buffer-string)))
           (org-cycle-list-bullet)
-          (list after1 after2 (buffer-string))))))))"##,
+          (list after1 after2 (buffer-string)))))))"##,
         expect,
     );
 }

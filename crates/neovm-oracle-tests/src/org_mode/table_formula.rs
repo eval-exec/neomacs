@@ -166,12 +166,13 @@ fn org_table_formula_reference_conversion_and_current_field_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_rectangle_cut_paste_sum_wrap_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\" Q2 \") (\" 2 \") (\" 5 \") (\" 8 \")) \"| Name | Q1 |   | Q3 | Note             |\\n|------+----+---+----+------------------|\\n| a    |  1 |   |  3 | alpha beta gamma |\\n| b    |  4 |   |  6 | delta epsilon    |\\n| c    |  7 |   |  9 | zeta eta         |\\n\" \"| Name | Q1 |   | Q3 |             Note |\\n|------+----+---+----+------------------|\\n| a    |  1 |   |  3 | alpha beta gamma |\\n| b    |  4 |   |  6 |               Q2 |\\n| c    |  7 |   |  9 |                2 |\\n|      |    |   |    |                5 |\\n|      |    |   |    |                8 |\\n\" \"15\" \"15\" \"| Name | Q1 |   | Q3 |             Note |\\n|------+----+---+----+------------------|\\n| a    |  1 |   |  3 |       alpha beta |\\n| b    |  4 |   |  6 | gamma         Q2 |\\n| c    |  7 |   |  9 |                2 |\\n|      |    |   |    |                5 |\\n|      |    |   |    |                8 |\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -208,17 +209,16 @@ fn org_table_rectangle_cut_paste_sum_wrap_combo() {
                   sum
                   (current-kill 0 t)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_create_convert_export_import_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 40 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -259,17 +259,18 @@ fn org_table_create_convert_export_import_combo() {
                        (point-min) (point-max)))
                     (buffer-substring-no-properties
                      (point-min) (point-max)))))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_row_column_cell_motion_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"| A | B | C |\\n|---+---+---|\\n| 5 | 2 | 3 |\\n| 1 | 4 | 6 |\\n| 7 | 8 | 9 |\\n\" \"| A | C | B |\\n|---+---+---|\\n| 5 | 3 | 2 |\\n| 7 | 9 | 8 |\\n| 1 | 6 | 4 |\\n\" ((#(\"A\" 0 1 (face org-table)) #(\"C\" 0 1 (face org-table)) #(\"Inserted\" 0 8 (face org-table)) #(\"B\" 0 1 (face org-table))) hline (#(\"5\" 0 1 (face org-table)) #(\"3\" 0 1 (face org-table)) \"\" #(\"2\" 0 1 (face org-table))) (#(\"7\" 0 1 (face org-table)) #(\"9\" 0 1 (face org-table)) \"\" #(\"8\" 0 1 (face org-table))) (#(\"new\" 0 3 (face org-table)) \"\" \"\" \"\") (#(\"1\" 0 1 (face org-table)) #(\"6\" 0 1 (face org-table)) \"\" #(\"4\" 0 1 (face org-table)))) \"|   A | C | Inserted | B |\\n|-----+---+----------+---|\\n|   5 | 3 |          | 2 |\\n|   7 | 9 |          | 8 |\\n| new |   |          |   |\\n|   1 | 6 |          | 4 |\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -307,17 +308,18 @@ fn org_table_row_column_cell_motion_combo() {
               after-row-col
               (org-table-to-lisp)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_column_width_shrink_expand_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"| Name | <6> Description | Count |\\n|------+-----------------+-------|\\n| A | alpha beta gamma | 1 |\\n| B | delta epsilon zeta | 2 |\\n\" ((\"Description\" nil nil (#<overlay in no buffer>)) (\"alpha\" nil nil (#<overlay in no buffer>)) (\"delta\" nil nil (#<overlay in no buffer>))) ((\"Description\" nil nil) (\"alpha\" nil nil) (\"delta\" nil nil)) \"| Name | <6> Description | Count |\\n|------+-----------------+-------|\\n| A | alpha beta gamma | 1 |\\n| B | delta epsilon zeta | 2 |\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -361,17 +363,16 @@ fn org_table_column_width_shrink_expand_combo() {
                 shrunk
                 expanded
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_hline_formula_sort_recalc_lifecycle_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (args-out-of-range [nil] 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -419,17 +420,18 @@ fn org_table_hline_formula_sort_recalc_lifecycle_combo() {
               (sort (copy-sequence stored-after) #'org-table-formula-less-p)
               (org-table-to-lisp)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_sort_transpose_formula_metadata_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"| Name | Jan | Feb | Mar | Total |\\n|------+-----+-----+-----+-------|\\n| B    |   2 |   3 |   4 |     9 |\\n| A    |   5 |   6 |   7 |    18 |\\n|------+-----+-----+-----+-------|\\n| Sum  |     |     |     |    27 |\\n#+TBLFM: @2$5=vsum($2..$4)::@3$5=vsum($2..$4)::@>$5=vsum(@2..@-1)\\n\" ((\"@2$5\" . \"vsum($2..$4)\") (\"@3$5\" . \"vsum($2..$4)\") (\"@>$5\" . \"vsum(@2..@-1)\")) \"| Name | Jan | Feb | Mar | Total |\\n|------+-----+-----+-----+-------|\\n| B    |   2 |   3 |   4 |     9 |\\n| A    |   5 |   6 |   7 |    18 |\\n|------+-----+-----+-----+-------|\\n| Sum  |     |     |     |    27 |\\n#+TBLFM: @2$5=vsum($2..$4)::@3$5=vsum($2..$4)::@>$5=vsum(@2..@-1)\\n\" (3 3 #(\"   6 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 3 (face org-table) 3 4 (face org-table) 4 5 (face org-table display (space :relative-width 1.001))) nil) \"| Name  | B |  A | Sum |\\n| Jan   | 2 |  5 |     |\\n| Feb   | 3 |  6 |     |\\n| Mar   | 4 |  7 |     |\\n| Total | 9 | 18 |  27 |\\n#+TBLFM: @2$5=vsum($2..$4)::@3$5=vsum($2..$4)::@>$5=vsum(@2..@-1)\\n\" ((\"@2$5\" . \"vsum($2..$4)\") (\"@3$5\" . \"vsum($2..$4)\") (\"@>$5\" . \"vsum(@2..@-1)\")) ((#(\"Name\" 0 4 (face org-table)) #(\"B\" 0 1 (face org-table)) #(\"A\" 0 1 (face org-table)) #(\"Sum\" 0 3 (face org-table))) (#(\"Jan\" 0 3 (face org-table)) #(\"2\" 0 1 (face org-table)) #(\"5\" 0 1 (face org-table)) \"\") (#(\"Feb\" 0 3 (face org-table)) #(\"3\" 0 1 (face org-table)) #(\"6\" 0 1 (face org-table)) \"\") (#(\"Mar\" 0 3 (face org-table)) #(\"4\" 0 1 (face org-table)) #(\"7\" 0 1 (face org-table)) \"\") (#(\"Total\" 0 5 (face org-table)) #(\"9\" 0 1 (face org-table)) #(\"18\" 0 2 (face org-table)) #(\"27\" 0 2 (face org-table)))) \"(#UNDEFINED_NAME)=vsum((#UNDEFINED_NAME)..(#UNDEFINED_NAME))\" \"@3$2..@4$5\" \"B3..E4\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -478,7 +480,7 @@ fn org_table_sort_transpose_formula_metadata_combo() {
                 (org-table-to-lisp)
                 (org-table-formula-substitute-names "$Total=vsum($Jan..$Mar)")
                 (org-table-convert-refs-to-rc "B3..E4")
-                (org-table-convert-refs-to-an "@3$2..@4$5"))))))"##,
+                (org-table-convert-refs-to-an "@3$2..@4$5")))))))"##,
         expect,
     );
 }
@@ -1418,12 +1420,13 @@ fn org_table_formula_multi_col_sort_recalc_edit_deep() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_formula_avg_sum_edit_sort_recalc_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 44 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil ((#(\"Name\" 0 4 (face org-table)) #(\"Math\" 0 4 (face org-table)) #(\"Sci\" 0 3 (face org-table)) #(\"Eng\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Avg\" 0 3 (face org-table))) hline (#(\"Eve\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table))) (#(\"Alice\" 0 5 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"273\" 0 3 (face org-table)) #(\"91\" 0 2 (face org-table))) (#(\"Dave\" 0 4 (face org-table)) #(\"72\" 0 2 (face org-table)) #(\"68\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"215\" 0 3 (face org-table)) #(\"71.666667\" 0 9 (face org-table))) (#(\"Bob\" 0 3 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"267\" 0 3 (face org-table)) #(\"89\" 0 2 (face org-table))) (#(\"Carol\" 0 5 (face org-table)) #(\"78\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"82\" 0 2 (face org-table)) #(\"240\" 0 3 (face org-table)) #(\"80\" 0 2 (face org-table)))) ((#(\"Name\" 0 4 (face org-table)) #(\"Math\" 0 4 (face org-table)) #(\"Sci\" 0 3 (face org-table)) #(\"Eng\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Avg\" 0 3 (face org-table))) hline (#(\"Eve\" 0 3 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"218\" 0 3 (face org-table)) #(\"72.666667\" 0 9 (face org-table))) (#(\"Alice\" 0 5 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"273\" 0 3 (face org-table)) #(\"91\" 0 2 (face org-table))) (#(\"Dave\" 0 4 (face org-table)) #(\"72\" 0 2 (face org-table)) #(\"68\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"215\" 0 3 (face org-table)) #(\"71.666667\" 0 9 (face org-table))) (#(\"Bob\" 0 3 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"267\" 0 3 (face org-table)) #(\"89\" 0 2 (face org-table))) (#(\"Carol\" 0 5 (face org-table)) #(\"78\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"82\" 0 2 (face org-table)) #(\"240\" 0 3 (face org-table)) #(\"80\" 0 2 (face org-table)))) #(\"   218 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 3 (face org-table) 3 6 (face org-table) 6 7 (face org-table display (space :relative-width 1.001))) #(\" 72.666667 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 10 (face org-table) 10 11 (face org-table display (space :relative-width 1.001))) \"| Name  | Math | Sci | Eng | Total |       Avg |\\n|-------+------+-----+-----+-------+-----------|\\n| Eve   |   88 |  70 |  60 |   218 | 72.666667 |\\n| Alice |   90 |  95 |  88 |   273 |        91 |\\n| Dave  |   72 |  68 |  75 |   215 | 71.666667 |\\n| Bob   |   85 |  92 |  90 |   267 |        89 |\\n| Carol |   78 |  80 |  82 |   240 |        80 |\\n#+TBLFM: $5=vsum($2..$4)::$6=vmean($2..$4)\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-table)
@@ -1468,17 +1471,18 @@ fn org_table_formula_avg_sum_edit_sort_recalc_deep() {
                 eve-total
                 eve-avg
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_formula_multi_col_sort_edit_recalc_v2() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 41 48)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil ((#(\"Name\" 0 4 (face org-table)) #(\"HW1\" 0 3 (face org-table)) #(\"HW2\" 0 3 (face org-table)) #(\"Mid\" 0 3 (face org-table)) #(\"Fin\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Grade\" 0 5 (face org-table))) hline (#(\"Eve\" 0 3 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"72\" 0 2 (face org-table)) #(\"282\" 0 3 (face org-table)) #(\"[67]\" 0 4 (face org-table))) (#(\"Alice\" 0 5 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"365\" 0 3 (face org-table)) #(\"[66]\" 0 4 (face org-table))) (#(\"Dave\" 0 4 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"78\" 0 2 (face org-table)) #(\"82\" 0 2 (face org-table)) #(\"76\" 0 2 (face org-table)) #(\"316\" 0 3 (face org-table)) #(\"[67]\" 0 4 (face org-table))) (#(\"Bob\" 0 3 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"365\" 0 3 (face org-table)) #(\"[66]\" 0 4 (face org-table))) (#(\"Carol\" 0 5 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"78\" 0 2 (face org-table)) #(\"82\" 0 2 (face org-table)) #(\"325\" 0 3 (face org-table)) #(\"[67]\" 0 4 (face org-table)))) ((#(\"Name\" 0 4 (face org-table)) #(\"HW1\" 0 3 (face org-table)) #(\"HW2\" 0 3 (face org-table)) #(\"Mid\" 0 3 (face org-table)) #(\"Fin\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Grade\" 0 5 (face org-table))) hline (#(\"Eve\" 0 3 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"72\" 0 2 (face org-table)) #(\"302\" 0 3 (face org-table)) #(\"[67]\" 0 4 (face org-table))) (#(\"Alice\" 0 5 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"365\" 0 3 (face org-table)) #(\"[66]\" 0 4 (face org-table))) (#(\"Dave\" 0 4 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"78\" 0 2 (face org-table)) #(\"82\" 0 2 (face org-table)) #(\"76\" 0 2 (face org-table)) #(\"316\" 0 3 (face org-table)) #(\"[67]\" 0 4 (face org-table))) (#(\"Bob\" 0 3 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"365\" 0 3 (face org-table)) #(\"[66]\" 0 4 (face org-table))) (#(\"Carol\" 0 5 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"78\" 0 2 (face org-table)) #(\"82\" 0 2 (face org-table)) #(\"325\" 0 3 (face org-table)) #(\"[67]\" 0 4 (face org-table)))) #(\"   302 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 3 (face org-table) 3 6 (face org-table) 6 7 (face org-table display (space :relative-width 1.001))) #(\" [67]  \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 5 (face org-table) 5 6 (face org-table) 6 7 (face org-table display (space :relative-width 1.001))) \"| Name  | HW1 | HW2 | Mid | Fin | Total | Grade |\\n|-------+-----+-----+-----+-----+-------+-------|\\n| Eve   |  90 |  75 |  65 |  72 |   302 | [67]  |\\n| Alice |  95 |  92 |  88 |  90 |   365 | [66]  |\\n| Dave  |  80 |  78 |  82 |  76 |   316 | [67]  |\\n| Bob   |  90 |  95 |  92 |  88 |   365 | [66]  |\\n| Carol |  85 |  80 |  78 |  82 |   325 | [67]  |\\n#+TBLFM: $6=vsum($2..$5)::$7=if($6>=400,\\\"A\\\",if($6>=350,\\\"B\\\",\\\"C\\\"))\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-table)
@@ -1520,17 +1524,18 @@ fn org_table_formula_multi_col_sort_edit_recalc_v2() {
           (list initial-lisp sorted-lisp edited-lisp
                 eve-total eve-grade
                 (buffer-substring-no-properties
-                 (point-min) (point-max)))))))))"##,
+                 (point-min) (point-max))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_formula_sort_edit_resort_recalc_v3() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 48 54)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil ((#(\"Name\" 0 4 (face org-table)) #(\"A\" 0 1 (face org-table)) #(\"B\" 0 1 (face org-table)) #(\"C\" 0 1 (face org-table)) #(\"Total\" 0 5 (face org-table))) hline (#(\"Zara\" 0 4 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"210\" 0 3 (face org-table))) (#(\"Adam\" 0 4 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"270\" 0 3 (face org-table))) (#(\"Yuki\" 0 4 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table))) (#(\"Bill\" 0 4 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"86\" 0 2 (face org-table)) #(\"266\" 0 3 (face org-table))) (#(\"Xena\" 0 4 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"210\" 0 3 (face org-table)))) ((#(\"Name\" 0 4 (face org-table)) #(\"A\" 0 1 (face org-table)) #(\"B\" 0 1 (face org-table)) #(\"C\" 0 1 (face org-table)) #(\"Total\" 0 5 (face org-table))) hline (#(\"Zara\" 0 4 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"210\" 0 3 (face org-table))) (#(\"Adam\" 0 4 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"270\" 0 3 (face org-table))) (#(\"Yuki\" 0 4 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table))) (#(\"Bill\" 0 4 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"86\" 0 2 (face org-table)) #(\"266\" 0 3 (face org-table))) (#(\"Xena\" 0 4 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"210\" 0 3 (face org-table)))) ((#(\"Name\" 0 4 (face org-table)) #(\"A\" 0 1 (face org-table)) #(\"B\" 0 1 (face org-table)) #(\"C\" 0 1 (face org-table)) #(\"Total\" 0 5 (face org-table))) hline (#(\"Zara\" 0 4 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"245\" 0 3 (face org-table))) (#(\"Adam\" 0 4 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"270\" 0 3 (face org-table))) (#(\"Yuki\" 0 4 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table))) (#(\"Bill\" 0 4 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"86\" 0 2 (face org-table)) #(\"266\" 0 3 (face org-table))) (#(\"Xena\" 0 4 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"210\" 0 3 (face org-table)))) #(\"   245 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 3 (face org-table) 3 6 (face org-table) 6 7 (face org-table display (space :relative-width 1.001))) ((#(\"Name\" 0 4 (face org-table)) #(\"A\" 0 1 (face org-table)) #(\"B\" 0 1 (face org-table)) #(\"C\" 0 1 (face org-table)) #(\"Total\" 0 5 (face org-table))) hline (#(\"Zara\" 0 4 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"245\" 0 3 (face org-table))) (#(\"Adam\" 0 4 (face org-table)) #(\"90\" 0 2 (face org-table)) #(\"85\" 0 2 (face org-table)) #(\"95\" 0 2 (face org-table)) #(\"270\" 0 3 (face org-table))) (#(\"Yuki\" 0 4 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table))) (#(\"Bill\" 0 4 (face org-table)) #(\"88\" 0 2 (face org-table)) #(\"92\" 0 2 (face org-table)) #(\"86\" 0 2 (face org-table)) #(\"266\" 0 3 (face org-table))) (#(\"Xena\" 0 4 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"210\" 0 3 (face org-table)))) \"| Name |  A |  B |  C | Total |\\n|------+----+----+----+-------|\\n| Zara | 95 | 70 | 80 |   245 |\\n| Adam | 90 | 85 | 95 |   270 |\\n| Yuki | 75 | 80 | 70 |   225 |\\n| Bill | 88 | 92 | 86 |   266 |\\n| Xena | 70 | 65 | 75 |   210 |\\n#+TBLFM: $5=vsum($2..$4)\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-table)
@@ -1579,17 +1584,18 @@ fn org_table_formula_sort_edit_resort_recalc_v3() {
               (list initial sorted-alpha sorted-total
                     after-edit zara-total resorted
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_table_formula_string_col_edit_sort_recalc_v4() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 53 54)""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil ((#(\"City\" 0 4 (face org-table)) #(\"Jan\" 0 3 (face org-table)) #(\"Feb\" 0 3 (face org-table)) #(\"Mar\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Avg\" 0 3 (face org-table))) hline (#(\"Tokyo\" 0 5 (face org-table)) #(\"50\" 0 2 (face org-table)) #(\"55\" 0 2 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"165\" 0 3 (face org-table)) #(\"55\" 0 2 (face org-table))) (#(\"Oslo\" 0 4 (face org-table)) #(\"20\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table))) (#(\"Miami\" 0 5 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table)) #(\"75\" 0 2 (face org-table))) (#(\"Berlin\" 0 6 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"35\" 0 2 (face org-table)) #(\"40\" 0 2 (face org-table)) #(\"105\" 0 3 (face org-table)) #(\"35\" 0 2 (face org-table))) (#(\"Sydney\" 0 6 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table)))) ((#(\"City\" 0 4 (face org-table)) #(\"Jan\" 0 3 (face org-table)) #(\"Feb\" 0 3 (face org-table)) #(\"Mar\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Avg\" 0 3 (face org-table))) hline (#(\"Tokyo\" 0 5 (face org-table)) #(\"50\" 0 2 (face org-table)) #(\"55\" 0 2 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"165\" 0 3 (face org-table)) #(\"55\" 0 2 (face org-table))) (#(\"Oslo\" 0 4 (face org-table)) #(\"20\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table))) (#(\"Miami\" 0 5 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table)) #(\"75\" 0 2 (face org-table))) (#(\"Berlin\" 0 6 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"35\" 0 2 (face org-table)) #(\"40\" 0 2 (face org-table)) #(\"105\" 0 3 (face org-table)) #(\"35\" 0 2 (face org-table))) (#(\"Sydney\" 0 6 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table)))) ((#(\"City\" 0 4 (face org-table)) #(\"Jan\" 0 3 (face org-table)) #(\"Feb\" 0 3 (face org-table)) #(\"Mar\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Avg\" 0 3 (face org-table))) hline (#(\"Tokyo\" 0 5 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"55\" 0 2 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table))) (#(\"Oslo\" 0 4 (face org-table)) #(\"20\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table))) (#(\"Miami\" 0 5 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table)) #(\"75\" 0 2 (face org-table))) (#(\"Berlin\" 0 6 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"35\" 0 2 (face org-table)) #(\"40\" 0 2 (face org-table)) #(\"105\" 0 3 (face org-table)) #(\"35\" 0 2 (face org-table))) (#(\"Sydney\" 0 6 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table)))) #(\"   195 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 3 (face org-table) 3 6 (face org-table) 6 7 (face org-table display (space :relative-width 1.001))) #(\"  65 \" 0 1 (face org-table rear-nonsticky t display (space :relative-width 1)) 1 2 (face org-table) 2 4 (face org-table) 4 5 (face org-table display (space :relative-width 1.001))) ((#(\"City\" 0 4 (face org-table)) #(\"Jan\" 0 3 (face org-table)) #(\"Feb\" 0 3 (face org-table)) #(\"Mar\" 0 3 (face org-table)) #(\"Total\" 0 5 (face org-table)) #(\"Avg\" 0 3 (face org-table))) hline (#(\"Tokyo\" 0 5 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"55\" 0 2 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table))) (#(\"Oslo\" 0 4 (face org-table)) #(\"20\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"25\" 0 2 (face org-table))) (#(\"Miami\" 0 5 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"75\" 0 2 (face org-table)) #(\"80\" 0 2 (face org-table)) #(\"225\" 0 3 (face org-table)) #(\"75\" 0 2 (face org-table))) (#(\"Berlin\" 0 6 (face org-table)) #(\"30\" 0 2 (face org-table)) #(\"35\" 0 2 (face org-table)) #(\"40\" 0 2 (face org-table)) #(\"105\" 0 3 (face org-table)) #(\"35\" 0 2 (face org-table))) (#(\"Sydney\" 0 6 (face org-table)) #(\"60\" 0 2 (face org-table)) #(\"65\" 0 2 (face org-table)) #(\"70\" 0 2 (face org-table)) #(\"195\" 0 3 (face org-table)) #(\"65\" 0 2 (face org-table)))) \"| City   | Jan | Feb | Mar | Total | Avg |\\n|--------+-----+-----+-----+-------+-----|\\n| Tokyo  |  80 |  55 |  60 |   195 |  65 |\\n| Oslo   |  20 |  25 |  30 |    75 |  25 |\\n| Miami  |  70 |  75 |  80 |   225 |  75 |\\n| Berlin |  30 |  35 |  40 |   105 |  35 |\\n| Sydney |  60 |  65 |  70 |   195 |  65 |\\n#+TBLFM: $5=vsum($2..$4)::$6=vmean($2..$4)\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org-table)
@@ -1643,7 +1649,7 @@ fn org_table_formula_string_col_edit_sort_recalc_v4() {
               (list initial sorted-alpha sorted-total
                     after-edit tokyo-total tokyo-avg resorted
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }

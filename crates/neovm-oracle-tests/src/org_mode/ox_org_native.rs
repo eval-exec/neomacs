@@ -1,12 +1,13 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_org_export_native_filter_options_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* TODO [#A] Alpha                                               :work:urgent:\\nParagraph with [fn:one], [[https://example.org][Example]], and =code=.\\n|---+---+---|\\n| A | B | C |\\n:LOGBOOK:\\n:END:\\n\\n[fn:one] Footnote text.\\n\" ((\"TODO\" 65 \"Alpha\" (\"work\" \"urgent\"))) nil (\"one\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'ox-org)
@@ -52,17 +53,18 @@ fn org_org_export_native_filter_options_combo() {
                 (cons (org-element-property :key p)
                       (org-element-property :value p))))
             (org-element-map tree 'footnote-definition
-              (lambda (f) (org-element-property :label f))))))"##,
+              (lambda (f) (org-element-property :label f)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_org_export_subtree_body_visible_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Alpha\\nVisible alpha.\\n** Hidden child\\n* Beta\\nBeta visible [fn:b].\\n\\n[fn:b] Beta footnote.\\n** Beta child                                                           :tag:\\nChild body.\\n\" \"Beta visible [fn:b].\\n\\n[fn:b] Beta footnote.\\n* Beta child\\nChild body.\\n\" (t t nil t) ((1 \"Beta child\" nil)) (\"b\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -108,7 +110,7 @@ fn org_org_export_subtree_body_visible_combo() {
                         (org-element-property :tags h))))
               (org-element-map parsed 'footnote-reference
                 (lambda (f)
-                  (org-element-property :label f)))))))"##,
+                  (org-element-property :label f))))))))"##,
         expect,
     );
 }

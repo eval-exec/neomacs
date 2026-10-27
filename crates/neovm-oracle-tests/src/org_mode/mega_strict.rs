@@ -7,11 +7,10 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // Mega: org-element with all inline markup combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_inline_markup_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (5 4 2 3 3 3)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -33,7 +32,7 @@ _underline with *bold* inside*
          (length (org-element-map tree 'underline #'identity))
          (length (org-element-map tree 'verbatim #'identity))
          (length (org-element-map tree 'code #'identity))
-         (length (org-element-map tree 'strike-through #'identity))))))"##,
+         (length (org-element-map tree 'strike-through #'identity)))))))"##,
         expect,
     );
 }
@@ -42,11 +41,12 @@ _underline with *bold* inside*
 // Mega: org-element with all link type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_link_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (17 (\"https\" \"http\" \"ftp\" \"mailto\" \"https\" \"https\" \"https\" \"file\" \"file\" \"file\" \"id\" \"custom-id\" \"fuzzy\" \"coderef\" \"fuzzy\" \"elisp\" \"shell\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -74,7 +74,7 @@ mailto:user@example.org
              (links (org-element-map tree 'link #'identity)))
         (list
          (length links)
-         (mapcar (lambda (l) (org-element-property :type l)) links)))))"##,
+         (mapcar (lambda (l) (org-element-property :type l)) links))))))"##,
         expect,
     );
 }
@@ -83,11 +83,12 @@ mailto:user@example.org
 // Mega: org-element with all timestamp type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_timestamp_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (14 (active active active-range active-range active-range active active active inactive inactive inactive-range inactive-range diary diary) (nil nil timerange daterange daterange nil nil nil nil nil timerange daterange nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -113,7 +114,7 @@ fn mega_all_timestamp_type_combinations() {
         (list
          (length timestamps)
          (mapcar (lambda (ts) (org-element-property :type ts)) timestamps)
-         (mapcar (lambda (ts) (org-element-property :range-type ts)) timestamps)))))"##,
+         (mapcar (lambda (ts) (org-element-property :range-type ts)) timestamps))))))"##,
         expect,
     );
 }
@@ -122,11 +123,10 @@ fn mega_all_timestamp_type_combinations() {
 // Mega: org-element with all block type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_block_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 1 1 2 1 1 2 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -181,7 +181,7 @@ Special
          (length (org-element-map tree 'verse-block #'identity))
          (length (org-element-map tree 'comment-block #'identity))
          (length (org-element-map tree 'src-block #'identity))
-         (length (org-element-map tree 'special-block #'identity))))))"##,
+         (length (org-element-map tree 'special-block #'identity)))))))"##,
         expect,
     );
 }
@@ -190,11 +190,12 @@ Special
 // Mega: org-element with all list type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_list_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (4 19 (unordered unordered ordered unordered) (nil nil nil nil nil nil nil nil nil nil nil nil nil nil nil off on trans nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -231,7 +232,7 @@ fn mega_all_list_type_combinations() {
          (length lists)
          (length items)
          (mapcar (lambda (l) (org-element-property :type l)) lists)
-         (mapcar (lambda (i) (org-element-property :checkbox i)) items)))))"##,
+         (mapcar (lambda (i) (org-element-property :checkbox i)) items))))))"##,
         expect,
     );
 }
@@ -240,11 +241,12 @@ fn mega_all_list_type_combinations() {
 // Mega: org-element with all headline feature combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_headline_feature_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (13 (nil \"TODO\" \"DONE\" nil \"TODO\" nil nil \"TODO\" nil \"TODO\" nil nil \"TODO\") (nil nil nil 65 66 nil nil 67 nil 65 nil nil 66) (nil nil nil nil nil (\"tag\") (\"tag1\" \"tag2\") (\"tag1\" \"tag2\") nil (\"tag\") nil nil nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -270,7 +272,7 @@ fn mega_all_headline_feature_combinations() {
          (length headlines)
          (mapcar (lambda (h) (org-element-property :todo-keyword h)) headlines)
          (mapcar (lambda (h) (org-element-property :priority h)) headlines)
-         (mapcar (lambda (h) (org-element-property :tags h)) headlines)))))"##,
+         (mapcar (lambda (h) (org-element-property :tags h)) headlines))))))"##,
         expect,
     );
 }
@@ -279,11 +281,12 @@ fn mega_all_headline_feature_combinations() {
 // Mega: org-element with all planning combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_planning_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (9 ((nil (timestamp (:standard-properties [20 nil nil nil 36 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil)) nil) ((timestamp (:standard-properties [58 nil nil nil 74 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil)) nil nil) (nil nil (timestamp (:standard-properties [93 nil nil nil 109 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type inactive :range-type nil :raw-value \"[2024-01-14 Sun]\" :year-start 2024 :month-start 1 :day-start 14 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 14 :hour-end nil :minute-end nil))) ((timestamp (:standard-properties [158 nil nil nil 174 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-14 Sun>\" :year-start 2024 :month-start 1 :day-start 14 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 14 :hour-end nil :minute-end nil)) (timestamp (:standard-properties [130 nil nil nil 147 1 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil)) nil) ((timestamp (:standard-properties [196 nil nil nil 213 1 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-14 Sun>\" :year-start 2024 :month-start 1 :day-start 14 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 14 :hour-end nil :minute-end nil)) (timestamp (:standard-properties [223 nil nil nil 240 1 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil)) (timestamp (:standard-properties [248 nil nil nil 264 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type inactive :range-type nil :raw-value \"[2024-01-13 Sat]\" :year-start 2024 :month-start 1 :day-start 13 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 13 :hour-end nil :minute-end nil))) (nil (timestamp (:standard-properties [285 nil nil nil 309 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon +1w -3d>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 15 :hour-end nil :minute-end nil :repeater-type cumulate :repeater-value 1 :repeater-unit week :warning-type all :warning-value 3 :warning-unit day)) nil) ((timestamp (:standard-properties [331 nil nil nil 351 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-14 Sun +1w>\" :year-start 2024 :month-start 1 :day-start 14 :hour-start nil :minute-start nil :year-end 2024 :month-end 1 :day-end 14 :hour-end nil :minute-end nil :repeater-type cumulate :repeater-value 1 :repeater-unit week)) nil nil) (nil (timestamp (:standard-properties [372 nil nil nil 394 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active :range-type nil :raw-value \"<2024-01-15 Mon 14:30>\" :year-start 2024 :month-start 1 :day-start 15 :hour-start 14 :minute-start 30 :year-end 2024 :month-end 1 :day-end 15 :hour-end 14 :minute-end 30)) nil) ((timestamp (:standard-properties [416 nil nil nil 444 0 nil nil nil nil nil nil nil nil nil nil nil nil] :type active-range :range-type timerange :raw-value \"<2024-01-14 Sun 09:00-10:00>\" :year-start 2024 :month-start 1 :day-start 14 :hour-start 9 :minute-start 0 :year-end 2024 :month-end 1 :day-end 14 :hour-end 10 :minute-end 0)) nil nil)))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -323,7 +326,7 @@ SCHEDULED: <2024-01-14 Sun 09:00-10:00>")
          (mapcar (lambda (p) (list (org-element-property :scheduled p)
                              (org-element-property :deadline p)
                              (org-element-property :closed p)))
-                 planning)))))"##,
+                 planning))))))"##,
         expect,
     );
 }
@@ -332,11 +335,12 @@ SCHEDULED: <2024-01-14 Sun 09:00-10:00>")
 // Mega: org-element with all property drawer combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_property_drawer_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (2 9 (\"EMPTY\" \"KEY\" \"KEY_NUM\" \"KEY_BOOL\" \"CUSTOM_ID\" \"EFFORT\" \"CATEGORY\" \"KEY\" \"KEY+\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -367,7 +371,7 @@ fn mega_all_property_drawer_combinations() {
          (length (org-element-map tree 'node-property #'identity))
          ;; Property keys.
          (mapcar (lambda (p) (org-element-property :key p))
-                 (org-element-map tree 'node-property #'identity))))))"##,
+                 (org-element-map tree 'node-property #'identity)))))))"##,
         expect,
     );
 }
@@ -376,11 +380,10 @@ fn mega_all_property_drawer_combinations() {
 // Mega: org-element with all drawer combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_drawer_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (1 2 (\"LOGBOOK\" \"CUSTOM_DRAWER\") 1)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -406,7 +409,7 @@ Body text.")
          (length (org-element-map tree 'drawer #'identity))
          (mapcar (lambda (d) (org-element-property :drawer-name d))
                  (org-element-map tree 'drawer #'identity))
-         (length (org-element-map tree 'clock #'identity))))))"##,
+         (length (org-element-map tree 'clock #'identity)))))))"##,
         expect,
     );
 }
@@ -415,11 +418,11 @@ Body text.")
 // Mega: org-element with all dynamic block combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_dynamic_block_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (3 (\"clocktable\" \"myblock\" \"another-block\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -440,7 +443,7 @@ More content
              (blocks (org-element-map tree 'dynamic-block #'identity)))
         (list
          (length blocks)
-         (mapcar (lambda (b) (org-element-property :block-name b)) blocks)))))"##,
+         (mapcar (lambda (b) (org-element-property :block-name b)) blocks))))))"##,
         expect,
     );
 }
@@ -449,11 +452,10 @@ More content
 // Mega: org-element with all footnote type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_footnote_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (5 2 (standard inline inline standard standard))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -471,7 +473,7 @@ Section[fn:3].
          (length (org-element-map tree 'footnote-reference #'identity))
          (length (org-element-map tree 'footnote-definition #'identity))
          (mapcar (lambda (ref) (org-element-property :type ref))
-                 (org-element-map tree 'footnote-reference #'identity))))))"##,
+                 (org-element-map tree 'footnote-reference #'identity)))))))"##,
         expect,
     );
 }
@@ -480,11 +482,12 @@ Section[fn:3].
 // Mega: org-element with all entity type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_entity_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (62 (\"alpha\" \"beta\" \"gamma\" \"delta\" \"epsilon\" \"Alpha\" \"Beta\" \"Gamma\" \"Delta\" \"Epsilon\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -508,7 +511,7 @@ fn mega_all_entity_type_combinations() {
          (length (org-element-map tree 'entity #'identity))
          ;; First 10 names.
          (mapcar (lambda (e) (org-element-property :name e))
-                 (take 10 (org-element-map tree 'entity #'identity)))))))"##,
+                 (take 10 (org-element-map tree 'entity #'identity))))))))"##,
         expect,
     );
 }
@@ -517,11 +520,12 @@ fn mega_all_entity_type_combinations() {
 // Mega: org-element with all LaTeX fragment type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_latex_fragment_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (9 (\"$x^2$\" \"$E=mc^2$\" \"$\\\\alpha + \\\\beta$\" \"$$\\\\int_0^1 f(x)dx$$\" \"$$\\\\sum_{i=1}^n i$$\" \"\\\\(x^2\\\\)\" \"\\\\[E=mc^2\\\\]\" \"\\\\command{}\" \"\\\\emph{text}\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -537,7 +541,7 @@ Command: \\command{} and \\emph{text}.")
          (length (org-element-map tree 'latex-fragment #'identity))
          ;; Fragment values.
          (mapcar (lambda (f) (org-element-property :value f))
-                 (org-element-map tree 'latex-fragment #'identity))))))"##,
+                 (org-element-map tree 'latex-fragment #'identity)))))))"##,
         expect,
     );
 }
@@ -546,11 +550,12 @@ Command: \\command{} and \\emph{text}.")
 // Mega: org-element with all LaTeX environment type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_latex_environment_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (4 (\"\\\\begin{equation}\\nx^2 + y^2 = z^2\\n\\\\end{equation}\\n\" \"\\\\begin{align}\\nx &= 1 \\\\\\\\\\ny &= 2\\n\\\\end{align}\\n\" \"\\\\begin{eqnarray}\\na &=& b \\\\\\\\\\nc &=& d\\n\\\\end{eqnarray}\\n\" \"\\\\begin{theorem}\\nImportant theorem.\\n\\\\end{theorem}\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -580,7 +585,7 @@ Important theorem.
          (length (org-element-map tree 'latex-environment #'identity))
          ;; Environment values.
          (mapcar (lambda (e) (org-element-property :value e))
-                 (org-element-map tree 'latex-environment #'identity))))))"##,
+                 (org-element-map tree 'latex-environment #'identity)))))))"##,
         expect,
     );
 }
@@ -589,11 +594,12 @@ Important theorem.
 // Mega: org-element with all macro type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_macro_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (6 (\"{{{name}}}\" \"{{{greet}}}\" \"{{{greeting}}}\" \"{{{greet(Beautiful)}}}\" \"{{{greet}}}\" \"{{{name}}}\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -613,7 +619,7 @@ fn mega_all_macro_type_combinations() {
         (list
          (length (org-element-map tree 'macro #'identity))
          (mapcar (lambda (m) (org-element-property :value m))
-                 (org-element-map tree 'macro #'identity))))))"##,
+                 (org-element-map tree 'macro #'identity)))))))"##,
         expect,
     );
 }
@@ -622,11 +628,12 @@ fn mega_all_macro_type_combinations() {
 // Mega: org-element with all export snippet type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_export_snippet_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (9 (\"html\" \"html\" \"html\" \"latex\" \"latex\" \"latex\" \"ascii\" \"texinfo\" \"mybackend\") (\"<b>bold</b>\" \"<i>italic</i>\" \"<p>paragraph</p>\" \"\\\\textbf{bold}\" \"\\\\textit{italic}\" \"\\\\emph{emphasis}\" \"plain text\" \"@code{code}\" \"custom content\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -648,7 +655,7 @@ fn mega_all_export_snippet_type_combinations() {
          (mapcar (lambda (s) (org-element-property :back-end s))
                  (org-element-map tree 'export-snippet #'identity))
          (mapcar (lambda (s) (org-element-property :value s))
-                 (org-element-map tree 'export-snippet #'identity))))))"##,
+                 (org-element-map tree 'export-snippet #'identity)))))))"##,
         expect,
     );
 }
@@ -657,11 +664,12 @@ fn mega_all_export_snippet_type_combinations() {
 // Mega: org-element with all radio target type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_radio_target_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (7 (radio-target radio-target radio-target radio-target radio-target radio-target radio-target))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -679,7 +687,7 @@ fn mega_all_radio_target_type_combinations() {
         (list
          (length (org-element-map tree 'radio-target #'identity))
          (mapcar #'org-element-type
-                 (org-element-map tree 'radio-target #'identity))))))"##,
+                 (org-element-map tree 'radio-target #'identity)))))))"##,
         expect,
     );
 }
@@ -688,11 +696,10 @@ fn mega_all_radio_target_type_combinations() {
 // Mega: org-element with all target type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_target_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (6 (target target target target target target))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -709,7 +716,7 @@ fn mega_all_target_type_combinations() {
         (list
          (length (org-element-map tree 'target #'identity))
          (mapcar #'org-element-type
-                 (org-element-map tree 'target #'identity))))))"##,
+                 (org-element-map tree 'target #'identity)))))))"##,
         expect,
     );
 }
@@ -718,11 +725,12 @@ fn mega_all_target_type_combinations() {
 // Mega: org-element with all statistics cookie type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_statistics_cookie_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (8 (\"[0/0]\" \"[1/2]\" \"[5/10]\" \"[0%]\" \"[50%]\" \"[100%]\" \"[/]\" \"[%]\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -741,7 +749,7 @@ fn mega_all_statistics_cookie_type_combinations() {
         (list
          (length (org-element-map tree 'statistics-cookie #'identity))
          (mapcar (lambda (c) (org-element-property :value c))
-                 (org-element-map tree 'statistics-cookie #'identity))))))"##,
+                 (org-element-map tree 'statistics-cookie #'identity)))))))"##,
         expect,
     );
 }
@@ -750,11 +758,12 @@ fn mega_all_statistics_cookie_type_combinations() {
 // Mega: org-element with all inlinetask type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_inlinetask_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (5 ((nil nil nil) (\"TODO\" nil nil) (\"DONE\" nil nil) (nil 65 nil) (\"TODO\" 66 (\"tag\"))))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -789,7 +798,7 @@ Body
          (mapcar (lambda (t) (list (org-element-property :todo-keyword t)
                              (org-element-property :priority t)
                              (org-element-property :tags t)))
-                 (org-element-map tree 'inlinetask #'identity))))))"##,
+                 (org-element-map tree 'inlinetask #'identity)))))))"##,
         expect,
     );
 }
@@ -798,11 +807,12 @@ Body
 // Mega: org-element with all clock type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_clock_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (5 (closed closed closed closed running) (\"1:00\" \"1:30\" \"2:00\" \"1:00\" nil))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -824,7 +834,7 @@ CLOCK: [2024-01-15 Mon 13:00]")
         (list
          (length clocks)
          (mapcar (lambda (c) (org-element-property :status c)) clocks)
-         (mapcar (lambda (c) (org-element-property :duration c)) clocks)))))"##,
+         (mapcar (lambda (c) (org-element-property :duration c)) clocks))))))"##,
         expect,
     );
 }
@@ -833,11 +843,12 @@ CLOCK: [2024-01-15 Mon 13:00]")
 // Mega: org-element with all diary sexp type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_diary_sexp_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (6 (diary-sexp diary-sexp diary-sexp diary-sexp diary-sexp diary-sexp))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -854,7 +865,7 @@ fn mega_all_diary_sexp_type_combinations() {
         (list
          (length (org-element-map tree 'diary-sexp #'identity))
          (mapcar #'org-element-type
-                 (org-element-map tree 'diary-sexp #'identity))))))"##,
+                 (org-element-map tree 'diary-sexp #'identity)))))))"##,
         expect,
     );
 }
@@ -863,11 +874,11 @@ fn mega_all_diary_sexp_type_combinations() {
 // Mega: org-element with all horizontal rule type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_horizontal_rule_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK (3 (horizontal-rule horizontal-rule horizontal-rule))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -891,7 +902,7 @@ Final")
         (list
          (length (org-element-map tree 'horizontal-rule #'identity))
          (mapcar #'org-element-type
-                 (org-element-map tree 'horizontal-rule #'identity))))))"##,
+                 (org-element-map tree 'horizontal-rule #'identity)))))))"##,
         expect,
     );
 }
@@ -900,11 +911,12 @@ Final")
 // Mega: org-element with all line break type combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn mega_all_line_break_type_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (5 (line-break line-break line-break line-break line-break))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -925,7 +937,7 @@ Line 7")
         (list
          (length (org-element-map tree 'line-break #'identity))
          (mapcar #'org-element-type
-                 (org-element-map tree 'line-break #'identity))))))"##,
+                 (org-element-map tree 'line-break #'identity)))))))"##,
         expect,
     );
 }

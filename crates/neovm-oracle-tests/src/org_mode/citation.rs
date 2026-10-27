@@ -50,12 +50,11 @@ fn org_cite_bibliography_and_reference_boundaries_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_cite_basic_bibtex_json_parse_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 58 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -114,17 +113,16 @@ fn org_cite_basic_bibtex_json_parse_export_combo() {
                     numbers
                     parsed
                     out)))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_cite_basic_note_numeric_bibliography_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 52 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -177,7 +175,7 @@ fn org_cite_basic_note_numeric_bibliography_export_combo() {
                    (keys (org-cite-list-keys info))
                    (output (org-export-as 'ascii nil nil t nil)))
               (list keys citations output)))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }
@@ -346,12 +344,11 @@ fn org_cite_custom_processor_note_adjust_wrap_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_cite_insert_processor_affix_boundaries_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 104 56)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -456,7 +453,7 @@ fn org_cite_insert_processor_affix_boundaries_combo() {
                     (nreverse calls)
                     (buffer-substring-no-properties
                      (point-min) (point-max)))))))
-      (setq org-cite--processors original-processors))))"##,
+      (setq org-cite--processors original-processors)))"##,
         expect,
     );
 }
@@ -581,12 +578,11 @@ fn org_cite_basic_activation_follow_completion_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_cite_basic_disambiguation_multibackend_export_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 100 34)""#]];
+    let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -687,7 +683,7 @@ fn org_cite_basic_disambiguation_multibackend_export_combo() {
                     html
                     ascii
                     latex)))))
-      (delete-directory root t))))"##,
+      (delete-directory root t)))"##,
         expect,
     );
 }

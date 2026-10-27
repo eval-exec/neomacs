@@ -36,12 +36,11 @@ fn org_timestamp_change_toggle_repeater_delay_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_read_date_relative_default_time_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function org-element-timestamp-parser)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -64,7 +63,7 @@ fn org_read_date_relative_default_time_combo() {
                 (org-timestamp-has-time-p ts))))
       '("<2026-05-27 Wed>"
         "[2026-05-27 Wed 09:30]"
-        "<2026-05-27 Wed 09:30-10:45>"))))"##,
+        "<2026-05-27 Wed 09:30-10:45>")))))"##,
         expect,
     );
 }
@@ -132,12 +131,13 @@ fn org_timestamp_time_range_eval_parse_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_planning_repeater_warning_element_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((((\"<2026-05-27 Wed .+2d/4d>\" restart 2 day nil nil nil) (\"<2026-06-01 Mon +1w -3d>\" cumulate 1 week all 3 day)) t \"2026-05-27\" \"2026-06-01\"))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -171,17 +171,16 @@ fn org_planning_repeater_warning_element_combo() {
               (org-timestamp-to-time scheduled))
              (format-time-string
               "%Y-%m-%d"
-              (org-timestamp-to-time deadline))))))))"##,
+              (org-timestamp-to-time deadline)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_schedule_deadline_timestamp_range_shift_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-function org-timestamp-at-point)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -240,17 +239,16 @@ fn org_schedule_deadline_timestamp_range_shift_combo() {
                    "\\[[0-9][^]\n]+\\]\\|<[0-9][^>\n]+>"
                    "[stamp]"
                    (buffer-substring-no-properties
-                    (point-min) (point-max))))))))"##,
+                    (point-min) (point-max))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_todo_auto_repeat_planning_logbook_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (void-variable events)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -329,7 +327,7 @@ fn org_todo_auto_repeat_planning_logbook_combo() {
                     ('node-property
                      (list 'property
                            (org-element-property :key el)
-                           (org-element-property :value el))))))))))"##,
+                           (org-element-property :value el)))))))))))"##,
         expect,
     );
 }
@@ -475,12 +473,13 @@ Body <2026-05-27 Wed 11:00-12:15>
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_timestamp_parse_shift_range_element_extract_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""ERR (error \"`let' bindings can have only one value-form\" org-timestamp-change 1 'day)""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -548,12 +547,11 @@ fn org_timestamp_parse_shift_range_element_extract_combo() {
                          (org-element-property :month-start ts))))))
           (list parsed
                 after-shift
-                shifted-ts))))))"##,
+                shifted-ts)))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_planning_timestamp_shift_edit_recurring_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -611,7 +609,7 @@ fn org_planning_timestamp_shift_edit_recurring_deep() {
                     after-shift2
                     after-edit
                     (buffer-substring-no-properties
-                     (point-min) (point-max)))))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }

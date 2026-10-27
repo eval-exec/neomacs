@@ -62,11 +62,10 @@ fn combo97_org_table_rotate_mark_counter() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo97_org_clock_specific_time_range() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 7 46)""#]];
+    let expect = expect_test::expect![[r#""OK (:ok t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (require 'org-clock)
  (let ((org-clock-persist nil)) (insert "* A\n* B\n") (goto-char (point-min))
@@ -74,7 +73,7 @@ fn combo97_org_clock_specific_time_range() {
   (org-clock-in nil) (org-clock-out nil nil) (goto-char (point-min))
   (insert "#+BEGIN: clocktable :maxlevel 2 :scope file :tstart \"<2024-01-01>\" :tend \"<2024-12-31>\" :block 2024\n#+END:\n")
   (goto-char (point-min)) (search-forward "#+BEGIN:") (beginning-of-line) (org-dblock-update)
-  (list :ok (> (length (buffer-string)) 0)))))"##,
+  (list :ok (> (length (buffer-string)) 0))))"##,
         expect,
     );
 }

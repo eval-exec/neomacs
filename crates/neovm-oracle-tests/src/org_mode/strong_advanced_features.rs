@@ -24,11 +24,10 @@ fn af_org_babel_src_block() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn af_org_babel_call() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (\"my-func\" nil)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -36,7 +35,7 @@ fn af_org_babel_call() {
   (let* ((tree (org-element-parse-buffer))
          (call (car (org-element-map tree 'babel-call (lambda (c) c)))))
     (list (org-element-property :call call)
-          (org-element-property :inside-header call)))"##,
+          (org-element-property :inside-header call))))"##,
         expect,
     );
 }
@@ -107,7 +106,6 @@ fn af_org_radio_targets() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn af_org_inline_task() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -124,7 +122,7 @@ fn af_org_inline_task() {
                       (list (org-element-property :raw-value h)
                             (org-element-property :todo-keyword h)
                             (org-element-property :level h)))))))
-    tasks)"##,
+    tasks))"##,
         expect,
     );
 }

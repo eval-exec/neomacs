@@ -1,14 +1,14 @@
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo80_babel_ob_awk_sed_langs() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 4 79)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (:ob-awk-e ob-awk :ob-sed-e ob-sed :ob-sql-e ob-sql)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn (list
  :ob-awk-e (condition-case nil (require 'ob-awk) (error nil))
  :ob-sed-e (condition-case nil (require 'ob-sed) (error nil))
- :ob-sql-e (condition-case nil (require 'ob-sql) (error (featurep 'ob-sql))))))"##,
+ :ob-sql-e (condition-case nil (require 'ob-sql) (error (featurep 'ob-sql)))))"##,
         expect,
     );
 }

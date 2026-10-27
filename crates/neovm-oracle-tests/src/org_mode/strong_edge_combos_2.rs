@@ -117,11 +117,10 @@ fn ec2_footnote_inline() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ec2_timestamp_active_inactive() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK ((active 2026 15) (inactive 2026 20))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
@@ -131,12 +130,11 @@ fn ec2_timestamp_active_inactive() {
                (lambda (t) (list (org-element-property :type t)
                                  (org-element-property :year-start t)
                                  (org-element-property :day-start t))))))
-    ts)"##,
+    ts))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ec2_drawer_empty_content() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -147,7 +145,7 @@ fn ec2_drawer_empty_content() {
   (insert "* T\n:PROPERTIES:\n:END:")
   (let* ((tree (org-element-parse-buffer))
          (drawer (car (org-element-map tree 'drawer (lambda (d) d)))))
-    (org-element-property :drawer-name drawer))"##,
+    (org-element-property :drawer-name drawer)))"##,
         expect,
     );
 }
@@ -321,18 +319,17 @@ fn ec2_comment_single_line() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn ec2_fixed_width_single() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK \"Fixed width\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
   (org-mode)
   (insert ": Fixed width")
   (let* ((tree (org-element-parse-buffer))
          (fw (car (org-element-map tree 'fixed-width (lambda (f) f)))))
-    (org-element-property :value fw))"##,
+    (org-element-property :value fw)))"##,
         expect,
     );
 }

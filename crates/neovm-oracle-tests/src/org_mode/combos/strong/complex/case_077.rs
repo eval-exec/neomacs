@@ -6,11 +6,12 @@
 //! subtree, and org-export to file with body-only.
 
 use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest_not_set};
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn combo77_agenda_todo_batch() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (void-variable r)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((:org-agenda-todo-fbound t) (:todo-count 3) (:remaining-todo 0) (:now-done 4))""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (require 'org-agenda)
  (insert "* TODO A\n** TODO B\n* DONE C\n* TODO D\n")
@@ -19,7 +20,7 @@ fn combo77_agenda_todo_batch() {
   ;; mark all TODO as DONE via map
   (org-map-entries (lambda () (org-todo "DONE")) "TODO=\"TODO\"")
   (push (list :remaining-todo (length (org-map-entries (lambda () t) "TODO=\"TODO\""))) r)
-  (push (list :now-done (length (org-map-entries (lambda () t) "TODO=\"DONE\""))) r))
+  (push (list :now-done (length (org-map-entries (lambda () t) "TODO=\"DONE\""))) r)
  (nreverse r)))"##,
         expect,
     );

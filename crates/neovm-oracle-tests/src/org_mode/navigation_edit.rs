@@ -1,7 +1,6 @@
 use crate::common::assert_oracle_parity;
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_element_navigation_positions_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -53,17 +52,16 @@ fn org_element_navigation_positions_combo() {
                     (point))
                   (line-number-at-pos)))
             states)
-      (nreverse states))))"##,
+      (nreverse states)))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_drag_transpose_element_buffer_integrity_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (search-failed \"item two\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -96,17 +94,18 @@ fn org_drag_transpose_element_buffer_integrity_combo() {
                 (lambda (e)
                   (list (org-element-type e)
                         (org-element-property :begin e)
-                        (org-element-property :end e))))))))"##,
+                        (org-element-property :end e)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_mark_narrow_unindent_navigation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* A\\n  Body A\\n  ** B\\n    Body B\\n    - item\\n* C\\n  Body C\\n\" \"  ** B\\n\" \"  ** B\\n\" (38 43) (38 43) \"item\\n\" \"* A\\n  Body A\\n  ** B\\n    Body B\\n    - item\\n* C\\n  Body C\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -148,17 +147,18 @@ fn org_mark_narrow_unindent_navigation_combo() {
                   narrow-limits
                   narrow-text
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_copy_visible_clone_subtree_navigation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (\"* Project\\n* Tail\\n\" \"* Project\\n** TODO Task\\nSCHEDULED: <2026-05-27 Wed>\\nBody task\\n*** Child\\nChild body\\n** Keep\\nKeep body\\n* Tail\\nTail body\\n** TODO Task\\nSCHEDULED: <2026-05-27 Wed>\\nBody task\\n*** Child\\nChild body\\n\" ((1 \"Project\" nil) (2 \"Task\" \"<2026-05-27 Wed>\") (3 \"Child\" nil) (2 \"Task\" \"<2026-06-03 Wed>\") (3 \"Child\" nil) (2 \"Task\" \"<2026-06-10 Wed>\") (3 \"Child\" nil) (2 \"Keep\" nil) (1 \"Tail\" nil) (2 \"Task\" \"<2026-05-27 Wed>\") (3 \"Child\" nil)) 2 \"Task\" \"* Project\\n** TODO Task\\nSCHEDULED: <2026-05-27 Wed>\\nBody task\\n*** Child\\nChild body\\n** TODO Task\\nSCHEDULED: <2026-06-03 Wed>\\nBody task\\n*** Child\\nChild body\\n** TODO Task\\nSCHEDULED: <2026-06-10 Wed>\\nBody task\\n*** Child\\nChild body\\n** Keep\\nKeep body\\n* Tail\\nTail body\\n** TODO Task\\nSCHEDULED: <2026-05-27 Wed>\\nBody task\\n*** Child\\nChild body\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -209,7 +209,7 @@ fn org_copy_visible_clone_subtree_navigation_combo() {
                   (org-up-heading-safe)
                   (org-get-heading t t t t)
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -441,12 +441,13 @@ fn org_outline_path_entry_position_level_visibility_deep_state_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_up_forward_end_subtree_cycle_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 53 60)""#]];
+    let expect = expect_test::expect![[
+        r#""OK ((4 \"**** Sub 1\" 4 nil) (3 \"*** Component X\" 3 nil) (2 \"** Module A\" 2 nil) (10 \"** Module B\" 2 nil) 9 (6 \"**** Sub 2\" 4 nil) \"* Project\\n** Module A\\n*** Component X\\n**** Sub 1\\nBody sub 1.\\n**** Sub 2\\nBody sub 2.\\n*** Component Y\\nBody Y.\\n** Module B\\n*** Component Z\\nBody Z.\\n\\n** Module C\\n*** Component W\\nBody W.\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -500,12 +501,11 @@ fn org_navigate_up_forward_end_subtree_cycle_edit_deep() {
                         (line-number-at-pos end-of-mod-a)
                         at-sub2
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_up_down_forward_backward_edit_fold_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -563,12 +563,11 @@ fn org_navigate_up_down_forward_backward_edit_fold_deep() {
                         down-to-gamma
                         after-fold
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_level_jump_fold_edit_reparse_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -627,12 +626,11 @@ fn org_navigate_level_jump_fold_edit_reparse_deep() {
                   (list at-x up-to-mod-a fwd-to-mod-b at-z at-archive
                         after-fold
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_siblings_descendants_edit_fold_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -694,12 +692,11 @@ fn org_navigate_siblings_descendants_edit_fold_deep() {
                     (list at-gamma at-delta at-beta at-epsilon at-zeta
                           at-eta after-fold
                           (buffer-substring-no-properties
-                           (point-min) (point-max))))))))))))))"##,
+                           (point-min) (point-max)))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_multi_level_cycle_edit_fold_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -757,12 +754,11 @@ fn org_navigate_multi_level_cycle_edit_fold_deep() {
                   (list at-a1a at-a1b at-a1 at-a2 at-a2a
                         after-fold
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_complex_tree_fold_edit_show_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -823,12 +819,11 @@ fn org_navigate_complex_tree_fold_edit_show_deep() {
                     (list at-r1a at-r1b at-r1 at-r2 at-r3 at-r3a
                           after-fold
                           (buffer-substring-no-properties
-                           (point-min) (point-max))))))))))))))"##,
+                           (point-min) (point-max)))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_ten_heading_tree_fold_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -893,12 +888,11 @@ fn org_navigate_ten_heading_tree_fold_edit_deep() {
                     (list at-t1a1 at-t1a2 at-t1a at-t1b at-t1b1 at-t2a1
                           after-fold
                           (buffer-substring-no-properties
-                           (point-min) (point-max))))))))))))))"##,
+                           (point-min) (point-max)))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_twelve_heading_tree_fold_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -965,12 +959,11 @@ fn org_navigate_twelve_heading_tree_fold_edit_deep() {
                     (list at-p1a1 at-p1a2 at-p1a at-p1b at-p1b1 at-p2c1
                           after-fold
                           (buffer-substring-no-properties
-                           (point-min) (point-max))))))))))))))"##,
+                           (point-min) (point-max)))))))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_navigate_fourteen_heading_tree_fold_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -1041,7 +1034,7 @@ fn org_navigate_fourteen_heading_tree_fold_edit_deep() {
                       (list at-q1a1 at-q1a2 at-q1a at-q1b at-q1b1 at-q1b2 at-q2c1
                             after-fold
                             (buffer-substring-no-properties
-                             (point-min) (point-max))))))))))))))))"##,
+                             (point-min) (point-max))))))))))))))"##,
         expect,
     );
 }

@@ -7,11 +7,10 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 // Peta: org-element with all org-element-parse-buffer granularity combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn peta_all_parse_buffer_granularity_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""OK (16 9 9 16 5)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -29,7 +28,7 @@ fn peta_all_parse_buffer_granularity_combinations() {
        ;; Object granularity.
        (length (org-element-map (org-element-parse-buffer 'object) t #'identity))
        ;; Headline granularity.
-       (length (org-element-map (org-element-parse-buffer 'headline) t #'identity)))))"##,
+       (length (org-element-map (org-element-parse-buffer 'headline) t #'identity))))))"##,
         expect,
     );
 }
@@ -38,11 +37,11 @@ fn peta_all_parse_buffer_granularity_combinations() {
 // Peta: org-element with all org-element-cache-map combinations
 // ═══════════════════════════════════════════════════════════════════════
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn peta_all_cache_map_combinations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((org-data headline section drawer paragraph headline))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -53,7 +52,7 @@ fn peta_all_cache_map_combinations() {
       (goto-char (point-min))
       (list
        ;; Cache map with element granularity.
-       (org-element-cache-map #'car :granularity 'element))))"##,
+       (org-element-cache-map #'car :granularity 'element)))))"##,
         expect,
     );
 }

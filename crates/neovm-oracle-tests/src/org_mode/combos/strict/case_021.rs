@@ -136,11 +136,11 @@ fn strict_agenda_custom_commands_all_keys() {
         expect,
     );
 }
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn strict_agenda_clock_report() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""ERR (invalid-read-syntax \")\" 10 17)""#]];
+    let expect =
+        expect_test::expect![[r#""OK ((:org-clocking-buffer-fbound t) (:has-clocktable t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer (org-mode) (require 'org-clock) (require 'org-agenda)
  (insert "* Task\n")
@@ -151,7 +151,7 @@ fn strict_agenda_clock_report() {
   (goto-char (point-min)) (search-forward "#+BEGIN: clocktable") (beginning-of-line)
   (org-dblock-update)
   (push (list :has-clocktable (> (length (buffer-string)) 0)) r)
-  (nreverse r))))"##,
+  (nreverse r)))"##,
         expect,
     );
 }

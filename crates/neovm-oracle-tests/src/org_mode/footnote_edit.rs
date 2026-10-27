@@ -36,12 +36,11 @@ fn org_footnote_renumber_delete_sort_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_local_inline_export_edit_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""Label (leave empty for anonymous): OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -119,7 +118,7 @@ fn org_footnote_local_inline_export_edit_combo() {
                     paras
                     ascii
                     (buffer-substring-no-properties
-                     (point-min) (point-max))))))))"##,
+                     (point-min) (point-max))))))))))"##,
         expect,
     );
 }
@@ -151,12 +150,13 @@ fn org_footnote_inline_normalize_section_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_reference_definition_navigation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (nil (5 (\"a\" 62 73 \"Aye\")) (2 (\"a\" 13 19 nil)) 52 \"* One\\nFirst [fn:a] and second [fn:b].\\n* Footnotes\\n\\n[fn:c] \\n[fn:b] Bee\\n[fn:a] Aye\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -184,7 +184,7 @@ fn org_footnote_reference_definition_navigation_combo() {
                   back-a
                   pos
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -227,12 +227,13 @@ fn org_footnote_auto_label_inline_adjust_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_delete_label_references_definitions_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (2 2 t (\"keep\") ((\"keep\" #<marker in no buffer> t nil)) ((\"keep\" . \"[fn:keep] Keep definition\")) \"* Text\\nA[fn:keep] B C D\\n\\n[fn:keep] Keep definition\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -256,7 +257,7 @@ fn org_footnote_delete_label_references_definitions_combo() {
               (org-footnote--collect-references 'anonymous)
               (org-footnote--collect-definitions)
               (buffer-substring-no-properties
-               (point-min) (point-max))))))"##,
+               (point-min) (point-max)))))))"##,
         expect,
     );
 }
@@ -370,12 +371,13 @@ fn org_footnote_action_context_matrix_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_local_normalize_nested_missing_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"unused\" \"b\" \"missing\" \"nested\" \"a\") ((\"a\" #<marker in no buffer> t nil) (nil #<marker in no buffer> t 30) (\"nested\" #<marker in no buffer> t nil) (\"missing\" #<marker in no buffer> t nil) (\"a\" #<marker in no buffer> t nil) (\"b\" #<marker in no buffer> t nil) (nil #<marker in no buffer> t 6)) ((\"b\" . \"[fn:b] Bee definition\") (\"unused\" . \"[fn:unused] Unused B definition\") (\"nested\" . \"[fn:nested] Nested definition\") (\"a\" . \"[fn:a] Local A definition\"))) (\"7\" \"6\" \"5\" \"4\" \"3\" \"nested\" \"2\" \"1\") ((\"7\" . \"[fn:7] Unused B definition\") (\"6\" . \"[fn:6] Anon B\") (\"5\" . \"[fn:5] Bee definition\") (\"4\" . \"[fn:4] DEFINITION NOT FOUND.\") (\"3\" . \"[fn:3] Nested definition\") (\"2\" . \"[fn:2] Anon A with nested [fn:nested]\") (\"1\" . \"[fn:1] Local A definition\")) \"* Chapter A\\nTop A[fn:1] inline[fn:2].\\n\\n[fn:1] Local A definition\\n\\n[fn:2] Anon A with nested [fn:nested]\\n\\n[fn:3] Nested definition\\n** Child A\\nChild ref[fn:4] and repeat[fn:1].\\n\\n[fn:4] DEFINITION NOT FOUND.\\n* Chapter B\\nTop B[fn:5] and anonymous[fn:6].\\n\\n[fn:5] Bee definition\\n\\n[fn:6] Anon B\\n\\n[fn:7] Unused B definition\\n\" (\"3\" \"7\" \"6\" \"5\" \"4\" \"nested\" \"2\" \"1\") ((\"1\" #<marker in no buffer> t nil) (\"2\" #<marker in no buffer> t nil) (\"nested\" #<marker in no buffer> nil nil) (\"4\" #<marker in no buffer> t nil) (\"1\" #<marker in no buffer> t nil) (\"5\" #<marker in no buffer> t nil) (\"6\" #<marker in no buffer> t nil)) ((\"3\" . \"[fn:3] Nested definition\") (\"7\" . \"[fn:7] Unused B definition\") (\"6\" . \"[fn:6] Anon B\") (\"5\" . \"[fn:5] Bee definition\") (\"4\" . \"[fn:4] DEFINITION NOT FOUND.\") (\"nested\" . \"[fn:nested] DEFINITION NOT FOUND.\") (\"2\" . \"[fn:2] Anon A with nested [fn:nested]\") (\"1\" . \"[fn:1] Local A definition\")) (\"5\" 14) (\"1\" 10) \"* Chapter A\\nTop A[fn:1] inline[fn:2].\\n\\n[fn:1] Local A definition\\n\\n[fn:2] Anon A with nested [fn:nested]\\n\\n[fn:nested] DEFINITION NOT FOUND.\\n** Child A\\nChild ref[fn:4] and repeat[fn:1].\\n\\n[fn:4] DEFINITION NOT FOUND.\\n* Chapter B\\nTop B[fn:5] and anonymous[fn:6].\\n\\n[fn:5] Bee definition\\n\\n[fn:6] Anon B\\n\\n[fn:7] Unused B definition\\n\\n[fn:3] Nested definition\\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -424,17 +426,18 @@ fn org_footnote_local_normalize_nested_missing_combo() {
                        (list (car prev-global)
                              (line-number-at-pos (nth 1 prev-global))))
                   (buffer-substring-no-properties
-                   (point-min) (point-max))))))))"##,
+                   (point-min) (point-max)))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_label_definition_section_adjust_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[
+        r#""OK (((\"abc\" \"n:spaced  \" \" plain \" nil) \"4\" \"3\" (\"1\" 61 83 \"One definition\") (\"3\" 101 125 \"Three definition\") nil (\"dup\" \"2\" \"3\" \"1\") ((\"dup\" . \"[fn:dup] Duplicate section definition\") (\"3\" . \"[fn:3] Three definition\") (\"2\" . \"[fn:2] Unused two\") (\"1\" . \"[fn:1] One definition\"))) ((\"dup\" . \"[fn:dup] Duplicate section definition\") (\"3\" . \"[fn:3] Three definition\") (\"2\" . \"[fn:2] Unused two\") (\"1\" . \"[fn:1] One definition\")) \"* Body\\nA[fn:1] B[fn:3] inline[fn::Inline note].\\n* Footnotes\\n* Footnotes\\n\" \"* Body\\nA[fn:1] B[fn:3] inline[fn::Inline note].\\n\\n* Footnotes\\n\" (\"3\" \"2\" \"1\") ((\"1\" #<marker in no buffer> t nil) (\"2\" #<marker in no buffer> t nil) (\"3\" #<marker in no buffer> t nil) (nil #<marker in no buffer> t 11)) ((\"1\" . \"[fn:1]New auto-adjust definition\")) \"* B[fn:1]ody\\nA[fn:2] B[fn:3] inline[fn::Inline note].\\n\\n* Footnotes\\n\\n[fn:1]New auto-adjust definition \\n\")""#
+    ]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -482,17 +485,16 @@ fn org_footnote_label_definition_section_adjust_combo() {
                     (org-footnote-all-labels)
                     (org-footnote--collect-references 'anonymous)
                     (org-footnote--collect-definitions)
-                    after-adjust)))))))"##,
+                    after-adjust))))))))"##,
         expect,
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_export_numbering_mutation_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK nil""#]];
+    let expect = expect_test::expect![[r#""ERR (error \"Definition not found for footnote a\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
@@ -599,7 +601,7 @@ fn org_footnote_export_numbering_mutation_combo() {
                   refs-after
                    ascii-after
                    (buffer-substring-no-properties
-                    (point-min) (point-max))))))))"##,
+                    (point-min) (point-max)))))))))"##,
         expect,
     );
 }
@@ -660,7 +662,6 @@ fn org_footnote_insert_sort_normalize_delete_lifecycle_combo() {
     );
 }
 
-#[ignore = "malformed embedded oracle form: the reader guard rejects this source until the probe is repaired"]
 #[test]
 fn org_footnote_insert_normalize_sort_delete_multi_edit_deep() {
     return_if_neovm_enable_oracle_proptest_not_set!();
@@ -711,7 +712,7 @@ fn org_footnote_insert_normalize_sort_delete_multi_edit_deep() {
                         after-delete
                         action-result
                         (buffer-substring-no-properties
-                         (point-min) (point-max))))))))))))))"##,
+                         (point-min) (point-max))))))))))))"##,
         expect,
     );
 }
