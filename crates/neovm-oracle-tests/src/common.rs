@@ -392,6 +392,16 @@ const EVAL_PROGRAM_WITH_NORMALIZER: &str = r#"(condition-case err
                             (list :mutex
                                   (and (fboundp 'mutex-name)
                                        (mutex-name m))))))))
+         ;; A raw frame object is an identity, not a value: GNU prints a real
+         ;; pointer (`#<frame F1 0x555555b467d8>') and Neomacs a synthetic id
+         ;; (`#<frame F1 0x100000000>').  The string branch below squashes
+         ;; addresses inside printed messages, but a frame embedded in a
+         ;; RESULT list never passes through a string, so normalize it to a
+         ;; stable semantic token.  Frame type and name remain observable.
+         ((and (fboundp 'framep) (framep v))
+          (list :frame
+                (and (fboundp 'frame-parameter)
+                     (frame-parameter v 'name))))
          ((and (functionp v) (eq (type-of v) 'interpreted-function))
           (let ((args (aref v 0))
                 (body (aref v 1))
