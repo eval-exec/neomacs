@@ -2657,6 +2657,13 @@ impl<'a> Vm<'a> {
             self.ctx.max_depth = 100;
         }
         if self.ctx.depth > self.ctx.max_depth {
+            // GNU raises a `max-lisp-eval-depth` below 100 before signalling
+            // (`src/eval.c:2604-2608`) and writes the `DEFVAR_INT` cell, so
+            // Lisp observes 100 after the failed nesting attempt. The cached
+            // `max_depth` above is clamped to 100 on every sync and cannot
+            // answer whether the variable is still lower, so the helper reads
+            // the binding itself.
+            self.ctx.raise_lisp_eval_depth_floor();
             return Err(BytecodeDepthOverflow::Confirmed);
         }
         Ok(())
@@ -7970,6 +7977,10 @@ impl<'a> Vm<'a> {
             if ctx.max_depth < 100 {
                 ctx.max_depth = 100;
             }
+            // GNU raises a `max-lisp-eval-depth` below 100 before it
+            // re-checks (`src/eval.c:2604-2608`) and writes the DEFVAR_INT
+            // cell, so the raised value stays visible through the binding.
+            ctx.raise_lisp_eval_depth_floor();
             if ctx.depth > ctx.max_depth {
                 // GNU checks depth before recording the rejected callee's
                 // frame (bytecode.c:779-795). Only the calling frame is live
@@ -8377,6 +8388,10 @@ impl<'a> Vm<'a> {
             if ctx.max_depth < 100 {
                 ctx.max_depth = 100;
             }
+            // GNU raises a `max-lisp-eval-depth` below 100 before it
+            // re-checks (`src/eval.c:2604-2608`) and writes the DEFVAR_INT
+            // cell, so the raised value stays visible through the binding.
+            ctx.raise_lisp_eval_depth_floor();
             if ctx.depth > ctx.max_depth {
                 return Some(Err(ctx.finish_lisp_depth_overflow(signal(
                     "error",

@@ -27,6 +27,10 @@ mod gd_b_safe_call;
 mod gd_b_signal_room;
 
 #[cfg(test)]
+#[path = "depth_floor_visible.rs"]
+mod depth_floor_visible;
+
+#[cfg(test)]
 #[path = "gd_b_signals.rs"]
 mod gd_b_signals;
 

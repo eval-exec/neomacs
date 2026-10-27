@@ -128,16 +128,13 @@ impl Context {
     /// does (ledger 196). The gate is one `Vec` index and one flag byte, on a
     /// path that then dispatches a whole form.
     #[inline]
-    fn current_max_lisp_eval_depth(&self) -> Option<usize> {
+    fn current_max_lisp_eval_depth(&self) -> Option<i64> {
         if !self.obarray.is_localized(max_lisp_eval_depth_symbol()) {
             return None;
         }
         self.variables()
             .value_in_buffer_by_name(self.buffers.current_buffer(), "max-lisp-eval-depth")
             .and_then(|value| value.as_fixnum())
-            // GNU raises a limit below 100 before it signals
-            // (`src/eval.c:2587-2588`) so a handler has room to run.
-            .map(|n| n.max(100) as usize)
     }
 
     /// GNU `eval_sub` (`src/eval.c:2585`): `lisp_eval_depth++` and one
@@ -160,13 +157,20 @@ impl Context {
     #[cold]
     #[inline(never)]
     fn enter_interpreted_eval_depth_slow(&mut self) -> Result<(), Flow> {
-        if let Some(buffer_limit) = self.current_max_lisp_eval_depth() {
-            if self.depth > buffer_limit {
+        if let Some(raw_limit) = self.current_max_lisp_eval_depth() {
+            // GNU raises a limit below 100 before it signals
+            // (`src/eval.c:2604-2608`) so a handler has room to run, and the
+            // raise is visible through the variable afterwards.  Mirror that
+            // cell write through the current (buffer-local) binding.
+            if self.depth as i64 > raw_limit.max(100) {
                 let overflow_depth = self.depth as i64;
                 return Err(self.finish_lisp_depth_overflow(signal(
                     "excessive-lisp-nesting",
                     vec![Value::fixnum(overflow_depth)],
                 )));
+            }
+            if raw_limit < 100 && self.depth as i64 > raw_limit {
+                self.raise_lisp_eval_depth_floor();
             }
             return Ok(());
         }
@@ -182,6 +186,10 @@ impl Context {
             if new_max != self.max_depth {
                 self.max_depth = new_max;
             }
+            if n < 100 {
+                // Same GNU cell write for the global/dynamic binding.
+                self.raise_lisp_eval_depth_floor();
+            }
         }
         if self.depth > self.max_depth {
             let overflow_depth = self.depth as i64;
@@ -191,6 +199,38 @@ impl Context {
             )));
         }
         Ok(())
+    }
+
+    /// GNU's `if (max_lisp_eval_depth < 100) max_lisp_eval_depth = 100;`
+    /// (`src/eval.c:2604-2608`) writes the `DEFVAR_INT` cell, so the raised
+    /// value stays visible through the variable's current binding after a
+    /// failed nesting attempt.  The cell can never be a constant, so a
+    /// rejected write can only mean the surrounding unwind is already in
+    /// progress; the nesting signal then reports the failure as GNU does.
+    ///
+    /// The condition must read the cell, not the evaluator caches:
+    /// `sync_cached_runtime_binding_by_id` clamps `max_depth` to 100
+    /// (`src/eval.c:2604`), so a binding of 99 leaves the cache at 100 and
+    /// the cache cannot tell that the variable still holds 99.
+    ///
+    /// Cold and out of line on purpose: the callers sit inside
+    /// `#[inline(always)]` depth checks on the call paths, and inlining this
+    /// binding lookup would move run_loop's frame size and register pressure.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn raise_lisp_eval_depth_floor(&mut self) {
+        let current = if self.obarray.is_localized(max_lisp_eval_depth_symbol()) {
+            self.variables()
+                .value_in_buffer_by_name(self.buffers.current_buffer(), "max-lisp-eval-depth")
+                .and_then(|value| value.as_fixnum())
+        } else {
+            self.variable_value(max_lisp_eval_depth_symbol())
+                .and_then(|value| value.as_fixnum())
+        };
+        if current.is_some_and(|limit| limit < 100) {
+            let _ = self
+                .try_set_runtime_binding_by_id(max_lisp_eval_depth_symbol(), Value::fixnum(100));
+        }
     }
 
     fn eval_sub_cons(&mut self, form: Value) -> EvalResult {
