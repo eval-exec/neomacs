@@ -258,16 +258,21 @@ fn org_protocol_rewrite_greedy_sanitize_matrix_combo() {
 fn org_protocol_capture_template_finalize_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[
-        r#""OK ((\"CAPTURE-org-protocol-captureP1W4w8.org\" ((\"https://example.org/path?q=1#frag\" \"Example Title\")) (:type \"https\" :link \"https://example.org/path?q=1#frag\" :description \"Example Title\" :annotation \"[[https://example.org/path?q=1#frag][Example Title]]\" :initial \"Line one\\nLine two\" :query (:template \"p\" :url \"https://example.org/path?q=1#frag\" :title \"Example Title\" :body \"Line one\\nLine two\")) \"** TODO Example Title\\nURL: https://example.org/path?q=1#frag\\nType: https\\nAnnotation: [[https://example.org/path?q=1#frag][Example Title]]\\nBody:\\nLine one\\nLine two\\nQuery: (:template \\\"p\\\" :url \\\"https://example.org/path?q=1#frag\\\" :title \\\"Example Title\\\" :body \\\"Line one\\nLine two\\\")\") (\"CAPTURE-org-protocol-captureP1W4w8.org\" ((\"mailto:ada@example.org\" \"Mail Title\") (\"https://example.org/path?q=1#frag\" \"Example Title\")) (:type \"mailto\" :link \"mailto:ada@example.org\" :description \"Mail Title\" :annotation \"[[mailto:ada@example.org][Mail Title]]\" :initial \"> quoted\\n> body\" :query (:template \"q\" :url \"mailto:ada@example.org\" :title \"Mail Title\" :body \"> quoted\\n> body\")) \"** QUOTE Mail Title\\n[[mailto:ada@example.org][Mail Title]]\\n> quoted\\n> body\\n\") ((\"mailto:ada@example.org\" \"Mail Title\") (\"https://example.org/path?q=1#frag\" \"Example Title\")) \"* Inbox\\n** TODO Example Title\\nURL: https://example.org/path?q=1#frag\\nType: https\\nAnnotation: [[https://example.org/path?q=1#frag][Example Title]]\\nBody:\\nLine one\\nLine two\\nQuery: (:template \\\"p\\\" :url \\\"https://example.org/path?q=1#frag\\\" :title \\\"Example Title\\\" :body \\\"Line one\\nLine two\\\")\\n* Archive\\n** QUOTE Mail Title\\n[[mailto:ada@example.org][Mail Title]]\\n> quoted\\n> body\\n\")""#
-    ]];
+    let expect = expect_test::expect![[r#""OK ((\"CAPTURE-org-protocol-capture-fixed.org\" ((\"https://example.org/path?q=1#frag\" \"Example Title\")) (:type \"https\" :link \"https://example.org/path?q=1#frag\" :description \"Example Title\" :annotation \"[[https://example.org/path?q=1#frag][Example Title]]\" :initial \"Line one\\nLine two\" :query (:template \"p\" :url \"https://example.org/path?q=1#frag\" :title \"Example Title\" :body \"Line one\\nLine two\")) \"** TODO Example Title\\nURL: https://example.org/path?q=1#frag\\nType: https\\nAnnotation: [[https://example.org/path?q=1#frag][Example Title]]\\nBody:\\nLine one\\nLine two\\nQuery: (:template \\\"p\\\" :url \\\"https://example.org/path?q=1#frag\\\" :title \\\"Example Title\\\" :body \\\"Line one\\nLine two\\\")\") (\"CAPTURE-org-protocol-capture-fixed.org\" ((\"mailto:ada@example.org\" \"Mail Title\") (\"https://example.org/path?q=1#frag\" \"Example Title\")) (:type \"mailto\" :link \"mailto:ada@example.org\" :description \"Mail Title\" :annotation \"[[mailto:ada@example.org][Mail Title]]\" :initial \"> quoted\\n> body\" :query (:template \"q\" :url \"mailto:ada@example.org\" :title \"Mail Title\" :body \"> quoted\\n> body\")) \"** QUOTE Mail Title\\n[[mailto:ada@example.org][Mail Title]]\\n> quoted\\n> body\\n\") ((\"mailto:ada@example.org\" \"Mail Title\") (\"https://example.org/path?q=1#frag\" \"Example Title\")) \"* Inbox\\n** TODO Example Title\\nURL: https://example.org/path?q=1#frag\\nType: https\\nAnnotation: [[https://example.org/path?q=1#frag][Example Title]]\\nBody:\\nLine one\\nLine two\\nQuery: (:template \\\"p\\\" :url \\\"https://example.org/path?q=1#frag\\\" :title \\\"Example Title\\\" :body \\\"Line one\\nLine two\\\")\\n* Archive\\n** QUOTE Mail Title\\n[[mailto:ada@example.org][Mail Title]]\\n> quoted\\n> body\\n\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(progn
   (require 'org)
   (require 'org-protocol)
   (require 'org-capture)
-  (let* ((file (make-temp-file "org-protocol-capture" nil ".org"
-                               "* Inbox\n* Archive\n"))
+  (let* ((tmp (make-temp-file "org-protocol-capture" nil ".org"
+                              "* Inbox\n* Archive\n"))
+         ;; `org-protocol-capture` derives the CAPTURE buffer name from the
+         ;; file's base name, and make-temp-file's random suffix would leak
+         ;; into the pinned state.  The captured content is what this probe
+         ;; checks, so give the file a stable name inside the case directory.
+         (file (expand-file-name "org-protocol-capture-fixed.org"
+                                 (file-name-directory tmp)))
+         (_ (rename-file tmp file))
          (org-stored-links nil)
          (org-protocol-default-template-key "p")
          (org-capture-templates
