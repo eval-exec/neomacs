@@ -504,7 +504,13 @@ fn neomacs_binary() -> PathBuf {
 }
 
 fn mock_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_neomacs-telega-fixture-mock"))
+    // nextest extracts the archive's binaries into its own target directory and
+    // publishes the real path as NEXTEST_BIN_EXE_<name>; the compile-time
+    // CARGO_BIN_EXE path points into the archive builder's workspace and does
+    // not exist on the test runner. Prefer the nextest variable when present.
+    std::env::var_os("NEXTEST_BIN_EXE_neomacs-telega-fixture-mock")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_neomacs-telega-fixture-mock")))
 }
 
 fn process_group_alive(pgid: i32) -> bool {
