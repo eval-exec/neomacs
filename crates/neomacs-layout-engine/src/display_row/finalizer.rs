@@ -140,11 +140,24 @@ impl DisplayRowLineEndFinalizer {
             box_vertical_edges: self.box_vertical_edges,
             box_run_membership: self.box_run_membership,
         };
-        let height_px = row.height_px.max(1.0);
+        // GNU's `extend_face_to_end_of_line` appends the fill with the
+        // iterator's CURRENT face metrics (it->ascent/descent), not with a
+        // row already raised to the frame's default height.  Canonical layout
+        // reaches this finalizer with `row.height_px` still at the content's
+        // own metrics; a prepared program starts from the frame fallback, so
+        // reading the row here made a rich line's fill one pixel taller than
+        // fresh layout.  Use the line-break face's metrics in both paths.
+        let break_face_metrics = faces
+            .iter()
+            .find(|face| face.face_id == self.row_break_face_id)
+            .map(|face| (face.metrics.line_height_px(), face.metrics.ascent_px()));
+        let (height_px, ascent_px) =
+            break_face_metrics.unwrap_or((row.height_px, row.ascent_px));
+        let height_px = height_px.max(1.0);
         let geometry = LineEndFillGeometry {
             content_x: 0.0,
             height_px,
-            ascent_px: row.ascent_px.max(0.0).min(height_px),
+            ascent_px: ascent_px.max(0.0).min(height_px),
             fill_char_width: extend_face
                 .map(|face| {
                     face.metrics
