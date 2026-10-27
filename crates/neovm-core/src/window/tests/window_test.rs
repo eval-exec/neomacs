@@ -1385,8 +1385,11 @@ fn gui_default_parameters_seed_scroll_bar_and_fringe_chrome() {
     // though the layout already reserves and draws the scroll bar — the frame
     // parameter lied about what is on screen. Each seeded value equals the layout
     // fallback in window/display.rs, so this is a reporting fix, not a geometry
-    // change. scroll-bar-width stays unseeded on purpose: its fallback tracks the
-    // live char width, so a fixed seed would go stale across a font change.
+    // change. scroll-bar-width stays unseeded on purpose: GNU reports the
+    // configured thickness from `frame-parameter' even when the alist has no
+    // entry (src/frame.c:5437-5456), and Neomacs answers it from
+    // frame_config_scroll_bar_width's toolkit default (16) in the parameter
+    // getter, so a seed would only duplicate that source of truth.
     assert_eq!(
         frame.known_parameter(FrameParam::VerticalScrollBars),
         Some(Value::symbol("right"))

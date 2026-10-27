@@ -203,6 +203,110 @@ fn frame_scroll_bar_width_reports_only_the_allocated_scroll_bar_area() {
 }
 
 #[test]
+fn gui_frames_take_gnu_toolkit_scroll_bar_defaults_and_report_realized_parameters() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*scroll-bar-defaults*");
+    let fid = eval
+        .frames
+        .create_frame("scroll-bar-defaults", 640, 480, buffer);
+    let frame = eval.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_width = 8.0;
+    frame.char_height = 17.0;
+    // GNU sizes a GUI frame's bars from the toolkit default, not the
+    // character cell: x_set_scroll_bar_default_width/height
+    // (src/xfns.c:2393-2438) store the constant 16 without a toolkit (and the
+    // Adwaita theme's 16 under GTK).  A fresh frame therefore reserves 16
+    // pixels (COLUMNS = ceil(16/8) = 2, src/frame.h:1335) and reports the
+    // configured thickness from `frame-parameter' even though the frame never
+    // named one (src/frame.c:5437-5456), while `frame-scroll-bar-height'
+    // answers zero because horizontal bars are off (src/frame.c:4496-4501).
+    let result = eval
+        .eval_str(
+            r#"(list (frame-scroll-bar-width) (frame-scroll-bar-height)
+                (window-scroll-bars)
+                (frame-parameter nil 'scroll-bar-width)
+                (frame-parameter nil 'scroll-bar-height)
+                (frame-parameter nil 'vertical-scroll-bars)
+                (frame-parameter nil 'horizontal-scroll-bars))"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result.to_string(),
+        "(16 0 (nil 2 t nil 0 t nil) 16 16 right nil)"
+    );
+
+    // Enabling horizontal bars normalizes the frame parameter to t
+    // (src/frame.c:4191-4198) and exposes the configured 16-pixel area height.
+    let result = eval
+        .eval_str(
+            r#"(progn
+      (modify-frame-parameters nil '((horizontal-scroll-bars . bottom)))
+      (list (frame-scroll-bar-height)
+            (frame-parameter nil 'horizontal-scroll-bars)
+            (window-scroll-bars)))"#,
+        )
+        .unwrap();
+    assert_eq!(result.to_string(), "(16 t (nil 2 t nil 1 t nil))");
+
+    // An explicit height is honored by both the accessor and the parameter.
+    let result = eval
+        .eval_str(
+            r#"(progn
+      (modify-frame-parameters nil '((scroll-bar-height . 7)))
+      (list (frame-scroll-bar-height)
+            (frame-parameter nil 'scroll-bar-height)))"#,
+        )
+        .unwrap();
+    assert_eq!(result.to_string(), "(7 7)");
+}
+
+#[test]
+fn moving_a_child_frame_marks_it_for_redisplay() {
+    use crate::emacs_core::eval::RedisplayHookPolicyGuard;
+
+    let _policy = RedisplayHookPolicyGuard::gnu();
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*child-move*");
+    let fid = eval.frames.create_frame("child-move", 640, 480, buffer);
+    eval.frames
+        .get_mut(fid)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    eval.set_display_host(Box::new(RecordingDisplayHost::new()));
+    let child = eval
+        .eval_str(
+            r#"(setq test-child
+                 (x-create-frame
+                  (list (cons 'parent-frame (selected-frame))
+                        '(width . 40) '(height . 10) '(minibuffer . nil)
+                        '(left . 40) '(top . 40) '(undecorated . t)
+                        '(vertical-scroll-bars . nil) '(menu-bar-lines . 0)
+                        '(tool-bar-lines . 0) '(tab-bar-lines . 0))))"#,
+        )
+        .unwrap();
+    let child_id = crate::window::FrameId(child.as_frame_id().expect("frame object"));
+    // The placement only reaches a GUI compositor through the frame's next
+    // published display state, and moving a frame changes neither the root
+    // window nor the redisplay signature: the parameter setter must mark the
+    // frame itself (GNU moves the native window in place through
+    // set_frame_offset_hook, src/frame.c:5366-5369).
+    eval.clear_frame_redisplay_marks();
+    eval.eval_str("(modify-frame-parameters test-child '((left . 400) (top . 300)))")
+        .unwrap();
+    assert!(
+        eval.frame_redisplay_pending(child_id),
+        "a re-anchored child frame must be marked for redisplay"
+    );
+    // Re-applying the same placement is not a move and must not manufacture a
+    // redisplay request.
+    eval.clear_frame_redisplay_marks();
+    eval.eval_str("(modify-frame-parameters test-child '((left . 400) (top . 300)))")
+        .unwrap();
+    assert!(!eval.frame_redisplay_pending(child_id));
+}
+
+#[test]
 fn child_initial_text_columns_include_explicit_fringe_and_border_chrome() {
     let mut eval = Context::new();
     let buffer = eval.buffers.create_buffer("*child-chrome*");
@@ -280,8 +384,11 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
 
     let (tx, rx) = crossbeam_channel::unbounded();
     eval.input_rx = Some(rx);
+    // 80 columns at 9px plus 16px of fringes and the GNU 16px scroll-bar
+    // default: the explicit native resize is column-aligned, so it must reach
+    // the host unchanged.
     tx.send(crate::keyboard::InputEvent::Resize {
-        width: 745,
+        width: 752,
         height: 450,
         scale_factor: 1.0,
         emacs_frame_id: fid.0,
@@ -294,7 +401,7 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
         2,
         "the explicit request must still reach the host"
     );
-    assert_eq!((requests[1].width, requests[1].height), (745, 450));
+    assert_eq!((requests[1].width, requests[1].height), (752, 450));
 }
 
 #[test]
@@ -353,7 +460,9 @@ fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row()
     let request = requests.borrow().last().unwrap().clone();
     // GNU frame.c:Fset_frame_width passes FRAME_TEXT_HEIGHT unchanged,
     // preserving both chrome and any fractional character-row remainder.
-    assert_eq!((request.width, request.height), (844, 688));
+    // 91 columns at 9px plus 16px of fringes and the GNU 16px scroll-bar
+    // default (x_set_scroll_bar_default_width, src/xfns.c:2393-2403).
+    assert_eq!((request.width, request.height), (851, 688));
     eval.apply_resize_input_event(request.width, request.height, 1.0, frame_id.0, false)
         .expect("resize redisplay");
     assert_eq!(
@@ -386,7 +495,8 @@ fn rejected_and_duplicate_native_resize_completions_preserve_actual_geometry() {
     let original = eval.eval_str("(list (frame-native-width) (frame-native-height) (frame-text-cols) (frame-text-lines))").unwrap();
 
     eval.eval_str("(set-frame-width nil 91)").unwrap();
-    assert_eq!(requests.borrow().last().unwrap().width, 844);
+    // 91 columns at 9px + 16px fringes + the GNU 16px scroll-bar default.
+    assert_eq!(requests.borrow().last().unwrap().width, 851);
     // A compositor can refuse the request and return the old size immediately;
     // a later configure event may repeat that same completion.
     for _ in 0..2 {
@@ -397,5 +507,5 @@ fn rejected_and_duplicate_native_resize_completions_preserve_actual_geometry() {
     }
     eval.eval_str("(set-frame-width nil 101)").unwrap();
     let request = requests.borrow().last().unwrap().clone();
-    assert_eq!((request.width, request.height), (934, 688));
+    assert_eq!((request.width, request.height), (941, 688));
 }
