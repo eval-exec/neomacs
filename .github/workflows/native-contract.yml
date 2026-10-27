@@ -1,12 +1,17 @@
 name: native terminal contract
 
+# Manual-only: all four jobs run on explicit workflow_dispatch. The
+# archive-based suites cover the Linux neovm-core file-notify subset; the
+# native terminfo, console, and macOS/Windows file-notify checks stay
+# available on demand. Uncomment the push/pull_request blocks to restore
+# automatic runs.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  # push:
+  #   branches:
+  #     - main
+  # pull_request:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 concurrency:
