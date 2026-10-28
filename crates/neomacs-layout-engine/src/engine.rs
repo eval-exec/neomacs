@@ -392,7 +392,15 @@ fn window_position_publication(
         purpose,
         WindowLayoutWalkPurpose::SynchronousQuery(_) | WindowLayoutWalkPurpose::MiniPreparation
     ) {
-        return WindowPositionPublication::SynchronousQueryEnd;
+        // `pos-visible-in-window-p`/`posn-at-point` answer from freshly measured
+        // chrome (GNU `pos_visible_p`, src/xdisp.c:1732-1770); the other logical
+        // queries preserve the accepted partition.
+        return match purpose {
+            WindowLayoutWalkPurpose::SynchronousQuery(
+                neovm_core::window::WindowLayoutQueryScope::Position { .. },
+            ) => WindowPositionPublication::SynchronousQueryPosition,
+            _ => WindowPositionPublication::SynchronousQueryEnd,
+        };
     }
     if source == WindowDisplaySource::InactiveEchoArea {
         return WindowPositionPublication::InactiveEchoArea;
@@ -2041,6 +2049,11 @@ impl LayoutEngine {
             && !(evaluator.gnu_redisplay_hooks_policy_enabled()
                 && evaluator.gnu_redisplay_transaction_active());
 
+        // A Position query measures chrome on its first physical attempt; the
+        // WindowChrome relayout immediately below must reuse those measured
+        // metrics instead of evaluating the formats a second time.
+        let mut chrome_remeasured_next_round: std::collections::HashSet<DisplayWindowId> =
+            std::collections::HashSet::new();
         let (
             frame_params,
             curr_window_infos,
@@ -2050,6 +2063,7 @@ impl LayoutEngine {
             accepted_window_navigation_intents,
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
+            let chrome_remeasured = std::mem::take(&mut chrome_remeasured_next_round);
             // Re-entering this loop means the preceding physical frame walk
             // was rejected. Restore every leaf publication before collecting
             // the next attempt's canonical previous-viewport evidence.
@@ -2848,6 +2862,8 @@ impl LayoutEngine {
                         scroll_replay.take(),
                         is_edit,
                         position_publication,
+                        !chrome_remeasured
+                            .contains(&DisplayWindowId::new(live_inputs.window.window_id)),
                         &mut lisp_ledger,
                         attempt_topology_generation,
                         &face_attempt,
@@ -3064,6 +3080,7 @@ impl LayoutEngine {
                         }
                         window_chrome_metrics
                             .insert(DisplayWindowId::new(params.window_id), measured);
+                        chrome_remeasured_next_round.insert(DisplayWindowId::new(params.window_id));
                         continue 'frame_layout;
                     }
                 };
@@ -4467,7 +4484,17 @@ impl LayoutEngine {
             // An unproved selected Rows request must run the canonical walk;
             // neither a legacy observation nor a prepared viewport can answer.
         } else {
+            // Position queries answer through GNU `pos_visible_p`: chrome is
+            // re-evaluated and measured, and line-number row faces may depend
+            // on point. A cached observation carries the text-area partition
+            // from its own point, so re-placing its rows would reproduce stale
+            // chrome bounds. Run the canonical walk instead.
+            let position_query = matches!(
+                scope,
+                neovm_core::window::WindowLayoutQueryScope::Position { .. }
+            );
             if !text_extent
+                && !position_query
                 && let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope)
             {
                 return Ok(query);
@@ -5306,6 +5333,9 @@ impl LayoutEngine {
         scroll_replay: Option<ScrollReplay>,
         is_edit: bool,
         position_publication: WindowPositionPublication,
+        // Whether this attempt still needs to evaluate/measure chrome. The
+        // retry after `WindowChrome` uses the already measured metrics.
+        remeasure_chrome: bool,
         lisp_ledger: &mut RedisplayLispLedger,
         topology_generation: u64,
         face_attempt: &FrameFaceAttempt,
@@ -5630,6 +5660,7 @@ impl LayoutEngine {
             resolved_window_start,
         )
         .with_position_publication(site_publication)
+        .with_remeasure_chrome(remeasure_chrome)
         .with_forward_viewport_measurement(match &viewport_resolution {
             ViewportResolutionPhase::Measure(measurement) => Some(measurement.clone()),
             ViewportResolutionPhase::Resolve | ViewportResolutionPhase::Commit(_) => None,
@@ -5659,6 +5690,11 @@ impl LayoutEngine {
                 freshness_before_chrome,
                 chrome_lisp_admission,
                 ..
+            }
+            | BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
+                freshness_before_chrome,
+                chrome_lisp_admission,
+                ..
             } => crate::attempt_freshness::after_span(
                 evaluator,
                 freshness_before_chrome,
@@ -5680,6 +5716,10 @@ impl LayoutEngine {
         let lisp_boundaries_remain_valid = match (&render_outcome, &freshness_after_leaf) {
             (
                 BufferSourceRenderAttemptOutcome::Finished {
+                    freshness_before_chrome,
+                    ..
+                }
+                | BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
                     freshness_before_chrome,
                     ..
                 },
@@ -5877,7 +5917,22 @@ impl LayoutEngine {
                     viewport_resolution: ViewportResolutionPhase::Commit(site.window_start()),
                 }));
             }
-            BufferSourceRenderAttemptOutcome::Skipped => {
+            BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured { measured, .. }
+                if layout_box.chrome() != measured =>
+            {
+                if let Some(attempt) = window_end_attempt.take() {
+                    evaluator.reject_redisplay_window_end_attempt(attempt);
+                }
+                return LeafLayoutAttempt::Completed {
+                    outcome: WindowLayoutOutcome::NeedsRelayout {
+                        assumed: layout_box.chrome(),
+                        measured,
+                    },
+                    window_end_attempt: None,
+                };
+            }
+            BufferSourceRenderAttemptOutcome::Skipped
+            | BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured { .. } => {
                 self.frame_output
                     .render_window_info(WindowFrameInfoRenderRequest::new(
                         params,

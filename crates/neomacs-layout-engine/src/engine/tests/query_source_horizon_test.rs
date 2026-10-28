@@ -84,13 +84,18 @@ fn truncated_position_target_stops_before_long_physical_tail() {
                         .point_for_buffer_pos(LispCharPos1::new(tail as i64 + 2))
                         .is_none()
                 );
+                // A Position query now measures chrome, so the snapshot's rows
+                // can include a chrome row after the last source row. Bound the
+                // final SOURCE row, which is what this acquisition asserts.
                 assert!(
                     geometry
                         .rows
-                        .last()
-                        .unwrap()
+                        .iter()
+                        .rev()
+                        .find(|row| row.start_buffer_pos.is_some())
+                        .expect("last source row")
                         .end_buffer_pos
-                        .unwrap()
+                        .expect("complete source row")
                         .as_i64()
                         <= target + 1
                 );
@@ -218,11 +223,15 @@ fn truncated_target_prefix_does_not_include_later_tall_face_or_reuse_its_coverag
         .into_geometry()
         .unwrap();
     assert_eq!(engine.query_row_coverage, QueryRowCoverage::TargetPrefix);
+    // Position queries never consult the cache (they must re-evaluate and
+    // measure chrome, GNU `pos_visible_p`), and a measured snapshot carries
+    // chrome strings that are not cache roots. The canonical walk still has to
+    // produce the early prefix on every call.
     assert!(
         engine
             .query_cache
             .get(&eval, frame, window, early_scope)
-            .is_some()
+            .is_none()
     );
     let later = engine
         .query_window_layout(&mut eval, frame, window, later_scope)

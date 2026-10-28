@@ -73,7 +73,15 @@ pub(crate) enum WindowPositionPublication {
     /// without entering redisplay_window. It publishes neither the temporary
     /// start/end nor a window-scroll-functions effect to the live minibuffer.
     InactiveEchoArea,
+    /// A GNU `window-end`/`vertical-motion`-style logical query. It walks from
+    /// the exact live start and preserves the accepted chrome partition.
     SynchronousQueryEnd,
+    /// A GNU `pos-visible-in-window-p` / `posn-at-point` query. Unlike
+    /// `window-end`, this path re-evaluates and measures the chrome formats
+    /// before laying out the body, exactly as `pos_visible_p` does. A measured
+    /// height that differs from the reserved one triggers the normal
+    /// `WindowChrome` relayout so the text-area bounds come from the new row.
+    SynchronousQueryPosition,
 }
 
 impl WindowPositionPublication {
@@ -84,15 +92,27 @@ impl WindowPositionPublication {
     pub(crate) const fn uses_exact_window_start(self) -> bool {
         matches!(
             self,
-            Self::Snapshot | Self::InactiveEchoArea | Self::SynchronousQueryEnd
+            Self::Snapshot
+                | Self::InactiveEchoArea
+                | Self::SynchronousQueryEnd
+                | Self::SynchronousQueryPosition
         )
     }
 
-    /// A synchronous GNU `window-end` query walks only the text area using
-    /// the chrome dimensions accepted by the last redisplay.  It must not
-    /// evaluate mode/header/tab-line Lisp while answering the query.
+    /// Both query kinds walk the exact live start without publishing redisplay
+    /// positions. Only Position queries additionally remeasure chrome.
     pub(crate) const fn is_synchronous_query(self) -> bool {
-        matches!(self, Self::SynchronousQueryEnd)
+        matches!(
+            self,
+            Self::SynchronousQueryEnd | Self::SynchronousQueryPosition
+        )
+    }
+
+    /// Whether the query must evaluate and measure chrome before trusting the
+    /// text-area partition (GNU `pos_visible_p`, src/xdisp.c:1732-1770).
+    /// `window-end` deliberately keeps the accepted chrome metrics instead.
+    pub(crate) const fn remeasures_chrome(self) -> bool {
+        matches!(self, Self::SynchronousQueryPosition)
     }
 
     pub(crate) const fn keeps_complete_minibuffer_measurement_start(self) -> bool {
@@ -133,7 +153,10 @@ impl WindowPositionPublication {
                     window_start_lisp,
                 );
             }
-            Self::Snapshot | Self::InactiveEchoArea | Self::SynchronousQueryEnd => {}
+            Self::Snapshot
+            | Self::InactiveEchoArea
+            | Self::SynchronousQueryEnd
+            | Self::SynchronousQueryPosition => {}
         }
         None
     }
@@ -153,6 +176,13 @@ pub(crate) struct BufferSourceRedisplayPublishRequest {
 #[derive(Debug)]
 pub(crate) enum BufferSourceRenderAttemptOutcome {
     Skipped,
+    /// A position query had no body under the retained partition. Measure
+    /// chrome anyway so a shrinking row can restore usable body space.
+    EmptyBodyChromeMeasured {
+        measured: crate::window_layout::WindowChromeMetrics,
+        freshness_before_chrome: neovm_core::window::WindowLayoutAttemptFreshness,
+        chrome_lisp_admission: crate::attempt_freshness::LayoutLispAdmission,
+    },
     /// Lisp evaluated by a buffer-owned display source changed the window's
     /// source projection. The frame transaction must discard this attempt and
     /// recollect the live window/buffer pair.
@@ -440,7 +470,8 @@ impl BufferSourceRedisplayPublishRequest {
             // discarded attempt.
             WindowPositionPublication::Snapshot
             | WindowPositionPublication::InactiveEchoArea
-            | WindowPositionPublication::SynchronousQueryEnd => {}
+            | WindowPositionPublication::SynchronousQueryEnd
+            | WindowPositionPublication::SynchronousQueryPosition => {}
         }
     }
 
