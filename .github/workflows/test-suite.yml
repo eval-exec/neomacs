@@ -730,13 +730,36 @@ jobs:
       # display-runtime scroll-input coverage in automatic CI by running it
       # from the same archive; native_display itself is already part of
       # package(neomacs-gui-tests).
-      - name: Run real GUI tests and display input units
+      #
+      # Two passes over the same archive.  The native-menu scenarios drive
+      # real pointer and keyboard input through a compositor and the
+      # presentation-latency cases assert input-to-present budgets: both are
+      # measurements of a live compositor, and a sibling test sharing the
+      # runner's four cores invalidates them (input injected into a menu that
+      # has not finished its first frame is dropped; a software rasterizer
+      # competing with a dozen of its siblings misses the 120 Hz budget).
+      # Run them, and the display scroll-input units, one at a time, ahead of
+      # the bulk pass.
+      - name: Run serialized input and presentation-budget scenarios
         run: |
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E 'package(neomacs-gui-tests) or (package(neomacs-display-runtime) and test(scroll_input))' \
+            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~continuous_120hz_) or test(~rich_large_buffer_wheel_presents_while_command_is_stalled))) or (package(neomacs-display-runtime) and test(scroll_input))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
+            --test-threads 1 \
+            --no-fail-fast
+
+      - name: Run real GUI tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo nextest run \
+            --archive-file neomacs-workspace-tests.tar.zst \
+            --extract-to "$TMPDIR/nextest" \
+            --extract-overwrite \
+            -E 'package(neomacs-gui-tests) and not (test(~native_menus::) or test(~continuous_120hz_) or test(~rich_large_buffer_wheel_presents_while_command_is_stalled))' \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            --test-threads 4 \
             --no-fail-fast
 
       - name: Upload GUI diagnostics

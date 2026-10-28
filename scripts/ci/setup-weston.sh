@@ -1,92 +1,100 @@
 #!/usr/bin/env bash
 # Build the Weston compositor the real-GUI suite talks to.
 #
-# Ubuntu 24.04 ships weston 13.0.0, whose pixman renderer keeps a raw pointer
-# into a wl_shm buffer's mapping: when a client destroys the buffer between
-# commit and repaint, repaint_region() composites through the unmapped memory
-# and the compositor dies with SIGSEGV (upstream #922, fixed in 14.0.0 by
-# 08c7015a "pixman-renderer: Check if the shm_buffer is gone during attach").
-# Neomacs's Vulkan and EGL swapchains recycle wl_buffers exactly that way, so
-# on the runner every Wayland scenario lost its compositor mid-test and the
-# editor reported a broken display connection instead of the status Lisp asked
-# for.  The pinned release is the oldest one with that fix and the newest whose
-# build inputs Ubuntu 24.04 provides: weston 14 needs wayland-protocols >= 1.33
-# (noble has 1.34), while weston 16 wants >= 1.46.
+# Pinned: weston 16.0.0.  Why not the distribution's 13.0.0, and why not 14:
+#
+#  - Weston 13's pixman renderer keeps a raw pointer into a wl_shm buffer's
+#    mapping: when a client destroys the buffer between commit and repaint,
+#    repaint_region() composites through the unmapped memory and the
+#    compositor dies with SIGSEGV (upstream #922, fixed in 14.0.0 by
+#    08c7015a "pixman-renderer: Check if the shm_buffer is gone during
+#    attach").  Neomacs's Vulkan and EGL swapchains recycle wl_buffers
+#    exactly that way, so on the runner every Wayland scenario lost its
+#    compositor mid-test.
+#  - Weston 13 and 14 do not implement xdg_positioner constraint adjustment
+#    at all: xdg-shell.c returns the requested geometry with a "TODO: add
+#    compositor policy configuration and the code here".  Native menus place
+#    their popup with SLIDE_X/SLIDE_Y/FLIP_* adjustments and, like every
+#    Wayland client, rely on the compositor to keep the popup on the usable
+#    area; the native-menu contracts assert exactly that constrained
+#    placement.  Weston 16 is the first release whose xdg-shell adjusts the
+#    popup (weston 15 implements it but aborts in
+#    weston_coord_global_to_surface when a parent relayouts during the popup
+#    sequence; 16 fixes the dirty parent transform).
 #
 # Only the headless and X11 backends and the pixman renderer are built: every
 # scenario pins pixman, the suite needs no DRM device, and the runner has no
 # EGL screen.  The X11 backend presents through MIT-SHM, so the harness starts
 # that Xvfb on its local Unix socket (start_local_xvfb_with_size).
+#
+# Ubuntu 24.04 (noble) satisfies weston 16's wayland >= 1.22 and meson
+# requirements, but not three of its build inputs; each is resolved here:
+#
+#  - wayland-protocols >= 1.46 (noble has 1.34).  Built from source into
+#    /usr/local; it is a protocol-data package with no runtime library.
+#  - libdisplay-info >= 0.2.0 (noble has 0.1.1).  Weston vendors the 0.2.0
+#    subproject, but that subproject generates its PNP-id table from
+#    /usr/share/hwdata/pnp.ids, which only the hwdata package provides.
+#  - libwayland-dev ships no wayland-scanner.pc (upstream added it in
+#    wayland 1.23); the scanner program itself comes from libwayland-bin, so
+#    a one-variable .pc in /usr/local points weston's meson at it.
 set -euo pipefail
 
-readonly version=14.0.1
-readonly sha256=0cd789cf0a2a4db43733078bc69d99c296cf79c7cbed439af8593359e3a97678
+readonly version=16.0.0
+readonly sha256=6a81af51045ccb2813f3a1d63ff8a66c121743c1a5ff3ce78388660bf650c55c
 readonly url="https://gitlab.freedesktop.org/wayland/weston/-/archive/${version}/weston-${version}.tar.gz"
+readonly protocols_version=1.46
+readonly protocols_sha256=83afedde1e63751578ba51b5f6c36052802f85634ed68be41ecfcc3a515ab03d
+readonly protocols_url="https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/${protocols_version}/wayland-protocols-${protocols_version}.tar.gz"
 
 work="${TMPDIR:-/tmp}/weston-${version}"
 rm -rf "$work"
 mkdir -p "$work"
 
-# The self-contained dependency list.  wayland, wayland-protocols, xkbcommon,
-# X11 and xcb development files also come from setup-linux.sh's build profile;
-# listing them here keeps this script runnable on its own and pins the exact
-# inputs the version above is built against.
+# The self-contained dependency list.  wayland, xkbcommon, X11 and xcb
+# development files also come from setup-linux.sh's build profile; listing
+# them here keeps this script runnable on its own and pins the exact inputs
+# the versions above are built against.  `git` is what meson's wrap fetches
+# the display-info subproject with; `hwdata` supplies pnp.ids.
 sudo apt-get install -y --no-install-recommends \
-    meson ninja-build \
+    meson ninja-build git \
     libpixman-1-dev libinput-dev libevdev-dev libdrm-dev \
     libcairo2-dev libxcb-shm0-dev libx11-xcb-dev \
     libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
-    libx11-dev libxcb1-dev
+    libx11-dev libxcb1-dev hwdata
+
+# wayland-protocols 1.46, installed ahead of the distribution's 1.34 in
+# /usr/local (pkg-config searches it first).
+curl -fsSL -o "$work/wayland-protocols.tar.gz" "$protocols_url"
+echo "$protocols_sha256  $work/wayland-protocols.tar.gz" | sha256sum -c -
+tar xzf "$work/wayland-protocols.tar.gz" -C "$work"
+meson setup "$work/protocols-build" "$work/wayland-protocols-$protocols_version" \
+    --prefix=/usr/local \
+    --buildtype=release \
+    -Dtests=false
+sudo ninja -C "$work/protocols-build" install
+
+# The scanner program is installed by libwayland-bin; only its .pc is
+# missing, and weston reads the scanner's path from that file.
+sudo mkdir -p /usr/local/lib/pkgconfig
+sudo tee /usr/local/lib/pkgconfig/wayland-scanner.pc >/dev/null <<'PC'
+prefix=/usr
+Name: wayland-scanner
+Description: Wayland protocol scanner
+Version: 1.22.0
+wayland_scanner=/usr/bin/wayland-scanner
+PC
 
 curl -fsSL -o "$work/weston.tar.gz" "$url"
 echo "$sha256  $work/weston.tar.gz" | sha256sum -c -
 tar xzf "$work/weston.tar.gz" -C "$work"
 source="$work/weston-$version"
 
-# The runner's wayland is 1.22, whose libwayland-dev does not ship the
-# wayland-scanner.pc that weston 14's meson asks for (upstream added it in
-# wayland 1.23), and whose generated "private-code" output type is newer than
-# the 1.14.91 cut-off weston checks.  Both are packaging facts about the
-# pinned runner, so resolve them here instead of rebuilding wayland itself:
-# locate the scanner installed by libwayland-bin, and keep the modern output
-# type unconditionally.
-python3 - "$source/protocol/meson.build" <<'PY'
-import sys
-
-path = sys.argv[1]
-source = open(path, encoding="utf-8").read()
-scanner = (
-    "dep_scanner = dependency('wayland-scanner', native: true)\n"
-    "prog_scanner = find_program(dep_scanner.get_variable(pkgconfig: 'wayland_scanner'))\n"
-)
-if scanner not in source:
-    sys.exit(f"unexpected wayland-scanner discovery in {path}")
-source = source.replace(
-    scanner,
-    "# Ubuntu 24.04's wayland 1.22 has no wayland-scanner.pc; libwayland-bin\n"
-    "# installs the program itself.\n"
-    "prog_scanner = find_program('wayland-scanner')\n",
-)
-legacy_code_type = (
-    "\t\t\tif dep_scanner.version().version_compare('< 1.14.91')\n"
-    "\t\t\t\toutput_type = 'code'\n"
-    "\t\t\tendif\n"
-)
-if legacy_code_type not in source:
-    sys.exit(f"unexpected wayland-scanner version gate in {path}")
-source = source.replace(
-    legacy_code_type,
-    "\t\t\t# wayland-scanner >= 1.14.91 emits 'private-code'; the runner's\n"
-    "\t\t\t# scanner is 1.22, so the legacy 'code' spelling is never needed.\n",
-)
-open(path, "w", encoding="utf-8").write(source)
-PY
-
+export PKG_CONFIG_PATH="/usr/local/share/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 meson setup "$work/build" "$source" \
     --prefix=/usr/local \
     --buildtype=release \
     -Dbackend-drm=false \
-    -Dbackend-drm-screencast-vaapi=false \
     -Dbackend-pipewire=false \
     -Dbackend-rdp=false \
     -Dbackend-vnc=false \
@@ -95,19 +103,26 @@ meson setup "$work/build" "$source" \
     -Dbackend-headless=true \
     -Dbackend-default=headless \
     -Drenderer-gl=false \
+    -Drenderer-vulkan=false \
     -Dxwayland=false \
     -Dsystemd=false \
-    -Dremoting=false \
-    -Dpipewire=false \
-    -Dscreenshare=false \
+    -Ddeprecated-remoting=false \
+    -Ddeprecated-pipewire=false \
+    -Dshell-desktop=true \
+    -Dshell-ivi=false \
+    -Dshell-kiosk=true \
+    -Dshell-lua=false \
+    -Dcolor-management-lcms=false \
     -Dimage-jpeg=false \
     -Dimage-webp=false \
+    -Dtools= \
     -Ddemo-clients=false \
     -Dsimple-clients= \
+    -Dresize-pool=false \
     -Dtests=false \
     -Ddoc=false \
-    -Dcolor-management-lcms=false \
-    -Dwcap-decode=false
+    -Dperfetto=false \
+    -Dallow-deprecated-modeset=false
 ninja -C "$work/build"
 sudo ninja -C "$work/build" install
 sudo ldconfig
