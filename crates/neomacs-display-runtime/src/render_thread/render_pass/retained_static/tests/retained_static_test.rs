@@ -94,3 +94,70 @@ fn a_retained_filled_box_cursor_cell_resolves_the_same_local_effect_profile_as_a
         );
     }
 }
+
+/// A root cursor is below child frames in a full render. The retained scene
+/// cannot put that cursor back on top of a settled popup during interpolation.
+#[test]
+fn settled_child_frames_keep_root_cursor_below_their_scene() {
+    use crate::render_thread::cursor::CursorTarget;
+    use crate::render_thread::frame_sched::RenderWork;
+    use crate::render_thread::frame_windows::GuiFrameRenderState;
+    use neomacs_display_protocol::DisplayFrameId;
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let mut render = GuiFrameRenderState::new_without_device(42, false, now);
+    let (mut root, _) = filled_box_frame(EffectsConfig::cursor_profile_baseline());
+    root.set_frame_identity(
+        DisplayFrameId::new(42),
+        DisplayFrameId::new(0),
+        0.0,
+        0.0,
+        i32::MIN,
+        false,
+        0.0,
+        Color::BLACK,
+        false,
+        1.0,
+    );
+    render.set_current_frame(Some(root), None, Default::default(), Default::default());
+    render.begin_presentable_render(RenderWork::RebuildScene);
+    assert!(super::is_eligible(true, &[], &render));
+    let mut child = FrameGlyphBuffer::with_size(10.0, 10.0);
+    child.set_frame_identity(
+        DisplayFrameId::new(43),
+        DisplayFrameId::new(42),
+        0.0,
+        0.0,
+        1,
+        false,
+        0.0,
+        Color::BLACK,
+        false,
+        1.0,
+    );
+    assert!(render.compositor.child_frames.update_frame(child));
+    assert!(!render.compositor.child_frames.has_animation_activity());
+    render.cursor.anim_enabled = true;
+    let target = CursorTarget {
+        window_id: 1,
+        x: 1.0,
+        y: 2.0,
+        width: 3.0,
+        height: 4.0,
+        style: CursorStyle::FilledBox,
+        frame_id: 42,
+    };
+    render.cursor.set_target(target.clone(), now);
+    render
+        .cursor
+        .set_target(CursorTarget { y: 5.0, ..target }, now);
+    assert!(render.tick_cursor_animation(now.plus(std::time::Duration::from_millis(16))));
+    assert!(
+        !super::is_eligible(true, &[], &render),
+        "root cursor composition must not paint above a settled child frame"
+    );
+    assert!(render.compositor.child_frames.remove_frame(43));
+    assert!(
+        super::is_eligible(true, &[], &render),
+        "closing the popup restores cursor composition"
+    );
+}

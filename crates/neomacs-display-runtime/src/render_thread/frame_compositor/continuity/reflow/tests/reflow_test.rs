@@ -515,7 +515,7 @@ fn install(
     // on composition, so a test that installed without composing would be
     // measuring the next presentation against one the user never saw — which
     // is the very thing that advance rule exists to prevent.
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
 }
 
 /// A presentation id one past whatever is retained, so each install is a

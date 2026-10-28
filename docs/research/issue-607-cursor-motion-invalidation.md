@@ -193,3 +193,54 @@ size tests check intermediate and final samples. All 89 focused cursor/scheduler
 tests passed after this follow-up; the original root cursor fast-path tests
 remain enabled. This change requires no new rendering strategy or scheduler
 variant.
+
+
+## Review follow-up: damage consumption and child stacking
+
+Two further regressions were reproduced test-first. A final child-cursor size
+sample marks scene damage, but a cursor deadline can precede the paced scene
+repaint. Clearing all damage at redraw dispatch, or when entering the render
+pass, loses that final sample. Damage consumption now follows the rendering
+strategy actually selected after surface admission. `RenderWork::CompositeOnly`
+consumes cursor damage; full rendering consumes scene and cursor damage. The
+scheduler regression uses the real coordinator and verifies that the earlier
+composite preserves scene damage until the later repaint consumes it.
+
+The other regression concerns settled children: the retained scene flattens child
+frames together with root content, then draws the root cursor above that picture.
+Full rendering places children above the root cursor. Retained composition now
+requires an empty child-frame set, so a settled popup uses full rendering and
+closing it restores the cursor fast path. This conservative rule preserves
+stacking without approximating overlap of animated cursor corners or effects.
+
+GNU Emacs keeps cursor painting local to its owning frame:
+`display_and_set_cursor` in `src/xdisp.c` dispatches through that frame's
+`draw_window_cursor`. Its X backend reparents child windows into the parent's
+X window in `src/xfns.c`; native window composition supplies their stacking.
+NeoMACS's single-surface composition must preserve that ordering explicitly.
+These source references were inspected in the local GNU checkout before the fix.
+
+Both new tests failed before their respective changes: the first lost pending
+scene damage, and the second admitted retained composition with a settled child.
+The resource measurements above belong to the original fix; these follow-ups
+make no additional CPU or memory claim.
+
+
+The retained-owner GPU pressure fixture now reflects the eligibility rule: a
+cache containing children can be retired immediately, before mandatory child
+target admission. It still checks stale ownership retirement and the resulting
+GPU census under held pressure.
+
+The broader runtime check also reproduced an existing GPU rounding assertion:
+`production_split_delete_placements_keep_background_opacity` reads blue 187
+where its literal expects 188. The identical failure was confirmed by compiling
+and running the unchanged previous PR head `2675d413e7` in an isolated checkout.
+No pane-rendering change or tolerance adjustment is included in this fix.
+
+
+Follow-up validation: the final isolated runtime run executed 260 scheduler,
+frame-state, render-pass and continuity tests: 259 passed, with only the
+baseline-confirmed pane-opacity assertion failing. Both new regressions and the
+updated GPU ownership tests passed. Two filled-box GPU equivalence tests, two
+live GNU viewport oracle cases in verify mode, and the TUI line-motion
+comparison passed again. Changed Rust formatting and `git diff --check` passed.

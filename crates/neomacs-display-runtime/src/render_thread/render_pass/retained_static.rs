@@ -54,6 +54,10 @@ pub(super) fn is_eligible(
         && !render.compositor.input_scroll.active()
         && pane_placements.is_empty()
         && !render.compositor.transitions.has_active()
+        // Children are painted above root glyphs and the root cursor in a
+        // full render. A retained scene flattens them into one picture, so
+        // redrawing the cursor afterward cannot preserve that stacking.
+        && render.compositor.child_frames.is_empty()
         && !window_has_active_overlays(render)
         && pointer_appearance_allowed(&render.pointer_appearance)
         && !render.has_pointer_paint_damage()

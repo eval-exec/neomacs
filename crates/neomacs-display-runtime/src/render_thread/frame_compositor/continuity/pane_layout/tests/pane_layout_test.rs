@@ -852,7 +852,7 @@ fn install(
     render.compositor.current_frame = Some(frame);
     // Composed, so the next install measures against this one. See the note on
     // `FrameCompositor::baseline`.
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
 }
 
 #[test]
