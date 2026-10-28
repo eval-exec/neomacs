@@ -3087,8 +3087,7 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
 fn retirement_wakeup_returns_to_same_blocking_read_without_redisplay_loop() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
 
     let redisplays = Rc::new(RefCell::new(0));
     let redisplays_in_callback = Rc::clone(&redisplays);
@@ -3186,8 +3185,7 @@ fn wait_for_pending_resize_events_blocks_until_resize_and_preserves_keypress() {
         .create_frame("F1", 960, 640, crate::buffer::BufferId(1));
     assert_eq!(ev.frames.selected_frame().map(|frame| frame.id), Some(fid));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
     // Keep one sender alive: dropping the last tx disconnects the channel,
     // which the input machinery treats as terminal-gone -> quit (timing flake;
     // see the sit-for soak fix).
@@ -14591,8 +14589,7 @@ fn sit_for_requeues_delayed_input_after_with_selected_window_cleanup() {
 
     let mut ev = runtime_startup_context();
     ev.set_variable("noninteractive", Value::NIL);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
 
     // Keep one sender alive for the whole test: dropping the last sender
     // disconnects the channel, which the input machinery treats as

@@ -7771,8 +7771,7 @@ fn accept_process_output_services_resize_arriving_during_wait() {
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
     let sender = tx.clone();
     let resize_thread = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(5));

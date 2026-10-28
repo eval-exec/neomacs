@@ -4837,15 +4837,16 @@ fn bootstrap_runtime_read_key_sequence_prioritizes_timer_unread_command_events()
     eval.eval_str(r#"(run-at-time 0 nil (lambda () (setq unread-command-events (list ?\e))))"#)
         .expect("schedule unread ESC timer");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let input = crate::test_utils::InputPublisher::install(&mut eval);
+    let sender = input.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(20));
-        tx.send(crate::keyboard::InputEvent::KeyPress {
-            key: crate::keyboard::KeyEvent::char('x'),
-            emacs_frame_id: 0,
-        })
-        .expect("queue x host input");
+        sender
+            .send(crate::keyboard::InputEvent::KeyPress {
+                key: crate::keyboard::KeyEvent::char('x'),
+                emacs_frame_id: 0,
+            })
+            .expect("queue x host input");
     });
 
     let (keys, binding) = eval
