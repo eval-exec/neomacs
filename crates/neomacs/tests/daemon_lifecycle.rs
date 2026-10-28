@@ -1226,10 +1226,15 @@ fn configure_blocking_aot(fixture: &Fixture, command: &mut Command) {
     let compiler = fixture.path("bin/cc");
     // Only the first compiler blocks. Its PID is retained before signalling;
     // later invocations fail immediately, so settling the control cannot hang.
-    fs::write(&compiler, format!(
-        "#!/bin/sh\nif test -e {:?}; then exit 1; fi\nprintf '%s' $$ > {:?}\nexec /usr/bin/sleep 3600\n",
-        fixture.path("compiler-pid"), fixture.path("compiler-pid"),
-    )).unwrap();
+    fs::write(
+        &compiler,
+        format!(
+            "#!/bin/sh\nif test -e {:?}; then exit 1; fi\nprintf '%s' $$ > {:?}\nexec sleep 3600\n",
+            fixture.path("compiler-pid"),
+            fixture.path("compiler-pid"),
+        ),
+    )
+    .unwrap();
     fs::set_permissions(compiler, fs::Permissions::from_mode(0o700)).unwrap();
     command
         .env("NEOVM_AOT_PGO", "1")
