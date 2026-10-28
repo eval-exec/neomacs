@@ -38,7 +38,9 @@ pub async fn request_renderer_device(
     let descriptor = wgpu::DeviceDescriptor {
         label: Some(label),
         required_features: requested_features(adapter),
-        required_limits: wgpu::Limits::default(),
+        // Window surfaces are sized by the display, not by wgpu's default
+        // 8192 cap, so request the adapter's own texture dimension limits.
+        required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
         memory_hints: Default::default(),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         trace: wgpu::Trace::Off,
