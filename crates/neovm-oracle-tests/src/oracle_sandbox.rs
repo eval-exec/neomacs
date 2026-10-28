@@ -36,6 +36,13 @@ const SNAPSHOT_TIME_ZONE: &str = "America/New_York";
 /// environment. The home directory itself remains a fresh per-case directory.
 const SNAPSHOT_USER: &str = "exec";
 
+/// Stable `user-full-name` for both engines. GNU's `init_editfns` takes it
+/// from `$NAME` when that is set and otherwise from the passwd GECOS field
+/// (src/editfns.c:128-134), so without this the snapshots would depend on the
+/// account running the suite: Org export prints it as the default author.
+/// Empty matches the recording hosts, whose GECOS field is empty.
+const SNAPSHOT_FULL_NAME: &str = "";
+
 /// Stable host identity for forms and libraries that derive output from the
 /// machine name (for example TRAMP defaults, Org macros, and email addresses).
 const SNAPSHOT_HOST: &str = "oracle-host";
@@ -164,6 +171,7 @@ impl OracleSandbox {
             .env("HOME", &self.home_root)
             .env("USER", SNAPSHOT_USER)
             .env("LOGNAME", SNAPSHOT_USER)
+            .env("NAME", SNAPSHOT_FULL_NAME)
             .env("HOSTNAME", SNAPSHOT_HOST)
             .env("EMAIL", format!("{SNAPSHOT_USER}@{SNAPSHOT_HOST}"))
             .env("NEOVM_ORACLE_SYSTEM_NAME", SNAPSHOT_HOST)
