@@ -4,20 +4,26 @@
 #
 #     scripts/ci/check-gnu-oracle.sh <emacs> <version> <manifest> [<commit>]
 #
-# .github/actions/setup-gnu-emacs/action.yml and the local NixOS build both run
-# THIS file; there is no second copy of the assertions.  It fails at the
-# environment seam -- before any oracle test runs -- when the installed build
-# differs from the pinned reference, because a divergence measured against a
-# different GNU is not a divergence.
+# .github/actions/setup-gnu-emacs/action.yml,
+# .github/actions/setup-gnu-emacs-macos/action.yml and the local NixOS build
+# all run THIS file; there is no second copy of the assertions.  It fails at
+# the environment seam -- before any oracle test runs -- when the installed
+# build differs from the pinned reference, because a divergence measured
+# against a different GNU is not a divergence.  The manifest's `profile` line
+# selects the host family's expectations: `linux-gtk3` (the default for
+# manifests written before the line existed) or `macos-batch`.
 #
 # The checks, and what each one catches:
 #   * emacs-version is the pinned release.
-#   * system-configuration-features has the window system (X11/GTK3) and the
-#     native primitives (TREE_SITTER/DBUS/GNUTLS/LIBXML2/GMP, plus the image
-#     libraries the face fixtures use).  A TTY-only build succeeds and reports
-#     the same version, but is a different oracle: it lacks 107 window-system
-#     mouse bindings, and their long keys shift every describe-bindings block
-#     one tab-width wider.
+#   * system-configuration-features has the features the profile promises.
+#     linux-gtk3: the window system (X11/GTK3), the native primitives
+#     (TREE_SITTER/DBUS/GNUTLS/LIBXML2/GMP) and the image libraries the face
+#     fixtures use.  A TTY-only build succeeds and reports the same version,
+#     but is a different oracle: it lacks 107 window-system mouse bindings,
+#     and their long keys shift every describe-bindings block one tab-width
+#     wider.  macos-batch: PDUMPER/KQUEUE/GNUTLS/LIBXML2/MODULES/THREADS and
+#     no window system, because that is the macOS reference the suite was
+#     characterized against.
 #   * ...and does NOT have NATIVE_COMP or the features configure was told to
 #     disable (GCONF/GSETTINGS/SOUND/LIBSYSTEMD).  A native-comp build ships
 #     inline docstrings where canonical byte-compiled Lisp has lazy
@@ -30,8 +36,8 @@
 #     built without native compilation can still be *installed over* a Lisp
 #     tree that an earlier native-comp build byte-compiled, and that stale
 #     tree is what changes doc-slot-4 oracle records.
-#   * the D-Bus native primitives exist, because notification fixtures use the
-#     oracle as a private D-Bus service.
+#   * the D-Bus native primitives exist on linux-gtk3, because notification
+#     fixtures use the oracle as a private D-Bus service.
 set -euo pipefail
 
 readonly usage="usage: $0 <emacs> <version> <manifest> [<commit>]"
@@ -60,6 +66,8 @@ fail() {
 prefix=
 manifest_version=
 manifest_commit=
+# Manifests written before the profile line are the Linux GTK3 oracle.
+profile=linux-gtk3
 configure_args=()
 while IFS= read -r line; do
     case $line in
@@ -67,6 +75,7 @@ while IFS= read -r line; do
         prefix=*) prefix=${line#prefix=} ;;
         emacs_version=*) manifest_version=${line#emacs_version=} ;;
         commit=*) manifest_commit=${line#commit=} ;;
+        profile=*) profile=${line#profile=} ;;
         configure_arg=*) configure_args+=("${line#configure_arg=}") ;;
     esac
 done <"$manifest"
@@ -89,28 +98,59 @@ if [[ $manifest_version != "$version" ]]; then
 fi
 
 features=$("$emacs" --batch --quick --eval '(princ system-configuration-features)')
+echo "oracle profile: $profile"
 echo "oracle features: $features"
 
 missing=
-for want in \
-    X11 GTK3 TREE_SITTER PDUMPER DBUS \
-    GNUTLS LIBXML2 GMP \
-    PNG JPEG GIF TIFF WEBP RSVG LCMS2 ZLIB XPM CAIRO HARFBUZZ FREETYPE; do
-    case " $features " in
-        *" $want "*) ;;
-        *) missing="$missing $want" ;;
-    esac
-done
-for forbidden in NATIVE_COMP GCONF GSETTINGS SOUND LIBSYSTEMD LIBOTF; do
-    case " $features " in
-        *" $forbidden "*) missing="$missing -$forbidden" ;;
-    esac
-done
-if [[ -n $missing ]]; then
-    fail "GNU oracle configuration does not match the pinned reference; wrong:$missing
+case $profile in
+    linux-gtk3)
+        for want in \
+            X11 GTK3 TREE_SITTER PDUMPER DBUS \
+            GNUTLS LIBXML2 GMP \
+            PNG JPEG GIF TIFF WEBP RSVG LCMS2 ZLIB XPM CAIRO HARFBUZZ FREETYPE; do
+            case " $features " in
+                *" $want "*) ;;
+                *) missing="$missing $want" ;;
+            esac
+        done
+        for forbidden in NATIVE_COMP GCONF GSETTINGS SOUND LIBSYSTEMD LIBOTF; do
+            case " $features " in
+                *" $forbidden "*) missing="$missing -$forbidden" ;;
+            esac
+        done
+        if [[ -n $missing ]]; then
+            fail "GNU oracle configuration does not match the pinned reference; wrong:$missing
 The window system is required: without X11/GTK3 the oracle lacks the
 window-system mouse bindings that keep describe-bindings aligned."
-fi
+        fi
+        ;;
+    macos-batch)
+        # The macOS parity reference is deliberately window-system-less
+        # (CI has no X server, and an NS build answers different face
+        # questions); kqueue is the Darwin notification backend
+        # (src/kqueue.c), and the TLS/XML libraries are the ones the recipe
+        # installs.  A silent --without-gnutls downgrade is a different oracle.
+        for want in PDUMPER KQUEUE GNUTLS LIBXML2 MODULES THREADS; do
+            case " $features " in
+                *" $want "*) ;;
+                *) missing="$missing $want" ;;
+            esac
+        done
+        for forbidden in NATIVE_COMP X11 GTK3 NS PGTK GCONF GSETTINGS SOUND LIBSYSTEMD; do
+            case " $features " in
+                *" $forbidden "*) missing="$missing -$forbidden" ;;
+            esac
+        done
+        if [[ -n $missing ]]; then
+            fail "GNU oracle configuration does not match the pinned macOS reference; wrong:$missing
+kqueue is Darwin's notification backend and the build must be
+window-system-less (--without-x --without-ns), as characterized."
+        fi
+        ;;
+    *)
+        fail "$manifest records unknown profile '$profile'"
+        ;;
+esac
 
 # The prefix is the one legitimate difference between CI's oracle and a local
 # one, so strip it before comparing the rest of the configure line verbatim.
@@ -143,14 +183,15 @@ fi
 # install.
 installed_bindings="$prefix/share/emacs/$version/lisp/bindings.elc"
 [[ -f $installed_bindings ]] || fail "missing $installed_bindings"
-lazy_refs=$(grep -a -o -F '#$' "$installed_bindings" | wc -l || true)
+lazy_refs=$(grep -a -o -F '#$' "$installed_bindings" | wc -l | tr -d ' ' || true)
 if [[ $lazy_refs -eq 0 ]]; then
     fail "$installed_bindings has no lazy (#\$ . N) docstring references:
 the installed Lisp tree is not canonical byte-compiler output"
 fi
-echo "installed bindings.elc: $(stat -c %s "$installed_bindings") bytes, $lazy_refs lazy docstring references"
+echo "installed bindings.elc: $(wc -c <"$installed_bindings" | tr -d ' ') bytes, $lazy_refs lazy docstring references"
 
-"$emacs" --batch --quick --eval "(progn
+if [[ $profile == linux-gtk3 ]]; then
+    "$emacs" --batch --quick --eval "(progn
   (require 'dbus)
   (dolist (function '(dbus-call-method dbus-register-method))
     (unless (fboundp function)
@@ -158,6 +199,7 @@ echo "installed bindings.elc: $(stat -c %s "$installed_bindings") bytes, $lazy_r
   (dolist (function '(dbus--init-bus dbus-get-unique-name dbus-message-internal))
     (unless (and (fboundp function) (subrp (symbol-function function)))
       (error \"GNU oracle lacks native D-Bus primitive %s\" function))))"
+fi
 
 # A manually installed oracle needs its dynamic libraries at run time; NixOS
 # has no system loader path.  The shell's build sets a RUNPATH, and this

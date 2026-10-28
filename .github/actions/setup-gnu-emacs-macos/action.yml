@@ -1,0 +1,130 @@
+name: 'Set up GNU Emacs oracle (macOS)'
+description: >-
+  Install the GNU Emacs that the macOS neovm-core parity suite runs against:
+  the pinned parity reference built from the exact emacs-mirror commit by the
+  one recipe (scripts/ci/build-gnu-oracle.sh), whose Darwin profile is a
+  window-system-less build (--without-x --without-ns) with the kqueue
+  notification backend.  The version string is not an identity, so the smoke
+  step asserts the configured features and configure line
+  (scripts/ci/check-gnu-oracle.sh), and the tests resolve the same binary
+  through the attested resolver (NEOVM_FORCE_ORACLE_PATH, attested against
+  parity-reference.toml by neomacs-test-oracle).
+
+  This is the macOS sibling of .github/actions/setup-gnu-emacs.  It differs
+  only in the host: the recipe's Darwin profile replaces the GTK3 line, the
+  cached tree is keyed by the recipe scripts' hash as well as the GNU commit
+  (a configure-line edit must rebuild, and there is no apt package list to
+  patch), and the build dependencies come from Homebrew.
+
+outputs:
+  emacs:
+    description: 'The installed, attested GNU Emacs executable.'
+    value: ${{ steps.install.outputs.emacs }}
+  manifest:
+    description: 'The build manifest recording the configure line.'
+    value: ${{ steps.install.outputs.manifest }}
+  version:
+    description: 'The pinned emacs_version from parity-reference.toml.'
+    value: ${{ steps.pin.outputs.version }}
+  commit:
+    description: 'The pinned mirror_commit from parity-reference.toml.'
+    value: ${{ steps.pin.outputs.commit }}
+
+inputs:
+  cache-version:
+    description: >-
+      Extra manual cache generation.  The key already carries a hash of the
+      recipe scripts; bump this only when something outside them changes the
+      installed tree (an intentionally different Homebrew dependency set).
+    required: false
+    default: "1"
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Read the pinned GNU reference
+      id: pin
+      shell: bash
+      run: |
+        # parity-reference.toml is the single record of which GNU the parity
+        # numbers are about; a re-pin there (cargo run -p xtask --
+        # pin-reference) moves this job with it.
+        set -euo pipefail
+        pin="$GITHUB_WORKSPACE/parity-reference.toml"
+        version="$(sed -n 's/^emacs_version = "\(.*\)"$/\1/p' "$pin")"
+        commit="$(sed -n 's/^mirror_commit = "\(.*\)"$/\1/p' "$pin")"
+        if [[ ! "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || [[ ! "$commit" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "parity-reference.toml does not pin emacs_version and mirror_commit" >&2
+          exit 1
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "commit=$commit" >> "$GITHUB_OUTPUT"
+        sudo mkdir -p /opt/gnu-emacs-oracle
+        sudo chown "$(id -u):$(id -g)" /opt/gnu-emacs-oracle
+
+    - name: Restore the cached oracle build
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /opt/gnu-emacs-oracle
+        # The GNU commit names the source; the recipe hash names what that
+        # source was configured with.  Both are load-bearing: two builds of
+        # 31.1 with different configure lines are different oracles.
+        key: gnu-emacs-oracle-macos-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}
+
+    - name: Install the oracle's Homebrew dependencies
+      shell: bash
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      run: |
+        # Needed on a cache HIT too: the cached oracle links Homebrew's
+        # gnutls, so a job that restores it without the library present has an
+        # Emacs that cannot start.  autoconf/automake/texinfo/pkgconf are
+        # build-only, but Homebrew makes an already-installed formula a
+        # no-op, so one list keeps the hit and miss paths identical.
+        #
+        # libxml2 is deliberately NOT installed: the characterized macOS
+        # oracle took the SDK's libxml2 through configure's fallback probe
+        # (--with-xml2=ifavailable), and check-gnu-oracle.sh fails loudly if a
+        # future runner image stops providing it.
+        set -euo pipefail
+        brew install autoconf automake texinfo pkgconf gnutls
+
+    - name: Build GNU Emacs from the pinned commit
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        EMACS_COMMIT: ${{ steps.pin.outputs.commit }}
+      run: |
+        # The recipe -- source fetch, autogen, the Darwin configure line,
+        # make, install, manifest -- lives in scripts/ci/build-gnu-oracle.sh.
+        set -euo pipefail
+        # Homebrew's pkgconf finds gnutls only when told where Homebrew keeps
+        # pkg-config files; without it the --with-gnutls=ifavailable line
+        # silently produces a different oracle and the smoke step rejects it.
+        export PKG_CONFIG_PATH="$(brew --prefix gnutls)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        EMACS_ORACLE_WORKDIR="$RUNNER_TEMP" \
+          "$GITHUB_WORKSPACE/scripts/ci/build-gnu-oracle.sh" \
+          "$EMACS_COMMIT" /opt/gnu-emacs-oracle
+
+    - name: Put the oracle on PATH and prove it is the pinned build
+      id: install
+      shell: bash
+      env:
+        EMACS_VERSION: ${{ steps.pin.outputs.version }}
+        EMACS_COMMIT: ${{ steps.pin.outputs.commit }}
+      run: |
+        # Fails at the environment seam, before any oracle test runs, when the
+        # installed build is not the pinned macOS reference.
+        set -euo pipefail
+        manifest=/opt/gnu-emacs-oracle/share/gnu-emacs-oracle/build-manifest
+        echo "/opt/gnu-emacs-oracle/bin" >> "$GITHUB_PATH"
+        echo "NEOVM_FORCE_ORACLE_PATH=/opt/gnu-emacs-oracle/bin/emacs" >> "$GITHUB_ENV"
+        echo "emacs=/opt/gnu-emacs-oracle/bin/emacs" >> "$GITHUB_OUTPUT"
+        echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+        "$GITHUB_WORKSPACE/scripts/ci/check-gnu-oracle.sh" \
+          /opt/gnu-emacs-oracle/bin/emacs \
+          "$EMACS_VERSION" \
+          "$manifest" \
+          "$EMACS_COMMIT"

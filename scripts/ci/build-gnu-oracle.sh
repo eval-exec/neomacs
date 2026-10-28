@@ -3,23 +3,29 @@
 #
 #     scripts/ci/build-gnu-oracle.sh <commit> <prefix> [<work-dir>]
 #
-# This is the ONE recipe.  .github/actions/setup-gnu-emacs/action.yml calls it
-# on CI, and the NixOS shell `nix develop .#gnu-oracle` (nix/gnu-oracle-shell.nix)
-# calls the same file locally, so a local oracle is the CI oracle by
-# construction.  Everything that identifies the oracle lives here: the source
-# commit (not a tag), the configure line, and the build/install commands.
-# Callers supply only the install prefix -- which `system-configuration-options'
-# reports, and which scripts/ci/check-gnu-oracle.sh strips before comparing --
-# and optionally the transport repository the commit is fetched from.
+# This is the ONE recipe, with one configure line per host family.
+# .github/actions/setup-gnu-emacs/action.yml calls it on Linux CI,
+# .github/actions/setup-gnu-emacs-macos/action.yml on macOS CI, and the NixOS
+# shell `nix develop .#gnu-oracle` (nix/gnu-oracle-shell.nix) calls the same
+# file locally, so a local oracle is the CI oracle by construction.  Everything
+# that identifies the oracle lives here: the source commit (not a tag), the
+# configure line, and the build/install commands.  Callers supply only the
+# install prefix -- which `system-configuration-options' reports, and which
+# scripts/ci/check-gnu-oracle.sh strips before comparing -- and optionally the
+# transport repository the commit is fetched from.
 #
-# The configure line is load-bearing, not a preference.  A TTY-only build (no
-# GTK3/X11) lacks the 107 window-system mouse bindings, and their long keys
-# shift every describe-bindings block's alignment.  A native-comp build ships
-# inline docstrings where a canonical byte-compiled build has lazy (#$ . N)
-# references, so doc-slot-4 oracle records differ.  --without-compress-install
-# keeps the installed Lisp tree as plain .el, because GNU's default `make
-# install' gzips it and jka-compr then prints "uncompressing FILE.el.gz...done"
-# into the message stream the MELPA/TUI harnesses compare.
+# The configure line is load-bearing, not a preference.  On Linux a TTY-only
+# build (no GTK3/X11) lacks the 107 window-system mouse bindings, and their
+# long keys shift every describe-bindings block's alignment.  On macOS there is
+# no X server in CI, so the characterized oracle is --without-x --without-ns;
+# the questions the macOS suite asks it (long-double formatting, load suffixes,
+# kqueue notification, time zones, raw-byte file names) are batch behaviors.
+# On both hosts a native-comp build ships inline docstrings where a canonical
+# byte-compiled build has lazy (#$ . N) references, so doc-slot-4 oracle
+# records differ, and --without-compress-install keeps the installed Lisp tree
+# as plain .el: GNU's default `make install' gzips it and jka-compr then prints
+# "uncompressing FILE.el.gz...done" into the message stream the MELPA/TUI
+# harnesses compare.
 #
 # Environment:
 #   EMACS_ORACLE_REPO     git repository to fetch <commit> from
@@ -52,7 +58,12 @@ readonly commit=$1
 readonly prefix=$2
 readonly workdir=${3:-${EMACS_ORACLE_WORKDIR:-${TMPDIR:-/tmp}}}
 readonly repo=${EMACS_ORACLE_REPO:-https://github.com/emacs-mirror/emacs.git}
-readonly jobs=${EMACS_ORACLE_JOBS:-$(nproc)}
+# GNU/Linux has nproc; Darwin does not (and its bash 3.2 does not either).
+if [[ $(uname -s) == Darwin ]]; then
+    readonly jobs=${EMACS_ORACLE_JOBS:-$(sysctl -n hw.ncpu)}
+else
+    readonly jobs=${EMACS_ORACLE_JOBS:-$(nproc)}
+fi
 
 if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
     echo "build-gnu-oracle: commit must be a full 40-hex mirror commit, got '$commit'" >&2
@@ -66,32 +77,63 @@ fi
 log() { printf 'build-gnu-oracle: %s\n' "$*" >&2; }
 
 # The configure line.  parity-reference.toml pins the commit; this array pins
-# what that commit is configured with.  Change it here and the cache key in
-# .github/actions/setup-gnu-emacs/action.yml (which hashes this file) rebuilds
-# the CI oracle, and the local build is the same recipe by construction.
-configure_args=(
-    # X11 + GTK3, never PGTK: configure would otherwise prefer PGTK when the
-    # Wayland headers are present, which is a different window system.
-    --with-x-toolkit=gtk3
-    --without-pgtk
-    --with-tree-sitter
-    # Real package-notification tests use the oracle as a private D-Bus
-    # service; require the native primitives rather than letting configure
-    # omit them silently.
-    --with-dbus
-    --with-native-compilation=no
-    --without-compress-install
-    --with-gnutls=ifavailable
-    --with-xml2=ifavailable
-    --with-libgmp=ifavailable
-    --with-sound=no
-    --without-gconf
-    --without-gsettings
-    --without-libsystemd
-    --without-selinux
-    --without-gpm
-    --without-sqlite3
-)
+# what that commit is configured with.  There is one recipe per host family,
+# because a window system is not portable: the Linux oracle is a GTK3 build
+# whose window-system bindings and face realization the TUI/describe-bindings
+# parity depends on, while macOS has neither X11 nor NS in CI and its
+# neovm-core parity questions (long double formatting, load suffixes, file
+# notification, time zones, file names) are batch behaviors.  Both are recorded
+# in the manifest and asserted by check-gnu-oracle.sh, and the cache key in
+# each setup action hashes this file, so changing a line rebuilds the oracle.
+case $(uname -s) in
+    Darwin)
+        profile=macos-batch
+        configure_args=(
+            # No window system: CI has no X server, and an NS build would
+            # answer different face questions than the reference the macOS
+            # suite was characterized against.
+            --without-x
+            --without-ns
+            --with-native-compilation=no
+            --without-compress-install
+            # Darwin's file-notify backend (src/kqueue.c); asking for it
+            # explicitly keeps configure from silently dropping notification.
+            --with-file-notification=kqueue
+            --with-gnutls=ifavailable
+            --with-xml2=ifavailable
+            --with-libgmp=ifavailable
+            --with-sound=no
+            --without-dbus
+        )
+        ;;
+    *)
+        profile=linux-gtk3
+        configure_args=(
+            # X11 + GTK3, never PGTK: configure would otherwise prefer PGTK
+            # when the Wayland headers are present, which is a different
+            # window system.
+            --with-x-toolkit=gtk3
+            --without-pgtk
+            --with-tree-sitter
+            # Real package-notification tests use the oracle as a private
+            # D-Bus service; require the native primitives rather than letting
+            # configure omit them silently.
+            --with-dbus
+            --with-native-compilation=no
+            --without-compress-install
+            --with-gnutls=ifavailable
+            --with-xml2=ifavailable
+            --with-libgmp=ifavailable
+            --with-sound=no
+            --without-gconf
+            --without-gsettings
+            --without-libsystemd
+            --without-selinux
+            --without-gpm
+            --without-sqlite3
+        )
+        ;;
+esac
 
 mkdir -p "$workdir" "$prefix"
 src=$(mktemp -d "$workdir/gnu-emacs-oracle.XXXXXX")
@@ -169,6 +211,7 @@ mkdir -p "$manifest_dir"
     printf '# Written by scripts/ci/build-gnu-oracle.sh; read by check-gnu-oracle.sh.\n'
     printf 'commit=%s\n' "$commit"
     printf 'prefix=%s\n' "$prefix"
+    printf 'profile=%s\n' "$profile"
     printf 'emacs_version=%s\n' "$version"
     printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'cc=%s\n' "$(cc --version | head -n 1)"
