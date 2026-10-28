@@ -28,6 +28,8 @@ use crate::harness::{
     sha256_file,
 };
 
+#[cfg(test)]
+mod magit_fixture_tests;
 mod package_loading;
 pub(crate) use package_loading::scenario_load_suffixes;
 
@@ -212,10 +214,31 @@ fn magit_fixture_file(name: &str, revision: u32, lines: u32) -> String {
     out
 }
 
+/// Every git invocation that builds the Magit fixture runs in this one
+/// environment, so the repository is a function of the workload alone.
+///
+/// Commit IDs hash the author and committer identities and timestamps. Without
+/// these pins every run minted a fresh HEAD, fresh commit dates and a stash
+/// signed by whoever ran the board, so the status buffer Magit rendered (and
+/// the work it did to render it) differed between the arms of one A/B and
+/// between machines. The host's global and system git config are shut out for
+/// the same reason (`commit.gpgsign`, `init.defaultBranch`, hooks, ...).
+const MAGIT_FIXTURE_GIT_ENV: [(&str, &str); 8] = [
+    ("GIT_CONFIG_NOSYSTEM", "1"),
+    ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ("GIT_AUTHOR_NAME", "neomacs-perf"),
+    ("GIT_AUTHOR_EMAIL", "perf@example.invalid"),
+    ("GIT_AUTHOR_DATE", "2026-01-01T00:00:00+0000"),
+    ("GIT_COMMITTER_NAME", "neomacs-perf"),
+    ("GIT_COMMITTER_EMAIL", "perf@example.invalid"),
+    ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+0000"),
+];
+
 fn run_git(repository: &Path, arguments: &[&str]) -> Result<(), String> {
     let output = Command::new("git")
         .args(arguments)
         .current_dir(repository)
+        .envs(MAGIT_FIXTURE_GIT_ENV)
         .output()
         .map_err(|error| format!("failed to launch git for Magit fixture: {error}"))?;
     if !output.status.success() {
@@ -229,19 +252,7 @@ fn run_git(repository: &Path, arguments: &[&str]) -> Result<(), String> {
 }
 
 fn git_commit(repository: &Path, message: &str) -> Result<(), String> {
-    run_git(
-        repository,
-        &[
-            "-c",
-            "user.name=neomacs-perf",
-            "-c",
-            "user.email=perf@example.invalid",
-            "commit",
-            "--quiet",
-            "-m",
-            message,
-        ],
-    )
+    run_git(repository, &["commit", "--quiet", "-m", message])
 }
 
 /// Files, commits, and per-section working-tree changes in the `Working`
@@ -262,7 +273,7 @@ fn prepare_magit_repository(run_directory: &Path, scenario: ScenarioId) -> Resul
             repository.display()
         )
     })?;
-    run_git(&repository, &["init", "--quiet"])?;
+    run_git(&repository, &["init", "--quiet", "--initial-branch=main"])?;
     // Pin everything about `git diff` that the HOST could otherwise decide.
     //
     // Magit renders a section per hunk, and how many hunks a change becomes is
