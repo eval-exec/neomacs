@@ -280,6 +280,10 @@ pub fn exercise(
         let w = menus(driver);
         (w.len() == 1).then(|| w[0].clone())
     });
+    // Same settle as above: a click aimed at a row of a menu that is still
+    // opening lands outside the popup and dismisses it instead of being
+    // swallowed as a disabled-item press.
+    capture(driver, path, "disabled-root", root.bounds);
     driver
         .click(
             DesktopPoint {
@@ -321,6 +325,12 @@ pub fn exercise_bottom_edges(driver: &mut impl DesktopDriver, path: &Path) {
             let w = menus(driver);
             (w.len() == 1).then(|| w[0].clone())
         });
+        // The observed window exists as soon as the compositor maps the
+        // popup, but the editor's menu session and the compositor's input
+        // focus settle a frame or two later.  Keys sent inside that window
+        // are dropped before they reach the menu, so wait for the presented
+        // panel before driving it.
+        capture(driver, path, &format!("bottom-root-{cycle}"), root.bounds);
         driver.press(Key::End).unwrap();
         driver
             .input(InputAction::Key {
