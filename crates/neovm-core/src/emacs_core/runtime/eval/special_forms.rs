@@ -111,6 +111,17 @@ impl Context {
     /// inline here stay out of the dispatcher that calls it; the evaluation
     /// depth is restored afterwards, as every special form's own frame
     /// unwinds in GNU.
+    ///
+    /// Every handler is out of line for the same reason.  Inlining them all
+    /// here made this one function 21 KB of code whose executed cache lines
+    /// were spread over the whole span (a magit-status edit loop touched 172
+    /// I-cache lines across 19 KB, and the callgrind I1 simulation charged
+    /// this function 142K misses, the largest evaluator-core owner): a hot
+    /// `if` evaluation fetched its own handful of lines from three clusters
+    /// separated by other forms' code.  GNU keeps each special form in its
+    /// own C function; this dispatch keeps only the handler selection and
+    /// the depth save/restore, and each handler's hot and rare paths are
+    /// laid out together inside its own function.
     #[inline(never)]
     pub(super) fn run_special_form(
         &mut self,
@@ -201,6 +212,7 @@ impl Context {
         self.sf_quote_value_named(quote_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_quote_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         self.one_unevalled_arg(call_name, tail)
     }
@@ -210,6 +222,7 @@ impl Context {
         self.sf_function_value_named(function_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_function_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         let arg = self.one_unevalled_arg(call_name, tail)?;
         if cons_head_symbol_id(&arg, self.symbol_mode()) == Some(lambda_symbol()) {
@@ -227,6 +240,7 @@ impl Context {
         self.sf_let_value_named(let_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_let_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -407,6 +421,7 @@ impl Context {
         self.sf_let_star_value_named(let_star_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_let_star_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -527,6 +542,7 @@ impl Context {
         self.sf_setq_value_named(setq_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_setq_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Ok(Value::NIL);
@@ -598,6 +614,7 @@ impl Context {
         self.sf_if_value_named(if_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_if_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -628,6 +645,7 @@ impl Context {
         }
     }
 
+    #[inline(never)]
     pub(super) fn sf_and_value(&mut self, tail: Value) -> EvalResult {
         let mut cursor = tail;
         let mut last = Value::T;
@@ -644,6 +662,7 @@ impl Context {
         Ok(last)
     }
 
+    #[inline(never)]
     pub(super) fn sf_or_value(&mut self, tail: Value) -> EvalResult {
         let mut cursor = tail;
         while cursor.is_cons() {
@@ -659,6 +678,7 @@ impl Context {
         Ok(Value::NIL)
     }
 
+    #[inline(never)]
     pub(super) fn sf_cond_value(&mut self, tail: Value) -> EvalResult {
         let mut clauses = tail;
         while clauses.is_cons() {
@@ -694,6 +714,7 @@ impl Context {
         self.sf_while_value_named(while_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_while_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -724,6 +745,7 @@ impl Context {
         }
     }
 
+    #[inline(never)]
     pub(super) fn sf_progn_value(&mut self, forms: Value) -> EvalResult {
         let temp_scope = self.save_sequence_temp_roots();
         let result = (|| {
@@ -758,6 +780,7 @@ impl Context {
         self.sf_prog1_value_named(prog1_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_prog1_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -784,6 +807,7 @@ impl Context {
         self.sf_defvar_value_named(defvar_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_defvar_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -861,6 +885,7 @@ impl Context {
         self.sf_defconst_value_named(defconst_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_defconst_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -925,6 +950,7 @@ impl Context {
         self.sf_catch_value_named(catch_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_catch_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
         if tail.is_nil() {
             return Err(signal(
@@ -968,6 +994,7 @@ impl Context {
         self.sf_unwind_protect_value_named(unwind_protect_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_unwind_protect_value_named(
         &mut self,
         call_name: SymId,
@@ -1003,6 +1030,7 @@ impl Context {
         self.sf_condition_case_value_named(condition_case_symbol(), tail)
     }
 
+    #[inline(never)]
     pub(super) fn sf_condition_case_value_named(
         &mut self,
         call_name: SymId,
@@ -1231,18 +1259,21 @@ impl Context {
         self.unbind_to_with_result(specpdl_count, result)
     }
 
+    #[inline(never)]
     pub(super) fn sf_save_excursion_value(&mut self, tail: Value) -> EvalResult {
         let mut scope = ExcursionScope::enter(self);
         let result = scope.context().sf_progn_value(tail);
         scope.finish(result)
     }
 
+    #[inline(never)]
     pub(super) fn sf_save_current_buffer_value(&mut self, tail: Value) -> EvalResult {
         let mut scope = CurrentBufferScope::enter(self);
         let result = scope.context().sf_progn_value(tail);
         scope.finish(result)
     }
 
+    #[inline(never)]
     pub(super) fn sf_save_restriction_value(&mut self, tail: Value) -> EvalResult {
         let mut scope = RestrictionScope::enter(self);
         let result = scope.context().sf_progn_value(tail);
