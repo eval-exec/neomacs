@@ -556,6 +556,23 @@ const EVAL_PROGRAM_WITH_NORMALIZER: &str = r#"(condition-case err
                             "[ORACLE-LOAD-ROOT]")
                       pairs)
                 (push (cons load-abs "[ORACLE-LOAD-ROOT]") pairs))
+              ;; The engine's OWN lisp tree. GNU now runs on its installed
+              ;; share/emacs/<version>/lisp (the sibling of data-directory)
+              ;; rather than the project tree, and runtime-loaded files
+              ;; report that path (locate-library, autoload filenames, lazy
+              ;; doc references).  Squash it to the same load-root token as
+              ;; the project tree: WHICH tree is environment, while the path
+              ;; REMAINDER (emacs-lisp/cl-lib.el, ...) stays the parity lock.
+              (let ((own-lisp
+                     (and (boundp 'data-directory)
+                          (stringp data-directory)
+                          (let ((dir (expand-file-name "../lisp" data-directory)))
+                            (and (file-directory-p dir) dir)))))
+                (when own-lisp
+                  (push (cons (abbreviate-file-name own-lisp)
+                              "[ORACLE-LOAD-ROOT]")
+                        pairs)
+                  (push (cons own-lisp "[ORACLE-LOAD-ROOT]") pairs)))
               ;; HOME is nested beneath the random per-case root. Normalize
               ;; only its absolute spelling so tilde syntax remains observable.
               (when (and home-abs (> (length home-abs) 1))
@@ -599,7 +616,15 @@ const EVAL_PROGRAM_WITH_NORMALIZER: &str = r#"(condition-case err
             (let ((source-buf (generate-new-buffer " *neovm-oracle-form*")))
               (unwind-protect
                   (progn
-                    (when load-root
+                    ;; The project lisp/ tree is Neomacs's own runtime; for
+                    ;; GNU it is a foreign tree whose .elc are Neo's compiler
+                    ;; output (and may not even be generated).  GNU keeps its
+                    ;; installed load-path; probes that need a project file
+                    ;; pass it in load-files, which loads absolute paths.
+                    (when (and load-root
+                               (or (equal (getenv "NEOVM_ORACLE_ENGINE") "neomacs")
+                                   (equal (getenv "NEOVM_ORACLE_LOAD_ROOT_OWNER")
+                                          "probe")))
                       (let ((extra-load-path nil))
                         (dolist (sub '("" "emacs-lisp" "progmodes" "language"
                                        "international" "textmodes" "vc" "leim"
@@ -653,7 +678,12 @@ const EVAL_PROGRAM_RAW: &str = r#"(condition-case err
               (let ((source-buf (generate-new-buffer " *neovm-oracle-form*")))
                 (unwind-protect
                     (progn
-                      (when load-root
+                      ;; Same contract as EVAL_PROGRAM_WITH_NORMALIZER: only
+                      ;; the engine that owns the project tree prepends it.
+                      (when (and load-root
+                                 (or (equal (getenv "NEOVM_ORACLE_ENGINE") "neomacs")
+                                     (equal (getenv "NEOVM_ORACLE_LOAD_ROOT_OWNER")
+                                            "probe")))
                         (let ((extra-load-path nil))
                           (dolist (sub '("" "emacs-lisp" "progmodes" "language"
                                          "international" "textmodes" "vc" "leim"
@@ -729,6 +759,35 @@ impl EvalProgram {
     }
 }
 
+/// Which editor the shared eval program is running inside.
+///
+/// The load-path setup is engine-specific on purpose.  The project's `lisp/`
+/// tree IS Neomacs's runtime, so Neomacs must be able to `(require ...)` the
+/// tree under test even when its dump was built in a different checkout (a
+/// nextest archive remaps the workspace).  For GNU that tree is FOREIGN:
+/// loading it runs Neomacs's byte-compiled `.elc` inside the oracle and makes
+/// "GNU" answers depend on Neo's compiler output -- and on generated files the
+/// checkout may not even contain.  GNU therefore keeps its installed
+/// load-path unless a probe explicitly loads a project file through the
+/// `load-files` API, which passes absolute paths to `load`.
+#[derive(Clone, Copy)]
+enum OracleEngine {
+    Gnu,
+    Neomacs,
+}
+
+impl OracleEngine {
+    /// Environment variable carrying [`OracleEngine`] into the eval program.
+    const ENV: &'static str = "NEOVM_ORACLE_ENGINE";
+
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Gnu => "gnu",
+            Self::Neomacs => "neomacs",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Oracle (GNU Emacs) subprocess evaluation
 // ---------------------------------------------------------------------------
@@ -745,6 +804,7 @@ fn run_oracle_eval_with_sandbox(
     let mem_limit = oracle_mem_limit_bytes();
     let mut cmd = Command::new(&oracle_bin);
     sandbox.configure(&mut cmd);
+    cmd.env(OracleEngine::ENV, OracleEngine::Gnu.as_env_value());
     cmd.env("EMACSNATIVELOADPATH", "/dev/null");
     eval_program.configure_command(&mut cmd);
 
@@ -854,6 +914,7 @@ fn run_neomacs_binary_eval_with_sandbox(
 
     let mut cmd = Command::new(&neomacs_bin);
     sandbox.configure(&mut cmd);
+    cmd.env(OracleEngine::ENV, OracleEngine::Neomacs.as_env_value());
     eval_program.configure_command(&mut cmd);
 
     if let Some(mem_limit) = neomacs_binary_mem_limit_bytes() {
