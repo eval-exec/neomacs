@@ -3,7 +3,6 @@ use winit::event_loop::EventLoop;
 use winit::platform::wayland::EventLoopBuilderExtWayland;
 
 #[test]
-#[ignore = "requires a private Wayland compositor with xdg-toplevel-icon-v1"]
 fn private_wayland_compositor_accepts_native_toplevel_icon() {
     let mut builder = EventLoop::builder();
     EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);

@@ -10,6 +10,6 @@ mod session;
 pub(crate) use controller::{MenuPresentation, MenuRequest};
 pub(crate) use session::MenuSession;
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, target_os = "linux", feature = "wayland-live-tests"))]
 #[path = "tests/native_test.rs"]
 mod native_test;

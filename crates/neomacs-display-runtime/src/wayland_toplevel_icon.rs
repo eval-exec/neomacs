@@ -255,6 +255,6 @@ impl Drop for WaylandToplevelIconService {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux", feature = "wayland-live-tests"))]
 #[path = "wayland_toplevel_icon/tests/wayland_toplevel_icon_test.rs"]
 mod tests;

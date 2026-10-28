@@ -14,25 +14,21 @@ use winit::{
 };
 
 #[test]
-#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
 fn linux_wayland_native_menu_smoke() {
     run_smoke(false);
 }
 
 #[test]
-#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
 fn linux_wayland_native_menu_tooltip_smoke() {
     run_smoke(true);
 }
 
 #[test]
-#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
 fn linux_wayland_native_menu_replacement_stress() {
     run_replacement_stress(CommitPolicy::BackendStress);
 }
 
 #[test]
-#[ignore = "requires a live Linux Wayland compositor and GPU; creates temporary windows"]
 fn linux_wayland_deferred_menu_replacement_stress() {
     run_replacement_stress(CommitPolicy::PostEvent);
 }

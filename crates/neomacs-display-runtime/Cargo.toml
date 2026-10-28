@@ -73,6 +73,13 @@ portable-pty = { workspace = true, optional = true }
 neomacs-infra.workspace = true
 
 [features]
+# Live Wayland compositor tests.  These create real windows and need a running
+# compositor advertising the protocols they exercise; the real-GUI CI job
+# enables this feature under a headless compositor (Weston 16 for the menu
+# tests, a compositor with xdg-toplevel-icon-v1 for the icon test).  Off by
+# default so ordinary unit builds and nextest archives stay hermetic.
+wayland-live-tests = []
+
 # Native video remains opt-in at this crate boundary. Linux production builds
 # enable it through neomacs's `cargo xtask fresh-build` pipeline.
 default = ["neo-term"]
