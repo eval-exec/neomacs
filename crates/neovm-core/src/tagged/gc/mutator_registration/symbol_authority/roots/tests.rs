@@ -15,6 +15,7 @@ enum RootFamily {
     Nonmember,
     Localized,
     OwnedForward,
+    ParkedKeyboard,
 }
 #[derive(Clone, Copy, Debug)]
 struct ExpectedRoot {
@@ -119,6 +120,17 @@ fn root_families(backing: PlainSymbolBacking) {
             ));
             assert_eq!(blv.defcell.load_atomic(), blv.valcell.load_atomic());
             assert_eq!(blv.where_buf.load_atomic(), TaggedValue::NIL);
+            // Only the parked keyboard owns this managed word. The active
+            // slot is NIL, and the expected ledger below retains bits only.
+            let keyboard_id = intern("c6-root-parked-keyboard");
+            let keyboard = crate::emacs_core::forward::alloc_kboard_objfwd(TaggedValue::NIL);
+            keyboard.use_selected_keyboard();
+            let parked = TaggedValue::string("C6 parked keyboard only");
+            keyboard.select_keyboard(1, parked);
+            keyboard.select_keyboard(2, TaggedValue::NIL);
+            assert_eq!(keyboard.get(), TaggedValue::NIL);
+            obarray.install_kboard_objfwd(keyboard_id, keyboard);
+            roots.push(ExpectedRoot::new(RootFamily::ParkedKeyboard, parked));
             // Prove that the existing serial flag really suppresses cells while
             // preserving residual pools. The parallel half must ignore this flag.
             use crate::gc_trace::GcTrace;
@@ -139,7 +151,9 @@ fn root_families(backing: PlainSymbolBacking) {
                 let value = TaggedValue::from_bits(root.identity.0);
                 assert!(serial_full.contains(&value));
                 match root.family {
-                    RootFamily::Localized | RootFamily::OwnedForward => {
+                    RootFamily::Localized
+                    | RootFamily::OwnedForward
+                    | RootFamily::ParkedKeyboard => {
                         assert!(serial_residual.contains(&value))
                     }
                     RootFamily::Plain
@@ -184,7 +198,8 @@ fn root_families(backing: PlainSymbolBacking) {
                             | RootFamily::Plist
                             | RootFamily::Nonmember
                             | RootFamily::Localized
-                            | RootFamily::OwnedForward => &cells,
+                            | RootFamily::OwnedForward
+                            | RootFamily::ParkedKeyboard => &cells,
                         };
                         RootObservation {
                             family: root.family,
