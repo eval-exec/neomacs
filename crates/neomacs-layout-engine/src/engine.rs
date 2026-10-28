@@ -913,6 +913,18 @@ struct IncrementalWindowPlan {
     cursor_only: Option<CursorOnlyReplay>,
     scroll: Option<ScrollReplay>,
     is_edit: bool,
+    /// Sorted union of edit replay and continuation-row faces admitted in
+    /// Phase A, captured for a bounded retry that may reclassify the edit into
+    /// a scroll. Retry subset checks rely on this ordering for binary search.
+    retry_admitted_faces: Option<Vec<FaceId>>,
+    /// Every enabled retained row for plans without a replay or with an edit
+    /// replay. Either can discover a new viewport while measuring and continue
+    /// as a scroll. Phase A must admit these faces before the leaf allocates
+    /// fresh IDs; the continuation cannot admit retained IDs afterward.
+    scroll_continuation_faces: Option<(
+        FrameFaceGeneration,
+        Vec<neomacs_display_protocol::glyph_matrix::MatrixRow>,
+    )>,
 }
 
 /// Lisp-derived GUI chrome semantics prepared before any window rows.
@@ -1183,6 +1195,11 @@ impl IncrementalWindowPlan {
             .as_ref()
             .map(|replay| replay.face_generation)
             .or_else(|| self.scroll.as_ref().map(|replay| replay.face_generation))
+            .or_else(|| {
+                self.scroll_continuation_faces
+                    .as_ref()
+                    .map(|(generation, _)| *generation)
+            })
     }
 
     #[inline]
@@ -1191,6 +1208,8 @@ impl IncrementalWindowPlan {
             replay.extend_retained_face_ids(ids);
         } else if let Some(replay) = &self.scroll {
             replay.extend_retained_face_ids(ids);
+        } else if let Some((_, rows)) = &self.scroll_continuation_faces {
+            crate::incremental_layout::extend_rows_face_ids(rows, ids);
         }
     }
 
@@ -1199,6 +1218,11 @@ impl IncrementalWindowPlan {
             .as_ref()
             .map(CursorOnlyReplay::retained_face_ids)
             .or_else(|| self.scroll.as_ref().map(ScrollReplay::retained_face_ids))
+            .or_else(|| {
+                self.scroll_continuation_faces
+                    .as_ref()
+                    .map(|(_, rows)| crate::incremental_layout::candidate_face_ids(rows))
+            })
             .unwrap_or_default()
     }
 
@@ -1207,6 +1231,8 @@ impl IncrementalWindowPlan {
         self.cursor_only = None;
         self.scroll = None;
         self.is_edit = false;
+        self.retry_admitted_faces = None;
+        self.scroll_continuation_faces = None;
     }
 }
 
@@ -1261,14 +1287,14 @@ fn visible_char_bound(params: &WindowParams) -> (usize, usize) {
 }
 
 fn admit_retained_frame_faces(
-    plans: &[IncrementalWindowPlan],
+    plans: &mut [IncrementalWindowPlan],
     face_attempt: &mut FrameFaceAttempt,
     committed_arena: &FrameFaceArena,
 ) -> Result<(), FrameFaceReuseError> {
     let current_generation = committed_arena.generation();
     let gather_directly = retained_face_gather::enabled();
     let mut face_ids = std::collections::BTreeSet::new();
-    for plan in plans {
+    for plan in plans.iter_mut() {
         if let Some(source) = &plan.prepared_faces {
             face_attempt.admit_prepared(
                 plan.retained_face_ids()
@@ -1288,7 +1314,17 @@ fn admit_retained_frame_faces(
                 current: current_generation,
             });
         }
-        if gather_directly {
+        if plan.is_edit && plan.prepared_faces.is_none() {
+            // Keep the sorted union of edit replay and continuation faces:
+            // a retry may only reuse identities admitted in Phase A.
+            let mut admitted = std::collections::BTreeSet::new();
+            plan.extend_retained_face_ids(&mut admitted);
+            if let Some((_, rows)) = &plan.scroll_continuation_faces {
+                crate::incremental_layout::extend_rows_face_ids(rows, &mut admitted);
+            }
+            face_ids.extend(admitted.iter().copied());
+            plan.retry_admitted_faces = Some(admitted.into_iter().collect());
+        } else if gather_directly {
             plan.extend_retained_face_ids(&mut face_ids);
         } else {
             face_ids.extend(
@@ -2348,6 +2384,8 @@ impl LayoutEngine {
                             cursor_only: None,
                             scroll: None,
                             is_edit: false,
+                            retry_admitted_faces: None,
+                            scroll_continuation_faces: None,
                         };
                     }
                     // The mini-window is probe-excluded from retention: its
@@ -2375,6 +2413,8 @@ impl LayoutEngine {
                             cursor_only,
                             scroll: None,
                             is_edit: false,
+                            retry_admitted_faces: None,
+                            scroll_continuation_faces: None,
                         };
                     }
                     let mut cursor_only =
@@ -2513,11 +2553,24 @@ impl LayoutEngine {
                             scroll = None;
                         }
                     }
+                    // A cursor-only decline or edit can discover a new viewport
+                    // while measuring. Admit all retained row faces in Phase A
+                    // so a later scroll continuation can reuse any of those rows.
+                    let scroll_continuation_faces = (cursor_only.is_none()
+                        && (scroll.is_none() || is_edit))
+                        .then(|| {
+                            self.retained_window_matrices
+                                .get(&DisplayWindowId::new(params.window_id))
+                        })
+                        .flatten()
+                        .map(|previous| (previous.face_generation, previous.candidate_rows()));
                     IncrementalWindowPlan {
                         prepared_faces,
                         cursor_only,
                         scroll,
                         is_edit,
+                        retry_admitted_faces: None,
+                        scroll_continuation_faces,
                     }
                 })
                 .collect();
@@ -2525,9 +2578,11 @@ impl LayoutEngine {
             // Admit all prior-frame face identities as one atomic batch before
             // the tab bar or any window can mint fresh IDs. A stale retained
             // generation invalidates every fast path for this attempt.
-            if let Err(error) =
-                admit_retained_frame_faces(&window_plans, &mut face_attempt, &committed_face_arena)
-            {
+            if let Err(error) = admit_retained_frame_faces(
+                &mut window_plans,
+                &mut face_attempt,
+                &committed_face_arena,
+            ) {
                 tracing::warn!(
                     ?error,
                     "discarding incremental frame plans with stale retained faces"
@@ -2702,6 +2757,23 @@ impl LayoutEngine {
                     self.prepared_window_ids
                         .insert(DisplayWindowId::new(params.window_id));
                 }
+                // A point move or face-overlay edit can discover a new viewport
+                // while measuring. A later scroll continuation may only reuse
+                // faces already admitted by Phase A; fresh face IDs have been
+                // allocated by now, so never admit more retained IDs here.
+                let retry_retained_faces = plan
+                    .retry_admitted_faces
+                    .take()
+                    .map(|faces| {
+                        debug_assert!(faces.is_sorted());
+                        (plan.retained_face_generation(), faces)
+                    });
+                // Phase A already admitted these rows' faces. Only the generation
+                // is needed to validate a continuation; release the rows now.
+                let retry_continuation_generation = plan
+                    .scroll_continuation_faces
+                    .take()
+                    .map(|(generation, _)| generation);
                 let mut cursor_only_replay = plan.cursor_only.take();
                 let mut scroll_replay = plan.scroll.take();
                 let mut is_edit = plan.is_edit;
@@ -2767,9 +2839,40 @@ impl LayoutEngine {
                             // new window start (or point) and asks for one more
                             // bounded attempt.  Do not re-collect live inputs —
                             // the retry carries the exact params the recursive
-                            // call site used to build.  Replays were already
-                            // consumed; position publication keeps the value
-                            // the attempt derived it from.
+                            // call site used to build. Reclassify a committed
+                            // scroll against those inputs only when its faces
+                            // are a subset of the original admitted plan.
+                            // Same-start failures still retry without reuse.
+                            if matches!(
+                                retry.viewport_resolution,
+                                ViewportResolutionPhase::Commit(_)
+                            ) && retry.params.window_start != live_inputs.window.window_start
+                                && let Some(replay) =
+                                    self.build_scroll_replay(&retry.params, layout_box, evaluator)
+                            {
+                                // Edit retries must stay within their Phase A
+                                // admission union. Other continuations reuse the
+                                // matrix whose enabled rows were all admitted,
+                                // so matching its generation is sufficient.
+                                let faces_admitted =
+                                    match (&retry_retained_faces, &retry_continuation_generation) {
+                                        (Some((generation, faces)), _) => {
+                                            *generation == Some(replay.face_generation)
+                                                && replay
+                                                    .retained_face_ids()
+                                                    .iter()
+                                                    .filter(|id| **id != FaceId::new(0))
+                                                    .all(|id| faces.binary_search(id).is_ok())
+                                        }
+                                        (None, Some(generation)) => {
+                                            *generation == replay.face_generation
+                                        }
+                                        (None, None) => false,
+                                    };
+                                if faces_admitted {
+                                    scroll_replay = Some(replay);
+                                }
+                            }
                             live_inputs.window = retry.params;
                             visibility_retry_budget = retry.remaining_visibility_retries;
                             viewport_retry_phase = retry.viewport_resolution;
@@ -4613,7 +4716,26 @@ impl LayoutEngine {
         // `chrome` at `None` is that decision. (GNU agrees from the other side —
         // its scroll commands all call `wset_update_mode_line`, window.c:6279,
         // 6418, 6603, 6864.)
-        let mut replay = prev.scroll_replay(&curr_key)?;
+        let mut replay = prev.scroll_replay(&curr_key).or_else(|| {
+            use crate::incremental_layout::edit_sync::{self, EditSyncMode};
+            if !self.allow_below_reuse
+                || edit_sync::edit_sync_mode() != EditSyncMode::Sync
+                || !edit_sync::sync_layout_conditions(&curr_key, params.scroll_margin)
+            {
+                return None;
+            }
+            let buffer = evaluator
+                .buffer_manager()
+                .get(neovm_core::buffer::BufferId(params.buffer_id))?;
+            if !crate::incremental_layout::face_overlay_aliases_supported(
+                buffer
+                    .buffer_local_value("char-property-alias-alist")
+                    .or_else(|| evaluator.variable_value_by_name("char-property-alias-alist")),
+            ) {
+                return None;
+            }
+            prev.face_overlay_scroll_replay(&curr_key)
+        })?;
         // P3.5 E2: the scrolled chrome is evaluated; it may still render the
         // string it showed (the `%p` of a long buffer rarely moves).
         if crate::incremental_layout::chrome_memo::chrome_memo_mode().enabled() {

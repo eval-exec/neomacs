@@ -4085,6 +4085,112 @@ fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
 }
 
 #[test]
+fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves() {
+    use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+
+    for (setup, mutation) in [
+        (
+            "(setq geometry-overlay (make-overlay 1 2))",
+            "(overlay-put geometry-overlay 'face '(:height 2.0))",
+        ),
+        (
+            "(progn (setq geometry-overlay (make-overlay 3 4)) (overlay-put geometry-overlay 'face '(:height 2.0)))",
+            "(move-overlay geometry-overlay 1 2)",
+        ),
+    ] {
+        let mut eval = interactive_context();
+        let buffer = eval.buffers.current_buffer().unwrap().id;
+        eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+        let frame = eval.frames.create_frame("overlay-row-query", 160, 96, buffer);
+        let window = eval.frames.get(frame).unwrap().selected_window;
+        eval.frames.get_mut(frame).unwrap().initial = false;
+        eval.eval_str(setup).unwrap();
+        let buffer_modiff = eval.buffers.get(buffer).unwrap().modified_tick();
+        let overlay_modiff = eval.buffers.get(buffer).unwrap().overlay_modified_tick();
+        let freshness = eval
+            .window_display_snapshot_freshness(frame, window, buffer)
+            .unwrap();
+        let snapshot = |y| crate::window::WindowDisplaySnapshot {
+            window_id: window,
+            points: vec![crate::window::DisplayPointSnapshot {
+                role: crate::window::DisplayPointRole::Glyph,
+                buffer_pos: LispCharPos1::new(3),
+                x: 0,
+                y,
+                width: 8,
+                height: 16,
+                row: 1,
+                col: 0,
+            }],
+            rows: vec![crate::window::DisplayRowSnapshot {
+                row: 1,
+                y,
+                height: 16,
+                start_buffer_pos: Some(LispCharPos1::new(3)),
+                end_buffer_pos: Some(LispCharPos1::new(4)),
+                ..Default::default()
+            }],
+            buffer_modiff: Some(buffer_modiff),
+            ..Default::default()
+        };
+        let mut warm = snapshot(16);
+        warm.layout_freshness = Some(freshness);
+        eval.frames
+            .get_mut(frame)
+            .unwrap()
+            .commit_redisplay_cache_for_test(vec![warm]);
+        let refreshed = snapshot(32);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = calls.clone();
+        eval.install_window_layout_query(move |_, fid, wid, scope| {
+            assert_eq!((fid, wid), (frame, window));
+            assert_eq!(
+                scope,
+                WindowLayoutQueryScope::Position {
+                    target: LispCharPos1::new(3),
+                }
+            );
+            observed.set(observed.get() + 1);
+            WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(
+                LispCharPos1::ONE,
+                Some(refreshed.clone()),
+            ))
+        });
+        let query = |eval: &mut Context| {
+            builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)])
+                .unwrap()
+                .cons_cdr()
+                .cons_cdr()
+                .cons_car()
+        };
+        assert_eq!(
+            query(&mut eval),
+            Value::cons(Value::fixnum(0), Value::fixnum(16))
+        );
+        assert_eq!(calls.get(), 0, "unchanged warm rows must answer directly");
+        eval.eval_str("(goto-char 1)").unwrap();
+        assert_eq!(
+            query(&mut eval),
+            Value::cons(Value::fixnum(0), Value::fixnum(16))
+        );
+        assert_eq!(calls.get(), 0, "point-only changes must retain warm rows");
+
+        // Face-only overlay changes preserve text but can double the preceding
+        // row's height; retained render-plan reuse cannot validate query rows.
+        eval.eval_str(mutation).unwrap();
+        let live = eval.buffers.get(buffer).unwrap();
+        assert_eq!(live.modified_tick(), buffer_modiff);
+        assert_ne!(live.overlay_modified_tick(), overlay_modiff);
+        assert_eq!(
+            query(&mut eval),
+            Value::cons(Value::fixnum(0), Value::fixnum(32)),
+            "{mutation}"
+        );
+        assert_eq!(calls.get(), 1, "stale rows must query layout: {mutation}");
+    }
+}
+
+#[test]
 fn pos_visible_in_new_live_window_falls_back_when_active_presentation_predates_it() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();

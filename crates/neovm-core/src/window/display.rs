@@ -1002,6 +1002,10 @@ impl crate::emacs_core::eval::Context {
             media_generation: self.media_generation(),
             function_epoch: self.obarray().function_epoch(),
             symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision::current(),
+            overlays_face_only: self
+                .buffers
+                .get(buffer_id)
+                .is_some_and(|buffer| buffer.overlays_are_face_only()),
         })
     }
 

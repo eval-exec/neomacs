@@ -950,6 +950,22 @@ fn referenced_face_ids<'a>(rows: impl IntoIterator<Item = &'a GlyphRow>) -> Vec<
         .collect()
 }
 
+/// Faces referenced by a retained candidate's rows. Only the retry path uses
+/// this: admitting them at plan time would materialize the set even when the
+/// streaming gather mode is active.
+pub(crate) fn candidate_face_ids(rows: &[MatrixRow]) -> Vec<FaceId> {
+    referenced_face_ids(rows.iter().map(|row| row.as_ref()))
+}
+
+/// Stream a retained candidate's row dependencies into the frame set without
+/// materializing an intermediate vector (the gather path used by Phase A).
+pub(crate) fn extend_rows_face_ids(
+    rows: &[MatrixRow],
+    ids: &mut std::collections::BTreeSet<FaceId>,
+) {
+    extend_referenced_face_ids(rows.iter().map(|row| row.as_ref()), ids);
+}
+
 /// Add every row dependency to the exclusively owned numeric frame set.
 /// Immutable retained rows and face IDs contain no Lisp state; the set
 /// belongs to one synchronous attempt and is not shared or cached.
@@ -1049,6 +1065,21 @@ impl ScrollReplay {
 }
 
 impl RetainedWindowMatrix {
+    /// Every enabled row of this matrix. A point move that may scroll has no
+    /// replay to plan yet, but the leaf can discover the new start and continue
+    /// as an ordinary scroll; that continuation reuses body rows and the
+    /// retained/memoized chrome, so Phase A must admit all of their faces
+    /// BEFORE the leaf starts. Retained face IDs cannot be admitted once the
+    /// leaf has allocated fresh ones.
+    pub(crate) fn candidate_rows(&self) -> Vec<MatrixRow> {
+        self.matrix
+            .rows
+            .iter()
+            .filter(|row| row.enabled)
+            .cloned()
+            .collect()
+    }
+
     /// True for chrome rows (mode/header/tab line, tab bar) — re-walked every
     /// frame, never reused. NOTE the discriminator is the row ROLE, not the
     /// `GlyphRow::mode_line` flag (which is set only for `ModeLine`, so header /
@@ -1491,7 +1522,31 @@ impl RetainedWindowMatrix {
     /// top. The engine limits that optimization to small moves. Vscroll, line
     /// numbers, and unsafe continuation/truncation rows bail conservatively.
     pub fn scroll_replay(&self, curr: &RetainedWindowKey) -> Option<ScrollReplay> {
-        self.scroll_replay_for_placement(curr, None)
+        self.scroll_replay_for_placement(curr, None, None)
+    }
+
+    /// Reuse only rows outside both generations of face-overlay coverage.
+    /// Forward scrolling keeps a clean prefix; backward scrolling walks to a
+    /// clean suffix. Faces can change row heights and box-run boundaries, not
+    /// just colors, so every affected row must be measured again.
+    pub(crate) fn face_overlay_scroll_replay(
+        &self,
+        curr: &RetainedWindowKey,
+    ) -> Option<ScrollReplay> {
+        let delta = WindowDelta::between(&self.key, curr);
+        if !delta.overlays_changed
+            || !delta.window_start_moved
+            || delta.text_changed
+            || delta.properties_changed
+            || delta.other_changed
+        {
+            return None;
+        }
+        let damage = self
+            .key
+            .face_overlay_coverage
+            .damage(curr.face_overlay_coverage)?;
+        self.scroll_replay_for_placement(curr, None, Some(damage))
     }
 
     /// A shifted prefix for joining with prepared coverage. It is not a
@@ -1501,13 +1556,14 @@ impl RetainedWindowMatrix {
         curr: &RetainedWindowKey,
         text_y: f32,
     ) -> Option<ScrollReplay> {
-        self.scroll_replay_for_placement(curr, Some(text_y))
+        self.scroll_replay_for_placement(curr, Some(text_y), None)
     }
 
     fn scroll_replay_for_placement(
         &self,
         curr: &RetainedWindowKey,
         projected_y: Option<f32>,
+        face_damage: Option<(i64, i64)>,
     ) -> Option<ScrollReplay> {
         if self.validity != MatrixValidity::Valid {
             return None;
@@ -1515,7 +1571,11 @@ impl RetainedWindowMatrix {
         let eligible = if projected_y.is_some() {
             RetainedWindowKey::row_content_eligible(&self.key, curr)
         } else {
-            RetainedWindowKey::scroll_eligible(&self.key, curr) && curr.vscroll == 0
+            // A damage bound is supplied only by the checked face-overlay
+            // entry point above; ordinary and prepared scrolling keep their
+            // existing eligibility rules.
+            (face_damage.is_some() || RetainedWindowKey::scroll_eligible(&self.key, curr))
+                && curr.vscroll == 0
         };
         if !eligible {
             return None;
@@ -1564,7 +1624,15 @@ impl RetainedWindowMatrix {
         // P3.5 G3: the start moved BACK. Walk the newly exposed rows from the
         // new start and synchronize with the old first row below them.
         if curr.window_start < body[0].1.start_charpos as i64 && edit_sync::scroll_back_enabled() {
-            let plan = edit_sync::backward_scroll_plan(self, &body)?;
+            let clean_start = if let Some((_, end)) = face_damage {
+                // A suffix row and its preceding source character must both
+                // be outside the old and new overlay spans (box boundaries).
+                body.iter()
+                    .position(|(_, row)| row.start_charpos as i64 > end)?
+            } else {
+                0
+            };
+            let plan = edit_sync::backward_scroll_plan(self, &body[clean_start..])?;
             let (first_index, first_row) = body[0];
             return Some(ScrollReplay {
                 // The real shift is what the walk produces; the install
@@ -1600,7 +1668,27 @@ impl RetainedWindowMatrix {
         if s == 0 && projected_y.is_none() {
             return None;
         }
-        let last = body.len() - 1;
+        let reuse_end = if let Some((start, _)) = face_damage {
+            // The next row's source start bounds even a row ending in a
+            // display replacement. Include the predecessor for box-run end
+            // ownership, which depends on the following character's face.
+            let start = start.saturating_sub(1);
+            (s..body.len())
+                .find(|&index| {
+                    let row_end = body[index].1.end_charpos as i64;
+                    let extent = body.get(index + 1).map_or(row_end, |(_, next)| {
+                        row_end.max(next.start_charpos as i64 - 1)
+                    });
+                    extent >= start
+                })
+                .unwrap_or(body.len())
+        } else {
+            body.len()
+        };
+        if reuse_end <= s {
+            return None;
+        }
+        let last = reuse_end - 1;
         let dvpos = projected_y.unwrap_or(body[0].1.pixel_y) - body[s].1.pixel_y;
         let dvpos_i64 = dvpos.round() as i64;
         // old matrix row index → new matrix row index for each reused row.
@@ -1662,9 +1750,14 @@ impl RetainedWindowMatrix {
             reused_row_snapshots,
             reused_points,
             reused_point_rows,
-            walk_start: PartialBodyWalkStart::new(last_row.end_charpos as i64 + 1),
+            walk_start: PartialBodyWalkStart::new(
+                body.get(reuse_end)
+                    .map_or(last_row.end_charpos as i64 + 1, |(_, row)| {
+                        row.start_charpos as i64
+                    }),
+            ),
             exposed_row_base: body.get(last - s + 1).map_or(body[last].0 + 1, |row| row.0),
-            exposed_row_count: s,
+            exposed_row_count: body.len() - (reuse_end - s),
             exposed_text_y: last_row.pixel_y + dvpos + last_row.height_px,
             new_window_start: curr.window_start,
             new_point: curr.point,

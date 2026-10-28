@@ -1363,11 +1363,73 @@ impl BufferSourceOutputSetup {
                         .is_some_and(|row| row.pixel_y + row.height_px <= visible_bottom + 0.5),
                 };
                 if !point_row_on_screen {
+                    // An above-only edit walk has already measured point and
+                    // the viewport tail. Together with its unchanged prefix it
+                    // supplies the same rows a full walk would use to choose
+                    // the next start. Synchronized tails, EOB insertion and
+                    // forced starts keep the full fallback.
+                    let outcome = if point_in_walk
+                        && !below_reused
+                        && !params.force_start
+                        && scroll.new_point < source.accessible_end()
+                        && scroll.new_window_start == params.window_start
+                    {
+                        let mut rows = scroll.reused_row_snapshots.clone();
+                        rows.extend_from_slice(output_emitter.rows());
+                        rows.sort_by_key(|row| row.row);
+                        let text_top = (layout_box.body().y - params.bounds.y).round() as i64;
+                        let text_bottom = visible_bottom.round() as i64;
+                        let retry =
+                            crate::display_text_window_row_lifecycle::TextWindowVisibilityRetryRequest::new(
+                                &rows,
+                                scroll.new_window_start,
+                                source.accessible_start(),
+                                source.accessible_end(),
+                                scroll.new_point,
+                                walk_setup.charpos,
+                                false,
+                                text_top,
+                                text_bottom,
+                                crate::scroll_policy::ScrollPolicy::from_window_params(params),
+                                params.scroll_margin,
+                                None,
+                                buf_access,
+                            )
+                            .decide();
+                        let retry_plan = BufferSourceRetryPlan::from_post_loop(
+                            params.window_id,
+                            scroll.new_window_start,
+                            scroll.new_point,
+                            walk_setup.charpos,
+                            BufferSourceRetryBounds::new(text_top, text_bottom),
+                            crate::buffer_source::tail_render::BufferSourcePostLoopRenderOutcome {
+                                retry,
+                                rendered_rows_len: rows.len(),
+                                ..post_loop
+                            },
+                        );
+                        retry_plan
+                            .viewport_resolution(remaining_visibility_retries)
+                            .map(
+                                |decision| BufferSourceRenderAttemptOutcome::ResolveViewport {
+                                    decision,
+                                },
+                            )
+                            .or_else(|| {
+                                retry_plan.should_retry(remaining_visibility_retries).map(
+                                    |window_start| BufferSourceRenderAttemptOutcome::Retry {
+                                        window_start,
+                                    },
+                                )
+                            })
+                    } else {
+                        None
+                    };
                     crate::window_output::restore_text_window_retry_checkpoint(
                         output.reborrow(),
                         retry_checkpoint,
                     );
-                    return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                    return outcome.unwrap_or(BufferSourceRenderAttemptOutcome::ReplayMispredicted);
                 }
             }
             output_emitter.push_reused_body(

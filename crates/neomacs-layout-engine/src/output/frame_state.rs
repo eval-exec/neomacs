@@ -247,6 +247,9 @@ impl OutputFrameBuildState {
             OutputWindowMetadataInstallRequest::RestoreRetryCheckpoint(checkpoint) => {
                 self.transition_hints
                     .truncate(checkpoint.transition_hints_len);
+                // Backgrounds are emitted before the body walk. A visibility
+                // retry must discard that attempt's fills, just like its rows.
+                self.face_fills.truncate(checkpoint.face_fills_len);
             }
         }
     }
@@ -336,6 +339,10 @@ impl OutputFrameBuildState {
     #[cfg(test)]
     pub(crate) fn cursors(&self) -> &[CursorItem] {
         &self.cursors
+    }
+
+    pub(crate) fn face_fills_len(&self) -> usize {
+        self.face_fills.len()
     }
 
     pub(crate) fn transition_hints(&self) -> &[ContentTransitionHint] {
