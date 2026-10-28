@@ -134,18 +134,23 @@ impl TreesitPatternKeyword {
     }
 }
 
-fn default_dynamic_library_suffixes() -> &'static [&'static str] {
-    #[cfg(target_os = "windows")]
-    {
-        &[".dll"]
-    }
-    #[cfg(target_os = "macos")]
-    {
-        &[".dylib"]
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        &[".so"]
+/// The suffixes `treesit_load_language_push_for_each_suffix` tries.
+///
+/// GNU reads the Lisp variable `dynamic-library-suffixes` at call time
+/// (src/treesit.c:701-715: `suffixes = Vdynamic_library_suffixes`), and that
+/// variable's startup value is `MODULES_SUFFIX` followed by
+/// `MODULES_SECONDARY_SUFFIX` (src/lread.c:5640-5645) -- on darwin
+/// `(".dylib" ".so")`, on GNU/Linux `(".so" "")`.  Hardcoding one suffix
+/// dropped the darwin secondary `.so` grammars and the no-suffix probe.
+fn dynamic_library_suffixes_for_eval(eval: &super::eval::Context) -> Vec<String> {
+    match super::misc_eval::dynamic_or_global_symbol_value(eval, "dynamic-library-suffixes") {
+        Some(value) => list_value_to_strings(Some(value)),
+        // The variable is seeded by the evaluator's startup constructor; an
+        // unbound value (a bare Context) still means the configured default.
+        None => crate::emacs_core::lread::dynamic_library_suffixes_for_os(std::env::consts::OS)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
     }
 }
 
@@ -188,22 +193,18 @@ impl LibraryProbe {
 }
 
 fn posix_versioned_candidates(base: &str, suffix: &str) -> Vec<String> {
+    // GNU wraps the whole versioned fan-out in `#ifndef WINDOWSNT`
+    // (src/treesit.c:710-733): every Posix build, macOS included, probes the
+    // `.0`, `.0.0` and `<abi>.0` names.
     #[cfg(unix)]
     {
-        #[cfg(target_os = "macos")]
-        {
-            vec![format!("{base}{suffix}")]
+        let mut out = vec![format!("{base}{suffix}")];
+        out.push(format!("{base}{suffix}.0"));
+        out.push(format!("{base}{suffix}.0.0"));
+        for version in MIN_COMPATIBLE_LANGUAGE_VERSION..=LANGUAGE_VERSION {
+            out.push(format!("{base}{suffix}.{version}.0"));
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let mut out = vec![format!("{base}{suffix}")];
-            out.push(format!("{base}{suffix}.0"));
-            out.push(format!("{base}{suffix}.0.0"));
-            for version in MIN_COMPATIBLE_LANGUAGE_VERSION..=LANGUAGE_VERSION {
-                out.push(format!("{base}{suffix}.{version}.0"));
-            }
-            out
-        }
+        out
     }
     #[cfg(not(unix))]
     {
@@ -446,13 +447,14 @@ pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: Sym
         .unwrap_or((default_lib_base, default_c_symbol));
 
     let mut candidates = Vec::new();
+    let suffixes = dynamic_library_suffixes_for_eval(eval);
 
     // GNU 31.1 searches explicit paths, then the user directory, then the system loader.
     for dir in list_value_to_strings(super::misc_eval::dynamic_or_global_symbol_value(
         eval,
         "treesit-extra-load-path",
     )) {
-        for suffix in default_dynamic_library_suffixes() {
+        for suffix in &suffixes {
             candidates.extend(
                 LibraryProbe::under_directory(&dir, &lib_base_name)
                     .versioned_variants(suffix)
@@ -463,7 +465,7 @@ pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: Sym
 
     if let Some(user_emacs_dir) = treesit_user_emacs_dir(eval) {
         let joined = format!("tree-sitter/{lib_base_name}");
-        for suffix in default_dynamic_library_suffixes() {
+        for suffix in &suffixes {
             candidates.extend(
                 LibraryProbe::under_directory(&user_emacs_dir, &joined)
                     .versioned_variants(suffix)
@@ -472,7 +474,7 @@ pub(crate) fn treesit_candidate_paths(eval: &super::eval::Context, language: Sym
         }
     }
 
-    for suffix in default_dynamic_library_suffixes() {
+    for suffix in &suffixes {
         candidates.extend(
             LibraryProbe::system_loader_name(&lib_base_name)
                 .versioned_variants(suffix)
