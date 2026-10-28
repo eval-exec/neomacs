@@ -480,7 +480,10 @@ impl TuiSession {
             // paired comparison at the mode line.  C.UTF-8 is built into
             // glibc everywhere the suite runs, and both editors agree
             // under it, so pin it for both sessions and drop the ambient
-            // spellings.
+            // spellings.  The pin is also what keeps a nil
+            // `text-quoting-style' equal on both sides: each binary resolves
+            // it from this locale (src/emacs.c:1653-1656, src/doc.c:638-650),
+            // and the recorded grids quote ‘like this’.
             .env("LC_ALL", "C.UTF-8")
             .env_remove("LANG")
             .env_remove("LANGUAGE")
