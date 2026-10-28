@@ -25635,7 +25635,8 @@ fn layout_frame_rust_aligns_dired_filenames_after_nerd_icon_tabs() {
             );
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
                 serial: neovm_core::heap_types::OverlaySerialSource::Preserved(
-                    neovm_core::heap_types::OverlaySerial::from_u64(serial as u64)
+                    // Overlay serials are NonZeroU64 (creation order starts at 1).
+                    neovm_core::heap_types::OverlaySerial::from_u64(serial as u64 + 1)
                         .expect("non-zero test serial"),
                 ),
                 plist: Value::NIL,
