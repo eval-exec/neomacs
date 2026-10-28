@@ -156,17 +156,19 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
     };
 
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let form = format!(
             "(progn (condition-case e (module-load {:?}) (error (prin1 (car e)))) (princ \":\") (princ ({function})))",
             library.to_str().unwrap(),
         );
-        let mut oracle = Command::new(&sandbox);
-        oracle
-            .arg(emacs)
-            .args(["-Q", "--batch", "--eval"])
-            .arg(form);
-        expected = String::from_utf8(checked_output(oracle).stdout).unwrap();
+        let mut oracle = crate::test_utils::gnu_refresh_command();
+        oracle.args(["-Q", "--batch", "--eval"]).arg(form);
+        let output = oracle.output().expect("start sandboxed GNU oracle");
+        assert!(
+            output.status.success(),
+            "GNU module lifetime oracle failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        expected = String::from_utf8(output.stdout).unwrap();
         let fixture = neomacs_infra::crate_root!()
             .join("src/emacs_core/system/dynamic_module/tests/library_lifetime")
             .join(format!("{case}.expect"));

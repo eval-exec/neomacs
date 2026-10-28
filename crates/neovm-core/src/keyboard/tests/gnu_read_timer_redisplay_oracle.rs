@@ -121,14 +121,7 @@ const READ_TIMER_GENERATIONS_FORM: &str = r#"(progn
 
 fn assert_gnu_oracle(form: &str, fixture_name: &str, fixture: &str) {
     crate::test_utils::init_test_tracing();
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
-    let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {
-        let mut command = std::process::Command::new(sandbox);
-        command.arg(&emacs);
-        command
-    } else {
-        std::process::Command::new(emacs)
-    };
+    let mut command = crate::test_utils::gnu_probe_command();
     let output = command
         .args([
             "-Q",

@@ -72,16 +72,9 @@ fn expectation() -> String {
         format!(";;; -*- lexical-binding: nil; -*-\n(prin1 {})\n", program()),
     )
     .expect("GNU probe file");
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
     // The campaign encloses the whole nextest driver in its PID sandbox;
     // callers outside that driver may supply an explicit child wrapper.
-    let mut command = if let Some(wrapper) = std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-        let mut command = std::process::Command::new(wrapper);
-        command.arg(&emacs);
-        command
-    } else {
-        std::process::Command::new(&emacs)
-    };
+    let mut command = crate::test_utils::gnu_probe_command();
     let output = command
         .args(["-Q", "--batch", "-l"])
         .arg(script)

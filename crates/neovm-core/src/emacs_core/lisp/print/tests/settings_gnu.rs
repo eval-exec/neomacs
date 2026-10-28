@@ -8,8 +8,7 @@ fn oracle(name: &str, form: &str, fixture: &str) {
             .join("../../tmp")
             .join(format!("settings-{name}-{}.el", std::process::id()));
         std::fs::write(&input, format!("(prin1 {form})\n")).expect("GNU probe");
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let output = std::process::Command::new(emacs)
+        let output = crate::test_utils::gnu_probe_command()
             .args(["-Q", "--batch", "-l"])
             .arg(input)
             .output()

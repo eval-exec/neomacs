@@ -89,16 +89,10 @@ fn accept_process_output_pipe_immediate_exit_matches_gnu_oracle() {
 
 fn assert_exit_oracle(form: &str, fixture_name: &str, compiled_expectation: &str) {
     crate::test_utils::init_test_tracing();
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
     // Campaign runs wrap nextest itself in sandbox-run.sh and unset this
     // variable inside it; a standalone refresh can supply the wrapper here.
-    let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {
-        let mut command = std::process::Command::new(sandbox);
-        command.arg(&emacs);
-        command
-    } else {
-        std::process::Command::new(emacs)
-    };
+    // `gnu_probe_command` applies the canonical environment on every path.
+    let mut command = crate::test_utils::gnu_probe_command();
     let gnu_form = format!(
         r#"(progn
           (unless (string= emacs-version "31.1")

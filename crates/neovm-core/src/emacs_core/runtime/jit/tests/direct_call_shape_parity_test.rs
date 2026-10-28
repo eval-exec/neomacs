@@ -32,8 +32,7 @@ fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String
         ),
     )
     .expect("write GNU oracle input");
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
-    let result = std::process::Command::new(emacs)
+    let result = crate::test_utils::gnu_probe_command()
         .args(["--batch", "-Q", "-l"])
         .arg(&script)
         .output()

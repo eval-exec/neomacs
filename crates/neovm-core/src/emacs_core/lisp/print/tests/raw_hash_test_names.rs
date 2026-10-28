@@ -76,15 +76,8 @@ fn gnu_expectation() -> String {
             format!(";;; -*- lexical-binding: nil; -*-\n(prin1 {form})\n"),
         )
         .unwrap();
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
         // Campaign nextest runs already enclose this child in a PID sandbox.
-        let mut command = if let Some(wrapper) = std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-            let mut command = std::process::Command::new(wrapper);
-            command.arg(emacs);
-            command
-        } else {
-            std::process::Command::new(emacs)
-        };
+        let mut command = crate::test_utils::gnu_probe_command();
         let result = command
             .args(["-Q", "--batch", "-l"])
             .arg(&script)

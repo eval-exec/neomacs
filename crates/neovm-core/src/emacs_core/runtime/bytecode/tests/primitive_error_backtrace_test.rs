@@ -119,18 +119,11 @@ fn gnu_expect(name: &str, program: &str, fixture: &str) -> String {
     std::fs::write(&script, format!(
         ";;; -*- lexical-binding: t; -*-\n(let* ((print-length nil) (print-level nil) (result {program})) (princ \"\\nCARFRAME-RESULT\\n\") (prin1 result))\n"
     )).expect("GNU oracle input");
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
-    // An outer sandbox already isolates this test process and its children.
-    // Nesting systemd scopes from its PID namespace cannot contact the bus.
-    let mut command = if std::env::var("CARFRAME_TEST_IN_SANDBOX").as_deref() == Ok("1") {
-        std::process::Command::new(emacs)
-    } else {
-        let mut command = std::process::Command::new(
-            "/home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/v10x/sandbox-run.sh",
-        );
-        command.arg(emacs);
-        command
-    };
+    // One path for both contexts: `gnu_probe_command` applies the canonical
+    // environment and, outside an outer sandbox, the campaign wrapper (an
+    // outer sandbox already isolates this test process and its children;
+    // nesting systemd scopes from its PID namespace cannot contact the bus).
+    let mut command = crate::test_utils::gnu_probe_command();
     let output = command
         .args(["--batch", "-Q", "-l"])
         .arg(&script)

@@ -72,7 +72,6 @@ const TIMED_READ_REDISPLAY_FORM: &str = r#"(progn
 #[test]
 fn gnu_timed_read_zero_timeout_preliminary_redisplay_matches_oracle() {
     crate::test_utils::init_test_tracing();
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
     let gnu_form = format!(
         r#"(progn
           (unless (string= emacs-version "31.1")
@@ -80,13 +79,7 @@ fn gnu_timed_read_zero_timeout_preliminary_redisplay_matches_oracle() {
           (prin1 {TIMED_READ_REDISPLAY_FORM})
           (terpri))"#
     );
-    let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {
-        let mut command = std::process::Command::new(sandbox);
-        command.arg(&emacs);
-        command
-    } else {
-        std::process::Command::new(emacs)
-    };
+    let mut command = crate::test_utils::gnu_probe_command();
     let output = command
         .args(["-Q", "--batch", "--eval", &gnu_form])
         .output()

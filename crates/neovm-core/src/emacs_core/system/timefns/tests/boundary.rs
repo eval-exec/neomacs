@@ -1,7 +1,5 @@
 use super::*;
 use crate::emacs_core::format::builtin_format_time_string;
-use std::process::Command;
-
 /// GNU 31.1's answer to FORM, saved as `tsb-NAME.expect` beside this file.
 ///
 /// `UPDATE_EXPECT=1` refreshes the fixture from the GNU binary in `EMACS`
@@ -31,14 +29,7 @@ fn gnu_expectation_with_suffix(name: &str, form: &str, suffix: &str) -> String {
         .join("src/emacs_core/system/timefns/tests")
         .join(format!("tsb-{name}{suffix}.expect"));
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
-        let sandbox = neomacs_infra::workspace_root()
-            .ancestors()
-            .map(|root| root.join("tmp/v10x/sandbox-run.sh"))
-            .find(|path| path.is_file())
-            .expect("GNU oracle refresh requires the Lisp sandbox");
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let output = Command::new(sandbox)
-            .arg(emacs)
+        let output = crate::test_utils::gnu_refresh_command()
             .args(["-Q", "--batch", "--eval"])
             .arg(format!("(prin1 {form})"))
             .output()

@@ -12,16 +12,9 @@ fn gnu_fixture(case: &str, form: &str, cached: &str) -> String {
         std::process::id()
     ));
     std::fs::write(&script, format!("(prin1 {form})\n")).expect("GNU fixture input");
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
     // Campaign refreshes provide the PID/memory sandbox; the helper also works
     // in ordinary checkouts that do not contain the campaign tooling.
-    let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {
-        let mut command = std::process::Command::new(sandbox);
-        command.arg(emacs);
-        command
-    } else {
-        std::process::Command::new(emacs)
-    };
+    let mut command = crate::test_utils::gnu_probe_command();
     let output = command
         .args(["-Q", "--batch", "-l"])
         .arg(script)

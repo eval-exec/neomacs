@@ -17,15 +17,7 @@ fn compare(name: &str, form: &str, saved: &str) {
             ),
         )
         .unwrap();
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let mut command = match std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-            Some(sandbox) => {
-                let mut command = std::process::Command::new(sandbox);
-                command.arg(emacs);
-                command
-            }
-            None => std::process::Command::new(emacs),
-        };
+        let mut command = crate::test_utils::gnu_probe_command();
         let output = command
             .args(["-Q", "--batch", "-l"])
             .arg(script)

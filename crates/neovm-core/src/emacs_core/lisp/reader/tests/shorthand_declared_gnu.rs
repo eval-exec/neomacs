@@ -22,12 +22,7 @@ fn assert_gnu(name: &str, form: &str, fixture: &str) {
             ),
         )
         .expect("write GNU fixture refresh program in worktree tmp");
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let sandbox = std::env::var_os("NEOVM_LISP_SANDBOX").unwrap_or_else(|| {
-            "/home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/v10x/sandbox-run.sh".into()
-        });
-        let output = std::process::Command::new(sandbox)
-            .arg(emacs)
+        let output = crate::test_utils::gnu_refresh_command()
             .args(["-Q", "--batch", "-l"])
             .arg(script)
             .output()

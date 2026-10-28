@@ -18,15 +18,7 @@ fn oracle(name: &str, form: &str, fixture: &str) {
             format!(";;; -*- lexical-binding: nil; -*-\n(prin1 {form})\n"),
         )
         .expect("GNU probe");
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let mut command = match std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-            Some(wrapper) => {
-                let mut command = std::process::Command::new(wrapper);
-                command.arg(emacs);
-                command
-            }
-            None => std::process::Command::new(emacs),
-        };
+        let mut command = crate::test_utils::gnu_probe_command();
         let output = command
             .args(["-Q", "--batch", "-l"])
             .arg(&probe)

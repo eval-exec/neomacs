@@ -320,15 +320,9 @@ fn gnu_fixture(name: &str, form: &str) -> String {
             format!(";;; -*- lexical-binding: t; -*-\n(prin1 {form})\n"),
         )
         .unwrap();
-        let sandbox = root
-            .ancestors()
-            .map(|path| path.join("tmp/v10x/sandbox-run.sh"))
-            .find(|path| path.is_file())
-            .expect("GNU refresh requires the campaign sandbox-run.sh");
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let output = std::process::Command::new(sandbox)
-            .args(["timeout", "30"])
-            .arg(emacs)
+        // The campaign sandbox and the editor are one typed command; a
+        // misbehaving refresh is bounded by nextest's per-test watchdog.
+        let output = crate::test_utils::gnu_refresh_command()
             .args(["-Q", "--batch", "-l"])
             .arg(script)
             .output()

@@ -16,12 +16,7 @@ fn gnu_expect(name: &str, form: &str, fixture: &str) -> String {
         format!("(unless (equal emacs-version \"31.1\") (error \"Expected GNU Emacs 31.1\"))\n(let ((print-length nil) (print-level nil)) (prin1 {form}))\n"),
     )
     .unwrap();
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
-    let sandbox = std::env::var_os("NEOVM_LISP_SANDBOX").unwrap_or_else(|| {
-        "/home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/v10x/sandbox-run.sh".into()
-    });
-    let result = std::process::Command::new(sandbox)
-        .arg(emacs)
+    let result = crate::test_utils::gnu_refresh_command()
         .args(["-Q", "--batch", "-l"])
         .arg(script)
         .output()

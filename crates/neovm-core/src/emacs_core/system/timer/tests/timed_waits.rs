@@ -41,8 +41,7 @@ fn sleep_for_fine_elapsed_matches_gnu() {
         "crates/neovm-core/src/emacs_core/system/timer/tests/fixtures/sleep_fine_elapsed.txt",
     );
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let output = std::process::Command::new(emacs)
+        let output = crate::test_utils::gnu_probe_command()
             .args(["--quick", "--batch", "--eval", &format!("(prin1 {FORM})")])
             .output()
             .expect("run GNU reference inside the campaign sandbox");

@@ -21,15 +21,8 @@ fn diagnostic_symbol_string_matches_gnu_live_names_and_quoting() {
         "(let ((print-gensym nil) (print-circle nil) (print-level nil) (print-length nil))\n  (dolist (symbol {SYMBOLS}) (prin1 (append (prin1-to-string symbol) nil)) (terpri)))\n"
     );
     std::fs::write(&script, program).expect("GNU diagnostic symbol probe");
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
     // Campaign nextest runs inside the PID/memory sandbox, including its GNU child.
-    let mut command = if let Some(wrapper) = std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-        let mut command = std::process::Command::new(wrapper);
-        command.arg(&emacs);
-        command
-    } else {
-        std::process::Command::new(&emacs)
-    };
+    let mut command = crate::test_utils::gnu_probe_command();
     let output = command
         .args(["-Q", "--batch", "-l"])
         .arg(&script)

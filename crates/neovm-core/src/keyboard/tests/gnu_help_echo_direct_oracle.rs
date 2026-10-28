@@ -114,15 +114,12 @@ fn direct_help_echo_rows() -> String {
 
 #[test]
 fn gnu_help_echo_substitution_direct_helper_matches_actual_event_path() {
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
-    let output = std::process::Command::new(emacs)
-        // The fixture is UTF-8 (recorded under the oracle harness's
-        // SNAPSHOT_LOCALE, oracle_sandbox.rs:26).  GNU's stdout coding and
-        // its `text-quoting-style' nil default both follow the process
-        // locale (using_utf8, src/emacs.c:415,1656), so a remote shell with
-        // no locale would emit internal-encoding bytes here instead.
-        .env("LANG", "en_US.UTF-8")
-        .env("LC_ALL", "en_US.UTF-8")
+    // The fixture was recorded under the canonical oracle environment; the
+    // builder pins the locale (which also fixes GNU's `text-quoting-style'
+    // nil default and stdout coding, src/emacs.c:415,1656), TZ, identity,
+    // HOME, TMPDIR and umask.
+    let mut command = crate::test_utils::gnu_probe_command();
+    let output = command
         .args(["-Q", "--batch", "--eval", GNU_HELP_ECHO_FORM])
         .output()
         .expect("run explicitly configured GNU Emacs oracle");

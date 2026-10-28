@@ -68,15 +68,8 @@ fn expectation() -> String {
             .join("../../tmp")
             .join(format!("symbol-noescape-oracle-{}.el", std::process::id()));
         std::fs::write(&script, format!("(prin1 {PROGRAM})\n")).expect("GNU probe file");
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
         // Campaign nextest already encloses oracle children in the PID sandbox.
-        let mut command = if let Some(wrapper) = std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-            let mut command = std::process::Command::new(wrapper);
-            command.arg(&emacs);
-            command
-        } else {
-            std::process::Command::new(&emacs)
-        };
+        let mut command = crate::test_utils::gnu_probe_command();
         let output = command
             .args(["-Q", "--batch", "-l"])
             .arg(script)

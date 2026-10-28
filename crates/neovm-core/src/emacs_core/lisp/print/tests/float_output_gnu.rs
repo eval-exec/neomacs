@@ -18,14 +18,7 @@ fn expectation() -> String {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../../tmp/float-oracle-{}.el", std::process::id()));
         std::fs::write(&script, format!("(prin1 {PROGRAM})\n")).unwrap();
-        let emacs = crate::test_utils::gnu_oracle().executable_path();
-        let mut command = if let Some(wrapper) = std::env::var_os("NEOMACS_PROBE_SANDBOX") {
-            let mut command = std::process::Command::new(wrapper);
-            command.arg(&emacs);
-            command
-        } else {
-            std::process::Command::new(&emacs)
-        };
+        let mut command = crate::test_utils::gnu_probe_command();
         let output = command
             .args(["-Q", "--batch", "-l"])
             .arg(script)

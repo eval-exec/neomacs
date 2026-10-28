@@ -704,3 +704,7 @@ fn lisp_string_quote(value: &str) -> String {
 #[cfg(test)]
 #[path = "canonical_env_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "spawn_architecture_test.rs"]
+mod spawn_architecture;

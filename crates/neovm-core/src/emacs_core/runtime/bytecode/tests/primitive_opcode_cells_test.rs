@@ -185,8 +185,7 @@ fn gnu_expect(name: &str, program: &str, fixture: &str) -> String {
     std::fs::write(&script, format!(
         ";;; -*- lexical-binding: t; -*-\n(require 'bytecomp)\n(let ((print-length nil) (print-level nil)) (prin1 {program}))\n"
     )).expect("GNU oracle input");
-    let emacs = crate::test_utils::gnu_oracle().executable_path();
-    let output = std::process::Command::new(emacs)
+    let output = crate::test_utils::gnu_probe_command()
         .args(["--batch", "-Q", "-l"])
         .arg(&script)
         .output()
