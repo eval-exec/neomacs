@@ -3861,6 +3861,93 @@ pub(crate) fn builtin_internal_lisp_face_equal_p(
     Ok(Value::T)
 }
 
+/// Whether FACE_A and FACE_B have equal frame-local lface definitions.
+///
+/// This is GNU `Finternal_lisp_face_equal_p (A, B, FRAME, Qt)`, the predicate
+/// `try_cursor_movement` uses to decide whether a point-only move may reuse the
+/// window's glyph rows while line numbers are displayed (src/xdisp.c:19912-19918;
+/// equality in src/xfaces.c:4516-4594). Every `LFACE_ATTRS` slot must match.
+/// `inherit` additionally accepts exactly one level of direct, symbol-valued
+/// `:inherit`: the inheriting face's other slots must be unspecified or equal
+/// to the parent's. GNU deliberately ignores list-valued `:inherit` there.
+///
+/// Never signals. An unknown face, alias cycle, or malformed vector cannot be
+/// proven equal and returns false.
+pub(crate) fn lisp_faces_equal_in_frame(
+    eval: &super::eval::Context,
+    frame_id: FrameId,
+    face_a: &str,
+    face_b: &str,
+    inherit: bool,
+) -> bool {
+    let Some((name_a, vector_a)) = resolved_lface_in_frame(eval, frame_id, face_a) else {
+        return false;
+    };
+    let Some((name_b, vector_b)) = resolved_lface_in_frame(eval, frame_id, face_b) else {
+        return false;
+    };
+    lface_vectors_equal(vector_a, vector_b, inherit.then_some((name_a, name_b)))
+}
+
+/// Resolve FACE_NAME through `face-alias` and return its lface vector.
+///
+/// Mirrors GNU `lface_from_face_name` (src/xfaces.c:2060-2100): the frame's
+/// face hash first, then the global `face--new-frame-defaults` table. Returns
+/// the canonical name beside the vector so the direct-`inherit` rule can
+/// compare against the symbol the face actually names.
+fn resolved_lface_in_frame(
+    eval: &super::eval::Context,
+    frame_id: FrameId,
+    face_name: &str,
+) -> Option<(Value, Value)> {
+    let resolved =
+        resolve_face_designator(eval, Value::symbol(face_name), FaceAliasCyclePolicy::Signal)
+            .ok()?
+            .name()?;
+    let name = resolved.symbol();
+    // Both tables store the lface vector as the hash value. A non-vector value
+    // cannot be compared slot-wise and is not proven equal.
+    let vector = lookup_frame_lisp_face_vector(eval, frame_id, resolved.name())
+        .or_else(|| lookup_face_new_frame_defaults_vector(eval, name))?;
+    if vector.as_vector_data().is_none() {
+        return None;
+    }
+    Some((name, vector))
+}
+
+fn lface_vectors_equal(a: Value, b: Value, inherit_names: Option<(Value, Value)>) -> bool {
+    let unspecified = unspecified_face_symbol();
+    let slot =
+        |vector: Value, attr: LFaceAttr| lisp_face_vector_attr(vector, attr).unwrap_or(unspecified);
+    let other_attrs: Vec<LFaceAttr> = LFACE_ATTRS
+        .iter()
+        .copied()
+        .filter(|attr| *attr != LFaceAttr::Inherit)
+        .collect();
+    // GNU compares every slot here, including `:inherit`; only the direct
+    // inheritance tolerance below ignores that one slot.
+    if LFACE_ATTRS
+        .iter()
+        .all(|attr| slot(a, *attr) == slot(b, *attr))
+    {
+        return true;
+    }
+    let Some((name_a, name_b)) = inherit_names else {
+        return false;
+    };
+    // GNU accepts only a direct, symbol-valued `:inherit` edge. The inheriting
+    // face may add no other attribute; inherited values are equal by identity
+    // of the parent definition.
+    let inherits = |child: Value, parent_name: Value, parent: Value| {
+        slot(child, LFaceAttr::Inherit) == parent_name
+            && other_attrs.iter().all(|attr| {
+                let value = slot(child, *attr);
+                value.is_bare_symbol_named("unspecified") || value == slot(parent, *attr)
+            })
+    };
+    inherits(a, name_b, b) || inherits(b, name_a, a)
+}
+
 /// `(internal-lisp-face-empty-p FACE &optional FRAME)` -- return t if FACE has
 /// only unspecified attributes in selected/default face definitions.
 pub(crate) fn builtin_internal_lisp_face_empty_p(

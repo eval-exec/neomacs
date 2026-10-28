@@ -3162,13 +3162,15 @@ impl WindowDisplaySnapshotFreshness {
     /// Every actual row input -- text, properties, accessibility, prefixes,
     /// display table, faces, fonts, geometry -- must still match, and BOTH
     /// tokens must certify that the overlays present could only change faces
-    /// (an overlay with `display`/`invisible`/`category` never qualifies).
+    /// (an overlay with `display`/`invisible`/`category` never qualifies). The
+    /// caller must separately rule out point-dependent chrome and line-number
+    /// metrics: unchanged format/face definitions can still yield new geometry.
     pub fn same_position_rows_ignoring_point(&self, current: &Self) -> bool {
         if !(self.overlays_face_only && current.overlays_face_only) {
             return false;
         }
         let mut expected = current.clone();
-        // Cursor decoration only.
+        // Point-dependent geometry is checked by the position-query caller.
         expected.window.point = self.window.point;
         // A request to repaint is not a body-content mutation.
         expected.redisplay_generation = self.redisplay_generation;

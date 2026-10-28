@@ -8612,13 +8612,11 @@ fn resolve_exact_visible_metrics_with_layout(
 
 /// Whether the retained row map for WINDOW still describes the live window.
 ///
-/// This is `vertical-motion`'s predicate, not a second one:
-/// `Context::fresh_window_display_snapshot` compares the whole
-/// [`crate::window::WindowDisplaySnapshotFreshness`] token, whose fields are
-/// deliberately opaque so that "individual snapshot consumers [cannot] invent
-/// partial freshness checks that drift apart". This includes graphical
-/// windows: a renderer acknowledgement does not make old scroll coordinates
-/// suitable for a new Lisp motion query.
+/// Prefer the canonical freshness comparison used by `vertical-motion`. The
+/// point-only exception additionally rejects row inputs whose geometry can
+/// depend on point without changing their format or face definitions. This also
+/// applies to graphical windows: renderer acknowledgement alone does not make
+/// old coordinates suitable for a live Lisp motion query.
 fn retained_rows_answer_for_live_window(
     eval: &super::eval::Context,
     window: Option<&Value>,
@@ -8638,10 +8636,10 @@ fn retained_rows_answer_for_live_window(
     {
         return Ok(true);
     }
-    // A command can move point and ask for position geometry before redisplay.
-    // Reuse only when row inputs, including overlay revisions, still match.
-    // Relative and visual line numbers follow point and keep the canonical walk.
-    if !line_numbers_are_point_independent(eval, buffer_id) {
+    // Stable format definitions do not prove stable geometry after point
+    // moves: the current line-number face can change row metrics even with
+    // absolute numbering.
+    if !line_numbers_are_point_independent(eval, fid, buffer_id) {
         return Ok(false);
     }
     let Some(current) = eval.window_display_snapshot_freshness(fid, wid, buffer_id) else {
@@ -8655,11 +8653,17 @@ fn retained_rows_answer_for_live_window(
         .is_some_and(|recorded| recorded.same_position_rows_ignoring_point(&current)))
 }
 
-/// Whether display line numbers in BUFFER leave row geometry independent of
-/// point. Only nil and absolute numbering qualify; relative/visual modes derive
-/// every gutter value from point.
+/// Whether line numbering is proven not to change geometry when point moves.
+///
+/// Absolute numbering still selects `line-number-current-line` for the current
+/// row, so moving point can change that row's prefix metrics. GNU's
+/// `try_cursor_movement` accepts the shortcut only when the two faces' frame
+/// lface definitions are equal, tolerating their default direct `:inherit`
+/// relationship (src/xdisp.c:19912-19918); relative and visual numbering are
+/// rejected separately because they renumber every row (src/xdisp.c:19908-19911).
 fn line_numbers_are_point_independent(
     eval: &super::eval::Context,
+    frame_id: FrameId,
     buffer_id: crate::buffer::BufferId,
 ) -> bool {
     let Some(buffer) = eval.buffers.get(buffer_id) else {
@@ -8671,10 +8675,42 @@ fn line_numbers_are_point_independent(
     ) else {
         return true;
     };
-    if value.is_nil() || value == Value::T {
+    if value.is_nil() {
         return true;
     }
-    matches!(value.as_bare_symbol_name().as_deref(), Some("absolute"))
+    if matches!(
+        value.as_bare_symbol_name().as_deref(),
+        Some("relative" | "visual")
+    ) {
+        return false;
+    }
+    // Neomacs realizes buffer-local face remappings while also comparing the
+    // frame's lface definitions. Equal definitions can therefore still yield
+    // different row metrics when either face is remapped in this buffer.
+    if line_number_faces_are_remapped(eval, buffer) {
+        return false;
+    }
+    crate::emacs_core::xfaces::lisp_faces_equal_in_frame(
+        eval,
+        frame_id,
+        "line-number",
+        "line-number-current-line",
+        true,
+    )
+}
+
+fn line_number_faces_are_remapped(eval: &super::eval::Context, buffer: &Buffer) -> bool {
+    let Some(value) = eval.variable_value_in_buffer(
+        Some(buffer),
+        crate::emacs_core::intern::intern("face-remapping-alist"),
+    ) else {
+        return false;
+    };
+    if value.is_nil() {
+        return false;
+    }
+    let remapping = crate::face::FaceRemapping::from_lisp(&value);
+    remapping.get("line-number").is_some() || remapping.get("line-number-current-line").is_some()
 }
 
 fn resolve_exact_visible_metrics(
