@@ -80,9 +80,47 @@ fn compat_face_semantics_matches_gnu_emacs() {
         },
     ];
 
+    // GNU's `face-font` has two implementations selected at build time by
+    // HAVE_WINDOW_SYSTEM (src/xfaces.c:4458-4473): a build with a window
+    // system reports the realized face's font (nil for a face on a tty
+    // frame), while a build without one returns the literal "tty".  The
+    // remote Mac oracle is configured --without-x --without-ns, so it takes
+    // the literal branch; this port always compiles its GUI backend.  Ask the
+    // oracle which shape it is once, so the comparison still compares like
+    // with like.
+    // Every GUI build defines x-create-frame (X/GTK, PGTK and NS share the
+    // DEFUN: src/xfns.c:4916, src/nsfns.m:1192); w32/haiku/android use their
+    // own names.  A tty-only build defines none of them.
+    let oracle_has_window_system = run_oracle_eval(
+        "(prin1 (or (fboundp 'x-create-frame) (fboundp 'w32-create-frame) \
+                    (fboundp 'haiku-create-frame) (fboundp 'android-create-frame)))",
+    )
+    .map(|answer| answer.contains('t'))
+    .unwrap_or(false);
+
     for case in cases {
         let gnu = run_oracle_eval(case.form).expect("GNU Emacs evaluation");
         let neovm = run_neovm_eval(case.form).expect("NeoVM evaluation");
+        if !oracle_has_window_system
+            && case.name == "obsolete_face_aliases_resolve_through_public_face_operations"
+        {
+            // Only the `face-font' element may differ, and only because the
+            // oracle took xfaces.c:4468-4473's no-window-system branch.
+            assert!(
+                gnu.contains("\"tty\""),
+                "a window-system-less GNU must answer \"tty\": {gnu}"
+            );
+            assert_eq!(
+                gnu.replace("\"tty\"", "nil"),
+                neovm,
+                "face semantics mismatch beyond the documented build-shape \
+                 branch for {}:\nGNU: {}\nNeoVM: {}",
+                case.name,
+                gnu,
+                neovm
+            );
+            continue;
+        }
         assert_eq!(
             neovm, gnu,
             "face semantics mismatch for {}:\nGNU: {}\nNeoVM: {}",
