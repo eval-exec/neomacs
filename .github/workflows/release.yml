@@ -1,5 +1,9 @@
 name: release
 
+# Release builds run from tags. Do not restore or save Actions caches
+# here: tag-scoped entries cannot be reused by main or PRs, and every
+# saved entry counts against the repository cache limit and can evict
+# main-branch caches.
 on:
   push:
     tags:
@@ -59,6 +63,7 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          cache: "false"
           cache-key: release-linux-${{ matrix.arch }}
           target: ${{ matrix.target }}
 
@@ -287,6 +292,7 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          cache: "false"
           cache-key: release-linux-rpm-el9-${{ matrix.arch }}
           target: ${{ matrix.target }}
 
@@ -431,6 +437,7 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          cache: "false"
           cache-key: release-macos-aarch64
           target: aarch64-apple-darwin
 
@@ -519,6 +526,7 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          cache: "false"
           cache-key: release-macos-x86_64
           target: x86_64-apple-darwin
 
@@ -603,6 +611,7 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          cache: "false"
           cache-key: release-windows-msvc-${{ matrix.arch }}
           install-nextest: true
           target: ${{ matrix.target }}

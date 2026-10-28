@@ -56,8 +56,11 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          # Test harnesses build with LTO off, codegen-units 16, and
+          # mold; keep this dependency cache separate from the normal
+          # release cache.
           cache-key: ci-workspace-archive-linux-x86_64
-          cache-shared-key: linux-x86_64-release
+          cache-shared-key: linux-x86_64-archive-release
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 

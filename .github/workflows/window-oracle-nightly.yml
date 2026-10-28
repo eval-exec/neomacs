@@ -79,7 +79,11 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          # fresh-build uses the default release profile; share the
+          # main-branch release dependency cache.
           cache-key: window-oracle-nightly-ubuntu-24.04
+          cache-shared-key: linux-x86_64-release
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
       # The oracle spawns the real neomacs binary per case, so it needs the

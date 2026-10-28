@@ -72,7 +72,11 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
-          cache-key: windows-msvc-x86_64
+          # fresh-build uses the default release profile; share the
+          # Windows release cache and save only from main.
+          cache-key: windows-msvc-${{ matrix.arch }}
+          cache-shared-key: windows-msvc-${{ matrix.arch }}-release
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
       - name: Install NSIS
