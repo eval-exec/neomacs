@@ -4091,6 +4091,7 @@ fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
         ("(set-default 'display-line-numbers 'visual)", false),
         ("(set-default 'display-line-numbers nil)", true),
         ("(set-default 'display-line-numbers t)", true),
+        ("(set-default 'display-line-numbers 'absolute)", true),
         (
             "(progn (set-default 'display-line-numbers 'relative) (set (make-local-variable 'display-line-numbers) nil))",
             true,
@@ -4099,15 +4100,305 @@ fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
             "(progn (set-default 'display-line-numbers 'relative) (set (make-local-variable 'display-line-numbers) t))",
             true,
         ),
+        (
+            "(progn (set-default 'display-line-numbers t) (set (make-local-variable 'display-line-numbers) nil))",
+            true,
+        ),
+        (
+            "(progn (set-default 'display-line-numbers nil) (set (make-local-variable 'display-line-numbers) 'absolute))",
+            true,
+        ),
     ] {
         let mut eval = interactive_context();
         let buffer = eval.buffers.current_buffer().unwrap().id;
+        let frame = eval
+            .frames
+            .create_frame("line-number-point-independence", 160, 96, buffer);
         eval.eval_str(setup).unwrap();
         assert_eq!(
-            line_numbers_are_point_independent(&eval, buffer),
+            line_numbers_are_point_independent(&eval, frame, buffer),
             expected,
             "{setup}"
         );
+    }
+}
+
+#[test]
+fn line_number_faces_use_gnu_frame_local_inherit_equality() {
+    use crate::emacs_core::xfaces::lisp_faces_equal_in_frame;
+
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    let frame = eval
+        .frames
+        .create_frame("line-number-face-equality", 160, 96, buffer);
+
+    // GNU's default `line-number-current-line` is `(t :inherit line-number)`:
+    // every other lface slot is unspecified, so `internal-lisp-face-equal-p`
+    // with INHERIT=t considers the definitions equal (src/xfaces.c:4556-4594).
+    // Bind this frame's table: `(frame--face-hash-table)` reads the selected
+    // frame, which a test context need not have selected.
+    let table = eval.frames.get(frame).unwrap().face_hash_table();
+    eval.set_variable("line-number-test-face-table", table);
+    eval.eval_str(
+        "(let ((vector (make-vector 20 'unspecified)))
+           (aset vector 0 'face)
+           (aset vector 16 'line-number)
+           (puthash 'line-number-current-line vector line-number-test-face-table))",
+    )
+    .unwrap();
+    assert!(
+        lisp_faces_equal_in_frame(
+            &eval,
+            frame,
+            "line-number",
+            "line-number-current-line",
+            true
+        ),
+        "direct :inherit must compare equal"
+    );
+    assert!(
+        !lisp_faces_equal_in_frame(
+            &eval,
+            frame,
+            "line-number",
+            "line-number-current-line",
+            false
+        ),
+        "without INHERIT the vectors differ"
+    );
+    eval.eval_str("(setq display-line-numbers t)").unwrap();
+    assert!(
+        line_numbers_are_point_independent(&eval, frame, buffer),
+        "inherit-only current-line face keeps absolute numbering point-independent"
+    );
+
+    // Any additional geometry-affecting attribute defeats the inherit rule.
+    eval.eval_str("(aset (gethash 'line-number-current-line line-number-test-face-table) 4 2)")
+        .unwrap();
+    assert!(
+        !lisp_faces_equal_in_frame(
+            &eval,
+            frame,
+            "line-number",
+            "line-number-current-line",
+            true
+        ),
+        "a :height attribute must decline reuse"
+    );
+    assert!(!line_numbers_are_point_independent(&eval, frame, buffer));
+}
+
+fn assert_point_only_warm_query_reuse(setup: &str, reuse_after_move: bool) {
+    assert_point_only_warm_query_reuse_with_face_setup(setup, None, reuse_after_move);
+}
+
+fn assert_point_only_warm_query_reuse_with_face_setup(
+    setup: &str,
+    face_setup: Option<&str>,
+    reuse_after_move: bool,
+) {
+    use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let frame = eval
+        .frames
+        .create_frame("point-only-row-query", 160, 96, buffer);
+    let window = eval.frames.get(frame).unwrap().selected_window;
+    eval.frames.get_mut(frame).unwrap().initial = false;
+    eval.set_variable("point-query-window", Value::make_window(window.0));
+    if let Some(face_setup) = face_setup {
+        let table = eval.frames.get(frame).unwrap().face_hash_table();
+        eval.set_variable("point-query-face-table", table);
+        eval.eval_str(face_setup).unwrap();
+    }
+    eval.eval_str(
+        "(progn
+           (set-default 'display-line-numbers nil)
+           (set-default 'mode-line-format nil)
+           (set-default 'header-line-format nil)
+           (set-default 'tab-line-format nil)
+           (goto-char 1))",
+    )
+    .unwrap();
+    eval.eval_str(setup).unwrap();
+    match eval
+        .frames
+        .get_mut(frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+    {
+        crate::window::Window::Leaf { point, .. } => *point = LispCharPos1::ONE,
+        other => panic!("expected leaf window, got {other:?}"),
+    }
+
+    // Deliberately give the current buffer the opposite admission conditions.
+    // The gate must inspect the queried window's buffer, not this buffer.
+    let other_buffer = eval.buffers.create_buffer("*point-query-other*");
+    eval.set_current_buffer_unrecorded(other_buffer).unwrap();
+    let other_value = if reuse_after_move {
+        Value::T
+    } else {
+        Value::NIL
+    };
+    for name in [
+        "display-line-numbers",
+        "mode-line-format",
+        "header-line-format",
+        "tab-line-format",
+    ] {
+        eval.buffers
+            .set_buffer_local_property(other_buffer, name, other_value)
+            .unwrap();
+    }
+
+    let freshness = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    let mut warm = crate::window::WindowDisplaySnapshot {
+        window_id: window,
+        regions_materialized: true,
+        points: vec![crate::window::DisplayPointSnapshot {
+            role: crate::window::DisplayPointRole::Glyph,
+            buffer_pos: LispCharPos1::new(3),
+            x: 0,
+            y: 16,
+            width: 8,
+            height: 16,
+            row: 1,
+            col: 0,
+        }],
+        rows: vec![crate::window::DisplayRowSnapshot {
+            row: 1,
+            y: 16,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::new(3)),
+            end_buffer_pos: Some(LispCharPos1::new(4)),
+            ..Default::default()
+        }],
+        buffer_modiff: Some(eval.buffers.get(buffer).unwrap().modified_tick()),
+        layout_freshness: Some(freshness.clone()),
+        ..Default::default()
+    };
+    warm.regions.text_body.width = 160.0;
+    warm.regions.text_body.height = 32.0;
+    eval.frames
+        .get_mut(frame)
+        .unwrap()
+        .commit_redisplay_cache_for_test(vec![warm]);
+
+    // Mock canonical bounds, not a font/chrome metric engine: the old body
+    // admitted the target at y=16 in [0,32); the new visible body is [0,16),
+    // with no target point. Header growth or current-line number face metrics
+    // can invalidate that old admission without any display-variable mutation.
+    let mut refreshed = crate::window::WindowDisplaySnapshot {
+        window_id: window,
+        regions_materialized: true,
+        rows: vec![crate::window::DisplayRowSnapshot {
+            row: 0,
+            y: 0,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::ONE),
+            end_buffer_pos: Some(LispCharPos1::new(2)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    refreshed.regions.text_body.width = 160.0;
+    refreshed.regions.text_body.height = 16.0;
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = calls.clone();
+    eval.install_window_layout_query(move |_, fid, wid, scope| {
+        assert_eq!((fid, wid), (frame, window));
+        assert_eq!(
+            scope,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(3)
+            }
+        );
+        observed.set(observed.get() + 1);
+        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(
+            LispCharPos1::ONE,
+            Some(refreshed.clone()),
+        ))
+    });
+    let query = |eval: &mut Context| {
+        builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)]).unwrap()
+    };
+    assert!(
+        !query(&mut eval).is_nil(),
+        "exact-fresh rows must answer: {setup}"
+    );
+    assert_eq!(calls.get(), 0, "exact-fresh rows must not query: {setup}");
+
+    eval.buffers
+        .get_mut(buffer)
+        .unwrap()
+        .goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(3));
+    match eval
+        .frames
+        .get_mut(frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+    {
+        crate::window::Window::Leaf { point, .. } => {
+            assert_eq!(*point, LispCharPos1::ONE);
+            *point = LispCharPos1::new(3);
+        }
+        other => panic!("expected leaf window, got {other:?}"),
+    }
+    let moved = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    assert_ne!(
+        freshness, moved,
+        "saved window point must change freshness: {setup}"
+    );
+    assert!(
+        freshness.same_position_rows_ignoring_point(&moved),
+        "only point may change: {setup}"
+    );
+    assert!(
+        eval.fresh_window_display_snapshot(frame, window, buffer)
+            .is_none()
+    );
+    assert_eq!(query(&mut eval).is_nil(), !reuse_after_move, "{setup}");
+    assert_eq!(calls.get(), usize::from(!reuse_after_move), "{setup}");
+    assert_eq!(eval.buffers.current_buffer_id(), Some(other_buffer));
+}
+
+#[test]
+fn posn_at_point_reuses_warm_rows_for_default_absolute_numbers_after_point_moves() {
+    // GNU's default `line-number-current-line` is `(t :inherit line-number)`,
+    // so `try_cursor_movement` accepts the point-only shortcut for absolute
+    // numbering; this port matches that lface comparison.
+    for setup in [
+        "(set-default 'display-line-numbers t)",
+        "(set-default 'display-line-numbers 'absolute)",
+        "(setq display-line-numbers t)",
+        "(setq display-line-numbers 'absolute)",
+    ] {
+        assert_point_only_warm_query_reuse(setup, true);
+    }
+}
+
+#[test]
+fn posn_at_point_requeries_warm_rows_for_distinct_current_line_face() {
+    // A taller current-line face moves the row's baseline when point enters
+    // it, so the retained rows must not answer (src/xdisp.c:19912-19918).
+    let face_setup = "(let ((vector (make-vector 20 'unspecified)))
+                         (aset vector 0 'face)
+                         (aset vector 4 2)
+                         (puthash 'line-number-current-line vector point-query-face-table))";
+    for setup in [
+        "(set-default 'display-line-numbers t)",
+        "(setq display-line-numbers 'absolute)",
+    ] {
+        assert_point_only_warm_query_reuse_with_face_setup(setup, Some(face_setup), false);
     }
 }
 
