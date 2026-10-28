@@ -1158,7 +1158,7 @@ fn dump_frame_glyphs_resolved(frame: &crate::core::frame_glyphs::FrameGlyphBuffe
             .map(|s| format!("{}x{}", s.width, s.height))
             .unwrap_or_else(|| "-".to_string());
         let (family, size) = f
-            .map(|f| (f.font_family.as_str(), f.font_size))
+            .map(|f| (f.font_family.as_ref(), f.font_size))
             .unwrap_or(("-", 0.0));
         format!(
             "face={:?} fg={} bg={} stipple={} font='{}'@{:.1}",

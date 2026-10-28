@@ -11,7 +11,7 @@ use neomacs_display_protocol::{Color, ColorStop, FaceId, Gradient, Rect};
 #[test]
 fn child_subpixel_gradient_sampling_uses_face_paint_domain() {
     let mut face = Face::new(FaceId::new(3));
-    face.background_gradient = Some(Box::new(Gradient::Linear {
+    face.background_gradient = Some(std::sync::Arc::new(Gradient::Linear {
         angle: 0.0,
         stops: vec![
             ColorStop::new(0.0, Color::RED),

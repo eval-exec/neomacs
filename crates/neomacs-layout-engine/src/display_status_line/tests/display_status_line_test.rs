@@ -26,7 +26,7 @@ use neovm_core::face::FaceTable;
 fn display_row_height_for_face_uses_realized_line_height_and_box() {
     let mut font_metrics = None;
     let mut face = ResolvedFace::default();
-    face.font_family = "monospace".to_string();
+    face.font_family = std::sync::Arc::from("monospace");
     face.font_size = 14.0;
     face.font_ascent = 9.0;
     face.font_line_height = 12.0;
@@ -47,7 +47,7 @@ fn display_row_height_for_face_uses_realized_line_height_and_box() {
 fn positive_box_width_expands_chrome_in_device_pixels_at_two_x_scale() {
     let mut font_metrics = None;
     let mut face = ResolvedFace::default();
-    face.font_family = "monospace".to_string();
+    face.font_family = std::sync::Arc::from("monospace");
     face.font_size = 14.0;
     face.font_ascent = 9.0;
     face.font_line_height = 12.0;
@@ -70,7 +70,7 @@ fn positive_box_width_expands_chrome_in_device_pixels_at_two_x_scale() {
 fn negative_box_line_width_draws_inside_without_increasing_chrome_row_height() {
     let mut font_metrics = None;
     let mut face = ResolvedFace::default();
-    face.font_family = "monospace".to_string();
+    face.font_family = std::sync::Arc::from("monospace");
     face.font_size = 14.0;
     face.font_ascent = 9.0;
     face.font_line_height = 12.0;
@@ -92,7 +92,7 @@ fn negative_box_line_width_draws_inside_without_increasing_chrome_row_height() {
 fn display_row_metrics_for_smaller_gui_face_do_not_inherit_default_descent() {
     let mut font_metrics = Some(FontMetricsService::new());
     let mut face = ResolvedFace::default();
-    face.font_family = "default".to_string();
+    face.font_family = std::sync::Arc::from("default");
     face.font_size = 11.5;
     let fallback = DisplayRowFallbackMetrics::from_default_face_extents(13.0, 32.0, 25.0);
     let metrics =
@@ -246,7 +246,7 @@ fn proportional_chrome_test_face(
     origin: &DisplayOrigin,
 ) -> ResolvedFace {
     let mut face = window_chrome_test_face(face_resolver, origin);
-    face.font_family = "Noto Sans".to_string();
+    face.font_family = std::sync::Arc::from("Noto Sans");
     face.font_size = 9.12871;
     face.font_weight = 400;
     face.set_measured_char_width_px(7.2);

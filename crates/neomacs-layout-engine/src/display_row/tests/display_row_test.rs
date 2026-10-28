@@ -2824,7 +2824,7 @@ fn display_row_measurement_policy_builds_faces_from_frame_mode() {
 #[test]
 fn display_row_gui_measurement_preserves_narrow_proportional_glyph_advance() {
     let mut base = base_face();
-    base.font_family = "Noto Sans".to_string();
+    base.font_family = std::sync::Arc::from("Noto Sans");
     base.font_size = 9.12871;
     base.font_weight = 400;
     base.set_measured_char_width_px(7.2);
@@ -2844,7 +2844,7 @@ fn display_row_gui_measurement_preserves_narrow_proportional_glyph_advance() {
 fn display_row_gui_renderer_preserves_narrow_proportional_glyph_advance() {
     let _eval = Context::new();
     let mut base = base_face();
-    base.font_family = "Noto Sans".to_string();
+    base.font_family = std::sync::Arc::from("Noto Sans");
     base.font_size = 9.12871;
     base.font_weight = 400;
     base.set_measured_char_width_px(7.2);
@@ -2890,7 +2890,7 @@ fn display_row_gui_renderer_preserves_narrow_proportional_glyph_advance() {
 #[test]
 fn display_row_gui_measurement_preserves_narrow_proportional_text_run_advances() {
     let mut base = base_face();
-    base.font_family = "Noto Sans".to_string();
+    base.font_family = std::sync::Arc::from("Noto Sans");
     base.font_size = 9.12871;
     base.font_weight = 400;
     base.set_measured_char_width_px(7.2);
@@ -3054,7 +3054,7 @@ fn display_row_measured_face_exposes_metrics_as_single_value() {
 #[test]
 fn display_row_glyph_measurement_face_shapes_text_runs_as_measurement_plans() {
     let mut base = base_face();
-    base.font_family = "monospace".to_string();
+    base.font_family = std::sync::Arc::from("monospace");
     base.font_size = 14.0;
     base.set_measured_char_width_px(8.0);
     let measurement_face =
@@ -3124,7 +3124,7 @@ fn display_text_run_measurement_plan_builds_from_shaped_glyphs() {
 #[test]
 fn display_row_glyph_measurer_builds_measured_complex_text_run_plan() {
     let mut base = base_face();
-    base.font_family = "monospace".to_string();
+    base.font_family = std::sync::Arc::from("monospace");
     base.font_size = 14.0;
     base.set_measured_char_width_px(8.0);
     let faces = vec![DisplayRowFace::from_resolved(FaceId::new(8), &base)];
@@ -3175,7 +3175,7 @@ fn display_row_glyph_measurer_builds_measured_complex_text_run_plan() {
 #[test]
 fn display_row_glyph_measurer_measures_every_plain_latin_character_independently() {
     let mut base = base_face();
-    base.font_family = "Noto Sans".to_string();
+    base.font_family = std::sync::Arc::from("Noto Sans");
     base.font_size = 14.0;
     base.set_measured_char_width_px(8.0);
     let faces = vec![DisplayRowFace::from_resolved(FaceId::new(8), &base)];
@@ -3201,7 +3201,7 @@ fn display_row_glyph_measurer_measures_every_plain_latin_character_independently
 #[test]
 fn display_row_glyph_measurement_face_builds_text_run_measurement_plan() {
     let mut base = base_face();
-    base.font_family = "monospace".to_string();
+    base.font_family = std::sync::Arc::from("monospace");
     base.font_size = 14.0;
     base.set_measured_char_width_px(8.0);
     let measurement_face =

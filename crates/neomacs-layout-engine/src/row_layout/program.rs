@@ -447,8 +447,8 @@ impl RowProgram {
             }
             metadata_bytes = metadata_bytes
                 .saturating_add(face.font_family.len())
-                .saturating_add(face.font_file_path.as_ref().map_or(0, String::len))
-                .saturating_add(face.lisp_name.as_ref().map_or(0, String::len));
+                .saturating_add(face.font_file_path.as_ref().map_or(0, |path| path.len()))
+                .saturating_add(face.lisp_name.as_ref().map_or(0, |name| name.len()));
         }
         if metadata_bytes > limits.text_bytes {
             return Err(RowProgramError::Budget);

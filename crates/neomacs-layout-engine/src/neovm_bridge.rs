@@ -3497,7 +3497,7 @@ pub struct ResolvedFace {
     /// Use the terminal's default background instead of `bg`.
     pub use_default_background: bool,
     /// Font family name.
-    pub font_family: String,
+    pub font_family: neomacs_display_protocol::face::FaceString,
     /// Font weight (CSS 100-900).
     pub font_weight: u16,
     /// Italic flag.
@@ -3567,11 +3567,11 @@ pub struct ResolvedFace {
     /// Lisp face name this face was resolved from, when it came from a
     /// named face (GNU keeps the name reachable via `struct face::lface`).
     /// `None` for anonymous attribute-plist faces.
-    pub lisp_name: Option<String>,
+    pub lisp_name: Option<neomacs_display_protocol::face::FaceString>,
     /// Realized `:stipple` bitmap, if the face specified one. GNU realizes the
     /// `LFACE_STIPPLE_INDEX` spec to a pixmap id in `face->stipple`; neomacs
     /// realizes it directly to the XBM `StipplePattern` the renderer tiles.
-    pub stipple: Option<neomacs_display_protocol::StipplePattern>,
+    pub stipple: Option<std::sync::Arc<neomacs_display_protocol::StipplePattern>>,
 }
 
 impl Default for ResolvedFace {
@@ -3583,7 +3583,7 @@ impl Default for ResolvedFace {
             terminal_bg: None,
             use_default_foreground: false,
             use_default_background: false,
-            font_family: String::new(),
+            font_family: neomacs_display_protocol::face::empty_face_string(),
             font_weight: 400,
             italic: false,
             font_size: 14.0,
@@ -4552,8 +4552,8 @@ impl FaceResolver {
             df.set_frame_default_background(default_bg);
         }
         df.font_family = neo_default
-            .family_runtime_string_owned()
-            .unwrap_or_default();
+            .family_runtime_string_shared()
+            .unwrap_or_else(neomacs_display_protocol::face::empty_face_string);
         df.font_weight = neo_default
             .weight
             .map(FontWeight::css_weight)
@@ -4681,7 +4681,7 @@ impl FaceResolver {
             generation: evaluator.face_change_count(),
         });
         let mut named_default = (*self.default_face).clone();
-        named_default.lisp_name = Some(BasicFace::Default.name().to_owned());
+        named_default.lisp_name = Some(std::sync::Arc::from(BasicFace::Default.name()));
         let mut basic_faces = Box::new(enum_map::EnumMap::default());
         basic_faces[BasicFace::Default] = Some(named_default);
         for name in neovm_core::face::realization::basic_face_names() {
@@ -4718,7 +4718,7 @@ impl FaceResolver {
             } else {
                 TtySpaceIdentity::OtherRealized
             };
-            resolved.lisp_name = Some(name.to_owned());
+            resolved.lisp_name = Some(std::sync::Arc::from(name));
             resolved.face_id =
                 BasicFaceId::from_name(name).map_or(BasicFaceId::SENTINEL, u32::from);
             basic_faces[role] = Some(resolved);
@@ -4978,7 +4978,7 @@ impl FaceResolver {
         }
         let face = self.face_table.resolve(name);
         let mut resolved = self.realize_face(&face);
-        resolved.lisp_name = Some(name.to_string());
+        resolved.lisp_name = Some(std::sync::Arc::from(name));
         if let Some(basic) = BasicFaceId::from_name(name) {
             resolved.face_id = basic.into();
         } else {
@@ -5003,7 +5003,7 @@ impl FaceResolver {
         }
         let face = self.face_table.resolve_producer(value)?;
         let mut resolved = self.realize_face(&face);
-        resolved.lisp_name = Some(name.to_string());
+        resolved.lisp_name = Some(std::sync::Arc::from(name));
         resolved.face_id = BasicFaceId::from_name(name)
             .map(u32::from)
             .unwrap_or(BasicFaceId::SENTINEL);
@@ -5024,7 +5024,7 @@ impl FaceResolver {
         let mut face = self.face_table.resolve(name);
         face.inverse_video = Some(false);
         let mut resolved = self.realize_face(&face);
-        resolved.lisp_name = Some(name.to_string());
+        resolved.lisp_name = Some(std::sync::Arc::from(name));
         if let Some(basic) = BasicFaceId::from_name(name) {
             resolved.face_id = basic.into();
         } else {
@@ -5363,7 +5363,7 @@ impl FaceResolver {
             .realize()
             .install(&mut rf);
 
-        if let Some(family) = face.family_runtime_string_owned() {
+        if let Some(family) = face.family_runtime_string_shared() {
             rf.font_family = family;
         }
         if let Some(weight) = face.weight {
@@ -5443,7 +5443,7 @@ impl FaceResolver {
         // semantics). This is the path buffer-text (text-property / overlay /
         // font-lock) faces take, e.g. `indent-bars`.
         if let Some(pat) = self.realize_stipple(face) {
-            rf.stipple = Some(pat);
+            rf.stipple = Some(std::sync::Arc::new(pat));
         }
 
         rf
@@ -5762,7 +5762,7 @@ impl FaceResolver {
                 resolved.face_id = 0;
                 resolved.canonical_tty_role = None;
                 resolved.tty_space_identity = TtySpaceIdentity::Unknown;
-                resolved.lisp_name = Some(face_id.name().to_string());
+                resolved.lisp_name = Some(face_id.name_shared());
                 resolved
             }
         }
@@ -6011,7 +6011,7 @@ impl FaceResolver {
         resolved.face_id = BasicFaceId::SENTINEL;
         resolved.canonical_tty_role = None;
         resolved.tty_space_identity = TtySpaceIdentity::Unknown;
-        resolved.lisp_name = Some(name.to_string());
+        resolved.lisp_name = Some(std::sync::Arc::from(name));
         resolved
     }
 
@@ -6442,7 +6442,7 @@ impl FaceResolver {
             .install(&mut rf);
 
         // Font family
-        if let Some(family) = face.family_runtime_string_owned() {
+        if let Some(family) = face.family_runtime_string_shared() {
             rf.font_family = family;
         }
         // Font weight
@@ -6530,7 +6530,7 @@ impl FaceResolver {
         // tiles behind glyphs. GNU realizes `LFACE_STIPPLE_INDEX` to a pixmap
         // id in `face->stipple`; neomacs keeps the small bitmap on the face.
         if let Some(pat) = self.realize_stipple(face) {
-            rf.stipple = Some(pat);
+            rf.stipple = Some(std::sync::Arc::new(pat));
         }
 
         rf

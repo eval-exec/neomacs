@@ -3,7 +3,7 @@ use crate::display_row::metrics::DisplayRowFallbackMetrics;
 
 fn face(family: &str, size: f32) -> ResolvedFace {
     let mut face = ResolvedFace::default();
-    face.font_family = family.to_string();
+    face.font_family = std::sync::Arc::from(family);
     face.font_weight = 400;
     face.italic = false;
     face.font_size = size;

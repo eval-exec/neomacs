@@ -192,7 +192,7 @@ fn test_face_creation() {
 #[test]
 fn test_pango_font_desc() {
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "DejaVu Sans Mono".to_string();
+    face.font_family = std::sync::Arc::from("DejaVu Sans Mono");
     face.font_size = 14.0;
     face.attributes = FaceAttributes::BOLD | FaceAttributes::ITALIC;
 
@@ -209,7 +209,7 @@ fn test_default_face_values() {
     assert_eq!(face.id, FaceId::new(0));
     assert_eq!(face.foreground, Color::WHITE);
     assert_eq!(face.background, Color::BLACK);
-    assert_eq!(face.font_family, "monospace");
+    assert_eq!(face.font_family.as_ref(), "monospace");
     assert_eq!(face.font_size, 10.0);
     assert_eq!(face.font_weight, 400);
     assert_eq!(face.attributes, FaceAttributes::empty());
@@ -466,7 +466,7 @@ fn test_combined_attributes() {
 fn test_pango_font_desc_plain() {
     // No bold, no italic — should just be family + size
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "Fira Code".to_string();
+    face.font_family = std::sync::Arc::from("Fira Code");
     face.font_size = 16.0;
     let desc = face.to_pango_font_description();
     assert_eq!(desc, "Fira Code 16");
@@ -475,7 +475,7 @@ fn test_pango_font_desc_plain() {
 #[test]
 fn test_pango_font_desc_bold_only() {
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "monospace".to_string();
+    face.font_family = std::sync::Arc::from("monospace");
     face.font_size = 10.0;
     face.attributes = FaceAttributes::BOLD;
     let desc = face.to_pango_font_description();
@@ -485,7 +485,7 @@ fn test_pango_font_desc_bold_only() {
 #[test]
 fn test_pango_font_desc_italic_only() {
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "monospace".to_string();
+    face.font_family = std::sync::Arc::from("monospace");
     face.font_size = 10.0;
     face.attributes = FaceAttributes::ITALIC;
     let desc = face.to_pango_font_description();
@@ -496,7 +496,7 @@ fn test_pango_font_desc_italic_only() {
 fn test_pango_font_desc_bold_via_weight() {
     // Bold should appear in description when font_weight >= 700 even without BOLD attribute
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "serif".to_string();
+    face.font_family = std::sync::Arc::from("serif");
     face.font_size = 12.0;
     face.font_weight = 700;
     let desc = face.to_pango_font_description();
@@ -508,7 +508,7 @@ fn test_pango_font_desc_bold_via_weight() {
 fn test_pango_font_desc_truncates_size() {
     // font_size 13.7 should be truncated to 13 (cast as i32)
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "monospace".to_string();
+    face.font_family = std::sync::Arc::from("monospace");
     face.font_size = 13.7;
     let desc = face.to_pango_font_description();
     assert_eq!(desc, "monospace 13");

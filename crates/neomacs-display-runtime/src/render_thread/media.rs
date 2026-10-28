@@ -1086,8 +1086,8 @@ fn terminal_cell_face(
         UnderlineStyle::None
     };
     let font_family = default_font
-        .map(|font| font.family.clone())
-        .unwrap_or_else(|| "monospace".to_string());
+        .map(|font| std::sync::Arc::from(font.family.as_str()))
+        .unwrap_or_else(neomacs_display_protocol::face::default_font_family);
     Face {
         id: face_id,
         tty_space_identity: neomacs_display_protocol::face::TtySpaceIdentity::Unknown,
@@ -1102,7 +1102,7 @@ fn terminal_cell_face(
         overline_color: None,
         strike_through_color: None,
         box_color: None,
-        font_family: font_family.clone(),
+        font_family,
         font_size,
         font_weight: if style.bold { 700 } else { 400 },
         attributes: style.face_attributes(),
@@ -1113,7 +1113,8 @@ fn terminal_cell_face(
         box_border_style: neomacs_display_protocol::face::BoxBorderStyle::Solid,
         box_border_speed: 1.0,
         box_color2: None,
-        font_file_path: default_font.and_then(|font| font.identity.file_path.clone()),
+        font_file_path: default_font
+            .and_then(|font| font.identity.file_path.as_deref().map(std::sync::Arc::from)),
         font_ascent: default_font.map_or(0, |font| font.ascent_px.round() as i32),
         font_descent: default_font.map_or(0, |font| font.descent_px.round() as i32),
         underline_position: 1,

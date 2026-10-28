@@ -1639,6 +1639,18 @@ pub fn to_utf8_lossy(bytes: &[u8]) -> String {
     out
 }
 
+/// [`to_utf8_lossy`] with the result stored as a shared immutable payload.
+///
+/// Realized faces keep their strings for the frame's lifetime and are copied
+/// per frame/row; one `Arc<str>` allocation here replaces a fresh `String` on
+/// every copy. Valid UTF-8 takes the direct path (no intermediate `String`).
+pub fn to_utf8_lossy_arc(bytes: &[u8]) -> std::sync::Arc<str> {
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return std::sync::Arc::from(text);
+    }
+    std::sync::Arc::from(to_utf8_lossy(bytes))
+}
+
 /// Decode Emacs-bytes into a lossy Rust `String` for measurement/layout/Debug
 /// consumers (line/char counting, motion, display estimation).
 ///

@@ -62,7 +62,7 @@ fn shared_source_identity_still_requires_the_escape_fields() {
 
     // The named-face resolver assigns the name after interning.
     let mut renamed = face.clone();
-    renamed.lisp_name = Some("font-lock-comment-face".to_owned());
+    renamed.lisp_name = Some(std::sync::Arc::from("font-lock-comment-face"));
     assert!(!face.shares_resolved_identity(&renamed));
 
     // Entry color state feeds the realization the memo would replay.

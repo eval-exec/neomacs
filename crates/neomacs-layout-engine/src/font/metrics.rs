@@ -3498,7 +3498,7 @@ pub(crate) fn realize_face_font(
     let family = if face.font_family.is_empty() {
         "monospace"
     } else {
-        face.font_family.as_str()
+        face.font_family.as_ref()
     };
     let font = service.resolved_font_for_face(
         family,
@@ -3508,7 +3508,7 @@ pub(crate) fn realize_face_font(
     )?;
     face.default_resolved_font_id = Some(font.id);
     if face.font_file_path.is_none() {
-        face.font_file_path = font.identity.file_path.clone();
+        face.font_file_path = font.identity.file_path.as_deref().map(std::sync::Arc::from);
     }
     Some(font)
 }
@@ -3519,7 +3519,7 @@ fn protocol_face_font_selection(
     let primary_family = if face.font_family.is_empty() {
         "monospace"
     } else {
-        face.font_family.as_str()
+        face.font_family.as_ref()
     };
     RealizedFaceFontSelection::new(
         primary_family,

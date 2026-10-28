@@ -129,7 +129,7 @@ fn bold_terminal_cell_does_not_replay_the_regular_font_as_exact() {
 
     assert_eq!(face.default_resolved_font_id, None);
     assert_eq!(face.font_weight, 700);
-    assert_eq!(face.font_family, "Terminal Font");
+    assert_eq!(face.font_family.as_ref(), "Terminal Font");
     assert_eq!(
         face.font_file_path.as_deref(),
         Some("/test-fixtures/terminal-font.ttf")
@@ -144,7 +144,7 @@ fn italic_terminal_cell_does_not_replay_the_upright_font_as_exact() {
 
     assert_eq!(face.default_resolved_font_id, None);
     assert!(face.attributes.contains(FaceAttributes::ITALIC));
-    assert_eq!(face.font_family, "Terminal Font");
+    assert_eq!(face.font_family.as_ref(), "Terminal Font");
     assert_eq!(
         face.font_file_path.as_deref(),
         Some("/test-fixtures/terminal-font.ttf")
@@ -171,7 +171,7 @@ fn terminal_glyph_expansion_inherits_frame_font_identity() {
     let face = terminal_face_for_flags(CellFlags::empty());
 
     assert_eq!(face.default_resolved_font_id, Some(ResolvedFontId(42)));
-    assert_eq!(face.font_family, "Terminal Font");
+    assert_eq!(face.font_family.as_ref(), "Terminal Font");
     assert_eq!(
         face.font_file_path.as_deref(),
         Some("/test-fixtures/terminal-font.ttf")

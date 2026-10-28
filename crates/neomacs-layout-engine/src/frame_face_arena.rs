@@ -173,6 +173,26 @@ fn realized_identity_lookup(
         .find_map(|(face, id)| same_face_realization(face, identity).then_some(*id))
 }
 
+/// The evaluator's `face_change_count` a frame face table was realized under.
+///
+/// A distinct type (not a raw `u64`) so a seat count can never stand in for a
+/// seal count or a font-catalog generation at a call site: the only way to
+/// compare epochs is through this type, and the engine's frame boundary is the
+/// single place that turns a mismatched epoch into a whole-cache retirement
+/// (GNU `face_change`, src/xfaces.c:3098-3105).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FaceEpoch(u64);
+
+impl FaceEpoch {
+    pub(crate) fn new(count: u64) -> Self {
+        Self(count)
+    }
+
+    pub(crate) fn get(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct FrameFaceGeneration(u64);
 
@@ -212,6 +232,11 @@ pub(crate) struct FrameFaceArena {
     /// Persistent monotonic id allocator. Never rewinds within an arena
     /// lineage, so a stable id can never be re-minted for different content.
     next_face_id: u32,
+    /// GNU `face_change_count` this table was realized under. A different
+    /// epoch at the next frame retires the whole cache (GNU `face_change`
+    /// frees realized faces, src/xfaces.c:3098-3105, :4889-4954), so retained
+    /// rows minted under the old definitions can never be admitted.
+    face_epoch: FaceEpoch,
 }
 
 #[derive(Clone, Debug)]
@@ -292,6 +317,7 @@ impl FrameFaceSeal {
     pub(crate) fn seal(
         self,
         presented: &FrameFaceMap,
+        face_epoch: FaceEpoch,
     ) -> Result<FrameFaceArena, FrameFaceSealError> {
         let mut finalized: Vec<FaceId> = presented.keys().copied().collect();
         finalized.sort_unstable();
@@ -317,6 +343,7 @@ impl FrameFaceSeal {
             realized: FrameFaceAttempt::fold_realized(&self.state),
             resolved_memo: FrameFaceAttempt::fold_resolved_memo(&self.state),
             next_face_id: self.state.next_face_id,
+            face_epoch,
         })
     }
 }
@@ -548,6 +575,7 @@ impl Default for FrameFaceArena {
             realized: Arc::new(HashMap::default()),
             resolved_memo: Arc::new(HashMap::default()),
             next_face_id: BasicFaceId::SENTINEL,
+            face_epoch: FaceEpoch::new(0),
         }
     }
 }
@@ -623,6 +651,31 @@ impl FrameFaceArena {
         self.generation
     }
 
+    /// GNU `face_change_count` the committed table was realized under. The
+    /// layout engine replaces the arena when this differs from the evaluator's
+    /// current count, which is exactly GNU's `face_change` retirement
+    /// (src/xfaces.c:3098-3105, `free_realized_faces` :4889-4954).
+    pub(crate) fn face_epoch(&self) -> FaceEpoch {
+        self.face_epoch
+    }
+
+    /// Retire every realized face and memo in this lineage, keeping the owner
+    /// and advancing the generation so no retained row or prepared snapshot
+    /// from the old definitions can be admitted (`StaleGeneration` /
+    /// `ForeignSnapshot` typed errors, never a content conflict).
+    pub(crate) fn invalidate_for_face_definition_change(&self, face_epoch: FaceEpoch) -> Self {
+        Self {
+            owner: Arc::clone(&self.owner),
+            snapshot: Arc::new(FrameFaceSnapshot),
+            generation: self.generation.next(),
+            faces: Arc::new(HashMap::default()),
+            realized: Arc::new(HashMap::default()),
+            resolved_memo: Arc::new(HashMap::default()),
+            next_face_id: BasicFaceId::SENTINEL,
+            face_epoch,
+        }
+    }
+
     fn new_attempt_state(&self) -> FrameFaceAttemptState {
         FrameFaceAttemptState {
             owner: Arc::clone(&self.owner),
@@ -660,6 +713,7 @@ impl FrameFaceArena {
             realized: Arc::new(HashMap::default()),
             resolved_memo: Arc::new(HashMap::default()),
             next_face_id: BasicFaceId::SENTINEL,
+            face_epoch: self.face_epoch,
         }
     }
 }
@@ -1026,6 +1080,7 @@ impl FrameFaceAttempt {
             realized: Self::fold_realized(&state),
             resolved_memo: Self::fold_resolved_memo(&state),
             next_face_id: state.next_face_id,
+            face_epoch: FaceEpoch::new(0),
         }
     }
 

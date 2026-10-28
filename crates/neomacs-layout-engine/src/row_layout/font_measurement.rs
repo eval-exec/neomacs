@@ -134,7 +134,7 @@ impl FontMeasurementSnapshot {
                     .filter(|ch| !ch.is_ascii())
                 {
                     let request = (
-                        face.font_family.as_str(),
+                        face.font_family.as_ref(),
                         ch,
                         face.font_weight,
                         face.italic,
@@ -176,7 +176,7 @@ impl FontMeasurementSnapshot {
 pub(crate) struct WorkerFontMeasurements {
     service: Option<FontMetricsService>,
     revision: Option<MeasurementRevision>,
-    faces: Vec<(String, u16, bool, u32)>,
+    faces: Vec<(neomacs_display_protocol::face::FaceString, u16, bool, u32)>,
     #[cfg(test)]
     cache_rebuilds: usize,
 }
@@ -195,7 +195,7 @@ impl WorkerFontMeasurements {
             .iter()
             .map(|face| {
                 (
-                    face.font_family.as_str(),
+                    face.font_family.as_ref(),
                     face.font_weight,
                     face.italic,
                     face.font_size.to_bits(),
@@ -203,7 +203,7 @@ impl WorkerFontMeasurements {
             })
             .collect();
         for (family, weight, italic, size) in &self.faces {
-            new_faces.remove(&(family.as_str(), *weight, *italic, *size));
+            new_faces.remove(&(family.as_ref(), *weight, *italic, *size));
         }
         if self.revision != Some(snapshot.revision)
             || self.faces.len() + new_faces.len() > MAX_CACHED_FACES

@@ -297,7 +297,7 @@ fn set_face_with_font_registers_baseline_render_face() {
         .get(&FaceId::new(42))
         .expect("face entry should exist");
     assert_eq!(face.id, FaceId::new(42));
-    assert_eq!(face.font_family, "DejaVu Sans");
+    assert_eq!(face.font_family.as_ref(), "DejaVu Sans");
     assert_eq!(face.font_size, 18.0);
     assert_eq!(face.font_weight, 700);
     assert!(face.attributes.contains(FaceAttributes::BOLD));
@@ -316,21 +316,21 @@ fn render_face_treats_face_ids_as_frame_local() {
     let mut child = FrameGlyphBuffer::new();
 
     let mut root_face = Face::new(FaceId::new(7));
-    root_face.font_family = "Root Mono".to_string();
+    root_face.font_family = std::sync::Arc::from("Root Mono");
     root_face.font_size = 11.0;
     root.faces.insert(FaceId::new(7), root_face);
 
     let mut child_face = Face::new(FaceId::new(7));
-    child_face.font_family = "Child Mono".to_string();
+    child_face.font_family = std::sync::Arc::from("Child Mono");
     child_face.font_size = 23.0;
     child.faces.insert(FaceId::new(7), child_face);
 
     let root_render_face = root.render_face(FaceId::new(7)).expect("root face");
     let child_render_face = child.render_face(FaceId::new(7)).expect("child face");
 
-    assert_eq!(root_render_face.font_family, "Root Mono");
+    assert_eq!(root_render_face.font_family.as_ref(), "Root Mono");
     assert_eq!(root_render_face.font_size, 11.0);
-    assert_eq!(child_render_face.font_family, "Child Mono");
+    assert_eq!(child_render_face.font_family.as_ref(), "Child Mono");
     assert_eq!(child_render_face.font_size, 23.0);
 }
 
@@ -373,7 +373,7 @@ fn set_face_uses_current_font_context_for_face_entry() {
         .faces
         .get(&FaceId::new(2))
         .expect("face entry should exist");
-    assert_eq!(face.font_family, "Iosevka");
+    assert_eq!(face.font_family.as_ref(), "Iosevka");
     assert_eq!(face.font_size, 15.0);
     assert_eq!(face.font_weight, 600);
     assert!(face.attributes.contains(FaceAttributes::ITALIC));
@@ -1267,7 +1267,7 @@ fn get_face_font_reads_from_faces_map() {
 
     // Insert faces (as layout engine's apply_face would)
     let mut face1 = Face::new(FaceId::new(1));
-    face1.font_family = "JetBrains Mono".to_string();
+    face1.font_family = std::sync::Arc::from("JetBrains Mono");
     buf.faces.insert(FaceId::new(1), face1);
 
     assert_eq!(buf.get_face_font(FaceId::new(1)), "JetBrains Mono");

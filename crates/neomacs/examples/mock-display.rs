@@ -814,7 +814,7 @@ fn build_faces() -> FrameFaceMap {
     );
 
     // Face 1: Mode-line with noise gradient, black foreground
-    let mode_line_gradient = Some(Box::new(Gradient::Noise {
+    let mode_line_gradient = Some(std::sync::Arc::new(Gradient::Noise {
         scale: 4.0,
         octaves: 4,
         color1: Color::new(1.0, 0.42, 0.62, 1.0), // #FF6B9D
@@ -854,7 +854,7 @@ fn build_faces() -> FrameFaceMap {
     );
 
     // Face 3: Comments with radial gradient
-    let comment_gradient = Some(Box::new(Gradient::Radial {
+    let comment_gradient = Some(std::sync::Arc::new(Gradient::Radial {
         center_x: 0.5,
         center_y: 0.5,
         radius: 0.8,
@@ -880,7 +880,7 @@ fn build_faces() -> FrameFaceMap {
     );
 
     // Face 4: Strings with conic gradient
-    let string_gradient = Some(Box::new(Gradient::Conic {
+    let string_gradient = Some(std::sync::Arc::new(Gradient::Conic {
         center_x: 0.5,
         center_y: 0.5,
         angle_offset: 0.0,
@@ -1045,7 +1045,7 @@ fn mk(
     bb: f32,
     weight: u16,
     italic: bool,
-    gradient: Option<Box<neomacs_display_protocol::gradient::Gradient>>,
+    gradient: Option<std::sync::Arc<neomacs_display_protocol::gradient::Gradient>>,
 ) -> Face {
     let mut attrs = FaceAttributes::empty();
     if italic {

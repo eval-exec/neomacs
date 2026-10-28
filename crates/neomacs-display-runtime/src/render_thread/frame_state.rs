@@ -114,7 +114,8 @@ pub(super) fn summarize_face_changes(old: &FrameFaceMap, new: &FrameFaceMap) -> 
 
 fn face_name(face: &Face) -> String {
     face.lisp_name
-        .clone()
+        .as_deref()
+        .map(str::to_owned)
         .unwrap_or_else(|| "<anonymous>".to_owned())
 }
 

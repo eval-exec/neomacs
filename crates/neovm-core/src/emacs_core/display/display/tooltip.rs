@@ -297,7 +297,7 @@ fn text_runs(
         };
         if let Some(font) = &font {
             paint.default_resolved_font_id = Some(font.id);
-            paint.font_family = font.family.clone();
+            paint.font_family = std::sync::Arc::from(font.family.as_str());
             paint.font_size = font.pixel_size;
             paint.font_ascent = font.ascent_px as i32;
             paint.font_descent = font.descent_px as i32;

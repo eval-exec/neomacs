@@ -101,7 +101,7 @@ use crate::font::frame_metrics::FrameFontDomain;
 use crate::font::metrics::{FontMetricsService, FrameCellGeometry};
 use crate::font::sizing::FontSizing;
 use crate::frame_face_arena::{
-    FrameFaceArena, FrameFaceAttempt, FrameFaceGeneration, FrameFaceReuseError,
+    FaceEpoch, FrameFaceArena, FrameFaceAttempt, FrameFaceGeneration, FrameFaceReuseError,
 };
 use crate::frame_layout_transaction::{FrameLayoutCoordinator, FrameRelayoutRequest};
 use crate::frame_visual_history::{FrameVisualHistories, FrameVisualHistory};
@@ -1997,11 +1997,32 @@ impl LayoutEngine {
             ..RedisplayLispLedger::default()
         };
         let mut window_chrome_metrics = self.retained_window_chrome_metrics.clone();
-        let committed_face_arena = self
-            .frame_face_arenas
-            .get(&frame_id)
-            .cloned()
-            .unwrap_or_default();
+        // GNU retires every realized face when `face_change` is set
+        // (`free_realized_faces`, src/xfaces.c:4889-4954, driven by
+        // `face_change_count`, src/xfaces.c:3098-3105). Do the same at the
+        // frame boundary: the arena keeps its owner lineage, but its faces,
+        // identity memo and generation are replaced, so retained rows minted
+        // under the old definitions fail admission with a typed
+        // `StaleGeneration` instead of colliding on a recycled basic id.
+        let frame_face_epoch = FaceEpoch::new(evaluator.face_change_count());
+        let committed_face_arena = match self.frame_face_arenas.get(&frame_id) {
+            Some(arena) if arena.face_epoch() == frame_face_epoch => arena.clone(),
+            Some(arena) => {
+                let invalidated = arena.invalidate_for_face_definition_change(frame_face_epoch);
+                // GNU's `face_change` retires everything derived from the old
+                // definitions, not only the realized face array: retained
+                // matrices and their chrome/scroll side tables carry face ids
+                // too (xfaces.c:3098-3105 -> redisplay_internal's full
+                // redisplay). Clearing them here means no stale row can reach
+                // a path that forgot an admission check; the arena lineage is
+                // re-inserted with a fresh generation so a retained handle
+                // that still exists elsewhere fails with `StaleGeneration`.
+                self.invalidate_for_font_selection_change();
+                self.frame_face_arenas.insert(frame_id, invalidated.clone());
+                invalidated
+            }
+            None => FrameFaceArena::default(),
+        };
         let mut frame_window_end_attempts = FrameWindowEndAttempts::default();
         let layout_walk_purpose = match purpose {
             LayoutPurpose::MiniPreparation { .. } => WindowLayoutWalkPurpose::MiniPreparation,
@@ -3597,7 +3618,7 @@ impl LayoutEngine {
             .and_then(|value| value.as_number_f64())
             .filter(|factor| factor.is_finite())
             .unwrap_or(1.0);
-        let sealed_face_arena = match face_seal.seal(&frame_display_state.faces) {
+        let sealed_face_arena = match face_seal.seal(&frame_display_state.faces, frame_face_epoch) {
             Ok(arena) => arena,
             Err(error) => {
                 tracing::error!(?error, "rejecting incoherent frame face namespace");
@@ -6256,7 +6277,7 @@ impl LayoutEngine {
             else {
                 continue;
             };
-            resolved.lisp_name = value.as_bare_symbol_name().map(str::to_owned);
+            resolved.lisp_name = value.as_bare_symbol_name().map(std::sync::Arc::from);
             let face_id = crate::display_row::face_state::stable_face_id_for_resolved(
                 &mut face_ids,
                 &resolved,

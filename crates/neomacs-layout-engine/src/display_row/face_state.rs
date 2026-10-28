@@ -43,8 +43,8 @@ pub(crate) struct DisplayRowFace {
     pub(crate) extend: bool,
     pub(crate) use_default_foreground: bool,
     pub(crate) use_default_background: bool,
-    pub(crate) font_family: String,
-    pub(crate) font_file_path: Option<String>,
+    pub(crate) font_family: neomacs_display_protocol::face::FaceString,
+    pub(crate) font_file_path: Option<neomacs_display_protocol::face::FaceString>,
     pub(crate) font_weight: u16,
     pub(crate) italic: bool,
     pub(crate) font_size: f32,
@@ -69,9 +69,9 @@ pub(crate) struct DisplayRowFace {
     pub(crate) metrics: DisplayRowFaceMetrics,
     pub(crate) underline_position: UnderlinePosition,
     pub(crate) underline_thickness: i32,
-    pub(crate) lisp_name: Option<String>,
+    pub(crate) lisp_name: Option<neomacs_display_protocol::face::FaceString>,
     /// Realized `:stipple` bitmap tiled behind the face's glyphs, if any.
-    pub(crate) stipple: Option<neomacs_display_protocol::StipplePattern>,
+    pub(crate) stipple: Option<std::sync::Arc<neomacs_display_protocol::StipplePattern>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -178,9 +178,9 @@ impl DisplayRowFace {
     pub(crate) fn from_resolved(face_id: FaceId, face: &ResolvedFace) -> Self {
         let box_type = BoxType::from_gnu_code(face.box_type).unwrap_or_default();
         let font_family = if face.font_family.is_empty() {
-            "monospace".to_string()
+            neomacs_display_protocol::face::default_font_family()
         } else {
-            face.font_family.clone()
+            std::sync::Arc::clone(&face.font_family)
         };
         Self {
             face_id,
@@ -319,9 +319,9 @@ impl DisplayRowFace {
             default_resolved_font_id: None,
             lisp_name: self.lisp_name.clone().or_else(|| {
                 neomacs_display_protocol::face::BasicFaceId::from_gnu_code(self.face_id.get())
-                    .map(|basic| basic.name().to_string())
+                    .map(|basic| basic.name_shared())
             }),
-            stipple: self.stipple.clone().map(Box::new),
+            stipple: self.stipple.clone(),
             underline_placement: self.underline_position,
         }
     }

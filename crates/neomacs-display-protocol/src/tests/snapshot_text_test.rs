@@ -22,7 +22,7 @@ fn golden_state() -> FrameDisplayState {
     );
 
     let mut default_face = Face::new(FaceId::new(0));
-    default_face.lisp_name = Some("default".to_string());
+    default_face.lisp_name = Some(std::sync::Arc::from("default"));
     default_face.foreground = Color::WHITE;
     default_face.background = Color::BLACK;
     state.faces.insert(FaceId::new(0), default_face);

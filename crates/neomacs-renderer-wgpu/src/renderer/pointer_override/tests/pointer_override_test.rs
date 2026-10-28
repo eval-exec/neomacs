@@ -757,7 +757,7 @@ fn complement_clips_do_not_reanchor_gradient_or_stipple_paint_coordinates() {
 #[test]
 fn subpixel_background_sampling_uses_immutable_paint_domain_not_output_clip() {
     let mut face = Face::new(FaceId::new(3));
-    face.background_gradient = Some(Box::new(Gradient::Linear {
+    face.background_gradient = Some(std::sync::Arc::new(Gradient::Linear {
         angle: 0.0,
         stops: vec![
             ColorStop::new(0.0, Color::RED),

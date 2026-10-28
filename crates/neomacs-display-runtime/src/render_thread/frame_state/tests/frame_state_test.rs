@@ -52,7 +52,7 @@ fn face(id: FaceId) -> Face {
 fn named_face(id: FaceId, name: &str) -> Face {
     Face {
         id,
-        lisp_name: Some(name.to_owned()),
+        lisp_name: Some(std::sync::Arc::from(name)),
         ..Face::default()
     }
 }
@@ -131,7 +131,7 @@ fn changing_a_face_font_is_classified_as_raster_relevant() {
     let id = FaceId::new(1);
     let old = HashMap::from_iter([(id, named_face(id, "refonted"))]);
     let mut refonted = named_face(id, "refonted");
-    refonted.font_family = "Iosevka".to_owned();
+    refonted.font_family = std::sync::Arc::from("Iosevka");
     let new = HashMap::from_iter([(id, refonted)]);
 
     let summary = summarize_face_changes(&old, &new);

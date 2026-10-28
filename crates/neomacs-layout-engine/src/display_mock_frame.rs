@@ -392,7 +392,7 @@ pub(crate) fn layout_mock_frame_content(
         sizing.layout_dpi(),
     );
     let default_family = default_face
-        .map(|f| f.font_family.as_str())
+        .map(|f| f.font_family.as_ref())
         .unwrap_or("monospace");
     let default_weight = default_face.map(|f| f.font_weight).unwrap_or(400);
     let default_italic = default_face

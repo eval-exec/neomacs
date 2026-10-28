@@ -151,7 +151,7 @@ fn prepared_faces(attempt: &FrameFaceAttempt) -> Vec<RealizedFrameFace> {
         .into_iter()
         .map(|id| {
             let mut face = Face::new(FaceId::new(id));
-            face.font_family = format!("move-test-{id}");
+            face.font_family = std::sync::Arc::from(format!("move-test-{id}"));
             attempt.prepare_face(face).expect("unpublished face")
         })
         .collect()

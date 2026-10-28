@@ -1133,6 +1133,25 @@ impl Face {
         })
     }
 
+    /// Shared-payload form of [`Self::family_runtime_string_owned`], for
+    /// realized faces that are copied per frame (see `FaceString`).
+    pub fn family_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
+        self.family.and_then(|value| {
+            value
+                .as_lisp_string()
+                .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy_arc(ls.as_bytes()))
+        })
+    }
+
+    /// Shared-payload form of [`Self::foundry_runtime_string_owned`].
+    pub fn foundry_runtime_string_shared(&self) -> Option<std::sync::Arc<str>> {
+        self.foundry.and_then(|value| {
+            value
+                .as_lisp_string()
+                .map(|ls| crate::emacs_core::emacs_char::to_utf8_lossy_arc(ls.as_bytes()))
+        })
+    }
+
     /// Compatibility constructor for existing call sites. The name is owned
     /// by `FaceTable`, not by `Face` itself.
     pub fn new(_name: &str) -> Self {

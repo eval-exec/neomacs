@@ -52,12 +52,13 @@ fn picture(background: Color, alpha: f32) -> FrameGlyphBuffer {
         0,
         None,
     );
-    frame.faces.get_mut(&FaceId::new(0)).unwrap().stipple =
-        Some(Box::new(neomacs_display_protocol::StipplePattern {
+    frame.faces.get_mut(&FaceId::new(0)).unwrap().stipple = Some(std::sync::Arc::new(
+        neomacs_display_protocol::StipplePattern {
             width: 1,
             height: 1,
             bits: vec![1],
-        }));
+        },
+    ));
     frame.set_draw_context(DisplayWindowId::new(1), GlyphRowRole::Text, None);
     frame.add_stretch(24.0, 16.0, 16.0, 80.0, background, FaceId::new(0), false);
     frame

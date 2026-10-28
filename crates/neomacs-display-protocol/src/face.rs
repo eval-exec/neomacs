@@ -7,7 +7,30 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::os::raw::c_int;
+use std::sync::{Arc, OnceLock};
 use strum::{EnumString, IntoStaticStr};
+
+/// Shared, immutable string payload of a realized face.
+///
+/// Faces are copied per frame, per row and per retained-row admission, but a
+/// face's strings never change after realization: `face_change`/font changes
+/// mint a *different* realization instead of mutating one (GNU's face cache
+/// keys realizations by their merged lface vector and invalidates wholesale,
+/// src/xfaces.c:3098-3105, :5064-5093). Sharing the payload makes those
+/// copies refcount bumps while keeping identity (`PartialEq`) content-based.
+pub type FaceString = Arc<str>;
+
+/// The default family without allocating a fresh string per `Face::default`.
+pub fn default_font_family() -> FaceString {
+    static DEFAULT: OnceLock<FaceString> = OnceLock::new();
+    Arc::clone(DEFAULT.get_or_init(|| Arc::from("monospace")))
+}
+
+/// The empty payload without one allocation per defaulted resolved face.
+pub fn empty_face_string() -> FaceString {
+    static EMPTY: OnceLock<FaceString> = OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::from("")))
+}
 
 /// The realized face table a frame presentation carries, keyed by face id.
 ///
@@ -497,6 +520,23 @@ impl BasicFaceId {
         self.into()
     }
 
+    /// The canonical name as a shared face payload: the fallback `Face::lisp_name`
+    /// is copied onto every realization of a basic face, so allocate each name
+    /// once per process rather than once per row.
+    pub fn name_shared(self) -> FaceString {
+        static NAMES: OnceLock<[FaceString; BasicFaceId::SENTINEL as usize]> = OnceLock::new();
+        let names = NAMES.get_or_init(|| {
+            std::array::from_fn(|index| {
+                Arc::from(
+                    BasicFaceId::try_from(index as u32)
+                        .expect("basic face name table is exactly SENTINEL long")
+                        .name(),
+                )
+            })
+        });
+        Arc::clone(&names[self as usize])
+    }
+
     /// Return GNU's fixed `enum face_id` value.
     pub fn gnu_code(self) -> u32 {
         self.into()
@@ -615,8 +655,8 @@ pub struct Face {
     /// Box color
     pub box_color: Option<Color>,
 
-    /// Font family name
-    pub font_family: String,
+    /// Font family name (shared: face copies are refcount bumps).
+    pub font_family: FaceString,
 
     /// Font size in points (1/72 inch)
     pub font_size: f32,
@@ -650,7 +690,7 @@ pub struct Face {
 
     /// Absolute path to the resolved font file (from Fontconfig), if available.
     /// Used to pre-load the exact font file into cosmic-text's fontdb.
-    pub font_file_path: Option<String>,
+    pub font_file_path: Option<FaceString>,
 
     /// Font metrics from Emacs's realized font
     /// Font ascent (FONT_BASE) in pixels
@@ -669,7 +709,7 @@ pub struct Face {
     /// Optional GPU-rendered gradient background.
     /// If present, this overrides the solid `background` color during rendering.
     /// GPU fragment shader evaluates the gradient per-pixel with no CPU overhead.
-    pub background_gradient: Option<Box<crate::gradient::Gradient>>,
+    pub background_gradient: Option<Arc<crate::gradient::Gradient>>,
 
     /// Lisp face name this realized face came from (e.g.
     /// "font-lock-keyword-face"), when known. `None` for anonymous faces
@@ -678,7 +718,7 @@ pub struct Face {
     ///
     /// NOTE: new fields append AFTER this one so the `#[repr(C)]` prefix
     /// layout stays stable for existing readers.
-    pub lisp_name: Option<String>,
+    pub lisp_name: Option<FaceString>,
 
     /// The face's primary resolved font, referencing the frame state's
     /// resolved font table (`FrameDisplayState::fonts`). When present, the
@@ -692,7 +732,7 @@ pub struct Face {
     /// background (`highlight-indent-guides`/`indent-bars` rely on this).
     /// Boxed to keep `Face` small, matching `background_gradient`.
     #[serde(default)]
-    pub stipple: Option<Box<crate::frame_glyphs::StipplePattern>>,
+    pub stipple: Option<Arc<crate::frame_glyphs::StipplePattern>>,
 
     /// Typed GNU-compatible vertical placement policy.
     #[serde(default)]
@@ -724,7 +764,7 @@ impl Default for Face {
             overline_color: None,
             strike_through_color: None,
             box_color: None,
-            font_family: "monospace".to_string(),
+            font_family: default_font_family(),
             font_size: 10.0,
             font_weight: 400,
             attributes: FaceAttributes::empty(),
@@ -787,7 +827,7 @@ impl Face {
 
     /// Create a Pango font description string
     pub fn to_pango_font_description(&self) -> String {
-        let mut desc = self.font_family.clone();
+        let mut desc = self.font_family.to_string();
 
         if self.is_italic() {
             desc.push_str(" Italic");
@@ -890,13 +930,14 @@ impl FaceDataFFI {
     /// Caller must ensure `font_family` and `font_file_path` pointers
     /// (if non-null) point to valid, null-terminated C strings.
     pub unsafe fn to_face(&self) -> Face {
-        let font_family = if !self.font_family.is_null() {
-            unsafe { CStr::from_ptr(self.font_family) }
-                .to_str()
-                .unwrap_or("monospace")
-                .to_string()
+        let font_family: FaceString = if !self.font_family.is_null() {
+            Arc::from(
+                unsafe { CStr::from_ptr(self.font_family) }
+                    .to_str()
+                    .unwrap_or("monospace"),
+            )
         } else {
-            "monospace".to_string()
+            default_font_family()
         };
 
         let font_file_path = if !self.font_file_path.is_null() {
@@ -904,7 +945,7 @@ impl FaceDataFFI {
                 .to_str()
                 .ok()
                 .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
+                .map(Arc::from)
         } else {
             None
         };

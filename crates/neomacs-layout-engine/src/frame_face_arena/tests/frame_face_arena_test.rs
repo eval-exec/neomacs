@@ -180,7 +180,9 @@ fn publication_moves_the_table_into_the_presented_state() {
         .install();
     assert_eq!(presented.len(), 1);
     assert_eq!(presented.get(&face_id), Some(&face));
-    let sealed = seal.seal(&presented).expect("seal the moved table");
+    let sealed = seal
+        .seal(&presented, crate::frame_face_arena::FaceEpoch::new(0))
+        .expect("seal the moved table");
 
     let mut replay = sealed.begin_attempt();
     replay
@@ -209,7 +211,7 @@ fn sealing_accepts_font_enrichment_of_the_installed_table() {
     entry.font_ascent = 14;
     entry.font_descent = 4;
     let sealed = seal
-        .seal(&presented)
+        .seal(&presented, crate::frame_face_arena::FaceEpoch::new(0))
         .expect("sealing may enrich a published face");
     let mut replay = sealed.begin_attempt();
     replay
@@ -330,7 +332,8 @@ fn seal_rejects_a_presented_table_that_dropped_a_published_face() {
         .install();
     presented.remove(&face.id);
     assert_eq!(
-        seal.seal(&presented).err(),
+        seal.seal(&presented, crate::frame_face_arena::FaceEpoch::new(0))
+            .err(),
         Some(FrameFaceSealError::FaceSetChanged {
             published: vec![face.id],
             finalized: vec![],
@@ -354,7 +357,8 @@ fn seal_rejects_a_rekeyed_presented_face() {
     let wrong_id = FaceId::new(7);
     *presented.get_mut(&face.id).unwrap() = Face::new(wrong_id);
     assert_eq!(
-        seal.seal(&presented).err(),
+        seal.seal(&presented, crate::frame_face_arena::FaceEpoch::new(0))
+            .err(),
         Some(FrameFaceSealError::MismatchedFaceId {
             table_id: face.id,
             face_id: wrong_id,
@@ -487,7 +491,7 @@ fn borrowed_realization_comparison_matches_canonical_projection_for_every_field(
         (
             "background_gradient",
             |face| {
-                face.background_gradient = Some(Box::new(Gradient::Linear {
+                face.background_gradient = Some(std::sync::Arc::new(Gradient::Linear {
                     angle: 90.0,
                     stops: vec![
                         ColorStop::new(0.0, Color::BLACK),
@@ -510,7 +514,7 @@ fn borrowed_realization_comparison_matches_canonical_projection_for_every_field(
         (
             "stipple",
             |face| {
-                face.stipple = Some(Box::new(StipplePattern {
+                face.stipple = Some(std::sync::Arc::new(StipplePattern {
                     width: 8,
                     height: 2,
                     bits: vec![0x55, 0xaa],
@@ -556,14 +560,14 @@ fn borrowed_realization_compares_nested_payload_contents_and_float_semantics() {
 
     let mut face = Face::new(FaceId::new(0));
     face.lisp_name = Some("nested payload face".into());
-    face.background_gradient = Some(Box::new(Gradient::Linear {
+    face.background_gradient = Some(std::sync::Arc::new(Gradient::Linear {
         angle: 90.0,
         stops: vec![
             ColorStop::new(0.0, Color::BLACK),
             ColorStop::new(1.0, Color::WHITE),
         ],
     }));
-    face.stipple = Some(Box::new(StipplePattern {
+    face.stipple = Some(std::sync::Arc::new(StipplePattern {
         width: 8,
         height: 2,
         bits: vec![0x55, 0xaa],
@@ -573,14 +577,16 @@ fn borrowed_realization_compares_nested_payload_contents_and_float_semantics() {
         same_face_realization(&face, &changed),
         "equal independently owned payloads match"
     );
-    changed.stipple.as_mut().unwrap().bits[1] ^= 1;
+    std::sync::Arc::make_mut(changed.stipple.as_mut().unwrap()).bits[1] ^= 1;
     assert!(!same_face_realization(&face, &changed));
     assert_eq!(
         same_face_realization(&face, &changed),
         face_realization_identity(&face) == face_realization_identity(&changed)
     );
     changed = face.clone();
-    let Gradient::Linear { stops, .. } = changed.background_gradient.as_deref_mut().unwrap() else {
+    let Gradient::Linear { stops, .. } =
+        std::sync::Arc::make_mut(changed.background_gradient.as_mut().unwrap())
+    else {
         unreachable!()
     };
     stops[1].position = 0.75;
@@ -589,7 +595,9 @@ fn borrowed_realization_compares_nested_payload_contents_and_float_semantics() {
         same_face_realization(&face, &changed),
         face_realization_identity(&face) == face_realization_identity(&changed)
     );
-    let Gradient::Linear { stops, .. } = changed.background_gradient.as_deref_mut().unwrap() else {
+    let Gradient::Linear { stops, .. } =
+        std::sync::Arc::make_mut(changed.background_gradient.as_mut().unwrap())
+    else {
         unreachable!()
     };
     stops[1].position = f32::NAN;
@@ -614,7 +622,7 @@ fn borrowed_validation_preserves_enrichment_conflicts_without_mutating_published
     for path in [None, Some("/fonts/exact.ttf"), Some("/fonts/different.ttf")] {
         for font_id in [None, Some(ResolvedFontId(7)), Some(ResolvedFontId(8))] {
             let mut replacement = base.clone();
-            replacement.font_file_path = path.map(str::to_owned);
+            replacement.font_file_path = path.map(std::sync::Arc::from);
             replacement.default_resolved_font_id = font_id;
             replacement.font_ascent = 18;
             replacement.font_descent = 0;
@@ -709,7 +717,7 @@ fn stable_ids_ignore_enrichment_but_not_content() {
     let mut enriched = base.clone();
     enriched.font_ascent = 12;
     enriched.font_descent = 3;
-    enriched.font_file_path = Some("/tmp/font.ttf".to_owned());
+    enriched.font_file_path = Some(std::sync::Arc::from("/tmp/font.ttf"));
 
     let arena = FrameFaceArena::default();
     let mut attempt = arena.begin_attempt();
@@ -796,7 +804,7 @@ fn later_realization_replaces_metrics_without_clearing_exact_font_identity() {
     let mut earlier = Face::new(face_id);
     earlier.font_ascent = 7;
     earlier.font_descent = 3;
-    earlier.font_file_path = Some("/fonts/exact.ttf".to_owned());
+    earlier.font_file_path = Some(std::sync::Arc::from("/fonts/exact.ttf"));
     attempt
         .import_face(earlier)
         .expect("publish earlier realization");
@@ -864,6 +872,43 @@ fn invalidated_arena_rejects_stale_retained_handles_before_admission() {
 }
 
 #[test]
+fn face_definition_epoch_change_retires_faces_and_rejects_old_retained_rows() {
+    let arena = FrameFaceArena::default();
+    let mut first = arena.begin_attempt();
+    let retained_id = first.reserve_dynamic_face();
+    first
+        .import_face(Face::new(retained_id))
+        .expect("publish retained face");
+    let committed = first.commit();
+    assert_eq!(committed.face_epoch(), FaceEpoch::new(0));
+
+    // GNU `face_change` retires the frame's realized faces without handing
+    // their ids or contents to the next definitions (src/xfaces.c:3098-3105,
+    // free_realized_faces :4889-4954).
+    let retired = committed.invalidate_for_face_definition_change(FaceEpoch::new(1));
+    assert_eq!(retired.face_epoch(), FaceEpoch::new(1));
+    assert_ne!(retired.generation(), committed.generation());
+    assert!(
+        retired.prepared_snapshot().faces.is_empty(),
+        "a face-definition change owns no old realization"
+    );
+
+    let mut next = retired.begin_attempt();
+    assert_eq!(
+        next.admit_retained(committed.generation(), [retained_id], &retired),
+        Err(FrameFaceReuseError::StaleGeneration {
+            retained: committed.generation(),
+            current: retired.generation(),
+        }),
+        "retained rows minted under the old face epoch must not type-check"
+    );
+    assert!(
+        next.faces().is_empty(),
+        "failed admission must not partially publish retained faces"
+    );
+}
+
+#[test]
 fn retained_admission_cannot_overwrite_an_attempt_publication() {
     let arena = FrameFaceArena::default();
     let mut first = arena.begin_attempt();
@@ -906,9 +951,9 @@ fn sealing_commits_the_installed_face_table_for_future_replay() {
     presented
         .get_mut(&face_id)
         .expect("published face")
-        .font_file_path = Some("/fonts/exact.ttf".to_owned());
+        .font_file_path = Some(std::sync::Arc::from("/fonts/exact.ttf"));
     let sealed = seal
-        .seal(&presented)
+        .seal(&presented, crate::frame_face_arena::FaceEpoch::new(0))
         .expect("sealing may enrich a published face");
 
     let mut replay = sealed.begin_attempt();
@@ -917,7 +962,7 @@ fn sealing_commits_the_installed_face_table_for_future_replay() {
         .expect("admit face from sealed arena");
     assert_eq!(
         replay.face(face_id).and_then(|face| face.font_file_path),
-        Some("/fonts/exact.ttf".to_owned())
+        Some(std::sync::Arc::from("/fonts/exact.ttf"))
     );
 }
 
@@ -927,7 +972,9 @@ fn sealing_advances_the_generation() {
     let table = arena.begin_table_attempt();
     let (presented, seal) = table.into_publication().expect("sole owner").install();
 
-    let sealed = seal.seal(&presented).expect("seal empty attempt");
+    let sealed = seal
+        .seal(&presented, crate::frame_face_arena::FaceEpoch::new(0))
+        .expect("seal empty attempt");
 
     assert_ne!(
         sealed.generation(),
@@ -1036,7 +1083,7 @@ fn admitting_repeated_prepared_glyph_faces_preserves_existing_storage() {
     let mut source = arena.begin_attempt();
     let id = FaceId::new(1);
     let mut face = Face::new(id);
-    face.font_family = "prepared face with owned family storage".to_owned();
+    face.font_family = std::sync::Arc::from("prepared face with owned family storage");
     source.import_face(face).unwrap();
     let arena = source.commit();
     let prepared = arena.prepared_snapshot();

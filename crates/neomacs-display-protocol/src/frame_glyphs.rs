@@ -1529,7 +1529,7 @@ impl FrameGlyphBuffer {
             overline_color,
             strike_through_color,
             box_color: None,
-            font_family: font_family.to_string(),
+            font_family: std::sync::Arc::from(font_family),
             font_size,
             font_weight,
             attributes: attrs,
@@ -1790,7 +1790,7 @@ impl FrameGlyphBuffer {
     pub fn get_face_font(&self, face_id: FaceId) -> &str {
         self.faces
             .get(&face_id)
-            .map(|f| f.font_family.as_str())
+            .map(|f| f.font_family.as_ref())
             .unwrap_or("monospace")
     }
 

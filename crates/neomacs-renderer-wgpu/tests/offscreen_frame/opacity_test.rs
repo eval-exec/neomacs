@@ -63,12 +63,13 @@ fn dispatched_scale_zoom_preserves_overlap_opacity_and_outside_pixels() {
         frame.background_alpha = alpha;
         // A broad foreground stipple interior remains fully covered after the
         // production scale resampling, unlike a one-pixel glyph stem.
-        frame.faces.get_mut(&FaceId::new(0)).unwrap().stipple =
-            Some(Box::new(neomacs_display_protocol::StipplePattern {
+        frame.faces.get_mut(&FaceId::new(0)).unwrap().stipple = Some(std::sync::Arc::new(
+            neomacs_display_protocol::StipplePattern {
                 width: 1,
                 height: 1,
                 bits: vec![1],
-            }));
+            },
+        ));
         frame.add_stretch(20.0, 16.0, 16.0, 24.0, Color::BLACK, FaceId::new(0), false);
         render(&mut h, &frame, old.view());
         render(&mut h, &frame, new.view());
@@ -653,7 +654,7 @@ fn child_char_and_stretch_stipple_is_foreground_at_zero_background() {
                 None,
             );
             child.faces.get_mut(&FaceId::new(1)).unwrap().stipple =
-                Some(Box::new(StipplePattern {
+                Some(std::sync::Arc::new(StipplePattern {
                     width: 1,
                     height: 1,
                     bits: vec![1],

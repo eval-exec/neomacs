@@ -11242,7 +11242,7 @@ fn buffer_remapped_default_gets_distinct_face_for_leading_invisible_ellipsis() {
     );
     assert_eq!(
         state.faces[&ellipsis_face_id].font_family,
-        "Noto Sans CJK SC"
+        std::sync::Arc::from("Noto Sans CJK SC")
     );
 }
 
@@ -13278,7 +13278,7 @@ fn layout_frame_rust_publishes_face_scaled_advances_for_inline_plist_faces() {
             BaseFacePolicy::BufferFaceIncludingOverlays,
             &mut next_check,
         );
-        assert_eq!(resolved.font_family, "JetBrains Mono");
+        assert_eq!(resolved.font_family.as_ref(), "JetBrains Mono");
         assert_eq!(resolved.font_weight, 800);
         assert!(
             resolved.font_size > face_resolver.default_face().font_size * 1.5,
@@ -20158,7 +20158,7 @@ fn next_window_start_for_point_line_continuation_ignores_tail_clipping_when_poin
 fn display_row_measurement_face_distinguishes_semantic_font_identity() {
     let mut font_metrics_svc = Some(FontMetricsService::new());
     let mut regular = crate::neovm_bridge::ResolvedFace::default();
-    regular.font_family = "monospace".to_string();
+    regular.font_family = std::sync::Arc::from("monospace");
     regular.font_size = 14.0;
     regular.font_weight = 400;
     regular.set_measured_char_width_px(8.0);
@@ -20190,7 +20190,7 @@ fn display_row_measurement_face_distinguishes_semantic_font_identity() {
 #[test]
 fn display_row_measurement_face_preserves_fractional_gui_cell_width_without_font_metrics() {
     let mut resolved = crate::neovm_bridge::ResolvedFace::default();
-    resolved.font_family = "JetBrainsMono Nerd Font".to_string();
+    resolved.font_family = std::sync::Arc::from("JetBrainsMono Nerd Font");
     resolved.font_size = 12.0;
     resolved.set_measured_char_width_px(7.2);
     let current_face =
@@ -20206,7 +20206,7 @@ fn display_row_measurement_face_preserves_fractional_gui_cell_width_without_font
 #[test]
 fn display_row_glyph_measurer_is_reusable_for_engine_measurements() {
     let mut resolved = crate::neovm_bridge::ResolvedFace::default();
-    resolved.font_family = "monospace".to_string();
+    resolved.font_family = std::sync::Arc::from("monospace");
     resolved.font_size = 14.0;
     resolved.set_measured_char_width_px(8.0);
     let faces = [DisplayRowFace::from_resolved(FaceId::new(42), &resolved)];
@@ -20223,7 +20223,7 @@ fn display_row_glyph_measurer_is_reusable_for_engine_measurements() {
 #[test]
 fn display_row_glyph_measurement_face_carries_engine_measurement_policy() {
     let mut resolved = crate::neovm_bridge::ResolvedFace::default();
-    resolved.font_family = "monospace".to_string();
+    resolved.font_family = std::sync::Arc::from("monospace");
     resolved.font_size = 14.0;
     resolved.set_measured_char_width_px(7.2);
     let current_face =
@@ -25726,11 +25726,13 @@ fn layout_frame_rust_aligns_dired_filenames_after_nerd_icon_tabs() {
             .get(&tab_glyph.face_id)
             .expect("published tab face");
         assert_eq!(
-            icon_face.font_family, "Symbols Nerd Font Mono",
+            icon_face.font_family.as_ref(),
+            "Symbols Nerd Font Mono",
             "fixture must exercise the nerd-icons face"
         );
         assert_eq!(
-            tab_face.font_family, "JetBrainsMono Nerd Font",
+            tab_face.font_family.as_ref(),
+            "JetBrainsMono Nerd Font",
             "GNU ends the icon's one-character face run before the unpropertized TAB"
         );
         let binding = state
@@ -25885,7 +25887,8 @@ fn layout_frame_rust_nerd_font_alias_icon_uses_resolved_monospace_cell_width() {
     let icon_face = state.faces.get(&icon.face_id).expect("icon face");
     let tab_face = state.faces.get(&tab.face_id).expect("tab face");
     assert_eq!(
-        icon_face.font_family, "Symbols Nerd Font Mono",
+        icon_face.font_family.as_ref(),
+        "Symbols Nerd Font Mono",
         "test must exercise the Nerd Font compatibility alias"
     );
     let binding = state
@@ -28828,7 +28831,7 @@ fn layout_frame_rust_paint_only_overlay_preserves_cjk_glyph_geometry() {
         GlyphGeometry {
             advance: opening.pixel_width,
             next_x: next_x.expect("following CJK glyph x"),
-            family: face.font_family.clone(),
+            family: face.font_family.to_string(),
             weight: face.font_weight,
             italic: face.is_italic(),
             size: face.font_size,

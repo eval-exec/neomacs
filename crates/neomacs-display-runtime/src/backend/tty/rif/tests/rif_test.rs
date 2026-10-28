@@ -817,7 +817,7 @@ fn tty_nondefault_logical_face_with_default_paint_writes_its_blank_tail() {
     default_face.use_default_background = true;
     let mut margin_face = default_face.clone();
     margin_face.id = FaceId::new(21);
-    margin_face.lisp_name = Some("margin".to_owned());
+    margin_face.lisp_name = Some(std::sync::Arc::from("margin"));
     margin_face.tty_space_identity =
         neomacs_display_protocol::face::TtySpaceIdentity::OtherRealized;
     state.faces.insert(FaceId::new(0), default_face);

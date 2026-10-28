@@ -3305,11 +3305,11 @@ fn realize_frame_fonts_publishes_face_identity_and_table() {
 
     let mut state = FrameDisplayState::new(80, 24, 8.0, 16.0);
     let mut default_face = Face::new(FaceId::new(0));
-    default_face.font_family = "Monospace".to_string();
+    default_face.font_family = std::sync::Arc::from("Monospace");
     default_face.font_size = 24.0;
     state.faces.insert(FaceId::new(0), default_face);
     let mut bold_face = Face::new(FaceId::new(21));
-    bold_face.font_family = "Monospace".to_string();
+    bold_face.font_family = std::sync::Arc::from("Monospace");
     bold_face.font_size = 24.0;
     bold_face.font_weight = 700;
     state.faces.insert(FaceId::new(21), bold_face);
@@ -3333,7 +3333,8 @@ fn realize_frame_fonts_publishes_face_identity_and_table() {
             .unwrap_or_else(|| panic!("frame font table has face {face_id}'s font"));
         assert_eq!(font.id, font_id);
         assert_eq!(
-            face.font_file_path, font.identity.file_path,
+            face.font_file_path.as_deref(),
+            font.identity.file_path.as_deref(),
             "font_file_path bridge mirrors the resolved identity"
         );
     }
@@ -3380,7 +3381,7 @@ fn realize_frame_fonts_resolves_an_installed_symbols_only_primary_face() {
     let face_id = FaceId::new(226);
     let mut state = FrameDisplayState::new(80, 24, 8.0, 16.0);
     let mut face = Face::new(face_id);
-    face.font_family = family.to_string();
+    face.font_family = std::sync::Arc::from(family);
     face.font_size = 10.0;
     state.faces.insert(face_id, face);
 
@@ -3417,7 +3418,7 @@ fn realize_frame_fonts_steady_state_cost_probe() {
         // italic, size variants) — a typical GUI frame's face table.
         for id in (0..40u32).map(FaceId::new) {
             let mut face = Face::new(id);
-            face.font_family = "Monospace".to_string();
+            face.font_family = std::sync::Arc::from("Monospace");
             face.font_size = 14.0 + (id.get() % 3) as f32;
             face.font_weight = if id.get() % 4 == 0 { 700 } else { 400 };
             state.faces.insert(id, face);
@@ -3472,7 +3473,7 @@ fn realize_frame_char_fonts_stamps_cjk_fallback() {
 
     let mut state = FrameDisplayState::new(20, 1, 8.0, 16.0);
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "Monospace".to_string();
+    face.font_family = std::sync::Arc::from("Monospace");
     face.font_size = 14.0;
     state.faces.insert(FaceId::new(0), face);
 
@@ -3641,7 +3642,7 @@ fn realize_frame_fonts_publishes_shaped_clusters_for_composites() {
 
     let mut state = FrameDisplayState::new(20, 1, 8.0, 16.0);
     let mut face = Face::new(FaceId::new(0));
-    face.font_family = "Monospace".to_string();
+    face.font_family = std::sync::Arc::from("Monospace");
     face.font_size = 14.0;
     state.faces.insert(FaceId::new(0), face);
 

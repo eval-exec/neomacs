@@ -785,7 +785,7 @@ impl WgpuGlyphAtlas {
         y_bin: SubpixelBin,
         enable_subpixel: bool,
     ) -> Option<RasterizeResult> {
-        let req_family = face.map(|f| f.font_family.as_str()).unwrap_or("monospace");
+        let req_family = face.map(|f| f.font_family.as_ref()).unwrap_or("monospace");
         let req_weight = face.map(|f| f.font_weight).unwrap_or(400);
         let req_italic = face
             .map(|f| {
@@ -905,7 +905,7 @@ impl WgpuGlyphAtlas {
                     let bearing_x = physical_glyph.x as f32 + image.left as f32;
                     let bearing_y = image.top as f32;
 
-                    let font_family_str = face.map(|f| f.font_family.as_str()).unwrap_or("(none)");
+                    let font_family_str = face.map(|f| f.font_family.as_ref()).unwrap_or("(none)");
                     tracing::debug!(
                         "rasterize_text: text='{}' glyph U+{:04X} font='{}' content={:?} size={}x{}",
                         text,
@@ -1880,12 +1880,12 @@ impl WgpuGlyphAtlas {
                     .replay
                     .file_asset()
                     .map(|asset| asset.path().to_owned()),
-                None => f.font_file_path.clone(),
+                None => f.font_file_path.as_deref().map(str::to_owned),
             };
             if let Some(ref path) = prime_path {
                 let _ = self.font_file_cache.prime_file(&mut self.font_system, path);
             }
-            let mut effective_family = f.font_family.clone();
+            let mut effective_family = f.font_family.to_string();
             let mut effective_weight = f.font_weight;
             let mut effective_style = if requested_italic {
                 Some(Style::Italic)

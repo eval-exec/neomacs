@@ -848,11 +848,12 @@ fn picture(id: u64, parent: u64, width: f32) -> FrameGlyphBuffer {
         0,
         None,
     );
-    frame.faces.get_mut(&FaceId::new(1)).unwrap().stipple = Some(Box::new(StipplePattern {
-        width: 1,
-        height: 1,
-        bits: vec![1],
-    }));
+    frame.faces.get_mut(&FaceId::new(1)).unwrap().stipple =
+        Some(std::sync::Arc::new(StipplePattern {
+            width: 1,
+            height: 1,
+            bits: vec![1],
+        }));
     frame.set_draw_context(DisplayWindowId::new(1), GlyphRowRole::Text, None);
     frame.add_stretch(12.0, 12.0, 16.0, 16.0, Color::GREEN, FaceId::new(1), false);
     frame

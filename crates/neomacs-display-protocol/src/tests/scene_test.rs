@@ -65,13 +65,13 @@ fn test_scene_set_and_get_face() {
     let mut scene = Scene::new(800.0, 600.0);
     let mut face = Face::new(FaceId::new(5));
     face.font_size = 16.0;
-    face.font_family = "Iosevka".to_string();
+    face.font_family = std::sync::Arc::from("Iosevka");
     scene.set_face(face);
 
     let retrieved = scene.get_face(FaceId::new(5)).unwrap();
     assert_eq!(retrieved.id, FaceId::new(5));
     assert_eq!(retrieved.font_size, 16.0);
-    assert_eq!(retrieved.font_family, "Iosevka");
+    assert_eq!(retrieved.font_family.as_ref(), "Iosevka");
     // Non-existent face
     assert!(scene.get_face(FaceId::new(99)).is_none());
 }

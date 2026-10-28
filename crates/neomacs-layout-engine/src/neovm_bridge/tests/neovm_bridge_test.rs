@@ -3638,7 +3638,7 @@ fn test_face_from_plist_realizes_relative_height_family_and_weight() {
     let inline_face = resolver.face_from_plist(&plist).expect("inline plist face");
     let realized = resolver.realize_face(&inline_face);
 
-    assert_eq!(realized.font_family, "DejaVu Sans Mono");
+    assert_eq!(realized.font_family.as_ref(), "DejaVu Sans Mono");
     assert_eq!(realized.font_weight, FontWeight::EXTRA_BOLD.css_weight());
     assert!(
         (realized.font_size - (resolver.default_face().font_size * 1.6)).abs() < 0.1,

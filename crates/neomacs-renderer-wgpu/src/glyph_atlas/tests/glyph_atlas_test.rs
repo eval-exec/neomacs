@@ -379,7 +379,7 @@ fn glyph_font_identity_discriminates_resolved_font_id() {
     use neomacs_display_protocol::font::ResolvedFontId;
 
     let mut a = Face::new(FaceId::new(5));
-    a.font_family = "Mono".to_string();
+    a.font_family = std::sync::Arc::from("Mono");
     let mut b = a.clone();
 
     // Same request fields, different realized fonts -> different identity.
@@ -398,7 +398,7 @@ fn glyph_font_identity_discriminates_resolved_font_id() {
     // Emergency non-ASCII fallback semantics are also part of an unresolved
     // face's raster identity.
     a.default_resolved_font_id = None;
-    b.font_family = "Different Effective Family".to_string();
+    b.font_family = std::sync::Arc::from("Different Effective Family");
     assert_ne!(glyph_font_identity(Some(&a)), glyph_font_identity(Some(&b)));
 }
 
@@ -546,7 +546,7 @@ fn renderer_keeps_missing_ascii_on_primary_font() {
         &Default::default(),
     );
     let mut face = Face::new(FaceId::new(7));
-    face.font_family = requested_family.to_string();
+    face.font_family = std::sync::Arc::from(requested_family);
     face.font_size = 10.0;
     face.font_ascent = 8;
     face.font_descent = 2;
@@ -1213,7 +1213,7 @@ fn color_rasters_are_not_shared_across_foregrounds() {
 
     let face_with = |foreground: neomacs_display_protocol::Color| {
         let mut face = Face::new(FaceId::new(11));
-        face.font_family = "Noto Color Emoji".to_owned();
+        face.font_family = std::sync::Arc::from("Noto Color Emoji");
         face.font_size = 16.0;
         face.default_resolved_font_id = Some(id);
         face.foreground = foreground;
@@ -1308,7 +1308,7 @@ fn mask_glyph_identities_ignore_the_foreground() {
 
     let face_for = |resolved: ResolvedFontId, foreground: neomacs_display_protocol::Color| {
         let mut face = Face::new(FaceId::new(21));
-        face.font_family = "Fixture".to_owned();
+        face.font_family = std::sync::Arc::from("Fixture");
         face.font_size = 16.0;
         face.default_resolved_font_id = Some(resolved);
         face.foreground = foreground;

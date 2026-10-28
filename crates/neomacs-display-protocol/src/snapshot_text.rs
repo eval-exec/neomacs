@@ -163,11 +163,14 @@ impl FrameDisplayState {
         for run in runs {
             let (name, fg, bg) = match self.faces.get(&run.face_id) {
                 Some(face) => (
-                    face.lisp_name.clone().unwrap_or_else(|| {
-                        BasicFaceId::from_gnu_code(face.id.get())
-                            .map(|basic| basic.name().to_string())
-                            .unwrap_or_else(|| format!("face:{}", face.id))
-                    }),
+                    face.lisp_name
+                        .as_deref()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            BasicFaceId::from_gnu_code(face.id.get())
+                                .map(|basic| basic.name().to_string())
+                                .unwrap_or_else(|| format!("face:{}", face.id))
+                        }),
                     hex(face.foreground),
                     hex(face.background),
                 ),
