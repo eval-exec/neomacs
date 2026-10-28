@@ -456,15 +456,14 @@ fn minor_unchains_young_dead_marker_and_keeps_old_chain_node() {
     let mut heap = heap_with_generations(true);
     set_tagged_heap(&mut heap);
     let roots = ScratchRoots::new();
-    let marker_data = || LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: None,
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: false,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
+    let marker_data = || {
+        LispMarker::new(
+            crate::heap_types::MarkerBuffer::DETACHED,
+            crate::buffer::CharPos0::new(0),
+            crate::buffer::EmacsBytePos::new(0),
+            false,
+            false,
+        )
     };
     let old = heap.alloc_marker(marker_data());
     roots.keep(old);

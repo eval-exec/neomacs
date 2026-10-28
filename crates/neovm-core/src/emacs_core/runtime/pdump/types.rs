@@ -782,6 +782,11 @@ pub struct DumpBuffer {
     pub state_begv_marker: Option<u64>,
     #[serde(default)]
     pub state_zv_marker: Option<u64>,
+    /// Dump-local id of this buffer's mark marker (`BVAR (buf, mark)`).
+    /// Marker identity on load is the `MarkerObj` pointer; the id only ties
+    /// this slot to the object allocated for the same chain entry.
+    #[serde(default)]
+    pub mark_marker: Option<u64>,
     #[serde(default)]
     pub properties_syms: Vec<(DumpSymId, DumpRuntimeBindingValue)>,
     pub properties: Vec<(String, DumpRuntimeBindingValue)>,
@@ -827,7 +832,6 @@ pub struct DumpBufferManager {
     pub buffer_order: Vec<DumpBufferId>,
     pub current: Option<DumpBufferId>,
     pub next_id: u64,
-    pub next_marker_id: u64,
     /// Runtime `buffer-defaults` slot table — one DumpValue per
     /// `BufferManager::buffer_defaults[]` entry in offset order.
     /// Mirrors GNU's static `struct buffer buffer_defaults` that

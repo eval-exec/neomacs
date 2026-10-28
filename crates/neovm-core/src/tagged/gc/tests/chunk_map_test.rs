@@ -31,16 +31,13 @@ fn addr_of(value: TaggedValue) -> usize {
 }
 
 fn marker(heap: &mut TaggedHeap, id: u64) -> TaggedValue {
-    heap.alloc_marker(LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: Some(id),
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: true,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    })
+    heap.alloc_marker(LispMarker::new(
+        crate::heap_types::MarkerBuffer::DETACHED,
+        crate::buffer::CharPos0::new(0),
+        crate::buffer::EmacsBytePos::new(0),
+        false,
+        true,
+    ))
 }
 
 /// One object of every paged class, plus a boxed hash table.

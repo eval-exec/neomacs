@@ -157,12 +157,17 @@ use crate::emacs_core::value;
 // contract v56 and v57 gave Boolean and integer slots, and the same two new
 // kinds for a BLV that `make_blv` copied one of them into.
 // v60: full-width bytecode depth and explicit parameter-domain codecs.
-// v61: overlay precedence identity is the overlay's creation serial
-//   (`OverlaySerial`, minted from the World's counter), not the tagged object
-//   address. The image preserves each serial and load resumes the counter
-//   above the largest one; a zero serial is rejected. GNU's final
-//   `compare_overlays` branch is address order, which GNU documents as
-//   arbitrary; later creation now deterministically wins.
+// v61: two identity changes share this bump. Overlay precedence identity is
+//   the overlay's creation serial (`OverlaySerial`, minted from the World's
+//   counter), not the tagged object address. The image preserves each serial
+//   and load resumes the counter above the largest one; a zero serial is
+//   rejected. GNU's final `compare_overlays` branch is address order, which
+//   GNU documents as arbitrary; later creation now deterministically wins.
+//   Marker identity is the MarkerObj pointer (64-byte zero-slack arena
+//   class). The object stores no integer id; the dump assigns ephemeral ids
+//   in a pre-pass over every buffer's intrusive chain and records the
+//   buffer's mark marker id, so marker positions, insertion types and the
+//   mark round-trip. `DumpBufferManager::next_marker_id` is gone.
 const FORMAT_VERSION: u32 = 61;
 
 const FINGERPRINT_PLACEHOLDER: [u8; 32] = *b"NEOMACS_PDUMP_FINGERPRINT_SLOT!!";

@@ -8,16 +8,13 @@ use neovm_core::heap_types::{LispMarker, LispString};
 use strum::IntoEnumIterator;
 
 fn detached_marker() -> Value {
-    Value::make_marker(LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: None,
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: false,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    })
+    Value::make_marker(LispMarker::new(
+        neovm_core::heap_types::MarkerBuffer::DETACHED,
+        CharPos0::new(0),
+        neovm_core::buffer::EmacsBytePos::new(0),
+        false,
+        false,
+    ))
 }
 
 fn property_string(plist: Value) -> Value {

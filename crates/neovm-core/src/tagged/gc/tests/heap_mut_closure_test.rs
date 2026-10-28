@@ -73,16 +73,13 @@ fn every_heap_mutation_closure_has_a_guard() {
         );
     }
     {
-        let owner = heap.alloc_marker(LispMarker {
-            buffer: None,
-            insertion_type: false,
-            marker_id: None,
-            bytepos: 0,
-            charpos: 0,
-            last_position_valid: false,
-            next_marker: std::ptr::null_mut(),
-            chained: false,
-        });
+        let owner = heap.alloc_marker(LispMarker::new(
+            crate::heap_types::MarkerBuffer::DETACHED,
+            crate::buffer::CharPos0::new(0),
+            crate::buffer::EmacsBytePos::new(0),
+            false,
+            false,
+        ));
         assert_eq!(
             with_marker_data_mut(owner, |_| assert_in_mutation()),
             Some(())

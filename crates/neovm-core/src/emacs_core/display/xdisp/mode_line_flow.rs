@@ -137,7 +137,8 @@ pub(super) struct FormatSelection {
     original_window: Option<WindowId>,
     target_selection: (Option<FrameId>, Option<(FrameId, WindowId)>),
     target_point: Option<(BufferId, EmacsBytePos)>,
-    point_marker: Option<(u64, Value)>,
+    /// GNU's saved-point marker, rooted by `point_root` until restore.
+    point_marker: Option<Value>,
     root_scope: crate::emacs_core::eval::SpecpdlRootScopeState,
     point_root: crate::emacs_core::eval::SpecpdlRootSlot,
     selection_changed: bool,
@@ -212,9 +213,9 @@ impl FormatSelection {
                 position,
                 false,
             );
-            if let Some(id) = marker.as_marker_data().and_then(|data| data.marker_id) {
+            if marker.is_marker() {
                 eval.set_specpdl_root_slot(&self.point_root, marker);
-                self.point_marker = Some((id, marker));
+                self.point_marker = Some(marker);
             }
         }
     }
@@ -259,13 +260,13 @@ impl FormatSelection {
             let point = self
                 .point_marker
                 .as_ref()
-                .and_then(|(id, _)| eval.buffers.marker_emacs_byte_pos(bid, *id))
+                .and_then(|marker| marker.as_marker_data().map(|data| data.bytepos))
                 .unwrap_or(saved_point);
             if let Some(buffer) = eval.buffers.get_mut(bid) {
                 buffer.goto_emacs_byte_pos(point);
             }
         }
-        if let Some((_, marker)) = self.point_marker {
+        if let Some(marker) = self.point_marker {
             crate::emacs_core::marker::unchain_marker(&mut eval.buffers, &marker);
         }
         eval.restore_specpdl_roots(self.root_scope);

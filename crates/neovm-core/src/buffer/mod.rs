@@ -21,8 +21,8 @@ pub mod visited_file_modtime;
 
 pub use buffer::{
     Buffer, BufferId, BufferManager, BufferTextSnapshot, InsertionType, LabeledRestriction,
-    LabeledRestrictionLabel, LineIndexBuild, SavedLabeledRestrictions, SavedRestrictionKind,
-    SavedRestrictionState,
+    LabeledRestrictionLabel, LineIndexBuild, MarkerRef, SavedLabeledRestrictions,
+    SavedRestrictionKind, SavedRestrictionState,
 };
 pub(crate) use buffer_text::BufferText;
 pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};

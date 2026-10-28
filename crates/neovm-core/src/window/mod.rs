@@ -1257,19 +1257,19 @@ fn redisplay_f32_bits(value: f32) -> u32 {
 /// unmarked entries before sweeping them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowStartMarker {
-    id: u64,
+    marker: crate::buffer::MarkerRef,
     gc_root: Value,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowPointMarker {
-    id: u64,
+    marker: crate::buffer::MarkerRef,
     gc_root: Value,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowOldPointMarker {
-    id: u64,
+    marker: crate::buffer::MarkerRef,
     gc_root: Value,
 }
 
@@ -1322,18 +1322,22 @@ impl WindowPositionMarkerState {
 }
 
 impl AttachedWindowPositionMarkers {
-    fn new(start: (u64, Value), point: (u64, Value), old_point: (u64, Value)) -> Self {
+    fn new(
+        start: (crate::buffer::MarkerRef, Value),
+        point: (crate::buffer::MarkerRef, Value),
+        old_point: (crate::buffer::MarkerRef, Value),
+    ) -> Self {
         Self {
             start: WindowStartMarker {
-                id: start.0,
+                marker: start.0,
                 gc_root: start.1,
             },
             point: WindowPointMarker {
-                id: point.0,
+                marker: point.0,
                 gc_root: point.1,
             },
             old_point: WindowOldPointMarker {
-                id: old_point.0,
+                marker: old_point.0,
                 gc_root: old_point.1,
             },
         }
@@ -1347,8 +1351,8 @@ impl AttachedWindowPositionMarkers {
 }
 
 impl WindowStartMarker {
-    const fn raw(self) -> u64 {
-        self.id
+    const fn raw(self) -> crate::buffer::MarkerRef {
+        self.marker
     }
 
     /// The rooted Lisp marker, whose `MarkerObj` carries the position.
@@ -1358,8 +1362,8 @@ impl WindowStartMarker {
 }
 
 impl WindowPointMarker {
-    const fn raw(self) -> u64 {
-        self.id
+    const fn raw(self) -> crate::buffer::MarkerRef {
+        self.marker
     }
 
     pub(crate) const fn root(self) -> Value {
@@ -1368,8 +1372,8 @@ impl WindowPointMarker {
 }
 
 impl WindowOldPointMarker {
-    const fn raw(self) -> u64 {
-        self.id
+    const fn raw(self) -> crate::buffer::MarkerRef {
+        self.marker
     }
 
     pub(crate) const fn root(self) -> Value {

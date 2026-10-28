@@ -171,17 +171,27 @@ pub(crate) static LIVE_RECORD_PAGES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static LIVE_SYMBOL_WITH_POS_PAGES: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 pub(crate) static LIVE_MARKER_PAGES: AtomicUsize = AtomicUsize::new(0);
-// Marker: `MarkerObj` is VecLikeHeader 24 + LispMarker (buffer, marker_id,
-// bytepos, charpos, chain link, two flags) ≈ 88B → the 128B class (512
-// slots/page, link in bytes 120..128). Markers are the highest-churn editor
-// object (`save-excursion` makes and frees one per call — thousands per
-// org-mode operation); GNU keeps them in `marker_block`s for the same
-// reason. POD: `LispMarker` holds no Values, so the sweep's drop_in_place
-// compiles out. If this assert fails the struct grew — bump the stride.
+// Marker: `MarkerObj` is VecLikeHeader 24 + LispMarker 32 (a niche
+// `MarkerBuffer` word, the tagged `MarkerLink` word, charpos, bytepos) = 56B
+// → the 64B class (1024 slots/page, link in bytes 56..64, ZERO slack — the
+// same shape as BignumObj). Markers are the highest-churn editor object
+// (`save-excursion` makes and frees one per call — thousands per org-mode
+// operation); GNU allocates them as pseudovectors from packed vector blocks
+// (alloc.c `allocate_vectorlike`), and one 64-byte slot per marker is the
+// analogue of that packing. POD: `LispMarker` holds no Values, so the
+// sweep's drop_in_place compiles out. If this assert fails the struct grew —
+// the 64B class no longer fits.
 const _: () = assert!(
-    size_of::<MarkerObj>() <= 120,
-    "MarkerObj must fit a 128-byte slot with its trailing free-list link \
-     (bytes 120..128); bump the marker stride if the struct grew",
+    size_of::<MarkerObj>() <= 56,
+    "MarkerObj must fit a 64-byte slot with its trailing free-list link \
+     (bytes 56..64 — zero slack); bump the marker stride if the struct grew",
+);
+// The slot class itself is part of the type contract: the size assertion
+// above only means something when the stride is the 64-byte class the
+// zero-slack comment names.
+const _: () = assert!(
+    <MarkerObj as PagedObject>::SLOT_BYTES == 64,
+    "the marker arena class is 64 bytes",
 );
 
 // Bignum: `BignumObj` is VecLikeHeader 24 + malachite `Integer` 32 (sign +
@@ -215,10 +225,10 @@ impl PagedObject for BignumObj {
 }
 
 impl PagedObject for MarkerObj {
-    // 128B class, own arena: POD-like (no Values; the intrusive buffer-chain
+    // 64B class, own arena: POD-like (no Values; the intrusive buffer-chain
     // link is a raw pointer that `unchain_dead_markers` detaches before any
     // sweep frees the slot).
-    const SLOT_BYTES: usize = 128;
+    const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "marker";
     const CHUNK_CLASS: ChunkClass = ChunkClass::Marker;

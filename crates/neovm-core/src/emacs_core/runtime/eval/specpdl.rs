@@ -1462,7 +1462,7 @@ impl Context {
                 let Some(buffer_id) = self.buffers.current_buffer_id() else {
                     return Ok(());
                 };
-                let (new_marker, _) = super::super::marker::make_registered_point_marker(
+                let new_marker = super::super::marker::make_registered_point_marker(
                     &mut self.buffers,
                     buffer_id,
                 )

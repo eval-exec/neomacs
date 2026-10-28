@@ -747,18 +747,10 @@ pub(crate) fn builtin_line_number_at_pos(
         match args[0].kind() {
             ValueKind::Veclike(VecLikeType::Marker) => {
                 let marker = args[0].as_marker_data().unwrap();
-                if marker.buffer == Some(current_buffer_id) {
-                    marker
-                        .marker_id
-                        .and_then(|marker_id| {
-                            eval.buffers
-                                .marker_emacs_byte_pos(current_buffer_id, marker_id)
-                        })
-                        .unwrap_or_else(|| {
-                            char_pos_to_byte(buf, CharPos0::new(marker.charpos).to_lisp())
-                        })
+                if marker.buffer_id() == Some(current_buffer_id) && marker.chained() {
+                    marker.bytepos
                 } else {
-                    char_pos_to_byte(buf, CharPos0::new(marker.charpos).to_lisp())
+                    char_pos_to_byte(buf, marker.charpos.to_lisp())
                 }
             }
             ValueKind::Fixnum(pos) => {

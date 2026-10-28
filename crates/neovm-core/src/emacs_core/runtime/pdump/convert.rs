@@ -11,6 +11,7 @@ use super::object_extra::FileObjectDescriptors;
 use super::object_starts::{LoadedObjectSpan, LoadedSpans};
 use super::types::*;
 use super::value_fixups::{self, RawValueFixup};
+use crate::buffer::MarkerRef;
 use crate::buffer::buffer::{Buffer, BufferDumpParts, BufferId, BufferManager};
 use crate::buffer::buffer_text::BufferText;
 use crate::buffer::overlay::{Overlay, OverlayList};
@@ -181,12 +182,54 @@ impl TaggedDumpState {
 
 pub(crate) struct DumpEncoder {
     state: TaggedDumpState,
+    /// Dump-local marker ids, keyed by the runtime `MarkerObj` pointer.
+    /// Assigned in a pre-pass over every buffer's intrusive chain (detached
+    /// markers get an id lazily) so the heap-object marker decode and the
+    /// per-buffer chain entries name one object on load.
+    marker_ids: FxHashMap<usize, u64>,
+    next_marker_id: u64,
 }
 
 impl DumpEncoder {
     fn new() -> Self {
         Self {
             state: TaggedDumpState::new(),
+            marker_ids: FxHashMap::default(),
+            next_marker_id: 0,
+        }
+    }
+
+    /// The dump-local id for a runtime marker object, assigning one on first
+    /// sight.
+    fn marker_id_for(&mut self, ptr: *mut MarkerObj) -> u64 {
+        debug_assert!(!ptr.is_null(), "a dump id needs a live MarkerObj");
+        if let Some(id) = self.marker_ids.get(&(ptr as usize)) {
+            return *id;
+        }
+        let id = self.next_marker_id;
+        self.next_marker_id += 1;
+        self.marker_ids.insert(ptr as usize, id);
+        id
+    }
+
+    /// Dump id for a rooted marker reference; `None` when the slot is empty.
+    fn marker_ref_id(&mut self, marker: MarkerRef) -> Option<u64> {
+        if marker.is_null() {
+            None
+        } else {
+            Some(self.marker_id_for(marker.as_ptr()))
+        }
+    }
+
+    /// Give every chained marker its dump id before any heap object or buffer
+    /// is serialized. Marker identity is the object pointer, so the chain
+    /// walk (buffer id order, head→tail) is the one place that can enumerate
+    /// the live marker objects and keep the image deterministic.
+    fn assign_chain_marker_ids(&mut self, bm: &BufferManager) {
+        for (_, buf) in bm.dump_buffers() {
+            buf.walk_marker_chain_for_dump(|ptr, _| {
+                self.marker_id_for(ptr);
+            });
         }
     }
 
@@ -1775,17 +1818,16 @@ impl<'a> LoadDecoder<'a> {
                 }
             }
             DumpHeapObject::Marker(marker) => {
-                let data = crate::heap_types::LispMarker {
-                    buffer: marker.buffer.map(|id| BufferId(id.0)),
-                    insertion_type: marker.insertion_type,
-                    marker_id: marker.marker_id,
-                    // v26: bytepos/charpos round-trip directly from LispMarker.
-                    bytepos: marker.bytepos,
-                    charpos: marker.charpos,
-                    last_position_valid: marker.last_position_valid,
-                    next_marker: std::ptr::null_mut(),
-                    chained: false,
-                };
+                let data = crate::heap_types::LispMarker::new(
+                    match marker.buffer {
+                        Some(id) => crate::heap_types::MarkerBuffer::attached(BufferId(id.0)),
+                        None => crate::heap_types::MarkerBuffer::DETACHED,
+                    },
+                    crate::buffer::CharPos0::new(marker.charpos),
+                    crate::buffer::EmacsBytePos::new(marker.bytepos),
+                    marker.insertion_type,
+                    marker.last_position_valid,
+                );
                 let value = if let Some(ptr) =
                     self.mapped_typed_object_for_object::<MarkerObj>(id, "marker")?
                 {
@@ -1802,10 +1844,10 @@ impl<'a> LoadDecoder<'a> {
                 } else {
                     Value::make_marker(data)
                 };
-                // Index by `marker_id` so per-buffer chain reconstruction and
-                // state-marker resolution can do an O(1) lookup instead of a
-                // heap-wide walk. Both call sites consult `markers_by_id` in
-                // place of the retired `find_marker_by_id_during_load`.
+                // Index by the dump-local id so per-buffer chain
+                // reconstruction, state-marker resolution and mark-marker
+                // resolution all land on this one MarkerObj; marker identity
+                // in the loaded runtime is the pointer.
                 if let Some(id) = marker.marker_id
                     && let Some(ptr) = value.as_veclike_ptr()
                 {
@@ -2342,12 +2384,14 @@ impl<'a> LoadDecoder<'a> {
             }
             DumpHeapObject::Marker(marker) => {
                 let _ = value.with_marker_data_mut(|data| {
-                    data.buffer = marker.buffer.map(|id| BufferId(id.0));
-                    // v26: bytepos/charpos round-trip directly.
-                    data.bytepos = marker.bytepos;
-                    data.charpos = marker.charpos;
-                    data.insertion_type = marker.insertion_type;
-                    data.marker_id = marker.marker_id;
+                    match marker.buffer {
+                        Some(id) => data.attach_to(BufferId(id.0)),
+                        None => data.detach(),
+                    }
+                    data.charpos = crate::buffer::CharPos0::new(marker.charpos);
+                    data.bytepos = crate::buffer::EmacsBytePos::new(marker.bytepos);
+                    data.set_insertion_type(marker.insertion_type);
+                    data.set_last_position_valid(marker.last_position_valid);
                 });
             }
             DumpHeapObject::Overlay(overlay) => {
@@ -3264,9 +3308,13 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
             encoder,
             value.as_overlay_data().expect("overlay"),
         )),
-        ValueKind::Veclike(VecLikeType::Marker) => {
-            DumpHeapObject::Marker(dump_marker_object(value.as_marker_data().expect("marker")))
-        }
+        ValueKind::Veclike(VecLikeType::Marker) => DumpHeapObject::Marker(dump_marker_object(
+            encoder,
+            value
+                .as_veclike_ptr()
+                .expect("marker should have a veclike ptr") as *mut MarkerObj,
+            value.as_marker_data().expect("marker"),
+        )),
         ValueKind::Veclike(VecLikeType::Buffer) => {
             DumpHeapObject::Buffer(DumpBufferId(value.as_buffer_id().expect("buffer").0))
         }
@@ -3683,17 +3731,21 @@ fn dump_overlay(encoder: &mut DumpEncoder, o: &Overlay) -> DumpOverlay {
     }
 }
 
-fn dump_marker_object(marker: &crate::heap_types::LispMarker) -> DumpMarker {
-    // T10 (v26): LispMarker fields are authoritative. We round-trip
-    // `bytepos` and `charpos` directly; the legacy `position` cache is
-    // gone in both runtime and on-disk shapes.
+fn dump_marker_object(
+    encoder: &mut DumpEncoder,
+    ptr: *mut MarkerObj,
+    marker: &crate::heap_types::LispMarker,
+) -> DumpMarker {
+    // LispMarker fields are authoritative. The id is dump-local and comes
+    // from the chain-walk table, so this heap object and the same marker's
+    // chain entry resolve to one MarkerObj on load.
     DumpMarker {
-        buffer: marker.buffer.map(|id| DumpBufferId(id.0)),
-        insertion_type: marker.insertion_type,
-        marker_id: marker.marker_id,
-        bytepos: marker.bytepos,
-        charpos: marker.charpos,
-        last_position_valid: marker.last_position_valid,
+        buffer: marker.buffer_id().map(|id| DumpBufferId(id.0)),
+        insertion_type: marker.insertion_type(),
+        marker_id: Some(encoder.marker_id_for(ptr)),
+        bytepos: marker.bytepos.get(),
+        charpos: marker.charpos.get(),
+        last_position_valid: marker.last_position_valid(),
     }
 }
 
@@ -3774,28 +3826,32 @@ fn dump_buffer(encoder: &mut DumpEncoder, buf: &Buffer) -> DumpBuffer {
         auto_save_file_name_lisp: buf.auto_save_file_name_lisp_string().map(dump_lisp_string),
         auto_save_file_name: None,
         markers: if is_shared_text_owner {
-            // T10 (v26): walk the intrusive chain head→tail and emit a
-            // `DumpMarker` per node. Identity with the heap-object
-            // Marker decode is preserved via `marker_id`; the load-side
-            // chain reconstruction reuses the heap-allocated MarkerObj.
+            // v61: walk the intrusive chain head→tail and emit a
+            // `DumpMarker` per node. The dump-local id comes from the same
+            // table as the heap-object Marker encode (pre-assigned by the
+            // chain-walk pre-pass), so the load side reuses one MarkerObj.
             let mut out = Vec::new();
-            buf.walk_marker_data_for_dump(|data| {
+            buf.walk_marker_chain_for_dump(|ptr, data| {
                 out.push(DumpMarker {
-                    buffer: data.buffer.map(|id| DumpBufferId(id.0)),
-                    insertion_type: data.insertion_type,
-                    marker_id: data.marker_id,
-                    bytepos: data.bytepos,
-                    charpos: data.charpos,
-                    last_position_valid: data.last_position_valid,
+                    buffer: data.buffer_id().map(|id| DumpBufferId(id.0)),
+                    insertion_type: data.insertion_type(),
+                    marker_id: Some(encoder.marker_id_for(ptr)),
+                    bytepos: data.bytepos.get(),
+                    charpos: data.charpos.get(),
+                    last_position_valid: data.last_position_valid(),
                 });
             });
             out
         } else {
             Vec::new()
         },
-        state_pt_marker: buf.state_markers.map(|markers| markers.pt_marker),
-        state_begv_marker: buf.state_markers.map(|markers| markers.begv_marker),
-        state_zv_marker: buf.state_markers.map(|markers| markers.zv_marker),
+        state_pt_marker: encoder
+            .marker_ref_id(buf.state_markers.map_or(MarkerRef::NONE, |m| m.pt_marker)),
+        state_begv_marker: encoder
+            .marker_ref_id(buf.state_markers.map_or(MarkerRef::NONE, |m| m.begv_marker)),
+        state_zv_marker: encoder
+            .marker_ref_id(buf.state_markers.map_or(MarkerRef::NONE, |m| m.zv_marker)),
+        mark_marker: encoder.marker_ref_id(buf.mark_marker),
         properties_syms: buf
             .ordered_buffer_local_bindings()
             .into_iter()
@@ -3860,7 +3916,6 @@ pub(crate) fn dump_buffer_manager(
             .collect(),
         current: bm.dump_current().map(|id| DumpBufferId(id.0)),
         next_id: bm.dump_next_id(),
-        next_marker_id: bm.dump_next_marker_id(),
         // Mirror GNU's `buffer_defaults` C-static struct through the
         // dump. Without this, `setq-default` writes during loadup
         // (notably bindings.el's rich `mode-line-format`) are lost
@@ -4707,6 +4762,9 @@ pub(crate) fn dump_evaluator_for_restart(eval: &Context) -> DumpContextState {
 
 fn dump_evaluator_for_session(eval: &Context, session: DumpSession) -> DumpContextState {
     let mut encoder = DumpEncoder::new();
+    // Assign marker dump ids before anything is serialized: the obarray is
+    // dumped ahead of the buffers and may already reference marker values.
+    encoder.assign_chain_marker_ids(&eval.buffers);
 
     let dump = DumpContextState {
         symbol_table: dump_symbol_table(),
@@ -5639,12 +5697,12 @@ fn load_buffer(
             }
         })
     });
-    // v26: walk `db.markers` in dumped chain order (head→tail). For each
-    // entry, resolve the backing MarkerObj allocated during
-    // `preload_tagged_heap` so the chain reuses the same allocation that
-    // Lisp values reference. Allocate a fresh scratch MarkerObj only when
-    // the dump's heap section did not contain a matching object (defensive
-    // — should not happen for self-consistent v26 dumps).
+    // v61: walk `db.markers` in dumped chain order (head→tail). Each entry
+    // names a dump-local marker id; `preload_tagged_heap` allocated the
+    // MarkerObj for every marker that also appears as a Lisp value, and the
+    // buffer mark / state markers are ordinary chain entries too. Allocate a
+    // fresh MarkerObj only for a chained marker the heap section did not
+    // carry (defensive — should not happen for self-consistent v61 dumps).
     //
     // We splice at head (`register_marker` uses `chain_splice_at_head`),
     // so iterate in reverse to restore head→tail order on the loaded
@@ -5662,28 +5720,28 @@ fn load_buffer(
         } else {
             crate::buffer::InsertionType::Before
         };
-        let marker_ptr = decoder
-            .state
-            .markers_by_id
-            .get(&marker_id)
-            .copied()
-            .unwrap_or_else(|| {
-                let scratch =
-                    crate::emacs_core::value::Value::make_marker(crate::heap_types::LispMarker {
-                        buffer: Some(buffer_id),
-                        insertion_type: dump_marker.insertion_type,
-                        marker_id: Some(marker_id),
-                        bytepos: dump_marker.bytepos,
-                        charpos: dump_marker.charpos,
-                        last_position_valid: dump_marker.last_position_valid,
-                        next_marker: std::ptr::null_mut(),
-                        chained: false,
-                    });
-                scratch
+        let marker_ptr = match decoder.state.markers_by_id.get(&marker_id).copied() {
+            Some(ptr) => ptr,
+            None => {
+                let scratch = crate::emacs_core::value::Value::make_marker(
+                    crate::heap_types::LispMarker::new(
+                        crate::heap_types::MarkerBuffer::attached(buffer_id),
+                        CharPos0::new(dump_marker.charpos),
+                        EmacsBytePos::new(dump_marker.bytepos),
+                        dump_marker.insertion_type,
+                        dump_marker.last_position_valid,
+                    ),
+                );
+                let ptr = scratch
                     .as_veclike_ptr()
                     .expect("freshly allocated marker should have a veclike ptr")
-                    as *mut crate::tagged::header::MarkerObj
-            });
+                    as *mut crate::tagged::header::MarkerObj;
+                // The state-marker and mark-marker slots below resolve the
+                // same dump id; index the scratch object so they name it.
+                decoder.state.markers_by_id.insert(marker_id, ptr);
+                ptr
+            }
+        };
         // The MarkerObj may already be on a chain from a prior load in
         // the same process (e.g. reload after a bootstrap). Unlink
         // defensively from this buffer's chain before splicing.
@@ -5691,7 +5749,6 @@ fn load_buffer(
         text.register_marker(
             marker_ptr,
             buffer_id,
-            marker_id,
             TextPositionAnchor::new(
                 CharPos0::new(dump_marker.charpos),
                 EmacsBytePos::new(dump_marker.bytepos),
@@ -5807,45 +5864,27 @@ fn load_buffer(
 
     text.set_modification_state(db.modified_tick, db.chars_modified_tick, save_modified_tick);
 
-    // v26: resolve state markers (pt/begv/zv) by walking the freshly-built
-    // chain on `text` before moving `text` into the Buffer literal below.
-    // Falls back to the LoadDecoder's `markers_by_id` index (built during
-    // `preload_tagged_heap`) for any state marker missing from `db.markers`,
-    // and only allocates a scratch MarkerObj as a final safety net.
-    let markers_by_id = &decoder.state.markers_by_id;
+    // v61: resolve state markers (pt/begv/zv) by dump-local id. The chain
+    // walk above registered every state marker and indexed any scratch
+    // allocation, so `markers_by_id` is the single resolution point.
     let state_markers = match (db.state_pt_marker, db.state_begv_marker, db.state_zv_marker) {
         (Some(pt_marker), Some(begv_marker), Some(zv_marker)) => {
-            let resolve = |mid: u64| -> *mut crate::tagged::header::MarkerObj {
-                let chain_hit = text.chain_find_by_id(mid);
-                if !chain_hit.is_null() {
-                    return chain_hit;
-                }
-                if let Some(p) = markers_by_id.get(&mid).copied() {
-                    return p;
-                }
-                let scratch =
-                    crate::emacs_core::value::Value::make_marker(crate::heap_types::LispMarker {
-                        buffer: Some(BufferId(db.id.0)),
-                        insertion_type: false,
-                        marker_id: Some(mid),
-                        bytepos: 0,
-                        charpos: 0,
-                        last_position_valid: true,
-                        next_marker: std::ptr::null_mut(),
-                        chained: false,
+            let resolve = |mid: u64| -> MarkerRef {
+                let ptr = decoder
+                    .state
+                    .markers_by_id
+                    .get(&mid)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        debug_assert!(false, "state marker id {mid} missing from the chain walk");
+                        std::ptr::null_mut()
                     });
-                scratch
-                    .as_veclike_ptr()
-                    .expect("freshly allocated marker should have a veclike ptr")
-                    as *mut crate::tagged::header::MarkerObj
+                MarkerRef::new(ptr)
             };
             Some(crate::buffer::buffer::BufferStateMarkers {
-                pt_marker,
-                begv_marker,
-                zv_marker,
-                pt_marker_ptr: resolve(pt_marker),
-                begv_marker_ptr: resolve(begv_marker),
-                zv_marker_ptr: resolve(zv_marker),
+                pt_marker: resolve(pt_marker),
+                begv_marker: resolve(begv_marker),
+                zv_marker: resolve(zv_marker),
             })
         }
         _ => None,
@@ -5871,8 +5910,11 @@ fn load_buffer(
         base_buffer: db.base_buffer.map(|id| BufferId(id.0)),
         text,
         point: dump_text_position_anchor(pt_char, db.pt),
-        mark_marker_id: None,
-        mark_marker_ptr: std::ptr::null_mut(),
+        mark_marker: db
+            .mark_marker
+            .and_then(|id| decoder.state.markers_by_id.get(&id).copied())
+            .map(MarkerRef::new)
+            .unwrap_or(MarkerRef::NONE),
         accessible_start: dump_text_position_anchor(begv_char, db.begv),
         accessible_end: dump_text_position_anchor(zv_char, db.zv),
         autosave_modified_tick,
@@ -6016,7 +6058,6 @@ pub(crate) fn load_buffer_manager(
         buffers,
         dbm.current.map(|id| BufferId(id.0)),
         dbm.next_id,
-        dbm.next_marker_id,
         dumped_order,
         dumped_defaults,
         load_buffer_text_backend_kind(dbm.default_text_backend_kind),

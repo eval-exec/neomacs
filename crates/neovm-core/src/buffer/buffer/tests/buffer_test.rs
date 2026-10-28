@@ -123,8 +123,8 @@ fn marker_position_anchor(byte_pos: usize, char_pos: usize) -> TextPositionAncho
     TextPositionAnchor::from_usize(char_pos, byte_pos)
 }
 
-fn marker_chain_anchor_for_test(buf: &Buffer, marker_id: u64) -> Option<TextPositionAnchor> {
-    marker_chain_lookup_for_test(buf, marker_id)
+fn marker_chain_anchor_for_test(buf: &Buffer, marker: &Value) -> Option<TextPositionAnchor> {
+    marker_chain_lookup_for_test(buf, marker)
         .map(|(byte_pos, char_pos, _)| marker_position_anchor(byte_pos, char_pos))
 }
 
@@ -217,9 +217,10 @@ fn overlay_end_for_test(buf: &Buffer, overlay: Value) -> Option<usize> {
 
 fn marker_chain_lookup_for_test(
     buf: &Buffer,
-    marker_id: u64,
+    marker: &Value,
 ) -> Option<(usize, usize, InsertionType)> {
-    buf.marker_chain_anchor_lookup(marker_id)
+    let marker = crate::buffer::MarkerRef::from_value(marker).expect("marker value");
+    buf.marker_chain_anchor_lookup(marker)
         .map(|(anchor, insertion_type)| {
             (
                 anchor.emacs_byte_pos_usize(),
@@ -231,32 +232,19 @@ fn marker_chain_lookup_for_test(
 
 /// Test helper: allocate a scratch `MarkerObj` via the tagged heap and
 /// register it on `buf` at an Emacs byte position.
-fn register_marker_for_test(
-    buf: &mut Buffer,
-    marker_id: u64,
-    pos: usize,
-    insertion_type: InsertionType,
-) -> Value {
-    let marker_value = Value::make_marker(crate::heap_types::LispMarker {
-        buffer: Some(buf.id),
-        insertion_type: insertion_type == InsertionType::After,
-        marker_id: Some(marker_id),
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: true,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    });
+fn register_marker_for_test(buf: &mut Buffer, pos: usize, insertion_type: InsertionType) -> Value {
+    let marker_value = Value::make_marker(crate::heap_types::LispMarker::new(
+        crate::heap_types::MarkerBuffer::attached(buf.id),
+        crate::buffer::CharPos0::new(0),
+        crate::buffer::EmacsBytePos::new(0),
+        insertion_type == InsertionType::After,
+        true,
+    ));
     let marker_ptr = marker_value
         .as_veclike_ptr()
         .expect("freshly allocated marker should have a veclike ptr")
         as *mut crate::tagged::header::MarkerObj;
-    buf.register_marker_at_emacs_byte_pos(
-        marker_ptr,
-        marker_id,
-        EmacsBytePos::new(pos),
-        insertion_type,
-    );
+    buf.register_marker_at_emacs_byte_pos(marker_ptr, EmacsBytePos::new(pos), insertion_type);
     marker_value
 }
 
@@ -647,7 +635,6 @@ fn from_dump_restores_indirect_buffer_shared_text_state() {
             dumped,
             mgr.dump_current(),
             mgr.dump_next_id(),
-            mgr.dump_next_marker_id(),
             None,
             None,
             implemented_kind,
@@ -685,7 +672,6 @@ fn from_dump_preserves_dumped_buffer_order() {
             .collect(),
         Some(three),
         mgr.dump_next_id(),
-        mgr.dump_next_marker_id(),
         Some(&[two, scratch, three, one]),
         None,
         require_implemented_kind(BufferTextBackendKind::GapBuffer),
@@ -983,14 +969,12 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
             let left_marker_pos = buffer_byte_pos_for_char(&mgr, left_id, 3);
             let left_marker = register_marker_for_test(
                 mgr.get_mut(left_id).expect("left buffer"),
-                501,
                 left_marker_pos,
                 InsertionType::After,
             );
             let right_marker_pos = buffer_byte_pos_for_char(&mgr, right_id, 4);
             let right_marker = register_marker_for_test(
                 mgr.get_mut(right_id).expect("right buffer"),
-                502,
                 right_marker_pos,
                 InsertionType::Before,
             );
@@ -1107,17 +1091,23 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
                 Some(left_overlay_start)
             );
 
-            assert_eq!(right_marker.as_marker_data().unwrap().buffer, Some(left_id));
-            assert_eq!(left_marker.as_marker_data().unwrap().buffer, Some(right_id));
             assert_eq!(
-                marker_chain_lookup_for_test(left_after, 502).map(|(b, c, _)| (b, c)),
+                right_marker.as_marker_data().unwrap().buffer_id(),
+                Some(left_id)
+            );
+            assert_eq!(
+                left_marker.as_marker_data().unwrap().buffer_id(),
+                Some(right_id)
+            );
+            assert_eq!(
+                marker_chain_lookup_for_test(left_after, &right_marker).map(|(b, c, _)| (b, c)),
                 Some((
                     right_marker_pos,
                     char_pos_for_byte(left_after, right_marker_pos)
                 ))
             );
             assert_eq!(
-                marker_chain_lookup_for_test(right_after, 501).map(|(b, c, _)| (b, c)),
+                marker_chain_lookup_for_test(right_after, &left_marker).map(|(b, c, _)| (b, c)),
                 Some((
                     left_marker_pos,
                     char_pos_for_byte(right_after, left_marker_pos)
@@ -1430,9 +1420,9 @@ fn delete_region_adjusts_mark() {
 fn delete_region_moves_marker_at_end_to_start() {
     crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("0123456789ABCDEF");
-    register_marker_for_test(&mut buf, 1, 12, InsertionType::Before);
+    let marker = register_marker_for_test(&mut buf, 12, InsertionType::Before);
     buf.delete_emacs_byte_range(crate::buffer::EmacsByteRange::from_usize(5, 12));
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 5);
     assert_eq!(char_pos, 5);
 }
@@ -1650,11 +1640,11 @@ fn narrow_clamps_point() {
 fn marker_tracks_insertion_after() {
     crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("ab");
-    register_marker_for_test(&mut buf, 1, 1, InsertionType::After);
+    let marker = register_marker_for_test(&mut buf, 1, InsertionType::After);
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(1));
     buf.insert("XY");
     // Marker was at 1 with After => advances to 3.
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 3);
     assert_eq!(char_pos, 3);
 }
@@ -1663,11 +1653,11 @@ fn marker_tracks_insertion_after() {
 fn marker_stays_on_insertion_before() {
     crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("ab");
-    register_marker_for_test(&mut buf, 1, 1, InsertionType::Before);
+    let marker = register_marker_for_test(&mut buf, 1, InsertionType::Before);
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(1));
     buf.insert("XY");
     // Marker was at 1 with Before => stays at 1.
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 1);
     assert_eq!(char_pos, 1);
 }
@@ -1676,10 +1666,10 @@ fn marker_stays_on_insertion_before() {
 fn marker_adjusts_on_deletion() {
     crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("abcdef");
-    register_marker_for_test(&mut buf, 1, 4, InsertionType::After);
+    let marker = register_marker_for_test(&mut buf, 4, InsertionType::After);
     buf.delete_emacs_byte_range(crate::buffer::EmacsByteRange::from_usize(1, 3));
     // Marker was at 4 (past deleted range [1,3)), shifts by 2 => 2.
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 2);
     assert_eq!(char_pos, 2);
 }
@@ -1718,7 +1708,7 @@ fn delete_records_point_entry_before_marker_adjustment() {
     buf.set_undo_list(Value::NIL);
     buf.insert("abcdef");
     // Marker at buffer position 4 (1-indexed) == Emacs byte pos 3.
-    register_marker_for_test(&mut buf, 1, 3, InsertionType::After);
+    let _marker = register_marker_for_test(&mut buf, 3, InsertionType::After);
     // Point at buffer position 7 (1-indexed) == Emacs byte pos 6.
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(6));
     {
@@ -1966,10 +1956,10 @@ fn every_buffer_of_one_editor_shares_the_saved_point_cell() {
 fn marker_inside_deleted_range_collapses() {
     crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("abcdef");
-    register_marker_for_test(&mut buf, 1, 2, InsertionType::After);
+    let marker = register_marker_for_test(&mut buf, 2, InsertionType::After);
     buf.delete_emacs_byte_range(crate::buffer::EmacsByteRange::from_usize(1, 5));
     // Marker at 2 inside [1,5) => collapses to 1.
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 1);
     assert_eq!(char_pos, 1);
 }
@@ -1978,15 +1968,15 @@ fn marker_inside_deleted_range_collapses() {
 fn marker_char_pos_tracks_multibyte_edits() {
     crate::test_utils::init_test_tracing();
     let mut buf = buf_with_text("ééz");
-    register_marker_for_test(&mut buf, 1, 'é'.len_utf8(), InsertionType::After);
+    let marker = register_marker_for_test(&mut buf, 'é'.len_utf8(), InsertionType::After);
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new('é'.len_utf8()));
     buf.insert("ß");
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 4);
     assert_eq!(char_pos, 2);
 
     buf.delete_emacs_byte_range(crate::buffer::EmacsByteRange::from_usize(2, 4));
-    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, 1).expect("marker");
+    let (byte_pos, char_pos, _ins) = marker_chain_lookup_for_test(&buf, &marker).expect("marker");
     assert_eq!(byte_pos, 2);
     assert_eq!(char_pos, 1);
 }
@@ -2013,7 +2003,7 @@ fn run_backend_edit_script(kind: BufferTextBackendKind) -> BackendEditSnapshot {
         face,
         bold
     ));
-    register_marker_for_test(&mut buf, 42, 3, InsertionType::After);
+    let marker = register_marker_for_test(&mut buf, 3, InsertionType::After);
     buf.set_mark_emacs_byte_pos(crate::buffer::EmacsBytePos::new(2));
 
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(3));
@@ -2034,7 +2024,7 @@ fn run_backend_edit_script(kind: BufferTextBackendKind) -> BackendEditSnapshot {
         &replacement,
     );
 
-    let marker_position = marker_chain_anchor_for_test(&buf, 42);
+    let marker_position = marker_chain_anchor_for_test(&buf, &marker);
 
     BackendEditSnapshot {
         buffer_string: buf.buffer_string(),
@@ -2071,7 +2061,7 @@ fn run_backend_transpose_script(kind: BufferTextBackendKind) -> BackendEditSnaps
         second_face,
     ));
     let marker_byte = byte_pos_for_char(&buf, 1);
-    register_marker_for_test(&mut buf, 42, marker_byte, InsertionType::Before);
+    let marker = register_marker_for_test(&mut buf, marker_byte, InsertionType::Before);
     buf.set_mark_emacs_byte_pos(crate::buffer::EmacsBytePos::new(byte_pos_for_char(&buf, 5)));
     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(byte_pos_for_char(&buf, 8)));
 
@@ -2084,7 +2074,7 @@ fn run_backend_transpose_script(kind: BufferTextBackendKind) -> BackendEditSnaps
         crate::buffer::TranspositionAnchorPolicy::FollowText,
     );
 
-    let marker_position = marker_chain_anchor_for_test(&buf, 42);
+    let marker_position = marker_chain_anchor_for_test(&buf, &marker);
 
     BackendEditSnapshot {
         buffer_string: buf.buffer_string(),
@@ -2143,7 +2133,12 @@ enum UndoEntrySnapshot {
         end1: i64,
     },
     MarkerAdjustment {
-        marker_id: Option<u64>,
+        /// Marker identity is the object pointer, which differs between
+        /// equivalent runs; the undo snapshot is compared structurally, so
+        /// the marker is labelled by its buffer and positions instead.
+        marker_buffer: Option<u64>,
+        marker_bytepos: usize,
+        marker_charpos: usize,
         adjustment: i64,
     },
     Other(String),
@@ -2172,12 +2167,14 @@ fn undo_value_label(value: Value) -> String {
         );
     }
     if value.is_marker() {
+        let data = value
+            .as_marker_data()
+            .expect("marker value should have marker payload");
         return format!(
-            "marker:{:?}",
-            value
-                .as_marker_data()
-                .expect("marker value should have marker payload")
-                .marker_id
+            "marker:{:?}:{}:{}",
+            data.buffer_id().map(|buffer| buffer.0),
+            data.bytepos.get(),
+            data.charpos.get()
         );
     }
     format!("{:?}", value.kind())
@@ -2204,11 +2201,13 @@ fn undo_entry_snapshot(entry: Value) -> UndoEntrySnapshot {
                     UndoEntrySnapshot::FirstChange(modtime)
                 }
                 (_, ValueKind::Fixnum(adjustment)) if car.is_marker() => {
+                    let data = car
+                        .as_marker_data()
+                        .expect("marker value should have marker payload");
                     UndoEntrySnapshot::MarkerAdjustment {
-                        marker_id: car
-                            .as_marker_data()
-                            .expect("marker value should have marker payload")
-                            .marker_id,
+                        marker_buffer: data.buffer_id().map(|buffer| buffer.0),
+                        marker_bytepos: data.bytepos.get(),
+                        marker_charpos: data.charpos.get(),
                         adjustment,
                     }
                 }
@@ -2336,6 +2335,7 @@ fn run_manager_edit_entrypoint_script(
     let face = Value::symbol("face");
     let bold = Value::symbol("bold");
 
+    let marker;
     {
         let buf = mgr.get_mut(id).expect("scratch buffer");
         buf.insert("aébc日本z");
@@ -2350,7 +2350,7 @@ fn run_manager_edit_entrypoint_script(
             face,
             bold
         ));
-        register_marker_for_test(buf, 99, marker_pos, InsertionType::After);
+        marker = register_marker_for_test(buf, marker_pos, InsertionType::After);
         buf.set_undo_list(Value::NIL);
     }
 
@@ -2397,7 +2397,7 @@ fn run_manager_edit_entrypoint_script(
         point_char: buf.point_char_pos().get(),
         mark_byte: buf.mark_emacs_byte_pos().map(|pos| pos.get()),
         mark_char: buf.mark_char_pos().map(|pos| pos.get()),
-        marker_position: marker_chain_anchor_for_test(buf, 99),
+        marker_position: marker_chain_anchor_for_test(buf, &marker),
         text_properties: buffer_text_property_snapshot(buf),
         undo: undo_list_snapshot(buf.get_undo_list()),
     }
@@ -2530,15 +2530,13 @@ fn run_shared_insert_policy_script(kind: BufferTextBackendKind) -> SharedInsertP
     .expect("text property");
 
     let insert_pos = buffer_byte_pos_for_char(&mgr, base_id, 2);
-    register_marker_for_test(
+    let marker_after = register_marker_for_test(
         mgr.get_mut(base_id).expect("base buffer"),
-        701,
         insert_pos,
         InsertionType::After,
     );
-    register_marker_for_test(
+    let marker_before = register_marker_for_test(
         mgr.get_mut(indirect_id).expect("indirect buffer"),
-        702,
         insert_pos,
         InsertionType::Before,
     );
@@ -2613,8 +2611,8 @@ fn run_shared_insert_policy_script(kind: BufferTextBackendKind) -> SharedInsertP
             indirect.mark_char_pos(),
             indirect.mark_emacs_byte_pos(),
         ),
-        marker_after_position: marker_chain_anchor_for_test(base, 701),
-        marker_before_position: marker_chain_anchor_for_test(indirect, 702),
+        marker_after_position: marker_chain_anchor_for_test(base, &marker_after),
+        marker_before_position: marker_chain_anchor_for_test(indirect, &marker_before),
         indirect_overlay_range: OptionalEmacsByteRangeSnapshot::from_usize(
             overlay_start_for_test(indirect, indirect_overlay),
             overlay_end_for_test(indirect, indirect_overlay),
@@ -2663,7 +2661,7 @@ fn run_backend_migration_script(
         face,
         bold
     ));
-    register_marker_for_test(&mut buf, 77, 4, InsertionType::After);
+    let marker = register_marker_for_test(&mut buf, 4, InsertionType::After);
     let overlay = Value::make_overlay(OverlayDataInit {
         serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
@@ -2702,7 +2700,7 @@ fn run_backend_migration_script(
         buffer_string: buf.buffer_string(),
         char_to_byte_4,
         byte_to_char_at_char_4: char_pos_for_byte(&buf, char_to_byte_4),
-        marker_position: marker_chain_anchor_for_test(&buf, 77),
+        marker_position: marker_chain_anchor_for_test(&buf, &marker),
         overlay_range: OptionalEmacsByteRangeSnapshot::from_usize(
             overlay_start_for_test(&buf, overlay),
             overlay_end_for_test(&buf, overlay),
@@ -3386,13 +3384,16 @@ fn manager_create_and_query_marker() {
     // Insert some text so there is room for a marker.
     mgr.insert_into_buffer(id, "abcdef").expect("insert text");
 
-    let (mid, _) =
-        mgr.create_marker_at_emacs_byte_pos(id, EmacsBytePos::new(3), InsertionType::After);
+    let mid = crate::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
+        id,
+        EmacsBytePos::new(3),
+        InsertionType::After,
+    ));
     assert_eq!(
-        mgr.marker_emacs_byte_pos(id, mid).map(EmacsBytePos::get),
+        mgr.marker_emacs_byte_pos(mid).map(EmacsBytePos::get),
         Some(3)
     );
-    assert_eq!(mgr.marker_char_pos(id, mid).map(CharPos0::get), Some(3));
+    assert_eq!(mgr.marker_char_pos(mid).map(CharPos0::get), Some(3));
 }
 
 #[test]
@@ -3401,20 +3402,26 @@ fn manager_marker_clamped_to_buffer_len() {
     let mut mgr = BufferManager::new();
     let id = mgr.create_buffer("m");
     // Buffer is empty (len = 0), marker at 100 should be clamped.
-    let (mid, _) =
-        mgr.create_marker_at_emacs_byte_pos(id, EmacsBytePos::new(100), InsertionType::Before);
+    let mid = crate::buffer::MarkerRef::new(mgr.create_marker_at_emacs_byte_pos(
+        id,
+        EmacsBytePos::new(100),
+        InsertionType::Before,
+    ));
     assert_eq!(
-        mgr.marker_emacs_byte_pos(id, mid).map(EmacsBytePos::get),
+        mgr.marker_emacs_byte_pos(mid).map(EmacsBytePos::get),
         Some(0)
     );
-    assert_eq!(mgr.marker_char_pos(id, mid).map(CharPos0::get), Some(0));
+    assert_eq!(mgr.marker_char_pos(mid).map(CharPos0::get), Some(0));
 }
 
 #[test]
 fn manager_marker_nonexistent_buffer() {
     crate::test_utils::init_test_tracing();
+    // Marker identity is the `MarkerObj` pointer, so a buffer id can no
+    // longer address a marker: the empty reference is the only lookup that
+    // names nothing, and it reports no position.
     let mgr = BufferManager::new();
-    let pos = mgr.marker_emacs_byte_pos(BufferId(9999), 1);
+    let pos = mgr.marker_emacs_byte_pos(crate::buffer::MarkerRef::NONE);
     assert_eq!(pos, None);
 }
 
@@ -3644,9 +3651,9 @@ fn state_markers_survive_gc_without_lisp_references() {
             .as_ref()
             .expect("state markers populated by create_indirect_buffer");
         (
-            sm.pt_marker_ptr,
-            sm.begv_marker_ptr,
-            sm.zv_marker_ptr,
+            sm.pt_marker.as_ptr(),
+            sm.begv_marker.as_ptr(),
+            sm.zv_marker.as_ptr(),
             buffer.id,
         )
     };
@@ -3687,25 +3694,25 @@ fn state_markers_survive_gc_without_lisp_references() {
     // reused for something else, `data.buffer` will almost certainly no
     // longer match `expected_buf`.
     unsafe {
-        let pt_buffer = (*pt_ptr).data.buffer;
-        let begv_buffer = (*begv_ptr).data.buffer;
-        let zv_buffer = (*zv_ptr).data.buffer;
+        let pt_buffer = (*pt_ptr).data.buffer_id();
+        let begv_buffer = (*begv_ptr).data.buffer_id();
+        let zv_buffer = (*zv_ptr).data.buffer_id();
 
         assert_eq!(pt_buffer, Some(expected_buf), "pt_marker survived GC");
         assert_eq!(begv_buffer, Some(expected_buf), "begv_marker survived GC");
         assert_eq!(zv_buffer, Some(expected_buf), "zv_marker survived GC");
 
         assert!(
-            (*pt_ptr).data.marker_id.is_some(),
-            "pt_marker retains its marker_id"
+            (*pt_ptr).data.chained(),
+            "pt_marker is still spliced into the chain"
         );
         assert!(
-            (*begv_ptr).data.marker_id.is_some(),
-            "begv_marker retains its marker_id"
+            (*begv_ptr).data.chained(),
+            "begv_marker is still spliced into the chain"
         );
         assert!(
-            (*zv_ptr).data.marker_id.is_some(),
-            "zv_marker retains its marker_id"
+            (*zv_ptr).data.chained(),
+            "zv_marker is still spliced into the chain"
         );
     }
 
@@ -3746,7 +3753,8 @@ fn buffer_mark_marker_survives_gc_without_lisp_reference() {
         .buffers
         .get(buffer_id)
         .expect("buffer present")
-        .mark_marker_ptr;
+        .mark_marker
+        .as_ptr();
     assert!(!mark_ptr.is_null(), "mark marker should be materialized");
 
     eval.gc_collect_exact();
@@ -3761,11 +3769,50 @@ fn buffer_mark_marker_survives_gc_without_lisp_reference() {
 
     unsafe {
         assert_eq!(
-            (*mark_ptr).data.buffer,
+            (*mark_ptr).data.buffer_id(),
             Some(buffer_id),
             "raw buffer mark pointer still refers to its buffer"
         );
     }
+    // The typed reference kept by the buffer is the SAME object GC kept
+    // alive: `mark-marker` returns it by pointer identity.
+    let same = crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![])
+        .expect("mark-marker after GC");
+    assert_eq!(
+        same.as_veclike_ptr().map(|p| p as *const u8),
+        Some(mark_ptr as *const u8),
+        "mark-marker must return the rooted marker object"
+    );
+}
+
+#[test]
+fn mark_marker_object_survives_gc_before_any_mark_is_set() {
+    // GNU gives every buffer a real detached mark marker at creation
+    // (`bset_mark (b, Fmake_marker ())`, buffer.c) and `mark_buffer` marks
+    // it. Neomacs materializes that marker lazily; `Buffer::mark_marker`
+    // must root it even while it points nowhere, and it must stay the same
+    // object so `(mark-marker)` identity is stable across GC.
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let first =
+        crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![]).expect("mark-marker");
+    assert!(first.is_marker());
+    assert_eq!(
+        first.as_marker_data().unwrap().buffer_id(),
+        None,
+        "a fresh buffer's mark points nowhere"
+    );
+    let first_ptr = first.as_veclike_ptr().expect("marker veclike pointer");
+
+    eval.gc_collect_exact();
+
+    let again = crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![])
+        .expect("mark-marker after GC");
+    assert_eq!(
+        again.as_veclike_ptr(),
+        Some(first_ptr),
+        "the detached mark marker is rooted by Buffer::mark_marker"
+    );
 }
 
 #[test]

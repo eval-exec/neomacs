@@ -1,5 +1,5 @@
 use super::*;
-use crate::buffer::{CharLen, CharPos0, CharRange, LispCharPos1};
+use crate::buffer::{CharLen, CharRange, LispCharPos1};
 use crate::emacs_core::error::{
     FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum, expect_max_args,
     expect_min_args,
@@ -2624,8 +2624,8 @@ pub(crate) fn builtin_marker_last_position(args: Vec<Value>) -> EvalResult {
             // marker's last known position even after detach.  Neomacs
             // tracks this with `last_position_valid`, set the first time
             // the marker is positioned and preserved across detach.
-            let last = if marker.last_position_valid {
-                CharPos0::new(marker.charpos).to_lisp().as_i64()
+            let last = if marker.last_position_valid() {
+                marker.charpos.to_lisp().as_i64()
             } else {
                 0
             };
@@ -4087,7 +4087,7 @@ fn marker_live_buffer_for_value_lt(
     eval: &crate::emacs_core::eval::Context,
     value: &Value,
 ) -> Option<crate::buffer::BufferId> {
-    let buffer_id = value.as_marker_data()?.buffer?;
+    let buffer_id = value.as_marker_data()?.buffer_id()?;
     eval.buffers.get(buffer_id)?;
     Some(buffer_id)
 }

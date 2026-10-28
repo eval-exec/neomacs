@@ -3001,19 +3001,19 @@ fn format_marker_handle(
     };
     let marker = value.as_marker_data().unwrap().clone();
     let buffer_name = marker
-        .buffer
+        .buffer_id()
         .and_then(|buffer_id| buffers.and_then(|manager| manager.get(buffer_id)))
         .map(|buffer| buffer.name_runtime_string_owned());
 
     let mut out = String::from("#<marker ");
-    if marker.insertion_type {
+    if marker.insertion_type() {
         out.push_str("(moves after insertion) ");
     }
     // T7: read authoritative charpos (1-based Lisp shape). A marker with
     // no buffer prints as "in no buffer"; otherwise include its current
     // chain-tracked position.
     if let Some(name) = buffer_name.as_deref() {
-        out.push_str(&format!("at {} in {}", marker.charpos + 1, name));
+        out.push_str(&format!("at {} in {}", marker.charpos.get() + 1, name));
     } else {
         out.push_str("in no buffer");
     }

@@ -1795,7 +1795,7 @@ impl BufferText {
                 let data = &mut (*curr).data;
                 let new_position = remap(marker_data_anchor(data));
                 set_marker_data_anchor(data, new_position);
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -2584,18 +2584,17 @@ impl BufferText {
     }
 
     /// Register a marker in this buffer. Updates `LispMarker` fields
-    /// authoritatively (buffer/bytepos/charpos/marker_id/insertion_type)
-    /// and splices the marker into this buffer's intrusive chain at head.
+    /// authoritatively (buffer/bytepos/charpos/insertion_type) and splices
+    /// the marker into this buffer's intrusive chain at head.
     ///
-    /// **Precondition:** `marker_ptr.data.next_marker` is null, i.e. the
-    /// marker is not currently on any chain. Callers re-binding a marker
-    /// must `chain_unlink` from the old buffer first; the
-    /// `debug_assert!` in `chain_splice_at_head` catches violations.
+    /// **Precondition:** `marker_ptr.data.next_marker_ptr()` is null, i.e.
+    /// the marker is not currently on any chain. Callers re-binding a marker
+    /// must `chain_unlink` from the old buffer first; the `debug_assert!` in
+    /// `chain_splice_at_head` catches violations.
     pub(crate) fn register_marker(
         &self,
         marker_ptr: *mut crate::tagged::header::MarkerObj,
         buffer_id: BufferId,
-        marker_id: u64,
         position: TextPositionAnchor,
         insertion_type: InsertionType,
     ) {
@@ -2607,32 +2606,31 @@ impl BufferText {
         // sound for the heap's lifetime. The chain precondition is
         // enforced by `chain_splice_at_head`'s debug_assert below.
         unsafe {
-            (*marker_ptr).data.buffer = Some(buffer_id);
-            (*marker_ptr).data.marker_id = Some(marker_id);
+            (*marker_ptr).data.attach_to(buffer_id);
             set_marker_data_anchor(&mut (*marker_ptr).data, position);
-            (*marker_ptr).data.last_position_valid = true;
-            (*marker_ptr).data.insertion_type = insertion_type == InsertionType::After;
+            (*marker_ptr).data.set_last_position_valid(true);
+            (*marker_ptr)
+                .data
+                .set_insertion_type(insertion_type == InsertionType::After);
         }
         self.chain_splice_at_head(marker_ptr);
     }
 
-    /// Walk the intrusive marker chain head→tail and invoke `f` on each
-    /// live `LispMarker` by reference. Read-only counterpart to
-    /// `chain_walk_mut`; used by pdump (v26) to serialize the chain
-    /// without materializing an intermediate Vec.
+    /// Walk the chain and invoke `f` with each node's raw pointer. The pdump
+    /// needs the node identity, not only the payload, to assign dump-local
+    /// marker ids from one table shared with Lisp marker Values.
     ///
     /// SAFETY: walks live chain-owned MarkerObj pointers from
     /// `storage.markers_head` until null; each `(*curr).data` reference
     /// stays valid for the duration of the call because the GC sweep
     /// runs `unchain_dead_markers` between mark and free.
-    pub fn chain_walk_data<F: FnMut(&crate::heap_types::LispMarker)>(&self, mut f: F) {
+    pub fn chain_walk_nodes<F: FnMut(*mut crate::tagged::header::MarkerObj)>(&self, mut f: F) {
         let storage = self.storage.borrow();
         let mut curr = storage.markers_head;
         unsafe {
             while !curr.is_null() {
-                let data = &(*curr).data;
-                f(data);
-                curr = data.next_marker;
+                f(curr);
+                curr = (*curr).data.next_marker_ptr();
             }
         }
     }
@@ -2653,7 +2651,7 @@ impl BufferText {
                 let data = &(*curr).data;
                 let charpos1 = marker_data_anchor(data).char_pos().to_lisp().as_i64();
                 if from1 <= charpos1 && charpos1 <= to1 {
-                    let target = if data.insertion_type { to1 } else { from1 };
+                    let target = if data.insertion_type() { to1 } else { from1 };
                     let adjustment = target - charpos1;
                     if adjustment != 0 {
                         adjustments.push((
@@ -2664,144 +2662,104 @@ impl BufferText {
                         ));
                     }
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
         adjustments
     }
 
-    pub(crate) fn move_marker_to_anchor(&self, marker_id: u64, position: TextPositionAnchor) {
-        let ptr = self.chain_find_by_id(marker_id);
-        if ptr.is_null() {
-            return;
-        }
-        unsafe {
-            set_marker_data_anchor(&mut (*ptr).data, position);
-        }
-    }
-
     /// GNU `attach_marker's position write (src/marker.c): `m->charpos' and
     /// `m->bytepos', and nothing else.
-    ///
-    /// The `marker_id` sibling above has to FIND the node first, and finding
-    /// it is a chain walk. Every caller that reached here from `set-marker'
-    /// already holds the pointer and must not pay for that walk.
     pub(crate) fn move_marker_ptr_to_anchor(
         &self,
         marker: *mut crate::tagged::header::MarkerObj,
         position: TextPositionAnchor,
     ) {
         // SAFETY: `marker` is a live GC-owned MarkerObj that the caller has
-        // established is on THIS buffer's chain (`data.chained` set and
-        // `data.buffer` equal to this buffer), so the heap still owns the
+        // established is on THIS buffer's chain, so the heap still owns the
         // allocation and the write targets chain-owned fields only.
         unsafe {
             set_marker_data_anchor(&mut (*marker).data, position);
-            (*marker).data.last_position_valid = true;
+            (*marker).data.set_last_position_valid(true);
         }
     }
 
-    /// Walk this buffer's intrusive marker chain and return the raw
-    /// MarkerObj pointer for the first node whose `marker_id` matches,
-    /// or null when none found. Used by pdump load (v26) to resolve
-    /// `BufferStateMarkers` (pt/begv/zv) ids back to chain pointers
-    /// after the chain has been reconstructed.
-    ///
-    /// Pointer lifetime: the returned `*mut MarkerObj` is only valid while
-    /// `self`'s chain still holds it. Any subsequent splice/unlink on this
-    /// buffer's chain, or a GC cycle that runs `unchain_dead_markers`, may
-    /// detach the node from the chain — callers must use the pointer
-    /// before doing anything that could mutate the chain, and must not
-    /// re-enter the chain (or invoke arbitrary Lisp) between lookup and
-    /// use.
-    pub fn chain_find_by_id(&self, marker_id: u64) -> *mut crate::tagged::header::MarkerObj {
-        let storage = self.storage.borrow();
-        let mut curr = storage.markers_head;
-        // SAFETY: chain walks live chain-owned MarkerObj pointers from
-        // `storage.markers_head` until null.
-        unsafe {
-            while !curr.is_null() {
-                if (*curr).data.marker_id == Some(marker_id) {
-                    return curr;
-                }
-                curr = (*curr).data.next_marker;
-            }
-        }
-        std::ptr::null_mut()
-    }
-
-    /// Walk the intrusive chain and return the LispMarker-derived position
-    /// anchor and insertion type for the marker with the given id, or `None`
-    /// if no live chain node carries that id.
-    ///
-    /// Production code should prefer reading `LispMarker` directly off a
-    /// Lisp `Value`. This helper exists for internal buffer-manager
-    /// callers (e.g. `clone_marker_in_buffer`) that track markers by id
-    /// without holding the Lisp value.
-    pub fn marker_chain_anchor_lookup(
+    /// Read a chained marker's position anchor and insertion type directly
+    /// from its payload. `None` when the marker is detached from every chain
+    /// (GNU `marker_position` reports nil for an unchained marker).
+    pub fn marker_chain_anchor_of(
         &self,
-        marker_id: u64,
+        marker: *mut crate::tagged::header::MarkerObj,
     ) -> Option<(TextPositionAnchor, InsertionType)> {
-        let storage = self.storage.borrow();
-        let mut curr = storage.markers_head;
-        // SAFETY: chain walks live chain-owned MarkerObj pointers until null.
-        unsafe {
-            while !curr.is_null() {
-                let data = &(*curr).data;
-                if data.marker_id == Some(marker_id) {
-                    let ins = if data.insertion_type {
-                        InsertionType::After
-                    } else {
-                        InsertionType::Before
-                    };
-                    return Some((marker_data_anchor(data), ins));
-                }
-                curr = data.next_marker;
-            }
+        if marker.is_null() {
+            return None;
         }
-        None
+        // SAFETY: the caller obtained `marker` from a live buffer-chain node
+        // (or from a Lisp marker Value the chain keeps alive); only the
+        // payload's own fields are read.
+        unsafe {
+            let data = &(*marker).data;
+            if !data.chained() {
+                return None;
+            }
+            let ins = if data.insertion_type() {
+                InsertionType::After
+            } else {
+                InsertionType::Before
+            };
+            Some((marker_data_anchor(data), ins))
+        }
     }
 
-    /// Unchain the marker with `marker_id`: one walk that finds and splices
-    /// it (GNU `unchain_marker` keeps the predecessor as it goes).  Between
-    /// GC cycles every chain node is live: `unchain_dead_markers` splices
-    /// unmarked MarkerObjs out between the mark and sweep phases.
-    pub fn remove_marker(&self, marker_id: u64) {
+    /// Unlink `marker` from this buffer's chain by object identity: one walk
+    /// that finds and splices it (GNU `unchain_marker` keeps the predecessor
+    /// as it goes). Between GC cycles every chain node is live:
+    /// `unchain_dead_markers` splices unmarked MarkerObjs out between the
+    /// mark and sweep phases.
+    ///
+    /// Returns whether the marker was found.
+    pub fn remove_marker_ptr(&self, marker: *mut crate::tagged::header::MarkerObj) -> bool {
         let mut storage = self.storage.borrow_mut();
-        let mut prev_slot: *mut *mut crate::tagged::header::MarkerObj = &mut storage.markers_head;
-        // SAFETY: `prev_slot` walks the intrusive chain from
-        // `storage.markers_head`; every non-null `*prev_slot` is a live
-        // chain-owned `MarkerObj` (see `chain_unlink`), and the only writes
-        // are to chain-owned `next_marker` slots and the leaving marker's
+        let mut prev: *mut crate::tagged::header::MarkerObj = std::ptr::null_mut();
+        let mut curr = storage.markers_head;
+        // SAFETY: `curr` walks live chain-owned MarkerObj pointers from
+        // `storage.markers_head`; `prev` is the previous node (null at the
+        // head). Writes go to chain-owned links and the leaving marker's
         // own fields.
         unsafe {
-            while !(*prev_slot).is_null() {
-                let curr = *prev_slot;
-                if (*curr).data.marker_id == Some(marker_id) {
-                    *prev_slot = (*curr).data.next_marker;
-                    (*curr).data.next_marker = std::ptr::null_mut();
-                    (*curr).data.chained = false;
-                    (*curr).data.buffer = None;
-                    return;
+            while !curr.is_null() {
+                let next = (*curr).data.next_marker_ptr();
+                if curr == marker {
+                    if prev.is_null() {
+                        storage.markers_head = next;
+                    } else {
+                        (*prev).data.set_next_marker(next);
+                    }
+                    (*curr).data.set_next_marker(std::ptr::null_mut());
+                    (*curr).data.set_chained(false);
+                    (*curr).data.detach();
+                    return true;
                 }
-                prev_slot = &mut (*curr).data.next_marker;
+                prev = curr;
+                curr = next;
             }
         }
+        false
     }
 
-    /// Return true iff a marker with `marker_id` is currently spliced
-    /// into this buffer's chain. Used by BufferManager to pick the
-    /// correct buffer when updating insertion type across buffers.
-    pub fn has_marker(&self, marker_id: u64) -> bool {
+    /// Return true iff `marker` is currently spliced into this buffer's chain.
+    /// Used by BufferManager to pick the correct buffer when updating
+    /// insertion type across buffers.
+    pub fn has_marker_ptr(&self, marker: *mut crate::tagged::header::MarkerObj) -> bool {
         let storage = self.storage.borrow();
         let mut curr = storage.markers_head;
         // SAFETY: chain walks live chain-owned MarkerObj pointers until null.
         unsafe {
             while !curr.is_null() {
-                if (*curr).data.marker_id == Some(marker_id) {
+                if curr == marker {
                     return true;
                 }
-                curr = (*curr).data.next_marker;
+                curr = (*curr).data.next_marker_ptr();
             }
         }
         false
@@ -2820,12 +2778,12 @@ impl BufferText {
         unsafe {
             while !curr.is_null() {
                 markers.push(curr);
-                curr = (*curr).data.next_marker;
+                curr = (*curr).data.next_marker_ptr();
             }
             markers.sort_unstable_by_key(|marker| (**marker).data.charpos);
             let mut anchor = TextPositionAnchor::new(CharPos0::ZERO, EmacsBytePos::ZERO);
             for marker in markers {
-                let position = CharPos0::new((*marker).data.charpos);
+                let position = (*marker).data.charpos;
                 let byte = scan_forward(&storage.backend, anchor, position);
                 anchor = TextPositionAnchor::new(position, byte);
                 set_marker_data_anchor(&mut (*marker).data, anchor);
@@ -2854,11 +2812,11 @@ impl BufferText {
                 let marker_byte_pos = marker_data_byte_pos(data);
                 if marker_byte_pos > insert_pos {
                     apply_marker_data_delta(data, insert_delta);
-                } else if marker_byte_pos == insert_pos && data.insertion_type {
+                } else if marker_byte_pos == insert_pos && data.insertion_type() {
                     // insertion_type == true means "after" in GNU terms.
                     apply_marker_data_delta(data, insert_delta);
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -2886,7 +2844,7 @@ impl BufferText {
                 if marker_data_byte_pos(data) > insert_pos {
                     apply_marker_data_delta(data, insert_delta);
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -2908,7 +2866,7 @@ impl BufferText {
                 } else if marker_byte_pos > range.byte_start() {
                     set_marker_data_anchor(data, range.start_anchor());
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -2936,7 +2894,7 @@ impl BufferText {
                 } else if marker_byte_pos > old_range.byte_start() {
                     set_marker_data_anchor(data, old_range.start_anchor());
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -2955,7 +2913,7 @@ impl BufferText {
                 if marker_data_byte_pos(data) == pos {
                     apply_marker_data_delta(data, insert_delta);
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -2969,26 +2927,35 @@ impl BufferText {
     pub fn remove_markers_for_buffers(&self, killed: &std::collections::HashSet<BufferId>) {
         let mut storage = self.storage.borrow_mut();
         storage.mode_line_clipped.retain(|id| !killed.contains(id));
-        let mut prev_slot: *mut *mut crate::tagged::header::MarkerObj = &mut storage.markers_head;
-        // SAFETY: analogous to `chain_unlink`. Every non-null `*prev_slot`
-        // was installed via `chain_splice_at_head`, i.e. a live GC-managed
-        // MarkerObj with a valid `data.next_marker` link.
+        let mut prev: *mut crate::tagged::header::MarkerObj = std::ptr::null_mut();
+        let mut curr = storage.markers_head;
+        // SAFETY: `curr` walks live chain-owned MarkerObj pointers installed
+        // via `chain_splice_at_head`; `prev` is the previous node (null at the
+        // head). Writes go to chain links and the leaving marker's fields.
         unsafe {
-            while !(*prev_slot).is_null() {
-                let curr = *prev_slot;
+            while !curr.is_null() {
+                let next = (*curr).data.next_marker_ptr();
                 let data = &mut (*curr).data;
-                let belongs_to_killed = data.buffer.map(|id| killed.contains(&id)).unwrap_or(false);
+                let belongs_to_killed = data
+                    .buffer_id()
+                    .map(|id| killed.contains(&id))
+                    .unwrap_or(false);
                 if belongs_to_killed {
-                    *prev_slot = data.next_marker;
-                    data.next_marker = std::ptr::null_mut();
-                    data.chained = false;
-                    data.buffer = None;
+                    if prev.is_null() {
+                        storage.markers_head = next;
+                    } else {
+                        (*prev).data.set_next_marker(next);
+                    }
+                    data.set_next_marker(std::ptr::null_mut());
+                    data.set_chained(false);
+                    data.detach();
                     // Preserve charpos/bytepos and last_position_valid so
                     // `marker-last-position` keeps GNU semantics across
                     // kill-buffer (cf. unchain_marker, marker.c:684).
                 } else {
-                    prev_slot = &mut data.next_marker;
+                    prev = curr;
                 }
+                curr = next;
             }
         }
     }
@@ -3005,10 +2972,10 @@ impl BufferText {
         unsafe {
             while !curr.is_null() {
                 let data = &mut (*curr).data;
-                if data.buffer == Some(from) {
-                    data.buffer = Some(to);
+                if data.buffer_id() == Some(from) {
+                    data.attach_to(to);
                 }
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
     }
@@ -3044,7 +3011,7 @@ impl BufferText {
             // because the heap retains ownership for the lifetime of the
             // MarkerObj.
             debug_assert!(
-                (*marker).data.next_marker.is_null(),
+                (*marker).data.next_marker_ptr().is_null(),
                 "chain_splice_at_head: marker is already on a chain"
             );
             // `chained` must agree with the link state it summarises, or the
@@ -3052,11 +3019,11 @@ impl BufferText {
             // would answer wrongly. Checked here so the whole debug suite
             // proves the bit rather than assuming it.
             debug_assert!(
-                !(*marker).data.chained,
+                !(*marker).data.chained(),
                 "chain_splice_at_head: marker is already flagged chained"
             );
-            (*marker).data.next_marker = old_head;
-            (*marker).data.chained = true;
+            (*marker).data.set_next_marker(old_head);
+            (*marker).data.set_chained(true);
         }
         storage.markers_head = marker;
     }
@@ -3070,23 +3037,27 @@ impl BufferText {
     /// double-invoked during GC sweep and kill-buffer cleanup in T8/T9.
     pub(crate) fn chain_unlink(&self, marker: *mut crate::tagged::header::MarkerObj) {
         let mut storage = self.storage.borrow_mut();
-        let mut prev_slot: *mut *mut crate::tagged::header::MarkerObj = &mut storage.markers_head;
-        // SAFETY: `prev_slot` walks the intrusive chain starting at
-        // `storage.markers_head`. Every non-null `*prev_slot` is a
-        // `*mut MarkerObj` previously installed via `chain_splice_at_head`,
-        // i.e. a live GC-managed allocation whose `.data.next_marker` is
-        // the next chain slot. We never read past a null terminator, and
-        // mutations only rewrite chain-owned `next_marker` fields.
+        let mut prev: *mut crate::tagged::header::MarkerObj = std::ptr::null_mut();
+        let mut curr = storage.markers_head;
+        // SAFETY: `curr` walks live chain-owned MarkerObj pointers installed
+        // via `chain_splice_at_head`; `prev` is the previous node (null at the
+        // head). No read goes past a null terminator; mutations rewrite only
+        // chain-owned links.
         unsafe {
-            while !(*prev_slot).is_null() {
-                let curr = *prev_slot;
+            while !curr.is_null() {
+                let next = (*curr).data.next_marker_ptr();
                 if curr == marker {
-                    *prev_slot = (*curr).data.next_marker;
-                    (*curr).data.next_marker = std::ptr::null_mut();
-                    (*curr).data.chained = false;
+                    if prev.is_null() {
+                        storage.markers_head = next;
+                    } else {
+                        (*prev).data.set_next_marker(next);
+                    }
+                    (*curr).data.set_next_marker(std::ptr::null_mut());
+                    (*curr).data.set_chained(false);
                     return;
                 }
-                prev_slot = &mut (*curr).data.next_marker;
+                prev = curr;
+                curr = next;
             }
         }
     }
@@ -3104,7 +3075,7 @@ impl BufferText {
         unsafe {
             while !curr.is_null() {
                 out.push(curr);
-                curr = (*curr).data.next_marker;
+                curr = (*curr).data.next_marker_ptr();
             }
         }
         out
@@ -3193,7 +3164,7 @@ impl BufferText {
                     break;
                 }
                 distance = distance.add_len(CharLen::new(POSITION_DISTANCE_INCR));
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
 
@@ -3243,7 +3214,7 @@ impl BufferText {
                     break;
                 }
                 distance = distance.add_len(EmacsByteLen::new(POSITION_DISTANCE_INCR));
-                curr = data.next_marker;
+                curr = data.next_marker_ptr();
             }
         }
 

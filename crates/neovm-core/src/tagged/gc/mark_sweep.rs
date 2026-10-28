@@ -2084,3 +2084,67 @@ impl TaggedHeap {
         done_rx.recv().expect("neovm-gc thread did not respond");
     }
 }
+
+/// Marker-chain maintenance between the mark phase and the sweep.
+/// Moved out of `gc.rs` with the rest of the mark/sweep cycle: the chain
+/// splice must run while every allocation is still readable, which is the
+/// ordering this module owns (`chain_splice_at_head`/`unchain` are also the
+/// only writers of the `chained` bit).
+impl TaggedHeap {
+    /// Walk each installed buffer-chain head slot and splice out markers
+    /// whose GC mark bit is clear. Runs between `mark_all` and
+    /// `sweep_objects` so reading `header.gc.marked` is sound (the
+    /// allocation is still live). Mirrors GNU Emacs `sweep_buffer →
+    /// unchain_dead_markers` (alloc.c).
+    pub(super) fn unchain_dead_markers(&mut self) {
+        // Take the slot list out so we don't alias self while iterating.
+        let slots = std::mem::take(&mut self.marker_chain_head_slots);
+        let parity = self.mark_parity;
+        let scope = self.collection_scope();
+        let (dump_lo, dump_hi) = (self.dump_addr_lo, self.dump_addr_hi);
+        for slot in slots {
+            unsafe {
+                let mut prev: *mut MarkerObj = std::ptr::null_mut();
+                let mut curr = *slot;
+                while !curr.is_null() {
+                    let next = (*curr).data.next_marker_ptr();
+                    // Buffer marker chains can hold TENURED markers (promoted
+                    // at the first partition cycle): their bit froze at
+                    // promotion and must not be interpreted against the
+                    // current parity — tenured ≡ permanently live.
+                    //
+                    // A marker in the mapped image (a dumped marker Lisp
+                    // later pointed into a buffer, e.g. `view-lossage`'s
+                    // `help-window-point-marker`) is permanently live too:
+                    // image objects are never freed, and their header bit
+                    // keeps the value the loader wrote, which reads as dead
+                    // at every other parity. Its mark lives in the side
+                    // table, not the header -- reading the header spliced it
+                    // out of the chain at the first GC, after which it no
+                    // longer moved with insertions and deletions. Keeping an
+                    // unreachable image marker chained costs one node and
+                    // cannot dangle.
+                    let addr = curr as usize;
+                    if (addr >= dump_lo && addr < dump_hi)
+                        || (*curr).header.gc.black_by_generation(scope)
+                        || (*curr).header.gc.is_marked_at(parity)
+                    {
+                        // Live — advance prev
+                        prev = curr;
+                    } else {
+                        // Dead — splice out. The generic `sweep_objects`
+                        // pass frees the allocation.
+                        if prev.is_null() {
+                            *slot = next;
+                        } else {
+                            (*prev).data.set_next_marker(next);
+                        }
+                        (*curr).data.set_next_marker(std::ptr::null_mut());
+                        (*curr).data.set_chained(false);
+                    }
+                    curr = next;
+                }
+            }
+        }
+    }
+}

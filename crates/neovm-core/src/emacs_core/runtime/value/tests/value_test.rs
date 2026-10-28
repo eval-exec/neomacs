@@ -496,29 +496,29 @@ fn string_equality() {
     });
 }
 
-fn test_marker(buffer: Option<BufferId>, bytepos: usize, marker_id: u64) -> Value {
-    Value::make_marker(LispMarker {
-        buffer,
-        insertion_type: false,
-        marker_id: Some(marker_id),
-        bytepos,
-        charpos: bytepos,
-        last_position_valid: buffer.is_some(),
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    })
+fn test_marker(buffer: Option<BufferId>, bytepos: usize) -> Value {
+    Value::make_marker(LispMarker::new(
+        match buffer {
+            Some(id) => crate::heap_types::MarkerBuffer::attached(id),
+            None => crate::heap_types::MarkerBuffer::DETACHED,
+        },
+        crate::buffer::CharPos0::new(bytepos),
+        crate::buffer::EmacsBytePos::new(bytepos),
+        false,
+        buffer.is_some(),
+    ))
 }
 
 #[test]
 fn marker_equal_matches_gnu_buffer_and_bytepos_rules() {
     crate::test_utils::init_test_tracing();
     with_test_heap(|| {
-        let detached_left = test_marker(None, 4, 1);
-        let detached_right = test_marker(None, 5, 2);
-        let attached_left = test_marker(Some(BufferId(1)), 4, 1);
-        let attached_same = test_marker(Some(BufferId(1)), 4, 2);
-        let attached_different_pos = test_marker(Some(BufferId(1)), 5, 3);
-        let attached_different_buffer = test_marker(Some(BufferId(2)), 4, 4);
+        let detached_left = test_marker(None, 4);
+        let detached_right = test_marker(None, 5);
+        let attached_left = test_marker(Some(BufferId(1)), 4);
+        let attached_same = test_marker(Some(BufferId(1)), 4);
+        let attached_different_pos = test_marker(Some(BufferId(1)), 5);
+        let attached_different_buffer = test_marker(Some(BufferId(2)), 4);
 
         assert!(equal_value(&detached_left, &detached_right, 0));
         assert!(equal_value(&attached_left, &attached_same, 0));

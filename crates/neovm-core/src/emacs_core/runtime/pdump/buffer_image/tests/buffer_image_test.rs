@@ -63,6 +63,7 @@ fn buffer_section_round_trips_manager_state() {
         state_pt_marker: Some(11),
         state_begv_marker: Some(12),
         state_zv_marker: Some(13),
+        mark_marker: Some(30),
         properties_syms: vec![(
             DumpSymId(14),
             DumpRuntimeBindingValue::Bound(DumpValue::Int(15)),
@@ -119,7 +120,6 @@ fn buffer_section_round_trips_manager_state() {
         buffer_order: vec![DumpBufferId(1)],
         current: Some(DumpBufferId(1)),
         next_id: 24,
-        next_marker_id: 25,
         buffer_defaults: vec![DumpValue::Int(26)],
         default_text_backend_kind: DumpBufferTextBackendKind::PieceTree,
     };

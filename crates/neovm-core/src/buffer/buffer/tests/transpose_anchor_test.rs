@@ -52,7 +52,7 @@ fn transpose_storage_moves_gap_outside_rearranged_character_boundaries() {
 fn transpose_preserved_marker_anchor_has_consistent_coordinates() {
     for kind in implemented_text_backends() {
         let mut buf = buf_with_text_backend("a中", kind);
-        let _marker = register_marker_for_test(&mut buf, 701, 1, InsertionType::Before);
+        let marker = register_marker_for_test(&mut buf, 1, InsertionType::Before);
         buf.goto_emacs_byte_pos(EmacsBytePos::new(1));
         let transposition = buf.text_transposition_for_char_ranges(
             CharRange::from_usize(0, 1),
@@ -63,7 +63,7 @@ fn transpose_preserved_marker_anchor_has_consistent_coordinates() {
             crate::buffer::TranspositionAnchorPolicy::PreserveCharacterPositions,
         );
         assert_eq!(
-            marker_chain_anchor_for_test(&buf, 701),
+            marker_chain_anchor_for_test(&buf, &marker),
             Some(TextPositionAnchor::from_usize(1, 3)),
             "{kind:?}"
         );
@@ -139,7 +139,7 @@ fn transpose_indirect_point_restores_full_text_anchor_outside_accessible_region(
                     PreserveCharacterPositions => (preserved_point, TextPositionAnchor::ZERO),
                 };
                 assert_eq!(
-                    manager.marker_anchor_position(sibling, point_marker),
+                    manager.marker_anchor_position(point_marker),
                     Some(expected_point),
                     "{kind:?} {text:?} {policy:?}"
                 );

@@ -151,7 +151,7 @@ fn arrow_marker_charpos(evaluator: &Context, var: Value, buffer_id: BufferId) ->
     let sym = var.as_bare_symbol_id()?;
     let value = evaluator.variable_value(sym)?;
     let marker = value.as_marker_data()?;
-    (marker.buffer == Some(buffer_id)).then_some(marker.charpos)
+    (marker.buffer_id() == Some(buffer_id)).then_some(marker.charpos.get())
 }
 
 /// GNU `overlay_arrow_string_or_property`: the symbol's own

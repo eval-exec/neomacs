@@ -47,13 +47,14 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
     let mut ids = Vec::new();
     let mut markers = Vec::new();
     for (pos, insertion_type) in specifications {
-        let (marker_id, _) = buffers.create_marker_at_anchor(
+        let marker_ptr = buffers.create_marker_at_anchor(
             id,
             anchor(buffers.get(id).unwrap(), pos),
             insertion_type,
         );
-        ids.push(marker_id);
-        markers.push(buffers.marker_value(id, marker_id).unwrap());
+        let marker_ref = crate::buffer::MarkerRef::new(marker_ptr);
+        ids.push(marker_ref);
+        markers.push(buffers.marker_value(marker_ref).unwrap());
     }
     let live = buffers.get_mut(id).unwrap();
     live.set_modified(false);
@@ -67,11 +68,15 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
     // Plan preparation grants no authority over marker state. Move, attach,
     // and detach markers before commit without changing measured text.
     let moved = anchor(live, 2);
-    live.move_marker_to_anchor(ids[0], moved);
+    live.move_marker_ref_to_anchor(ids[0], moved);
     buffers.remove_marker(ids[2]);
     let anchor = anchor(buffers.get(id).unwrap(), 3);
-    let (late_id, _) = buffers.create_marker_at_anchor(id, anchor, InsertionType::Before);
-    markers.push(buffers.marker_value(id, late_id).unwrap());
+    let late_ptr = buffers.create_marker_at_anchor(id, anchor, InsertionType::Before);
+    markers.push(
+        buffers
+            .marker_value(crate::buffer::MarkerRef::new(late_ptr))
+            .unwrap(),
+    );
     let live = buffers.get_mut(id).unwrap();
     live.set_undo_list(match committed {
         UndoRecording::Enabled => Value::NIL,
@@ -82,8 +87,8 @@ fn assert_live_delete(prepared: UndoRecording, committed: UndoRecording) {
         .iter()
         .map(|m| {
             let data = m.as_marker_data().unwrap();
-            if data.buffer.is_some() {
-                Value::fixnum((data.charpos + 1) as i64)
+            if data.buffer_id().is_some() {
+                Value::fixnum(data.charpos.get() as i64 + 1)
             } else {
                 Value::NIL
             }

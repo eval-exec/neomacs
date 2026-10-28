@@ -1371,17 +1371,17 @@ pub(crate) fn format_opaque_handle_in_state(
         && let Some(marker) = value.as_marker_data()
     {
         let mut out = String::from("#<marker ");
-        if marker.insertion_type {
+        if marker.insertion_type() {
             out.push_str("(moves after insertion) ");
         }
         // T7: read authoritative charpos (1-based Lisp shape) directly
         // from LispMarker, not the deleted stale `position` cache.
-        if let Some(buffer_id) = marker.buffer
+        if let Some(buffer_id) = marker.buffer_id()
             && let Some(buffer) = buffers.get(buffer_id)
         {
             out.push_str(&format!(
                 "at {} in {}",
-                marker.charpos + 1,
+                marker.charpos.get() + 1,
                 buffer.name_runtime_string_owned()
             ));
         } else {

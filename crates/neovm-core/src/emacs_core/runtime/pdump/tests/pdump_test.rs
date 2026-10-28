@@ -887,16 +887,13 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
     let mut eval = Context::new();
     eval.obarray.set_symbol_value(
         "test-pdump-mapped-marker",
-        Value::make_marker(LispMarker {
-            buffer: None,
-            insertion_type: true,
-            marker_id: Some(42),
-            bytepos: 7,
-            charpos: 7,
-            last_position_valid: true,
-            next_marker: std::ptr::null_mut(),
-            chained: false,
-        }),
+        Value::make_marker(LispMarker::new(
+            crate::heap_types::MarkerBuffer::DETACHED,
+            crate::buffer::CharPos0::new(7),
+            crate::buffer::EmacsBytePos::new(7),
+            true,
+            true,
+        )),
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -914,22 +911,135 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
         loaded.pdump_image_contains_ptr(value.as_veclike_ptr().unwrap().cast::<u8>()),
         "loaded marker object must be a tagged pointer into the retained mmap image"
     );
-    assert!(marker.insertion_type);
-    assert_eq!(marker.marker_id, Some(42));
-    assert_eq!(marker.bytepos, 7);
-    assert_eq!(marker.charpos, 7);
+    assert!(marker.insertion_type());
+    assert_eq!(marker.bytepos.get(), 7);
+    assert_eq!(marker.charpos.get(), 7);
 
     loaded.gc_collect_exact();
     let value_after_gc = loaded
         .obarray
         .symbol_value_copied("test-pdump-mapped-marker")
         .expect("restored marker symbol after GC");
+    // Marker identity is the object pointer: GC keeps the very same
+    // MarkerObj the load decoded from the mmap image.
     assert_eq!(
-        value_after_gc
-            .as_marker_data()
-            .expect("marker after GC")
-            .marker_id,
-        Some(42)
+        value_after_gc.as_veclike_ptr(),
+        value.as_veclike_ptr(),
+        "the restored marker keeps its identity across GC"
+    );
+}
+
+/// The load image must restore marker identity, not just marker-shaped
+/// values: positions, insertion types and the buffer mark all round-trip,
+/// and the restored objects are spliced back into the buffer's chain, so
+/// they keep tracking edits.
+#[test]
+fn file_pdump_round_trips_marker_positions_insertion_types_and_mark() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let buffer_id = eval.buffers.current_buffer_id().expect("scratch buffer");
+    eval.buffers
+        .insert_into_buffer(buffer_id, "abcdefghij")
+        .expect("insert text");
+
+    // One Before marker at Lisp position 3, one After marker at position 5.
+    let before_marker = crate::emacs_core::marker::make_registered_buffer_marker(
+        &mut eval.buffers,
+        buffer_id,
+        LispCharPos1::new(3),
+        false,
+    );
+    let after_marker = crate::emacs_core::marker::make_registered_buffer_marker(
+        &mut eval.buffers,
+        buffer_id,
+        LispCharPos1::new(5),
+        true,
+    );
+    eval.obarray
+        .set_symbol_value("test-pdump-marker-before", before_marker);
+    eval.obarray
+        .set_symbol_value("test-pdump-marker-after", after_marker);
+
+    // Mark at Emacs byte 4 (0-based char 4).
+    eval.buffers
+        .set_buffer_mark_emacs_byte_pos(buffer_id, crate::buffer::EmacsBytePos::new(4))
+        .expect("set mark");
+    let mark =
+        crate::emacs_core::marker::builtin_mark_marker(&mut eval, vec![]).expect("mark-marker");
+    eval.obarray.set_symbol_value("test-pdump-mark", mark);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dump_path = dir.path().join("marker-roundtrip.pdump");
+    dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
+
+    let before_marker = loaded
+        .obarray
+        .symbol_value_copied("test-pdump-marker-before")
+        .expect("restored before marker");
+    let after_marker = loaded
+        .obarray
+        .symbol_value_copied("test-pdump-marker-after")
+        .expect("restored after marker");
+    let mark = loaded
+        .obarray
+        .symbol_value_copied("test-pdump-mark")
+        .expect("restored mark marker");
+
+    for (marker, charpos, insertion_type) in [
+        (before_marker, 2usize, false),
+        (after_marker, 4usize, true),
+        (mark, 4usize, false),
+    ] {
+        let data = marker.as_marker_data().expect("marker payload");
+        assert_eq!(data.buffer_id(), Some(buffer_id), "buffer round-trip");
+        assert_eq!(data.charpos.get(), charpos, "char position round-trip");
+        assert_eq!(
+            data.insertion_type(),
+            insertion_type,
+            "insertion type round-trip"
+        );
+        assert!(data.chained(), "the marker is back on the buffer chain");
+    }
+
+    // The buffer's mark reference names the same object Lisp holds.
+    let mark_ref = loaded
+        .buffers
+        .get(buffer_id)
+        .expect("restored buffer")
+        .mark_marker;
+    assert_eq!(
+        mark_ref.as_ptr(),
+        mark.as_veclike_ptr().expect("mark veclike pointer")
+            as *mut crate::tagged::header::MarkerObj,
+        "the restored buffer mark is the dumped marker object"
+    );
+
+    // The restored chain is live: inserting two chars at the start moves the
+    // markers by two, each through its own chain entry.
+    loaded
+        .buffers
+        .goto_buffer_emacs_byte_pos(buffer_id, crate::buffer::EmacsBytePos::new(0))
+        .expect("goto start");
+    loaded
+        .buffers
+        .insert_into_buffer(buffer_id, "XY")
+        .expect("insert at start");
+    assert_eq!(
+        before_marker.as_marker_data().unwrap().charpos.get(),
+        4,
+        "Before marker follows the inserted text"
+    );
+    assert_eq!(
+        after_marker.as_marker_data().unwrap().charpos.get(),
+        6,
+        "After marker follows the inserted text"
+    );
+    assert_eq!(
+        crate::emacs_core::marker::marker_position_as_int_with_buffers(&loaded.buffers, &mark)
+            .expect("mark position after edit"),
+        7,
+        "mark moved with its marker object"
     );
 }
 
@@ -946,16 +1056,13 @@ fn a_mapped_marker_set_into_a_buffer_keeps_tracking_edits_across_gcs() {
     let mut eval = Context::new();
     eval.obarray.set_symbol_value(
         "test-pdump-chained-marker",
-        Value::make_marker(LispMarker {
-            buffer: None,
-            insertion_type: false,
-            marker_id: Some(43),
-            bytepos: 1,
-            charpos: 1,
-            last_position_valid: true,
-            next_marker: std::ptr::null_mut(),
-            chained: false,
-        }),
+        Value::make_marker(LispMarker::new(
+            crate::heap_types::MarkerBuffer::DETACHED,
+            crate::buffer::CharPos0::new(1),
+            crate::buffer::EmacsBytePos::new(1),
+            false,
+            true,
+        )),
     );
     let dir = tempfile::tempdir().unwrap();
     let dump_path = dir.path().join("chained-marker.pdump");

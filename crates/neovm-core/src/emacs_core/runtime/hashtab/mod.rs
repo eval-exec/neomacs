@@ -306,13 +306,13 @@ fn emacs_sxhash_structural_pseudovector(
 
 fn emacs_sxhash_marker(value: &Value) -> Option<u64> {
     let marker = value.as_marker_data()?;
-    let bytepos = if marker.buffer.is_some() {
-        marker.bytepos as u64
+    let bytepos = if marker.buffer.is_attached() {
+        marker.bytepos.get() as u64
     } else {
         0
     };
     Some(sxhash_combine(
-        marker.buffer.map(|buffer| buffer.0).unwrap_or(0),
+        marker.buffer_id().map(|buffer| buffer.0).unwrap_or(0),
         bytepos,
     ))
 }
@@ -580,9 +580,9 @@ fn hash_value_for_equal(
         ValueKind::Veclike(VecLikeType::Marker) => {
             18_u8.hash(hasher);
             if let Some(marker) = value.as_marker_data() {
-                marker.buffer.map(|buffer| buffer.0).hash(hasher);
-                if marker.buffer.is_some() {
-                    marker.bytepos.hash(hasher);
+                marker.buffer_id().map(|buffer| buffer.0).hash(hasher);
+                if marker.buffer.is_attached() {
+                    marker.bytepos.get().hash(hasher);
                 } else {
                     0_usize.hash(hasher);
                 }

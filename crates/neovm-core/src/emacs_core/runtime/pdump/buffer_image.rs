@@ -17,7 +17,7 @@ use super::types::{
 };
 
 const BUFFER_MAGIC: [u8; 16] = *b"NEOBUFFER\0\0\0\0\0\0\0";
-const BUFFER_FORMAT_VERSION: u32 = 7;
+const BUFFER_FORMAT_VERSION: u32 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -28,7 +28,6 @@ struct BufferHeader {
     buffer_count: u64,
     default_count: u64,
     next_id: u64,
-    next_marker_id: u64,
     payload_offset: u64,
     payload_len: u64,
 }
@@ -62,7 +61,6 @@ pub(crate) fn buffer_manager_section_bytes(
         buffer_count: count_u64(manager.buffers.len(), "buffer count")?,
         default_count: count_u64(manager.buffer_defaults.len(), "buffer default count")?,
         next_id: manager.next_id,
-        next_marker_id: manager.next_marker_id,
         payload_offset: HEADER_SIZE as u64,
         payload_len: payload_len as u64,
     };
@@ -115,7 +113,6 @@ pub(crate) fn load_buffer_manager_section(section: &[u8]) -> Result<DumpBufferMa
         buffer_order,
         current,
         next_id: header.next_id,
-        next_marker_id: header.next_marker_id,
         buffer_defaults,
         default_text_backend_kind,
     })
@@ -178,6 +175,7 @@ fn write_buffer(out: &mut Vec<u8>, buffer: &DumpBuffer) -> Result<(), DumpError>
     write_opt_u64(out, buffer.state_pt_marker);
     write_opt_u64(out, buffer.state_begv_marker);
     write_opt_u64(out, buffer.state_zv_marker);
+    write_opt_u64(out, buffer.mark_marker);
     write_symbol_runtime_pairs(out, &buffer.properties_syms)?;
     write_string_runtime_pairs(out, &buffer.properties)?;
     write_sym_vec(out, &buffer.local_binding_syms)?;
@@ -228,6 +226,7 @@ fn read_buffer(cursor: &mut Cursor<'_>) -> Result<DumpBuffer, DumpError> {
         state_pt_marker: read_opt_u64(cursor)?,
         state_begv_marker: read_opt_u64(cursor)?,
         state_zv_marker: read_opt_u64(cursor)?,
+        mark_marker: read_opt_u64(cursor)?,
         properties_syms: read_symbol_runtime_pairs(cursor)?,
         properties: read_string_runtime_pairs(cursor)?,
         local_binding_syms: read_sym_vec(cursor)?,
@@ -877,7 +876,6 @@ pub(crate) fn empty_buffer_manager() -> DumpBufferManager {
         buffer_order: Vec::new(),
         current: None,
         next_id: 0,
-        next_marker_id: 0,
         buffer_defaults: Vec::new(),
         default_text_backend_kind: DumpBufferTextBackendKind::GapBuffer,
     }

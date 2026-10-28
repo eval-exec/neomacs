@@ -1296,7 +1296,7 @@ impl Context {
     #[inline(never)]
     pub(crate) fn record_save_excursion(&mut self) -> Option<usize> {
         let buffer_id = self.buffers.current_buffer_id()?;
-        let (marker, _marker_id) =
+        let marker =
             super::super::marker::make_registered_point_marker(&mut self.buffers, buffer_id)
                 .expect("the current buffer is live, so its point marker registers");
         let saved_window = super::ExcursionWindow::capture(&self.frames, buffer_id);

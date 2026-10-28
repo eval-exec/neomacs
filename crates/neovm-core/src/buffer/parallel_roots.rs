@@ -36,12 +36,8 @@ impl BufferStorage {
             // same live marker as a raw pointer in Buffer; synthesize the
             // tagged Value here so GC does not reclaim it while the buffer
             // remains live.
-            unsafe {
-                if !buffer.mark_marker_ptr.is_null() {
-                    visit(Value::from_veclike_ptr(
-                        buffer.mark_marker_ptr as *const crate::tagged::header::VecLikeHeader,
-                    ));
-                }
+            if let Some(value) = buffer.mark_marker.as_value() {
+                visit(value);
             }
             // T8 C-1: the noncurrent PT/BEGV/ZV markers stashed in
             // `state_markers` are referenced only by raw pointers and
@@ -55,27 +51,9 @@ impl BufferStorage {
             // buffer's `pt_marker` / `begv_marker` / `zv_marker`
             // `Lisp_Object` BVAR slots in `alloc.c`.
             if let Some(sm) = buffer.state_markers {
-                // SAFETY: the pointers were obtained from
-                // `as_veclike_ptr()` on freshly allocated marker
-                // values in `create_marker` and stored in
-                // `state_markers`; they remain valid as long as the
-                // buffer exists. `from_veclike_ptr` is a pure bit-cast
-                // to the tagged encoding.
-                unsafe {
-                    if !sm.pt_marker_ptr.is_null() {
-                        visit(Value::from_veclike_ptr(
-                            sm.pt_marker_ptr as *const crate::tagged::header::VecLikeHeader,
-                        ));
-                    }
-                    if !sm.begv_marker_ptr.is_null() {
-                        visit(Value::from_veclike_ptr(
-                            sm.begv_marker_ptr as *const crate::tagged::header::VecLikeHeader,
-                        ));
-                    }
-                    if !sm.zv_marker_ptr.is_null() {
-                        visit(Value::from_veclike_ptr(
-                            sm.zv_marker_ptr as *const crate::tagged::header::VecLikeHeader,
-                        ));
+                for marker in [sm.pt_marker, sm.begv_marker, sm.zv_marker] {
+                    if let Some(value) = marker.as_value() {
+                        visit(value);
                     }
                 }
             }
@@ -110,13 +88,12 @@ impl BufferStorage {
                 // Synthesize Lisp handles so the mark phase walks them
                 // (same hazard and fix as state_markers above; GNU keeps
                 // these alive via staticpro'd narrowing_locks, editfns.c).
-                if let Some(buffer) = buffer {
-                    if let Some(value) = buffer.marker_value_by_id(restriction.beg_marker) {
-                        visit(value);
-                    }
-                    if let Some(value) = buffer.marker_value_by_id(restriction.end_marker) {
-                        visit(value);
-                    }
+                let _ = buffer;
+                if let Some(value) = restriction.beg_marker.as_value() {
+                    visit(value);
+                }
+                if let Some(value) = restriction.end_marker.as_value() {
+                    visit(value);
                 }
             }
         }

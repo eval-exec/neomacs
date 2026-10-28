@@ -43,16 +43,13 @@ impl Leaf {
 }
 
 fn marker() -> LispMarker {
-    LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: Some(35),
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: true,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    }
+    LispMarker::new(
+        crate::heap_types::MarkerBuffer::DETACHED,
+        crate::buffer::CharPos0::new(0),
+        crate::buffer::EmacsBytePos::new(0),
+        false,
+        true,
+    )
 }
 
 fn heap(enabled: bool, chunk_map: bool, generational: bool) -> TestHeap {

@@ -367,13 +367,13 @@ fn set_marker_within_the_same_buffer_leaves_the_marker_chain_alone() {
             })
             .collect();
 
-        let before = ctx.buffers.get(buffer_id).unwrap().marker_chain_ids();
+        let before = ctx.buffers.get(buffer_id).unwrap().marker_chain_ptrs();
         assert_eq!(before.len(), 3, "three markers are on the chain");
 
         builtin_set_marker_in_buffers(&mut ctx.buffers, &[markers[1], Value::fixnum(8)])
             .expect("set-marker");
 
-        let after = ctx.buffers.get(buffer_id).unwrap().marker_chain_ids();
+        let after = ctx.buffers.get(buffer_id).unwrap().marker_chain_ptrs();
         assert_eq!(
             before, after,
             "set-marker inside the same buffer re-chained the marker"

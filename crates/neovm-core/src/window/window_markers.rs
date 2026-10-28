@@ -73,11 +73,11 @@ fn lisp_position_to_usize(lisp_position: LispCharPos1) -> usize {
 /// chain" answer without the walk.
 fn marker_lisp_position(marker: Value, buffer_id: BufferId) -> Option<LispCharPos1> {
     let data = marker.as_marker_data()?;
-    if data.buffer != Some(buffer_id) {
+    if data.buffer_id() != Some(buffer_id) {
         return None;
     }
     Some(LispCharPos1::from_one_based_usize(
-        data.charpos.saturating_add(1),
+        data.charpos.get().saturating_add(1),
     ))
 }
 
@@ -88,12 +88,14 @@ fn create_rooted_marker_at_anchor(
     buffer_id: BufferId,
     position: TextPositionAnchor,
     insertion_type: InsertionType,
-) -> (u64, Value) {
-    let (marker_id, _) = bm.create_marker_at_anchor(buffer_id, position, insertion_type);
-    let gc_root = bm
-        .marker_value(buffer_id, marker_id)
-        .expect("a newly registered window marker must be present in its buffer chain");
-    (marker_id, gc_root)
+) -> (crate::buffer::MarkerRef, Value) {
+    let marker_ptr = bm.create_marker_at_anchor(buffer_id, position, insertion_type);
+    // SAFETY: `create_marker_at_anchor` returned the live MarkerObj it just
+    // allocated and chained; the Value is the window's GC root for it.
+    let gc_root = unsafe {
+        Value::from_veclike_ptr(marker_ptr as *const crate::tagged::header::VecLikeHeader)
+    };
+    (crate::buffer::MarkerRef::new(marker_ptr), gc_root)
 }
 
 /// Attach the complete GNU position-marker set to one leaf window.
@@ -156,12 +158,12 @@ fn remove_attached_markers(bm: &mut BufferManager, markers: Option<AttachedWindo
 fn move_marker(
     bm: &mut BufferManager,
     buffer_id: BufferId,
-    marker_id: Option<u64>,
+    marker: Option<crate::buffer::MarkerRef>,
     lisp_position: LispCharPos1,
 ) {
-    let Some(marker_id) = marker_id else { return };
+    let Some(marker) = marker else { return };
     let position = lisp_position_to_restricted_marker_position(bm, buffer_id, lisp_position);
-    let _ = bm.move_marker_to_anchor(buffer_id, marker_id, position);
+    let _ = bm.move_marker_ref_to_anchor(buffer_id, marker, position);
 }
 
 pub fn set_window_start_with_marker(

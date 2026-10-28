@@ -2,17 +2,17 @@ use super::*;
 
 #[test]
 fn marker_data_new_fields_default() {
-    let data = LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: None,
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: false,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    };
-    assert_eq!(data.bytepos, 0);
-    assert_eq!(data.charpos, 0);
-    assert!(data.next_marker.is_null());
+    let data = LispMarker::new(
+        crate::heap_types::MarkerBuffer::DETACHED,
+        crate::buffer::CharPos0::new(0),
+        crate::buffer::EmacsBytePos::new(0),
+        false,
+        false,
+    );
+    assert_eq!(data.bytepos.get(), 0);
+    assert_eq!(data.charpos.get(), 0);
+    assert!(data.next_marker_ptr().is_null());
+    assert!(!data.chained());
+    assert!(!data.insertion_type());
+    assert!(!data.last_position_valid());
 }

@@ -4,16 +4,13 @@ use crate::tagged::gc::{TaggedHeap, set_tagged_heap};
 use crate::tagged::header::MarkerObj;
 
 fn alloc_marker_for_test(heap: &mut TaggedHeap) -> *mut MarkerObj {
-    let tv = heap.alloc_marker(LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: None,
-        bytepos: 0,
-        charpos: 0,
-        last_position_valid: false,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    });
+    let tv = heap.alloc_marker(LispMarker::new(
+        crate::heap_types::MarkerBuffer::DETACHED,
+        crate::buffer::CharPos0::new(0),
+        crate::buffer::EmacsBytePos::new(0),
+        false,
+        false,
+    ));
     tv.as_veclike_ptr().unwrap() as *mut MarkerObj
 }
 
@@ -86,10 +83,10 @@ fn chained_flag_tracks_chain_membership_through_splice_and_unlink() {
         .map(|_| {
             let ptr = alloc_marker_for_test(&mut heap);
             // A marker that has never been spliced is not chained.
-            assert!(!unsafe { (*ptr).data.chained });
+            assert!(!unsafe { (*ptr).data.chained() });
             bt.chain_splice_at_head(ptr);
             assert!(
-                unsafe { (*ptr).data.chained },
+                unsafe { (*ptr).data.chained() },
                 "splicing must flag the marker chained"
             );
             ptr
@@ -99,22 +96,22 @@ fn chained_flag_tracks_chain_membership_through_splice_and_unlink() {
     // Unlinking the TAIL is the case a null `next_marker` cannot tell apart
     // from "never chained", which is the whole reason the bit exists.
     let tail = markers[0];
-    assert!(unsafe { (*tail).data.next_marker.is_null() });
+    assert!(unsafe { (*tail).data.next_marker_ptr().is_null() });
     bt.chain_unlink(tail);
     assert!(
-        !unsafe { (*tail).data.chained },
+        !unsafe { (*tail).data.chained() },
         "unlinking the tail must clear the flag"
     );
     for &ptr in &markers[1..] {
-        assert!(unsafe { (*ptr).data.chained }, "survivors stay chained");
+        assert!(unsafe { (*ptr).data.chained() }, "survivors stay chained");
     }
 
     // Unlinking an absent marker leaves every flag alone.
     bt.chain_unlink(tail);
-    assert!(!unsafe { (*tail).data.chained });
+    assert!(!unsafe { (*tail).data.chained() });
 
     // And a cleared marker can be spliced again, which is what
     // `chain_splice_at_head`'s debug assertion checks.
     bt.chain_splice_at_head(tail);
-    assert!(unsafe { (*tail).data.chained });
+    assert!(unsafe { (*tail).data.chained() });
 }

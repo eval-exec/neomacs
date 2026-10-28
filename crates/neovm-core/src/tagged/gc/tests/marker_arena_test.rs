@@ -26,25 +26,22 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     heap.finish_incremental_sweep_now();
     assert!(!heap.sweep_in_progress());
 }
-/// A detached marker whose `marker_id`/positions carry `id` as its identity.
+/// A detached marker whose positions carry `id` as its identity.
 fn mk(heap: &mut TaggedHeap, id: u64) -> TaggedValue {
-    heap.alloc_marker(LispMarker {
-        buffer: None,
-        insertion_type: false,
-        marker_id: Some(id),
-        bytepos: id as usize,
-        charpos: id as usize,
-        last_position_valid: true,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    })
+    heap.alloc_marker(LispMarker::new(
+        crate::heap_types::MarkerBuffer::DETACHED,
+        crate::buffer::CharPos0::new(id as usize),
+        crate::buffer::EmacsBytePos::new(id as usize),
+        false,
+        true,
+    ))
 }
 fn mk_ptr(v: TaggedValue) -> *const u8 {
     v.as_veclike_ptr().unwrap() as *const u8
 }
-fn mk_id(v: TaggedValue) -> Option<u64> {
+fn mk_id(v: TaggedValue) -> usize {
     let obj = unsafe { &*(v.as_veclike_ptr().unwrap() as *const MarkerObj) };
-    obj.data.marker_id
+    obj.data.charpos.get()
 }
 /// Marker is POD (no Drop): `LispMarker` holds no Values and its chain link
 /// is a raw pointer, so the generic sweep/teardown `drop_in_place` walk
@@ -57,7 +54,7 @@ fn marker_is_pod() {
          field was added and the sweep must drop_in_place it",
     );
 }
-/// (a) PAGE-SPAN ORACLE EXACTNESS for the 128B class + cross-class
+/// (a) PAGE-SPAN ORACLE EXACTNESS for the 64B class + cross-class
 /// no-collision with the same-stride macro arena.
 #[test]
 fn marker_page_span_oracle_freed_slot_exactness() {
@@ -108,7 +105,7 @@ fn marker_ownership_tracks_sweep() {
     assert!(heap.marker_arena.owns(live_ptr));
     assert!(!heap.marker_arena.owns(dead_ptr));
     assert_eq!(heap.non_cons_object_addrs.len(), 0);
-    assert_eq!(mk_id(live), Some(10));
+    assert_eq!(mk_id(live), 10);
     heap.assert_object_arenas_coherent();
 }
 /// THE POINT OF THE ARENA: a freed marker slot is handed back to the very
@@ -130,8 +127,8 @@ fn marker_freed_slot_is_reused_by_the_next_allocation() {
         transient_ptr,
         "the next marker must reuse the freed slot — the locality win",
     );
-    assert_eq!(mk_id(next), Some(3), "reused slot must be fully rewritten");
-    assert_eq!(mk_id(keep), Some(2));
+    assert_eq!(mk_id(next), 3, "reused slot must be fully rewritten");
+    assert_eq!(mk_id(keep), 2);
     heap.assert_object_arenas_coherent();
 }
 /// (b) Parity two-cycle survival/reclaim under the concurrent collector.
@@ -169,7 +166,7 @@ fn parity_two_cycle_marker_survival_and_reclaim_body(verify: bool) {
     );
     run_concurrent_cycle(&mut heap, &[spine, b]);
     assert!(heap.owns_non_cons_object(b_ptr));
-    assert_eq!(mk_id(b), Some(25));
+    assert_eq!(mk_id(b), 25);
     let g1 = mk(&mut heap, 91);
     let g1_ptr = mk_ptr(g1);
     heap.concurrent_begin();
@@ -202,7 +199,7 @@ fn parity_two_cycle_marker_survival_and_reclaim_body(verify: bool) {
         !heap.owns_non_cons_object(g2_ptr),
         "mark-born garbage must be reclaimed by the SECOND cycle",
     );
-    assert_eq!(mk_id(b), Some(25));
+    assert_eq!(mk_id(b), 25);
     heap.assert_object_arenas_coherent();
 }
 #[test]
@@ -254,10 +251,10 @@ fn dead_chained_marker_is_unchained_before_its_slot_is_freed_and_reused() {
         "the fresh marker reuses the freed slot"
     );
     assert!(
-        unsafe { (*fresh_ptr).data.next_marker.is_null() },
+        unsafe { (*fresh_ptr).data.next_marker_ptr().is_null() },
         "a reused slot must be fully rewritten — no stale chain link",
     );
-    assert_eq!(mk_id(fresh), Some(3));
+    assert_eq!(mk_id(fresh), 3);
     assert_eq!(
         bt.chain_walk_collect(),
         vec![live_ptr],

@@ -39,7 +39,6 @@ fn from_dump_rebuilds_the_selection_for_the_restored_slab() {
         buffers,
         current,
         original.dump_next_id(),
-        original.dump_next_marker_id(),
         Some(original.dump_buffer_order()),
         Some(&original.buffer_defaults),
         original.implemented_default_text_backend_kind(),

@@ -15,7 +15,7 @@
 
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
-use crate::buffer::{BufferId, BufferManager, CharPos0, EmacsBytePos, InsertionType, LispCharPos1};
+use crate::buffer::{BufferId, BufferManager, EmacsBytePos, InsertionType, LispCharPos1};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
 
@@ -38,8 +38,6 @@ pub(crate) struct Marker {
 // Marker value helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) const MARK_MARKER_ID: u64 = i64::MAX as u64;
-
 pub(crate) fn is_marker(v: &Value) -> bool {
     v.is_marker()
 }
@@ -49,15 +47,6 @@ pub(crate) fn make_marker_value(
     position: Option<LispCharPos1>,
     insertion_type: bool,
 ) -> Value {
-    make_marker_value_with_id(buffer_id, position, insertion_type, None)
-}
-
-pub(crate) fn make_marker_value_with_id(
-    buffer_id: Option<BufferId>,
-    position: Option<LispCharPos1>,
-    insertion_type: bool,
-    marker_id: Option<u64>,
-) -> Value {
     // Seed charpos from the 1-based Lisp position so unregistered markers
     // can preserve a last-position value.  GNU `marker-position` still
     // reports nil unless the marker is attached to a live buffer.
@@ -65,18 +54,20 @@ pub(crate) fn make_marker_value_with_id(
     // Markers that later get registered via register_marker have their
     // charpos/bytepos overwritten through the chain path, so this only
     // matters for unregistered/synthesized markers.
-    let charpos = position.map(|p| p.to_char_pos().get()).unwrap_or(0);
+    let charpos = position.map(|p| p.to_char_pos()).unwrap_or_default();
     let last_position_valid = matches!(position, Some(p) if p.as_i64() > 0) || buffer_id.is_some();
-    Value::make_marker(crate::heap_types::LispMarker {
-        buffer: buffer_id,
-        insertion_type,
-        marker_id,
-        bytepos: 0,
+    // Marker identity is the freshly allocated MarkerObj itself: the object
+    // is the Lisp-visible value and the chain node, with no integer id.
+    Value::make_marker(crate::heap_types::LispMarker::new(
+        match buffer_id {
+            Some(id) => crate::heap_types::MarkerBuffer::attached(id),
+            None => crate::heap_types::MarkerBuffer::DETACHED,
+        },
         charpos,
+        EmacsBytePos::default(),
+        insertion_type,
         last_position_valid,
-        next_marker: std::ptr::null_mut(),
-        chained: false,
-    })
+    ))
 }
 
 pub(crate) fn make_registered_buffer_marker(
@@ -92,27 +83,17 @@ pub(crate) fn make_registered_buffer_marker(
         // position that marker-position would mistake for a live attachment.
         None => return make_marker_value(None, None, insertion_type),
     };
-    // The id goes in at construction: stamping it on afterwards was a
-    // barriered heap write to an object nothing else has seen yet.
-    let marker_id = buffers.allocate_marker_id();
-    let marker = make_marker_value_with_id(
-        Some(buffer_id),
-        Some(position),
-        insertion_type,
-        Some(marker_id),
-    );
-    // Reuse the just-allocated MarkerObj as the chain node for this
-    // buffer; calling `create_marker` here would allocate a *second*
-    // MarkerObj with the same marker_id, wasting an allocation and
-    // leaving the Lisp-visible Value off-chain.
+    // The just-allocated MarkerObj is also the chain node for this buffer;
+    // calling `create_marker` here would allocate a *second* MarkerObj,
+    // wasting an allocation and leaving the Lisp-visible Value off-chain.
+    let marker = make_marker_value(Some(buffer_id), Some(position), insertion_type);
     if let Some(marker_ptr) = marker
         .as_veclike_ptr()
         .map(|p| p as *mut crate::tagged::header::MarkerObj)
     {
-        let _ = buffers.register_marker_id_at_emacs_byte_pos(
+        let _ = buffers.register_marker_at_emacs_byte_pos(
             marker_ptr,
             buffer_id,
-            marker_id,
             byte_pos,
             if insertion_type {
                 InsertionType::After
@@ -126,8 +107,8 @@ pub(crate) fn make_registered_buffer_marker(
 }
 
 /// `save-excursion`'s point marker (GNU `save_excursion_save` ->
-/// `Fpoint_marker`), returned with its id. The buffer holds point as a
-/// char/byte pair already, so the marker is seated on that anchor directly:
+/// `Fpoint_marker`). The buffer holds point as a char/byte pair already, so
+/// the marker is seated on that anchor directly:
 /// [`make_registered_buffer_marker`] would turn point into a Lisp position,
 /// that back into a byte, and the byte back into a char. `None` when
 /// `buffer_id` names no live buffer.
@@ -135,22 +116,12 @@ pub(crate) fn make_registered_buffer_marker(
 pub(crate) fn make_registered_point_marker(
     buffers: &mut BufferManager,
     buffer_id: BufferId,
-) -> Option<(Value, u64)> {
-    let (position, anchor) = {
-        let buffer = buffers.get(buffer_id)?;
-        (buffer.point_lisp_char_pos(), buffer.point_anchor())
-    };
-    let marker_id = buffers.allocate_marker_id();
-    let marker = make_marker_value_with_id(Some(buffer_id), Some(position), false, Some(marker_id));
+) -> Option<Value> {
+    let anchor = buffers.get(buffer_id)?.point_anchor();
+    let marker = make_marker_value(None, None, false);
     let marker_ptr = marker.as_veclike_ptr()? as *mut crate::tagged::header::MarkerObj;
-    buffers.register_marker_id_at_anchor(
-        marker_ptr,
-        buffer_id,
-        marker_id,
-        anchor,
-        InsertionType::Before,
-    )?;
-    Some((marker, marker_id))
+    buffers.register_marker_at_anchor(marker_ptr, buffer_id, anchor, InsertionType::Before)?;
+    Some(marker)
 }
 
 pub(crate) fn marker_logical_fields(
@@ -167,12 +138,12 @@ pub(crate) fn marker_logical_fields(
     // `make_marker_value(None, Some(N), _)`. A truly unset marker has
     // `buffer == None && charpos == 0`, which reports `None` and matches
     // GNU's "points nowhere" semantics.
-    let position = if data.buffer.is_some() || data.last_position_valid {
-        Some(marker_charpos_to_lisp_pos(data.charpos))
+    let position = if data.buffer_id().is_some() || data.last_position_valid() {
+        Some(data.charpos.to_lisp())
     } else {
         None
     };
-    Some((data.buffer, position, data.insertion_type))
+    Some((data.buffer_id(), position, data.insertion_type()))
 }
 
 /// A live marker's buffer and position are one validated location.
@@ -198,14 +169,15 @@ impl MarkerLocation {
 
 pub(crate) fn marker_location(buffers: &BufferManager, marker: Value) -> Option<MarkerLocation> {
     let data = marker.as_marker_data()?;
-    let buffer = data.buffer?;
-    let buf = buffers.get(buffer)?;
-    let byte_pos = if data.marker_id == Some(MARK_MARKER_ID) {
-        buf.mark_emacs_byte_pos()?
-    } else {
-        EmacsBytePos::new(data.bytepos)
-    };
-    Some(MarkerLocation { buffer, byte_pos })
+    let buffer = data.buffer_id()?;
+    buffers.get(buffer)?;
+    // The buffer mark is an ordinary MarkerObj whose own payload is
+    // authoritative (`set_mark_emacs_byte_pos` keeps it on this buffer's
+    // chain), so no id-based special case is needed here.
+    Some(MarkerLocation {
+        buffer,
+        byte_pos: data.bytepos,
+    })
 }
 
 pub(crate) fn marker_location_or_signal(
@@ -225,69 +197,50 @@ pub(crate) fn marker_equal_logical_fields(v: &Value) -> Option<(Option<BufferId>
         return None;
     };
     let data = v.as_marker_data().unwrap();
-    let bytepos = if data.buffer.is_some() {
-        EmacsBytePos::new(data.bytepos)
+    let bytepos = if data.buffer_id().is_some() {
+        data.bytepos
     } else {
         EmacsBytePos::ZERO
     };
-    Some((data.buffer, bytepos))
+    Some((data.buffer_id(), bytepos))
 }
 
 /// Tagged-pointer version: compute equal hash key from a marker Value.
 pub(crate) fn marker_equal_hash_key_value(v: &Value) -> HashKey {
     if let Some(marker) = v.as_marker_data() {
-        let bytepos = if marker.buffer.is_some() {
-            EmacsBytePos::new(marker.bytepos)
+        let bytepos = if marker.buffer_id().is_some() {
+            marker.bytepos
         } else {
             EmacsBytePos::ZERO
         };
-        HashKey::Marker(Box::new((marker.buffer.map(|buffer| buffer.0), bytepos)))
+        HashKey::Marker(Box::new((
+            marker.buffer_id().map(|buffer| buffer.0),
+            bytepos,
+        )))
     } else {
         HashKey::Ptr(v.bits())
     }
 }
 
-pub(crate) fn marker_id_value(v: &Value) -> Option<u64> {
-    if !v.is_marker() {
-        return None;
-    };
-    v.as_marker_data().unwrap().marker_id
-}
-
-fn is_mark_marker(v: &Value) -> bool {
-    marker_id_value(v) == Some(MARK_MARKER_ID)
-}
-
-fn set_marker_id(v: &Value, mid: u64) {
-    if v.is_marker() {
-        let _ = v.with_marker_data_mut(|data| {
-            data.marker_id = Some(mid);
-        });
-    }
-}
-
-fn marker_charpos_to_lisp_pos(charpos: usize) -> LispCharPos1 {
-    CharPos0::new(charpos).to_lisp()
-}
-
 /// GNU `unchain_marker` (`src/marker.c`): a marker knows its buffer, so
-/// leaving it is one walk of THAT buffer's chain, by pointer.  The id-keyed
-/// `BufferManager::remove_marker` walks every live buffer's chain and stays
-/// only as the fallback for a marker whose buffer slot does not name a live
-/// buffer (`save-match-data` reseats several markers per search, and each
-/// used to pay a walk of every chain).
+/// leaving it is one walk of THAT buffer's chain, by pointer.
 pub(crate) fn unchain_marker(buffers: &mut BufferManager, marker: &Value) {
-    let ptr = marker
+    let Some(ptr) = marker
         .as_veclike_ptr()
-        .map(|p| p as *mut crate::tagged::header::MarkerObj);
-    if let (Some(buffer_id), Some(ptr)) = (marker_buffer_id(marker), ptr)
-        && buffers.unlink_marker_ptr(buffer_id, ptr).is_some()
-    {
-        let _ = marker.with_marker_data_mut(|data| data.buffer = None);
+        .map(|p| p as *mut crate::tagged::header::MarkerObj)
+    else {
         return;
+    };
+    let marker_ref = crate::buffer::MarkerRef::new(ptr);
+    if let Some(buffer_id) = marker_ref.buffer_id() {
+        let _ = buffers.unlink_marker_ptr(buffer_id, ptr);
+        let _ = marker.with_marker_data_mut(|data| data.detach());
     }
-    if let Some(mid) = marker_id_value(marker) {
-        buffers.remove_marker(mid);
+    // The buffer slot names no chain the walk could reach, yet the object
+    // still claims chain membership: sweep every live buffer so a marker
+    // bound for release can never stay exposed on a chain.
+    if marker_ref.is_chained() {
+        buffers.remove_marker(marker_ref);
     }
 }
 
@@ -297,11 +250,13 @@ pub(crate) fn detach_marker_in_buffers(buffers: &mut BufferManager, marker: &Val
     }
     unchain_marker(buffers, marker);
     let _ = marker.with_marker_data_mut(|data| {
-        data.buffer = None;
         // Preserve charpos/bytepos/last_position_valid so
         // `marker-last-position` reports the last attached location
-        // (GNU `unchain_marker`, marker.c:684).
-        data.next_marker = std::ptr::null_mut();
+        // (GNU `unchain_marker`, marker.c:684). Only the buffer identity and
+        // the chain link are cleared.
+        data.detach();
+        data.set_next_marker(std::ptr::null_mut());
+        data.set_chained(false);
     });
 }
 
@@ -326,8 +281,8 @@ fn marker_position_value(v: &Value) -> Value {
     // GNU `Fmarker_position` returns nil for detached markers.  The saved
     // charpos for detached/dead-buffer markers is exposed by
     // `marker-last-position`, not by `marker-position`.
-    if data.buffer.is_some() {
-        Value::fixnum(marker_charpos_to_lisp_pos(data.charpos).as_i64())
+    if data.buffer_id().is_some() {
+        Value::fixnum(data.charpos.to_lisp().as_i64())
     } else {
         Value::NIL
     }
@@ -349,32 +304,17 @@ pub(crate) fn marker_position_as_int(v: &Value) -> Result<i64, Flow> {
 }
 
 pub(crate) fn marker_position_as_int_with_buffers(
-    buffers: &BufferManager,
+    _buffers: &BufferManager,
     v: &Value,
 ) -> Result<i64, Flow> {
     expect_marker("marker-position", v)?;
-
-    // Special mark-marker: resolves via buffer's tracked mark-char.
-    // (See buffer.rs mark_char() for how the mark position is stored.)
-    if is_mark_marker(v)
-        && let Some(buf_id) = marker_buffer_id(v)
-        && let Some(buf) = buffers.get(buf_id)
-    {
-        return match buf.mark_char_pos() {
-            Some(char_pos) => Ok(char_pos.to_lisp().as_i64()),
-            None => Err(signal(
-                "error",
-                vec![Value::string("Marker does not point anywhere")],
-            )),
-        };
-    }
 
     let data = v.as_marker_data().unwrap();
     // GNU position contexts require an attached marker; detached markers
     // still retain a charpos for `marker-last-position`, but they do not
     // point anywhere for `marker-position`.
-    if data.buffer.is_some() {
-        Ok(marker_charpos_to_lisp_pos(data.charpos).as_i64())
+    if data.buffer_id().is_some() {
+        Ok(data.charpos.to_lisp().as_i64())
     } else {
         Err(signal(
             "error",
@@ -395,7 +335,7 @@ fn marker_buffer_value(v: &Value) -> Value {
     if !v.is_marker() {
         return Value::NIL;
     };
-    match v.as_marker_data().unwrap().buffer {
+    match v.as_marker_data().unwrap().buffer_id() {
         Some(buffer_id) => Value::make_buffer(buffer_id),
         None => Value::NIL,
     }
@@ -405,23 +345,19 @@ fn marker_insertion_type_value(v: &Value) -> Value {
     if !v.is_marker() {
         return Value::NIL;
     };
-    Value::bool_val(v.as_marker_data().unwrap().insertion_type)
+    Value::bool_val(v.as_marker_data().unwrap().insertion_type())
 }
 
 fn marker_buffer_id(v: &Value) -> Option<BufferId> {
     if !v.is_marker() {
         return None;
     };
-    v.as_marker_data().unwrap().buffer
+    v.as_marker_data().unwrap().buffer_id()
 }
 
 fn lisp_pos_to_byte(buf: &crate::buffer::Buffer, lisp_pos: LispCharPos1) -> EmacsBytePos {
     // GNU Emacs: set-marker clamps to the full buffer, not the narrowed region.
     buf.lisp_pos_to_full_buffer_emacs_byte_pos(lisp_pos)
-}
-
-fn marker_targets_current_mark(marker: &Value) -> bool {
-    is_mark_marker(marker)
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +468,7 @@ pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
     // cost O(markers) per call: 79.8ms for 5,000 calls over an 8,000-marker
     // chain, against GNU's flat 0.7ms.
     let _ = args[0].with_marker_data_mut(|data| {
-        data.insertion_type = new_type;
+        data.set_insertion_type(new_type);
     });
 
     Ok(args[1])
@@ -580,7 +516,7 @@ pub(crate) fn builtin_copy_marker_in_buffers(
             };
             builtin_set_marker_in_buffers(buffers, &[marker, *src, buffer])?;
             let _ = marker.with_marker_data_mut(|data| {
-                data.insertion_type = insertion_type;
+                data.set_insertion_type(insertion_type);
             });
             Ok(marker)
         }
@@ -620,8 +556,6 @@ pub(crate) fn builtin_set_marker_in_buffers(
 ) -> EvalResult {
     expect_args_range("set-marker", args, 2, 3)?;
     expect_marker("set-marker", &args[0])?;
-
-    let targets_current_mark = marker_targets_current_mark(&args[0]);
 
     let buffer_id: Option<BufferId> = if args.len() > 2 && args[2].is_truthy() {
         match args[2].kind() {
@@ -678,7 +612,6 @@ pub(crate) fn builtin_set_marker_in_buffers(
 
     if args[0].is_marker() {
         let _ = args[0].with_marker_data_mut(|data| {
-            data.buffer = buffer_id;
             // GNU `unchain_marker` (marker.c:684) preserves the marker's
             // last attached charpos when it's detached, so
             // `marker-last-position` keeps reporting it.  Stamp
@@ -686,27 +619,9 @@ pub(crate) fn builtin_set_marker_in_buffers(
             // supplied (or buffer is set to a live buffer); never clear
             // charpos/bytepos on detach.
             if position.is_some() || buffer_id.is_some() {
-                data.last_position_valid = true;
+                data.set_last_position_valid(true);
             }
         });
-    }
-
-    if targets_current_mark {
-        let target_buf_id = buffer_id.or_else(|| buffers.current_buffer().map(|buf| buf.id));
-        if let Some(buf_id) = target_buf_id {
-            match position {
-                Some(pos) => {
-                    if let Some(byte_pos) =
-                        buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos))
-                    {
-                        let _ = buffers.set_buffer_mark_emacs_byte_pos(buf_id, byte_pos);
-                    }
-                }
-                None => {
-                    let _ = buffers.clear_buffer_mark(buf_id);
-                }
-            }
-        }
     }
 
     Ok(args[0])
@@ -716,18 +631,6 @@ pub(crate) fn builtin_set_marker_in_buffers(
 // `(defalias 'move-marker #'set-marker)' at lisp/subr.el:2280, so
 // `symbol-function' answers the SYMBOL `set-marker' and a compiled caller
 // emits the Bset_marker opcode.  DIVERGENCES.md 148.
-
-/// Register a Lisp marker in the target buffer's marker list so that
-/// insert/delete operations automatically adjust its position.
-#[allow(dead_code)]
-fn register_marker_in_buffer(
-    eval: &mut super::eval::Context,
-    marker: &Value,
-    buffer_id: Option<BufferId>,
-    position: Option<LispCharPos1>,
-) {
-    register_marker_in_buffers(&mut eval.buffers, marker, buffer_id, position);
-}
 
 /// Which half of GNU `attach_marker' (src/marker.c) a registration needs.
 ///
@@ -761,13 +664,11 @@ enum MarkerAttach {
 }
 
 impl MarkerAttach {
-    fn classify(marker: &Value, buffer_id: BufferId) -> Self {
+    fn classify(marker: crate::buffer::MarkerRef, buffer_id: BufferId) -> Self {
         // `chained` is the O(1) answer to "is this marker on a chain?"; the
         // buffer it names says WHICH chain. Both must agree with the target
         // before the chain work can be skipped.
-        let on_target_chain = marker_buffer_id(marker) == Some(buffer_id)
-            && marker.as_marker_data().is_some_and(|data| data.chained);
-        if on_target_chain {
+        if marker.is_chained() && marker.buffer_id() == Some(buffer_id) {
             Self::InPlace
         } else {
             Self::Rechain
@@ -781,83 +682,42 @@ fn register_marker_in_buffers(
     buffer_id: Option<BufferId>,
     position: Option<LispCharPos1>,
 ) {
-    if is_mark_marker(marker) {
+    // Marker identity is the object pointer: the Value's veclike payload IS
+    // the chain node, so registration works on that object directly.
+    let Some(ptr) = marker
+        .as_veclike_ptr()
+        .map(|p| p as *mut crate::tagged::header::MarkerObj)
+    else {
         return;
-    }
-
-    // Read insertion type from marker vector
-    let insertion_type_val = marker_insertion_type_value(marker);
-    let ins_type = if insertion_type_val.is_truthy() {
-        crate::buffer::InsertionType::After
-    } else {
-        crate::buffer::InsertionType::Before
     };
-
-    // Get or assign a marker-id
-    let existing_mid = marker_id_value(marker);
+    let marker_ref = crate::buffer::MarkerRef::new(ptr);
+    let ins_type = marker_ref.insertion_type();
 
     // GNU `attach_marker' (src/marker.c) always writes the position and only
     // touches the chain when the marker changes buffer. Taking the same
     // shortcut is what keeps `set-marker' O(1): unlinking is a walk, and so
     // is the splice's precondition check.
     if let (Some(buf_id), Some(pos)) = (buffer_id, position)
-        && existing_mid.is_some()
-        && MarkerAttach::classify(marker, buf_id) == MarkerAttach::InPlace
-        && let Some(ptr) = marker
-            .as_veclike_ptr()
-            .map(|p| p as *mut crate::tagged::header::MarkerObj)
+        && MarkerAttach::classify(marker_ref, buf_id) == MarkerAttach::InPlace
         && let Some(byte_pos) = buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos))
     {
-        // The id, the buffer and the insertion type are all unchanged: the
-        // marker never left the chain it is already on.
         let _ = buffers.move_marker_ptr_to_emacs_byte_pos(buf_id, ptr, byte_pos);
         return;
     }
 
-    // Remove old registration from all buffers (this also unchains the
-    // marker on the old buffer's intrusive chain, clearing
-    // LispMarker.buffer/bytepos/charpos).
-    if existing_mid.is_some() {
+    // GNU `attach_marker's `if (m->buffer != b)' arm: unchain from the old
+    // buffer's chain before splicing onto the target. For a freshly built
+    // marker `chained' is false, so this is O(1) -- asking an unconditional
+    // unlink costs a walk of the whole chain per marker creation, and magit
+    // builds a marker pair per section.
+    if marker_ref.is_chained() || marker_ref.buffer_id().is_some() {
         unchain_marker(buffers, marker);
     }
 
-    if let (Some(buf_id), Some(pos)) = (buffer_id, position) {
-        let mid = existing_mid.unwrap_or_else(|| buffers.allocate_marker_id());
-        set_marker_id(marker, mid);
-        // Resolve the MarkerObj pointer from the Lisp-visible Value so
-        // register_marker_id can splice it into buf_id's chain.
-        let marker_ptr = marker
-            .as_veclike_ptr()
-            .map(|p| p as *mut crate::tagged::header::MarkerObj);
-        // Defensive: the marker's old chain was cleared by `remove_marker`
-        // above if it had a previous buffer binding. But Values freshly
-        // created via `make_marker_value` (point-marker etc.) don't go
-        // through that path — they arrive here with `next_marker == null`
-        // by construction of `LispMarker`. If for some reason this marker
-        // is still on a chain (e.g. same-buffer re-registration where
-        // `existing_mid` matched a chain entry we just removed), the
-        // chain_splice_at_head precondition would fire; belt-and-braces
-        // unlink from this buffer first.
-        //
-        // `chained` makes that question O(1). Asking it by walking -- which is
-        // what an unconditional `unlink_marker_ptr` does, since the walk is how
-        // it discovers the marker is absent -- costs O(markers in the buffer)
-        // on EVERY marker creation, and the answer is "absent" for every
-        // freshly built marker. Magit keeps a marker pair per section, so
-        // building a status buffer paid that walk thousands of times against a
-        // chain thousands long.
-        if let Some(ptr) = marker_ptr
-            && marker.as_marker_data().is_some_and(|data| data.chained)
-        {
-            let _ = buffers.unlink_marker_ptr(buf_id, ptr);
-        }
-        if let (Some(ptr), Some(byte_pos)) = (
-            marker_ptr,
-            buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos)),
-        ) {
-            let _ =
-                buffers.register_marker_id_at_emacs_byte_pos(ptr, buf_id, mid, byte_pos, ins_type);
-        }
+    if let (Some(buf_id), Some(pos)) = (buffer_id, position)
+        && let Some(byte_pos) = buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos))
+    {
+        let _ = buffers.register_marker_at_emacs_byte_pos(ptr, buf_id, byte_pos, ins_type);
     }
 }
 
@@ -930,7 +790,15 @@ pub(crate) fn builtin_point_max_marker_in_buffers(
     Ok(marker)
 }
 
-/// (mark-marker) -> marker at mark, or error if no mark set
+/// (mark-marker) -> the buffer's mark, as a marker object
+///
+/// GNU gives every buffer a real marker at creation (`reset_buffer` ->
+/// `bset_mark (b, Fmake_marker ())`, src/buffer.c) and `mark-marker` returns
+/// that object, so moving it with `set-marker` moves the mark. Reproduce
+/// that lazily: the first call on a buffer that has never had a mark installs
+/// a detached marker, which `set-mark` or `set-marker` then attaches to this
+/// buffer's chain. `Buffer::mark_marker` roots it, so it survives GC with no
+/// other reference.
 pub(crate) fn builtin_mark_marker(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("mark-marker", &args, 0)?;
     let buffer_id = eval
@@ -939,24 +807,22 @@ pub(crate) fn builtin_mark_marker(eval: &mut super::eval::Context, args: Vec<Val
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .id;
 
-    // Return the real marker created by set_mark_emacs_byte_pos, if it exists.
-    if let Some(buf) = eval.buffers.get(buffer_id)
-        && !buf.mark_marker_ptr.is_null()
-    {
-        unsafe {
-            return Ok(Value::from_veclike_ptr(
-                buf.mark_marker_ptr as *const crate::tagged::header::VecLikeHeader,
-            ));
-        }
+    let buf = eval
+        .buffers
+        .get_mut(buffer_id)
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if buf.mark_marker.is_null() {
+        let marker = make_marker_value(None, None, false);
+        let ptr = marker
+            .as_veclike_ptr()
+            .expect("freshly allocated marker should have a veclike ptr")
+            as *mut crate::tagged::header::MarkerObj;
+        buf.mark_marker = crate::buffer::MarkerRef::new(ptr);
+        return Ok(marker);
     }
-
-    // No mark set — return a detached marker.
-    Ok(make_marker_value_with_id(
-        None,
-        None,
-        false,
-        Some(MARK_MARKER_ID),
-    ))
+    buf.mark_marker
+        .as_value()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
 
 // ---------------------------------------------------------------------------

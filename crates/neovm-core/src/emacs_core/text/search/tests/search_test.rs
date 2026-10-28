@@ -642,9 +642,9 @@ fn killed_buffer_match_data_uses_detached_markers_and_restores_zero() {
         let data = marker
             .as_marker_data()
             .expect("dead buffer positions materialize as markers");
-        assert_eq!(data.buffer, None);
-        assert_eq!(data.charpos, 0);
-        assert!(!data.last_position_valid);
+        assert_eq!(data.buffer_id(), None);
+        assert_eq!(data.charpos.get(), 0);
+        assert!(!data.last_position_valid());
     }
 
     builtin_set_match_data(&mut eval, vec![saved]).expect("detached markers coerce to zero");
@@ -677,13 +677,13 @@ fn set_match_data_reseat_detaches_buffer_markers() {
     let saved = builtin_match_data(&mut eval, vec![]).unwrap();
     let start_marker = saved.cons_car();
     let end_marker = saved.cons_cdr().cons_car();
-    assert!(start_marker.as_marker_data().unwrap().buffer.is_some());
-    assert!(end_marker.as_marker_data().unwrap().buffer.is_some());
+    assert!(start_marker.as_marker_data().unwrap().buffer_id().is_some());
+    assert!(end_marker.as_marker_data().unwrap().buffer_id().is_some());
 
     builtin_set_match_data(&mut eval, vec![saved, Value::T]).unwrap();
 
-    assert!(start_marker.as_marker_data().unwrap().buffer.is_none());
-    assert!(end_marker.as_marker_data().unwrap().buffer.is_none());
+    assert!(start_marker.as_marker_data().unwrap().buffer_id().is_none());
+    assert!(end_marker.as_marker_data().unwrap().buffer_id().is_none());
     assert_nil(saved.cons_car());
     assert_nil(saved.cons_cdr().cons_car());
     let buffer = eval.buffers.get(buffer_id).expect("test buffer");
@@ -779,7 +779,7 @@ fn match_data_reseat_reuse_markers_before_refill_like_gnu() {
     let result = builtin_match_data(&mut eval, vec![Value::T, reuse, Value::T]).unwrap();
 
     assert_eq!(result, reuse);
-    assert!(first_marker.as_marker_data().unwrap().buffer.is_none());
+    assert!(first_marker.as_marker_data().unwrap().buffer_id().is_none());
     assert_eq!(
         list_to_vec(&reuse).unwrap(),
         vec![
