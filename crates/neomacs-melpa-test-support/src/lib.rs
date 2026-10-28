@@ -25,7 +25,7 @@ mod package_archive;
 mod prepared_package_set;
 mod source_lock;
 mod tree_sitter_grammar;
-pub use package_archive::{GNU_ELPA_ARCHIVE, PackageArchiveSpec, prepare_cached_gnu_elpa_package};
+pub use package_archive::{GNU_ELPA_LABEL, GnuElpaPackage, prepare_cached_gnu_elpa_package};
 pub use prepared_package_set::{
     LoadSuffixes, PackageActivation, PreparedPackageSet, package_activation_elisp,
 };

@@ -39,7 +39,8 @@ pub mod scenario {
 
 pub const ACE_WINDOW_MELPA_PIN: (&str, &str) = ("ace-window", "20220911.358");
 pub const BEACON_MELPA_PIN: (&str, &str) = ("beacon", "20220730.100");
-pub const COMPAT_GNU_ELPA_PIN: (&str, &str) = ("compat", "31.1.0.0");
+pub const COMPAT_GNU_ELPA_PIN: neomacs_melpa_test_support::GnuElpaPackage =
+    neomacs_melpa_test_support::GnuElpaPackage::COMPAT;
 pub const CORFU_MELPA_PIN: (&str, &str) = ("corfu", "20260802.2028");
 pub const GRUVBOX_THEME_MELPA_PIN: (&str, &str) = ("gruvbox-theme", "20250117.222");
 pub const HELM_CORE_MELPA_PIN: (&str, &str) = ("helm-core", "20260720.1307");
@@ -80,7 +81,7 @@ impl PackageOracle {
 
     /// Prepare one pinned GNU ELPA package and select its Elisp source file.
     pub fn new_from_gnu_elpa(
-        package: (&str, &str),
+        package: neomacs_melpa_test_support::GnuElpaPackage,
         source_file_name: &str,
     ) -> Result<Self, String> {
         let package_dir = neomacs_melpa_test_support::prepare_cached_gnu_elpa_package(
@@ -88,7 +89,11 @@ impl PackageOracle {
             package,
         )?;
         Ok(Self {
-            packages: PreparedPackageSet::from_package_dir(package, source_file_name, package_dir)?,
+            packages: PreparedPackageSet::from_package_dir(
+                (package.name(), package.version()),
+                source_file_name,
+                package_dir,
+            )?,
         })
     }
 
@@ -99,12 +104,15 @@ impl PackageOracle {
     }
 
     /// Mount one exact pinned package as an additional dependency.
-    pub fn with_gnu_elpa_dependency(self, package: (&str, &str)) -> Result<Self, String> {
+    pub fn with_gnu_elpa_dependency(
+        self,
+        package: neomacs_melpa_test_support::GnuElpaPackage,
+    ) -> Result<Self, String> {
         let package_dir = neomacs_melpa_test_support::prepare_cached_gnu_elpa_package(
             &EmacsRuntime::gnu_emacs(),
             package,
         )?;
-        self.with_prepared_dependency(package, package_dir)
+        self.with_prepared_dependency((package.name(), package.version()), package_dir)
     }
 
     fn with_prepared_dependency(

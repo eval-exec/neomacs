@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use neomacs_melpa_test_support::{EmacsRuntime, MelpaSandbox, prepare_cached_gnu_elpa_package};
+use neomacs_melpa_test_support::{
+    EmacsRuntime, GnuElpaPackage, MelpaSandbox, prepare_cached_gnu_elpa_package,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::harness::{
@@ -24,11 +26,11 @@ use crate::harness::{
     sha256_file,
 };
 
-/// The pinned release. Note that GNU ELPA serves only an UNVERSIONED
-/// `elisp-benchmarks.tar`; the version is what `package-archive-contents`
-/// reports, which is what the cache validates against, so the pin is real even
-/// though the URL does not carry it.
-const ELISP_BENCHMARKS_PIN: (&str, &str) = ("elisp-benchmarks", "1.16");
+/// The pinned release, installed from the release tarball vendored under
+/// `crates/neomacs-infra/fixtures/gnu-elpa/` and verified against the checksum
+/// in the ELPA lock manifest.  The suite never fetches the archive at run
+/// time, so the measured input cannot change between runs.
+const ELISP_BENCHMARKS_PIN: GnuElpaPackage = GnuElpaPackage::ELISP_BENCHMARKS;
 
 /// Benchmark SOURCE FILES in release 1.16. Pinned so a suite that silently
 /// shrank -- an upstream file rename, a half-extracted archive -- is a
@@ -66,6 +68,7 @@ pub(crate) fn prepare(
     // measured engine never participates in preparing its own input.
     let package_dir =
         prepare_cached_gnu_elpa_package(&EmacsRuntime::gnu_emacs(), ELISP_BENCHMARKS_PIN)?;
+    let package_source = ELISP_BENCHMARKS_PIN.source()?;
 
     let provenance = run_directory.join("input-provenance.json");
     let provenance_manifest = ElispBenchmarksInputProvenanceManifest {
@@ -73,9 +76,10 @@ pub(crate) fn prepare(
         host: collect_host_provenance(request.machine_policy()),
         workload_source: "crates/neomacs-perf/fixtures/elisp-benchmarks.el",
         workload_source_sha256: sha256_file(&fixture_source)?,
-        package_name: ELISP_BENCHMARKS_PIN.0,
-        package_version: ELISP_BENCHMARKS_PIN.1,
-        package_archive: "https://elpa.gnu.org/packages/",
+        package_name: package_source.name,
+        package_version: package_source.version,
+        package_source: ELISP_BENCHMARKS_PIN.fixture_identity(),
+        package_sha256: package_source.sha256,
         environment_policy: "closed-v1",
         passthrough_environment: request
             .benchmark_environment()
@@ -180,7 +184,10 @@ struct ElispBenchmarksInputProvenanceManifest<'a> {
     workload_source_sha256: String,
     package_name: &'a str,
     package_version: &'a str,
-    package_archive: &'a str,
+    /// Workspace-relative path of the vendored release tarball that was
+    /// installed for this run; `package_sha256` is its lock-manifest digest.
+    package_source: String,
+    package_sha256: &'a str,
     environment_policy: &'a str,
     passthrough_environment: BTreeMap<String, String>,
 }

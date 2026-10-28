@@ -1,11 +1,11 @@
-//! Deterministic MELPA package provisioning for every test suite.
+//! Deterministic package provisioning for every test suite.
 //!
 //! This module owns the acquisition core the package-parity harness built:
-//! a locked manifest of pinned package sources, a content-addressed install
-//! cache materialized **once by GNU Emacs**, and the activation vocabulary
-//! tests use to mount a prepared package into an editor session.  It follows
-//! the same three-step contract as [`crate::config_env`]: materialize once,
-//! seal, mount per session.
+//! locked manifests of pinned package sources and checksummed GNU ELPA release
+//! tarballs, a content-addressed install cache materialized **once by GNU
+//! Emacs**, and the activation vocabulary tests use to mount a prepared
+//! package into an editor session.  It follows the same three-step contract as
+//! [`crate::config_env`]: materialize once, seal, mount per session.
 //!
 //! The seam that keeps this crate free of any concrete editor handle is
 //! [`PackageInstallDriver`]: the runtime that drives `package-install`
@@ -26,7 +26,7 @@ pub mod source_lock;
 pub(crate) mod test_support;
 
 pub use activation::{LoadSuffixes, PackageActivation, package_activation_elisp};
-pub use elpa_archive::{GNU_ELPA_ARCHIVE, prepare_cached_gnu_elpa_package};
+pub use elpa_archive::{GNU_ELPA_LABEL, GnuElpaPackage, prepare_cached_gnu_elpa_package};
 pub use install::{
     InstallCommandError, PackageInstallDriver, PathGnuDriver, configure_process_environment,
     deterministic_process_environment, elisp_string, package_preparation_run_id,
@@ -43,10 +43,12 @@ use std::path::{Path, PathBuf};
 
 /// A package a test wants, pinned by name and locked version.
 ///
-/// The version must have a row in the embedded lock manifest
-/// (`melpa-package-lock.tsv`); the manifest carries the full provenance
-/// (upstream repository + revision, MELPA recipe revision, package-build
-/// revision, dependency rows), so a provision is reproducible from data.
+/// The version must have a row in one of the embedded lock manifests:
+/// `melpa-package-lock.tsv` for a source build (the row carries the upstream
+/// repository + revision, MELPA recipe revision, package-build revision, and
+/// dependency rows), or `elpa-package-lock.tsv` for a GNU ELPA release
+/// installed from its vendored, checksummed tarball.  Either way a provision
+/// is reproducible from data.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinnedPackage {
     pub name: String,
@@ -263,12 +265,18 @@ pub fn provision(
     driver: &dyn PackageInstallDriver,
 ) -> Result<ProvisionedPackage, String> {
     // Dispatch by which manifest pins the package: a MELPA row installs from
-    // the locked source checkout, an ELPA row through the archive.  Neither
-    // path vendors package source in this repository.
+    // the locked source checkout, an ELPA row installs a checksummed release
+    // tarball vendored under `crates/neomacs-infra/fixtures/gnu-elpa/`.
     let package_dir = match elpa_lock::locked_elpa_source(&pinned.name, &pinned.version) {
         Ok(row) => {
-            let _ = row;
-            elpa_archive::prepare_cached_gnu_elpa_package(driver, pinned.as_pair())?
+            let package = GnuElpaPackage::from_pin(row.name, row.version).ok_or_else(|| {
+                format!(
+                    "GNU ELPA lock row {} {} has no typed GnuElpaPackage pin; add the pin in \
+                     neomacs-infra::packages::elpa_archive and its fixture tarball together",
+                    row.name, row.version
+                )
+            })?;
+            elpa_archive::prepare_cached_gnu_elpa_package(driver, package)?
         }
         Err(elpa_miss) => match prepare_cached_locked_melpa_package(driver, pinned.as_pair()) {
             Ok(directory) => directory,

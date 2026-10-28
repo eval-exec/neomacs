@@ -30,7 +30,9 @@ use neomacs_test_oracle::{
 const RESULT_MARKER: &str = "NEOMACS-MELPA-RESULT:";
 const OUTCOME_MARKER: &str = "NEOMACS-MELPA-OUTCOME:";
 const BATCH_BEGIN_MARKER: &str = "NEOMACS-MELPA-BEGIN:";
-pub use neomacs_melpa_test_support::{GNU_ELPA_ARCHIVE, prepare_cached_gnu_elpa_package};
+pub use neomacs_melpa_test_support::{
+    GNU_ELPA_LABEL, GnuElpaPackage, prepare_cached_gnu_elpa_package,
+};
 
 const BATCH_COMPLETE_MARKER: &str = "NEOMACS-MELPA-COMPLETE:";
 const TRANSPORTED_FORM_FUNCTION: &str = "neomacs--melpa-oracle-transported-form";
@@ -40,14 +42,11 @@ const DEFAULT_PROCESS_TIMEOUT: Duration = neomacs_melpa_test_support::DEFAULT_PR
 /// The exact Async release selected from GNU ELPA by the comprehensive API
 /// parity corpus.
 ///
-/// GNU ELPA serves only the LATEST release of a package: 1.9.9's tarball
-/// disappeared from `https://elpa.gnu.org/packages/` when upstream published
-/// 2.0, and `package-install` cannot reach a version the archive no longer
-/// lists.  This row therefore names the release the archive actually
-/// carries, and the expectations pinned against it; a later upstream release
-/// fails loudly here rather than silently installing something else.  (The
+/// The release tarball is vendored and checksummed
+/// (`crates/neomacs-infra/fixtures/gnu-elpa/async-2.0.tar`), so the bytes the
+/// expectations were pinned against cannot change behind the suite.  (The
 /// immutable sibling axis is [`ASYNC_MELPA_PIN`], built from a Git revision.)
-pub const ASYNC_GNU_ELPA_PIN: (&str, &str) = ("async", "2.0");
+pub const ASYNC_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::ASYNC;
 
 /// The exact current MELPA Async package selected by the comprehensive
 /// serialization, process, byte-compilation, Dired, package, and mail workflow
@@ -113,7 +112,7 @@ pub const AUTO_COMPLETE_AUCTEX_MELPA_PIN: (&str, &str) = ("auto-complete-auctex"
 
 /// The exact AUCTeX release selected from GNU ELPA for the
 /// auto-complete-auctex integration parity corpus.
-pub const AUCTEX_GNU_ELPA_PIN: (&str, &str) = ("auctex", "14.2.0");
+pub const AUCTEX_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::AUCTEX;
 
 /// The exact auto-complete-c-headers package selected by the comprehensive
 /// include-path, filesystem-cache, documentation, candidate-source, and
@@ -480,7 +479,7 @@ pub const ERLANG_MELPA_PIN: (&str, &str) = ("erlang", "20260724.1508");
 
 /// The exact GNU ELPA let-alist dependency selected for the flycheck-rust and
 /// sage-shell-mode package graphs.
-pub const LET_ALIST_GNU_ELPA_PIN: (&str, &str) = ("let-alist", "1.0.6");
+pub const LET_ALIST_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::LET_ALIST;
 
 /// The exact audio-notes-mode package selected by the comprehensive
 /// filesystem, playback, process-control, mode-line, advice, and global-mode
@@ -576,7 +575,7 @@ pub const PYVENV_MELPA_PIN: (&str, &str) = ("pyvenv", "20211014.707");
 /// The exact Queue release selected from GNU ELPA by the practical scheduler,
 /// priority, copy, iterator, traversal, event-loop, and live-view parity
 /// corpus.
-pub const QUEUE_GNU_ELPA_PIN: (&str, &str) = ("queue", "0.2");
+pub const QUEUE_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::QUEUE;
 
 /// The exact Quelpa package selected for practical source checkout, package
 /// build/install, dependency, upgrade, cache, async, and failure-state parity.
@@ -3065,7 +3064,7 @@ pub const SMEARGLE_MELPA_PIN: (&str, &str) = ("smeargle", "20200323.533");
 
 /// The exact Bind-Key release selected from GNU ELPA by the comprehensive API
 /// parity corpus.
-pub const BIND_KEY_GNU_ELPA_PIN: (&str, &str) = ("bind-key", "2.4.1");
+pub const BIND_KEY_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::BIND_KEY;
 
 /// The exact BUI package selected by the practical service dashboard,
 /// marking, filtering, detail action, and history parity corpus, and as
@@ -3270,7 +3269,7 @@ pub const BERT_MELPA_PIN: (&str, &str) = ("bert", "20131117.1014");
 
 /// The exact Compat release selected from GNU ELPA by the comprehensive API
 /// parity corpus.
-pub const COMPAT_GNU_ELPA_PIN: (&str, &str) = ("compat", "31.1.0.0");
+pub const COMPAT_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::COMPAT;
 
 /// The exact Corfu package selected for practical in-buffer completion,
 /// candidate navigation, preview, insertion, cancellation, and extension-mode
@@ -4121,7 +4120,7 @@ pub const TSC_MELPA_PIN: (&str, &str) = ("tsc", "20260116.9");
 
 /// The exact Use-Package release selected from GNU ELPA by the comprehensive
 /// API parity corpus.
-pub const USE_PACKAGE_GNU_ELPA_PIN: (&str, &str) = ("use-package", "2.4.6");
+pub const USE_PACKAGE_GNU_ELPA_PIN: GnuElpaPackage = GnuElpaPackage::USE_PACKAGE;
 
 /// The exact Uuidgen package selected for practical deterministic and random
 /// UUID v1/v3/v4/v5 generation, namespace hashing, CID/URN serialization,
@@ -4618,12 +4617,16 @@ impl CachedPackageOracle {
 
     /// Prepare one pinned GNU ELPA package and select its Elisp source file.
     pub fn new_from_gnu_elpa(
-        package: (&str, &str),
+        package: GnuElpaPackage,
         source_file_name: &str,
     ) -> Result<Self, String> {
-        validate_cached_source_file_name(GNU_ELPA_ARCHIVE.label, source_file_name)?;
+        validate_cached_source_file_name(GNU_ELPA_LABEL, source_file_name)?;
         let package_dir = prepare_cached_gnu_elpa_package(&EmacsRuntime::gnu_emacs(), package)?;
-        Self::from_package_dir(package, source_file_name, package_dir)
+        Self::from_package_dir(
+            (package.name(), package.version()),
+            source_file_name,
+            package_dir,
+        )
     }
 
     fn from_package_dir(
@@ -4670,9 +4673,9 @@ impl CachedPackageOracle {
 
     /// Make another exact GNU ELPA package cache visible as a system-wide
     /// package directory while loading the package under test.
-    pub fn with_gnu_elpa_dependency(self, package: (&str, &str)) -> Result<Self, String> {
+    pub fn with_gnu_elpa_dependency(self, package: GnuElpaPackage) -> Result<Self, String> {
         let package_dir = prepare_cached_gnu_elpa_package(&EmacsRuntime::gnu_emacs(), package)?;
-        self.with_prepared_dependency(package, package_dir)
+        self.with_prepared_dependency((package.name(), package.version()), package_dir)
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
