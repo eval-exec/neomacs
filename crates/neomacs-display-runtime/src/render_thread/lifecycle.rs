@@ -679,11 +679,6 @@ impl RenderApp {
                     dynamic_animation_rate,
                 ),
                 (
-                    dynamic_effects_allowed && window_state.render.cursor.is_animating(),
-                    DemandReason::CursorAnimation,
-                    dynamic_animation_rate,
-                ),
-                (
                     dynamic_effects_allowed
                         && window_state.render.compositor.transitions.has_active(),
                     DemandReason::Transition,
@@ -746,6 +741,28 @@ impl RenderApp {
                 } else {
                     self.frame_coordinator.retract(id, reason);
                 }
+            }
+
+            // Cursor geometry is compositor state, not editor content. Keep
+            // its cadence independent of the blink deadline below (#607).
+            if dynamic_effects_allowed && window_state.render.cursor.is_animating() {
+                let motion_action = self.frame_coordinator.submit_demand(
+                    id,
+                    FrameDemand {
+                        invalidation: Invalidation::CompositeOnly {
+                            layers: LayerMask::CURSOR_EFFECTS,
+                        },
+                        cadence: Cadence::MaxRate(dynamic_animation_rate),
+                        reason: DemandReason::CursorMotion,
+                    },
+                    now,
+                );
+                if motion_action == PacingAction::RequestRedraw {
+                    action = PacingAction::RequestRedraw;
+                }
+            } else {
+                self.frame_coordinator
+                    .retract(id, DemandReason::CursorMotion);
             }
 
             // Shader surfaces may cap their animation rate (`:fps`): when they

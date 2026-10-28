@@ -60,7 +60,7 @@ pub(crate) struct FrameCompositor {
     pub glyph_atlas: Option<WgpuGlyphAtlas>,
     /// Content of the scene changed: the next frame must repaint layers.
     pub dirty: bool,
-    /// Only the cursor layer changed (a blink toggle). The composite fast
+    /// Only the primary cursor layer changed (blink, motion, or size). The composite fast
     /// path reproduces such a frame from the retained scene, so this asks for
     /// a cursor-only frame rather than a repaint. Kept separate from `dirty`
     /// because anything that sets `dirty` outranks it in the demand model.

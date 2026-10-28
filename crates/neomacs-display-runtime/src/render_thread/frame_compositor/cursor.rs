@@ -18,14 +18,17 @@ impl GuiFrameRenderState {
         &mut self,
         at: neomacs_display_protocol::frame_time::EventTime,
     ) -> bool {
-        let mut dirty = self.cursor.tick_animation(at);
+        let cursor_dirty = self.cursor.tick_animation(at);
+        self.compositor.cursor_dirty |= cursor_dirty;
+        // Decorative cursors are materialized into the frame, whereas the
+        // primary cursor has an AnimatedCursor override at composition time.
+        // Their cached cells cannot yet be reused while geometry changes.
+        let mut scene_dirty = false;
         for cursor in self.compositor.visual_cursors.values_mut() {
-            dirty |= cursor.tick_animation(at);
+            scene_dirty |= cursor.tick_animation(at);
         }
-        if dirty {
-            self.compositor.dirty = true;
-        }
-        dirty
+        self.compositor.dirty |= scene_dirty;
+        cursor_dirty || scene_dirty
     }
 
     pub(in crate::render_thread) fn tick_cursor_blink(
@@ -98,14 +101,17 @@ impl GuiFrameRenderState {
         &mut self,
         at: neomacs_display_protocol::frame_time::EventTime,
     ) -> bool {
-        let mut dirty = self.cursor.tick_size_animation(at);
+        let cursor_dirty = self.cursor.tick_size_animation(at);
+        self.compositor.cursor_dirty |= cursor_dirty;
+        // Decorative cursors are materialized into the frame, whereas the
+        // primary cursor has an AnimatedCursor override at composition time.
+        // Their cached cells cannot yet be reused while geometry changes.
+        let mut scene_dirty = false;
         for cursor in self.compositor.visual_cursors.values_mut() {
-            dirty |= cursor.tick_size_animation(at);
+            scene_dirty |= cursor.tick_size_animation(at);
         }
-        if dirty {
-            self.compositor.dirty = true;
-        }
-        dirty
+        self.compositor.dirty |= scene_dirty;
+        cursor_dirty || scene_dirty
     }
 
     pub(in crate::render_thread) fn sync_visual_cursors_from_current_frame(

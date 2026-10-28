@@ -145,6 +145,7 @@ pub(crate) enum Cadence {
 #[strum(serialize_all = "snake_case")]
 pub(crate) enum DemandReason {
     EditorCommit,
+    /// Blink toggles and the next blink deadline.
     CursorAnimation,
     /// Infinite ambient compositor-only demand: the cursor color cycle
     /// (Stage 3 tracer bullet). Distinct from CursorAnimation so its MaxRate
@@ -179,7 +180,7 @@ pub(crate) enum DemandReason {
     /// deliver.
     PlatformRedraw,
     DebugCapture,
-    /// New editor content or blink toggle needing a repaint.
+    /// New editor content needing a repaint.
     Redisplay,
     /// Render-effect families (Stage 6). Each names the group animating so
     /// diagnostics can answer "why is this window still rendering?" without
@@ -190,6 +191,8 @@ pub(crate) enum DemandReason {
     ScrollEffect,
     DecorativeEffect,
     TransientEffect,
+    /// Finite cursor position/size interpolation, independent of blink.
+    CursorMotion,
 }
 
 impl DemandReason {
