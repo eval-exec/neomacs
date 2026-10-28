@@ -265,17 +265,31 @@ pub fn use_backend_only_vc_mode_line(gnu: &mut TuiSession, neo: &mut TuiSession)
     eval_expression(gnu, neo, "(setq vc-display-status nil)");
 }
 
-/// Make compilation and diff buffers' wall-clock annotations deterministic.
+/// Make compilation and diff buffers' displays deterministic.
 ///
-/// The advice is scoped to `compilation-start`, `compilation-handle-exit` and
-/// `diff-sentinel`: editor timers and process polling continue to observe
-/// real time, while the buffers' "started at"/"finished" annotations always
+/// Two determinism problems are solved here.  Wall-clock annotations: the
+/// advice is scoped to `compilation-start`, `compilation-handle-exit` and
+/// `diff-sentinel`, so editor timers and process polling continue to observe
+/// real time while the buffers' "started at"/"finished" annotations always
 /// receive the same timestamp and a 0.01-second elapsed duration in both
-/// sessions.  Both editors necessarily run the command seconds apart (the pair
-/// sends the same key to each editor in turn), so the raw clock can never
-/// match.  `diff-sentinel` (lisp/vc/diff.el) writes its own "Diff finished"
-/// timestamp rather than going through compilation mode.
-pub fn use_deterministic_compilation_exit_time(gnu: &mut TuiSession, neo: &mut TuiSession) {
+/// sessions.  Both editors necessarily run the command seconds apart (the
+/// pair sends the same key to each editor in turn), so the raw clock can
+/// never match.  `diff-sentinel` (lisp/vc/diff.el) writes its own "Diff
+/// finished" timestamp rather than going through compilation mode.
+///
+/// Settled display: the same advice forces a complete frame redraw after the
+/// command starts and after the process finishes.  GNU's TTY redisplay can
+/// keep the pre-split screen when the compilation output is processed before
+/// the new window's first redisplay: the output rows are painted later, but
+/// the window's header rows, the vertical border and the menu bar are not
+/// (observed on the TUI shard: GNU still showed the "Minibuf" menu and an
+/// unpainted right window while Neo had painted the whole frame).
+/// `redraw-display` clears the frame and every window's current matrix on
+/// both editors (GNU `redraw_frame`, dispnew.c; Neo publishes the same
+/// full-frame redraw and menu-bar rebuild), so the paired exact-display
+/// assertion observes the settled frame instead of a half-updated GNU one.
+/// It changes no buffer or window state.
+pub fn use_deterministic_compilation_setup(gnu: &mut TuiSession, neo: &mut TuiSession) {
     let expression = r##"(progn
       (require 'compile)
       (require 'cl-lib)
@@ -294,12 +308,20 @@ pub fn use_deterministic_compilation_exit_time(gnu: &mut TuiSession, neo: &mut T
         (cl-letf (((symbol-function 'current-time-string)
                    (lambda (&optional _time _zone) "Wed Sep  2 00:00:00 2026")))
           (apply original args)))
+      (defun neomacs-tui--redraw-after-process-display (&rest _args)
+        (redraw-display))
       (advice-add 'compilation-handle-exit :around
                   #'neomacs-tui--stable-compilation-exit-time)
       (advice-add 'compilation-start :around
                   #'neomacs-tui--stable-compilation-start-time)
       (advice-add 'diff-sentinel :around
-                  #'neomacs-tui--stable-diff-sentinel-time))"##;
+                  #'neomacs-tui--stable-diff-sentinel-time)
+      (advice-add 'compilation-start :after
+                  #'neomacs-tui--redraw-after-process-display)
+      (advice-add 'compilation-handle-exit :after
+                  #'neomacs-tui--redraw-after-process-display)
+      (advice-add 'diff-sentinel :after
+                  #'neomacs-tui--redraw-after-process-display))"##;
     eval_expression(gnu, neo, expression);
 }
 
