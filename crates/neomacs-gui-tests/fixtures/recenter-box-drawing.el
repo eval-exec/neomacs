@@ -11,11 +11,29 @@
 (defvar neomacs-recenter-stage 0)
 (defvar neomacs-recenter-point nil)
 (defvar neomacs-recenter-trace nil)
+(defvar neomacs-recenter-readback-deadline 0)
 
 (defun neomacs-recenter-fail (error)
   (princ (format "Recenter GUI fixture failed: %S\n" error)
          'external-debugging-output)
   (kill-emacs 1))
+
+(defun neomacs-recenter-await-readback ()
+  ;; The harness asserts on the renderer's surface-readback PNG, which the
+  ;; render thread writes on a later present.  Wait for the artifact itself
+  ;; instead of racing it with a fixed delay.
+  (condition-case error
+      (let* ((png (getenv "NEOMACS_DEBUG_SURFACE_READBACK_PNG"))
+             (written (and png
+                           (file-regular-p png)
+                           (> (file-attribute-size (file-attributes png)) 0))))
+        (cond
+         ((or (null png) written) (kill-emacs 0))
+         ((> (float-time) neomacs-recenter-readback-deadline)
+          (neomacs-recenter-fail
+           (format "surface readback PNG was not written: %S" png)))
+         (t (run-at-time 0.02 nil #'neomacs-recenter-await-readback))))
+    (error (neomacs-recenter-fail error))))
 
 (defun neomacs-recenter-finish ()
   (condition-case error
@@ -34,7 +52,8 @@
          (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json)
         (neomacs--write-frame-snapshot
          (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_TXT") t 'text)
-        (run-at-time 0.2 nil (lambda () (kill-emacs 0))))
+        (setq neomacs-recenter-readback-deadline (+ (float-time) 10))
+        (run-at-time 0.02 nil #'neomacs-recenter-await-readback))
     (error (neomacs-recenter-fail error))))
 
 (defun neomacs-recenter-after-command ()
