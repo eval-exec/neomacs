@@ -92,10 +92,13 @@
     (erase-buffer)
     (insert "FADE POPUP\nwhite on red text\n"))
   (child-frame-animation-write "created")
-  ;; At slowdown 20 both fades run 3s. Timer positions leave the settled
-  ;; window (3.0-7.0s) wide enough for a ~1s compositor capture to land
-  ;; inside it, and the pruned window wide enough for the final capture to
-  ;; reach a live editor.
+  ;; At slowdown 20 both fades run 3s (a 150ms easing tween), while the
+  ;; drift and resize slots are critically damped springs (default
+  ;; `neomacs-child-frame-resize'): omega sqrt(800)/20 ~ 1.414 rad/s, so
+  ;; their envelope falls to 1e-3 only after ~6.6s. Timer positions leave
+  ;; the settled window (3.0-7.0s) wide enough for a ~1s compositor capture
+  ;; to land inside it, and every later phase wide enough for its own
+  ;; observation window rather than merely its ramp.
   (run-at-time 3.5 nil
                (lambda ()
                  (child-frame-animation-write "settled")
@@ -109,14 +112,14 @@
                    (error (child-frame-animation-write
                            (format "snapshot-error %S" err))))))
   ;; Grow the popup mid-life: the size-changing update crossfades the old
-  ;; picture into the bigger one over the resize slot's 3s curve. Placed
-  ;; after the drift settles so the two windows do not overlap.
-  (run-at-time 12.0 nil
+  ;; picture into the bigger one over the resize slot's spring. Placed long
+  ;; after the drift's own spring settles so the two do not overlap.
+  (run-at-time 20.0 nil
                (lambda ()
                  ;; The phase goes out first: the crossfade begins when the
                  ;; render thread ingests the resized payload, which races
                  ;; this write, and the test's first capture must land
-                 ;; inside the tween rather than after it.
+                 ;; inside the ramp rather than after it.
                  (child-frame-animation-write "resized")
                  (setq child-frame-animation-popup-size-before
                        (frame-pixel-width child-frame-animation-popup))
@@ -129,7 +132,7 @@
   ;; Re-anchor mid-life: the movement slot's drift glides the popup from
   ;; (240,180) to (400,300) over the spring's slowed settle (~6.6s, most of
   ;; the travel in the first three).
-  (run-at-time 5.0 nil
+  (run-at-time 6.5 nil
                (lambda ()
                  (child-frame-animation-write "reanchored")
                  (modify-frame-parameters
@@ -138,13 +141,21 @@
                  ;; The re-anchored payload reaches the render thread only
                  ;; through a redisplay that re-publishes the child frame.
                  (redisplay t)))
-  (run-at-time 16.0 nil
+  ;; Delete only after the resize crossfade has settled: the spring needs
+  ;; ~6.6s from the resize at 20.0s, and the test's four captures plus its
+  ;; endpoint poll must see the settled picture before the close fade
+  ;; starts overwriting it. The gap is generous: a loaded runner's captures
+  ;; may start late, and the poll must still win the race to the delete.
+  (run-at-time 32.0 nil
                (lambda ()
                  (delete-frame child-frame-animation-popup)
                  (child-frame-animation-write "deleted")))
-  ;; The close fade ends at 19.0s; the dying entry is pruned right after.
-  (run-at-time 19.5 nil (lambda () (child-frame-animation-write "pruned")))
-  (run-at-time 21.0 nil (lambda () (kill-emacs 0))))
+  ;; The 3s close fade ends at 35.0s; the dying entry is pruned right after.
+  (run-at-time 35.5 nil (lambda () (child-frame-animation-write "pruned")))
+  ;; The last observation (the pruned capture) happens well before this;
+  ;; the timer is only an upper bound for a hung session, and the harness
+  ;; kills the editor as soon as its captures are done.
+  (run-at-time 60.0 nil (lambda () (kill-emacs 0))))
 
 ;; Let the initial native configure establish the parent dimensions first.
 (run-at-time 1.5 nil #'child-frame-animation-setup)
