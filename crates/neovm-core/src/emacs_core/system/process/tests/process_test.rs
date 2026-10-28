@@ -1066,19 +1066,75 @@ fn continue_process_cancels_a_pending_stop_transition_like_gnu() {
     assert!(!process.status_notify_pending);
 }
 
+/// Wait for an observable event, never for an assumed duration.
+///
+/// `probe` returns `Some` once the event has happened. The guard only turns a
+/// broken protocol (a helper that died before reporting) into a named failure
+/// instead of nextest's slow-timeout; the protocol itself never depends on it,
+/// so a starved runner that takes seconds to start Python still passes.
+#[cfg(unix)]
+fn wait_for_process_test_event<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+    const HANG_GUARD: Duration = Duration::from_secs(300);
+    let started = Instant::now();
+    loop {
+        if let Some(value) = probe() {
+            return value;
+        }
+        assert!(
+            started.elapsed() < HANG_GUARD,
+            "{what}: no progress within the {HANG_GUARD:?} hang guard"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Whether `pid` still names a process (a zombie counts until it is reaped).
+#[cfg(unix)]
+fn process_test_pid_exists(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 performs only the existence/permission check.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// GNU `internal-default-signal-process` sends the signal to the named PID
+/// (process.c `Finternal_default_signal_process` -> `kill (pid, signo)`), not
+/// to its process group.
+///
+/// The parent reports its descendant's PID only after spawning it, and the
+/// descendant finishes only after the test releases it, which happens strictly
+/// after the TERM was sent. A group-wide signal is therefore already pending
+/// in the descendant before it can observe the release, so it dies without
+/// writing `done`; a PID-only signal leaves it to finish normally. Every wait
+/// is on an event (a file appearing, the descendant exiting), so CPU
+/// starvation can delay the test but cannot change its verdict.
 #[cfg(unix)]
 #[test]
 fn internal_default_signal_process_targets_only_the_named_pid_like_gnu() {
     crate::test_utils::init_test_tracing();
     let directory = tempfile::tempdir().expect("tempdir");
     let ready = directory.path().join("ready");
-    let descendant_finished = directory.path().join("descendant-finished");
+    let release = directory.path().join("release");
+    let done = directory.path().join("done");
     let python = find_bin("python3");
+    // The descendant's own deadline only bounds an orphan if the test dies
+    // before releasing it; the verdict never depends on it.
     let descendant = format!(
-        "import time; from pathlib import Path; time.sleep(0.2); Path({descendant_finished:?}).write_text('done')"
+        "import time; from pathlib import Path\n\
+         release, done = Path({release:?}), Path({done:?})\n\
+         limit = time.monotonic() + 600\n\
+         while not release.exists():\n    \
+             if time.monotonic() > limit: raise SystemExit(3)\n    \
+             time.sleep(0.01)\n\
+         tmp = done.with_suffix('.tmp'); tmp.write_text('done'); tmp.replace(done)\n"
     );
     let parent = format!(
-        "import subprocess, time; from pathlib import Path; subprocess.Popen([{python:?}, '-c', {descendant:?}]); Path({ready:?}).write_text('ready'); time.sleep(30)"
+        "import subprocess, time; from pathlib import Path\n\
+         child = subprocess.Popen([{python:?}, '-c', {descendant:?}])\n\
+         ready = Path({ready:?}); tmp = ready.with_suffix('.tmp')\n\
+         tmp.write_text(str(child.pid)); tmp.replace(ready)\n\
+         time.sleep(3600)\n"
     );
 
     let mut processes = ProcessManager::new();
@@ -1091,13 +1147,12 @@ fn internal_default_signal_process_targets_only_the_named_pid_like_gnu() {
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
     processes.spawn_child(id, false).expect("spawn parent");
-    for _ in 0..100 {
-        if ready.exists() {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(ready.exists(), "parent did not spawn its descendant");
+    let descendant_pid: libc::pid_t =
+        wait_for_process_test_event("parent reporting its descendant", || {
+            std::fs::read_to_string(&ready)
+                .ok()
+                .and_then(|pid| pid.trim().parse().ok())
+        });
 
     builtin_internal_default_signal_process_impl(
         &mut processes,
@@ -1105,15 +1160,21 @@ fn internal_default_signal_process_targets_only_the_named_pid_like_gnu() {
         vec![Value::make_process(id), Value::symbol("TERM")],
     )
     .expect("internal-default-signal-process");
+    std::fs::write(&release, "go").expect("release the descendant");
 
-    for _ in 0..100 {
-        if descendant_finished.exists() {
-            break;
+    let finished = wait_for_process_test_event("descendant finishing or dying", || {
+        if done.exists() {
+            Some(true)
+        } else if !process_test_pid_exists(descendant_pid) {
+            // Re-check after observing the exit: `done` is renamed into place
+            // before the descendant exits.
+            Some(done.exists())
+        } else {
+            None
         }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    });
     assert!(
-        descendant_finished.exists(),
+        finished,
         "signal-process killed the process group instead of only the named PID"
     );
     processes.delete_process(id);
