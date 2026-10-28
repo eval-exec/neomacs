@@ -7,6 +7,9 @@
 
 mod common;
 
+#[path = "dump_environment.rs"]
+mod dump_environment;
+
 #[path = "compat_all.rs"]
 mod compat_all;
 

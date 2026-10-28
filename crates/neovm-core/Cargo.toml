@@ -10,10 +10,6 @@ description = "Core runtime structures for NeoVM"
 # auto-discovery off makes every remaining integration target explicit below.
 autotests = false
 
-[[test]]
-name = "dump_environment"
-path = "tests/dump_environment.rs"
-
 [dependencies]
 neovm-host-abi.workspace = true
 neomacs-display-protocol.workspace = true

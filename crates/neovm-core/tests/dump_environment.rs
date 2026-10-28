@@ -14,7 +14,7 @@ use tempfile::tempdir;
 fn production_dump_does_not_capture_the_build_environment() {
     assert_dump_environment(
         LoadupDumpMode::Pdump,
-        "production_dump_does_not_capture_the_build_environment",
+        "dump_environment::production_dump_does_not_capture_the_build_environment",
     );
 }
 
@@ -22,7 +22,19 @@ fn production_dump_does_not_capture_the_build_environment() {
 fn bootstrap_dump_does_not_capture_the_build_environment() {
     assert_dump_environment(
         LoadupDumpMode::Pbootstrap,
-        "bootstrap_dump_does_not_capture_the_build_environment",
+        "dump_environment::bootstrap_dump_does_not_capture_the_build_environment",
+    );
+}
+
+fn run_one_test(command: &mut Command) {
+    let output = command.output().expect("run the saved-image fixture");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success()
+            && stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+        "saved-image fixture must run exactly one passing test; status: {}\nstdout:\n{stdout}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
     );
 }
 
@@ -49,25 +61,20 @@ fn assert_dump_environment(mode: LoadupDumpMode, test_name: &str) {
             b"dump fixture",
         )
         .unwrap();
-        let output = Command::new(&executable)
-            .args(["--exact", test_name, "--nocapture"])
-            .env(CHILD, "dump")
-            .env("NEOMACS_ISSUE578_BUILD_ONLY", MARKER)
-            .env(
-                "PATH",
-                std::env::join_paths(
-                    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                        .chain(std::iter::once(PathBuf::from(MARKER))),
+        run_one_test(
+            Command::new(&executable)
+                .args(["--exact", test_name, "--nocapture"])
+                .env(CHILD, "dump")
+                .env("NEOMACS_ISSUE578_BUILD_ONLY", MARKER)
+                .env(
+                    "PATH",
+                    std::env::join_paths(
+                        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                            .chain(std::iter::once(PathBuf::from(MARKER))),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .env("SHELL", format!("{MARKER}/bin/sh"))
-            .output()
-            .expect("run isolated dump construction");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+                .env("SHELL", format!("{MARKER}/bin/sh")),
         );
 
         let bytes = fs::read(directory.path().join(dump_name)).unwrap();
@@ -77,27 +84,22 @@ fn assert_dump_environment(mode: LoadupDumpMode, test_name: &str) {
                 .any(|window| window == MARKER.as_bytes()),
             "{dump_name} retains a build-only environment value",
         );
-        let runtime = Command::new(&executable)
-            .args(["--exact", test_name, "--nocapture"])
-            .env(CHILD, "runtime")
-            .env_remove("NEOMACS_ISSUE578_BUILD_ONLY")
-            .env("NEOMACS_ISSUE578_RUNTIME", "runtime")
-            .env("NEOMACS_ISSUE578_RUNTIME_PATH", "issue578-runtime-bin")
-            .env(
-                "PATH",
-                std::env::join_paths(
-                    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                        .chain(std::iter::once(PathBuf::from("issue578-runtime-bin"))),
+        run_one_test(
+            Command::new(&executable)
+                .args(["--exact", test_name, "--nocapture"])
+                .env(CHILD, "runtime")
+                .env_remove("NEOMACS_ISSUE578_BUILD_ONLY")
+                .env("NEOMACS_ISSUE578_RUNTIME", "runtime")
+                .env("NEOMACS_ISSUE578_RUNTIME_PATH", "issue578-runtime-bin")
+                .env(
+                    "PATH",
+                    std::env::join_paths(
+                        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                            .chain(std::iter::once(PathBuf::from("issue578-runtime-bin"))),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .env("SHELL", "issue578-runtime-shell")
-            .output()
-            .expect("activate the image in a different runtime environment");
-        assert!(
-            runtime.status.success(),
-            "{}",
-            String::from_utf8_lossy(&runtime.stderr)
+                .env("SHELL", "issue578-runtime-shell"),
         );
         return;
     }
