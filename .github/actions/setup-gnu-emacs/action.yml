@@ -23,7 +23,8 @@ description: >-
   that spawn GNU start, and a cache hit costs one restore.
 
   The recipe itself -- source fetch, autogen, the configure line, make,
-  install -- is scripts/ci/build-gnu-oracle.sh, and the assertions are
+  install, and the pinned Tree-sitter runtime built into the prefix -- is
+  scripts/ci/build-gnu-oracle.sh, and the assertions are
   scripts/ci/check-gnu-oracle.sh.  The local NixOS shell
   (nix/gnu-oracle-shell.nix) runs the same two files, so a local oracle is
   the CI oracle by construction; this action only wires them into CI and
@@ -35,7 +36,7 @@ inputs:
       Bump when the configure flags, dependency lists, or build script change.
       Comment and description edits must not invalidate the cached oracle.
     required: false
-    default: "1"
+    default: "2"
 
 runs:
   using: 'composite'
@@ -88,10 +89,17 @@ runs:
         # wider). The smoke step below asserts the features.
         set -euo pipefail
         sudo apt-get update
+        # Tree-sitter is deliberately absent: build-gnu-oracle.sh builds the
+        # pinned 0.26.11 runtime into the oracle prefix itself, configure
+        # finds that .pc first, and the installed executable resolves
+        # libtree-sitter through its prefix RUNPATH.  A system runtime would
+        # be an older ABI (Ubuntu 24.04 ships 0.20, ABI 13) that rejects the
+        # ABI-15 grammars, and check-gnu-oracle.sh fails if the oracle loads
+        # one.
         sudo apt-get install -y --no-install-recommends \
           libgtk-3-dev \
           libx11-dev libxpm-dev libxext-dev libxinerama-dev libxi-dev libxrandr-dev \
-          libtree-sitter-dev libdbus-1-dev dbus-daemon \
+          libdbus-1-dev dbus-daemon \
           libgnutls28-dev libxml2-dev libgmp-dev libncurses-dev \
           libcairo2-dev libharfbuzz-dev libfreetype-dev libfontconfig-dev \
           libpng-dev libjpeg-dev libgif-dev libtiff-dev libwebp-dev \
@@ -104,8 +112,10 @@ runs:
         # Only a cache miss compiles GNU. These tools are not needed to RUN
         # the cached tree, so keep them off the hit path.
         set -euo pipefail
+        # curl fetches the pinned Tree-sitter tarball; patchelf bakes the
+        # prefix RUNPATH into the installed executables.
         sudo apt-get install -y --no-install-recommends \
-          autoconf texinfo make gcc pkg-config git
+          autoconf texinfo make gcc pkg-config git curl patchelf
 
     - name: Build GNU Emacs from the pinned commit
       if: steps.cache.outputs.cache-hit != 'true'

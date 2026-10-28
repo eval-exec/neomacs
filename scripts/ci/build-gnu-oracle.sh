@@ -27,6 +27,19 @@
 # "uncompressing FILE.el.gz...done" into the message stream the MELPA/TUI
 # harnesses compare.
 #
+# On Linux the oracle also bundles the pinned Tree-sitter runtime.  GNU's
+# `treesit' refuses a grammar whose ABI is newer than the runtime it was
+# COMPILED against (src/treesit.c:728-755 compares the language's abi_version
+# with TREE_SITTER_LANGUAGE_VERSION); Ubuntu 24.04 ships tree-sitter 0.20
+# (ABI 13) while the pinned grammar revisions include ABI 15.  The runtime is
+# built into $prefix, configure finds it through $prefix/lib/pkgconfig, and
+# the installed executables get a RUNPATH that puts $prefix/lib first, so a CI
+# cache HIT resolves it without a compiler, LD_LIBRARY_PATH, or the system's
+# tree-sitter.  The macOS oracle is a batch reference and builds none.
+#
+# A change here -- including the Tree-sitter pin below -- is a recipe change:
+# bump `cache-version` in the setup actions so CI rebuilds its cache.
+#
 # Environment:
 #   EMACS_ORACLE_REPO     git repository to fetch <commit> from
 #                         (default https://github.com/emacs-mirror/emacs.git;
@@ -35,12 +48,15 @@
 #   EMACS_ORACLE_WORKDIR  parent directory for the throwaway source tree
 #                         (default: ${TMPDIR:-/tmp})
 #   EMACS_ORACLE_KEEP_SRC 1 keeps the source tree after install
-#   EMACS_ORACLE_RPATH    if set, set this ELF RUNPATH on the installed
-#                         executables.  NixOS has no system library path and
-#                         `make install' does no patchelf pass; CI leaves it
-#                         unset.  This changes ELF metadata only -- GNU's dump
-#                         fingerprint is a compiled-in byte array, not a hash
-#                         of the executable file (src/pdumper.c:5694-5701).
+#   EMACS_ORACLE_RPATH    extra directories appended to the installed
+#                         executables' RUNPATH.  On Linux $prefix/lib is
+#                         ALWAYS first (the bundled Tree-sitter runtime); this
+#                         value adds the rest, which NixOS needs because it
+#                         has no system library path and `make install' does
+#                         no patchelf pass.  This changes ELF metadata only --
+#                         GNU's dump fingerprint is a compiled-in byte array,
+#                         not a hash of the executable file
+#                         (src/pdumper.c:5694-5701).
 #
 # The build writes $prefix/share/gnu-emacs-oracle/build-manifest, which
 # check-gnu-oracle.sh uses to prove the installed binary was built by exactly
@@ -64,6 +80,11 @@ if [[ $(uname -s) == Darwin ]]; then
 else
     readonly jobs=${EMACS_ORACLE_JOBS:-$(nproc)}
 fi
+# Linux-profile bundled runtime pin (see the header).  The macOS profile does
+# not build it.
+readonly tree_sitter_version=0.26.11
+readonly tree_sitter_sha256=1bab01ed21464f3272665b9c60e39ee79f68da1333e80b23f2c9356569d06971
+readonly tree_sitter_url="https://github.com/tree-sitter/tree-sitter/archive/refs/tags/v$tree_sitter_version.tar.gz"
 
 if [[ ! $commit =~ ^[0-9a-f]{40}$ ]]; then
     echo "build-gnu-oracle: commit must be a full 40-hex mirror commit, got '$commit'" >&2
@@ -126,7 +147,16 @@ case $(uname -s) in
             --with-libgmp=ifavailable
             --with-sound=no
             --without-gconf
-            --without-gsettings
+            # GSettings stays ENABLED (no --without-gsettings).
+            # font-get-system-font answers from the GNOME desktop settings
+            # only in a GSettings build; with --without-gsettings it returns
+            # nil, and the desktop-font scenarios (the GNU half and the
+            # Neomacs half that compares against it) fail with "Initial
+            # settings are not isolated" / "Startup ignored desktop font".
+            # The CI image and the NixOS shell both provide gio >= 2.26.
+            # The macOS profile needs no flag: its action installs no glib,
+            # so configure omits GSettings there (and the macos-batch check
+            # forbids it).
             --without-libsystemd
             --without-selinux
             --without-gpm
@@ -137,11 +167,15 @@ esac
 
 mkdir -p "$workdir" "$prefix"
 src=$(mktemp -d "$workdir/gnu-emacs-oracle.XXXXXX")
+ts_work=
 cleanup() {
     if [[ ${EMACS_ORACLE_KEEP_SRC:-0} == 1 ]]; then
         log "keeping source tree at $src"
     else
         rm -rf "$src"
+    fi
+    if [[ -n $ts_work ]]; then
+        rm -rf "$ts_work"
     fi
 }
 trap cleanup EXIT
@@ -177,6 +211,24 @@ log "autogen.sh"
 # caller's environment.
 unset CFLAGS CPPFLAGS LDFLAGS
 
+if [[ $profile == linux-gtk3 ]]; then
+    log "tree-sitter $tree_sitter_version into $prefix"
+    ts_work=$(mktemp -d "$workdir/tree-sitter.XXXXXX")
+    curl -fsSL -o "$ts_work/tree-sitter.tar.gz" "$tree_sitter_url"
+    echo "$tree_sitter_sha256  $ts_work/tree-sitter.tar.gz" | sha256sum -c -
+    tar xzf "$ts_work/tree-sitter.tar.gz" -C "$ts_work"
+    # PREFIX belongs on the BUILD too: tree-sitter generates its .pc file
+    # with the prefix in effect at build time, and a .pc pointing at
+    # /usr/local would send configure to headers that are not there.
+    make -C "$ts_work/tree-sitter-$tree_sitter_version" -j"$jobs" PREFIX="$prefix"
+    make -C "$ts_work/tree-sitter-$tree_sitter_version" install PREFIX="$prefix"
+    test "$(PKG_CONFIG_PATH="$prefix/lib/pkgconfig" \
+        pkg-config --modversion tree-sitter)" = "$tree_sitter_version"
+    rm -rf "$ts_work"
+    ts_work=
+    export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
+
 log "configure (prefix $prefix)"
 ./configure --prefix="$prefix" "${configure_args[@]}"
 
@@ -186,19 +238,37 @@ make -j"$jobs"
 log "make install"
 make install
 
-if [[ -n ${EMACS_ORACLE_RPATH:-} ]]; then
+# The installed Linux oracle must find the bundled Tree-sitter runtime by
+# itself: CI's cached tree is restored onto a runner that builds nothing, and
+# NixOS has no system loader path.  $prefix/lib goes first so the bundled
+# runtime wins over any system tree-sitter; a caller-provided
+# EMACS_ORACLE_RPATH (the NixOS shell's library set) is appended for the other
+# dynamic libraries.  Other host families keep the caller-driven behavior.
+if [[ $profile == linux-gtk3 ]]; then
+    if ! command -v patchelf >/dev/null; then
+        echo "build-gnu-oracle: patchelf is required to set the oracle RUNPATH" >&2
+        exit 1
+    fi
+    readonly rpath="$prefix/lib${EMACS_ORACLE_RPATH:+:$EMACS_ORACLE_RPATH}"
+elif [[ -n ${EMACS_ORACLE_RPATH:-} ]]; then
     if ! command -v patchelf >/dev/null; then
         echo "build-gnu-oracle: EMACS_ORACLE_RPATH is set but patchelf is not on PATH" >&2
         exit 1
     fi
+    readonly rpath=$EMACS_ORACLE_RPATH
+else
+    readonly rpath=
+fi
+
+if [[ -n $rpath ]]; then
     log "setting RUNPATH on the installed executables"
-    # emacs is the only installed program that links the window-system and
-    # image libraries.  bin/emacs may be a symlink or a hardlink to
+    # emacs is the only installed program that links the window-system, image
+    # and Tree-sitter libraries.  bin/emacs may be a symlink or a hardlink to
     # bin/emacs-VERSION; patch every non-symlink path so both names work.
     shopt -s nullglob
     for exe in "$prefix"/bin/emacs "$prefix"/bin/emacs-[0-9]*; do
         [[ -f $exe && ! -L $exe ]] || continue
-        patchelf --set-rpath "$EMACS_ORACLE_RPATH" "$exe"
+        patchelf --set-rpath "$rpath" "$exe"
     done
     shopt -u nullglob
 fi
@@ -215,6 +285,10 @@ mkdir -p "$manifest_dir"
     printf 'emacs_version=%s\n' "$version"
     printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'cc=%s\n' "$(cc --version | head -n 1)"
+    if [[ $profile == linux-gtk3 ]]; then
+        printf 'tree_sitter_version=%s\n' "$tree_sitter_version"
+        printf 'tree_sitter_sha256=%s\n' "$tree_sitter_sha256"
+    fi
     # The full configure invocation, prefix first, exactly as it was run.
     printf 'configure_arg=--prefix=%s\n' "$prefix"
     for arg in "${configure_args[@]}"; do

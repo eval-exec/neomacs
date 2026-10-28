@@ -87,6 +87,8 @@ pkgs.mkShell {
     git
     gettext
     patchelf
+    # build-gnu-oracle.sh fetches the pinned Tree-sitter tarball.
+    curl
     # D-Bus notification fixtures start a private bus.
     dbus
   ];

@@ -17,17 +17,25 @@
 #   * emacs-version is the pinned release.
 #   * system-configuration-features has the features the profile promises.
 #     linux-gtk3: the window system (X11/GTK3), the native primitives
-#     (TREE_SITTER/DBUS/GNUTLS/LIBXML2/GMP) and the image libraries the face
-#     fixtures use.  A TTY-only build succeeds and reports the same version,
-#     but is a different oracle: it lacks 107 window-system mouse bindings,
-#     and their long keys shift every describe-bindings block one tab-width
-#     wider.  macos-batch: PDUMPER/KQUEUE/GNUTLS/LIBXML2/MODULES/THREADS and
-#     no window system, because that is the macOS reference the suite was
-#     characterized against.
+#     (TREE_SITTER/DBUS/GSETTINGS/GNUTLS/LIBXML2/GMP) and the image libraries
+#     the face fixtures use.  A TTY-only build succeeds and reports the same
+#     version, but is a different oracle: it lacks 107 window-system mouse
+#     bindings, and their long keys shift every describe-bindings block one
+#     tab-width wider.  macos-batch: PDUMPER/KQUEUE/GNUTLS/LIBXML2/MODULES/
+#     THREADS and no window system, because that is the macOS reference the
+#     suite was characterized against.
 #   * ...and does NOT have NATIVE_COMP or the features configure was told to
-#     disable (GCONF/GSETTINGS/SOUND/LIBSYSTEMD).  A native-comp build ships
-#     inline docstrings where canonical byte-compiled Lisp has lazy
-#     (#$ . N) references, which changes preloaded doc slot 4.
+#     disable (linux-gtk3: GCONF/SOUND/LIBSYSTEMD; macos-batch also GSETTINGS).
+#     A native-comp build ships inline docstrings where canonical byte-compiled
+#     Lisp has lazy (#$ . N) references, which changes preloaded doc slot 4.
+#   * GSETTINGS is present on linux-gtk3: the desktop-font scenarios read the
+#     font configuration through GSettings, and a build without it silently
+#     falls back to a different font list.
+#   * on linux-gtk3 the bundled Tree-sitter runtime (the version in the
+#     manifest) is installed in the prefix, its .pc file points back at the
+#     prefix, the executable resolves libtree-sitter from there, and
+#     `treesit-available-p' is true.  An older system runtime links fine but
+#     rejects the ABI-15 grammars (src/treesit.c:728-755).
 #   * system-configuration-options equals the configure line recorded in the
 #     manifest, apart from its --prefix.  This is the identity the version
 #     string cannot provide.
@@ -66,6 +74,8 @@ fail() {
 prefix=
 manifest_version=
 manifest_commit=
+tree_sitter_version=
+tree_sitter_sha256=
 # Manifests written before the profile line are the Linux GTK3 oracle.
 profile=linux-gtk3
 configure_args=()
@@ -76,6 +86,8 @@ while IFS= read -r line; do
         emacs_version=*) manifest_version=${line#emacs_version=} ;;
         commit=*) manifest_commit=${line#commit=} ;;
         profile=*) profile=${line#profile=} ;;
+        tree_sitter_version=*) tree_sitter_version=${line#tree_sitter_version=} ;;
+        tree_sitter_sha256=*) tree_sitter_sha256=${line#tree_sitter_sha256=} ;;
         configure_arg=*) configure_args+=("${line#configure_arg=}") ;;
     esac
 done <"$manifest"
@@ -84,6 +96,10 @@ done <"$manifest"
 [[ -n $manifest_version ]] || fail "$manifest records no emacs_version"
 [[ -n $manifest_commit ]] || fail "$manifest records no commit"
 [[ ${#configure_args[@]} -gt 0 ]] || fail "$manifest records no configure args"
+if [[ $profile == linux-gtk3 ]]; then
+    [[ -n $tree_sitter_version ]] || fail "$manifest records no tree_sitter_version"
+    [[ -n $tree_sitter_sha256 ]] || fail "$manifest records no tree_sitter_sha256"
+fi
 
 if [[ -n $want_commit && $want_commit != "$manifest_commit" ]]; then
     fail "manifest is for commit $manifest_commit, parity-reference pins $want_commit"
@@ -105,7 +121,7 @@ missing=
 case $profile in
     linux-gtk3)
         for want in \
-            X11 GTK3 TREE_SITTER PDUMPER DBUS \
+            X11 GTK3 TREE_SITTER PDUMPER DBUS GSETTINGS \
             GNUTLS LIBXML2 GMP \
             PNG JPEG GIF TIFF WEBP RSVG LCMS2 ZLIB XPM CAIRO HARFBUZZ FREETYPE; do
             case " $features " in
@@ -113,7 +129,7 @@ case $profile in
                 *) missing="$missing $want" ;;
             esac
         done
-        for forbidden in NATIVE_COMP GCONF GSETTINGS SOUND LIBSYSTEMD LIBOTF; do
+        for forbidden in NATIVE_COMP GCONF SOUND LIBSYSTEMD LIBOTF; do
             case " $features " in
                 *" $forbidden "*) missing="$missing -$forbidden" ;;
             esac
@@ -178,6 +194,24 @@ if [[ $options != "$expected" ]]; then
   actual:   $options"
 fi
 
+if [[ $profile == linux-gtk3 ]]; then
+    # The bundled Tree-sitter runtime.  Parity-reference.toml's identity is
+    # the commit plus the recipe; the runtime version is part of the recipe
+    # because GNU refuses a grammar whose ABI is newer than the runtime it was
+    # compiled against (src/treesit.c:728-755), and Ubuntu 24.04's system 0.20
+    # runtime is ABI 13 while the pinned grammars include ABI 15.
+    readonly pc="$prefix/lib/pkgconfig/tree-sitter.pc"
+    [[ -f $pc ]] || fail "missing bundled Tree-sitter runtime: $pc"
+    pc_version=$(sed -n 's/^[Vv]ersion: *//p' "$pc" | head -n 1)
+    [[ $pc_version == "$tree_sitter_version" ]] ||
+        fail "bundled Tree-sitter .pc reports version '$pc_version', manifest pins $tree_sitter_version"
+    pc_prefix=$(sed -n 's/^prefix=//p' "$pc" | head -n 1)
+    [[ $pc_prefix == "$prefix" ]] ||
+        fail "bundled Tree-sitter .pc prefix '$pc_prefix' disagrees with $prefix"
+    "$emacs" --batch --quick --eval '(unless (treesit-available-p)
+  (error "GNU oracle cannot load its bundled Tree-sitter runtime"))'
+fi
+
 # Lazy docstring references are what a canonical byte-compiled installation
 # has; see the header.  A file with none is native-comp output or a stale
 # install.
@@ -211,6 +245,14 @@ if command -v ldd >/dev/null; then
     if ldd_out=$(env -u LD_LIBRARY_PATH ldd "$emacs" 2>&1) && [[ $ldd_out == *"not found"* ]]; then
         fail "unresolved shared libraries:
 $ldd_out"
+    fi
+    if [[ $profile == linux-gtk3 ]]; then
+        tree_line=$(printf '%s\n' "$ldd_out" | grep 'libtree-sitter' || true)
+        [[ -n $tree_line ]] || fail "the oracle does not link the Tree-sitter runtime"
+        case $tree_line in
+            *"$prefix/lib/"*) ;;
+            *) fail "the oracle resolves libtree-sitter outside the bundled prefix: $tree_line" ;;
+        esac
     fi
 fi
 
