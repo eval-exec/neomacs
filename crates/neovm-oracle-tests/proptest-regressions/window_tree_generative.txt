@@ -1,0 +1,16 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc fbdb8e1a988ef150f5ea85ff24d4437865a7b02a1a09b98de47e3ef4a1f3202c # shrinks to ops = [Split { window: 0, side: Left, limit: false, resize: Nil }, Split { window: 0, side: Left, limit: false, resize: T }]
+cc 10a7554b047e5f20789c08669e6449b8a8ff8088c70ceb1244133a767891f809 # shrinks to ops = [Split { window: 0, side: Above, limit: false, resize: Nil }, SideWindow { side: Above, slot: 0 }, SideWindow { side: Below, slot: 0 }]
+cc 1964a67e1eb4f838d90e97b84bdbedebacb1641717f2eb5e52c38bae72fae3e9 # shrinks to ops = [Split { window: 0, side: Left, limit: false, resize: Nil }, Split { window: 0, side: Above, limit: false, resize: Nil }, SideWindow { side: Above, slot: 0 }, SideWindow { side: Left, slot: 0 }, SideWindow { side: Left, slot: -1 }, Split { window: 6, side: Below, limit: false, resize: Nil }, SideWindow { side: Below, slot: 0 }]
+cc 686d491a3b751d0e1c2b9bc85dc09b9d3b611420ea4c5086f3fe36405ec04824 # shrinks to ops = [Split { window: 0, side: Right, limit: false, resize: Nil }, SideWindow { side: Left, slot: 0 }]
+cc 10c7005cc0b875b375c1fbd3a2f3321ee94b03187410e809ee40395fb702ecf3 # shrinks to ops = [Split { window: 0, side: Above, limit: false, resize: Nil }, SideWindow { side: Left, slot: 0 }, Split { window: 2, side: Above, limit: false, resize: Nil }, SideWindow { side: Above, slot: 0 }, Delete { window: 6, resize: Nil }]
+cc 78b4e4888fb8a8953a3b745d3cdc17595cf332b7deca611321a85fad150324db # shrinks to ops = [Split { window: 0, side: Left, limit: false, resize: Nil }, Split { window: 1, side: Above, limit: false, resize: Nil }, Delete { window: 4, resize: Nil }, SideWindow { side: Left, slot: 0 }]
+cc bcf52d88007629b621c3567824f685aa2f685c82a19c6f08847368d965852b1e # shrinks to ops = [SideWindow { side: Below, slot: 0 }, Split { window: 1, side: Above, limit: false, resize: Side }, SideWindow { side: Below, slot: 0 }]
+cc 687460f49a279d1e93e22de8629dea6d99536e0e0cbc5dd7787ad8d73b71ac9f # shrinks to ops = [Delete { window: 6, resize: T }, Delete { window: 3, resize: Side }, SideWindow { side: Above, slot: 1 }, Split { window: 4, side: Right, limit: true, resize: Nil }, MakeAtom { window: 5 }, Split { window: 0, side: Above, limit: false, resize: Nil }, Delete { window: 7, resize: T }, SideWindow { side: Left, slot: 1 }]
+cc fb7fa14c49fa11f5401b5fa72ae68fa65df78809483a54214368e11c7ece9137 # shrinks to ops = [SideWindow { side: Above, slot: 0 }, SideWindow { side: Right, slot: 0 }, MakeAtom { window: 0 }, Delete { window: 3, resize: Nil }]
+cc 5cc38f96523b5bcfc14be52294a61cb48709d13f10c83e08e589d54a2726b287 # shrinks to [SideWindow { side: Above, slot: 0 }, SideWindow { side: Below, slot: 0 }, SaveConfiguration, RestoreConfiguration]

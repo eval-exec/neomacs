@@ -367,8 +367,12 @@ proptest! {
     /// separates "nondeterministic engine" from "bad comparison" in a single
     /// step.
     ///
-    /// Note `proptest-regressions/` is GITIGNORED here (`.gitignore:438`), so
-    /// seeds are local-only and a deep run must rediscover cases each time.
+    /// Persisted failure seeds belong in
+    /// `proptest-regressions/window_tree_generative.txt`; preserve and explicitly
+    /// version that file even though the containing directory is gitignored.
+    /// Proptest replays those cases before generating new ones. Deterministic
+    /// restore-configuration regressions also live in the `restore_config`
+    /// sibling module so they do not depend on rediscovering a random sequence.
     #[test]
     fn oracle_prop_window_tree_survives_random_operation_sequences(
         ops in prop::collection::vec(op_strategy(), 2..9),
@@ -386,3 +390,7 @@ proptest! {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "window_tree_generative/restore_config.rs"]
+mod restore_config;

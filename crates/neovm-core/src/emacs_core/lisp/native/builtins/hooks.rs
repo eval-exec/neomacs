@@ -1,6 +1,7 @@
 use super::*;
 use crate::tagged::SymbolMode;
 mod redisplay_gnu;
+mod window_configuration_geometry;
 mod window_configuration_redisplay;
 use crate::buffer::LispCharPos1;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
@@ -1904,9 +1905,7 @@ pub(crate) fn set_window_configuration_with_options(
         // for the initial batch frame: its saved root may still cover all 24
         // pre-menu-bar rows, while the live frame has a one-line top margin and
         // therefore a 23-line root at row 1.
-        if let Some(frame) = eval.frames.get_mut(snapshot.frame_id) {
-            frame.reconcile_restored_window_configuration_geometry();
-        }
+        window_configuration_geometry::reconcile(eval, snapshot.frame_id)?;
 
         eval.gnu_mark_frame_window_change(snapshot.frame_id);
         let frame_to_select = match options.selected_frame {

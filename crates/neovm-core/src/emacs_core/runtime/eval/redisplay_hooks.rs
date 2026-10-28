@@ -401,7 +401,12 @@ impl Context {
         let Some(state) = self.frames.get(frame) else {
             return Ok(PreparedMiniResizeOutcome::Unchanged);
         };
-        if !crate::window::window_resize_check(state.tree(), state.tree().root_id(), false) {
+        if !crate::window::window_resize_check(
+            state.tree(),
+            state.tree().root_id(),
+            crate::window::SplitDirection::Vertical,
+            crate::window::body::WindowBodyCellSize::new(state.char_width, state.char_height),
+        ) {
             return Ok(PreparedMiniResizeOutcome::Unchanged);
         }
         if let Some(mini) = self

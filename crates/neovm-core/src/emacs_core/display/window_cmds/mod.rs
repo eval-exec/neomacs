@@ -8259,7 +8259,16 @@ pub(crate) fn builtin_window_resize_apply(
     let ch = frame.char_height;
 
     // Validate: root's new_pixel must match the frame dimension.
-    if !crate::window::window_resize_check(frame.tree(), frame.tree().root_id(), horflag) {
+    if !crate::window::window_resize_check(
+        frame.tree(),
+        frame.tree().root_id(),
+        if horflag {
+            crate::window::SplitDirection::Horizontal
+        } else {
+            crate::window::SplitDirection::Vertical
+        },
+        crate::window::body::WindowBodyCellSize::new(cw, ch),
+    ) {
         return Ok(Value::NIL);
     }
 
@@ -8335,16 +8344,15 @@ pub(crate) fn builtin_window_resize_apply_total(
 
     // GNU updates the minibuffer's character grid only. Its pixel bounds,
     // like the root's, were already installed by the pixel resize pass.
-    let mini_top = frame.root_window().top_line() + frame.root_window().total_lines(ch);
     if frame.minibuffer_window.is_some()
         && let Some(mb) = frame.minibuffer_leaf.as_mut()
     {
         if let Some(total) = mb.new_total() {
             mb.commit_cell_total(horflag, total.max(0));
         }
-        if !horflag {
-            mb.set_top_line(mini_top);
-        }
+    }
+    if !horflag {
+        frame.sync_minibuffer_top_line_after_root_resize();
     }
 
     Ok(Value::T)

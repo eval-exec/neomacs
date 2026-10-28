@@ -5319,16 +5319,18 @@ impl Frame {
         self.reposition_minibuffer_below_root();
     }
 
+    /// Root pixel budget shared by Lisp-planned and native configuration restore.
+    pub(crate) fn restored_window_configuration_root_bounds(&self) -> Rect {
+        self.window_text_area_bounds_with_chrome(true)
+    }
+
     /// Reconcile a restored window tree with the frame's current geometry.
     ///
-    /// GNU `Fset_window_configuration` restores the saved window fields and
-    /// then calls `adjust_frame_size` (`window.c`).  That final pass realizes
-    /// the current `FRAME_TOP_MARGIN` even when the saved initial batch-frame
-    /// tree still spans the pre-menu-bar area.  Keep this transition separate
-    /// from ordinary batch-frame initialization: the latter intentionally
-    /// retains its initial `(0, 0)` root until a reconciliation point occurs.
+    /// GNU Fset_window_configuration performs a final adjust_frame_size pass,
+    /// realizing the current top margin even for an initial batch-frame tree.
+    /// Ordinary initial batch geometry intentionally retains its (0, 0) root.
     pub fn reconcile_restored_window_configuration_geometry(&mut self) {
-        let root_bounds = self.window_text_area_bounds_with_chrome(true);
+        let root_bounds = self.restored_window_configuration_root_bounds();
         // Everything read off `self` is gathered before the tree is borrowed
         // mutably; each was previously a direct field read that could sit
         // inside the same expression.
@@ -5340,6 +5342,18 @@ impl Frame {
         self.root_window_mut().set_top_line(top_margin);
         sync_window_character_edges_from_bounds(&mut self.tree, root, char_width, char_height);
         self.reposition_minibuffer_below_root();
+    }
+
+    /// Commit the minibuffer's character origin after a root resize without
+    /// deriving it again from rounded pixel geometry (GNU resize_frame_windows).
+    pub(crate) fn sync_minibuffer_top_line_after_root_resize(&mut self) {
+        let top_line =
+            self.root_window().top_line() + self.root_window().total_lines(self.char_height);
+        if self.minibuffer_window.is_some()
+            && let Some(minibuffer) = self.minibuffer_leaf.as_mut()
+        {
+            minibuffer.set_top_line(top_line);
+        }
     }
 
     pub fn reposition_minibuffer_below_root(&mut self) {
@@ -7871,7 +7885,14 @@ impl FrameManager {
         }
         let parent_id = frame.tree().parent_of(new_window_id)?;
         let horflag = matches!(direction, SplitDirection::Horizontal);
-        window_resize_apply(frame.tree_mut(), parent_id, horflag, 1.0, 1.0);
+        let (char_width, char_height) = (frame.char_width, frame.char_height);
+        window_resize_apply(
+            frame.tree_mut(),
+            parent_id,
+            horflag,
+            char_width,
+            char_height,
+        );
         frame.tty_posn_adjust_current_matrices();
         Some(())
     }
@@ -7907,7 +7928,8 @@ impl FrameManager {
         let deleted_parameters = &mut self.deleted_window_parameters;
         // A promotion at the very top has no grandparent to merge into, so the
         // outcome collapses to "was it removed" here.
-        let removed = delete_window_in_tree(frame.tree_mut(), window_id, resize, |window| {
+        let cells = body::WindowBodyCellSize::new(frame.char_width, frame.char_height);
+        let removed = delete_window_in_tree(frame.tree_mut(), window_id, resize, cells, |window| {
             let id = window.id();
             let record = Self::deletion_record(Some(frame_id), Some(&window));
             let parameters = match window {
@@ -8680,6 +8702,7 @@ fn delete_window_in_tree(
     tree: &mut WindowTree,
     target: WindowId,
     resize: DeleteResize,
+    cells: body::WindowBodyCellSize,
     mut on_removed: impl FnMut(Window),
 ) -> DeleteOutcome {
     let Some(parent) = tree.parent_of(target) else {
@@ -8716,7 +8739,12 @@ fn delete_window_in_tree(
     // the multi-child case left a promoted subtree laid out by proportional
     // redistribution instead of by the plan `window.el` computed.
     if let DeleteResize::ApplyStaged = resize {
-        window_resize_apply(tree, parent, horflag, 1.0, 1.0);
+        let axis = if horflag {
+            SplitDirection::Horizontal
+        } else {
+            SplitDirection::Vertical
+        };
+        resize_apply_pixels(tree, parent, axis, cells);
     }
 
     if remaining == 1 {
@@ -8985,63 +9013,74 @@ pub fn window_resize_apply(
     tree: &mut WindowTree,
     id: WindowId,
     horflag: bool,
-    _char_width: f32,
-    _char_height: f32,
+    char_width: f32,
+    char_height: f32,
+) {
+    let axis = if horflag {
+        SplitDirection::Horizontal
+    } else {
+        SplitDirection::Vertical
+    };
+    resize_apply_pixels(
+        tree,
+        id,
+        axis,
+        body::WindowBodyCellSize::new(char_width, char_height),
+    );
+}
+
+fn resize_body_axis(axis: SplitDirection) -> body::WindowBodyAxis {
+    match axis {
+        SplitDirection::Horizontal => body::WindowBodyAxis::Width,
+        SplitDirection::Vertical => body::WindowBodyAxis::Height,
+    }
+}
+
+fn resize_apply_pixels(
+    tree: &mut WindowTree,
+    id: WindowId,
+    axis: SplitDirection,
+    cells: body::WindowBodyCellSize,
 ) {
     let Some(window) = tree.find_mut(id) else {
         return;
     };
-    // Apply new_pixel to this window's bounds.
-    let new_px = window.new_pixel();
     let bounds = *window.bounds();
-    if let Some(px) = new_px {
+    if let Some(px) = window.new_pixel() {
         let px = px.max(0) as f32;
-        if horflag {
-            window.set_bounds(Rect::new(bounds.x, bounds.y, px, bounds.height));
-        } else {
-            window.set_bounds(Rect::new(bounds.x, bounds.y, bounds.width, px));
-        }
-        // Clear the pending slot to mirror GNU's
-        // `wset_new_pixel(w, make_fixnum(-1))` reset at the end of
-        // `window_resize_apply`.
+        let bounds = match axis {
+            SplitDirection::Horizontal => Rect::new(bounds.x, bounds.y, px, bounds.height),
+            SplitDirection::Vertical => Rect::new(bounds.x, bounds.y, bounds.width, px),
+        };
+        window.set_bounds(bounds);
         window.set_new_pixel(None);
     }
 
-    // Commit the pending normal-size fraction. GNU
-    // `Fwindow_resize_apply` (`src/window.c:4826,4835`):
-    //
-    //   if (horflag) wset_normal_cols (w, w->new_normal);
-    //   else         wset_normal_lines (w, w->new_normal);
-    //
-    // Audit Critical 7 in `drafts/window-system-audit.md`:
-    // moving the persistent fraction onto the Window struct here
-    // means `window-normal-size` reads it back instead of
-    // re-deriving the ratio from current pixel bounds.
-    // GNU guards this with `NUMBERP` (`src/window.c`):
-    //
-    //     if (NUMBERP (w->new_normal))
-    //       wset_normal_cols (w, w->new_normal);
-    //
-    // The slot legitimately holds the SYMBOLS `skip'/`stuck'/`ignore' while
-    // `window--resize-child-windows' is marking which children to leave alone
-    // (see `window--resize-child-windows-skip-p' in `lisp/window.el').
-    // Committing one of those as a window's normal size makes the next
-    // arithmetic on it signal `(wrong-type-argument number-or-marker-p skip)'.
-    //
-    // GNU also does NOT clear the slot here -- `window--resize-child-windows-skip-p'
-    // reads it back on the next pass, so clearing it changes which windows are
-    // skipped.
+    // GNU window_resize_apply commits floored cell totals before returning to
+    // Lisp's window--pixel-to-total reconciliation, including unchanged sizes.
+    let bounds = *window.bounds();
+    let extent = match axis {
+        SplitDirection::Horizontal => bounds.width,
+        SplitDirection::Vertical => bounds.height,
+    };
+    let total = body::WindowBodyUnit::CanonicalChars.measure(
+        resize_body_axis(axis),
+        extent as i64,
+        cells,
+        None,
+    );
+    window.commit_cell_total(axis == SplitDirection::Horizontal, total);
+
+    // A planner may leave skip/stuck/ignore in new_normal. Only a numeric
+    // value becomes persistent, and the pending slot remains readable by Lisp.
     let pending_normal = window.new_normal();
     if pending_normal.is_number() {
-        if horflag {
-            window.set_normal_cols(pending_normal);
-        } else {
-            window.set_normal_lines(pending_normal);
+        match axis {
+            SplitDirection::Horizontal => window.set_normal_cols(pending_normal),
+            SplitDirection::Vertical => window.set_normal_lines(pending_normal),
         }
     }
 
-    // Get updated bounds after applying new_pixel.
-    let bounds = *window.bounds();
     let Window::Internal {
         direction,
         children,
@@ -9050,86 +9089,120 @@ pub fn window_resize_apply(
     else {
         return;
     };
-    let dir = *direction;
+    let direction = *direction;
     let children = children.clone();
-    let mut edge = if horflag { bounds.x } else { bounds.y };
-
+    let mut edge = match axis {
+        SplitDirection::Horizontal => bounds.x,
+        SplitDirection::Vertical => bounds.y,
+    };
     for child in children {
-        // Position child at current edge.
         let Some(node) = tree.find_mut(child) else {
             continue;
         };
-        let cb = *node.bounds();
-        if horflag {
-            node.set_bounds(Rect::new(edge, cb.y, cb.width, cb.height));
-        } else {
-            node.set_bounds(Rect::new(cb.x, edge, cb.width, cb.height));
+        let child_bounds = *node.bounds();
+        let cell_edge = body::WindowBodyUnit::CanonicalChars.measure(
+            resize_body_axis(axis),
+            edge as i64,
+            cells,
+            None,
+        );
+        match axis {
+            SplitDirection::Horizontal => {
+                node.set_bounds(Rect::new(
+                    edge,
+                    child_bounds.y,
+                    child_bounds.width,
+                    child_bounds.height,
+                ));
+                node.set_left_col(cell_edge);
+            }
+            SplitDirection::Vertical => {
+                node.set_bounds(Rect::new(
+                    child_bounds.x,
+                    edge,
+                    child_bounds.width,
+                    child_bounds.height,
+                ));
+                node.set_top_line(cell_edge);
+            }
         }
-
-        // Recurse.
-        window_resize_apply(tree, child, horflag, _char_width, _char_height);
-
-        // Accumulate edge in the combination direction.
-        let Some(child_bounds) = tree.find(child).map(|node| *node.bounds()) else {
-            continue;
-        };
-        match (dir, horflag) {
-            (SplitDirection::Horizontal, true) => edge += child_bounds.width,
-            (SplitDirection::Vertical, false) => edge += child_bounds.height,
-            _ => {}
+        resize_apply_pixels(tree, child, axis, cells);
+        if direction == axis {
+            if let Some(node) = tree.find(child) {
+                edge += match axis {
+                    SplitDirection::Horizontal => node.bounds().width,
+                    SplitDirection::Vertical => node.bounds().height,
+                };
+            }
         }
     }
 }
 
-/// Check that a resize is valid: the sum of children's new_pixel values
-/// must equal the parent's new_pixel value in the combination direction.
-///
-/// Reads each window's own `new_pixel` slot, mirroring GNU's
-/// recursive walk in `window_resize_check`.
-pub fn window_resize_check(tree: &WindowTree, id: WindowId, horflag: bool) -> bool {
-    /// A window's staged extent along the checked axis, falling back to the
-    /// extent it already has when nothing is staged.
-    fn staged_extent(window: &Window, horflag: bool) -> i64 {
-        window.new_pixel().unwrap_or_else(|| {
-            let bounds = window.bounds();
-            if horflag {
-                bounds.width as i64
-            } else {
-                bounds.height as i64
-            }
-        })
-    }
-
+/// Validate a completely staged pixel plan, as GNU window_resize_check does:
+/// iso children sum to their parent, ortho children equal their parent, and
+/// leaves retain at least two columns or one line. Missing staging is invalid.
+pub(crate) fn window_resize_check(
+    tree: &WindowTree,
+    id: WindowId,
+    axis: SplitDirection,
+    cells: body::WindowBodyCellSize,
+) -> bool {
     let Some(window) = tree.find(id) else {
-        return true;
+        return false;
     };
-    let my_new = staged_extent(window, horflag);
-
-    let Window::Internal {
-        direction,
-        children,
-        ..
-    } = window
-    else {
-        return true;
+    let Some(staged) = window.new_pixel() else {
+        return false;
     };
-
-    // In the combination direction, sum of children must equal parent.
-    let combines = (*direction == SplitDirection::Horizontal) == horflag;
-    if combines {
-        let child_sum: i64 = children
-            .iter()
-            .filter_map(|child| tree.find(*child))
-            .map(|child| staged_extent(child, horflag))
-            .sum();
-        if child_sum != my_new {
-            return false;
+    if staged < 0 {
+        return false;
+    }
+    match window {
+        Window::Leaf { .. } => {
+            let minimum = match axis {
+                SplitDirection::Horizontal => 2,
+                SplitDirection::Vertical => 1,
+            };
+            body::WindowBodyUnit::CanonicalChars.measure(
+                resize_body_axis(axis),
+                staged,
+                cells,
+                None,
+            ) >= minimum
+        }
+        Window::Internal {
+            direction,
+            children,
+            ..
+        } => {
+            if children.is_empty() {
+                return false;
+            }
+            let mut remaining = staged;
+            for child in children {
+                let Some(child_window) = tree.find(*child) else {
+                    return false;
+                };
+                let Some(child_staged) = child_window.new_pixel() else {
+                    return false;
+                };
+                if !window_resize_check(tree, *child, axis, cells) {
+                    return false;
+                }
+                if *direction == axis {
+                    let Some(rest) = remaining.checked_sub(child_staged) else {
+                        return false;
+                    };
+                    if rest < 0 {
+                        return false;
+                    }
+                    remaining = rest;
+                } else if child_staged != staged {
+                    return false;
+                }
+            }
+            *direction != axis || remaining == 0
         }
     }
-    // All children must also pass the check.
-    children
-        .iter()
-        .all(|child| window_resize_check(tree, *child, horflag))
 }
 
 /// Apply only character-grid sizes and edges, like GNU window_resize_apply_total.
@@ -9418,3 +9491,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/eob_overlay_motion_test.rs"]
 mod eob_overlay_motion_tests;
+
+#[cfg(test)]
+#[path = "tests/resize_commit_test.rs"]
+mod resize_commit_tests;
