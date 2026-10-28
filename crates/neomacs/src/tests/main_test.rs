@@ -1474,15 +1474,11 @@ fn inactive_echo_layout_preserves_live_minibuffer_positions_and_query_source() {
         .get_mut(minibuffer_buffer)
         .expect("live minibuffer buffer")
         .insert(&"live minibuffer text\n".repeat(20));
-    eval.ensure_echo_area_buffers();
-    let echo_buffer = eval
-        .buffer_manager()
-        .find_buffer_by_name(" *Echo Area 0*")
-        .expect("echo buffer");
-    eval.buffer_manager_mut()
-        .get_mut(echo_buffer)
-        .expect("echo buffer")
-        .insert("x\n");
+    eval.set_current_message(Some(neovm_core::heap_types::LispString::from_utf8("x\n")));
+    assert!(
+        eval.has_current_message(),
+        "fixture must select the transient echo source"
+    );
 
     eval.set_variable(
         "neomacs-inactive-minibuffer-window",
