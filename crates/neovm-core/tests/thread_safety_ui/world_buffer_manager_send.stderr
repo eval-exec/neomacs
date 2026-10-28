@@ -85,8 +85,6 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `BufferManager: Send`
            `Cell<CanonicalArm>: Sync`
            which is required by `BufferManager: Send`
-           `*mut MarkerObj: Send`
-           which is required by `BufferManager: Send`
            `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
            which is required by `BufferManager: Send`
            `Cell<usize>: Sync`
@@ -115,6 +113,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `BufferManager: Send`
            `*const (): Sync`
            which is required by `BufferManager: Send`
+           `NonNull<MarkerObj>: Send`
+           which is required by `BufferManager: Send`
            `*mut HashTableObj: Sync`
            which is required by `BufferManager: Send`
            `*mut FinalizerObj: Sync`
@@ -136,6 +136,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut RecordObj: Send`
            which is required by `BufferManager: Send`
            `*mut SymbolWithPosObj: Send`
+           which is required by `BufferManager: Send`
+           `*mut MarkerObj: Send`
            which is required by `BufferManager: Send`
            `*mut BignumObj: Send`
            which is required by `BufferManager: Send`

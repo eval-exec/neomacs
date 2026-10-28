@@ -241,7 +241,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut StringObj: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut MarkerObj: Send`
+           `NonNull<MarkerObj>: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<Cell<*const ()>>: Send`
            which is required by `neovm_core::Context: Send`
@@ -276,6 +276,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*mut RecordObj: Send`
            which is required by `neovm_core::Context: Send`
            `*mut SymbolWithPosObj: Send`
+           which is required by `neovm_core::Context: Send`
+           `*mut MarkerObj: Send`
            which is required by `neovm_core::Context: Send`
            `*mut BignumObj: Send`
            which is required by `neovm_core::Context: Send`

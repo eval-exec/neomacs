@@ -270,6 +270,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Sync`
            `*const u8: Send`
            which is required by `neovm_core::Context: Sync`
+           `NonNull<MarkerObj>: Sync`
+           which is required by `neovm_core::Context: Sync`
            `(dyn FnMut() -> Result<(), std::string::String> + Send + 'static): Sync`
            which is required by `neovm_core::Context: Sync`
            `Rc<Cell<*const ()>>: Send`
@@ -365,6 +367,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*const LispSymbol: Sync`
            which is required by `neovm_core::Context: Sync`
            `*const Atomic<u32>: Sync`
+           which is required by `neovm_core::Context: Sync`
+           `NonNull<MarkerObj>: Send`
            which is required by `neovm_core::Context: Sync`
            `NonNull<()>: Send`
            which is required by `neovm_core::Context: Sync`
