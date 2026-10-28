@@ -18,6 +18,7 @@
 //! `try_init`), so events from crates using the `log` facade
 //! (e.g. `cosmic-text`, `wgpu`) flow into the tracing subscriber.
 
+use std::io::IsTerminal;
 use std::sync::OnceLock;
 
 use tracing_subscriber::EnvFilter;
@@ -196,9 +197,14 @@ fn resolve_env_log_file() -> Option<std::path::PathBuf> {
 
 fn default_layer(target: LogTarget) -> Option<BoxedLayer> {
     match target {
+        // stdout is a captured log by convention (build drivers, GUI test
+        // harnesses, `> file`), so colorize only a real terminal.  Pipelines
+        // parse these fields (`scene_commits=`, `quality_mode=`); ANSI
+        // between the name and its value silently defeats every probe.
         LogTarget::Stdout => Some(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stdout)
+                .with_ansi(std::io::stdout().is_terminal())
                 .with_filter(make_env_filter())
                 .boxed(),
         ),
