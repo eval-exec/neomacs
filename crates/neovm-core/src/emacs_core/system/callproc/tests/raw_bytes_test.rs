@@ -36,6 +36,69 @@ fn raw_path_value(path: &std::path::Path) -> Value {
     ))
 }
 
+/// The platform file system cannot store a raw-byte name.
+///
+/// GNU's primitives pass the encoded bytes to the kernel and report the
+/// failed call through `report_file_errno` (src/callproc.c:338-340 for the
+/// input file, :584-594 for the output file), so the Lisp-visible result is a
+/// `file-error` carrying the operation string, the platform `strerror` text
+/// and the file name -- never a fabricated success.
+#[cfg(unix)]
+fn assert_raw_path_file_error(
+    flow: crate::emacs_core::error::Flow,
+    operation: &str,
+    name: &std::path::Path,
+) {
+    let (symbol, data) = crate::test_utils::signal_data_bytes(flow);
+    assert_eq!(symbol, "file-error");
+    assert_eq!(
+        data[0],
+        operation.as_bytes(),
+        "GNU report_file_errno operation string"
+    );
+    assert_eq!(
+        data[1],
+        crate::emacs_core::errno::emacs_strerror(libc::EILSEQ).as_bytes(),
+        "the error text is the platform C library's strerror (EILSEQ)"
+    );
+    assert_eq!(data.len(), 3, "GNU includes the file name: {data:?}");
+    assert_eq!(
+        data[2],
+        name.as_os_str().as_bytes(),
+        "the raw name survives"
+    );
+}
+
+/// GNU's `report_file_errno` shape for an open-for-read failure.
+///
+/// `report_file_errno` maps ENOENT to `file-missing` (src/fileio.c:264-283).
+/// On APFS GNU 31.1 reaches ENOENT for a raw-byte input name and answers
+/// `(file-missing "Opening process input file" "No such file or directory"
+/// NAME)`; an output *create* is the one that fails with EILSEQ instead.
+#[cfg(unix)]
+fn assert_raw_path_missing_file(
+    flow: crate::emacs_core::error::Flow,
+    operation: &str,
+    name: &std::path::Path,
+) {
+    let (symbol, data) = crate::test_utils::signal_data_bytes(flow);
+    assert_eq!(symbol, "file-missing");
+    assert_eq!(data[0], operation.as_bytes());
+    assert_eq!(data[1], b"No such file or directory");
+    assert_eq!(data.len(), 3, "GNU includes the file name: {data:?}");
+    assert_eq!(
+        data[2],
+        name.as_os_str().as_bytes(),
+        "the raw name survives"
+    );
+}
+
+#[cfg(unix)]
+fn raw_names_rejected() -> bool {
+    crate::emacs_core::platform_facts::RAW_BYTE_FILENAMES
+        == crate::emacs_core::platform_facts::RawByteFilenames::Rejected
+}
+
 #[cfg(unix)]
 #[test]
 fn builtin_call_process_preserves_raw_unibyte_argument_and_output_path_bytes() {
@@ -44,6 +107,23 @@ fn builtin_call_process_preserves_raw_unibyte_argument_and_output_path_bytes() {
     let printf = find_bin("printf");
     let out = raw_temp_path(b"neomacs-callproc-out-\xFF");
     let _ = std::fs::remove_file(&out);
+
+    if raw_names_rejected() {
+        let flow = builtin_call_process(
+            &mut eval,
+            vec![
+                Value::string(printf),
+                Value::NIL,
+                Value::list(vec![Value::keyword(":file"), raw_path_value(&out)]),
+                Value::NIL,
+                Value::string("%s"),
+                Value::heap_string(LispString::from_unibyte(vec![0xFF])),
+            ],
+        )
+        .expect_err("a filesystem that rejects raw-byte names cannot open this output");
+        assert_raw_path_file_error(flow, "Opening process output file", &out);
+        return;
+    }
 
     let result = builtin_call_process(
         &mut eval,
@@ -117,6 +197,24 @@ fn builtin_call_process_preserves_raw_unibyte_infile_path_bytes() {
     let out = raw_temp_path(b"neomacs-callproc-copy-\xFE");
     let _ = std::fs::remove_file(&infile);
     let _ = std::fs::remove_file(&out);
+
+    if raw_names_rejected() {
+        // GNU opens the input file first (src/callproc.c:338-340), so the
+        // missing capability is reported against the input path.
+        let flow = builtin_call_process(
+            &mut eval,
+            vec![
+                Value::string(cat),
+                raw_path_value(&infile),
+                Value::list(vec![Value::keyword(":file"), raw_path_value(&out)]),
+                Value::NIL,
+            ],
+        )
+        .expect_err("a filesystem that rejects raw-byte names cannot open this input");
+        assert_raw_path_missing_file(flow, "Opening process input file", &infile);
+        return;
+    }
+
     std::fs::write(&infile, b"raw infile bytes").expect("write infile");
 
     let result = builtin_call_process(
@@ -147,6 +245,23 @@ fn builtin_call_process_region_preserves_raw_unibyte_string_input_bytes() {
     let cat = find_bin("cat");
     let out = raw_temp_path(b"neomacs-callproc-region-\xFD");
     let _ = std::fs::remove_file(&out);
+
+    if raw_names_rejected() {
+        let flow = builtin_call_process_region(
+            &mut eval,
+            vec![
+                Value::heap_string(LispString::from_unibyte(vec![0xFF, b'A', 0x80])),
+                Value::NIL,
+                Value::string(cat),
+                Value::NIL,
+                Value::list(vec![Value::keyword(":file"), raw_path_value(&out)]),
+                Value::NIL,
+            ],
+        )
+        .expect_err("a filesystem that rejects raw-byte names cannot open this output");
+        assert_raw_path_file_error(flow, "Opening process output file", &out);
+        return;
+    }
 
     let result = builtin_call_process_region(
         &mut eval,
@@ -186,6 +301,26 @@ fn builtin_call_process_region_extracts_byte8_buffer_input_bytes() {
             &LispString::from_unibyte(vec![b'I', b':', b' ', 0xC3, 0xA9]),
         )
         .expect("insert byte8 source");
+
+    // The region is validated against the buffer above, so the output-path
+    // rejection must run with that buffer current — otherwise the region
+    // check fires first (args-out-of-range) and never reaches the file.
+    if raw_names_rejected() {
+        let flow = builtin_call_process_region(
+            &mut eval,
+            vec![
+                Value::fixnum(1),
+                Value::fixnum(6),
+                Value::string(cat),
+                Value::NIL,
+                Value::list(vec![Value::keyword(":file"), raw_path_value(&out)]),
+                Value::NIL,
+            ],
+        )
+        .expect_err("a filesystem that rejects raw-byte names cannot open this output");
+        assert_raw_path_file_error(flow, "Opening process output file", &out);
+        return;
+    }
 
     let result = builtin_call_process_region(
         &mut eval,

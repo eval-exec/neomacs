@@ -151,8 +151,11 @@ fn make_directory_eexist_omits_action_matches_gnu() {
 }
 
 /// Bug 10: `copy-file` with src == dest signals
-/// `(file-error "Input and output files are the same" "Success" SRC DEST)` —
-/// GNU compares dev+inode and reports with errno 0 (strerror "Success").
+/// `(file-error "Input and output files are the same" TEXT SRC DEST)` — GNU
+/// compares dev+inode and reports with errno 0 (src/fileio.c:2396-2403), and
+/// `report_file_errno` fills TEXT with the C library's `strerror (0)`, so the
+/// text is the platform's ("Success" on glibc, "Undefined error: 0" on Darwin),
+/// not a fixed string.
 #[test]
 #[cfg(unix)]
 fn copy_file_same_src_dest_signals_matches_gnu() {
@@ -173,7 +176,7 @@ fn copy_file_same_src_dest_signals_matches_gnu() {
         data,
         vec![
             "Input and output files are the same".to_string(),
-            "Success".to_string(),
+            crate::emacs_core::errno::emacs_strerror(0),
             same_str.clone(),
             same_str,
         ]

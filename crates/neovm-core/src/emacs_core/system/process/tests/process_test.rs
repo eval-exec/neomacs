@@ -3367,6 +3367,11 @@ fn process_send_string_sends_euc_jp_dictionary_query_over_tcp() {
                 Err(error) => panic!("dictionary connection failed: {error}"),
             }
         };
+        // BSD/macOS accept() makes the new socket inherit the listener's
+        // non-blocking flag; Linux accept() does not.  The listener above is
+        // non-blocking only to poll for the connection, so clear the flag on
+        // the accepted stream before the blocking read.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();

@@ -9031,6 +9031,32 @@ fn resolve_autoload_load_path_requires_load_suffix_like_gnu() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// Assert GNU's `(file-missing "Cannot open load file" TEXT NAME)` shape.
+///
+/// GNU's `Fload` reports a failed `openp` through `report_file_error
+/// ("Cannot open load file", file)` (src/lread.c:1228), and
+/// `report_file_errno` maps ENOENT to the `file-missing` symbol
+/// (src/fileio.c:264-283).  On APFS, GNU's file-name encoding plus the failed
+/// lookup leave ENOENT behind — measured with GNU 31.1 on macOS, whose own
+/// `(load RAW)` answers exactly this shape ("No such file or directory", the
+/// expanded raw name) — so the expectation follows GNU on the host, not the
+/// glibc EILSEQ an in-memory byte-preserving open would get.
+#[cfg(unix)]
+fn assert_load_cannot_open(flow: crate::emacs_core::error::Flow, expected_name: &[u8]) {
+    let (symbol, data) = crate::test_utils::signal_data_bytes(flow);
+    assert_eq!(symbol, "file-missing");
+    assert_eq!(data[0], b"Cannot open load file");
+    assert_eq!(data[1], b"No such file or directory");
+    assert_eq!(data.len(), 3, "GNU includes the file name: {data:?}");
+    assert_eq!(data[2], expected_name);
+}
+
+#[cfg(unix)]
+fn raw_names_rejected() -> bool {
+    crate::emacs_core::platform_facts::RAW_BYTE_FILENAMES
+        == crate::emacs_core::platform_facts::RawByteFilenames::Rejected
+}
+
 #[cfg(unix)]
 #[test]
 fn builtin_load_accepts_raw_unibyte_absolute_filename_values() {
@@ -9047,6 +9073,21 @@ fn builtin_load_accepts_raw_unibyte_absolute_filename_values() {
     path_bytes.push(0xFF);
     path_bytes.extend_from_slice(b".el");
     let raw_path = PathBuf::from(std::ffi::OsString::from_vec(path_bytes.clone()));
+
+    if raw_names_rejected() {
+        // APFS rejects the name inside the syscall; GNU's `load` reports the
+        // failed search (src/lread.c:1228) rather than creating a file under
+        // a substituted name.
+        let mut eval = super::super::eval::Context::new();
+        let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
+            path_bytes.clone(),
+        ));
+        let flow = crate::emacs_core::builtins::builtin_load(&mut eval, vec![value])
+            .expect_err("a filesystem that rejects raw-byte names cannot open this file");
+        assert_load_cannot_open(flow, &path_bytes);
+        return;
+    }
+
     fs::write(&raw_path, "(setq vm-load-absolute-raw-ran t)\n").expect("write fixture");
 
     let mut eval = super::super::eval::Context::new();
@@ -9078,6 +9119,23 @@ fn builtin_load_resolves_raw_unibyte_load_path_entries() {
     dir_bytes.extend_from_slice(b"/dir-");
     dir_bytes.push(0xFF);
     let raw_dir = PathBuf::from(std::ffi::OsString::from_vec(dir_bytes.clone()));
+
+    if raw_names_rejected() {
+        // The load-path entry cannot exist on this file system.  GNU's openp
+        // opens `DIR/probe' (+ suffixes) directly, so the failure is EILSEQ
+        // and the reported name is the argument the caller asked to load.
+        let mut eval = super::super::eval::Context::new();
+        eval.set_variable(
+            "load-path",
+            Value::list(vec![Value::heap_string(raw_path_entry(dir_bytes.clone()))]),
+        );
+        let flow =
+            crate::emacs_core::builtins::builtin_load(&mut eval, vec![Value::string("probe")])
+                .expect_err("a filesystem that rejects raw-byte names cannot open this entry");
+        assert_load_cannot_open(flow, b"probe");
+        return;
+    }
+
     fs::create_dir_all(&raw_dir).expect("create raw dir");
 
     let file = raw_dir.join("probe.el");
@@ -9116,15 +9174,31 @@ fn builtin_load_substitutes_environment_variables_before_search() {
     dir_bytes.extend_from_slice(b"/env-");
     dir_bytes.push(0xFF);
     let raw_dir = PathBuf::from(std::ffi::OsString::from_vec(dir_bytes.clone()));
-    fs::create_dir_all(&raw_dir).expect("create raw dir");
-
-    let file = raw_dir.join("probe.el");
-    fs::write(&file, "(setq vm-load-env-ran t)\n").expect("write fixture");
 
     let env_name = "NEOVM_LOAD_ENV_RAW";
     unsafe {
         std::env::set_var(env_name, std::ffi::OsString::from_vec(dir_bytes.clone()));
     }
+
+    if raw_names_rejected() {
+        // GNU substitutes `$NAME' before the search and reports that expanded
+        // name when the raw-byte path cannot be opened.
+        let mut expected = dir_bytes.clone();
+        expected.extend_from_slice(b"/probe");
+        let mut eval = super::super::eval::Context::new();
+        let flow = crate::emacs_core::builtins::builtin_load(
+            &mut eval,
+            vec![Value::string(format!("${env_name}/probe"))],
+        )
+        .expect_err("a filesystem that rejects raw-byte names cannot open this file");
+        assert_load_cannot_open(flow, &expected);
+        return;
+    }
+
+    fs::create_dir_all(&raw_dir).expect("create raw dir");
+
+    let file = raw_dir.join("probe.el");
+    fs::write(&file, "(setq vm-load-env-ran t)\n").expect("write fixture");
 
     let mut eval = super::super::eval::Context::new();
     let loaded = crate::emacs_core::builtins::builtin_load(
@@ -10585,7 +10659,7 @@ fn load_file_binds_load_true_file_name_and_current_load_list() {
 
 #[cfg(unix)]
 #[test]
-fn builtin_load_file_accepts_raw_unibyte_filename_values() {
+fn load_file_semantics_accept_raw_unibyte_filename_values() {
     crate::test_utils::init_test_tracing();
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -10599,12 +10673,34 @@ fn builtin_load_file_accepts_raw_unibyte_filename_values() {
     path_bytes.push(0xFF);
     path_bytes.extend_from_slice(b".el");
     let raw_path = PathBuf::from(std::ffi::OsString::from_vec(path_bytes.clone()));
+
+    // GNU's `load-file' is `(load (expand-file-name FILE) nil nil t)'
+    // (lisp/files.el:1101-1109).  The name here is absolute, so
+    // expand-file-name is byte-identity and the call is exactly
+    // `(load FILE nil nil t)'; its observable behaviour is what this test
+    // pins, not a private Rust helper.
+    let load_file_args = |value: Value| vec![value, Value::NIL, Value::NIL, Value::T];
+
+    if raw_names_rejected() {
+        // On a file system that cannot store the raw-byte name, GNU's own
+        // `(load RAW ...)' answers (file-missing "Cannot open load file" ...);
+        // measured with GNU 31.1 on macOS.
+        let mut eval = super::super::eval::Context::new();
+        let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(
+            path_bytes.clone(),
+        ));
+        let flow = crate::emacs_core::builtins::builtin_load(&mut eval, load_file_args(value))
+            .expect_err("a filesystem that rejects raw-byte names cannot open this file");
+        assert_load_cannot_open(flow, &path_bytes);
+        return;
+    }
+
     fs::write(&raw_path, "(setq vm-load-file-raw-ran t)\n").expect("write fixture");
 
     let mut eval = super::super::eval::Context::new();
     let value = Value::heap_string(crate::heap_types::LispString::from_unibyte(path_bytes));
-    let loaded = crate::emacs_core::builtins::builtin_load_file(&mut eval, vec![value])
-        .expect("load-file should accept raw unibyte filename values");
+    let loaded = crate::emacs_core::builtins::builtin_load(&mut eval, load_file_args(value))
+        .expect("load-file semantics should accept raw unibyte filename values");
     assert_eq!(loaded, Value::T);
     assert_eq!(
         eval.obarray().symbol_value_copied("vm-load-file-raw-ran"),

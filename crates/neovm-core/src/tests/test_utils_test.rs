@@ -27,6 +27,28 @@ pub fn init_test_tracing() {
     crate::logging::init_for_tests();
 }
 
+/// The symbol name and byte-string data of a signal.
+///
+/// Raw-byte file-name tests must compare GNU's `file-error` data byte for
+/// byte: a name containing 0xFF is not UTF-8, so the `as_utf8_str` helpers
+/// would lose it.  Non-string data keeps its debug form.
+pub fn signal_data_bytes(flow: crate::emacs_core::error::Flow) -> (String, Vec<Vec<u8>>) {
+    match flow.into_kind() {
+        crate::emacs_core::error::FlowKind::Signal(signal) => (
+            signal.symbol_name().to_string(),
+            signal
+                .data
+                .iter()
+                .map(|value| match value.as_lisp_string() {
+                    Some(text) => text.as_bytes().to_vec(),
+                    None => format!("{value:?}").into_bytes(),
+                })
+                .collect(),
+        ),
+        other => panic!("expected a signal, got {other:?}"),
+    }
+}
+
 /// The workspace root baked in at compile time — the **build** machine's
 /// path, wrong for archive-shipped binaries on every other runner.  Only
 /// [`workspace_root`] reads it.

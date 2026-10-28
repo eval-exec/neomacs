@@ -964,8 +964,19 @@ fn test_file_attributes_symlink_size_is_link_string_length_like_gnu() {
 
     // TYPE (nth 0) for a symlink is the target string.
     assert_eq!(items[0].as_str_owned().as_deref(), Some("alpha.txt"));
-    // MODES (nth 8) lstats: leading 'l' for symlink.
-    assert_eq!(items[8].as_str_owned().as_deref(), Some("lrwxrwxrwx"));
+    // MODES (nth 8) comes from the same lstat, formatted with GNU's
+    // filemodestring (src/dired.c:file_attributes reads st_mode from its one
+    // AT_SYMLINK_NOFOLLOW stat).  The permission bits are the filesystem's:
+    // ext4 lstats symlinks as 0777 while APFS reports 0755, and GNU on each
+    // platform prints what lstat returned, so derive the expectation from the
+    // same lstat rather than pinning one filesystem's bits.
+    use std::os::unix::fs::PermissionsExt;
+    let link_meta = fs::symlink_metadata(&link).expect("lstat the symlink");
+    let expected_modes = format_mode_string(link_meta.permissions().mode(), &link_meta);
+    assert_eq!(
+        items[8].as_str_owned().as_deref(),
+        Some(expected_modes.as_str())
+    );
     // SIZE (nth 7) must be the link-string byte length (9), NOT the target's 12.
     assert_eq!(items[7].as_int(), Some(9));
 

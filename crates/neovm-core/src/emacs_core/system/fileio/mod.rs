@@ -4695,8 +4695,9 @@ pub(crate) fn builtin_copy_file(eval: &mut Context, args: Vec<Value>) -> EvalRes
     // GNU's `already_exists` path: after reopening the destination it compares
     // the input/output `st_dev`+`st_ino` and, when equal, signals
     // `report_file_errno ("Input and output files are the same",
-    //  list2 (file, newname), 0)` — errno 0, so strerror is "Success"
-    // (fileio.c:2401).
+    //  list2 (file, newname), 0)` — errno 0, so the message text is the
+    // platform C library's `strerror (0)` (fileio.c:2396-2403), not a fixed
+    // string.
     #[cfg(unix)]
     if dest_exists {
         use std::os::unix::fs::MetadataExt;

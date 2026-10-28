@@ -625,6 +625,24 @@ fn bookmark_save_load_preserves_raw_unibyte_file_path() {
     set_current_buffer_file(&mut eval, "/raw-file.el");
     builtin_bookmark_set(&mut eval, vec![Value::string("raw-bm")]).unwrap();
 
+    if crate::emacs_core::platform_facts::RAW_BYTE_FILENAMES
+        == crate::emacs_core::platform_facts::RawByteFilenames::Rejected
+    {
+        // GNU bookmark-save wraps `write-file` in
+        // `(condition-case nil ... (file-error (message "Can't write %s" file)))`
+        // (lisp/bookmark.el:1708-1735), so a file system that refuses the
+        // raw-byte name leaves the observable Lisp result nil and writes
+        // nothing; measured with GNU 31.1 on macOS.
+        let result = builtin_bookmark_save(&mut eval, vec![Value::NIL, path_val])
+            .expect("bookmark-save catches the file-error like GNU");
+        assert!(result.is_nil());
+        assert!(
+            !os_path.exists(),
+            "no file may appear at the raw-byte path {os_path:?}"
+        );
+        return;
+    }
+
     builtin_bookmark_save(&mut eval, vec![Value::NIL, path_val]).expect("save to raw path");
     assert!(
         os_path.exists(),

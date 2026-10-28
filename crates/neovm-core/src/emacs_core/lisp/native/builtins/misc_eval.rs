@@ -813,20 +813,6 @@ pub(crate) fn builtin_load(eval: &mut super::eval::Context, args: Vec<Value>) ->
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_load_file(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    expect_args("load-file", &args, 1)?;
-    let file = crate::emacs_core::builtins::expect_lisp_string(&args[0])?.clone();
-    let path = super::fileio::lisp_file_name_to_path_buf(&file);
-    super::load::load_file_with_found_options(
-        eval,
-        &path,
-        &file,
-        super::load::LoadOptions::EXPLICIT,
-    )
-    .map_err(eval_error_to_flow)
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_eval(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("eval", &args, 1)?;
     expect_max_args("eval", &args, 2)?;
