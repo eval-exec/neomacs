@@ -2119,3 +2119,82 @@ fn a_pointer_outside_every_scroll_bar_highlights_none_of_them() {
 
     assert_eq!(render.hovered_scroll_bar(&frame), None);
 }
+
+#[test]
+fn cursor_motion_tick_does_not_damage_editor_content() {
+    let Some(device) = make_test_device() else {
+        return;
+    };
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false, now);
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.cursor.anim_enabled = true;
+    let target = crate::render_thread::cursor::CursorTarget {
+        window_id: 7,
+        x: 10.0,
+        y: 20.0,
+        width: 8.0,
+        height: 16.0,
+        style: CursorStyle::FilledBox,
+        frame_id: 0x42,
+    };
+    render.cursor.set_target(target.clone(), now);
+    render.cursor.set_target(
+        crate::render_thread::cursor::CursorTarget { y: 36.0, ..target },
+        now,
+    );
+    render.begin_presentable_render();
+    assert!(render.tick_cursor_animation(now.plus(std::time::Duration::from_millis(16))));
+    assert!(
+        !render.has_presentable_dirty_content(),
+        "cursor motion must not repaint the editor scene (#607)"
+    );
+    assert!(render.has_presentable_cursor_change());
+}
+
+#[test]
+fn cursor_size_tick_does_not_damage_editor_content() {
+    let Some(device) = make_test_device() else {
+        return;
+    };
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false, now);
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.cursor.size_transition_enabled = true;
+    let target = crate::render_thread::cursor::CursorTarget {
+        window_id: 7,
+        x: 10.0,
+        y: 20.0,
+        width: 8.0,
+        height: 16.0,
+        style: CursorStyle::FilledBox,
+        frame_id: 0x42,
+    };
+    render.cursor.set_target(target.clone(), now);
+    render.cursor.set_target(
+        crate::render_thread::cursor::CursorTarget {
+            width: 16.0,
+            ..target
+        },
+        now,
+    );
+    render.begin_presentable_render();
+    assert!(render.tick_cursor_size_animation(now.plus(std::time::Duration::from_millis(16))));
+    assert!(!render.has_presentable_dirty_content());
+    assert!(render.has_presentable_cursor_change());
+    // The final sample still owes a cursor frame when continuous demand ends.
+    render.begin_presentable_render();
+    assert!(render.tick_cursor_size_animation(now.plus(std::time::Duration::from_secs(2))));
+    assert!(render.has_presentable_cursor_change());
+    assert!(!render.has_presentable_dirty_content());
+}

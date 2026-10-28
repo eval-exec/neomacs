@@ -9,6 +9,9 @@ use neomacs_gui_tests::{
 #[path = "real_gui_smoke/scrolling.rs"]
 mod scrolling;
 
+#[path = "real_gui_smoke/line_navigation.rs"]
+mod line_navigation;
+
 #[test]
 fn real_gui_smoke_generates_surface_readback_png() {
     let Some(backend) = requested_backend() else {

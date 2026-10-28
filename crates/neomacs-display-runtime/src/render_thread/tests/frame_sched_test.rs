@@ -921,9 +921,10 @@ fn demand_reason_names_are_an_explicit_golden_in_index_order() {
             "scroll_effect",
             "decorative_effect",
             "transient_effect",
+            "cursor_motion",
         ]
     );
-    assert_eq!(DemandReason::COUNT, 22);
+    assert_eq!(DemandReason::COUNT, 23);
 }
 
 #[test]
@@ -1308,4 +1309,42 @@ fn per_window_counters_preserve_every_reason_in_diagnostic_order() {
 
     frame_stats::publish_window_demand(std::iter::empty());
     assert!(frame_stats::window_snapshots().is_empty());
+}
+
+#[test]
+fn retracting_blink_does_not_cancel_cursor_motion_cadence() {
+    let mut coordinator = FrameCoordinator::new();
+    let now = t0();
+    let motion = FrameDemand {
+        invalidation: Invalidation::CompositeOnly {
+            layers: LayerMask::CURSOR_EFFECTS,
+        },
+        cadence: Cadence::MaxRate(NonZeroU16::new(60).unwrap()),
+        reason: DemandReason::CursorMotion,
+    };
+    coordinator.submit_demand(win(1), motion, now);
+    let first = coordinator.begin_frame(win(1), tick_at(now.plus(ms(1))));
+    assert!(matches!(first.work, RenderWork::CompositeOnly { .. }));
+    coordinator.submit_demand(win(1), motion, now.plus(ms(2)));
+    coordinator.submit_demand(
+        win(1),
+        FrameDemand {
+            invalidation: Invalidation::CompositeOnly {
+                layers: LayerMask::CURSOR_EFFECTS,
+            },
+            cadence: Cadence::At(now.plus(ms(500))),
+            reason: DemandReason::CursorAnimation,
+        },
+        now.plus(ms(2)),
+    );
+    coordinator.retract(win(1), DemandReason::CursorAnimation);
+    assert!(
+        coordinator.next_wake_deadline().is_some(),
+        "finite motion must keep its cadence when blinking is disabled"
+    );
+    let next = coordinator.begin_frame(win(1), tick_at(now.plus(ms(20))));
+    assert!(next.should_present);
+    assert!(matches!(next.work, RenderWork::CompositeOnly { .. }));
+    assert!(next.reasons.contains(DemandReason::CursorMotion));
+    assert!(!next.reasons.contains(DemandReason::CursorAnimation));
 }

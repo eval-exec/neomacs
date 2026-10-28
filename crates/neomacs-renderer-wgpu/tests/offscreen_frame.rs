@@ -1768,6 +1768,35 @@ fn filled_box_frame() -> FrameGlyphBuffer {
 
 #[test]
 fn filled_box_composite_matches_full_render() {
+    assert_filled_box_composite_matches_full_render(None);
+}
+
+#[test]
+fn filled_box_composite_matches_full_render_during_motion() {
+    for (x, y, width, height, corners) in [
+        (20.0, 38.0, 10.0, 18.0, None),
+        (22.0, 18.0, 7.0, 12.0, None),
+        (
+            20.0,
+            18.0,
+            10.0,
+            18.0,
+            Some([(20.0, 18.0), (30.0, 20.0), (30.0, 36.0), (20.0, 34.0)]),
+        ),
+    ] {
+        assert_filled_box_composite_matches_full_render(Some(AnimatedCursor {
+            window_id: DisplayWindowId::new(1),
+            x,
+            y,
+            width,
+            height,
+            corners,
+            frame_id: DisplayFrameId::new(0),
+        }));
+    }
+}
+
+fn assert_filled_box_composite_matches_full_render(animated: Option<AnimatedCursor>) {
     let Some(mut h) = try_harness() else {
         return;
     };
@@ -1783,7 +1812,7 @@ fn filled_box_composite_matches_full_render() {
         &mut h.atlas,
         mapping_for(&frame, W, H),
         true,
-        None,
+        animated,
         None,
         None,
         None,
@@ -1816,7 +1845,7 @@ fn filled_box_composite_matches_full_render() {
     // Match the runtime sequence exactly: render_cursor_only draws the box
     // (cursor_bg) unscissored, then the scissored cell redraw adds box + char.
     h.renderer
-        .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, None, None);
+        .render_cursor_only(&vc, &frame, mapping_for(&frame, W, H), true, animated, None);
     // cursor cell = the glyph cell (20,16,10,18)
     h.renderer.render_frame_cell_loaded(
         &vc,
@@ -1824,7 +1853,7 @@ fn filled_box_composite_matches_full_render() {
         &mut h.atlas,
         mapping_for(&frame, W, H),
         true,
-        None,
+        animated,
         (20, 16, 10, 18),
     );
     let comp = read_tex(&h.renderer, &tc);
