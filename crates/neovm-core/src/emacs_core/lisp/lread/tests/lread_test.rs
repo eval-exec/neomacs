@@ -1323,15 +1323,17 @@ fn read_char_exclusive_skips_non_character_and_leaves_tail() {
 fn get_load_suffixes_returns_list() {
     crate::test_utils::init_test_tracing();
     let ev = Context::new();
-    // GNU `Fget_load_suffixes` cross-products `load-suffixes` with
-    // `load-file-rep-suffixes`.  The empty representation suffix extends each
-    // load suffix; it is not returned as its own suffix.
+    // GNU syms_of_lread starts from (".elc" ".el"), conses MODULES_SUFFIX and
+    // then MODULES_SECONDARY_SUFFIX (src/lread.c:5623-5629).  On darwin the
+    // secondary `.so` is therefore the FIRST startup suffix, and the build's
+    // own table is the only correct expectation.
+    let expected = load_suffixes_startup_values_for_os(std::env::consts::OS);
     let result = builtin_get_load_suffixes(ev.variables(), vec![]).unwrap();
     let items = list_to_vec(&result).unwrap();
-    assert_eq!(items.len(), 3);
-    assert_eq!(items[0].as_utf8_str(), Some(module_file_suffix()));
-    assert_eq!(items[1].as_utf8_str(), Some(".elc"));
-    assert_eq!(items[2].as_utf8_str(), Some(".el"));
+    assert_eq!(items.len(), expected.len());
+    for (item, suffix) in items.iter().zip(&expected) {
+        assert_eq!(item.as_utf8_str(), Some(*suffix));
+    }
 }
 
 #[test]
@@ -1353,10 +1355,26 @@ fn get_load_suffixes_cross_products_rep_suffixes() {
         .into_iter()
         .map(|v| v.as_utf8_str().unwrap().to_string())
         .collect::<Vec<_>>();
-    assert_eq!(
-        rendered,
-        vec![module_file_suffix(), ".elc", ".elc.gz", ".el", ".el.gz"]
-    );
+
+    // Mirror GNU Fget_load_suffixes (src/lread.c:967-990): every load suffix
+    // is concatenated with every representation suffix, except a non-empty
+    // representation of a module suffix when that representation is in
+    // `jka-compr-load-suffixes`.  Both MODULES_SUFFIX and (on darwin)
+    // MODULES_SECONDARY_SUFFIX take part in that test.
+    let module_suffixes = module_suffixes();
+    let mut expected = Vec::new();
+    for suffix in load_suffixes_startup_values_for_os(std::env::consts::OS) {
+        for representation in ["", ".gz"] {
+            if !representation.is_empty()
+                && module_suffixes.matches(suffix.as_bytes())
+                && representation == ".gz"
+            {
+                continue;
+            }
+            expected.push(format!("{suffix}{representation}"));
+        }
+    }
+    assert_eq!(rendered, expected);
 }
 
 #[test]

@@ -1092,6 +1092,22 @@ pub(crate) fn module_suffixes_for_os(os: &str) -> ModuleSuffixes {
     }
 }
 
+impl ModuleSuffixes {
+    /// Whether `candidate` ends with one of GNU's module suffixes.
+    ///
+    /// GNU Fget_load_suffixes tests both `MODULES_SUFFIX` and
+    /// `MODULES_SECONDARY_SUFFIX` with `suffix_p` (src/lread.c:971-979), so
+    /// on darwin the `.so` secondary suffix is a module suffix just as
+    /// `.dylib` is.  Testing only the primary leaves the secondary's
+    /// compressed representations in `get-load-suffixes`.
+    pub(crate) fn matches(&self, candidate: &[u8]) -> bool {
+        candidate.ends_with(self.primary.as_bytes())
+            || self
+                .secondary
+                .is_some_and(|secondary| candidate.ends_with(secondary.as_bytes()))
+    }
+}
+
 /// The suffixes of the platform this build runs on.
 pub(crate) fn module_suffixes() -> ModuleSuffixes {
     module_suffixes_for_os(std::env::consts::OS)

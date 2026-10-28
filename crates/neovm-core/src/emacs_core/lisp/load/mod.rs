@@ -680,13 +680,16 @@ impl LoadSuffixPlan {
             .value_by_name("jka-compr-load-suffixes")
             .unwrap_or(Value::NIL);
 
+        // GNU tests BOTH module suffixes here (MODULES_SUFFIX and, on darwin,
+        // MODULES_SECONDARY_SUFFIX), src/lread.c:971-979.
+        let module_suffixes = super::lread::module_suffixes();
         let mut required = Vec::with_capacity(suffixes.len() * representations.len());
         for suffix in &suffixes {
             for representation in &representations {
                 // GNU Fget_load_suffixes does not try compressed dynamic
                 // modules when the representation comes from jka-compr.
                 if !representation.is_empty()
-                    && suffix.ends_with(std::env::consts::DLL_SUFFIX.as_bytes())
+                    && module_suffixes.matches(suffix)
                     && super::builtins::builtin_member(vec![
                         Value::heap_string(LispString::from_unibyte(representation.clone())),
                         compressed_representations,
