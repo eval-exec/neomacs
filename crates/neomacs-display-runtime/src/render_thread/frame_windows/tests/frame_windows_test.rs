@@ -2198,3 +2198,65 @@ fn cursor_size_tick_does_not_damage_editor_content() {
     assert!(render.has_presentable_cursor_change());
     assert!(!render.has_presentable_dirty_content());
 }
+
+/// A popup cursor is drawn inside the retained child scene, so interpolation
+/// must repaint that scene even though the primary cursor also changed.
+fn assert_child_cursor_interpolation_repaints(
+    tick: impl Fn(&mut GuiFrameRenderState, neomacs_display_protocol::frame_time::EventTime) -> bool,
+) {
+    let Some(device) = make_test_device() else {
+        return;
+    };
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let mut render = GuiFrameRenderState::new(0x42, &device, 1.0, false, now);
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.cursor.anim_enabled = true;
+    render.cursor.size_transition_enabled = true;
+    let target = CursorTarget {
+        window_id: 7,
+        x: 10.0,
+        y: 20.0,
+        width: 8.0,
+        height: 16.0,
+        style: CursorStyle::FilledBox,
+        frame_id: 0x43,
+    };
+    render.cursor.set_target(target.clone(), now);
+    render.cursor.set_target(
+        CursorTarget {
+            y: 36.0,
+            width: 16.0,
+            ..target
+        },
+        now,
+    );
+    for elapsed in [
+        std::time::Duration::from_millis(16),
+        std::time::Duration::from_secs(2),
+    ] {
+        render.begin_presentable_render();
+        assert!(tick(&mut render, now.plus(elapsed)));
+        assert!(render.has_presentable_cursor_change());
+        assert!(
+            render.has_presentable_dirty_content(),
+            "child-frame cursor interpolation must repaint the child scene, including its final sample"
+        );
+    }
+}
+
+/// Child position samples must invalidate the scene that contains their pixels.
+#[test]
+fn child_frame_cursor_motion_tick_repaints_child_scene() {
+    assert_child_cursor_interpolation_repaints(|render, at| render.tick_cursor_animation(at));
+}
+
+/// Child size samples, including completion, must invalidate their scene.
+#[test]
+fn child_frame_cursor_size_tick_repaints_child_scene() {
+    assert_child_cursor_interpolation_repaints(|render, at| render.tick_cursor_size_animation(at));
+}

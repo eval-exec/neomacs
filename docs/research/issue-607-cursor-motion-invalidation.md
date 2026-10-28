@@ -176,3 +176,20 @@ a texture cost. Scripts, counter CSVs, samples, executable hashes and logs are
 in `tmp/issue607/`; `python3 tmp/issue607/private-bench.py` repeats this private-
 display resource comparison. The compositor and both editors are terminated
 when the script exits.
+
+## Review follow-up: primary cursors inside child frames
+
+The primary cursor can target a child frame when the root has no active cursor
+(`frame_ingest::sync_render_cursor`). Retained-static composition redraws root
+cursor cells only; child cursor pixels are part of the retained child scene.
+Consequently a primary cursor is eligible for cursor-only interpolation only
+when its target frame matches the native host's root frame. Child-frame
+position and size samples preserve cursor damage and additionally mark scene
+damage, including the final sample after continuous demand ends.
+
+Two regressions at the existing frame-render-state seam failed on the original
+PR commit and passed after applying this shared damage rule. Both motion and
+size tests check intermediate and final samples. All 89 focused cursor/scheduler
+tests passed after this follow-up; the original root cursor fast-path tests
+remain enabled. This change requires no new rendering strategy or scheduler
+variant.
