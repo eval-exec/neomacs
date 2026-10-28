@@ -1006,6 +1006,32 @@ impl crate::emacs_core::eval::Context {
                 .buffers
                 .get(buffer_id)
                 .is_some_and(|buffer| buffer.overlays_are_face_only()),
+            point_geometry_reuse: {
+                let live_window = frame.find_window(window_id)?;
+                let buffer = self.buffers.get(buffer_id)?;
+                // Absolute numbers are not a geometry proof: moving point
+                // changes the row receiving line-number-current-line, whose
+                // font can change both the gutter width and the row height.
+                // Until the producer certifies equivalent face metrics, all
+                // active numbering requires the canonical targeted query.
+                if self
+                    .variable_value_in_buffer(
+                        Some(buffer),
+                        super::WindowLayoutVariable::DisplayLineNumbers.sym_id(),
+                    )
+                    .is_some_and(|value| value.is_truthy())
+                {
+                    super::PointGeometryReuse::RequiresMeasurement
+                } else {
+                    super::WindowChromePresence::resolve(
+                        live_window,
+                        buffer,
+                        frame,
+                        frame.minibuffer_window == Some(window_id),
+                    )
+                    .point_geometry_reuse(live_window, buffer)
+                }
+            },
         })
     }
 

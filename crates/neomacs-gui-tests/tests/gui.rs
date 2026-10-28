@@ -130,6 +130,9 @@ mod org_silent_selection;
 #[path = "pixel_measurement.rs"]
 mod pixel_measurement;
 
+#[path = "point_query_geometry.rs"]
+mod point_query_geometry;
+
 #[path = "prefix_help.rs"]
 mod prefix_help;
 

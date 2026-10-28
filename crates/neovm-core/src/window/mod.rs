@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 pub(crate) mod body;
 mod chrome;
+pub(crate) use chrome::PointGeometryReuse;
 pub use chrome::WindowChromePresence;
 mod display;
 pub(crate) use display::{
@@ -3125,6 +3126,7 @@ pub struct WindowDisplaySnapshotFreshness {
     /// captured. This excludes structural overlays from point-only query reuse;
     /// it does not prove that overlay modifications preserve row geometry.
     pub(crate) overlays_face_only: bool,
+    pub(crate) point_geometry_reuse: PointGeometryReuse,
 }
 
 impl WindowDisplaySnapshotFreshness {
@@ -3159,8 +3161,14 @@ impl WindowDisplaySnapshotFreshness {
         if !(self.overlays_face_only && current.overlays_face_only) {
             return false;
         }
+        if self.window.point != current.window.point
+            && (self.point_geometry_reuse != PointGeometryReuse::CertifiedIndependent
+                || current.point_geometry_reuse != PointGeometryReuse::CertifiedIndependent)
+        {
+            return false;
+        }
         let mut expected = current.clone();
-        // Cursor decoration only.
+        // Point is cursor decoration only after both tokens certify it.
         expected.window.point = self.window.point;
         // A request to repaint is not a body-content mutation.
         expected.redisplay_generation = self.redisplay_generation;
