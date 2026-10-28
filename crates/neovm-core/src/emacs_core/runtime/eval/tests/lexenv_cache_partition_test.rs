@@ -1,4 +1,4 @@
-//! The lexenv assq cache reserves its first two slots for nil and t.
+//! The lexenv assq cache reserves its last two slots for nil and t.
 //!
 //! GNU `eval_sub` consults the lexical environment for constants too: a
 //! crafted environment binds them (`(eval 'nil '((nil . 42)))` -> 42), so the
@@ -13,19 +13,21 @@ use crate::emacs_core::{Context, Value};
 
 #[test]
 fn constant_slots_are_reserved_from_every_dynamic_symbol() {
+    let lexenv_bits = 0x1234_5678_9abc_usize;
     for id in 0..256u32 {
         let sym = SymId(id);
-        match LexenvAssqCacheSlot::of(0x1234_5678_9abc_usize, sym) {
-            LexenvAssqCacheSlot::Constant(constant) => {
+        let slot = lexenv_assq_slot(lexenv_bits, sym);
+        match LexenvConstant::from_sym_id(sym) {
+            Some(constant) => {
                 assert_eq!(constant.symbol(), sym);
+                assert_eq!(slot, constant.slot());
                 assert!(id < 2, "SymId({id}) classified as a constant");
             }
-            LexenvAssqCacheSlot::Dynamic(slot) => {
+            None => {
                 assert!(id >= 2, "seed SymId({id}) classified as dynamic");
                 assert!(
-                    slot.index() >= LexenvConstant::COUNT,
-                    "dynamic SymId({id}) landed in constant slot {}",
-                    slot.index()
+                    slot < LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS,
+                    "dynamic SymId({id}) landed in a constant slot at {slot}"
                 );
             }
         }

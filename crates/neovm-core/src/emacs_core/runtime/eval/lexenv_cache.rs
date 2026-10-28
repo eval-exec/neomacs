@@ -8,10 +8,23 @@
 //! The two constants `nil` and `t` are a large share of interpreted reads.
 //! GNU consults the environment for them too -- a crafted environment binds
 //! them, as in `(eval 'nil '((nil . 42)))` -> 42 -- so they are cached like
-//! any other symbol, but in slots no dynamic symbol can evict.  The DEFSYM
-//! const prefix gives fixed ids to the most common dynamic names, so the old
-//! low-bit index could put a hot loop variable in nil's slot: the
-//! regex-search row regressed 0.8% when `matches` did exactly that.
+//! any other symbol, but in slots no dynamic symbol can evict: the last two
+//! entries are theirs and a dynamic bucket that hashes onto them folds back
+//! into the dynamic range.  The DEFSYM const prefix gives fixed ids to the
+//! most common dynamic names, so the old low-bit index could put a hot loop
+//! variable in nil's slot: the regex-search row regressed 0.8% when
+//! `matches` did exactly that.
+//!
+//! One slot computation per lookup.  The old shape classified the symbol
+//! (constant vs dynamic) inside `find`, then classified it again inside
+//! `push`, and remapped the dynamic bucket with a compare+cmov; on the
+//! magit-status row that cost +14 instructions on every one of the cache's
+//! ~36K calls.  Both call sites now share a single index: one constant range
+//! check, one masked hash, one fold, and the fill reuses the result instead
+//! of recomputing it.  The interpreter's lookup is out of line so
+//! `eval_symbol_by_id` does not carry either half in its own body, and the
+//! table keeps its 16-entry shape so `Context`'s pinned layout does not
+//! move.
 
 use std::cell::Cell;
 
@@ -19,7 +32,11 @@ use super::{Context, lexical_symbols};
 use crate::emacs_core::intern::{NIL_SYM_ID, SymId, T_SYM_ID};
 use crate::emacs_core::value::{Value, lexenv_assq};
 
+/// Fourteen dynamic slots followed by the two constant slots.  The table is
+/// still sixteen entries, so the field keeps its place in `Context`; a
+/// dynamic bucket that hashes onto the constants folds back into 0..14.
 const LEXENV_ASSQ_CACHE_CAPACITY: usize = 16;
+const LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS: usize = LEXENV_ASSQ_CACHE_CAPACITY - LexenvConstant::COUNT;
 
 #[derive(Clone, Copy, Debug)]
 struct LexenvAssqCacheEntry {
@@ -48,7 +65,7 @@ impl LexenvConstant {
     fn from_sym_id(sym_id: SymId) -> Option<Self> {
         // The constant ids are the first seeds.  One unsigned range check is
         // the whole dynamic-symbol rejection: the fast path runs once per
-        // interpreted symbol read, so classification stays inside the branch.
+        // interpreted symbol read, so classification stays one compare.
         if sym_id.0 >= Self::COUNT as u32 {
             return None;
         }
@@ -64,8 +81,8 @@ impl LexenvConstant {
     #[inline]
     const fn slot(self) -> usize {
         match self {
-            Self::Nil => 0,
-            Self::T => 1,
+            Self::Nil => LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS,
+            Self::T => LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS + 1,
         }
     }
 
@@ -78,75 +95,42 @@ impl LexenvConstant {
     }
 }
 
-// The constant slots are dense and immediately precede every dynamic slot,
-// and the seed ids the range check assumes are the two constants.
+// The constant slots are the table's last two entries, the dynamic slots are
+// the range below them, and the seed ids the range check assumes are the two
+// constants.
 const _: () = {
-    assert!(LexenvConstant::Nil.slot() < LexenvConstant::COUNT);
-    assert!(LexenvConstant::T.slot() < LexenvConstant::COUNT);
+    assert!(LexenvConstant::COUNT == 2);
+    assert!(LexenvConstant::Nil.slot() >= LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS);
+    assert!(LexenvConstant::T.slot() >= LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS);
+    assert!(LexenvConstant::Nil.slot() < LEXENV_ASSQ_CACHE_CAPACITY);
+    assert!(LexenvConstant::T.slot() < LEXENV_ASSQ_CACHE_CAPACITY);
     assert!(LexenvConstant::Nil.slot() != LexenvConstant::T.slot());
-    assert!(LexenvConstant::T.slot() + 1 == LexenvConstant::COUNT);
+    assert!(LexenvConstant::T.slot() + 1 == LEXENV_ASSQ_CACHE_CAPACITY);
     assert!(NIL_SYM_ID.0 < LexenvConstant::COUNT as u32);
     assert!(T_SYM_ID.0 < LexenvConstant::COUNT as u32);
+    assert!(LEXENV_ASSQ_CACHE_CAPACITY & (LEXENV_ASSQ_CACHE_CAPACITY - 1) == 0);
+    assert!(LEXENV_ASSQ_CACHE_CAPACITY == LexenvConstant::COUNT + LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS);
 };
 
-/// Cache index owned by an ordinary symbol.  The private field is only built
-/// through [`Self::from_mixed`], which folds the hash away from the constant
-/// slots, so no dynamic symbol can evict a [`LexenvConstant`] entry.
-#[derive(Clone, Copy)]
-struct DynamicLexenvAssqSlot(usize);
-
-impl DynamicLexenvAssqSlot {
-    #[inline]
-    fn from_mixed(mixed: usize) -> Self {
-        let index = mixed & (LEXENV_ASSQ_CACHE_CAPACITY - 1);
-        Self(if index < LexenvConstant::COUNT {
-            index + LexenvConstant::COUNT
-        } else {
-            index
-        })
+/// Cache index for one (environment, symbol) pair, computed once per lookup.
+///
+/// A constant owns one of the table's last two cells; a dynamic symbol's hash
+/// bucket folds onto the fourteen cells below them, so no dynamic symbol can
+/// evict a constant's cached answer.  Same rotate/xor/multiply mix as before:
+/// one mask, one fold, no second classification and no recomputation in the
+/// fill.
+#[inline]
+fn lexenv_assq_slot(lexenv_bits: usize, sym_id: SymId) -> usize {
+    if let Some(constant) = LexenvConstant::from_sym_id(sym_id) {
+        return constant.slot();
     }
-
-    #[inline]
-    const fn index(self) -> usize {
-        self.0
+    let mixed = lexenv_bits.rotate_left(7) ^ (sym_id.0 as usize).wrapping_mul(0x9E37_79B1);
+    let bucket = mixed & (LEXENV_ASSQ_CACHE_CAPACITY - 1);
+    if bucket < LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS {
+        bucket
+    } else {
+        bucket - LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS
     }
-}
-
-#[derive(Clone, Copy)]
-enum LexenvAssqCacheSlot {
-    Constant(LexenvConstant),
-    Dynamic(DynamicLexenvAssqSlot),
-}
-
-impl LexenvAssqCacheSlot {
-    #[inline]
-    fn of(lexenv_bits: usize, sym_id: SymId) -> Self {
-        if let Some(constant) = LexenvConstant::from_sym_id(sym_id) {
-            return Self::Constant(constant);
-        }
-        let mixed = lexenv_bits.rotate_left(7) ^ (sym_id.0 as usize).wrapping_mul(0x9E37_79B1);
-        Self::Dynamic(DynamicLexenvAssqSlot::from_mixed(mixed))
-    }
-
-    #[inline]
-    const fn index(self) -> usize {
-        match self {
-            Self::Constant(constant) => constant.slot(),
-            Self::Dynamic(slot) => slot.index(),
-        }
-    }
-}
-
-/// Answer of the constant fast path in
-/// [`Context::lexenv_lookup_cached_in`].
-#[derive(Clone, Copy)]
-enum LexenvConstantLookup {
-    /// This environment binds the constant nowhere: read its dynamic value.
-    Absent,
-    /// The environment's binding cell, projected to its value.
-    Bound(Value),
-    /// No cached answer for this environment: run the assq walk.
-    CacheMiss,
 }
 
 pub(crate) struct LexenvAssqCache {
@@ -163,36 +147,13 @@ impl Default for LexenvAssqCache {
 
 impl LexenvAssqCache {
     #[inline]
-    fn find(&self, lexenv_bits: usize, sym_id: SymId) -> Option<Value> {
-        let entry = self.entries[LexenvAssqCacheSlot::of(lexenv_bits, sym_id).index()].get()?;
+    fn find_at(&self, index: usize, lexenv_bits: usize, sym_id: SymId) -> Option<Value> {
+        let entry = self.entries[index].get()?;
         (entry.lexenv_bits == lexenv_bits && entry.symbol == sym_id).then_some(entry.cell)
     }
 
-    /// Cached answer for a constant symbol without the generic-assq call.
-    /// The slot belongs to `constant` alone, but the entry tag is compared in
-    /// full: the cache is cleared on sweep, not per environment.
     #[inline]
-    fn constant_lookup(
-        &self,
-        lexenv_bits: usize,
-        constant: LexenvConstant,
-    ) -> LexenvConstantLookup {
-        let Some(entry) = self.entries[constant.slot()].get() else {
-            return LexenvConstantLookup::CacheMiss;
-        };
-        if entry.lexenv_bits != lexenv_bits || entry.symbol != constant.symbol() {
-            return LexenvConstantLookup::CacheMiss;
-        }
-        if entry.cell.is_nil() {
-            LexenvConstantLookup::Absent
-        } else {
-            LexenvConstantLookup::Bound(entry.cell.cons_cdr())
-        }
-    }
-
-    #[inline]
-    fn push(&self, entry: LexenvAssqCacheEntry) {
-        let index = LexenvAssqCacheSlot::of(entry.lexenv_bits, entry.symbol).index();
+    fn push_at(&self, index: usize, entry: LexenvAssqCacheEntry) {
         self.entries[index].set(Some(entry));
     }
 
@@ -207,8 +168,8 @@ impl LexenvAssqCache {
 impl Context {
     pub(crate) fn lexenv_assq_cached_in(&self, lexenv: Value, sym_id: SymId) -> Option<Value> {
         let lexenv_bits = lexenv.bits();
-        let cache = &self.lexenv_assq_cache;
-        if let Some(cell) = cache.find(lexenv_bits, sym_id) {
+        let index = lexenv_assq_slot(lexenv_bits, sym_id);
+        if let Some(cell) = self.lexenv_assq_cache.find_at(index, lexenv_bits, sym_id) {
             // `nil` is not a binding cell -- `lexenv_assq` only ever returns a
             // cons -- so it is free to record the other answer: this
             // environment has no binding for this symbol.  Absence is the
@@ -220,37 +181,54 @@ impl Context {
             // symbols.
             return (!cell.is_nil()).then_some(cell);
         }
+        self.lexenv_assq_cached_fill(lexenv, lexenv_bits, sym_id, index)
+    }
 
+    /// Walk the environment once and record the answer in the slot the caller
+    /// already computed.  Kept out of line: the walk is the long tail, and
+    /// neither lookup entry point should carry it.
+    #[inline(never)]
+    fn lexenv_assq_cached_fill(
+        &self,
+        lexenv: Value,
+        lexenv_bits: usize,
+        sym_id: SymId,
+        index: usize,
+    ) -> Option<Value> {
         let cell = if self.symbols_with_pos_enabled {
             lexical_symbols::assq(lexenv, sym_id)
         } else {
             lexenv_assq(lexenv, sym_id)
         };
-        cache.push(LexenvAssqCacheEntry {
-            lexenv_bits,
-            symbol: sym_id,
-            cell: cell.unwrap_or(Value::NIL),
-        });
+        self.lexenv_assq_cache.push_at(
+            index,
+            LexenvAssqCacheEntry {
+                lexenv_bits,
+                symbol: sym_id,
+                cell: cell.unwrap_or(Value::NIL),
+            },
+        );
         cell
     }
 
-    /// The interpreter's symbol read path.  Constants use their dedicated
-    /// slots and a cached negative answer needs no assq walk; any other
-    /// outcome keeps the single generic definition above.
-    #[inline]
+    /// The interpreter's symbol read path.
+    ///
+    /// Out of line: `eval_symbol_by_id` is instruction-size gated, and the
+    /// constant-slot handling that used to sit in its body is one range check
+    /// here instead of an inline branch plus a second classification in the
+    /// generic cache.
+    #[inline(never)]
     pub(crate) fn lexenv_lookup_cached_in(&self, lexenv: Value, sym_id: SymId) -> Option<Value> {
         let lexenv_bits = lexenv.bits();
-        if let Some(constant) = LexenvConstant::from_sym_id(sym_id) {
-            match self
-                .lexenv_assq_cache
-                .constant_lookup(lexenv_bits, constant)
-            {
-                LexenvConstantLookup::Bound(value) => return Some(value),
-                LexenvConstantLookup::Absent => return None,
-                LexenvConstantLookup::CacheMiss => {}
-            }
+        let index = lexenv_assq_slot(lexenv_bits, sym_id);
+        if let Some(cell) = self.lexenv_assq_cache.find_at(index, lexenv_bits, sym_id) {
+            return if cell.is_nil() {
+                None
+            } else {
+                Some(cell.cons_cdr())
+            };
         }
-        self.lexenv_assq_cached_in(lexenv, sym_id)
+        self.lexenv_assq_cached_fill(lexenv, lexenv_bits, sym_id, index)
             .map(|cell| cell.cons_cdr())
     }
 }
