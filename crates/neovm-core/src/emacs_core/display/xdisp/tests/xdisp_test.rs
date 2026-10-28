@@ -4085,6 +4085,120 @@ fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
 }
 
 #[test]
+fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
+    for (setup, expected) in [
+        ("(set-default 'display-line-numbers 'relative)", false),
+        ("(set-default 'display-line-numbers 'visual)", false),
+        ("(set-default 'display-line-numbers nil)", true),
+        ("(set-default 'display-line-numbers t)", true),
+        (
+            "(progn (set-default 'display-line-numbers 'relative) (set (make-local-variable 'display-line-numbers) nil))",
+            true,
+        ),
+        (
+            "(progn (set-default 'display-line-numbers 'relative) (set (make-local-variable 'display-line-numbers) t))",
+            true,
+        ),
+    ] {
+        let mut eval = interactive_context();
+        let buffer = eval.buffers.current_buffer().unwrap().id;
+        eval.eval_str(setup).unwrap();
+        assert_eq!(
+            line_numbers_are_point_independent(&eval, buffer),
+            expected,
+            "{setup}"
+        );
+    }
+}
+
+#[test]
+fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_numbers() {
+    use crate::window::{WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let frame = eval.frames.create_frame("relative-row-query", 160, 96, buffer);
+    let window = eval.frames.get(frame).unwrap().selected_window;
+    eval.frames.get_mut(frame).unwrap().initial = false;
+    eval.eval_str("(progn (set-default 'display-line-numbers 'relative) (goto-char 1))")
+        .unwrap();
+    let freshness = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    let warm = crate::window::WindowDisplaySnapshot {
+        window_id: window,
+        points: vec![crate::window::DisplayPointSnapshot {
+            role: crate::window::DisplayPointRole::Glyph,
+            buffer_pos: LispCharPos1::new(3),
+            x: 0,
+            y: 16,
+            width: 8,
+            height: 16,
+            row: 1,
+            col: 0,
+        }],
+        rows: vec![crate::window::DisplayRowSnapshot {
+            row: 1,
+            y: 16,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::new(3)),
+            end_buffer_pos: Some(LispCharPos1::new(4)),
+            ..Default::default()
+        }],
+        buffer_modiff: Some(eval.buffers.get(buffer).unwrap().modified_tick()),
+        layout_freshness: Some(freshness.clone()),
+        ..Default::default()
+    };
+    eval.frames
+        .get_mut(frame)
+        .unwrap()
+        .commit_redisplay_cache_for_test(vec![warm]);
+    let scopes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = scopes.clone();
+    eval.install_window_layout_query(move |_, fid, wid, scope| {
+        assert_eq!((fid, wid), (frame, window));
+        observed.borrow_mut().push(scope);
+        WindowLayoutQueryOutcome::Unavailable
+    });
+    let query = |eval: &mut Context| {
+        builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)])
+            .unwrap()
+    };
+    assert!(!query(&mut eval).is_nil());
+    assert!(
+        scopes.borrow().is_empty(),
+        "unchanged warm rows answer directly"
+    );
+
+    eval.eval_str("(goto-char 3)").unwrap();
+    // Keep the non-selected test window's saved point in sync with buffer point.
+    match eval
+        .frames
+        .get_mut(frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+    {
+        crate::window::Window::Leaf { point, .. } => *point = LispCharPos1::new(3),
+        other => panic!("expected leaf window, got {other:?}"),
+    }
+    let moved = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    assert_ne!(freshness, moved, "the fixture must change snapshot freshness");
+    assert!(freshness.same_position_rows_ignoring_point(&moved));
+    query(&mut eval);
+    assert_eq!(
+        scopes.borrow().as_slice(),
+        &[WindowLayoutQueryScope::Position {
+            target: LispCharPos1::new(3),
+        }],
+        "default relative numbering must requery after point moves"
+    );
+}
+
+#[test]
 fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves() {
     use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
 

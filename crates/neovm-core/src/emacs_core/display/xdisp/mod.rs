@@ -8664,11 +8664,13 @@ fn line_numbers_are_point_independent(
     eval: &super::eval::Context,
     buffer_id: crate::buffer::BufferId,
 ) -> bool {
-    let Some(value) = eval
-        .buffers
-        .get(buffer_id)
-        .and_then(|buffer| buffer.buffer_local_value("display-line-numbers"))
-    else {
+    let Some(buffer) = eval.buffers.get(buffer_id) else {
+        return true;
+    };
+    let Some(value) = eval.variable_value_in_buffer(
+        Some(buffer),
+        crate::emacs_core::intern::intern("display-line-numbers"),
+    ) else {
         return true;
     };
     if value.is_nil() || value == Value::T {
