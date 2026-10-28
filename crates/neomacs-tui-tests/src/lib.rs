@@ -33,6 +33,7 @@
 //! - [`diff_screens`] remains available for tests that intentionally inspect
 //!   raw terminal cells or exact palette values.
 
+use neomacs_test_env::{CanonicalEnvironment, CanonicalProfile};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
@@ -452,6 +453,17 @@ impl TuiSession {
             std::fs::create_dir_all(home.path().join(".emacs.d"))
                 .expect("create isolated tui test HOME");
         }
+        // The canonical pins (locale, TZ, login/full name, host, mail, HOME,
+        // TMPDIR) come from the one builder every harness shares; per-launch
+        // overrides below are applied after them, and the per-terminal TERM
+        // and geometry after those.
+        let canonical = CanonicalEnvironment::new(
+            CanonicalProfile::Tui,
+            home.path(),
+            tmp.path(),
+            neomacs_infra::workspace_root(),
+        )
+        .expect("canonical TUI environment");
 
         let TuiLaunch {
             program,
@@ -465,29 +477,24 @@ impl TuiSession {
         for arg in args {
             command = command.arg(arg);
         }
+        let (canonical_pairs, canonical_removals) = canonical.apply_env_pairs();
+        for (name, value) in canonical_pairs {
+            command = command.env(name, value);
+        }
+        for name in canonical_removals {
+            command = command.env_remove(name);
+        }
         command = command
             .env("TERM", &terminal.terminal_type)
             .env("COLUMNS", terminal.columns.to_string())
-            .env("LINES", terminal.rows.to_string())
-            // Prevent user config from interfering while also isolating
-            // concurrent TUI tests from one another.
-            .env("HOME", home.path())
-            .env("TMPDIR", tmp.path())
-            // The mode line's mule-info segment exposes every coding
-            // default, and those follow the ambient locale: under the C
-            // locale GNU and Neomacs still diverge (GNU "--" vs Neomacs
-            // "U=="), so a runner that comes up without LANG fails every
-            // paired comparison at the mode line.  C.UTF-8 is built into
-            // glibc everywhere the suite runs, and both editors agree
-            // under it, so pin it for both sessions and drop the ambient
-            // spellings.  The pin is also what keeps a nil
-            // `text-quoting-style' equal on both sides: each binary resolves
-            // it from this locale (src/emacs.c:1653-1656, src/doc.c:638-650),
-            // and the recorded grids quote ‘like this’.
-            .env("LC_ALL", "C.UTF-8")
-            .env_remove("LANG")
-            .env_remove("LANGUAGE")
-            .env_remove("LC_CTYPE");
+            .env("LINES", terminal.rows.to_string());
+        // The mode line's mule-info segment exposes every coding default, and
+        // those follow the ambient locale: under the C locale GNU and Neomacs
+        // still diverge (GNU "--" vs Neomacs "U=="), so a runner that comes up
+        // without LANG fails every paired comparison at the mode line.  The
+        // Tui profile pins C.UTF-8 for both sessions (and is also what keeps
+        // a nil `text-quoting-style' equal on both sides,
+        // src/emacs.c:1653-1656, src/doc.c:638-650).
         for var in [
             "RUST_LOG",
             "NEOMACS_LOG_FILE",

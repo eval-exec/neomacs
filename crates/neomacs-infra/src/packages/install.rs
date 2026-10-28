@@ -3,10 +3,11 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::Duration;
 
+use neomacs_test_env::{CanonicalEnvironment, PackagePaths, PinnedCommand};
 use wait_timeout::ChildExt;
 
 /// Mirror of the package-parity harness's command error for install runs.
@@ -39,15 +40,18 @@ pub trait PackageInstallDriver: Sync {
     /// Display name for diagnostics (e.g. `gnu-emacs-31.1`).
     fn name(&self) -> &str;
 
-    /// A fresh, fully configured editor command (program and editor
-    /// environment; the caller adds the specific install invocation).
-    fn command(&self) -> Command;
+    /// A fresh editor command carrying every pin ENVIRONMENT defines: the
+    /// recorded identity (locale, TZ, login/full name, host, mail, HOME,
+    /// TMPDIR, umask) and the caller's per-case sandbox paths.  There is no
+    /// second environment-application step: a raw re-application would hit
+    /// the pin guards.
+    fn command(&self, environment: &CanonicalEnvironment) -> PinnedCommand;
 
     /// Install-run deadline policy.
     fn timeout(&self) -> Duration;
 
     /// Run `command` to completion, killing it at [`Self::timeout`].
-    fn run(&self, command: &mut Command) -> Result<Output, InstallCommandError>;
+    fn run(&self, command: &mut PinnedCommand) -> Result<Output, InstallCommandError>;
 }
 
 /// A [`PackageInstallDriver`] over any GNU Emacs binary reachable from a
@@ -101,20 +105,14 @@ impl PackageInstallDriver for PathGnuDriver {
         self.timeout
     }
 
-    fn command(&self) -> Command {
-        let mut command = Command::new(&self.program);
-        // Package installation only ever runs `--batch` probes; the
-        // deterministic sandbox environment is applied per invocation by
-        // `configure_process_environment`.
-        command
-            .env("TERM", "dumb")
-            .env("LC_ALL", "C.UTF-8")
-            .env("LANG", "C.UTF-8");
-        command
+    fn command(&self, environment: &CanonicalEnvironment) -> PinnedCommand {
+        // The environment carries both the identity pins and this case's
+        // sandbox paths; there is no unpinned way to name the editor.
+        environment.command(&self.program)
     }
 
-    fn run(&self, command: &mut Command) -> Result<Output, InstallCommandError> {
-        output_with_timeout(command, self.timeout)
+    fn run(&self, command: &mut PinnedCommand) -> Result<Output, InstallCommandError> {
+        output_with_timeout_pinned(command, self.timeout)
     }
 }
 
@@ -164,166 +162,107 @@ pub(crate) fn os_string(value: &std::ffi::OsStr) -> std::ffi::OsString {
 /// The deterministic process environment shared by package preparation and
 /// test sessions (moved with the acquisition core so the install cache and
 /// its consumers cannot drift apart).
+/// The package sandbox's canonical environment for one case.
+///
+/// The identity pins and every suite variable are defined once, in
+/// `neomacs_test_oracle::canonical_env` (`CanonicalProfile::Package`); this
+/// function only supplies the case's roots.
+pub fn package_environment_with_runtime(
+    root: &Path,
+    home: &Path,
+    tmp: &Path,
+    runtime: &Path,
+) -> Result<CanonicalEnvironment, String> {
+    CanonicalEnvironment::package(
+        home,
+        tmp,
+        PackagePaths {
+            scratch_root: root.to_path_buf(),
+            workspace_root: crate::workspace_root(),
+            runtime_dir: runtime.to_path_buf(),
+            melpa_cache_root: crate::melpa_cache_root(),
+        },
+    )
+    .map_err(|error| format!("package sandbox environment: {error}"))
+}
+
+/// Deterministic environment entries for adapters that launch a package
+/// process without [`std::process::Command`] (a PTY launcher, a test driver).
 pub fn deterministic_process_environment(
     root: &Path,
     home: &Path,
     tmp: &Path,
     runtime: &Path,
 ) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-    vec![
-        (
-            std::ffi::OsString::from("HOME"),
-            os_string(home.as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("TMPDIR"),
-            os_string(tmp.as_os_str()),
-        ),
-        (std::ffi::OsString::from("TMP"), os_string(tmp.as_os_str())),
-        (std::ffi::OsString::from("TEMP"), os_string(tmp.as_os_str())),
-        (
-            std::ffi::OsString::from("XDG_CONFIG_HOME"),
-            os_string(root.join("xdg/config").as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("XDG_CACHE_HOME"),
-            os_string(root.join("xdg/cache").as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("XDG_DATA_HOME"),
-            os_string(root.join("xdg/data").as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("XDG_STATE_HOME"),
-            os_string(root.join("xdg/state").as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("XDG_RUNTIME_DIR"),
-            os_string(runtime.as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("LANG"),
-            std::ffi::OsString::from("C.UTF-8"),
-        ),
-        (
-            std::ffi::OsString::from("LC_ALL"),
-            std::ffi::OsString::from("C.UTF-8"),
-        ),
-        (
-            std::ffi::OsString::from("TZ"),
-            std::ffi::OsString::from("UTC"),
-        ),
-        // CPython 3.11+ adds fine-grained error-location lines
-        // ("    ~~~~~~^^^^^") to tracebacks; earlier interpreters do not,
-        // and which python a host pins is a host property.  A traceback the
-        // editor surfaces is program output, not the interpreter's
-        // decoration, so disable the ranges for every editor-spawned python
-        // (the variable is ignored before 3.11).
-        (
-            std::ffi::OsString::from("PYTHONNODEBUGRANGES"),
-            std::ffi::OsString::from("1"),
-        ),
-        (
-            std::ffi::OsString::from("USER"),
-            std::ffi::OsString::from("melpa-test"),
-        ),
-        (
-            std::ffi::OsString::from("LOGNAME"),
-            std::ffi::OsString::from("melpa-test"),
-        ),
-        // `user-full-name' is not the login name: GNU reads NAME first and
-        // falls back to the password database, so an unset NAME leaks the
-        // running user into every value that prints it.
-        (
-            std::ffi::OsString::from("NAME"),
-            std::ffi::OsString::from("melpa-test"),
-        ),
-        // A recorded process environment prints this one verbatim, and CI
-        // exports it for the whole job: pin it so a plain shell agrees.
-        (
-            std::ffi::OsString::from("RUST_BACKTRACE"),
-            std::ffi::OsString::from("1"),
-        ),
-        (
-            std::ffi::OsString::from("HOSTNAME"),
-            std::ffi::OsString::from("melpa-host"),
-        ),
-        (
-            std::ffi::OsString::from("EMAIL"),
-            std::ffi::OsString::from("melpa-test@melpa-host"),
-        ),
-        (
-            std::ffi::OsString::from("TERM"),
-            std::ffi::OsString::from("dumb"),
-        ),
-        (
-            std::ffi::OsString::from("NEOMACS_TEST_SANDBOX_ROOT"),
-            os_string(root.as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("NEOMACS_TEST_WORKSPACE_ROOT"),
-            os_string(crate::workspace_root().as_os_str()),
-        ),
-        // Where MELPA scenario sandboxes and their editor TMPDIRs live.  This
-        // is the melpa cache root (honoring CARGO_TARGET_DIR), not
-        // `<workspace>/tmp`; suites that guard their owned scratch trees must
-        // approve this root so a relocated target directory stays valid.
-        (
-            std::ffi::OsString::from("NEOMACS_TEST_SCRATCH_ROOT"),
-            os_string(crate::melpa_cache_root().as_os_str()),
-        ),
-        (
-            std::ffi::OsString::from("GIT_CEILING_DIRECTORIES"),
-            os_string(crate::workspace_root().as_os_str()),
-        ),
-        // `mailcap-parse-mimetypes' reads $MIMETYPES before /etc/mime.types,
-        // so an extension the editor does not ship itself would otherwise be
-        // answered by the host database: Ubuntu maps `md' to text/markdown,
-        // a NixOS host has no /etc/mime.types at all.  Pin the file to the
-        // suite's own database so a recorded MIME type is a property of the
-        // fixture rather than of the machine that produced the record.
-        (
-            std::ffi::OsString::from("MIMETYPES"),
-            os_string(
-                crate::workspace_root()
-                    .join("crates/neomacs-melpa-test-support/fixtures/mime.types")
-                    .as_os_str(),
-            ),
-        ),
-    ]
+    package_environment_with_runtime(root, home, tmp, runtime)
+        .expect("package sandbox roots must be absolute")
+        .env_pairs()
+        .into_iter()
+        .map(|(name, value)| (std::ffi::OsString::from(name), value))
+        .collect()
 }
 
-/// Apply [`deterministic_process_environment`] to a command.
-pub fn configure_process_environment(command: &mut Command, root: &Path, home: &Path, tmp: &Path) {
-    configure_process_environment_with_runtime(command, root, home, tmp, &root.join("xdg/runtime"));
-}
-
-/// [`configure_process_environment`] with an explicit `XDG_RUNTIME_DIR`
-/// (GNU binds AF_UNIX sockets under it, so sandboxed runs keep that namespace
-/// on a short path).
-pub fn configure_process_environment_with_runtime(
+/// Apply the package sandbox's deterministic environment to a NON-editor
+/// helper command (git, package-build tooling).
+///
+/// The values are the same as the editor environment's, so helper output
+/// (git messages, timestamps, locale-sensitive text) is as deterministic as
+/// the editor's; the helper is not an editor process, so it has no identity
+/// pins to enforce with a `PinnedCommand`.
+pub fn configure_helper_process_environment(
     command: &mut Command,
     root: &Path,
     home: &Path,
     tmp: &Path,
-    runtime: &Path,
 ) {
-    command
-        .current_dir(root)
-        .envs(deterministic_process_environment(root, home, tmp, runtime))
-        .env_remove("EMACSLOADPATH");
+    let environment = package_environment_with_runtime(root, home, tmp, &root.join("xdg/runtime"))
+        .expect("package sandbox roots must be absolute");
+    command.current_dir(root);
+    for (name, value) in environment.env_pairs() {
+        command.env(name, value);
+    }
+    for name in environment.removed_vars() {
+        command.env_remove(name);
+    }
 }
 
 /// Run a plain helper command (git, package-build tooling) to completion,
 /// killing it at `timeout`.  Single-process ownership: helper commands never
 /// spawn process trees, so unlike the harness's grouped capture there is
 /// nothing to reap beyond the child itself.
-pub(crate) fn output_with_timeout(
-    command: &mut Command,
+/// The two command types this crate can run: a plain helper `Command` and a
+/// canonically pinned editor command.
+trait EditorLikeCommand {
+    fn pipe_output(&mut self);
+    fn launch(&mut self) -> std::io::Result<Child>;
+}
+
+impl EditorLikeCommand for Command {
+    fn pipe_output(&mut self) {
+        self.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
+
+    fn launch(&mut self) -> std::io::Result<Child> {
+        self.spawn()
+    }
+}
+
+impl EditorLikeCommand for PinnedCommand {
+    fn pipe_output(&mut self) {
+        self.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
+
+    fn launch(&mut self) -> std::io::Result<Child> {
+        self.spawn()
+    }
+}
+
+fn run_with_timeout<C: EditorLikeCommand>(
+    command: &mut C,
     timeout: Duration,
 ) -> Result<Output, InstallCommandError> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(InstallCommandError::Launch)?;
+    command.pipe_output();
+    let mut child = command.launch().map_err(InstallCommandError::Launch)?;
     let mut stdout_pipe = child
         .stdout
         .take()
@@ -382,6 +321,20 @@ pub(crate) fn output_with_timeout(
         stdout,
         stderr,
     })
+}
+
+pub(crate) fn output_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<Output, InstallCommandError> {
+    run_with_timeout(command, timeout)
+}
+
+pub(crate) fn output_with_timeout_pinned(
+    command: &mut PinnedCommand,
+    timeout: Duration,
+) -> Result<Output, InstallCommandError> {
+    run_with_timeout(command, timeout)
 }
 
 /// Per-scratch directories the install cache builds inside.

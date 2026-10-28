@@ -28,9 +28,9 @@ pub(crate) mod test_support;
 pub use activation::{LoadSuffixes, PackageActivation, package_activation_elisp};
 pub use elpa_archive::{GNU_ELPA_LABEL, GnuElpaPackage, prepare_cached_gnu_elpa_package};
 pub use install::{
-    InstallCommandError, PackageInstallDriver, PathGnuDriver, configure_process_environment,
-    deterministic_process_environment, elisp_string, package_preparation_run_id,
-    publish_package_preparation_failure,
+    InstallCommandError, PackageInstallDriver, PathGnuDriver, configure_helper_process_environment,
+    deterministic_process_environment, elisp_string, package_environment_with_runtime,
+    package_preparation_run_id, publish_package_preparation_failure,
 };
 pub use seal::{ProvisionedSealReport, verify_provisioned};
 pub use source_lock::{

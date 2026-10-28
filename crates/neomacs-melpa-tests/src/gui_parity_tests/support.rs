@@ -61,7 +61,7 @@ impl LinuxCpuAffinity {
         Ok(Self { cpus })
     }
 
-    fn apply(&self, command: &mut std::process::Command) {
+    fn apply(&self, command: &mut neomacs_test_env::PinnedCommand) {
         let cpus = self.cpus.clone();
         // SAFETY: `pre_exec` runs after fork. The closure performs only
         // stack-local CPU-set operations and the async-signal-safe
@@ -187,9 +187,8 @@ fn run_editor(
         )
     })?;
 
-    let mut command = runtime.command();
+    let mut command = sandbox.command(&runtime);
     affinity.apply(&mut command);
-    sandbox.configure(&mut command);
     command
         .envs(packages.process_environment())
         .env("RUST_LOG", "off")

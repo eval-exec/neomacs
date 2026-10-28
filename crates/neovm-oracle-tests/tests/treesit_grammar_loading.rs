@@ -1,7 +1,7 @@
 //! Real pinned grammar libraries through GNU 31.1's public Lisp API.
 use neomacs_melpa_test_support::{
     EmacsRuntime, GNU31_TREE_SITTER_GRAMMARS, MelpaSandbox, TreeSitterGrammarCase, elisp_string,
-    output_with_timeout,
+    output_with_timeout, output_with_timeout_pinned,
 };
 use std::{fs, path::Path, time::Duration};
 
@@ -16,10 +16,9 @@ fn copy_grammar(source: &Path, destination: &Path) {
 }
 
 fn run_lisp(runtime: &EmacsRuntime, sandbox: &MelpaSandbox, form: &str) -> String {
-    let mut command = runtime.command();
-    sandbox.configure(&mut command);
+    let mut command = sandbox.command(runtime);
     command.args(["--batch", "-Q", "--eval", form]);
-    let output = output_with_timeout(&mut command, Duration::from_secs(60)).unwrap();
+    let output = output_with_timeout_pinned(&mut command, Duration::from_secs(60)).unwrap();
     assert!(
         output.status.success(),
         "{}: {}\n{}",

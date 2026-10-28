@@ -36,6 +36,7 @@ tempfile.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-infra.workspace = true
 neomacs-melpa-test-support.workspace = true
+neomacs-test-env.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 static_assertions.workspace = true

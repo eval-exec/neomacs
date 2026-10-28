@@ -1,9 +1,9 @@
 use std::cell::RefCell;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::OnceLock;
+
+use neomacs_test_env::{CanonicalEnvironment, CanonicalProfile, PinnedCommand, bounded_temp_dir};
 
 use neovm_core::emacs_core::format_eval_result_with_eval;
 use neovm_core::emacs_core::load::{
@@ -14,6 +14,37 @@ use neovm_core::emacs_core::pdump;
 thread_local! {
     static RUNTIME_TEMPLATE: RefCell<Option<neovm_core::emacs_core::pdump::types::DumpContextState>> =
         const { RefCell::new(None) };
+}
+
+/// The canonical environment shared by every comparison in this test process.
+///
+/// The two `TempDir`s are kept alive for the whole process so the paths the
+/// spawned GNU and the in-process Neomacs both see remain valid (and equal).
+/// `bounded_temp_dir` keeps them short enough for any unix socket a form binds.
+struct CanonicalHarness {
+    _home: tempfile::TempDir,
+    _tmp: tempfile::TempDir,
+    environment: CanonicalEnvironment,
+}
+
+fn canonical_harness() -> &'static CanonicalHarness {
+    static HARNESS: OnceLock<CanonicalHarness> = OnceLock::new();
+    HARNESS.get_or_init(|| {
+        let home = bounded_temp_dir("nv-compat-home-").expect("create canonical compat HOME");
+        let tmp = bounded_temp_dir("nv-compat-tmp-").expect("create canonical compat TMPDIR");
+        let environment = CanonicalEnvironment::new(
+            CanonicalProfile::Oracle,
+            home.path(),
+            tmp.path(),
+            workspace_root(),
+        )
+        .expect("canonical compat environment");
+        CanonicalHarness {
+            _home: home,
+            _tmp: tmp,
+            environment,
+        }
+    })
 }
 
 /// The attested GNU oracle every comparison in this test crate runs against.
@@ -79,7 +110,7 @@ fn write_temp_elisp_file(
 /// at the rlimit instead of in the system OOM killer. Mirrors
 /// crates/neovm-oracle-tests/src/common.rs apply_virtual_memory_limit.
 #[cfg(unix)]
-fn apply_memory_limit(cmd: &mut Command, mem_limit_bytes: u64) {
+fn apply_memory_limit(cmd: &mut PinnedCommand, mem_limit_bytes: u64) {
     if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
         return;
     }
@@ -101,7 +132,7 @@ fn apply_memory_limit(cmd: &mut Command, mem_limit_bytes: u64) {
 
 /// RLIMIT_AS is Unix-only; non-Unix hosts run the oracle unlimited.
 #[cfg(not(unix))]
-fn apply_memory_limit(_cmd: &mut Command, _mem_limit_bytes: u64) {}
+fn apply_memory_limit(_cmd: &mut PinnedCommand, _mem_limit_bytes: u64) {}
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub fn run_oracle_eval(form: &str) -> Result<String, String> {
@@ -132,17 +163,13 @@ pub fn run_oracle_eval(form: &str) -> Result<String, String> {
         .unwrap_or(500);
     let mem_limit_bytes = mem_limit_mb * 1024 * 1024;
 
-    let mut cmd = Command::new(oracle_bin);
+    // The canonical environment (`CanonicalProfile::Oracle`) pins the locale,
+    // TZ, login/full name, HOME, TMPDIR and umask the expectations were
+    // recorded under; the in-process Neomacs side receives the same answers
+    // through `lisp_environment_form` below.
+    let mut cmd = canonical_harness().environment.command(oracle_bin);
     cmd.env("NEOVM_ORACLE_FORM_FILE", form_path.as_os_str())
         .env("EMACSNATIVELOADPATH", "/dev/null")
-        // The canonical oracle and every frozen fixture were recorded under
-        // the oracle harness's SNAPSHOT_LOCALE (oracle_sandbox.rs:26).  A
-        // bare remote shell exports no locale, and GNU's
-        // `text-quoting-style' nil default follows it (`using_utf8',
-        // src/emacs.c:415,1656; src/doc.c:638-645), so an unpinned spawn
-        // quotes `like this' where both this suite and Neo quote ‘like this’.
-        .env("LANG", "en_US.UTF-8")
-        .env("LC_ALL", "en_US.UTF-8")
         .args([
             "--batch",
             "-Q",
@@ -187,6 +214,15 @@ pub fn run_neovm_eval(form: &str) -> Result<String, String> {
                 .map_err(|_| "NeoVM bootstrap failed".to_string())?;
             apply_runtime_startup_state(&mut template)
                 .map_err(|_| "NeoVM runtime startup failed".to_string())?;
+            // The spawned GNU above runs under the canonical environment; an
+            // in-process evaluator has no child environment to pin, so it gets
+            // the same `getenv` and identity answers through the Lisp-visible
+            // seams.  Applied after startup state, which derives identity from
+            // the real host.
+            let canonical = canonical_harness().environment.lisp_environment_form();
+            template
+                .eval_str(&canonical)
+                .map_err(|_| "NeoVM canonical environment failed".to_string())?;
             *slot.borrow_mut() = Some(pdump::snapshot_evaluator(&template));
         }
 

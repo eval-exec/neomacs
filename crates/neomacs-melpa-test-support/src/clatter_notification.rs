@@ -57,6 +57,13 @@ impl PrivateClatterService {
     pub fn start(control: &Path) -> Result<Self, String> {
         fs::create_dir_all(control.join("home")).map_err(|error| error.to_string())?;
         fs::create_dir_all(control.join("tmp")).map_err(|error| error.to_string())?;
+        fs::create_dir_all(control.join("run")).map_err(|error| error.to_string())?;
+        let environment = neomacs_infra::packages::install::package_environment_with_runtime(
+            control,
+            &control.join("home"),
+            &control.join("tmp"),
+            &control.join("run"),
+        )?;
         let address_file = control.join("bus-address");
         let socket_id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -89,7 +96,7 @@ impl PrivateClatterService {
                 .with_env("NEOMACS_CLATTER_CONTROL", control.as_os_str())
                 .with_env("HOME", control.join("home").into_os_string())
                 .with_env("TMPDIR", control.join("tmp").into_os_string())
-                .command()
+                .command(&environment)
                 .args(["--batch", "-Q", "-l"])
                 .arg(&script)
                 .stdout(

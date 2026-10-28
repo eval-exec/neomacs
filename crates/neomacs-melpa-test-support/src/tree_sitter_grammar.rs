@@ -6,8 +6,9 @@ mod matrix;
 pub use matrix::{GNU31_TREE_SITTER_GRAMMARS, GrammarSourceDirectory, TreeSitterGrammarCase};
 
 use crate::{
-    CommandError, EmacsRuntime, configure_process_environment, elisp_string, output_with_timeout,
+    CommandError, EmacsRuntime, elisp_string, output_with_timeout, output_with_timeout_pinned,
 };
+use neomacs_test_env::{CanonicalEnvironment, PinnedCommand};
 
 #[derive(Clone, Copy)]
 struct GrammarSourceSpec<'a> {
@@ -43,8 +44,30 @@ impl GrammarCachePaths {
         }
     }
 
-    fn configure(&self, command: &mut Command) {
-        configure_process_environment(command, &self.root, &self.home, &self.tmp);
+    /// The package sandbox's canonical environment for this cache root.
+    fn environment(&self) -> CanonicalEnvironment {
+        neomacs_infra::packages::install::package_environment_with_runtime(
+            &self.root,
+            &self.home,
+            &self.tmp,
+            &self.root.join("xdg/runtime"),
+        )
+        .expect("tree-sitter grammar cache roots must be absolute")
+    }
+
+    /// A canonically pinned command for the editor that builds the grammar.
+    fn command(&self, runtime: &EmacsRuntime) -> PinnedCommand {
+        let mut command = runtime.command(&self.environment());
+        command.current_dir(&self.root);
+        command
+    }
+
+    /// Same deterministic environment for the git helper that checks the
+    /// grammar source out: helper output is host-independent too.
+    fn configure_helper(&self, command: &mut Command) {
+        neomacs_infra::packages::configure_helper_process_environment(
+            command, &self.root, &self.home, &self.tmp,
+        );
     }
 }
 
@@ -235,7 +258,7 @@ fn prepare_grammar_checkout(
     let source_arg = paths.checkout.to_string_lossy().into_owned();
     let run_git = |arguments: &[&str]| -> Result<(), String> {
         let mut command = Command::new("git");
-        paths.configure(&mut command);
+        paths.configure_helper(&mut command);
         command.args(arguments);
         let output =
             output_with_timeout(&mut command, gnu_emacs.timeout).map_err(|error| match error {
@@ -322,29 +345,30 @@ fn install_grammar(
                (princ "NEOMACS-TREESIT-GRAMMAR-CACHE:ready"))"##,
         language = source.language,
     );
-    let mut command = gnu_emacs.command();
-    paths.configure(&mut command);
+    let mut command = paths.command(gnu_emacs);
     command.args(["--batch", "--quick", "--eval", &form]);
     let output =
-        output_with_timeout(&mut command, gnu_emacs.timeout).map_err(|error| match error {
-            CommandError::Launch(error) => format!(
-                "failed to launch {} for cached Tree-sitter grammar `{}` in {}: {error}",
-                gnu_emacs.name,
-                source.language,
-                paths.root.display()
-            ),
-            CommandError::TimedOut(_) => format!(
-                "{} cached Tree-sitter grammar `{}` timed out after {:?} in {}",
-                gnu_emacs.name,
-                source.language,
-                gnu_emacs.timeout,
-                paths.root.display()
-            ),
-            CommandError::Capture(error) => format!(
-                "failed to capture {} cached Tree-sitter grammar `{}` output: {error}",
-                gnu_emacs.name, source.language
-            ),
-        })?;
+        output_with_timeout_pinned(&mut command, gnu_emacs.timeout).map_err(
+            |error| match error {
+                CommandError::Launch(error) => format!(
+                    "failed to launch {} for cached Tree-sitter grammar `{}` in {}: {error}",
+                    gnu_emacs.name,
+                    source.language,
+                    paths.root.display()
+                ),
+                CommandError::TimedOut(_) => format!(
+                    "{} cached Tree-sitter grammar `{}` timed out after {:?} in {}",
+                    gnu_emacs.name,
+                    source.language,
+                    gnu_emacs.timeout,
+                    paths.root.display()
+                ),
+                CommandError::Capture(error) => format!(
+                    "failed to capture {} cached Tree-sitter grammar `{}` output: {error}",
+                    gnu_emacs.name, source.language
+                ),
+            },
+        )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success()

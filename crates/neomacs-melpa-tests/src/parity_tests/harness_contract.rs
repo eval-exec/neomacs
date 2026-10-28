@@ -50,7 +50,12 @@ fn sandbox_keeps_process_state_under_the_cache_root_and_socket_paths_bounded() {
             "-c",
             r##"printf '%s\n' "$HOME" "$TMPDIR" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_RUNTIME_DIR" "$PWD" "$USER" "$LOGNAME" "$HOSTNAME" "$EMAIL" "$TZ" "$LC_ALL" "$TERM""##,
         ]);
-        sandbox.configure(&mut command);
+        neomacs_infra::packages::configure_helper_process_environment(
+            &mut command,
+            sandbox.root(),
+            sandbox.home(),
+            sandbox.tmp_dir(),
+        );
         let output = command.output().expect("inspect sandbox environment");
         assert!(output.status.success());
         let stdout = String::from_utf8(output.stdout).expect("environment output is UTF-8");
@@ -933,6 +938,16 @@ fn invocation_directory_reports_the_invoked_path_not_the_canonical_binary() {
     fs::create_dir_all(&symlinked).expect("create symlink bin dir");
 
     let oracle = EmacsRuntime::gnu_emacs();
+    let home = symlinked.join("home");
+    let tmp = symlinked.join("tmp");
+    let run = symlinked.join("run");
+    std::fs::create_dir_all(&home).expect("create symlink-contract HOME");
+    std::fs::create_dir_all(&tmp).expect("create symlink-contract TMPDIR");
+    std::fs::create_dir_all(&run).expect("create symlink-contract XDG runtime dir");
+    let environment = neomacs_infra::packages::install::package_environment_with_runtime(
+        &symlinked, &home, &tmp, &run,
+    )
+    .expect("symlink-contract environment roots must be absolute");
     for (label, source) in [
         ("GNU", oracle.executable.clone()),
         ("Neomacs", neomacs_binary()),
@@ -941,14 +956,14 @@ fn invocation_directory_reports_the_invoked_path_not_the_canonical_binary() {
         std::os::unix::fs::symlink(&source, &link_path)
             .expect("symlink the editor into the contract dir");
 
-        let output = Command::new(&link_path)
-            .args([
-                "--batch",
-                "--quick",
-                "--eval",
-                "(prin1 (list invocation-name invocation-directory) 'external-debugging-output)",
-            ])
-            .env_remove("EMACSLOADPATH")
+        let mut command = environment.command(&link_path);
+        command.args([
+            "--batch",
+            "--quick",
+            "--eval",
+            "(prin1 (list invocation-name invocation-directory) 'external-debugging-output)",
+        ]);
+        let output = command
             .output()
             .expect("run the editor through the symlink");
         // `external-debugging-output' writes to the editor's stderr.

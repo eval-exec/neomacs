@@ -73,7 +73,8 @@ fn thin_only_family_metrics_and_vertico_completion_match_gnu() {
         .then(|| DisplayHarness::for_backend(GuiBackend::LinuxX11).start_session(&gnu_control))
         .transpose()
         .unwrap();
-    let mut command = gnu.command();
+    let environment = neomacs_melpa_test_support::package_environment_at(&control).unwrap();
+    let mut command = gnu.command(&environment);
     command
         .args(["-Q", "-l"])
         .arg(&script)
@@ -89,9 +90,11 @@ fn thin_only_family_metrics_and_vertico_completion_match_gnu() {
                 .iter()
                 .cloned(),
         );
-    let output =
-        neomacs_melpa_test_support::output_with_timeout(&mut command, Duration::from_secs(30))
-            .unwrap();
+    let output = neomacs_melpa_test_support::output_with_timeout_pinned(
+        &mut command,
+        Duration::from_secs(30),
+    )
+    .unwrap();
     fs::write(gnu_control.join("stdout"), &output.stdout).unwrap();
     fs::write(gnu_control.join("stderr"), &output.stderr).unwrap();
     assert!(

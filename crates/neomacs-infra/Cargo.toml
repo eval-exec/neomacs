@@ -18,6 +18,7 @@ publish = false
 # instead of silently dirtying the fixture for every other test.
 
 [dependencies]
+neomacs-test-env.workspace = true
 fs4.workspace = true
 tempfile.workspace = true
 getrandom.workspace = true

@@ -7,8 +7,9 @@ use std::sync::OnceLock;
 use sha2::{Digest, Sha256};
 
 use super::install::{
-    InstallCommandError, PackageInstallDriver, configure_process_environment, elisp_string,
-    output_with_timeout, package_preparation_run_id, publish_package_preparation_failure,
+    InstallCommandError, PackageInstallDriver, elisp_string, output_with_timeout,
+    package_environment_with_runtime, package_preparation_run_id,
+    publish_package_preparation_failure,
 };
 use crate::workspace_root;
 
@@ -1168,8 +1169,10 @@ fn prepare_cached_source_artifact_with_tools(
         };
         let build_script = workspace_root()
             .join("crates/neomacs-melpa-test-support/elisp/build-package-from-source.el");
-        let mut command = driver.command();
-        configure_process_environment(&mut command, &root, &home, &editor_tmp);
+        let environment =
+            package_environment_with_runtime(&root, &home, &editor_tmp, &root.join("xdg/runtime"))
+                .expect("package sandbox roots must be absolute");
+        let mut command = driver.command(&environment);
         command
             .env("NEOMACS_PACKAGE_BUILD_DIR", &package_build)
             .env("NEOMACS_PACKAGE_RECIPES_DIR", &recipes)
@@ -1427,8 +1430,10 @@ pub fn prepare_cached_locked_package_plan(
                {install_steps}
                (princ "NEOMACS-SOURCE-INSTALL:ready"))"##
     );
-    let mut command = driver.command();
-    configure_process_environment(&mut command, &root, &home, &editor_tmp);
+    let environment =
+        package_environment_with_runtime(&root, &home, &editor_tmp, &root.join("xdg/runtime"))
+            .expect("package sandbox roots must be absolute");
+    let mut command = driver.command(&environment);
     command.args(["--batch", "--quick", "--eval", &form]);
     let output = match driver.run(&mut command) {
         Ok(output) => output,

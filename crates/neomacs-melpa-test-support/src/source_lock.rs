@@ -16,7 +16,7 @@ pub use neomacs_infra::packages::source_lock::{
     prepare_cached_locked_package_plan,
 };
 
-use crate::{CommandError, EmacsRuntime, output_with_timeout};
+use crate::{CommandError, EmacsRuntime, output_with_timeout_pinned};
 
 impl neomacs_infra::packages::PackageInstallDriver for EmacsRuntime {
     fn name(&self) -> &str {
@@ -27,15 +27,18 @@ impl neomacs_infra::packages::PackageInstallDriver for EmacsRuntime {
         self.timeout
     }
 
-    fn command(&self) -> std::process::Command {
-        EmacsRuntime::command(self)
+    fn command(
+        &self,
+        environment: &neomacs_test_env::CanonicalEnvironment,
+    ) -> neomacs_test_env::PinnedCommand {
+        EmacsRuntime::command(self, environment)
     }
 
     fn run(
         &self,
-        command: &mut std::process::Command,
+        command: &mut neomacs_test_env::PinnedCommand,
     ) -> Result<std::process::Output, neomacs_infra::packages::InstallCommandError> {
-        output_with_timeout(command, self.timeout).map_err(|error| match error {
+        output_with_timeout_pinned(command, self.timeout).map_err(|error| match error {
             CommandError::Launch(launch) => {
                 neomacs_infra::packages::InstallCommandError::Launch(launch)
             }

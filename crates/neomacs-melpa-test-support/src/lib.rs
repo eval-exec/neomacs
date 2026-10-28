@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use command_group::{CommandGroup, GroupChild};
+use neomacs_test_env::{CanonicalEnvironment, PinnedCommand};
 use wait_timeout::ChildExt;
 
 #[cfg(target_os = "linux")]
@@ -61,6 +62,9 @@ pub struct MelpaSandbox {
     home: PathBuf,
     tmp: PathBuf,
     runtime: RuntimeDirectory,
+    /// The package profile's canonical environment for this case: identity
+    /// pins plus this sandbox's HOME/TMPDIR/XDG/test roots.
+    environment: CanonicalEnvironment,
 }
 
 enum RuntimeDirectory {
@@ -153,12 +157,19 @@ impl MelpaSandbox {
         let runtime = RuntimeDirectory::new(case_root.path())?;
         fs::create_dir_all(home.join(".emacs.d"))
             .map_err(|error| format!("failed to create isolated .emacs.d: {error}"))?;
+        let environment = neomacs_infra::packages::install::package_environment_with_runtime(
+            case_root.path(),
+            &home,
+            &tmp,
+            runtime.path(),
+        )?;
 
         Ok(Self {
             case_root,
             home,
             tmp,
             runtime,
+            environment,
         })
     }
 
@@ -174,38 +185,62 @@ impl MelpaSandbox {
         &self.tmp
     }
 
+    /// The canonical environment for this case.
+    pub fn environment(&self) -> &CanonicalEnvironment {
+        &self.environment
+    }
+
     /// Deterministic environment entries for adapters that do not use
     /// [`std::process::Command`] directly, such as a PTY launcher.
     pub fn process_environment(&self) -> Vec<PackageEnvironmentEntry> {
-        deterministic_process_environment(self.root(), &self.home, &self.tmp, self.runtime.path())
+        self.environment
+            .env_pairs()
+            .into_iter()
+            .map(|(name, value)| (OsString::from(name), value))
+            .collect()
     }
 
-    /// Apply the deterministic process environment shared by package test
-    /// adapters.
-    pub fn configure(&self, command: &mut Command) {
-        configure_process_environment_with_runtime(
-            command,
-            self.root(),
-            &self.home,
-            &self.tmp,
-            self.runtime.path(),
-        );
+    /// A canonically pinned command for RUNTIME, running in this sandbox.
+    ///
+    /// This is the only editor-command constructor a package scenario needs:
+    /// the environment (identity pins and this case's roots) is applied by the
+    /// type, and the command starts in the scenario root.
+    pub fn command(&self, runtime: &EmacsRuntime) -> PinnedCommand {
+        let mut command = runtime.command(&self.environment);
+        self.configure(&mut command);
+        command
+    }
+
+    /// Apply this sandbox's environment to a pinned command built for the
+    /// same roots (useful when an adapter adds its own program arguments
+    /// between construction and the spawn).
+    pub fn configure(&self, command: &mut PinnedCommand) {
+        for (name, value) in self.environment.env_pairs() {
+            command.env(name, value);
+        }
+        for name in self.environment.removed_vars() {
+            command.env_remove(name);
+        }
+        command.current_dir(self.root());
     }
 }
 
-/// Apply the deterministic environment used by package preparation and test
-/// processes.
-fn configure_process_environment_with_runtime(
-    command: &mut Command,
-    root: &Path,
-    home: &Path,
-    tmp: &Path,
-    runtime: &Path,
-) {
-    command
-        .current_dir(root)
-        .envs(deterministic_process_environment(root, home, tmp, runtime))
-        .env_remove("EMACSLOADPATH");
+/// A canonical package environment for an editor probe rooted at `root`.
+///
+/// For probes that are not a [`MelpaSandbox`] but still spawn an editor (the
+/// GUI font checks keep their own display and control directories): the
+/// per-case HOME, TMPDIR and XDG runtime roots are created below `root`, and
+/// the workspace/cache roots come from the same resolvers the package drivers
+/// use.
+pub fn package_environment_at(root: &Path) -> Result<CanonicalEnvironment, String> {
+    let home = root.join("home");
+    let tmp = root.join("tmp");
+    let runtime = root.join("runtime");
+    for directory in [&home, &tmp, &runtime] {
+        std::fs::create_dir_all(directory)
+            .map_err(|error| format!("create {}: {error}", directory.display()))?;
+    }
+    neomacs_infra::packages::install::package_environment_with_runtime(root, &home, &tmp, &runtime)
 }
 
 pub fn sanitize_label(label: &str) -> String {
@@ -288,8 +323,10 @@ impl EmacsRuntime {
         self
     }
 
-    pub fn command(&self) -> Command {
-        let mut command = Command::new(&self.executable);
+    /// A command for this editor carrying ENVIRONMENT's canonical pins and
+    /// this runtime's extra environment.
+    pub fn command(&self, environment: &CanonicalEnvironment) -> PinnedCommand {
+        let mut command = environment.command(&self.executable);
         for (name, value) in &self.extra_env {
             command.env(name, value);
         }
@@ -467,6 +504,78 @@ fn output_with_timeout_in_scope(
     })
 }
 
+/// [`output_with_timeout`] for a canonically pinned editor command.
+///
+/// The pinned form owns a `std::process::Command` privately, so it cannot be
+/// handed to the group-scope runner; editor probes use single-process
+/// ownership anyway (a package scenario's editor does not fork a tree the
+/// harness has to reap).
+pub fn output_with_timeout_pinned(
+    command: &mut PinnedCommand,
+    timeout: Duration,
+) -> Result<Output, CommandError> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = ManagedChild::Single(command.spawn().map_err(CommandError::Launch)?);
+    let stdout = child
+        .process()
+        .stdout
+        .take()
+        .ok_or_else(|| CommandError::Capture("stdout pipe was not created".to_string()))?;
+    let stderr = child
+        .process()
+        .stderr
+        .take()
+        .ok_or_else(|| CommandError::Capture("stderr pipe was not created".to_string()))?;
+    let stdout_reader = thread::spawn(move || read_pipe(stdout));
+    let stderr_reader = thread::spawn(move || read_pipe(stderr));
+
+    let status = match child
+        .wait_for_exit_and_output(
+            ProcessScope::Single,
+            timeout,
+            &stdout_reader,
+            &stderr_reader,
+        )
+        .map_err(CommandError::Launch)?
+    {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let status = child.wait().map_err(CommandError::Launch)?;
+            let stdout = stdout_reader
+                .join()
+                .map_err(|_| CommandError::Capture("stdout reader panicked".to_string()))?
+                .map_err(|error| {
+                    CommandError::Capture(format!("failed to read stdout: {error}"))
+                })?;
+            let stderr = stderr_reader
+                .join()
+                .map_err(|_| CommandError::Capture("stderr reader panicked".to_string()))?
+                .map_err(|error| {
+                    CommandError::Capture(format!("failed to read stderr: {error}"))
+                })?;
+            return Err(CommandError::TimedOut(Output {
+                status,
+                stdout,
+                stderr,
+            }));
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| CommandError::Capture("stdout reader panicked".to_string()))?
+        .map_err(|error| CommandError::Capture(format!("failed to read stdout: {error}")))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| CommandError::Capture("stderr reader panicked".to_string()))?
+        .map_err(|error| CommandError::Capture(format!("failed to read stderr: {error}")))?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 fn read_pipe(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     pipe.read_to_end(&mut bytes)?;
@@ -475,7 +584,7 @@ fn read_pipe(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
 
 pub use neomacs_infra::packages::elisp_string;
 pub use neomacs_infra::packages::install::{
-    configure_process_environment, deterministic_process_environment, package_preparation_run_id,
+    deterministic_process_environment, package_preparation_run_id,
     publish_package_preparation_failure,
 };
 /// The path to the `neomacs` binary (override with `NEOMACS_BIN`).

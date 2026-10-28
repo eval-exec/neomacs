@@ -67,8 +67,11 @@ impl PackageInstallDriver for TestRuntime {
         self.timeout
     }
 
-    fn command(&self) -> Command {
-        let mut command = Command::new(&self.script);
+    fn command(
+        &self,
+        environment: &neomacs_test_env::CanonicalEnvironment,
+    ) -> neomacs_test_env::PinnedCommand {
+        let mut command = environment.command(&self.script);
         for (key, value) in &self.envs {
             command.env(key, value);
         }
@@ -77,7 +80,7 @@ impl PackageInstallDriver for TestRuntime {
 
     fn run(
         &self,
-        command: &mut Command,
+        command: &mut neomacs_test_env::PinnedCommand,
     ) -> Result<std::process::Output, super::install::InstallCommandError> {
         use wait_timeout::ChildExt;
         command.stdout(std::process::Stdio::piped());

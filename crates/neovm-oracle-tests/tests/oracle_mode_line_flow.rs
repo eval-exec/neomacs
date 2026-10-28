@@ -3,8 +3,6 @@
 
 use crate::common;
 
-use std::process::Command;
-
 use common::oracle_sandbox::{OracleSandbox, project_root};
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -17,7 +15,7 @@ fn run_active_gnu(form: &str) -> String {
     let result_path = artifacts.path().join("mode-line-result.txt");
     let sandbox = OracleSandbox::new(form, &[], &project_root().join("lisp"))
         .expect("mode-line oracle sandbox");
-    let mut command = Command::new(oracle.executable());
+    let mut command = sandbox.pinned_command(oracle.executable());
     sandbox.configure(&mut command);
     command
         .envs(display.env().iter().map(|(key, value)| (key, value)))

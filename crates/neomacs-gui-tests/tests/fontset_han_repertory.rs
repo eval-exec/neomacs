@@ -76,7 +76,8 @@ fn han_fontset_rule_with_absent_registry_selects_same_face_as_unicode_registry()
         .then(|| DisplayHarness::for_backend(GuiBackend::LinuxX11).start_session(&gnu_control))
         .transpose()
         .unwrap();
-    let mut command = gnu.command();
+    let environment = neomacs_melpa_test_support::package_environment_at(&control).unwrap();
+    let mut command = gnu.command(&environment);
     command
         .args(["-Q", "-l"])
         .arg(&script)
@@ -91,9 +92,11 @@ fn han_fontset_rule_with_absent_registry_selects_same_face_as_unicode_registry()
                 .iter()
                 .cloned(),
         );
-    let output =
-        neomacs_melpa_test_support::output_with_timeout(&mut command, Duration::from_secs(30))
-            .unwrap();
+    let output = neomacs_melpa_test_support::output_with_timeout_pinned(
+        &mut command,
+        Duration::from_secs(30),
+    )
+    .unwrap();
     fs::write(gnu_control.join("stdout"), &output.stdout).unwrap();
     fs::write(gnu_control.join("stderr"), &output.stderr).unwrap();
     assert!(

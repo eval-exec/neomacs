@@ -7,6 +7,7 @@
 
 use colored::Colorize;
 use neomacs_parity_reference::ReferenceUse;
+use neomacs_test_env::PinnedCommand;
 use neomacs_test_oracle::CapturedEvaluation;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -19,7 +20,7 @@ pub(crate) mod oracle_sandbox;
 use oracle_sandbox::{OracleSandbox, ResultNormalization};
 
 #[cfg(unix)]
-fn apply_virtual_memory_limit(cmd: &mut Command, mem_limit: u64) {
+fn apply_virtual_memory_limit(cmd: &mut PinnedCommand, mem_limit: u64) {
     if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
         return;
     }
@@ -38,7 +39,7 @@ fn apply_virtual_memory_limit(cmd: &mut Command, mem_limit: u64) {
 }
 
 #[cfg(not(unix))]
-fn apply_virtual_memory_limit(_cmd: &mut Command, _mem_limit: u64) {}
+fn apply_virtual_memory_limit(_cmd: &mut PinnedCommand, _mem_limit: u64) {}
 
 /// Maximum virtual address space (in bytes) for each spawned oracle Emacs
 /// process.  This prevents runaway evaluations from consuming unbounded
@@ -213,11 +214,32 @@ fn neomacs_binary_path() -> String {
 /// runs. The leading `@` pins the clock (it does not advance from this instant).
 const ORACLE_FROZEN_TIME: &str = "@2026-06-15 12:00:00";
 
-/// Resolve `libfaketime.so.1`. Prefer the explicit `NEOVM_LIBFAKETIME_SO`
-/// override (set by the flake devShell for reproducibility); otherwise locate
-/// it relative to the `faketime` binary on `PATH`. Frozen-clock tests cannot be
-/// deterministic without it, so a missing library is a hard, clearly-explained
-/// error rather than a silently flaky pass.
+/// Library file names libfaketime installs under a prefix's `lib/`.
+///
+/// The interposer is a shared object on Linux and a dylib on Darwin; a harness
+/// that only knows the Linux name cannot freeze the clock on a Mac even when
+/// the library is installed there.
+const LIBFAKETIME_NAMES: &[&str] = if cfg!(target_os = "macos") {
+    &[
+        "lib/libfaketime.1.dylib",
+        "lib/faketime/libfaketime.1.dylib",
+        "lib/libfaketime.dylib",
+    ]
+} else {
+    &[
+        "lib/libfaketime.so.1",
+        "lib/faketime/libfaketime.so.1",
+        "lib64/libfaketime.so.1",
+        "lib64/faketime/libfaketime.so.1",
+    ]
+};
+
+/// Resolve the libfaketime shared library. Prefer the explicit
+/// `NEOVM_LIBFAKETIME_SO` override (set by the flake devShell for
+/// reproducibility); otherwise locate it relative to the `faketime` binary on
+/// `PATH`. Frozen-clock tests cannot be deterministic without it, so a missing
+/// library is a hard, clearly-explained error rather than a silently flaky
+/// pass.
 fn libfaketime_so_path() -> String {
     if let Ok(explicit) = std::env::var("NEOVM_LIBFAKETIME_SO")
         && !explicit.is_empty()
@@ -231,29 +253,26 @@ fn libfaketime_so_path() -> String {
                 continue;
             }
             // Canonicalize resolves the nix-profile symlink to the real
-            // <prefix>/bin/faketime, whose sibling <prefix>/lib holds the .so.
+            // <prefix>/bin/faketime, whose sibling <prefix>/lib holds the
+            // library.
             let Ok(real) = std::fs::canonicalize(&bin) else {
                 continue;
             };
             let Some(prefix) = real.parent().and_then(|p| p.parent()) else {
                 continue;
             };
-            for rel in [
-                "lib/libfaketime.so.1",
-                "lib/faketime/libfaketime.so.1",
-                "lib64/libfaketime.so.1",
-                "lib64/faketime/libfaketime.so.1",
-            ] {
-                let so = prefix.join(rel);
-                if so.is_file() {
-                    return so.to_string_lossy().into_owned();
+            for rel in LIBFAKETIME_NAMES {
+                let library = prefix.join(rel);
+                if library.is_file() {
+                    return library.to_string_lossy().into_owned();
                 }
             }
         }
     }
     panic!(
-        "frozen-time oracle tests require libfaketime, but libfaketime.so.1 could not be located. \
-         Set NEOVM_LIBFAKETIME_SO to its path, or run inside `nix develop` (the devShell provides it)."
+        "frozen-time oracle tests require libfaketime, but {} could not be located. \
+         Set NEOVM_LIBFAKETIME_SO to its path, or run inside `nix develop` (the devShell provides it).",
+        LIBFAKETIME_NAMES[0]
     );
 }
 
@@ -262,11 +281,20 @@ fn libfaketime_so_path() -> String {
 /// clock that leaks into timestamps) and leaves `CLOCK_MONOTONIC` real, so the
 /// subprocess's own `select`/timeout logic is unaffected.
 fn frozen_time_env() -> Vec<(String, String)> {
-    vec![
-        ("LD_PRELOAD".to_string(), libfaketime_so_path()),
-        ("FAKETIME".to_string(), ORACLE_FROZEN_TIME.to_string()),
-        ("FAKETIME_DONT_FAKE_MONOTONIC".to_string(), "1".to_string()),
-    ]
+    let library = libfaketime_so_path();
+    // Linux interposes through the dynamic loader's LD_PRELOAD; Darwin
+    // ignores that variable and uses dyld's flat-namespace insertion.
+    let mut env = if cfg!(target_os = "macos") {
+        vec![
+            ("DYLD_INSERT_LIBRARIES".to_string(), library),
+            ("DYLD_FORCE_FLAT_NAMESPACE".to_string(), "1".to_string()),
+        ]
+    } else {
+        vec![("LD_PRELOAD".to_string(), library)]
+    };
+    env.push(("FAKETIME".to_string(), ORACLE_FROZEN_TIME.to_string()));
+    env.push(("FAKETIME_DONT_FAKE_MONOTONIC".to_string(), "1".to_string()));
+    env
 }
 
 fn project_lisp_dir() -> PathBuf {
@@ -676,7 +704,7 @@ impl EvalProgram {
         }
     }
 
-    fn configure_command(self, command: &mut Command) {
+    fn configure_command(self, command: &mut PinnedCommand) {
         command.args([
             "--batch",
             "-Q",
@@ -733,7 +761,7 @@ fn run_oracle_eval_with_sandbox(
     let oracle_bin = oracle.executable().to_path_buf();
 
     let mem_limit = oracle_mem_limit_bytes();
-    let mut cmd = Command::new(&oracle_bin);
+    let mut cmd = sandbox.pinned_command(&oracle_bin);
     sandbox.configure(&mut cmd);
     cmd.env(OracleEngine::ENV, OracleEngine::Gnu.as_env_value());
     cmd.env("EMACSNATIVELOADPATH", "/dev/null");
@@ -843,7 +871,7 @@ fn run_neomacs_binary_eval_with_sandbox(
 ) -> Result<CapturedEvaluation, String> {
     let neomacs_bin = neomacs_binary_path();
 
-    let mut cmd = Command::new(&neomacs_bin);
+    let mut cmd = sandbox.pinned_command(&neomacs_bin);
     sandbox.configure(&mut cmd);
     cmd.env(OracleEngine::ENV, OracleEngine::Neomacs.as_env_value());
     eval_program.configure_command(&mut cmd);

@@ -220,8 +220,7 @@ fn direct_wrapped_logs_round_trip_through_gnu_reader_without_byte_loss() {
     )
     .expect("write GNU log round-trip script");
 
-    let mut command = EmacsRuntime::gnu_emacs().command();
-    sandbox.configure(&mut command);
+    let mut command = sandbox.command(&EmacsRuntime::gnu_emacs());
     let output = command
         .arg("--quick")
         .arg("--batch")

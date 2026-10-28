@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 
 use super::elpa_lock::{LockedElpaSource, locked_elpa_source};
 use super::install::{
-    InstallCommandError, PackageInstallDriver, configure_process_environment, elisp_string,
+    InstallCommandError, PackageInstallDriver, elisp_string, package_environment_with_runtime,
     package_preparation_run_id, publish_package_preparation_failure,
 };
 
@@ -351,8 +351,10 @@ fn prepare_cached_package(
     }
 
     let form = install_form(&prepared);
-    let mut command = driver.command();
-    configure_process_environment(&mut command, &root, &home, &tmp);
+    let environment =
+        package_environment_with_runtime(&root, &home, &tmp, &root.join("xdg/runtime"))
+            .expect("package sandbox roots must be absolute");
+    let mut command = driver.command(&environment);
     command.args(["--batch", "--quick", "--eval", &form]);
     let output = match driver.run(&mut command) {
         Ok(output) => output,

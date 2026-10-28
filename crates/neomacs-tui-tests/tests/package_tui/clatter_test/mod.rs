@@ -25,7 +25,10 @@ fn clatter_process_filter_notification_completes_and_remains_visible() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(neomacs_melpa_test_support::neomacs_binary);
     for (label, program) in [
-        ("GNU", gnu.command().get_program().to_os_string()),
+        // The TUI PTY harness pins the child environment; this probe only
+        // needs GNU's executable path (the canonical command would require
+        // an environment it does not use here).
+        ("GNU", gnu.executable.clone().into_os_string()),
         ("NEO", neo.into_os_string()),
     ] {
         let service = PrivateClatterService::start(&artifacts.join(label)).unwrap();

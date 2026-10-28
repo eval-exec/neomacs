@@ -3859,6 +3859,7 @@ dependencies = [
  "neomacs-infra",
  "neomacs-layout-engine",
  "neomacs-terminfo",
+ "neomacs-test-env",
  "neomacs-test-oracle",
  "neomacs-video-model",
  "neomacs-webview",
@@ -4025,6 +4026,7 @@ version = "0.0.20"
 dependencies = [
  "fs4",
  "getrandom 0.4.3",
+ "neomacs-test-env",
  "sha2",
  "tempfile",
  "thiserror 2.0.20",
@@ -4074,6 +4076,7 @@ dependencies = [
  "fs4",
  "neomacs-infra",
  "neomacs-parity-reference",
+ "neomacs-test-env",
  "neomacs-test-oracle",
  "serde_json",
  "sha2",
@@ -4092,6 +4095,7 @@ dependencies = [
  "neomacs-gui-tests",
  "neomacs-infra",
  "neomacs-melpa-test-support",
+ "neomacs-test-env",
  "neomacs-test-oracle",
  "serde_json",
  "sha2",
@@ -4181,6 +4185,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "neomacs-test-env"
+version = "0.0.20"
+dependencies = [
+ "libc",
+ "tempfile",
+]
+
+[[package]]
 name = "neomacs-test-fonts"
 version = "0.0.20"
 dependencies = [
@@ -4209,6 +4221,7 @@ dependencies = [
  "neomacs-display-protocol",
  "neomacs-infra",
  "neomacs-melpa-test-support",
+ "neomacs-test-env",
  "pty-process",
  "serde_json",
  "static_assertions",
@@ -4329,6 +4342,7 @@ dependencies = [
  "memmap2",
  "neomacs-display-protocol",
  "neomacs-infra",
+ "neomacs-test-env",
  "neomacs-test-oracle",
  "neomacs-video-model",
  "neovm-host-abi",
@@ -4396,6 +4410,7 @@ dependencies = [
  "neomacs-infra",
  "neomacs-melpa-test-support",
  "neomacs-parity-reference",
+ "neomacs-test-env",
  "neomacs-test-oracle",
  "proptest",
  "rustls",

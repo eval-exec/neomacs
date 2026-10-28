@@ -183,6 +183,7 @@ contract-fixtures = []
 [dev-dependencies]
 static_assertions.workspace = true
 neomacs-test-oracle.workspace = true
+neomacs-test-env.workspace = true
 trybuild = "1.0"
 expect-test.workspace = true
 thiserror.workspace = true

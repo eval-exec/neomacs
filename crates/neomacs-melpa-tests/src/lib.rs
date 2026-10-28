@@ -12,7 +12,9 @@ use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use neomacs_melpa_test_support::{CommandError, elisp_string, output_with_timeout, sanitize_label};
+use neomacs_melpa_test_support::{
+    CommandError, elisp_string, output_with_timeout_pinned, sanitize_label,
+};
 pub use neomacs_melpa_test_support::{
     EmacsRuntime, LockedPackageSource, MelpaSandbox, PackageActivation, PreparedPackageSet,
     SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan, locked_melpa_source,
@@ -4922,8 +4924,7 @@ fn run_direct_editor_probe(
             stderr_path.display()
         )
     })?;
-    let mut command = runtime.command();
-    sandbox.configure(&mut command);
+    let mut command = sandbox.command(&runtime);
     command
         .arg("--quick")
         .arg("--batch")
@@ -5046,23 +5047,56 @@ struct DirectEditorChild {
     tree_armed: bool,
 }
 
-impl DirectEditorChild {
-    fn spawn(command: &mut Command) -> Result<Self, String> {
+/// The two command types the direct probes run: a canonically pinned editor
+/// and a plain helper fixture (`sh`, a test executable).
+trait DirectSpawnCommand {
+    fn enter_process_group(&mut self);
+    fn spawn_direct(&mut self) -> std::io::Result<Child>;
+}
+
+impl DirectSpawnCommand for Command {
+    fn enter_process_group(&mut self) {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            command.process_group(0);
+            self.process_group(0);
         }
         #[cfg(windows)]
-        let job = {
+        {
             use std::os::windows::process::CommandExt;
             use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+            self.creation_flags(CREATE_SUSPENDED);
+        }
+    }
 
-            command.creation_flags(CREATE_SUSPENDED);
-            DirectWindowsJob::new()?
-        };
+    fn spawn_direct(&mut self) -> std::io::Result<Child> {
+        self.spawn()
+    }
+}
+
+impl DirectSpawnCommand for neomacs_test_env::PinnedCommand {
+    fn enter_process_group(&mut self) {
+        #[cfg(unix)]
+        self.process_group(0);
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
+            self.creation_flags(CREATE_SUSPENDED);
+        }
+    }
+
+    fn spawn_direct(&mut self) -> std::io::Result<Child> {
+        self.spawn()
+    }
+}
+
+impl DirectEditorChild {
+    fn spawn<C: DirectSpawnCommand>(command: &mut C) -> Result<Self, String> {
+        command.enter_process_group();
+        #[cfg(windows)]
+        let job = DirectWindowsJob::new()?;
         let mut child = command
-            .spawn()
+            .spawn_direct()
             .map_err(|error| format!("failed to spawn editor: {error}"))?;
         #[cfg(unix)]
         {
@@ -5872,8 +5906,7 @@ pub fn run_ert_scenario(
         .parent()
         .expect("ERT test files have a parent directory");
     let eval = format!(r##"(ert-run-tests-batch {})"##, scenario.selector);
-    let mut command = runtime.command();
-    sandbox.configure(&mut command);
+    let mut command = sandbox.command(&runtime);
     command
         .env("NEOMACS_RUNTIME_ROOT", workspace_root())
         .args(["--batch", "--quick", "-L"])
@@ -5883,7 +5916,7 @@ pub fn run_ert_scenario(
         .args(["--eval", &eval]);
 
     let started = Instant::now();
-    let output = output_with_timeout(&mut command, runtime.timeout).map_err(|error| {
+    let output = output_with_timeout_pinned(&mut command, runtime.timeout).map_err(|error| {
         command_error_message(error, runtime, &sandbox, &scenario.name, ScenarioPhase::Ert)
     })?;
     let phase = phase_report(ScenarioPhase::Ert, started.elapsed(), output);
@@ -6379,7 +6412,12 @@ fn git<const N: usize>(
     args: [&str; N],
 ) -> Result<(), String> {
     let mut command = Command::new("git");
-    sandbox.configure(&mut command);
+    neomacs_infra::packages::configure_helper_process_environment(
+        &mut command,
+        sandbox.root(),
+        sandbox.home(),
+        sandbox.tmp_dir(),
+    );
     let output = command
         .current_dir(repository)
         .args(args)
@@ -6568,8 +6606,7 @@ fn run_phase_with_validation(
             loader_file.path().display()
         )
     })?;
-    let mut command = runtime.command();
-    sandbox.configure(&mut command);
+    let mut command = sandbox.command(&runtime);
     command
         .env("NEOMACS_RUNTIME_ROOT", workspace_root())
         .env("NEOMACS_MELPA_ORACLE_FORM_FILE", form_file.path())
@@ -6577,7 +6614,7 @@ fn run_phase_with_validation(
         .arg(loader_file.path())
         .args(["--eval", &format!("({TRANSPORTED_FORM_FUNCTION})")]);
     let started = Instant::now();
-    let output = output_with_timeout(&mut command, runtime.timeout)
+    let output = output_with_timeout_pinned(&mut command, runtime.timeout)
         .map_err(|error| command_error_message(error, runtime, sandbox, scenario_name, phase))?;
     let report = phase_report(phase, started.elapsed(), output);
     if report.status_code != Some(0) {

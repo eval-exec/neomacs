@@ -15,6 +15,7 @@ members = [
     "crates/neomacs-perf",
     "crates/neomacs-renderer-wgpu",
     "crates/neomacs-test-fonts",
+    "crates/neomacs-test-env",
     "crates/neomacs-test-oracle",
     "crates/neomacs-infra",
     "crates/neomacs-tui-tests",
@@ -104,6 +105,7 @@ neomacs-webview = { path = "crates/neomacs-webview", default-features = false }
 neomacs-renderer-wgpu = { path = "crates/neomacs-renderer-wgpu", default-features = false }
 neomacs-diagnostics = { path = "crates/neomacs-diagnostics", default-features = false }
 neomacs-perf = { path = "crates/neomacs-perf", default-features = false }
+neomacs-test-env = { path = "crates/neomacs-test-env" }
 neomacs-test-oracle = { path = "crates/neomacs-test-oracle" }
 neomacs-infra = { path = "crates/neomacs-infra" }
 neomacs-melpa-test-support = { path = "crates/neomacs-melpa-test-support" }

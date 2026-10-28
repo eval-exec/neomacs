@@ -102,6 +102,7 @@ jobs:
             --exclude neomacs-infra \
             --exclude neomacs-parity-reference \
             --exclude neomacs-perf \
+            --exclude neomacs-test-env \
             --exclude neomacs-test-fonts \
             --exclude neomacs-test-oracle \
             --exclude neomacs-terminfo \

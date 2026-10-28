@@ -19,7 +19,6 @@ use super::ConfigEnvironment;
 use super::common::{self, Spec};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Environment variable naming an operator's Spacemacs checkout to copy
 /// instead of cloning the pinned spec.
@@ -107,12 +106,29 @@ impl SpacemacsEnvironment {
         // GNU Emacs performs the first-run package install — the fixture
         // is canonical, not reconstructed.  Batch keeps the bootstrap
         // scriptable; package.el installs the core layers' packages into
-        // the overlay's writable elpa.
-        let status = Command::new("emacs")
+        // the overlay's writable elpa.  The editor runs under the suite's
+        // canonical package environment (locale, TZ, identity, umask, XDG
+        // roots); every root lives inside the bootstrap home, which is
+        // discarded after the package state is extracted, so the sealed
+        // fixture sees only the recorded install.
+        let bootstrap_tmp = bootstrap.join("tmp");
+        let bootstrap_runtime = bootstrap.join("xdg/runtime");
+        for directory in [&bootstrap_tmp, &bootstrap_runtime] {
+            fs::create_dir_all(directory)
+                .map_err(|error| format!("create {}: {error}", directory.display()))?;
+        }
+        let environment = crate::packages::install::package_environment_with_runtime(
+            &bootstrap,
+            &bootstrap,
+            &bootstrap_tmp,
+            &bootstrap_runtime,
+        )
+        .map_err(|error| format!("spacemacs bootstrap environment: {error}"))?;
+        let status = environment
+            .command("emacs")
             .arg("--batch")
             .arg("-l")
             .arg(bootstrap.join(".emacs.d/init.el"))
-            .env("HOME", &bootstrap)
             .env_remove("SPACEMACSDIR")
             .status()
             .map_err(|error| format!("spawn emacs bootstrap: {error}"))?;
