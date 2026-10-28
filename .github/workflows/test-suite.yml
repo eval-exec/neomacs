@@ -705,17 +705,26 @@ jobs:
         run: scripts/ci/setup-linux.sh ecosystem
       - name: Set up the Weston test compositor
         run: bash scripts/ci/setup-weston.sh
+      # labwc 0.9+ is the only provisioned compositor that advertises
+      # xdg-toplevel-icon-v1; setup-labwc.sh installs 0.9.7 from the
+      # flake-locked nixpkgs revision (cache.nixos.org substitutes it, so no
+      # wlroots build happens on the runner).
+      - name: Set up Nix for the labwc test compositor
+        uses: ./.github/actions/setup-nix
+      - name: Set up the labwc test compositor
+        run: bash scripts/ci/setup-labwc.sh
       - name: Set up GNU Emacs oracle
         uses: ./.github/actions/setup-gnu-emacs
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-real-gui-tests
-          # Runs prebuilt binaries out of the downloaded nextest archive and
-          # never invokes rustc, so a Cargo build cache here can never be read
-          # back.  Measured: these entries were ~246 MiB each and carried the
-          # SAME content hash as each other, in a 10 GiB store whose overflow
-          # was evicting the release caches.
+          # The archive passes run prebuilt binaries; only the two
+          # feature-gated live compositor steps compile (the
+          # neomacs-display-runtime test target), and that cold build is
+          # cheaper than re-adding a cache whose entries were ~246 MiB each,
+          # carried the SAME content hash as each other, and overflowed the
+          # 10 GiB store until it evicted the release caches.
           cache: "false"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
@@ -761,6 +770,76 @@ jobs:
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 4 \
             --no-fail-fast
+
+      # Feature-gated live compositor tests are not in the hermetic workspace
+      # archive (the archive builds with default features), so these two steps
+      # build the display-runtime test target from source.  The non-vacuity
+      # greps make a silently empty feature run fail instead of a green step
+      # that ran zero tests.
+      #
+      # The menu scenarios drive real pointer and keyboard input through a
+      # compositor and assert xdg_positioner constraint adjustment, which only
+      # Weston 16 implements (13 and 14 return the requested geometry).  The
+      # pinned Weston builds the pixman renderer only -- the runner has no EGL
+      # screen -- so the renderer is pinned here as well rather than asking for
+      # a GL module that the build deliberately omits.
+      - name: Run live Wayland menu tests (Weston 16 headless)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # This step compiles; the daemon-lifecycle source build sets the
+          # same switch so a dev build cannot exhaust the runner's disk.
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          set -euo pipefail
+          unset DISPLAY
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/wayland-menu"
+          mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+          LOG="$RUNNER_TEMP/wayland-menu.log"
+          weston --backend=headless-backend.so --renderer=pixman \
+                 --socket=wayland-menu --idle-time=0 >"$RUNNER_TEMP/weston.log" 2>&1 &
+          weston_pid=$!
+          trap 'kill "$weston_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 100); do [ -S "$XDG_RUNTIME_DIR/wayland-menu" ] && break; sleep 0.1; done
+          test -S "$XDG_RUNTIME_DIR/wayland-menu"
+          if ! WAYLAND_DISPLAY=wayland-menu \
+               cargo nextest run -p neomacs-display-runtime \
+                 --features wayland-live-tests --test-threads 1 \
+                 -E 'test(linux_wayland_native_menu_smoke) or test(linux_wayland_native_menu_tooltip_smoke) or test(linux_wayland_native_menu_replacement_stress) or test(linux_wayland_deferred_menu_replacement_stress)' \
+                 >"$LOG" 2>&1; then
+            cat "$LOG"; exit 1
+          fi
+          grep -Eq 'Summary \[[^]]*\] 4 tests run: 4 passed' "$LOG"
+
+      # Weston 16 does not implement xdg-toplevel-icon-v1; labwc 0.9.7 does,
+      # and setup-labwc.sh provisions exactly that compositor.
+      - name: Run live xdg-toplevel-icon test (labwc headless)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # This step compiles; the daemon-lifecycle source build sets the
+          # same switch so a dev build cannot exhaust the runner's disk.
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          set -euo pipefail
+          unset DISPLAY
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/wayland-icon"
+          mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+          LOG="$RUNNER_TEMP/wayland-icon.log"
+          WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
+            labwc >"$RUNNER_TEMP/labwc.log" 2>&1 &
+          labwc_pid=$!
+          trap 'kill "$labwc_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 100); do [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break; sleep 0.1; done
+          test -S "$XDG_RUNTIME_DIR/wayland-0"
+          if ! WAYLAND_DISPLAY=wayland-0 \
+               cargo nextest run -p neomacs-display-runtime \
+                 --features wayland-live-tests --test-threads 1 \
+                 -E 'test(private_wayland_compositor_accepts_native_toplevel_icon)' \
+                 >"$LOG" 2>&1; then
+            cat "$LOG"; exit 1
+          fi
+          grep -Eq 'Summary \[[^]]*\] 1 test run: 1 passed' "$LOG"
 
       - name: Upload GUI diagnostics
         if: always()
