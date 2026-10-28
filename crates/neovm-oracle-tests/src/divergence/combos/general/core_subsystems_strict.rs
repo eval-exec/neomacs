@@ -2045,9 +2045,14 @@ fn div_core_divergence_surface_kill_buffer_live_process_hangup() {
       (unwind-protect
           (progn
             (kill-buffer buf)
+            ;; Wait for the sentinel itself (the observable event), not for
+            ;; `process-live-p': on a loaded machine the child can be reaped and
+            ;; the raw status flipped before the sentinel is delivered, and the
+            ;; old loop then exited with an empty log.  The neighbouring
+            ;; delete-process probe uses the same nil + event form.
             (let ((i 0))
-              (while (and (process-live-p proc) (< i 20))
-                (accept-process-output proc 0.05)
+              (while (and (null log) (< i 100))
+                (accept-process-output nil 0.05)
                 (setq i (1+ i))))
             (setq result
                   (list (process-status proc)
