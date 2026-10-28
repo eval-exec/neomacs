@@ -40,19 +40,28 @@
          (when (fboundp 'neomacs--write-frame-snapshot)
            (neomacs--write-frame-snapshot
             (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json))
-         ;; Observe the settled native resize, not just the pending Lisp request.
-         (let ((original-height (frame-pixel-height)))
+         ;; Observe the settled native resize, not just the pending Lisp
+         ;; request: a software Wayland compositor can take longer than any
+         ;; fixed delay to acknowledge the configure, so poll the settled
+         ;; geometry and fail only at a deadline.
+         (let ((original-height (frame-pixel-height))
+               (deadline (+ (float-time) 12))
+               (timer nil))
            (set-frame-width nil 91)
-           (run-at-time
-          1 nil
-          (lambda ()
-            (if (and (= (frame-width) 91)
-                     (= (frame-pixel-height) original-height))
-                (kill-emacs 0)
-              (princ (format "DESKTOP-FONT-STARTUP-FAIL resized geometry: expected 91 columns and height %S, got %S / %S\n"
-                             original-height (frame-width) (frame-pixel-height))
-                     'external-debugging-output)
-              (kill-emacs 1))))))
+           (setq timer
+                 (run-at-time
+                  0 0.02
+                  (lambda ()
+                    (when (and (= (frame-width) 91)
+                               (= (frame-pixel-height) original-height))
+                      (cancel-timer timer)
+                      (kill-emacs 0))
+                    (when (> (float-time) deadline)
+                      (cancel-timer timer)
+                      (princ (format "DESKTOP-FONT-STARTUP-FAIL resized geometry: expected 91 columns and height %S, got %S / %S\n"
+                                     original-height (frame-width) (frame-pixel-height))
+                             'external-debugging-output)
+                      (kill-emacs 1)))))))
      (error
       (princ (format "DESKTOP-FONT-STARTUP-FAIL %S\n" err) 'external-debugging-output)
       (message "Desktop font startup regression: %S" err)
