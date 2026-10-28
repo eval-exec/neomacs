@@ -339,3 +339,26 @@ fn face_overlay_replay_declines_under_structural_configurations() {
         exercise(setup, &[(move_form, 0)]);
     }
 }
+
+/// `NEOMACS_LAYOUT_EDIT_SYNC=prove` must disable synchronized reuse here too.
+#[test]
+fn face_overlay_replay_declines_in_prove_mode() {
+    use crate::incremental_layout::edit_sync::{EditSyncMode, set_edit_sync_mode_for_test};
+
+    struct RestoreSyncMode;
+    impl Drop for RestoreSyncMode {
+        fn drop(&mut self) {
+            set_edit_sync_mode_for_test(None);
+        }
+    }
+
+    set_edit_sync_mode_for_test(Some(EditSyncMode::Prove));
+    let _restore = RestoreSyncMode;
+    exercise(
+        "nil",
+        &[(
+            "(progn (forward-line 1) (move-overlay moving-highlight (point) (line-beginning-position 2)))",
+            0,
+        )],
+    );
+}
