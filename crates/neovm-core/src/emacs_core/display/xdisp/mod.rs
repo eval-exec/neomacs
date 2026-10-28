@@ -8652,9 +8652,7 @@ fn retained_rows_answer_for_live_window(
         .get(fid)
         .and_then(|frame| frame.redisplay_snapshot(wid))
         .and_then(|snapshot| snapshot.layout_freshness.as_ref())
-        .is_some_and(|recorded| {
-            recorded.same_position_rows_ignoring_point(&current)
-        }))
+        .is_some_and(|recorded| recorded.same_position_rows_ignoring_point(&current)))
 }
 
 /// Whether display line numbers in BUFFER leave row geometry independent of

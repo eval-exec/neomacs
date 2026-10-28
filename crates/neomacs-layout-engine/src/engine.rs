@@ -2761,13 +2761,10 @@ impl LayoutEngine {
                 // while measuring. A later scroll continuation may only reuse
                 // faces already admitted by Phase A; fresh face IDs have been
                 // allocated by now, so never admit more retained IDs here.
-                let retry_retained_faces = plan
-                    .retry_admitted_faces
-                    .take()
-                    .map(|faces| {
-                        debug_assert!(faces.is_sorted());
-                        (plan.retained_face_generation(), faces)
-                    });
+                let retry_retained_faces = plan.retry_admitted_faces.take().map(|faces| {
+                    debug_assert!(faces.is_sorted());
+                    (plan.retained_face_generation(), faces)
+                });
                 // Phase A already admitted these rows' faces. Only the generation
                 // is needed to validate a continuation; release the rows now.
                 let retry_continuation_generation = plan

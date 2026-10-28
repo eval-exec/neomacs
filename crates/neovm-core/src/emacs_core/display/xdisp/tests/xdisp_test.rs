@@ -4118,7 +4118,9 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
     let mut eval = interactive_context();
     let buffer = eval.buffers.current_buffer().unwrap().id;
     eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
-    let frame = eval.frames.create_frame("relative-row-query", 160, 96, buffer);
+    let frame = eval
+        .frames
+        .create_frame("relative-row-query", 160, 96, buffer);
     let window = eval.frames.get(frame).unwrap().selected_window;
     eval.frames.get_mut(frame).unwrap().initial = false;
     eval.eval_str("(progn (set-default 'display-line-numbers 'relative) (goto-char 1))")
@@ -4162,8 +4164,7 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
         WindowLayoutQueryOutcome::Unavailable
     });
     let query = |eval: &mut Context| {
-        builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)])
-            .unwrap()
+        builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)]).unwrap()
     };
     assert!(!query(&mut eval).is_nil());
     assert!(
@@ -4186,7 +4187,10 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
     let moved = eval
         .window_display_snapshot_freshness(frame, window, buffer)
         .unwrap();
-    assert_ne!(freshness, moved, "the fixture must change snapshot freshness");
+    assert_ne!(
+        freshness, moved,
+        "the fixture must change snapshot freshness"
+    );
     assert!(freshness.same_position_rows_ignoring_point(&moved));
     query(&mut eval);
     assert_eq!(
@@ -4215,7 +4219,9 @@ fn posn_at_point_requeries_warm_rows_after_face_overlay_height_changes_or_moves(
         let mut eval = interactive_context();
         let buffer = eval.buffers.current_buffer().unwrap().id;
         eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
-        let frame = eval.frames.create_frame("overlay-row-query", 160, 96, buffer);
+        let frame = eval
+            .frames
+            .create_frame("overlay-row-query", 160, 96, buffer);
         let window = eval.frames.get(frame).unwrap().selected_window;
         eval.frames.get_mut(frame).unwrap().initial = false;
         eval.eval_str(setup).unwrap();
