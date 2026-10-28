@@ -360,6 +360,19 @@ pub(super) fn render_frame_content_overlays(
                     glyphs = child_frame.glyphs.len(),
                     "child_frame_lifecycle: render_child_frame_start"
                 );
+                // The resize mix is its own weight, not an opacity: the old
+                // and new pictures are mixed in the renderer and the
+                // accepted/lifecycle alpha is applied to the result. Log it
+                // beside the draw so the crossfade ramp is readable from the
+                // render thread's own record, independent of capture latency.
+                if let Some((_, _, _, mix)) = crossfade_layer {
+                    tracing::debug!(
+                        parent_frame_id = render.emacs_frame_id,
+                        frame_id = child_id,
+                        mix,
+                        "child_frame_lifecycle: render_child_frame_crossfade"
+                    );
+                }
             }
             if crossfade_layer.is_some() {
                 frame_stats::count(&frame_stats::CHILD_FRAME_CROSSFADE_QUADS);
