@@ -5634,7 +5634,11 @@ fn vm_window_resize_and_metric_builtins_use_shared_runtime_state() {
                    (frame-scroll-bar-width f)
                    (redirect-frame-focus f f)))"#
         ),
-        "OK (nil t t t 0.5 0.5 20 20 10 10 0 nil 0 0 0 0 0 0 0 0 nil 0 0 nil 0 0 nil t 0 1.0 0 0 nil)"
+        // GNU 31.1 (canonical oracle, batch -Q) prints exactly this list. In
+        // particular `window-resize-apply' is nil on a frame whose root has no
+        // pending new size: Fwindow_resize_apply refuses unless the root's
+        // new_pixel equals its current pixel size (src/window.c:4986-4989).
+        "OK (nil t nil t 0.5 0.5 20 20 10 10 0 nil 0 0 0 0 0 0 0 0 nil 0 0 nil 0 0 nil t 0 1.0 0 0 nil)"
     );
 }
 
@@ -5730,7 +5734,7 @@ fn vm_window_deletion_and_frame_builtins_use_shared_runtime_state() {
                        (delete-window-internal w2)
                        ;; GNU's `Fdelete_window_internal' ends with
                        ;; `Fselect_window (new_selected_window, Qt)'
-                       ;; (src/window.c), and `select_window' makes the new
+                       ;; (src/window.c:4986-4989). and `select_window' makes the new
                        ;; window's buffer current.  Ours selects but does not
                        ;; set the buffer, so the test names the second C step.
                        (progn (select-window w1) (eq (selected-window) w1))
