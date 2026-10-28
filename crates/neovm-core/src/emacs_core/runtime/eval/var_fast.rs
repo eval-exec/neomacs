@@ -141,6 +141,30 @@ fn read_var_cache_knob() -> u8 {
     tiers
 }
 
+/// Admission for one immediate noncalling cached Read on this thread.
+///
+/// The existing selector is the only constructor. Consuming this zero-sized
+/// token lets callers that already borrowed a symbol avoid resolving its id
+/// again, while preserving admission before any new symbol lookup. It is not
+/// a saved symbol/cache owner and must not cross a callback or thread boundary.
+#[derive(Debug)]
+#[must_use]
+pub(super) struct CachedVarReadTier {
+    _thread: std::marker::PhantomData<*mut ()>,
+}
+
+impl CachedVarReadTier {
+    #[inline(always)]
+    pub(super) fn admit() -> Option<Self> {
+        var_cache_tier_on(VarCacheTier::Read).then_some(Self {
+            _thread: std::marker::PhantomData,
+        })
+    }
+}
+
+static_assertions::assert_eq_size!(CachedVarReadTier, ());
+static_assertions::assert_not_impl_any!(CachedVarReadTier: Send, Sync, Clone, Copy);
+
 // ---------------------------------------------------------------------------
 // Census
 // ---------------------------------------------------------------------------
@@ -308,12 +332,23 @@ impl Context {
     /// `None` for anything else -- a plain or aliased symbol, a BLV miss,
     /// no current buffer, a void value (the general path signals
     /// `void-variable`) -- and when the `read` tier is off.
-    #[inline(never)]
+    #[inline(always)]
     pub(crate) fn read_var_cached(&self, id: SymId) -> Option<Value> {
-        if !var_cache_tier_on(VarCacheTier::Read) {
-            return None;
-        }
+        let tier = CachedVarReadTier::admit()?;
         let sym = self.obarray.get_by_id(id)?;
+        self.read_var_cached_symbol(sym, tier)
+    }
+
+    /// The admitted Read tier for a symbol borrowed from this Context's obarray.
+    /// No Lisp callback, Lisp allocation, GC safepoint or owner change can
+    /// occur between that borrow and this read. The existing BLV buffer/epoch
+    /// and forwarder rules remain the sole authority for a cached answer.
+    #[inline(never)]
+    pub(super) fn read_var_cached_symbol(
+        &self,
+        sym: &LispSymbol,
+        _tier: CachedVarReadTier,
+    ) -> Option<Value> {
         let value = match sym.redirect() {
             SymbolRedirect::Localized => self.read_localized_cached(sym),
             SymbolRedirect::Forwarded => self.read_forwarded_cached(sym),

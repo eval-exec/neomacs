@@ -69,6 +69,21 @@ fn typed_reads_answer_like_the_general_reader() {
             for (name, typed, general) in read_all(&eval) {
                 assert_eq!(typed, general, "{name} in {buffer}, frontend {frontend}");
             }
+            if frontend {
+                // The canonical read loads this buffer's BLV. A builtin
+                // already resolved the symbol before asking its cached tier;
+                // reading that cell must not resolve the same identity again.
+                let id = intern("case-fold-search");
+                let expected = eval.special_variable_value_by_id(id);
+                eval.obarray.reset_symbol_slot_read_count();
+                let actual = eval.builtin_var_value(id);
+                let symbol_reads = eval.obarray.symbol_slot_read_count();
+                assert_eq!(actual, expected, "cached control variable in {buffer}");
+                assert_eq!(
+                    symbol_reads, 1,
+                    "cached builtin read must resolve its symbol once in {buffer}"
+                );
+            }
         }
     }
     set_builtin_frontend_for_test(None);

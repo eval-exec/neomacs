@@ -18,6 +18,7 @@
 //! A/B: unset, `1`, `on` or `all` enables them; `0`, `off` or `none` restores
 //! the general reads and the old per-call preparation. Read once per
 //! process, on the first builtin that asks.
+use super::var_fast::CachedVarReadTier;
 use super::*;
 use crate::emacs_core::symbol::ValueCell;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -107,7 +108,10 @@ impl Context {
         let sym = self.obarray.get_by_id(id)?;
         match sym.value_cell() {
             ValueCell::Plain(value) => (!value.is_unbound()).then_some(value),
-            ValueCell::Localized(_) | ValueCell::Forwarded(_) => self.read_var_cached(id),
+            ValueCell::Localized(_) | ValueCell::Forwarded(_) => {
+                let tier = CachedVarReadTier::admit()?;
+                self.read_var_cached_symbol(sym, tier)
+            }
             ValueCell::Alias(_) => None,
         }
     }
