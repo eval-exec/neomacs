@@ -720,10 +720,15 @@ jobs:
       - *prepare_workspace_tmp
       - uses: ./.github/actions/install-build-deps
 
+      # Share the macOS release cache with the file-notify ERT job, which
+      # builds the same fresh release runtime. Save only on main so PRs do not
+      # write a ~1 GB PR-scoped copy.
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
           cache-key: doom-install-macos
+          cache-shared-key: macos-aarch64-release
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           target: aarch64-apple-darwin
 
       - name: Build the runtime this job installs Doom into
