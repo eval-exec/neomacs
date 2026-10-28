@@ -754,7 +754,7 @@ jobs:
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
-            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~continuous_120hz_) or test(~rich_large_buffer_wheel_presents_while_command_is_stalled) or test(~resize_presentation::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
+            -E '(package(neomacs-gui-tests) and (test(~native_menus::) or test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::))) or (package(neomacs-display-runtime) and test(scroll_input))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 1 \
             --no-fail-fast
@@ -766,7 +766,7 @@ jobs:
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
             --extract-overwrite \
-            -E 'package(neomacs-gui-tests) and not (test(~native_menus::) or test(~continuous_120hz_) or test(~rich_large_buffer_wheel_presents_while_command_is_stalled) or test(~resize_presentation::))' \
+            -E 'package(neomacs-gui-tests) and not (test(~native_menus::) or test(~continuous_120hz_) or test(~presents_while_command_is_stalled) or test(~presents_resolved_destination_while_command_is_stalled) or test(~presents_pixels_while_evaluator_is_stalled) or test(~have_confirmed_input_latency) or test(~resize_presentation::))' \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --test-threads 4 \
             --no-fail-fast
