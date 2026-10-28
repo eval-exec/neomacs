@@ -83,7 +83,7 @@ fn install_layout(
 ) {
     render.measure_pane_layout(Some(root), origin);
     render.compositor.current_frame = Some(root.clone());
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
 }
 fn seed_pending_layout(
     render: &mut GuiFrameRenderState,

@@ -270,9 +270,12 @@ fn static_scene(shrink: bool) {
     );
     let pressure = hold(&mut renderer, u64::from(W * H * 2));
     if !shrink {
-        refused(&mut renderer, &mut render, &root, &full_plan());
         child(&mut render, 0.7);
     }
+    // A child makes even a current retained scene ineligible: keeping it
+    // would flatten the child below a subsequently composed root cursor.
+    // Admission must retire that ownership before requesting child targets.
+    assert!(!retained_static::is_eligible(true, &[], &render));
     let result = admitted(&mut renderer, &mut render, &root, &full_plan());
     assert!(render.compositor.retained_static.is_none());
     assert_eq!(renderer.gpu_budget().unpooled_bytes(), u64::from(W * H)); // live stencil, not stale census

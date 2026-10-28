@@ -59,7 +59,9 @@ fn terminal_scene_commands_schedule_repositioning_and_final_removal() {
             vec![retained_terminal_glyph.clone()],
             Default::default(),
         ));
-    primary.render.begin_presentable_render();
+    primary
+        .render
+        .begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
 
     app.handle_terminal(TerminalCommand::TerminalSetFloat {
         id,
@@ -78,7 +80,7 @@ fn terminal_scene_commands_schedule_repositioning_and_final_removal() {
         .primary_window_mut()
         .expect("test app has a primary window")
         .render
-        .begin_presentable_render();
+        .begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
 
     app.handle_terminal(TerminalCommand::TerminalDestroy { id });
 

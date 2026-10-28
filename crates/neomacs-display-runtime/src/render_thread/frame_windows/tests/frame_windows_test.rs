@@ -252,7 +252,7 @@ fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {
     );
     assert!(composed.faces.contains_key(&face_id));
 
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     let installed_generation = render.compositor.current_scene_generation;
     assert_eq!(
         render.replace_terminal_expansion(expansion),
@@ -310,7 +310,7 @@ fn terminal_expansion_rejects_editor_face_collisions_without_partial_installatio
         render.replace_terminal_expansion(retained),
         TerminalExpansionUpdate::Replaced
     );
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     let installed_generation = render.compositor.current_scene_generation;
 
     let collision = TerminalExpansion::new(
@@ -772,7 +772,7 @@ fn beginning_presentable_render_consumes_dirty_content() {
     );
     render.mark_dirty();
 
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
 
     assert!(!render.compositor.dirty);
     assert!(!render.has_presentable_dirty_content());
@@ -1819,7 +1819,7 @@ fn cursor_blink_toggle_asks_for_a_cursor_frame_not_a_repaint() {
     );
     render.cursor.blink_enabled = true;
     render.cursor.blink_interval = std::time::Duration::from_millis(1);
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(!render.has_presentable_dirty_content());
 
     let toggled = render.tick_cursor_blink(
@@ -1841,7 +1841,7 @@ fn cursor_blink_toggle_asks_for_a_cursor_frame_not_a_repaint() {
 
     // Starting any frame satisfies both channels: every render path draws the
     // cursor at its current blink state.
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(!render.has_presentable_cursor_change());
 }
 
@@ -1870,7 +1870,7 @@ fn content_change_outranks_a_pending_cursor_change() {
     assert!(render.has_presentable_cursor_change());
     // The demand model merges strongest-invalidation-wins, so the repaint the
     // content owes covers the cursor layer too.
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(!render.has_presentable_dirty_content());
     assert!(!render.has_presentable_cursor_change());
 }
@@ -2148,7 +2148,7 @@ fn cursor_motion_tick_does_not_damage_editor_content() {
         crate::render_thread::cursor::CursorTarget { y: 36.0, ..target },
         now,
     );
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(render.tick_cursor_animation(now.plus(std::time::Duration::from_millis(16))));
     assert!(
         !render.has_presentable_dirty_content(),
@@ -2188,12 +2188,12 @@ fn cursor_size_tick_does_not_damage_editor_content() {
         },
         now,
     );
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(render.tick_cursor_size_animation(now.plus(std::time::Duration::from_millis(16))));
     assert!(!render.has_presentable_dirty_content());
     assert!(render.has_presentable_cursor_change());
     // The final sample still owes a cursor frame when continuous demand ends.
-    render.begin_presentable_render();
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
     assert!(render.tick_cursor_size_animation(now.plus(std::time::Duration::from_secs(2))));
     assert!(render.has_presentable_cursor_change());
     assert!(!render.has_presentable_dirty_content());
@@ -2239,7 +2239,8 @@ fn assert_child_cursor_interpolation_repaints(
         std::time::Duration::from_millis(16),
         std::time::Duration::from_secs(2),
     ] {
-        render.begin_presentable_render();
+        render
+            .begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
         assert!(tick(&mut render, now.plus(elapsed)));
         assert!(render.has_presentable_cursor_change());
         assert!(
@@ -2259,4 +2260,97 @@ fn child_frame_cursor_motion_tick_repaints_child_scene() {
 #[test]
 fn child_frame_cursor_size_tick_repaints_child_scene() {
     assert_child_cursor_interpolation_repaints(|render, at| render.tick_cursor_size_animation(at));
+}
+
+/// A cursor deadline can precede a scheduled scene repaint. In particular,
+/// the final child cursor sample must survive that earlier composite frame.
+#[test]
+fn composite_frame_preserves_final_child_cursor_scene_damage() {
+    use crate::render_thread::frame_sched::{
+        Cadence, ClockSource, Damage, DemandReason, FrameCoordinator, FrameDemand, FrameTick,
+        Invalidation, LayerMask, NativeWindowId, RenderWork,
+    };
+    let now = neomacs_display_protocol::frame_time::observe_platform_now();
+    let rate = std::num::NonZeroU16::new(60).unwrap();
+    let id = NativeWindowId(0x42);
+    let mut coordinator = FrameCoordinator::new();
+    let redisplay = FrameDemand {
+        invalidation: Invalidation::RepaintLayers {
+            layers: LayerMask::all(),
+            damage: Damage::FullLayer,
+        },
+        cadence: Cadence::MaxRate(rate),
+        reason: DemandReason::Redisplay,
+    };
+    let tick = |at| FrameTick {
+        frame_time: at,
+        target_presentation_time: at,
+        estimated_interval: std::time::Duration::from_millis(16),
+        source: ClockSource::Synthetic,
+    };
+    coordinator.submit_demand(id, redisplay, now);
+    coordinator.begin_frame(id, tick(now));
+
+    let mut render = GuiFrameRenderState::new_without_device(0x42, false, now);
+    render.set_current_frame(
+        Some(make_frame(0x42, 0)),
+        None,
+        Default::default(),
+        Default::default(),
+    );
+    render.begin_presentable_render(crate::render_thread::frame_sched::RenderWork::RebuildScene);
+    render.cursor.anim_enabled = false;
+    render.cursor.size_transition_enabled = true;
+    render.cursor.size_transition_duration = 0.001;
+    let target = CursorTarget {
+        window_id: 7,
+        x: 10.0,
+        y: 20.0,
+        width: 8.0,
+        height: 16.0,
+        style: CursorStyle::FilledBox,
+        frame_id: 0x43,
+    };
+    render.cursor.set_target(target.clone(), now);
+    render.cursor.set_target(
+        CursorTarget {
+            width: 16.0,
+            ..target
+        },
+        now,
+    );
+    let at = now.plus(std::time::Duration::from_millis(2));
+    assert!(render.tick_cursor_size_animation(at));
+    assert!(
+        !render.cursor.is_animating(),
+        "this is the final size sample"
+    );
+    assert!(render.has_presentable_dirty_content());
+    coordinator.submit_demand(id, redisplay, at);
+    coordinator.submit_demand(
+        id,
+        FrameDemand {
+            invalidation: Invalidation::CompositeOnly {
+                layers: LayerMask::CURSOR_EFFECTS,
+            },
+            cadence: Cadence::NextPresentation,
+            reason: DemandReason::CursorAnimation,
+        },
+        at,
+    );
+    let plan = coordinator.begin_frame(id, tick(at));
+    assert!(matches!(plan.work, RenderWork::CompositeOnly { .. }));
+    render.begin_presentable_render(plan.work);
+    assert!(!render.has_presentable_cursor_change());
+    assert!(
+        render.has_presentable_dirty_content(),
+        "a cursor-only frame must preserve the final child cursor scene sample"
+    );
+    let repaint = coordinator.begin_frame(id, tick(now.plus(std::time::Duration::from_millis(20))));
+    assert!(matches!(repaint.work, RenderWork::RepaintLayers { .. }));
+    render.begin_presentable_render(repaint.work);
+    assert!(
+        !render.has_presentable_dirty_content(),
+        "a full repaint satisfies pending scene damage"
+    );
 }

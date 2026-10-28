@@ -53,6 +53,7 @@ pub(in crate::render_thread) mod surface;
 
 use self::surface::FrameRenderFailure;
 use super::RenderApp;
+use super::frame_sched::{Damage, LayerMask, RenderWork};
 use super::frame_windows::{
     FrameLifecycle, GuiFrameNativeWindowState, GuiFrameRenderState, GuiFrameWindowState,
 };
@@ -335,7 +336,6 @@ fn render_frame_window_contents_reserved(
         .take_current_frame_for_render(&acquired)
         .ok_or(FrameRenderFailure::AwaitingContent)?;
     feature_plan.prepare_frame(&mut frame);
-    render.begin_presentable_render();
     if extra_line_spacing != 0.0 || extra_letter_spacing != 0.0 {
         RenderApp::apply_extra_spacing(
             &mut frame.glyphs,
@@ -412,6 +412,9 @@ fn render_frame_window_contents_reserved(
         .root_frame_point_from_surface(render.mouse_pos.0, render.mouse_pos.1)
         .unwrap_or((-1.0, -1.0));
     if retained_static::is_eligible(compositor_only_hint, &pane_blits, render) {
+        render.begin_presentable_render(RenderWork::CompositeOnly {
+            layers: LayerMask::CURSOR_EFFECTS,
+        });
         let hovered_scroll_bar = render.hovered_scroll_bar(&frame);
         let draw_result = retained_static::draw(
             renderer,
@@ -462,6 +465,11 @@ fn render_frame_window_contents_reserved(
             projection: pane_projection,
         });
     }
+
+    render.begin_presentable_render(RenderWork::RepaintLayers {
+        layers: LayerMask::all(),
+        damage: Damage::FullLayer,
+    });
 
     // Rotated here rather than at the top of the frame: every path above
     // returns without composing anything, and advancing for a frame that

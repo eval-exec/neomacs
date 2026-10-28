@@ -590,9 +590,6 @@ impl RenderApp {
                     if let Some(renderer) = self.renderer.as_mut() {
                         renderer.set_frame_sample(plan.tick.sample());
                     }
-                    if let Some(window_state) = self.frame_windows.get_mut(emacs_fid) {
-                        window_state.render.set_dirty(false);
-                    }
                     // Stage 4: any compositor-only plan can use the retained
                     // static scene and sample just its dynamic layers (cursor,
                     // frame post, and later compositor effects). Any stronger

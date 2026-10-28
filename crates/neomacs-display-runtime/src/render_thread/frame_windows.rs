@@ -18,6 +18,7 @@ use winit::window::{
 
 use super::cursor::{CursorState, CursorTarget};
 pub(crate) use super::frame_compositor::{FrameCompositor, RetainedCursorCell, RetainedStatic};
+use super::frame_sched::RenderWork;
 use super::geometry_hints::apply_window_geometry_hints;
 use super::state::{
     FpsCounter, GuiChromeInteractionState, IdleDimState, ImeCursorArea, PendingPointerDamage,
@@ -1144,8 +1145,17 @@ impl GuiFrameRenderState {
         self.compositor.cursor_dirty && self.compositor.current_frame.is_some()
     }
 
-    pub(super) fn begin_presentable_render(&mut self) {
-        self.compositor.dirty = false;
+    /// Consume only the damage the selected rendering strategy will paint.
+    /// A cursor composite cannot satisfy pending scene damage, even if it
+    /// reaches the surface before the scene's paced redisplay deadline.
+    pub(super) fn begin_presentable_render(&mut self, work: RenderWork) {
+        match work {
+            RenderWork::None => return,
+            RenderWork::CompositeOnly { .. } => {}
+            RenderWork::RepaintLayers { .. } | RenderWork::RebuildScene => {
+                self.compositor.dirty = false;
+            }
+        }
         self.compositor.cursor_dirty = false;
         // The measurement baseline advances here and nowhere else, because this
         // is the first point at which the retained presentation is committed to
