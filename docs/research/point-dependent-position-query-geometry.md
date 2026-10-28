@@ -98,3 +98,13 @@ without redisplay. Each mode/header/tab-line case checks that a taller live row
 hides the old last body target. The current-line-number case checks that moving
 the tall current-line face lowers the target's Y coordinate. Font-dependent
 absolute pixel coordinates need not match between the two executables.
+
+Final verification used `cargo nextest`: 141 core tests, 353 layout-engine tests,
+two oracle tests, one TUI comparison and three real GUI tests passed. The full
+release fresh-build also regenerated the matching dump and Lisp bytecode.
+Both GUI executables returned `[true, false]` for each chrome case; current-line
+Y changed from 38 to 20 in GNU and from 35 to 18 in Neomacs. Startup surface
+readback was visually checked. Timer-driven navigation ran with hardware
+`quality_mode=Full`, reached line 261 and recorded 317 scene commits, 494 root
+glyph passes and 1,099 composite-only frames at the final periodic sample.
+Every GUI process used a private display.
