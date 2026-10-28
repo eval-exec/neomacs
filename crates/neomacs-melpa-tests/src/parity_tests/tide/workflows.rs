@@ -3833,6 +3833,15 @@ const FAILURE_RECOVERY_BODY: &str = r#"(lambda (world)
                             first-process root))
       (unless (equal before (source-state buffer main))
         (error "Tide healthy framing mutated the source state"))
+      ;; The public restart deletes this session through the checked route,
+      ;; whose ledger contract is a READY trace record.  The documentation
+      ;; buffer proves the response frames arrived, not that the adapter's
+      ;; append ran, so wait for the record like the lifecycle body does.
+      (wait-until
+       (lambda ()
+         (tide368-test-terminal-record
+          (process-get first-process 'tide368-session-index)))
+       first-process 'healthy-ready)
       (tide-restart-server)
       (setq second-process (tide368-test-assert-current-server))
       (when (eq first-process second-process)
@@ -3886,6 +3895,11 @@ const FAILURE_RECOVERY_BODY: &str = r#"(lambda (world)
       (setq after (source-state buffer main))
       (unless (equal before after)
         (error "Tide public recovery changed the source state"))
+      (wait-until
+       (lambda ()
+         (tide368-test-terminal-record
+          (process-get third-process 'tide368-session-index)))
+       third-process 'recovered-ready)
       (tide-kill-server)
       (wait-until (lambda () (not (process-live-p third-process)))
                   third-process 'public-final-kill)
