@@ -35,6 +35,12 @@
 # record cannot be forgotten.
 #
 # RE-BASELINING LOG
+#   2026-10-28  GNU Emacs 31.1 built 2026-10-28T08:19:25-04:00 from mirror commit a360712c9d2.
+#               Recipe change: GSettings on and Tree-sitter 0.26.11 bundled
+#               in the oracle prefix. Rebuilt from mirror a360712c9d2; the
+#               whole oracle package re-verified, no expectation re-recorded
+#               (the one GNU-side mismatch under load was a timing flake,
+#               18/18 on re-run).
 #   2026-09-16  GNU Emacs 31.1 built 2026-09-13T03:18:28-04:00 from mirror commit a360712c9d2.
 #               User requested the existing GNU Emacs 31.1 build from
 #               2026-09-13 for full-suite validation; preserve all test
@@ -56,9 +62,9 @@
 schema = "1"
 emacs_version = "31.1"
 mirror_commit = "a360712c9d272d950d8d8255ef74570f7e90b7d9"
-build_time = "2026-09-13T03:18:28-04:00"
-fingerprint = "65a0d3fc8ef8849514a09a3837ed1673133aef5014d19f6d968b0bf23a333036"
-executable_sha256 = "1bbc23be1ed3ed354779b184f872f0ff7879aac1e121b475ee38c319275e9791"
-executable_size = "31675280"
-pdmp_sha256 = "e9ca70c302384a2639bf14f688cbcb226f39c4a500d636ae9fea0b3f8d6ac14c"
-pdmp_size = "15449680"
+build_time = "2026-10-28T08:19:25-04:00"
+fingerprint = "90c7a67cf0d95b746f00e16b779e48e4b21567334a9a9c1ecb205701a51b1c02"
+executable_sha256 = "ebe445d3db56d694527431b0ded2f7b8528cfe931f8f6839a9e53c247a5a1af3"
+executable_size = "26383728"
+pdmp_sha256 = "0bb8856cb09ea260a4344e36314eb046405b9123a5eaacdc963d5e687fb6c0b1"
+pdmp_size = "13618192"
