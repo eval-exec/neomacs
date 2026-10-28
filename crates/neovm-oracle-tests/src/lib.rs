@@ -303,6 +303,7 @@ mod or;
 mod oracle_harness_semantics;
 mod overlay_comprehensive_patterns;
 mod overlay_helper_semantics;
+mod package_eol_async_semantics;
 mod parse_colon_path_strict_edge_semantics;
 mod parse_time_semantics;
 mod pcase_comprehensive_patterns;

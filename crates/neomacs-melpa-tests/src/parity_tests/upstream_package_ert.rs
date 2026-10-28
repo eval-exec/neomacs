@@ -123,13 +123,11 @@ fn upstream_package_signature_contract() {
 }
 
 #[test]
-#[ignore = "known Neomacs divergence: CRLF package version retains carriage return"]
 fn upstream_package_eol_contract() {
     run_group("upstream-package-eol", &["package-test-install-file-EOLs"]);
 }
 
 #[test]
-#[ignore = "known Neomacs divergence: async package refresh writes a read-only menu buffer"]
 fn upstream_package_async_refresh_contract() {
     let started = Instant::now();
     run_group(
