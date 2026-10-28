@@ -3473,7 +3473,8 @@ impl crate::emacs_core::eval::Context {
             // structural lookup stopped at a filter-resolved prefix and
             // reported the deep translation as unreachable.
             let mut current_map = map;
-            for event in events[start..].iter() {
+            let suffix = &events[start..];
+            for (index, event) in suffix.iter().enumerate() {
                 let binding = crate::emacs_core::keymap::list_keymap_lookup_one_runtime(
                     self,
                     &current_map,
@@ -3487,7 +3488,9 @@ impl crate::emacs_core::eval::Context {
                 // GNU errors when a *called* translation returns something
                 // invalid; a nil resolution (an explicit nil binding or an
                 // unbound suffix) is simply not a translation for this start.
-                if binding.is_nil() {
+                // A translation that ends before the last event is not a
+                // suffix translation: taking it would drop the later events.
+                if binding.is_nil() || index + 1 != suffix.len() {
                     break;
                 }
                 let Some(replacement) = self.call_key_sequence_translation(binding, prompt)? else {

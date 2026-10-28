@@ -1749,6 +1749,47 @@ fn read_key_sequence_translates_raw_tty_csi_through_input_decode_map() {
 }
 
 #[test]
+fn read_key_sequence_keeps_events_after_an_earlier_decode_translation() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    install_global_map_for_test(&mut ev, global_map);
+    let ctrl_x = Value::fixnum(0x18);
+    let ctrl_c = Value::fixnum(0x03);
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[ctrl_x, ctrl_c],
+        Value::symbol("neomacs-test-kill-command"),
+        crate::tagged::SymbolMode::Bare,
+    )
+    .expect("define C-x C-c");
+    // Each prefix key maps to itself in input-decode-map.
+    let input_decode_map = ev
+        .eval_symbol("input-decode-map")
+        .expect("input-decode-map");
+    for key in [ctrl_x, ctrl_c] {
+        crate::emacs_core::keymap::list_keymap_define_seq(
+            input_decode_map,
+            &[key],
+            Value::vector(vec![key]),
+            crate::tagged::SymbolMode::Bare,
+        )
+        .expect("define identity translation");
+    }
+    let (tx, rx) = crossbeam_channel::unbounded();
+    ev.input_rx = Some(rx);
+    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0x18, 0x03], 0))
+        .unwrap();
+    // Close the channel so a reader that lost C-c fails with quit instead of
+    // waiting forever for another key.
+    drop(tx);
+
+    let (keys, binding) = ev.read_key_sequence().expect("read C-x C-c");
+    assert_eq!(keys, vec![ctrl_x, ctrl_c]);
+    assert_eq!(binding, Value::symbol("neomacs-test-kill-command"));
+}
+
+#[test]
 fn read_char_switches_active_kboard_to_keypress_source_frame_terminal() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
