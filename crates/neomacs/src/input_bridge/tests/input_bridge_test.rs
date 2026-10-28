@@ -153,6 +153,7 @@ fn frame_shader_failure_reaches_the_evaluator() {
 }
 
 #[test]
+#[cfg(feature = "neo-term")]
 fn terminal_lifecycle_events_reach_the_evaluator_losslessly() {
     let id = neovm_core::emacs_core::display_host::TerminalId::new(17).unwrap();
     assert!(matches!(
