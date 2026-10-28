@@ -340,9 +340,10 @@ impl SpecSlot {
     /// Low three bits of a subr slot's `direct_entry` hold the cached
     /// screened entry's [`SubrFn`](crate::tagged::header::SubrFn) class
     /// (`slots + 1`, `slots` being the fixed entry's A0..A5 slot count
-    /// 0..=5); the rest is the entry's code address. A subr slot never arms
-    /// a direct entry ([`Self::arm_direct_entry`] refuses one), so the word
-    /// is otherwise unused there.
+    /// 0..=5); the rest is the entry's code address shifted left by three
+    /// (see [`Self::pack_screened_subr_entry`]). A subr slot never arms a
+    /// direct entry ([`Self::arm_direct_entry`] refuses one), so the word is
+    /// otherwise unused there.
     pub(crate) const SUBR_ENTRY_CLASS_MASK: u64 = 7;
 
     /// The screened fixed-arity builtin entry cached for the armed subr spec
@@ -354,9 +355,9 @@ impl SpecSlot {
     }
 
     /// Cache the screened fixed-arity builtin entry of a `SubrGeneral` site:
-    /// its code address with the [`SubrFn`](crate::tagged::header::SubrFn)
-    /// slot class in the low three bits
-    /// ([`Self::pack_screened_subr_entry`]).
+    /// its code address shifted left three, with the
+    /// [`SubrFn`](crate::tagged::header::SubrFn) slot class in the low three
+    /// bits ([`Self::pack_screened_subr_entry`]).
     ///
     /// Validity: exactly while `epoch` still equals the obarray's
     /// `function_epoch` — the same proof the subr shim's gate already
@@ -384,23 +385,32 @@ impl SpecSlot {
         self.direct_entry.store(0, Ordering::Relaxed);
     }
 
-    /// Encode a screened fixed-arity entry as `fn_ptr | (slots + 1)`, or
-    /// `None` when the code address's low three bits are not clear, so the
-    /// class could not be recovered from the word.
+    /// Encode a screened fixed-arity entry as `(fn_ptr << 3) | (slots + 1)`.
+    ///
+    /// A function address is only guaranteed to be 4-byte aligned (arm64
+    /// instructions are four bytes; LLVM packs `.p2align 2` functions
+    /// consecutively), so on aarch64 bit 2 of `fn_ptr` is frequently set and
+    /// the pointer cannot carry the class in its own low bits.  Shifting the
+    /// pointer up leaves three zero bits for the tag and loses nothing: the
+    /// inverse shifts the address back exactly.  The only rejected shape is
+    /// an address that would not survive the shift, which no 64-bit user
+    /// address reaches (arm64 and x86-64 canonical user addresses are at most
+    /// 57 bits).
     #[inline]
     pub(crate) fn pack_screened_subr_entry(fn_ptr: usize, slots: usize) -> Option<u64> {
         debug_assert!(slots <= 5, "the screen accepts only the A0..A5 entries");
-        if fn_ptr as u64 & Self::SUBR_ENTRY_CLASS_MASK != 0 {
+        let address = fn_ptr as u64;
+        if address >= 1 << 61 {
             return None;
         }
-        Some(fn_ptr as u64 | (slots as u64 + 1))
+        Some((address << 3) | (slots as u64 + 1))
     }
 
     /// `(fn_ptr, slots)` of a nonzero [`Self::cached_subr_entry`] word.
     #[inline(always)]
     pub(crate) fn decode_screened_subr_entry(entry: u64) -> (usize, usize) {
         (
-            (entry & !Self::SUBR_ENTRY_CLASS_MASK) as usize,
+            (entry >> 3) as usize,
             (entry & Self::SUBR_ENTRY_CLASS_MASK) as usize - 1,
         )
     }
