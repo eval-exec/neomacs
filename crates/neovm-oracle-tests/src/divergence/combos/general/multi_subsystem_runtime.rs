@@ -107,7 +107,9 @@ fn proc_decode_search_replace() {
                :connection-type 'pipe :coding 'utf-8
                :filter (lambda (_p s) (setq acc (concat acc s))))))
     (set-process-query-on-exit-flag proc nil)
-    (while (process-live-p proc) (accept-process-output proc 1))
+    ;; A terminal status does not imply the final filter bytes arrived; the
+    ;; post-terminal observation drains them (GNU proc.c).
+    (neovm--oracle-settle-process proc)
     (with-temp-buffer
       (insert acc)
       (goto-char (point-min))

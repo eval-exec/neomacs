@@ -73,21 +73,27 @@ fn div_cx247_process_plist_set_get_round_trip() {
 #[test]
 fn div_cx247_process_query_before_and_after_exit() {
     return_if_neovm_enable_oracle_proptest_not_set!();
+    // The first query must not race the child's exit.  `echo start; exit 5'
+    // can be reaped before `process-live-p' runs (GNU then answers nil where a
+    // less-loaded run answers the live status list), so the child blocks on a
+    // line of input and is released only after the before-exit query.
     let expect = expect_test::expect![[
-        r#""OK ((run open listen connect stop) \"neo-cx247-q\" (\"sh\" \"-c\" \"echo start; exit 5\") t t nil exit 5)""#
+        r#""OK ((run open listen connect stop) \"neo-cx247-q\" (\"sh\" \"-c\" \"read line; echo done; exit 5\") t t nil exit 5)""#
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((p (make-process :name "neo-cx247-q"
-                        :command '("sh" "-c" "echo start; exit 5"))))
-  (list (process-live-p p)
-        (process-name p)
-        (process-command p)
-        (accept-process-output p 2)
-        (sit-for 0.05)
-        (process-live-p p)
-        (process-status p)
-        (process-exit-status p)))
+                        :command '("sh" "-c" "read line; echo done; exit 5"))))
+  (let ((before (process-live-p p)))
+    (process-send-string p "go\n")
+    (list before
+          (process-name p)
+          (process-command p)
+          (accept-process-output p 2)
+          (sit-for 0.05)
+          (process-live-p p)
+          (process-status p)
+          (process-exit-status p))))
 "##,
         expect,
     );
