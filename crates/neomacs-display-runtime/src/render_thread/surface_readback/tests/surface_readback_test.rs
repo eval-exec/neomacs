@@ -36,3 +36,38 @@ fn published_readback_remains_complete_while_next_capture_replaces_it() {
         [0, 0, 255, 255]
     );
 }
+
+#[test]
+fn readback_usage_disables_unsupported_captures_and_retains_supported_requests() {
+    for supports_copy in [false, true] {
+        for first_frame_requested in [false, true] {
+            for requested_frames in [0, 2] {
+                let mut first_frame_pending = first_frame_requested;
+                let mut remaining_frames = requested_frames;
+                let supported = if supports_copy {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+                } else {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                };
+
+                let usage = surface_usage_for_debug_readback(
+                    supported,
+                    &mut first_frame_pending,
+                    &mut remaining_frames,
+                );
+
+                let capture_enabled = first_frame_requested || requested_frames > 0;
+                assert_eq!(
+                    usage.contains(wgpu::TextureUsages::COPY_SRC),
+                    supports_copy && capture_enabled,
+                );
+                assert!(usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
+                assert_eq!(first_frame_pending, supports_copy && first_frame_requested);
+                assert_eq!(
+                    remaining_frames,
+                    if supports_copy { requested_frames } else { 0 },
+                );
+            }
+        }
+    }
+}

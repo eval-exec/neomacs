@@ -43,10 +43,11 @@
    ;; the composition table with the rule present, then dump the same state
    ;; again post-redisplay for the diag file.
    (redisplay t)
+   ;; Diagnostics do not complete the scenario. Only C-c t captures the
+   ;; required snapshot and schedules a successful shutdown.
    (run-at-time 2 nil
      (lambda ()
        (let ((diag (concat (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") ".diag")))
          (with-temp-file diag
            (prin1 (list :auto-comp-mode auto-composition-mode
-                        :table-rule (aref composition-function-table ?-)))))
-       (kill-emacs 0)))))
+                        :table-rule (aref composition-function-table ?-)))))))))

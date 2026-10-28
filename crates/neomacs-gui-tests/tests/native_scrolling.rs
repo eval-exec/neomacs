@@ -356,7 +356,7 @@ focus_follows_mouse yes
             .spawn()
             .unwrap(),
     );
-    let mut trackpad = wayland::Trackpad::connect(&PathBuf::from(&runtime).join(&socket));
+    let trackpad = wayland::Trackpad::connect(&PathBuf::from(&runtime).join(&socket));
     let initial = state_with_timeout(&state_path, 2, Duration::from_secs(90));
     if rich {
         assert_eq!(initial["content"]["profile"], "rich-v1");
@@ -384,6 +384,17 @@ focus_follows_mouse yes
             "large-buffer scrolling must exercise a viewport far from buffer start"
         );
     }
+    // Lisp timers and a complete readback PNG can precede the first native
+    // buffer commit. Require the owned compositor's mapped view before input;
+    // this setup gate is also outside the sustained stream's measured phase.
+    let pointer_target = crate::wayland_readiness::wait_for_pointer_target(
+        Path::new(&runtime),
+        &mut editor.0,
+        &artifacts,
+        200,
+        200,
+    );
+    let mut trackpad = trackpad.for_pointer_target(pointer_target);
     trackpad.move_to_body();
     thread::sleep(Duration::from_millis(200));
     let mut previous = state(&state_path, initial["sample"].as_u64().unwrap());

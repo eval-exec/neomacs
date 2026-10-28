@@ -1,8 +1,12 @@
 //! Native event-loop startup before font-owned window geometry is available.
 
-use super::RenderApp;
+use super::{RenderApp, SharedMonitorInfo};
+use crate::thread_comm::{
+    COMMAND_CHANNEL_CAPACITY, LifecycleCommand, RenderCommand, WindowCommand,
+};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use std::{cell::RefCell, rc::Rc};
+use std::{collections::VecDeque, ops::ControlFlow as CommandFlow};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -27,14 +31,23 @@ impl InitialWindowSize {
     }
 }
 
+/// Final logical intent for a native window that has not been allocated yet.
+/// Geometry observations may change size without resetting visibility or chrome.
+#[derive(Clone, Copy, Debug)]
+pub struct InitialWindowPreparation {
+    pub size: InitialWindowSize,
+    pub visibility: crate::thread_comm::WindowVisibility,
+    pub decorated: bool,
+}
+
 /// Consuming preparation reply. Success, failure and unwind all wake the native
 /// loop after publishing their outcome; an idle loop never needs a polling timer.
 pub struct InitialWindowReply {
-    sender: Option<Sender<Result<InitialWindowSize, String>>>,
+    sender: Option<Sender<Result<InitialWindowPreparation, String>>>,
     proxy: EventLoopProxy,
 }
 
-pub struct InitialWindowReceiver(Receiver<Result<InitialWindowSize, String>>);
+pub struct InitialWindowReceiver(Receiver<Result<InitialWindowPreparation, String>>);
 
 /// Retain on the evaluator stack until it exits. While surfaces are unavailable,
 /// the native loop must distinguish prepared geometry from a departed evaluator.
@@ -56,8 +69,8 @@ impl InitialWindowReply {
     }
 
     /// None means the native loop has already closed; abandon GUI installation.
-    pub fn ready(self, size: InitialWindowSize) -> Option<InitialWindowLifetime> {
-        self.sender.as_ref().unwrap().send(Ok(size)).ok()?;
+    pub fn ready(self, preparation: InitialWindowPreparation) -> Option<InitialWindowLifetime> {
+        self.sender.as_ref().unwrap().send(Ok(preparation)).ok()?;
         self.proxy.wake_up();
         Some(InitialWindowLifetime { _reply: self })
     }
@@ -97,13 +110,44 @@ pub enum RenderLoopExit {
 pub(super) enum InitialWindow {
     Waiting(InitialWindowReceiver),
     Ready {
-        size: InitialWindowSize,
-        evaluator: Option<Receiver<Result<InitialWindowSize, String>>>,
+        preparation: InitialWindowPreparation,
+        evaluator: Option<Receiver<Result<InitialWindowPreparation, String>>>,
     },
 }
 
+/// The native actor consumes commands even before a window may be allocated.
+/// Transfer the ordered work to RenderApp when geometry becomes available.
+#[derive(Default)]
+struct PreparingCommands(VecDeque<RenderCommand>);
+
+impl PreparingCommands {
+    fn drain(&mut self, receiver: &Receiver<RenderCommand>) -> CommandFlow<()> {
+        // Bound each dispatch so command traffic cannot starve readiness or
+        // native events. A remaining batch schedules another wake below.
+        for command in receiver.try_iter().take(COMMAND_CHANNEL_CAPACITY) {
+            match command {
+                RenderCommand::Lifecycle(LifecycleCommand::Shutdown) => {
+                    return CommandFlow::Break(());
+                }
+                RenderCommand::Window(WindowCommand::RefreshFrameOpacity)
+                    if matches!(
+                        self.0.back(),
+                        Some(RenderCommand::Window(WindowCommand::RefreshFrameOpacity))
+                    ) => {}
+                command => self.0.push_back(command),
+            }
+        }
+        CommandFlow::Continue(())
+    }
+}
+
 enum Phase<F> {
-    Preparing { initial: InitialWindow, create: F },
+    Preparing {
+        initial: InitialWindow,
+        create: F,
+        receiver: Receiver<RenderCommand>,
+        commands: PreparingCommands,
+    },
     Running(Box<RenderApp>),
     Stopped,
 }
@@ -118,11 +162,72 @@ enum Outcome {
     GpuFailed(String),
 }
 
+impl Outcome {
+    fn observe_evaluator_shutdown(
+        &mut self,
+        gpu_was_ready: bool,
+        reason: Option<super::state::RenderShutdownReason>,
+    ) -> bool {
+        // Evaluator departure is a successful startup cancellation only while
+        // preparing. Running records history: recovery or teardown may remove
+        // the GPU without turning an established session back into startup.
+        match self {
+            Self::Preparing
+                if !gpu_was_ready
+                    && matches!(
+                        reason,
+                        Some(super::state::RenderShutdownReason::EvaluatorShutdown)
+                    ) =>
+            {
+                *self = Self::EvaluatorExited;
+                true
+            }
+            Self::Preparing
+            | Self::Running
+            | Self::EvaluatorExited
+            | Self::Failed(_)
+            | Self::GpuFailed(_) => false,
+        }
+    }
+
+    fn finish(
+        self,
+        result: Result<(), impl ToString>,
+        gpu_cancelled: bool,
+    ) -> Result<RenderLoopExit, RenderLoopError> {
+        let successful_exit = || {
+            if gpu_cancelled {
+                RenderLoopExit::GpuStartupCancelled
+            } else {
+                RenderLoopExit::Finished
+            }
+        };
+        match self {
+            Self::Preparing => Err(RenderLoopError::StartupInterrupted(
+                result
+                    .err()
+                    .map_or_else(|| "event loop exited".into(), |error| error.to_string()),
+            )),
+            Self::Failed(error) => Err(RenderLoopError::Preparation(error)),
+            Self::GpuFailed(error) => Err(RenderLoopError::StartupInterrupted(error)),
+            Self::EvaluatorExited => Ok(successful_exit()),
+            Self::Running => result.map(|()| successful_exit()).map_err(|error| {
+                if gpu_cancelled {
+                    RenderLoopError::StartupInterrupted(error.to_string())
+                } else {
+                    RenderLoopError::EventLoop(error.to_string())
+                }
+            }),
+        }
+    }
+}
+
 struct StartingApp<F> {
     phase: Phase<F>,
+    shared_monitors: SharedMonitorInfo,
     can_create_surfaces: bool,
     outcome: Rc<RefCell<Outcome>>,
-    evaluator: Option<Receiver<Result<InitialWindowSize, String>>>,
+    evaluator: Option<Receiver<Result<InitialWindowPreparation, String>>>,
     gpu_cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -158,32 +263,67 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if let Phase::Preparing { initial, .. } = &mut self.phase {
+        if let Phase::Preparing {
+            initial,
+            receiver,
+            commands,
+            ..
+        } = &mut self.phase
+        {
+            // Lisp can query display geometry during initialization before
+            // requesting its first GUI frame. Publish that connection metadata
+            // independently of first-window readiness and surface permission.
+            if self
+                .shared_monitors
+                .0
+                .lock()
+                .is_ok_and(|monitors| monitors.is_empty())
+            {
+                let snapshot = RenderApp::collect_monitor_snapshot(event_loop);
+                super::lifecycle::publish_monitor_snapshot(&self.shared_monitors, &snapshot);
+            }
             if let InitialWindow::Waiting(receiver) = initial {
                 let result = match receiver.0.try_recv() {
-                    Ok(result) => result,
-                    Err(TryRecvError::Empty) => {
-                        event_loop.set_control_flow(ControlFlow::Wait);
-                        return;
-                    }
+                    Ok(result) => Some(result),
+                    Err(TryRecvError::Empty) => None,
                     Err(TryRecvError::Disconnected) => {
-                        Err("GUI evaluator exited before preparing its initial frame".into())
+                        // early-init may intentionally exit before creating
+                        // any GUI frame. Join the worker for its authoritative
+                        // status or panic, just as after readiness below.
+                        *self.outcome.borrow_mut() = Outcome::EvaluatorExited;
+                        self.phase = Phase::Stopped;
+                        event_loop.exit();
+                        return;
                     }
                 };
                 match result {
-                    Ok(size) => {
+                    Some(Ok(preparation)) => {
                         *initial = InitialWindow::Ready {
-                            size,
+                            preparation,
                             evaluator: Some(receiver.0.clone()),
                         };
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         *self.outcome.borrow_mut() = Outcome::Failed(error);
                         self.phase = Phase::Stopped;
                         event_loop.exit();
                         return;
                     }
+                    None => {}
                 }
+            }
+            if commands.drain(receiver).is_break() {
+                *self.outcome.borrow_mut() = Outcome::EvaluatorExited;
+                self.phase = Phase::Stopped;
+                event_loop.exit();
+                return;
+            }
+            if !receiver.is_empty() {
+                event_loop.create_proxy().wake_up();
+            }
+            if matches!(initial, InitialWindow::Waiting(_)) {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
             }
             if let InitialWindow::Ready {
                 evaluator: Some(evaluator),
@@ -203,11 +343,24 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
                 return;
             }
             if let Phase::Preparing {
-                initial: InitialWindow::Ready { size, evaluator },
+                initial:
+                    InitialWindow::Ready {
+                        preparation,
+                        evaluator,
+                    },
                 create,
+                mut commands,
+                ..
             } = std::mem::replace(&mut self.phase, Phase::Stopped)
             {
-                let mut app = Box::new(create(size));
+                let mut app = Box::new(create(preparation.size));
+                app.startup_commands.append(&mut commands.0);
+                let primary = app
+                    .frame_windows
+                    .primary_window_mut()
+                    .expect("initial primary window state");
+                primary.set_visibility(preparation.visibility);
+                primary.set_decorations(preparation.decorated);
                 app.gpu_startup_cancelled = self.gpu_cancelled.clone();
                 app.can_create_surfaces(event_loop);
                 self.evaluator = evaluator;
@@ -223,14 +376,21 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
             return;
         }
         if let Phase::Running(app) = &mut self.phase {
+            let gpu_was_ready = app.gpu.is_some();
             app.about_to_wait(event_loop);
-            if let Some(error) = app.startup_error.take() {
-                *self.outcome.borrow_mut() = Outcome::GpuFailed(error);
-                self.phase = Phase::Stopped;
-                event_loop.exit();
-            } else if app.gpu.is_some() {
-                self.evaluator = None;
-                *self.outcome.borrow_mut() = Outcome::Running;
+            let evaluator_exited = self
+                .outcome
+                .borrow_mut()
+                .observe_evaluator_shutdown(gpu_was_ready, app.lifecycle_flags.shutdown_reason());
+            if !evaluator_exited {
+                if let Some(error) = app.startup_error.take() {
+                    *self.outcome.borrow_mut() = Outcome::GpuFailed(error);
+                    self.phase = Phase::Stopped;
+                    event_loop.exit();
+                } else if app.gpu.is_some() {
+                    self.evaluator = None;
+                    *self.outcome.borrow_mut() = Outcome::Running;
+                }
             }
         }
     }
@@ -243,42 +403,32 @@ impl<F: FnOnce(InitialWindowSize) -> RenderApp> ApplicationHandler for StartingA
 pub(super) fn run(
     event_loop: EventLoop,
     initial: InitialWindow,
+    shared_monitors: SharedMonitorInfo,
+    command_rx: Receiver<RenderCommand>,
     create: impl FnOnce(InitialWindowSize) -> RenderApp + 'static,
 ) -> Result<RenderLoopExit, RenderLoopError> {
     event_loop.set_control_flow(ControlFlow::Wait);
     let outcome = Rc::new(RefCell::new(Outcome::Preparing));
     let gpu_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let result = event_loop.run_app(StartingApp {
-        phase: Phase::Preparing { initial, create },
+        phase: Phase::Preparing {
+            initial,
+            create,
+            receiver: command_rx,
+            commands: PreparingCommands::default(),
+        },
+        shared_monitors,
         can_create_surfaces: false,
         outcome: Rc::clone(&outcome),
         evaluator: None,
         gpu_cancelled: gpu_cancelled.clone(),
     });
-    let successful_exit = || {
-        if gpu_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-            RenderLoopExit::GpuStartupCancelled
-        } else {
-            RenderLoopExit::Finished
-        }
-    };
-    match &mut *outcome.borrow_mut() {
-        Outcome::Preparing => Err(RenderLoopError::StartupInterrupted(
-            result
-                .err()
-                .map_or_else(|| "event loop exited".into(), |error| error.to_string()),
-        )),
-        Outcome::Failed(error) => Err(RenderLoopError::Preparation(std::mem::take(error))),
-        Outcome::GpuFailed(error) => {
-            Err(RenderLoopError::StartupInterrupted(std::mem::take(error)))
-        }
-        Outcome::EvaluatorExited => Ok(successful_exit()),
-        Outcome::Running => result.map(|()| successful_exit()).map_err(|error| {
-            if gpu_cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                RenderLoopError::StartupInterrupted(error.to_string())
-            } else {
-                RenderLoopError::EventLoop(error.to_string())
-            }
-        }),
-    }
+    std::mem::take(&mut *outcome.borrow_mut()).finish(
+        result,
+        gpu_cancelled.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
+
+#[cfg(test)]
+#[path = "tests/startup_test.rs"]
+mod startup_test;

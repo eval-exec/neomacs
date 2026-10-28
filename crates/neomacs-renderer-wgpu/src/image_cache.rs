@@ -6,6 +6,10 @@
 //! - GPU texture upload when ready
 //! - LRU cache with memory limits
 
+mod decoder;
+use decoder::DecodeOutputSink;
+pub use decoder::{ImageDecodeClient, ImageDecoder};
+
 use neomacs_display_protocol::image::EncodedBytes;
 use neomacs_display_protocol::image_diagnostic::{ImageDiagnostic, ImageLoadIdentity};
 use neomacs_display_protocol::{
@@ -502,7 +506,23 @@ pub enum ImageCacheEvent {
 #[derive(Default)]
 struct ImageLoadLifecycle {
     next_attempt: u64,
-    active: HashMap<ImageId, ImageLoadAttempt>,
+    current: HashMap<ImageId, ImageLoadPhase>,
+}
+
+/// Renderer admission is distinct from CPU completion: an uploaded token must
+/// remain recognizable so a repeated command cannot discard its only texture.
+#[derive(Clone, Copy)]
+enum ImageLoadPhase {
+    Pending(ImageLoadAttempt),
+    Complete(ImageLoadAttempt),
+}
+
+impl ImageLoadPhase {
+    fn attempt(self) -> ImageLoadAttempt {
+        match self {
+            Self::Pending(attempt) | Self::Complete(attempt) => attempt,
+        }
+    }
 }
 
 impl ImageLoadLifecycle {
@@ -524,7 +544,8 @@ impl ImageLoadLifecycle {
 
     fn begin(&mut self, load: ImageLoadToken) -> ImageLoadToken {
         self.next_attempt = self.next_attempt.max(load.attempt().get());
-        self.active.insert(load.image(), load.attempt());
+        self.current
+            .insert(load.image(), ImageLoadPhase::Pending(load.attempt()));
         load
     }
 
@@ -532,7 +553,8 @@ impl ImageLoadLifecycle {
         if !self.is_current(load) {
             return false;
         }
-        self.active.remove(&load.image());
+        self.current
+            .insert(load.image(), ImageLoadPhase::Complete(load.attempt()));
         true
     }
 
@@ -542,7 +564,13 @@ impl ImageLoadLifecycle {
     /// Intermediate publications — bands — check this and leave the attempt
     /// alone; only the terminal outcome consumes it.
     fn is_current(&self, load: ImageLoadToken) -> bool {
-        self.active.get(&load.image()) == Some(&load.attempt())
+        matches!(self.current.get(&load.image()), Some(ImageLoadPhase::Pending(attempt)) if *attempt == load.attempt())
+    }
+
+    fn was_admitted(&self, load: ImageLoadToken) -> bool {
+        self.current
+            .get(&load.image())
+            .is_some_and(|phase| phase.attempt() == load.attempt())
     }
 
     /// Accept `outcome` if its attempt is still the current one.
@@ -559,11 +587,11 @@ impl ImageLoadLifecycle {
     }
 
     fn free(&mut self, image: ImageId) {
-        self.active.remove(&image);
+        self.current.remove(&image);
     }
 
     fn clear(&mut self) {
-        self.active.clear();
+        self.current.clear();
     }
 }
 
@@ -620,8 +648,6 @@ pub struct ImageMetadata {
 pub struct ImageCache {
     /// Budget accounting events since the last drain (texture create/free).
     accounting: Vec<crate::media_budget::MediaAccounting>,
-    /// Next image ID
-    next_id: AtomicU32,
     /// Cached textures: id -> CachedImage
     textures: HashMap<ImageId, CachedImage>,
     /// Image states: id -> state
@@ -633,12 +659,8 @@ pub struct ImageCache {
     retained_images: RetainedImageSet,
     /// Pending dimensions (before texture is ready)
     pending_dimensions: HashMap<ImageId, ImageLayoutExtent>,
-    /// Channel to receive decoded images
-    decoded_rx: mpsc::Receiver<WorkerDecodeOutcome>,
-    /// Channel to send decode requests
-    decode_tx: mpsc::Sender<DecodeRequest>,
-    /// CPU decoder/compositor state shared across all frames of an animation.
-    sequence_cache: Arc<ImageSequenceCache>,
+    /// CPU ownership moves out before the GPU cache is destroyed.
+    decoder: ImageDecoder,
     /// Bind group layout for image textures
     bind_group_layout: wgpu::BindGroupLayout,
     /// Sampler for image textures
@@ -679,6 +701,7 @@ struct DecodeRequest {
     /// file: `%s'`), and the job is the last place that knows both the bytes
     /// and what they were asked to be.
     identity: ImageLoadIdentity,
+    limit: neomacs_display_protocol::ImageSizeLimit,
 }
 
 /// What a decode job can still say about a source once the decode chain has
@@ -801,6 +824,10 @@ enum ImageSource {
 impl ImageCache {
     /// Create a new image cache
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::with_decoder(device, ImageDecoder::new())
+    }
+
+    pub fn with_decoder(device: &wgpu::Device, decoder: ImageDecoder) -> Self {
         // Create bind group layout for image textures
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Image Bind Group Layout"),
@@ -836,42 +863,25 @@ impl ImageCache {
             ..Default::default()
         });
 
-        // Create channels for async decoding
-        let (decode_tx, decode_rx) = mpsc::channel::<DecodeRequest>();
-        let (decoded_tx, decoded_rx) = mpsc::channel::<WorkerDecodeOutcome>();
-        let sequence_cache = Arc::new(ImageSequenceCache::new());
-
-        // Wrap receiver in Arc<Mutex> for sharing across threads
-        let decode_rx = Arc::new(Mutex::new(decode_rx));
-
-        let pool_size = ImageDecoderPoolSize::detected();
-        tracing::info!("Starting {} image decoder threads", pool_size.get());
-        for i in 0..pool_size.get() {
-            let rx = Arc::clone(&decode_rx);
-            let tx = decoded_tx.clone();
-            let sequence_cache = Arc::clone(&sequence_cache);
-            thread::spawn(move || {
-                Self::decoder_thread_pooled(i, rx, tx, sequence_cache);
-            });
-        }
-
         Self {
-            next_id: AtomicU32::new(1),
             textures: HashMap::new(),
             states: HashMap::new(),
             loads: ImageLoadLifecycle::default(),
             residency: ImageResidencyLifecycle::default(),
             retained_images: RetainedImageSet::default(),
             pending_dimensions: HashMap::new(),
-            decoded_rx,
-            decode_tx,
-            sequence_cache,
+            decoder,
             bind_group_layout,
             accounting: Vec::new(),
             sampler,
             total_memory: 0,
             access_clock: Cell::new(0),
         }
+    }
+
+    /// Consume the GPU cache and preserve its unique CPU decoder for recovery.
+    pub fn into_decoder(self) -> ImageDecoder {
+        self.decoder
     }
 
     /// Advance the access clock and return a fresh stamp.
@@ -902,20 +912,14 @@ impl ImageCache {
     }
 
     fn allocate_image_id(&self) -> ImageId {
-        let raw = self
-            .next_id
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
-                current.checked_add(1)
-            })
-            .expect("image identity space exhausted");
-        ImageId::new(raw)
+        self.decoder.allocate_image_id()
     }
 
     /// Background decoder thread (pooled version)
     fn decoder_thread_pooled(
         thread_id: usize,
         rx: Arc<Mutex<mpsc::Receiver<DecodeRequest>>>,
-        tx: mpsc::Sender<WorkerDecodeOutcome>,
+        output: DecodeOutputSink,
         sequence_cache: Arc<ImageSequenceCache>,
     ) {
         tracing::debug!("Decoder thread {} started", thread_id);
@@ -944,7 +948,11 @@ impl ImageCache {
                         animation,
                         frame,
                         identity,
+                        limit,
                     } = request;
+                    if !output.accepts(load) {
+                        continue;
+                    }
                     // A banded decode reports each band as it lands, which is
                     // the whole point of decoding that way: the display side
                     // can act on a band long before the decode finishes, and
@@ -955,7 +963,7 @@ impl ImageCache {
                     // wants the image decodes the same pixels without any of
                     // this.
                     let mut publish_band = |decoded: DecodedBand| {
-                        let _ = tx.send(WorkerDecodeOutcome::Band { load, decoded });
+                        output.publish(WorkerDecodeOutcome::Band { load, decoded });
                     };
                     let sink: Option<&mut dyn FnMut(DecodedBand)> = Some(&mut publish_band);
                     // The chain below answers `Option` and each arm collapses
@@ -963,70 +971,83 @@ impl ImageCache {
                     // captured before the bytes are handed over: the source
                     // itself, and whether reading it worked at all.
                     let failure_source = DecodeFailureSource::of(&source);
-                    let result = catch_unwind(AssertUnwindSafe(|| match source {
-                        #[cfg(test)]
-                        ImageSource::Panic => panic!("injected decoder panic"),
-                        ImageSource::File { path, sequence } => Self::decode_file(
-                            &path,
-                            size,
-                            rotation,
-                            colors,
-                            realization,
-                            mask,
-                            animation,
-                            frame,
-                            &sequence_cache,
-                            sequence,
-                            sink,
-                        ),
-                        ImageSource::Data {
-                            data,
-                            resources,
-                            sequence,
-                        } => Self::decode_data(
-                            data,
-                            size,
-                            rotation,
-                            colors,
-                            realization,
-                            mask,
-                            animation,
-                            frame,
-                            resources,
-                            &sequence_cache,
-                            sequence,
-                            sink,
-                        ),
-                        ImageSource::RawArgb32 {
-                            data,
-                            width,
-                            height,
-                            stride,
-                        } => Self::convert_argb32_to_rgba(&data, width, height, stride)
-                            .map(NativePixels::from_raster_tuple)
-                            .and_then(|pixels| {
-                                pixels.realize_bitmap(size, rotation, realization, mask)
-                            }),
-                        ImageSource::RawRgb24 {
-                            data,
-                            width,
-                            height,
-                            stride,
-                        } => Self::convert_rgb24_to_rgba(&data, width, height, stride)
-                            .map(NativePixels::from_raster_tuple)
-                            .and_then(|pixels| {
-                                pixels.realize_bitmap(size, rotation, realization, mask)
-                            }),
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        let admitted = match &source {
+                            ImageSource::File { path, .. } => {
+                                crate::admit(crate::ImageProbeSource::File(path), limit)
+                            }
+                            ImageSource::Data { data, .. } => {
+                                crate::admit(crate::ImageProbeSource::Data(data.as_slice()), limit)
+                            }
+                            _ => Ok(()),
+                        };
+                        admitted.map_err(|_| ImageDiagnostic::InvalidSize)?;
+                        Ok::<_, ImageDiagnostic>(match source {
+                            #[cfg(test)]
+                            ImageSource::Panic => panic!("injected decoder panic"),
+                            ImageSource::File { path, sequence } => Self::decode_file(
+                                &path,
+                                size,
+                                rotation,
+                                colors,
+                                realization,
+                                mask,
+                                animation,
+                                frame,
+                                &sequence_cache,
+                                sequence,
+                                sink,
+                            ),
+                            ImageSource::Data {
+                                data,
+                                resources,
+                                sequence,
+                            } => Self::decode_data(
+                                data,
+                                size,
+                                rotation,
+                                colors,
+                                realization,
+                                mask,
+                                animation,
+                                frame,
+                                resources,
+                                &sequence_cache,
+                                sequence,
+                                sink,
+                            ),
+                            ImageSource::RawArgb32 {
+                                data,
+                                width,
+                                height,
+                                stride,
+                            } => Self::convert_argb32_to_rgba(&data, width, height, stride)
+                                .map(NativePixels::from_raster_tuple)
+                                .and_then(|pixels| {
+                                    pixels.realize_bitmap(size, rotation, realization, mask)
+                                }),
+                            ImageSource::RawRgb24 {
+                                data,
+                                width,
+                                height,
+                                stride,
+                            } => Self::convert_rgb24_to_rgba(&data, width, height, stride)
+                                .map(NativePixels::from_raster_tuple)
+                                .and_then(|pixels| {
+                                    pixels.realize_bitmap(size, rotation, realization, mask)
+                                }),
+                        })
                     }));
 
                     let outcome = match result {
-                        Ok(Some(pixels)) => {
+                        Ok(Ok(Some(pixels))) => {
                             WorkerDecodeOutcome::Ready(Self::decoded_image(load, pixels))
                         }
-                        Ok(None) => WorkerDecodeOutcome::Failed {
+                        Ok(Ok(None)) => WorkerDecodeOutcome::Failed {
                             load,
                             diagnostic: failure_source.diagnostic(&identity),
                         },
+                        Ok(Err(diagnostic)) => WorkerDecodeOutcome::Failed { load, diagnostic },
                         Err(_) => {
                             tracing::warn!(
                                 "Decoder thread {} recovered from a panic while decoding image {}",
@@ -1039,7 +1060,7 @@ impl ImageCache {
                             }
                         }
                     };
-                    let _ = tx.send(outcome);
+                    output.publish(outcome);
                 }
                 Err(_) => {
                     // Channel closed, exit thread
@@ -1817,6 +1838,7 @@ impl ImageCache {
             ImageSequenceId::new(u64::from(image.get()))
                 .expect("allocated image identity is non-zero"),
             ImageLoadIdentity::unspecified(),
+            neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         );
         image
     }
@@ -1841,7 +1863,11 @@ impl ImageCache {
         sequence: ImageSequenceId,
         resources: crate::svg::SvgResourceContext,
         identity: ImageLoadIdentity,
+        limit: neomacs_display_protocol::ImageSizeLimit,
     ) {
+        if self.loads.was_admitted(load) || !self.decoder.client.accepts(load) {
+            return;
+        }
         let load = self.begin_load(load);
         let image = load.image();
         // Query dimensions for the pending-image placeholder.
@@ -1854,7 +1880,7 @@ impl ImageCache {
 
         // Queue for async decode
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             load,
             source: ImageSource::Data {
                 data,
@@ -1869,6 +1895,7 @@ impl ImageCache {
             animation,
             frame,
             identity,
+            limit,
         });
     }
 
@@ -1888,7 +1915,11 @@ impl ImageCache {
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         identity: ImageLoadIdentity,
+        limit: neomacs_display_protocol::ImageSizeLimit,
     ) {
+        if self.loads.was_admitted(load) || !self.decoder.client.accepts(load) {
+            return;
+        }
         let load = self.begin_load(load);
         let image = load.image();
         // Query dimensions for the pending-image placeholder.
@@ -1901,7 +1932,7 @@ impl ImageCache {
 
         // Queue for async decode
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             load,
             source: ImageSource::File {
                 path: path.to_string(),
@@ -1915,6 +1946,7 @@ impl ImageCache {
             animation,
             frame,
             identity,
+            limit,
         });
     }
 
@@ -1925,13 +1957,13 @@ impl ImageCache {
     }
 
     pub fn retire_sequence(&self, retirement: ImageSequenceRetirement) {
-        self.sequence_cache.retire(retirement);
+        self.decoder.client.retire_sequence(retirement);
     }
 
     pub(crate) fn memory_usage(&self) -> ImageCacheUsage {
         ImageCacheUsage::new(
             u64::try_from(self.total_memory).unwrap_or(u64::MAX),
-            u64::try_from(self.sequence_cache.resident_bytes()).unwrap_or(u64::MAX),
+            u64::try_from(self.decoder.client.sequence_cache.resident_bytes()).unwrap_or(u64::MAX),
         )
     }
 
@@ -1961,7 +1993,7 @@ impl ImageCache {
 
         // Queue for async decode
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             load,
             source: ImageSource::Data {
                 data: EncodedBytes::copy_of(data),
@@ -1977,6 +2009,7 @@ impl ImageCache {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         });
 
         image
@@ -2008,7 +2041,7 @@ impl ImageCache {
 
         // Queue for async conversion
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             load,
             source: ImageSource::RawArgb32 {
                 data: data.to_vec(),
@@ -2024,6 +2057,7 @@ impl ImageCache {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         });
 
         image
@@ -2055,7 +2089,7 @@ impl ImageCache {
 
         // Queue for async conversion
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             load,
             source: ImageSource::RawRgb24 {
                 data: data.to_vec(),
@@ -2071,6 +2105,7 @@ impl ImageCache {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         });
 
         image
@@ -2085,12 +2120,15 @@ impl ImageCache {
         height: u32,
         stride: u32,
     ) {
+        if self.loads.was_admitted(load) || !self.decoder.client.accepts(load) {
+            return;
+        }
         let load = self.begin_load(load);
         let image = load.image();
         self.pending_dimensions
             .insert(image, ImageLayoutExtent::new(width, height));
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             rotation: ImageRotation::None,
             load,
             source: ImageSource::RawArgb32 {
@@ -2106,6 +2144,7 @@ impl ImageCache {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         });
     }
 
@@ -2118,12 +2157,15 @@ impl ImageCache {
         height: u32,
         stride: u32,
     ) {
+        if self.loads.was_admitted(load) || !self.decoder.client.accepts(load) {
+            return;
+        }
         let load = self.begin_load(load);
         let image = load.image();
         self.pending_dimensions
             .insert(image, ImageLayoutExtent::new(width, height));
         self.states.insert(image, ImageState::Pending);
-        let _ = self.decode_tx.send(DecodeRequest {
+        self.decoder.client.submit(DecodeRequest {
             rotation: ImageRotation::None,
             load,
             source: ImageSource::RawRgb24 {
@@ -2139,6 +2181,7 @@ impl ImageCache {
             animation: ImageAnimationPolicy::disabled(),
             frame: ImageFrameIndex::default(),
             identity: ImageLoadIdentity::unspecified(),
+            limit: neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
         });
     }
 
@@ -2218,8 +2261,9 @@ impl ImageCache {
         queue: &wgpu::Queue,
     ) -> Vec<ImageCacheEvent> {
         let mut events = Vec::new();
-        // Drain decoded images from channel
-        while let Ok(outcome) = self.decoded_rx.try_recv() {
+        // Drain only outcomes whose renderer command has been admitted.
+        let pending = self.decoder.take_pending(&self.loads);
+        for outcome in pending {
             let Some(outcome) = self.loads.take_current(outcome) else {
                 continue;
             };
@@ -2622,6 +2666,7 @@ impl ImageCache {
     /// Logically retire an image. Its texture remains drawable until no
     /// accepted or queued presentation references the identity.
     pub fn retire(&mut self, image: ImageId) {
+        self.decoder.client.retire_image(image);
         self.loads.free(image);
         self.pending_dimensions.remove(&image);
         if self.textures.contains_key(&image) {
@@ -2660,6 +2705,7 @@ impl ImageCache {
 
     /// Clear entire cache
     pub fn clear(&mut self) {
+        self.decoder.client.clear();
         self.loads.clear();
         self.residency.clear();
         self.retained_images = RetainedImageSet::default();

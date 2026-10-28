@@ -292,6 +292,15 @@ fn with_native_menu_at_scale(
             char_height: state["char-height"].as_u64()?.try_into().ok()?,
         })
     });
+    // In this headless nested display, Weston maps the click target only
+    // after the first content-buffer commit. Its surface frame callback proves
+    // that commit was processed; Lisp readiness can precede the first GPU swap.
+    wait_for("primary surface presentation", &artifacts, || {
+        alive(&mut compositor, "compositor before input", &artifacts);
+        alive(&mut editor, "editor before input", &artifacts);
+        let log = fs::read_to_string(artifacts.join("wayland.log")).ok()?;
+        popup_trace::primary_surface_presented(&log).then_some(())
+    });
     input(display.env(), &["windowfocus", &window]);
     exercise(
         display.env(),

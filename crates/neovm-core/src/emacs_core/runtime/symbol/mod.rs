@@ -3417,6 +3417,9 @@ impl Obarray {
         id: SymId,
         fwd: &'static crate::emacs_core::forward::LispKboardObjFwd,
     ) {
+        if id == intern("window-system") {
+            fwd.use_selected_keyboard();
+        }
         if !self.forward_cell(id, fwd.header()) {
             return;
         }
@@ -5141,6 +5144,9 @@ impl GcTrace for Obarray {
         for fwd in &self.value_fwds {
             if let Some(value) = fwd.owned_value() {
                 roots.push(value);
+            }
+            if let Some(keyboard) = fwd.as_kboard_obj_fwd() {
+                keyboard.trace_parked_roots(roots);
             }
         }
     }

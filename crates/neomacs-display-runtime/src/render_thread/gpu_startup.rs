@@ -1,8 +1,9 @@
 //! Driver discovery and device acquisition without worker-owned native surfaces.
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use std::sync::Arc;
+use std::{collections::VecDeque, sync::Arc};
 use winit::{
+    event::WindowEvent,
     event_loop::EventLoopProxy,
     window::{Window, WindowId},
 };
@@ -52,6 +53,111 @@ pub(super) struct PreparedGpu {
     pub(super) queue: wgpu::Queue,
 }
 
+/// Only replayable input may outlive the native dispatch callback. In
+/// particular, lifecycle and surface-size-writer events stay synchronous.
+struct PendingNativeInput(WindowEvent);
+
+impl TryFrom<WindowEvent> for PendingNativeInput {
+    type Error = WindowEvent;
+
+    fn try_from(event: WindowEvent) -> Result<Self, Self::Error> {
+        match event {
+            event @ (WindowEvent::KeyboardInput { .. }
+            | WindowEvent::ModifiersChanged(_)
+            | WindowEvent::Focused(_)
+            | WindowEvent::Ime(_)
+            | WindowEvent::PointerMoved { .. }
+            | WindowEvent::PointerLeft { .. }
+            | WindowEvent::PointerButton { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::Occluded(_)) => Ok(Self(event)),
+            other => Err(other),
+        }
+    }
+}
+
+/// Input belongs to one native window creation attempt. Moving this owner
+/// through GPU acquisition and native owner installation preserves event order.
+pub(super) struct StartupInputReplay {
+    window_id: WindowId,
+    events: VecDeque<PendingNativeInput>,
+}
+
+impl StartupInputReplay {
+    fn new(window_id: WindowId) -> Self {
+        Self {
+            window_id,
+            events: VecDeque::new(),
+        }
+    }
+
+    pub(super) fn window_id(&self) -> WindowId {
+        self.window_id
+    }
+
+    pub(super) fn defer_input(&mut self, event: WindowEvent) -> Result<(), WindowEvent> {
+        self.events.push_back(PendingNativeInput::try_from(event)?);
+        Ok(())
+    }
+
+    pub(super) fn pop_front(&mut self) -> Option<WindowEvent> {
+        self.events.pop_front().map(|input| input.0)
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+pub(super) struct PendingGpuAttempt {
+    gpu: PendingGpu,
+    input: StartupInputReplay,
+}
+
+pub(super) enum GpuAttemptPoll {
+    Pending(PendingGpuAttempt),
+    Ready {
+        gpu: PreparedGpu,
+        input: StartupInputReplay,
+    },
+}
+
+impl PendingGpuAttempt {
+    pub(super) fn start(
+        window: Arc<dyn Window>,
+        descriptor: wgpu::InstanceDescriptor,
+        proxy: EventLoopProxy,
+    ) -> Result<Self, String> {
+        let input = StartupInputReplay::new(window.id());
+        Ok(Self {
+            gpu: PendingGpu::start(window, descriptor, proxy)?,
+            input,
+        })
+    }
+
+    pub(super) fn window_id(&self) -> WindowId {
+        self.input.window_id()
+    }
+
+    pub(super) fn window(&self) -> &dyn Window {
+        self.gpu.window()
+    }
+
+    pub(super) fn retain_input(&mut self, event: WindowEvent) {
+        // Other events have synchronous pending-startup policies at the caller.
+        let _ = self.input.defer_input(event);
+    }
+
+    pub(super) fn poll(self, proxy: &EventLoopProxy) -> Result<GpuAttemptPoll, String> {
+        let Self { gpu, input } = self;
+        match gpu.poll(proxy)? {
+            GpuPoll::Pending(gpu) => Ok(GpuAttemptPoll::Pending(Self { gpu, input })),
+            GpuPoll::Ready(gpu) => Ok(GpuAttemptPoll::Ready { gpu, input }),
+        }
+    }
+}
+
 pub(super) enum PendingGpu {
     SurfaceSize(PreparedGpu),
     Adapters {
@@ -84,10 +190,6 @@ impl PendingGpu {
             Ok((instance, adapters))
         })?;
         Ok(Self::Adapters { window, reply })
-    }
-
-    pub(super) fn window_id(&self) -> WindowId {
-        self.window().id()
     }
 
     pub(super) fn window(&self) -> &dyn Window {
@@ -194,3 +296,7 @@ fn adapter_rank(kind: wgpu::DeviceType, preference: wgpu::PowerPreference) -> u8
         (_, DeviceType::Cpu) => 4,
     }
 }
+
+#[cfg(test)]
+#[path = "tests/gpu_startup_test.rs"]
+mod gpu_startup_test;

@@ -652,6 +652,17 @@ impl Context {
         }
     }
 
+    /// GNU window.c:window_change_record advances public window history and
+    /// the hook comparison snapshot together, after callbacks have completed.
+    /// Keep the shared boundary for both redisplay policies; neither ordinary
+    /// selection nor frame creation may stand in for a completed hook pass.
+    pub(crate) fn record_redisplay_selection(&mut self) {
+        self.gnu_redisplay_hooks.old_selected_frame =
+            self.frames.selected_frame().map(|frame| frame.id);
+        self.gnu_redisplay_hooks.old_selected_window =
+            self.frames.record_selected_window_after_redisplay();
+    }
+
     pub(crate) fn gnu_selected_window(&self) -> Option<WindowId> {
         self.frames
             .selected_frame()

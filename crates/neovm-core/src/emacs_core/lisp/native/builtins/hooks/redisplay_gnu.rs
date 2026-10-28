@@ -91,9 +91,7 @@ fn finish_record(eval: &mut super::eval::Context, record: bool) {
     if record {
         record_frames(eval);
     }
-    eval.gnu_redisplay_hooks.old_selected_frame =
-        eval.frames.selected_frame().map(|frame| frame.id);
-    eval.gnu_redisplay_hooks.old_selected_window = eval.gnu_selected_window();
+    eval.record_redisplay_selection();
 }
 
 fn live(eval: &super::eval::Context, frame: FrameId, window: WindowId) -> bool {

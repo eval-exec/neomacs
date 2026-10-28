@@ -230,6 +230,7 @@ fn recreated_device_has_no_old_pane_bindings_and_keeps_cpu_scene() {
     let current = render.compositor.current_frame.clone();
     let mut manager = GuiFrameWindowManager::new();
     manager.set_primary_pending(GuiFrameWindowState {
+        visibility: crate::thread_comm::WindowVisibility::Visible,
         pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
             width: W,

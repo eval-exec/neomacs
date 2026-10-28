@@ -5934,9 +5934,17 @@ pub(crate) fn resize_live_gui_frame(
         && !is_child_frame
         && let Some(host) = display_host.as_mut()
     {
-        let geometry_hints = frames
+        let (geometry_hints, visibility, decorated) = frames
             .get(fid)
-            .map(|frame| frame.gui_geometry_hints())
+            .map(|frame| {
+                (
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         tracing::debug!(
             "resize_live_gui_frame: notifying host fid={:?} size={}x{} title={:?}",
@@ -5951,6 +5959,8 @@ pub(crate) fn resize_live_gui_frame(
             height: total_height_px,
             title,
             geometry_hints,
+            visibility,
+            decorated,
             fullscreen: None,
         })
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -6016,9 +6026,17 @@ pub(crate) fn request_live_gui_frame_resize(
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
     if !is_child_frame && let Some(host) = display_host.as_mut() {
-        let geometry_hints = frames
+        let (geometry_hints, visibility, decorated) = frames
             .get(fid)
-            .map(|frame| frame.gui_geometry_hints())
+            .map(|frame| {
+                (
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.resize_gui_frame(super::eval::GuiFrameHostRequest {
             frame_id: fid,
@@ -6026,6 +6044,8 @@ pub(crate) fn request_live_gui_frame_resize(
             height: total_height_px,
             title,
             geometry_hints,
+            visibility,
+            decorated,
             fullscreen: None,
         })
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -7235,11 +7255,14 @@ pub(crate) fn builtin_x_create_frame(
     tracing::debug!(
         "builtin_x_create_frame: syncing pending resize events before frame realization"
     );
-    // GNU's initial GUI frame creation observes the actual host surface
-    // geometry that exists at make-frame time. Our bootstrap window can
-    // already have queued resize events before Lisp reaches x-create-frame,
-    // so apply them first instead of reusing stale bootstrap dimensions.
+    // Existing windows can have queued resize events when Lisp requests
+    // another frame. Apply them before inheriting geometry. The opening GUI
+    // frame obtains its own font and dimensions from the host below.
     eval.sync_pending_resize_events();
+    let opening_gui_frame = eval
+        .display_host
+        .as_ref()
+        .is_some_and(|host| host.opening_gui_frame_pending());
     let result = x_create_frame_impl(
         &mut eval.frames,
         &mut eval.buffers,
@@ -7250,6 +7273,23 @@ pub(crate) fn builtin_x_create_frame(
     if let Ok(value) = &result
         && let Some(id) = value.as_frame_id()
     {
+        let frame_id = FrameId(id);
+        if opening_gui_frame
+            && eval.frames.get(frame_id).is_some_and(|frame| {
+                frame.parent_frame.is_nil()
+                    && frame
+                        .parameter("font-parameter")
+                        .is_some_and(|font| super::font::is_font_object(&font))
+            })
+        {
+            // GNU init_frame_faces realizes the newly opened GUI font before
+            // faces.el recalculates frame-local definitions. Do not inherit
+            // the startup terminal's synthetic "default" family/height here.
+            // This seeds only the frame-local face: Lisp's subsequent global
+            // merge still applies the user's early-init new-frame overrides.
+            super::font::seed_live_frame_default_face_from_font_parameter(eval, frame_id);
+            eval.initialize_display_faces_for_frame(frame_id);
+        }
         // The frame is already live and realized. Like GNU x_set_frame_alpha,
         // which ignores X errors, a host opacity failure must not turn into a
         // signal that hides the new frame from its caller.
@@ -7269,6 +7309,22 @@ pub(crate) fn builtin_x_create_frame(
                     ?err,
                     "x-create-frame: failed to sync GUI frame {what}"
                 );
+            }
+        }
+        // Raw x-create-frame callers do not run frame-after-make-frame. A
+        // visible first frame is already finalized at this boundary. GNU's
+        // faces wrapper explicitly creates it invisible while applying its
+        // delayed font/face parameters, so that path still publishes later.
+        if opening_gui_frame {
+            let request = eval.frames.get(frame_id).and_then(|frame| {
+                (frame.parent_frame.is_nil() && frame.visibility.is_visible())
+                    .then(|| super::eval::GuiFrameHostRequest::for_frame(frame))
+            });
+            if let Some(request) = request
+                && let Some(host) = eval.display_host.as_mut()
+            {
+                host.finish_gui_frame_creation(request)
+                    .map_err(|message| signal("error", vec![Value::string(message)]))?;
             }
         }
     }
@@ -7307,6 +7363,20 @@ pub(crate) fn x_create_frame_impl(
     let parent_id = parsed
         .parent_frame
         .filter(|parent_id| frames.get(*parent_id).is_some());
+    let opening_frame_adoption = parent_id.is_none()
+        && display_host
+            .as_ref()
+            .is_some_and(|host| host.opening_gui_frame_pending());
+    let initial_defaults = if opening_frame_adoption {
+        display_host
+            .as_mut()
+            .map(|host| host.prepare_initial_gui_frame())
+            .transpose()
+            .map_err(|message| signal("error", vec![Value::string(message)]))?
+            .flatten()
+    } else {
+        None
+    };
     let parent_frame_value = parent_id
         .map(|parent_id| Value::make_frame(parent_id.0))
         .unwrap_or(Value::NIL);
@@ -7322,33 +7392,51 @@ pub(crate) fn x_create_frame_impl(
                 Some((public_font, font_parameter))
             })
     };
-    let inherited_display_identity = parent_id
-        .and_then(|parent_id| frames.get(parent_id))
-        .or_else(|| frames.selected_frame())
-        .map(|frame| frame.display_identity().clone())
+    let inherited_display_identity = initial_defaults
+        .as_ref()
+        .map(|defaults| crate::window::FrameDisplayIdentity::Graphical(defaults.display.clone()))
+        .or_else(|| {
+            parent_id
+                .and_then(|parent_id| frames.get(parent_id))
+                .or_else(|| frames.selected_frame())
+                .map(|frame| frame.display_identity().clone())
+        })
         .unwrap_or_default();
-    let metrics = parent_id
-        .and_then(|parent_id| frames.get(parent_id))
-        .map(|parent| GuiFrameMetrics {
-            width_px: parent.width.max(1),
-            height_px: parent.height.max(1),
-            char_width: parent.char_width.max(1.0),
-            char_height: parent.char_height.max(1.0),
-            font_pixel_size: parent.font_pixel_size.max(1.0),
-            device_scale_factor: parent.device_scale_factor,
-            minibuffer_height: parent
-                .minibuffer_leaf
-                .as_ref()
-                .map(|leaf| leaf.bounds().height.max(parent.char_height).max(1.0))
-                // A frame's minibuffer defaults to one text line (GNU
-                // `make-frame`); see current_gui_frame_metrics_in_state.
-                .unwrap_or_else(|| parent.char_height.max(1.0)),
+    let metrics = initial_defaults
+        .as_ref()
+        .map(|defaults| GuiFrameMetrics {
+            width_px: defaults.size.width,
+            height_px: defaults.size.height,
+            char_width: defaults.font.font.char_width(),
+            char_height: defaults.font.font.line_height(),
+            font_pixel_size: defaults.font.font.font_size_px(),
+            minibuffer_height: defaults.font.font.line_height(),
+            device_scale_factor: 1.0,
+        })
+        .or_else(|| {
+            parent_id
+                .and_then(|parent_id| frames.get(parent_id))
+                .map(|parent| GuiFrameMetrics {
+                    width_px: parent.width.max(1),
+                    height_px: parent.height.max(1),
+                    char_width: parent.char_width.max(1.0),
+                    char_height: parent.char_height.max(1.0),
+                    font_pixel_size: parent.font_pixel_size.max(1.0),
+                    device_scale_factor: parent.device_scale_factor,
+                    minibuffer_height: parent
+                        .minibuffer_leaf
+                        .as_ref()
+                        .map(|leaf| leaf.bounds().height.max(parent.char_height).max(1.0))
+                        // A frame's minibuffer defaults to one text line (GNU
+                        // `make-frame`); see current_gui_frame_metrics_in_state.
+                        .unwrap_or_else(|| parent.char_height.max(1.0)),
+                })
         })
         .unwrap_or_else(|| current_gui_frame_metrics_in_state(frames));
-    let host_size = current_primary_window_size(&*display_host);
-    let opening_frame_adoption = display_host
+    let host_size = initial_defaults
         .as_ref()
-        .is_some_and(|host| host.opening_gui_frame_pending());
+        .map(|defaults| defaults.size)
+        .or_else(|| current_primary_window_size(&*display_host));
     let is_child_frame = parent_id.is_some();
     let internal_border_width = parsed_effective_internal_border_width(&parsed, is_child_frame);
     let width_px = parsed
@@ -7457,6 +7545,30 @@ pub(crate) fn x_create_frame_impl(
         // reaches that Lisp, so a frame built through Lisp still gets both.
         // DIVERGENCES.md 157.
         frame.install_gnu_gui_default_parameters();
+        if let Some(defaults) = &initial_defaults {
+            frame.font_ascent = defaults
+                .font
+                .font
+                .metrics
+                .ascent
+                .clamp(0, defaults.font.font.metrics.height) as f32;
+            let mut face = crate::face::Face::new("default");
+            face.height = Some(crate::face::FaceHeight::Absolute(
+                defaults.font.height_tenths,
+            ));
+            let opened = super::font::opened_font_from_resolved_match(
+                &face,
+                &super::eval::ResolvedFontMatch {
+                    font: defaults.font.font.clone(),
+                    glyph_code: None,
+                },
+            );
+            frame.set_known_parameter(
+                FrameParam::Font,
+                super::font::public_frame_font_parameter_value(opened),
+            );
+            frame.set_parameter(Value::symbol("font-parameter"), opened);
+        }
         if let Some((public_font, font_parameter)) = inherited_font_state {
             frame.set_known_parameter(FrameParam::Font, public_font);
             frame.set_parameter(Value::symbol("font-parameter"), font_parameter);
@@ -7514,11 +7626,52 @@ pub(crate) fn x_create_frame_impl(
         frame.sync_window_area_bounds();
         crate::window::window_markers::attach_frame_window_position_markers(buffers, frame);
     }
+    let initial_text_size = initial_defaults.as_ref().map(|_| {
+        let frame = frames.get(fid).expect("new graphical frame exists");
+        (
+            frame_text_width_pixels_in_state(frames, fid),
+            frame_text_height_pixels(frame),
+        )
+    });
     if let Some(font_value) = explicit_font_value {
         super::font::sync_live_frame_font_parameter_in_state(frames, display_host, fid, font_value);
         if let Some(frame) = frames.get_mut(fid) {
             frame.sync_window_area_bounds();
         }
+    }
+    if let Some((old_text_width, old_text_height)) = initial_text_size {
+        let frame = frames.get(fid).expect("new graphical frame exists");
+        let width = parsed.width.map_or_else(
+            || {
+                if frame.char_width != metrics.char_width {
+                    ((old_text_width as f32 / metrics.char_width)
+                        .floor()
+                        .max(1.0)
+                        * frame.char_width)
+                        .round() as u32
+                } else {
+                    old_text_width
+                }
+            },
+            |size| frame_size_param_to_pixels(size, frame.char_width),
+        );
+        let height = parsed.height.map_or_else(
+            || {
+                if frame.char_height != metrics.char_height {
+                    ((old_text_height as f32 / metrics.char_height)
+                        .floor()
+                        .max(1.0)
+                        * frame.char_height)
+                        .round() as u32
+                } else {
+                    old_text_height
+                }
+            },
+            |size| frame_size_param_to_pixels(size, frame.char_height),
+        );
+        // No native allocation exists yet. Finish logical geometry against
+        // the actual opened font, then publish it in the realization request.
+        resize_live_gui_frame(frames, buffers, &mut None, fid, width, height, false)?;
     }
     if is_child_frame {
         // Resolve text dimensions after installing effective chrome and the
@@ -7537,16 +7690,28 @@ pub(crate) fn x_create_frame_impl(
     }
     super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
     if !is_child_frame && let Some(host) = display_host.as_mut() {
-        let geometry_hints = frames
+        let (width, height, geometry_hints, visibility, decorated) = frames
             .get(fid)
-            .map(|frame| frame.gui_geometry_hints())
+            .map(|frame| {
+                (
+                    frame.width,
+                    frame.height,
+                    frame.gui_geometry_hints(),
+                    frame.visibility,
+                    frame
+                        .known_parameter(FrameParam::Undecorated)
+                        .is_none_or(|value| value.is_nil()),
+                )
+            })
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         host.realize_gui_frame(super::eval::GuiFrameHostRequest {
             frame_id: fid,
-            width: width_px,
-            height: height_px,
+            width,
+            height,
             title: host_title,
             geometry_hints,
+            visibility,
+            decorated,
             fullscreen: parsed.fullscreen,
         })
         .map_err(|message| signal("error", vec![Value::string(message)]))?;
@@ -7601,19 +7766,39 @@ impl DeleteFrameMode {
     }
 }
 
+/// GNU other_frames distinguishes deleting a frame from merely hiding it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OtherFramePurpose {
+    MakeInvisible,
+    Delete { force_non_nil: bool },
+}
+
 pub(crate) fn other_frames_in_state(
     eval: &super::eval::Context,
-    deleting: crate::window::FrameId,
-    include_invisible: bool,
+    target: crate::window::FrameId,
+    purpose: OtherFramePurpose,
 ) -> bool {
+    let target_is_terminal = eval
+        .frames
+        .get(target)
+        .is_some_and(|frame| frame.effective_window_system().is_none());
     eval.frames
         .frame_list()
         .into_iter()
-        .filter(|frame_id| *frame_id != deleting)
+        .filter(|frame_id| *frame_id != target)
         .filter(|frame_id| eval.frames.frame_parent_id(*frame_id).is_none())
         .any(|frame_id| {
             eval.frames.get(frame_id).is_some_and(|frame| {
-                include_invisible || frame.visibility.is_visible_or_iconified()
+                frame.visibility.is_visible_or_iconified()
+                    || match purpose {
+                        OtherFramePurpose::MakeInvisible => false,
+                        OtherFramePurpose::Delete { force_non_nil } => {
+                            // GNU frame.c:other_frames permits retiring the
+                            // startup terminal for an invisible GUI frame.
+                            force_non_nil
+                                || (target_is_terminal && frame.effective_window_system().is_some())
+                        }
+                    }
             })
         })
 }
@@ -7638,7 +7823,9 @@ pub(crate) fn delete_frame_owned(
         return Ok(Value::NIL);
     }
     let force_non_nil = mode.force_non_nil();
-    if !mode.bypasses_only_frame_check() && !other_frames_in_state(eval, fid, force_non_nil) {
+    if !mode.bypasses_only_frame_check()
+        && !other_frames_in_state(eval, fid, OtherFramePurpose::Delete { force_non_nil })
+    {
         return Err(signal(
             "error",
             vec![Value::string(if force_non_nil {
@@ -7775,7 +7962,16 @@ pub(crate) fn delete_frame_owned(
             .get(frame_id)
             .is_none_or(|frame| frame.terminal_id != terminal_id)
     });
+    // The host owns its graphical connection independently of any frame.
+    // GNU toolkit backends likewise retain an empty display connection.
+    use crate::emacs_core::terminal::pure::TerminalOutputMethod;
+    let frame_owns_terminal =
+        match crate::emacs_core::terminal::pure::live_terminal_output_method_for_id(terminal_id) {
+            Some(TerminalOutputMethod::WindowSystem) => false,
+            Some(TerminalOutputMethod::Initial | TerminalOutputMethod::Termcap) | None => true,
+        };
     if mode.allows_terminal_cascade()
+        && frame_owns_terminal
         && terminal_is_empty
         && !eval.frames.frame_list().is_empty()
         && let Some(terminal) =
@@ -8277,3 +8473,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/selection_chrome_test.rs"]
 mod selection_chrome_tests;
+
+#[cfg(test)]
+#[path = "tests/terminal_frame_deletion.rs"]
+mod terminal_frame_deletion_tests;

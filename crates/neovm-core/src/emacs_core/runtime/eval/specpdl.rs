@@ -399,11 +399,19 @@ impl Context {
                 }
                 SpecBinding::LoadsInProgress { len } => self.loads_in_progress.truncate(len),
                 SpecBinding::RequireStack { len } => self.require_stack.truncate(len),
-                SpecBinding::NativeUnwind { action } => {
-                    if let NativeUnwindAction::OwnerBinding(binding) = action {
-                        self.discard_owner_binding(binding);
+                SpecBinding::NativeUnwind { action } => match action {
+                    NativeUnwindAction::OwnerBinding(binding) => {
+                        self.discard_owner_binding(binding)
                     }
-                }
+                    NativeUnwindAction::KeyboardBinding(binding) => {
+                        let _ = self.restore_keyboard_binding(*binding, false);
+                    }
+                    NativeUnwindAction::RestoreEvalDepth { .. }
+                    | NativeUnwindAction::RestoreWindowConfiguration { .. }
+                    | NativeUnwindAction::MinibufferSession { .. }
+                    | NativeUnwindAction::MinibufferBuffer { .. }
+                    | NativeUnwindAction::BacktraceEvalRewind { .. } => {}
+                },
                 SpecBinding::GcRoot { .. }
                 | SpecBinding::Backtrace1 { .. }
                 | SpecBinding::Backtrace2 { .. }
@@ -843,6 +851,28 @@ impl Context {
             None => (SymbolRedirect::Plainval, None),
         };
 
+        if let Some(keyboard) = forwarded
+            .and_then(|fwd| fwd.as_kboard_obj_fwd())
+            .filter(|keyboard| keyboard.is_selected_keyboard())
+        {
+            self.sync_keyboard_terminal_owner();
+            let owner = keyboard.binding_owner().expect("selected frame keyboard");
+            let binding = KeyboardBinding {
+                sym_id: resolved,
+                owner,
+                old_value: keyboard.get(),
+            };
+            self.push_specpdl_with(|| SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(Box::new(binding)),
+            });
+            self.run_specbind_watcher(resolved, value, "let")?;
+            return self.set_internal_after_watchers(
+                resolved,
+                value,
+                crate::emacs_core::symbol::SetInternalBind::Bind,
+            );
+        }
+
         // FORWARDED BUFFER_OBJFWD specbind, separate from the legacy
         // LOCALIZED path. Mirrors GNU `specbind` SYMBOL_FORWARDED arm at
         // `eval.c:3641-3677`.
@@ -1169,7 +1199,52 @@ impl Context {
         self.sync_user_test_gc_binding_by_id(sym_id);
     }
 
+    pub(super) fn restore_keyboard_binding(
+        &mut self,
+        binding: KeyboardBinding,
+        watched: bool,
+    ) -> Result<(), Flow> {
+        if watched {
+            self.run_specbind_watcher(binding.sym_id, binding.old_value, "unlet")?;
+        }
+        if let Some(keyboard) = self
+            .obarray
+            .forwarder(binding.sym_id)
+            .and_then(|fwd| fwd.as_kboard_obj_fwd())
+        {
+            keyboard.exchange_for_owner(binding.owner, binding.old_value);
+        }
+        Ok(())
+    }
+
+    fn swap_keyboard_binding(&mut self, index: usize) -> bool {
+        let Some(SpecBinding::NativeUnwind {
+            action: NativeUnwindAction::KeyboardBinding(binding),
+        }) = self.specpdl.get(index)
+        else {
+            return false;
+        };
+        let saved = **binding;
+        let current = self
+            .obarray
+            .forwarder(saved.sym_id)
+            .and_then(|fwd| fwd.as_kboard_obj_fwd())
+            .and_then(|keyboard| keyboard.exchange_for_owner(saved.owner, saved.old_value));
+        if let Some(current) = current
+            && let Some(SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(binding),
+            }) = self.specpdl.get_mut(index)
+        {
+            crate::tagged::gc::note_root_overwrite(binding.old_value);
+            binding.old_value = current;
+        }
+        true
+    }
+
     pub(super) fn swap_let_binding_for_thread_switch(&mut self, index: usize) -> Result<(), Flow> {
+        if self.swap_keyboard_binding(index) {
+            return Ok(());
+        }
         let (sym_id, old_value, originally_default_binding) = match self.specpdl.get(index) {
             Some(SpecBinding::Let { sym_id, old_value }) => (*sym_id, old_value.get(), false),
             Some(SpecBinding::LetDefault {
@@ -1357,6 +1432,7 @@ impl Context {
             LexicalEnv,
             Let,
             LetLocal,
+            Keyboard,
             Owner(super::owner_bindings::OwnerBindingRef),
         }
         let swap = match self.specpdl.get(index) {
@@ -1369,6 +1445,9 @@ impl Context {
             Some(SpecBinding::LexicalEnv { .. }) => Swap::LexicalEnv,
             Some(SpecBinding::Let { .. } | SpecBinding::LetDefault { .. }) => Swap::Let,
             Some(SpecBinding::LetLocal { .. }) => Swap::LetLocal,
+            Some(SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(_),
+            }) => Swap::Keyboard,
             Some(SpecBinding::NativeUnwind {
                 action: NativeUnwindAction::OwnerBinding(binding),
             }) => Swap::Owner(*binding),
@@ -1430,6 +1509,9 @@ impl Context {
             Swap::LetLocal => {
                 self.swap_let_binding_for_thread_switch(index)?;
                 self.swap_local_let_binding_for_thread_switch(index);
+            }
+            Swap::Keyboard => {
+                self.swap_keyboard_binding(index);
             }
             Swap::Owner(binding) => self.swap_owner_binding(binding),
         }

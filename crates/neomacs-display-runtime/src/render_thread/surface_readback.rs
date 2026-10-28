@@ -10,20 +10,19 @@ mod tests;
 pub(crate) fn surface_usage_for_debug_readback(
     supported_usages: wgpu::TextureUsages,
     pending: &mut bool,
-    continuous_enabled: bool,
+    remaining_frames: &mut u32,
 ) -> wgpu::TextureUsages {
-    if !*pending && !continuous_enabled {
+    if !*pending && *remaining_frames == 0 {
         return wgpu::TextureUsages::RENDER_ATTACHMENT;
     }
 
     if supported_usages.contains(wgpu::TextureUsages::COPY_SRC) {
-        tracing::info!("First-frame surface readback enabled (surface usage includes COPY_SRC)");
+        tracing::info!("Debug surface readback enabled (surface usage includes COPY_SRC)");
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
     } else {
-        tracing::warn!(
-            "NEOMACS_DEBUG_FIRST_FRAME_READBACK requested, but surface COPY_SRC is unsupported"
-        );
+        tracing::warn!("Debug surface readback requested, but surface COPY_SRC is unsupported");
         *pending = false;
+        *remaining_frames = 0;
         wgpu::TextureUsages::RENDER_ATTACHMENT
     }
 }

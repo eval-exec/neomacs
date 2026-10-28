@@ -1,5 +1,6 @@
 use super::startup::{
-    self, InitialWindow, InitialWindowReceiver, InitialWindowSize, RenderLoopError,
+    self, InitialWindow, InitialWindowPreparation, InitialWindowReceiver, InitialWindowSize,
+    RenderLoopError,
 };
 use super::{RenderApp, SharedImageRenderState, SharedMonitorInfo, surface_readback};
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameNativeWindowState};
@@ -134,7 +135,7 @@ impl RenderApp {
         let surface_usage = surface_readback::surface_usage_for_debug_readback(
             caps.usages,
             &mut self.debug_first_frame_readback_pending,
-            self.debug_surface_readback_frames_remaining > 0,
+            &mut self.debug_surface_readback_frames_remaining,
         );
 
         {
@@ -183,8 +184,9 @@ impl RenderApp {
         }
         surface.configure(&device, &config);
 
+        let image_decoder = self.comms.image_decoder.take().unwrap_or_default();
         #[cfg(feature = "video")]
-        let renderer = WgpuRenderer::with_device_and_video_runtime(
+        let renderer = WgpuRenderer::with_device_and_video_runtime_and_image_decoder(
             device.clone(),
             queue.clone(),
             pending_width,
@@ -193,15 +195,17 @@ impl RenderApp {
             pending_scale_factor as f32,
             self.video_gpu_generation,
             self.video_wake.clone(),
+            image_decoder,
         );
         #[cfg(not(feature = "video"))]
-        let renderer = WgpuRenderer::with_device(
+        let renderer = WgpuRenderer::with_device_and_image_decoder(
             device.clone(),
             queue.clone(),
             pending_width,
             pending_height,
             format,
             pending_scale_factor as f32,
+            image_decoder,
         );
 
         tracing::info!(
@@ -324,7 +328,12 @@ impl RenderApp {
         if let Some(renderer) = self.renderer.as_ref() {
             self.pending_video_recovery = renderer.video_recovery_manifests();
         }
-        self.renderer = None;
+        if let Some(renderer) = self.renderer.take() {
+            // CPU decoding and pending pixels belong to the image pipeline,
+            // whose metadata client outlives this device and its textures.
+            debug_assert!(self.comms.image_decoder.is_none());
+            self.comms.image_decoder = Some(renderer.into_image_decoder());
+        }
         self.publish_image_cache_usage();
         #[cfg(feature = "video")]
         {
@@ -503,7 +512,11 @@ pub(crate) fn run_render_loop_with_event_loop(
         event_loop,
         comms,
         InitialWindow::Ready {
-            size: InitialWindowSize { width, height },
+            preparation: InitialWindowPreparation {
+                size: InitialWindowSize { width, height },
+                visibility: crate::thread_comm::WindowVisibility::Visible,
+                decorated: true,
+            },
             evaluator: None,
         },
         title,
@@ -547,36 +560,43 @@ fn run_render_loop_with_startup(
     tracing::info!("Render thread entering winit event loop");
     let preparation_proxy = event_loop.create_proxy();
     let exit_input = comms.input_tx.clone();
-    let result = startup::run(event_loop, initial, move |size| {
-        let app = RenderApp::new(
-            comms,
-            size.width,
-            size.height,
-            title,
-            image_metadata,
-            shared_monitors,
-            poll_when_idle,
-            #[cfg(feature = "neo-term")]
-            shared_terminals,
-        );
-        let mut app = app;
-        match super::frame_preparation::FramePreparation::spawn(
-            app.comms.frame_rx.clone(),
-            move || preparation_proxy.wake_up(),
-        ) {
-            Ok(worker) => app.frame_preparation = Some(worker),
-            Err(error) => tracing::warn!(%error, "frame preparation worker unavailable"),
-        }
-        #[cfg(feature = "video")]
-        {
-            app.video_wake = video_wake;
-        }
-        #[cfg(feature = "webview")]
-        {
-            app.webview_wake = webview_wake;
-        }
-        app
-    });
+    let command_rx = comms.cmd_rx.clone();
+    let result = startup::run(
+        event_loop,
+        initial,
+        shared_monitors.clone(),
+        command_rx,
+        move |size| {
+            let app = RenderApp::new(
+                comms,
+                size.width,
+                size.height,
+                title,
+                image_metadata,
+                shared_monitors,
+                poll_when_idle,
+                #[cfg(feature = "neo-term")]
+                shared_terminals,
+            );
+            let mut app = app;
+            match super::frame_preparation::FramePreparation::spawn(
+                app.comms.frame_rx.clone(),
+                move || preparation_proxy.wake_up(),
+            ) {
+                Ok(worker) => app.frame_preparation = Some(worker),
+                Err(error) => tracing::warn!(%error, "frame preparation worker unavailable"),
+            }
+            #[cfg(feature = "video")]
+            {
+                app.video_wake = video_wake;
+            }
+            #[cfg(feature = "webview")]
+            {
+                app.webview_wake = webview_wake;
+            }
+            app
+        },
+    );
     if let Err(ref e) = result {
         tracing::error!("Event loop error: {:?}", e);
     }

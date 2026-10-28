@@ -21,6 +21,21 @@ thread_local! {
 
 use neomacs_display_protocol::ImageAnimationPolicy;
 
+fn test_catalog(
+    cmd_tx: crossbeam_channel::Sender<RenderCommand>,
+    render_waker: Option<GuiEventLoopWaker>,
+    image_metadata: SharedImageRenderState,
+    redisplay_waker: Option<RedisplayWaker>,
+) -> AsyncImageCatalog {
+    AsyncImageCatalog::new(
+        cmd_tx,
+        render_waker,
+        image_metadata,
+        redisplay_waker,
+        neomacs_display_runtime::render_thread::ImageDecoder::new().client(),
+    )
+}
+
 fn file_request(path: &str) -> ImageResolveRequest {
     let spec = IMAGE_SPEC_TEST_CONTEXT.with(|_| {
         Value::list(vec![
@@ -56,7 +71,7 @@ fn lookup(catalog: &AsyncImageCatalog, request: ImageResolveRequest) -> ImageLoo
 fn classify(file: &str) -> (ImageResolveRequest, Option<ImageFileRequest>) {
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     catalog.classify_request(file_request(file))
 }
 
@@ -103,7 +118,7 @@ fn named_user_file_is_deferred_off_thread() {
 fn pending_slot_and_decode_command_share_one_resolved_realization() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let mut request = file_request("/tmp/icon.svg");
     // Neither axis pinned: the placeholder falls back to the realization.
     request.size = ImageSizeSpec::new(AxisSize::Native, AxisSize::AtMost(24));
@@ -128,7 +143,7 @@ fn pending_slot_and_decode_command_share_one_resolved_realization() {
 fn invalidate_all_requeues_every_entry_under_its_existing_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
 
     let first = lookup(&catalog, file_request("/tmp/one.png"))
         .placement()
@@ -168,7 +183,7 @@ fn invalidate_all_requeues_every_entry_under_its_existing_id() {
 fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let request = file_request("/tmp/watched.svg");
 
     let first = lookup(&catalog, request.clone()).placement().image_id();
@@ -197,7 +212,7 @@ fn invalidating_dependency_retires_old_identity_and_next_lookup_reloads() {
 fn invalidating_spec_preserves_other_spec_that_uses_same_dependency() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let first = file_request("/tmp/multi-page.png");
     let mut second = first.clone();
     let second_spec = Value::list(vec![
@@ -249,7 +264,7 @@ fn renderer_reconciliation_upgrades_pending_to_ready_geometry() {
 
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::clone(&metadata), None);
+    let catalog = test_catalog(cmd_tx, None, Arc::clone(&metadata), None);
     let request = file_request("/tmp/promote.png");
 
     let ImageLookup::Pending(pending) = lookup(&catalog, request.clone()) else {
@@ -286,7 +301,7 @@ fn renderer_eviction_requeues_ready_image_under_its_stable_id() {
 
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::clone(&metadata), None);
+    let catalog = test_catalog(cmd_tx, None, Arc::clone(&metadata), None);
     let request = file_request("/tmp/room-avatar.png");
 
     let ImageLookup::Pending(pending) = lookup(&catalog, request.clone()) else {
@@ -338,7 +353,7 @@ fn renderer_eviction_requeues_ready_image_under_its_stable_id() {
 fn eviction_after_decode_but_before_evaluator_service_does_not_strand_pending_image() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let request = file_request("/tmp/large-chat-photo.png");
 
     let ImageLookup::Pending(first_load) = lookup(&catalog, request.clone()) else {
@@ -373,7 +388,7 @@ fn stale_decode_completion_cannot_promote_a_replacement_load() {
 
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::clone(&metadata), None);
+    let catalog = test_catalog(cmd_tx, None, Arc::clone(&metadata), None);
     let request = file_request("/tmp/replaced-avatar.png");
 
     let ImageLookup::Pending(first) = lookup(&catalog, request.clone()) else {
@@ -423,7 +438,7 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
     let (redisplay_tx, redisplay_rx) = crossbeam_channel::unbounded();
-    let catalog = AsyncImageCatalog::new(
+    let catalog = test_catalog(
         cmd_tx,
         None,
         Arc::clone(&metadata),
@@ -539,7 +554,7 @@ fn placeholder_extent_matches_the_probed_layout_for_a_scaled_spec() {
 fn a_later_frame_reserves_the_geometry_an_earlier_frame_resolved() {
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::clone(&metadata), None);
+    let catalog = test_catalog(cmd_tx, None, Arc::clone(&metadata), None);
     let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
     let mut request = file_request(fixture.to_str().expect("utf8 fixture path"));
     // Height pinned, width left to the native aspect ratio: the reservation is
@@ -592,7 +607,7 @@ fn a_later_frame_reserves_the_geometry_an_earlier_frame_resolved() {
 fn pending_geometry_without_a_header_keeps_the_request_placeholder() {
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let request = file_request("/nonexistent/neomacs/not-an-image.png");
 
     let ImageLookup::Pending(pending) = lookup(&catalog, request.clone()) else {
@@ -628,7 +643,7 @@ fn pending_geometry_without_a_header_keeps_the_request_placeholder() {
 fn the_load_command_carries_the_looking_frames_max_image_size() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let limit = ImageSizeLimit::from_axis_pixels(64);
 
     catalog.lookup(file_request("/tmp/huge.png"), limit);
@@ -646,7 +661,7 @@ fn the_load_command_carries_the_looking_frames_max_image_size() {
 fn each_lookup_carries_the_bound_it_was_made_under() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let request = file_request("/tmp/reloaded.png");
 
     catalog.lookup(request.clone(), ImageSizeLimit::from_axis_pixels(64));
@@ -679,7 +694,7 @@ fn each_lookup_carries_the_bound_it_was_made_under() {
 fn a_device_loss_requeue_carries_the_limit_it_last_saw() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, metadata, None);
+    let catalog = test_catalog(cmd_tx, None, metadata, None);
     let limit = ImageSizeLimit::from_axis_pixels(7);
 
     catalog.lookup(file_request("/tmp/before-loss.png"), limit);
@@ -705,7 +720,7 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
 
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let catalog = AsyncImageCatalog::new(cmd_tx, None, Arc::clone(&metadata), None);
+    let catalog = test_catalog(cmd_tx, None, Arc::clone(&metadata), None);
     let request = file_request("/tmp/too-large.png");
 
     let ImageLookup::Pending(pending) = catalog.lookup(request.clone(), ImageSizeLimit::UNLIMITED)
@@ -730,5 +745,61 @@ fn a_refused_load_is_a_failed_lookup_carrying_gnus_diagnostic() {
         failed.placement().dimensions(),
         slot.dimensions(),
         "the reserved slot survives the refusal, so the frame does not move"
+    );
+}
+
+#[test]
+fn public_catalog_invalidation_retires_cpu_metadata_before_gpu_admission() {
+    // Keep the CPU owner alive; no renderer or GPU admission is involved.
+    let decoder = neomacs_display_runtime::render_thread::ImageDecoder::new();
+    let client = decoder.client();
+    let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
+    let catalog = AsyncImageCatalog::new(
+        cmd_tx,
+        None,
+        Arc::new(ImageRenderState::default()),
+        None,
+        client.clone(),
+    );
+    let path = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
+    let mut request = file_request(path.to_str().expect("UTF-8 image fixture"));
+    request.size = ImageSizeSpec::default();
+
+    let queried = catalog
+        .resolve_sync(request.clone(), ImageSizeLimit::UNLIMITED)
+        .expect("CPU metadata query must finish without a GPU")
+        .expect("valid PNG has metadata");
+    assert_eq!(
+        queried.metadata.layout,
+        neomacs_display_protocol::ImageLayoutExtent::new(100, 200)
+    );
+
+    // Production callers use the ImageCatalog trait object. CPU completion
+    // must not pretend that its decoded pixels are already GPU-resident.
+    let public: &dyn ImageCatalog = &catalog;
+    let ImageLookup::Pending(old) = public.lookup(request.clone(), ImageSizeLimit::UNLIMITED)
+    else {
+        panic!("ordinary lookup must remain pending before GPU admission");
+    };
+    assert_eq!(old.load(), queried.load);
+    assert_eq!(
+        public.invalidate(ImageInvalidation::Dependency(request.source.clone())),
+        ImageInvalidationResult::Changed,
+        "public invalidation must dispatch to the live catalog, not the no-op default"
+    );
+    assert!(
+        client
+            .wait_for_terminal(old.load(), Duration::ZERO)
+            .is_none(),
+        "invalidation must retire the completed CPU generation immediately"
+    );
+    let ImageLookup::Pending(replacement) = public.lookup(request, ImageSizeLimit::UNLIMITED)
+    else {
+        panic!("the invalidated source must be scheduled again");
+    };
+    assert_ne!(
+        replacement.load().image(),
+        old.load().image(),
+        "a retired source identity cannot be reused by the next lookup"
     );
 }

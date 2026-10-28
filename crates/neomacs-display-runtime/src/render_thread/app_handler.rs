@@ -30,10 +30,33 @@ impl ApplicationHandler for RenderApp {
                     .request_shutdown(super::state::RenderShutdownReason::StartupCancelled);
                 self.handle_exiting();
                 event_loop.exit();
+                return;
             }
-            // Read current size/scale from the native window upon completion.
+            // GPU initialization must not consume native input. Keep its
+            // modifier, focus and IME ordering until this window has an owner.
+            self.gpu_startup.as_mut().unwrap().retain_input(event);
             return;
         }
+        if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed)
+            && self
+                .startup_input
+                .as_ref()
+                .is_some_and(|input| input.window_id() == window_id)
+        {
+            self.startup_input = None;
+        }
+        let event = if let Some(input) = self
+            .startup_input
+            .as_mut()
+            .filter(|input| input.window_id() == window_id)
+        {
+            match input.defer_input(event) {
+                Ok(()) => return,
+                Err(event) => event,
+            }
+        } else {
+            event
+        };
         self.handle_window_event(event_loop, window_id, event);
     }
 

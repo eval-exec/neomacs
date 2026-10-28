@@ -378,7 +378,17 @@ impl Obarray {
             }),
             super::ValueCell::Localized(_) => Some(AdmissionPlanCell::Owned),
             super::ValueCell::Forwarded(fwd) => {
-                BuiltinForwarder::new(fwd).map(|_| AdmissionPlanCell::Owned)
+                // Selected-keyboard slots bind in their keyboard's storage.
+                // Their typed specpdl exchange handles Lisp thread switching;
+                // an owner-default projection would hide other keyboards.
+                if fwd
+                    .as_kboard_obj_fwd()
+                    .is_some_and(|kbd| kbd.is_selected_keyboard())
+                {
+                    None
+                } else {
+                    BuiltinForwarder::new(fwd).map(|_| AdmissionPlanCell::Owned)
+                }
             }
             super::ValueCell::Alias(_) => None,
         }

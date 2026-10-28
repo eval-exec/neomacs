@@ -2129,6 +2129,7 @@ fn drive_banded_load(
         ImageSequenceId::new(u64::from(image)).expect("non-zero test sequence"),
         neomacs_renderer_wgpu::SvgResourceContext::Isolated,
         neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
+        neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
     );
     let image_id = ImageId::new(image);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -2569,6 +2570,7 @@ fn a_failed_banded_decode_leaves_no_partial_texture() {
         ImageSequenceId::new(909).expect("non-zero test sequence"),
         neomacs_renderer_wgpu::SvgResourceContext::Isolated,
         neomacs_display_protocol::image_diagnostic::ImageLoadIdentity::unspecified(),
+        neomacs_display_protocol::ImageSizeLimit::UNLIMITED,
     );
     let image_id = ImageId::new(909);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -2604,4 +2606,111 @@ fn a_failed_banded_decode_leaves_no_partial_texture() {
         h.renderer.image_cache().get(image_id).is_none(),
         "a failed decode keeps no texture, partial or otherwise"
     );
+}
+
+#[test]
+fn renderer_generated_images_keep_identity_after_decoder_handoff() {
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+    let load_fixture = |renderer: &mut WgpuRenderer, name: &str| {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../test/data/image")
+            .join(name);
+        renderer.load_image_file(
+            path.to_str().expect("UTF-8 image fixture"),
+            ImageSizeSpec::default(),
+            ImageRotation::None,
+            ImageColorContext::default(),
+        )
+    };
+    let await_layout = |renderer: &mut WgpuRenderer, image: ImageId| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            renderer.process_pending_images();
+            if renderer.is_image_ready(image) {
+                return renderer
+                    .image_cache()
+                    .get(image)
+                    .expect("ready image has a texture")
+                    .metadata
+                    .as_ref()
+                    .expect("complete decode has metadata")
+                    .layout;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "renderer-owned image {image} never completed: {:?}",
+                renderer.image_cache().get_state(image)
+            );
+            std::thread::yield_now();
+        }
+    };
+
+    let first = load_fixture(&mut h.renderer, "blank-200x100.png");
+    assert_eq!(
+        await_layout(&mut h.renderer, first),
+        neomacs_display_protocol::ImageLayoutExtent::new(200, 100)
+    );
+    // GPU recovery preserves this CPU owner, while all old textures and the
+    // renderer's GPU resources are destroyed.
+    let device = h.renderer.device().clone();
+    let queue = h.renderer.queue().clone();
+    let decoder = h.renderer.into_image_decoder();
+    let mut renderer = WgpuRenderer::with_device_and_image_decoder(
+        device,
+        queue,
+        W,
+        H,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        1.0,
+        decoder,
+    );
+
+    let second = load_fixture(&mut renderer, "blank-100x200.png");
+    assert_ne!(
+        second, first,
+        "new renderer-owned resources cannot reuse an identity retained by the CPU decoder or old frames"
+    );
+    assert_eq!(
+        await_layout(&mut renderer, second),
+        neomacs_display_protocol::ImageLayoutExtent::new(100, 200),
+        "the replacement renderer must decode the new source, not wait for or adopt the old token"
+    );
+}
+
+#[test]
+fn repeated_adopted_image_load_preserves_ready_texture() {
+    let Some(mut h) = try_harness() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+    let load = test_image_load(50123);
+    let submit = |renderer: &mut WgpuRenderer, bytes: &[u8]| {
+        renderer.load_image_argb32_with_id(load, bytes, 1, 1, 4);
+    };
+    submit(&mut h.renderer, &[255, 18, 52, 86]);
+    // Repeated admission while decoding must also remain one live attempt.
+    submit(&mut h.renderer, &[255, 18, 52, 86]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        h.renderer.process_pending_images();
+        if h.renderer.is_image_ready(load.image()) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "initial raw image never completed"
+        );
+        std::thread::yield_now();
+    }
+    // The first outcome's pixels have been consumed. A repeated command must
+    // leave that texture intact; deduplicating only in the CPU queue loses it.
+    submit(&mut h.renderer, &[]);
+    assert!(
+        h.renderer.is_image_ready(load.image()),
+        "repeated admission discarded the completed texture"
+    );
+    assert_eq!(h.renderer.get_image_size(load.image()), Some((1, 1)));
 }

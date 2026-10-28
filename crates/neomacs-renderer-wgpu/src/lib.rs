@@ -58,7 +58,8 @@ pub use glyph_atlas::{
     allocator, pages, types,
 };
 pub use image_cache::{
-    CachedImage, FilledRows, ImageCache, ImageCacheEvent, ImageMetadata, ImageState,
+    CachedImage, FilledRows, ImageCache, ImageCacheEvent, ImageDecodeClient, ImageDecoder,
+    ImageMetadata, ImageState,
 };
 pub use image_probe::{ImageProbeSource, admit, probe_image_layout};
 pub use renderer::{

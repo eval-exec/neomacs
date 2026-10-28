@@ -1238,6 +1238,9 @@ impl SpecBinding {
             Self::Let { sym_id, .. }
             | Self::LetLocal { sym_id, .. }
             | Self::LetDefault { sym_id, .. } => Some(sym_id),
+            Self::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(ref binding),
+            } => Some(binding.sym_id),
             Self::LexicalEnv { .. }
             | Self::GcRoot { .. }
             | Self::Backtrace { .. }
@@ -1256,6 +1259,14 @@ impl SpecBinding {
     }
 }
 
+/// A dynamic binding owned by one selected keyboard lifetime.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KeyboardBinding {
+    sym_id: SymId,
+    owner: crate::emacs_core::forward::KeyboardBindingOwner,
+    old_value: Value,
+}
+
 /// Native cleanups that must participate in GNU's specpdl unwind ordering.
 ///
 /// Keep this closed and exhaustive: adding a lifecycle that can signal or
@@ -1263,6 +1274,9 @@ impl SpecBinding {
 /// an untyped callback whose captures the GC cannot see.
 #[derive(Clone, Debug)]
 pub(crate) enum NativeUnwindAction {
+    /// GNU SPECPDL_LET's where.kbd: restore the captured keyboard even
+    /// when the selected frame changed inside the dynamic extent.
+    KeyboardBinding(Box<KeyboardBinding>),
     /// Scalar reserve state owned by this Context's mutator; restored on its
     /// own specpdl, without sharing a limit or a reserve between Contexts.
     RestoreEvalDepth { old_limit: i64 },
@@ -1298,6 +1312,7 @@ impl NativeUnwindAction {
             Self::MinibufferBuffer { .. } => {}
             Self::BacktraceEvalRewind { .. } => {}
             Self::OwnerBinding(_) => {}
+            Self::KeyboardBinding(binding) => visit(binding.old_value),
         }
     }
 
@@ -1307,6 +1322,9 @@ impl NativeUnwindAction {
         let root_scope = context.save_vm_roots();
         self.trace_roots(&mut |value| context.push_vm_frame_root(value));
         let result = match self {
+            Self::KeyboardBinding(binding) => context
+                .restore_keyboard_binding(*binding, true)
+                .map(|()| Value::NIL),
             Self::RestoreEvalDepth { old_limit } => {
                 context.restore_lisp_eval_depth_room(old_limit);
                 Ok(Value::NIL)
@@ -2307,7 +2325,30 @@ pub struct GuiFrameHostRequest {
     pub height: u32,
     pub title: crate::heap_types::LispString,
     pub geometry_hints: crate::window::GuiFrameGeometryHints,
+    pub visibility: crate::window::FrameVisibility,
+    pub decorated: bool,
     pub fullscreen: Option<FrameFullscreen>,
+}
+
+impl GuiFrameHostRequest {
+    /// Snapshot final frame parameters without transferring evaluator-owned
+    /// values to the native thread. Callers retain their creation guards.
+    pub fn for_frame(frame: &crate::window::Frame) -> Self {
+        Self {
+            frame_id: frame.id,
+            width: frame.width,
+            height: frame.height,
+            title: frame.host_title_lisp_string(),
+            geometry_hints: frame.gui_geometry_hints(),
+            visibility: frame.visibility,
+            decorated: frame
+                .known_parameter(crate::window::FrameParam::Undecorated)
+                .is_none_or(|value| value.is_nil()),
+            fullscreen: frame
+                .known_parameter(crate::window::FrameParam::Fullscreen)
+                .and_then(|value| FrameFullscreen::from_symbol_value(&value)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5633,15 +5674,6 @@ impl Context {
         &mut self.current_message
     }
 
-    pub(crate) fn sync_keyboard_terminal_owner(&mut self) {
-        let terminal_id = self
-            .frames
-            .selected_frame()
-            .map(|frame| frame.terminal_id)
-            .unwrap_or(crate::emacs_core::terminal::pure::TERMINAL_ID);
-        self.command_loop.keyboard.select_terminal(terminal_id);
-    }
-
     pub(crate) fn route_keyboard_input_to_frame(&mut self, emacs_frame_id: u64) {
         let frame_id = if emacs_frame_id == 0 {
             self.frames.selected_frame().map(|frame| frame.id)
@@ -6517,6 +6549,9 @@ fn default_toplevel_binding(specpdl: &[SpecBinding], sym_id: SymId) -> Option<&S
             sym_id: binding_sym,
             ..
         } => *binding_sym == sym_id,
+        SpecBinding::NativeUnwind {
+            action: NativeUnwindAction::KeyboardBinding(binding),
+        } => binding.sym_id == sym_id,
         SpecBinding::LetLocal { .. }
         | SpecBinding::LexicalEnv { .. }
         | SpecBinding::GcRoot { .. }
@@ -6544,6 +6579,9 @@ pub(crate) fn default_toplevel_value_in_state(
     match default_toplevel_binding(specpdl, sym_id) {
         Some(SpecBinding::Let { old_value, .. })
         | Some(SpecBinding::LetDefault { old_value, .. }) => old_value.get(),
+        Some(SpecBinding::NativeUnwind {
+            action: NativeUnwindAction::KeyboardBinding(binding),
+        }) => Some(binding.old_value),
         Some(SpecBinding::LetLocal { .. })
         | Some(SpecBinding::LexicalEnv { .. })
         | Some(SpecBinding::GcRoot { .. })
@@ -6574,6 +6612,9 @@ pub(crate) fn default_toplevel_value(ctx: &mut Context, args: Vec<Value>) -> Eva
             SpecBinding::Let { old_value, .. } | SpecBinding::LetDefault { old_value, .. } => {
                 old_value.get()
             }
+            SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(binding),
+            } => Some(binding.old_value),
             _ => unreachable!("default_toplevel_binding returns only variable bindings"),
         };
         return value.ok_or_else(|| signal(LispCondition::VoidVariable, vec![args[0]]));
@@ -6636,6 +6677,13 @@ pub(crate) fn set_default_toplevel_value_in_state(
                 ..
             } if *binding_sym == sym_id => {
                 old_value.set(Some(value));
+                return true;
+            }
+            SpecBinding::NativeUnwind {
+                action: NativeUnwindAction::KeyboardBinding(binding),
+            } if binding.sym_id == sym_id => {
+                crate::tagged::gc::note_root_overwrite(binding.old_value);
+                binding.old_value = value;
                 return true;
             }
             SpecBinding::Let { .. }
@@ -7659,6 +7707,7 @@ mod global_state;
 mod green;
 pub(crate) use admission::ThreadingMode;
 pub(crate) use green::{SelectTurn, green_make_thread, green_world};
+mod keyboard_forwarding;
 mod owner_bindings;
 mod owner_mirrors;
 mod variable_access;

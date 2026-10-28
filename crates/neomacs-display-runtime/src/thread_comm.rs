@@ -317,6 +317,22 @@ pub enum WindowVisibility {
     Invisible,
 }
 
+impl WindowVisibility {
+    pub(crate) const fn is_visible_or_iconified(self) -> bool {
+        matches!(self, Self::Visible | Self::Iconified)
+    }
+}
+
+impl From<neovm_core::window::FrameVisibility> for WindowVisibility {
+    fn from(visibility: neovm_core::window::FrameVisibility) -> Self {
+        match visibility {
+            neovm_core::window::FrameVisibility::Visible => Self::Visible,
+            neovm_core::window::FrameVisibility::Iconified => Self::Iconified,
+            neovm_core::window::FrameVisibility::Invisible => Self::Invisible,
+        }
+    }
+}
+
 /// Lifecycle commands for the render thread.
 #[derive(Debug)]
 pub enum LifecycleCommand {
@@ -397,6 +413,7 @@ pub enum WindowCommand {
         height: u32,
         title: String,
         geometry_hints: GuiFrameGeometryHints,
+        visibility: WindowVisibility,
     },
     /// Associate the already-created primary OS window with its real Emacs frame ID.
     AdoptPrimaryFrame { frame: FrameRef },
@@ -760,7 +777,7 @@ pub enum RenderCommand {
 // silently dropping command input.  Keep Neomacs' render-to-evaluator input
 // queue at the same scale and use backpressure for durable user input below.
 const INPUT_CHANNEL_CAPACITY: usize = 4096;
-const COMMAND_CHANNEL_CAPACITY: usize = 64;
+pub(crate) const COMMAND_CHANNEL_CAPACITY: usize = 64;
 
 /// Effective full-frame shader availability published by the render thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -990,6 +1007,7 @@ pub struct ThreadComms {
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,
     pub frame_opacity: Arc<Mutex<FrameOpacityState>>,
+    image_decoder: Option<neomacs_renderer_wgpu::ImageDecoder>,
 }
 
 impl ThreadComms {
@@ -1009,7 +1027,15 @@ impl ThreadComms {
             capabilities,
             tooltip_context: Arc::default(),
             frame_opacity: Arc::default(),
+            image_decoder: None,
         }
+    }
+
+    /// Transfer the GUI's CPU image decoder to the native thread.
+    /// Metadata clients can submit work before GPU resources exist.
+    pub fn with_image_decoder(mut self, decoder: neomacs_renderer_wgpu::ImageDecoder) -> Self {
+        self.image_decoder = Some(decoder);
+        self
     }
 
     /// Split into Emacs-side and Render-side handles
@@ -1025,6 +1051,7 @@ impl ThreadComms {
 
         let render = RenderComms {
             input_stream: Default::default(),
+            image_decoder: self.image_decoder,
             tooltip_context: self.tooltip_context,
             frame_opacity: self.frame_opacity,
             frame_rx: self.frame_rx,
@@ -1055,6 +1082,7 @@ pub struct EmacsComms {
 
 /// Render thread communication handle
 pub struct RenderComms {
+    pub(crate) image_decoder: Option<neomacs_renderer_wgpu::ImageDecoder>,
     input_stream: neomacs_display_protocol::input_progress::InputStream,
     pub frame_rx: FrameReceiver,
     pub cmd_rx: Receiver<RenderCommand>,

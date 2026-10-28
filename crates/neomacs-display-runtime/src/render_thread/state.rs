@@ -200,6 +200,16 @@ impl ImageRenderState {
         self.begin_terminal_publication().remove(load);
     }
 
+    /// Retire only strictly older terminals when admitting a native load.
+    /// Duplicate or stale commands may be ignored by the renderer, so they
+    /// cannot erase an equal or newer result that will not be published again.
+    pub fn begin_image_load(&self, load: ImageLoadToken) {
+        let mut publication = self.begin_terminal_publication();
+        publication.terminals.retain(|published, _| {
+            published.image() != load.image() || published.attempt() >= load.attempt()
+        });
+    }
+
     pub fn clear_image_terminals(&self, image: ImageId) {
         self.begin_terminal_publication().clear_image(image);
     }
@@ -883,7 +893,8 @@ pub(super) struct RenderApp {
     pub(super) clipboard: Result<ClipboardService, String>,
 
     pub(super) gpu: Option<RenderGpuContext>,
-    pub(super) gpu_startup: Option<super::gpu_startup::PendingGpu>,
+    pub(super) gpu_startup: Option<super::gpu_startup::PendingGpuAttempt>,
+    pub(super) startup_input: Option<super::gpu_startup::StartupInputReplay>,
     /// Last usable editor area for recreating a window during GPU startup.
     pub(super) pending_content_size: super::startup::InitialWindowSize,
     pub(super) gpu_startup_cancelled: Arc<std::sync::atomic::AtomicBool>,
@@ -1012,6 +1023,10 @@ impl RenderLifecycle {
         self.shutdown_reason.is_some()
     }
 
+    pub(super) fn shutdown_reason(&self) -> Option<RenderShutdownReason> {
+        self.shutdown_reason
+    }
+
     pub fn new(poll_when_idle: bool) -> Self {
         Self {
             resumed_seen: false,
@@ -1092,6 +1107,7 @@ impl RenderApp {
     ) -> Self {
         let mut frame_windows = GuiFrameWindowManager::new();
         frame_windows.set_primary_pending(GuiFrameWindowState {
+            visibility: crate::thread_comm::WindowVisibility::Visible,
             pending_scale_factor: None,
             lifecycle: FrameLifecycle::Pending {
                 width,
@@ -1125,6 +1141,7 @@ impl RenderApp {
             clipboard: Err("clipboard is unavailable before display initialization".to_owned()),
             gpu: None,
             gpu_startup: None,
+            startup_input: None,
             pending_content_size: super::startup::InitialWindowSize { width, height },
             gpu_startup_cancelled: Default::default(),
             startup_error: None,

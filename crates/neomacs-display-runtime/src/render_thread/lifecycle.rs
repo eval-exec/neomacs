@@ -28,7 +28,9 @@ impl<'a> PopupCommit<'a> {
 }
 
 impl RenderApp {
-    fn collect_monitor_snapshot(
+    /// Display metadata is available from the native event loop independently
+    /// of any editor window, surface permission, or GPU allocation.
+    pub(super) fn collect_monitor_snapshot(
         event_loop: &dyn ActiveEventLoop,
     ) -> Vec<crate::thread_comm::MonitorInfo> {
         let mut monitors = Vec::new();
@@ -95,11 +97,7 @@ impl RenderApp {
         }
 
         if let Some(ref shared) = self.shared_monitors {
-            let (ref lock, ref cvar) = **shared;
-            if let Ok(mut shared) = lock.lock() {
-                *shared = snapshot.clone();
-                cvar.notify_all();
-            }
+            publish_monitor_snapshot(shared, &snapshot);
         }
 
         if emit_change_event && had_snapshot {
@@ -137,14 +135,21 @@ impl RenderApp {
             .primary_window()
             .is_some_and(|ws| !ws.lifecycle.is_active());
         if needs_native && self.gpu_startup.is_none() {
-            let (width, height, title, decorations_enabled) = {
+            let (width, height, title, decorations_enabled, visibility) = {
                 let primary = self.frame_windows.primary_window().unwrap();
                 let (w, h) = primary.lifecycle.native_size();
                 let chrome = primary.lifecycle.chrome();
-                (w, h, chrome.title.clone(), chrome.decorations_enabled)
+                (
+                    w,
+                    h,
+                    chrome.title.clone(),
+                    chrome.decorations_enabled,
+                    primary.visibility,
+                )
             };
             let attrs = winit::window::WindowAttributes::default()
                 .with_title(&title)
+                .with_visible(visibility.is_visible_or_iconified())
                 .with_surface_size(window_size_from_emacs_pixels(width, height))
                 .with_decorations(decorations_enabled)
                 .with_transparent(true);
@@ -161,6 +166,9 @@ impl RenderApp {
             match event_loop.create_window(attrs) {
                 Ok(window) => {
                     let window: Arc<dyn winit::window::Window> = Arc::from(window);
+                    if matches!(visibility, crate::thread_comm::WindowVisibility::Iconified) {
+                        window.set_minimized(true);
+                    }
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
                     apply_option_key_policy(window.as_ref(), self.frame_windows.option_as_alt);
 
@@ -217,7 +225,11 @@ impl RenderApp {
                         event_loop.owned_display_handle(),
                     );
                     let proxy = event_loop.create_proxy();
-                    match super::gpu_startup::PendingGpu::start(window.clone(), descriptor, proxy) {
+                    match super::gpu_startup::PendingGpuAttempt::start(
+                        window.clone(),
+                        descriptor,
+                        proxy,
+                    ) {
                         Ok(pending) => {
                             self.gpu_startup = Some(pending);
                             self.observe_pending_content(phys);
@@ -273,10 +285,13 @@ impl RenderApp {
         }
         if let Some(pending) = self.gpu_startup.take() {
             match pending.poll(&event_loop.create_proxy()) {
-                Ok(super::gpu_startup::GpuPoll::Pending(pending)) => {
+                Ok(super::gpu_startup::GpuAttemptPoll::Pending(pending)) => {
                     self.gpu_startup = Some(pending)
                 }
-                Ok(super::gpu_startup::GpuPoll::Ready(prepared)) => self.install_wgpu(prepared),
+                Ok(super::gpu_startup::GpuAttemptPoll::Ready { gpu, input }) => {
+                    self.install_wgpu(gpu);
+                    self.startup_input = Some(input);
+                }
                 Err(error) => {
                     self.startup_error = Some(error);
                     event_loop.exit();
@@ -426,6 +441,7 @@ impl RenderApp {
         }
 
         self.poll_frame();
+        self.replay_startup_input(event_loop);
         self.synchronize_toolbar_resources();
         #[cfg(feature = "webview")]
         self.synchronize_webview_presentations();
@@ -1030,7 +1046,31 @@ impl RenderApp {
         }
     }
 
+    fn replay_startup_input(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let Some(mut input) = self.startup_input.take() else {
+            return;
+        };
+        let window_id = input.window_id();
+        if self.frame_windows.get_by_winit(window_id).is_none() {
+            // The owning logical/native frame was retired while startup was
+            // pending. These events must never reach its replacement.
+            return;
+        }
+        // Ordinary pointer delivery has an Unpresented target before the first
+        // scene. Preserve the whole FIFO so a pointer cannot postpone Ctrl-G
+        // or separate a keyboard event from its modifier/focus transitions.
+        while let Some(event) = input.pop_front() {
+            self.handle_window_event(event_loop, window_id, event);
+            if self.lifecycle_flags.is_shutting_down()
+                || self.frame_windows.get_by_winit(window_id).is_none()
+            {
+                return;
+            }
+        }
+    }
+
     pub(super) fn cancel_gpu_startup(&mut self) {
+        self.startup_input = None;
         if let Some(pending) = self.gpu_startup.take() {
             // While a native window exists these fields track its observed
             // surface. A new creation consumes editor dimensions instead;
@@ -1117,5 +1157,17 @@ impl RenderApp {
         }
 
         tracing::info!("GPU resources cleaned up");
+    }
+}
+
+/// Wake evaluator-side startup metadata readers without requiring a frame.
+pub(super) fn publish_monitor_snapshot(
+    shared: &super::SharedMonitorInfo,
+    snapshot: &[crate::thread_comm::MonitorInfo],
+) {
+    let (lock, ready) = &**shared;
+    if let Ok(mut monitors) = lock.lock() {
+        *monitors = snapshot.to_vec();
+        ready.notify_all();
     }
 }

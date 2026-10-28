@@ -94,6 +94,9 @@ mod recenter_box_drawing;
 #[path = "interaction_geometry.rs"]
 mod interaction_geometry;
 
+#[path = "issue_417_startup.rs"]
+mod issue_417_startup;
+
 #[path = "issue_582_fullscreen.rs"]
 mod issue_582_fullscreen;
 
@@ -186,3 +189,7 @@ mod x11_presentation;
 
 #[path = "xpm_named_colors.rs"]
 mod xpm_named_colors;
+
+#[cfg(target_os = "linux")]
+#[path = "wayland_readiness.rs"]
+mod wayland_readiness;

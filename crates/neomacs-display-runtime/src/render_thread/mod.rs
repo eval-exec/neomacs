@@ -59,8 +59,8 @@ pub use bootstrap::run_render_loop_current_thread_with_terminals;
 pub use bootstrap::{build_render_event_loop, run_render_loop, run_render_loop_current_thread};
 pub(crate) use lifecycle::PopupCommit;
 pub use startup::{
-    InitialWindowLifetime, InitialWindowReceiver, InitialWindowReply, InitialWindowSize,
-    RenderLoopError, RenderLoopExit,
+    InitialWindowLifetime, InitialWindowPreparation, InitialWindowReceiver, InitialWindowReply,
+    InitialWindowSize, RenderLoopError, RenderLoopExit,
 };
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{
@@ -75,7 +75,7 @@ pub use neomacs_renderer_wgpu::image_probe::{ImageProbeSource, probe_image_layou
 
 /// Rows of an image whose decode is still running, as published by
 /// `ImageDecodeTerminal::Band`.
-pub use neomacs_renderer_wgpu::RowRange;
+pub use neomacs_renderer_wgpu::{ImageDecodeClient, ImageDecoder, RowRange, SvgResourceContext};
 
 use winit::event_loop::EventLoopProxy;
 

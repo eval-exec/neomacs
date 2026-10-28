@@ -203,6 +203,7 @@ fn native_chrome_moves_webviews_and_invalidates_the_scene_cache() {
     };
     render.set_surface_state(SurfaceState::Drawable(surface));
     let mut window = GuiFrameWindowState {
+        visibility: crate::thread_comm::WindowVisibility::Visible,
         pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
             width: 1600,

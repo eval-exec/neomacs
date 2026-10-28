@@ -135,3 +135,6 @@ mod tls_fixture_cleanup;
 
 #[path = "treesit_grammar_loading.rs"]
 mod treesit_grammar_loading;
+
+#[path = "oracle_startup_frame_lifecycle.rs"]
+mod oracle_startup_frame_lifecycle;

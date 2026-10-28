@@ -286,6 +286,7 @@ impl WgpuRenderer {
             width,
             height,
             scale_factor,
+            crate::ImageDecoder::new(),
             #[cfg(feature = "video")]
             neomacs_video::GpuGeneration::INITIAL,
             #[cfg(feature = "video")]
@@ -315,9 +316,69 @@ impl WgpuRenderer {
             width,
             height,
             scale_factor,
+            crate::ImageDecoder::new(),
             generation,
             wake,
         )
+    }
+
+    /// Attach an existing CPU image decoder without replacing its jobs or pixels.
+    pub fn with_device_and_image_decoder(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        width: u32,
+        height: u32,
+        surface_format: wgpu::TextureFormat,
+        scale_factor: f32,
+        image_decoder: crate::ImageDecoder,
+    ) -> Self {
+        Self::create_renderer_internal(
+            device,
+            queue,
+            None,
+            Some(surface_format),
+            width,
+            height,
+            scale_factor,
+            image_decoder,
+            #[cfg(feature = "video")]
+            neomacs_video::GpuGeneration::INITIAL,
+            #[cfg(feature = "video")]
+            neomacs_video::VideoWake::noop(),
+        )
+    }
+
+    /// Attach the CPU image decoder alongside the native video runtime.
+    #[cfg(feature = "video")]
+    pub fn with_device_and_video_runtime_and_image_decoder(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        width: u32,
+        height: u32,
+        surface_format: wgpu::TextureFormat,
+        scale_factor: f32,
+        generation: neomacs_video::GpuGeneration,
+        wake: neomacs_video::VideoWake,
+        image_decoder: crate::ImageDecoder,
+    ) -> Self {
+        Self::create_renderer_internal(
+            device,
+            queue,
+            None,
+            Some(surface_format),
+            width,
+            height,
+            scale_factor,
+            image_decoder,
+            generation,
+            wake,
+        )
+    }
+
+    /// Consume this GPU renderer while preserving CPU jobs and generated image
+    /// identities for the replacement renderer.
+    pub fn into_image_decoder(self) -> crate::ImageDecoder {
+        self.caches.image.into_decoder()
     }
 
     /// Internal helper that creates the renderer with the given device/queue.
@@ -335,6 +396,7 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
         scale_factor: f32,
+        image_decoder: crate::ImageDecoder,
         #[cfg(feature = "video")] video_generation: neomacs_video::GpuGeneration,
         #[cfg(feature = "video")] video_wake: neomacs_video::VideoWake,
     ) -> Self {
@@ -658,7 +720,7 @@ impl WgpuRenderer {
         let subpixel_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Subpixel, None, false);
 
         // Create image cache (also creates its bind group layout)
-        let image_cache = ImageCache::new(&device);
+        let image_cache = ImageCache::with_decoder(&device, image_decoder);
 
         // Create video cache
         #[cfg(feature = "video")]
@@ -1261,6 +1323,7 @@ impl WgpuRenderer {
             width,
             height,
             1.0,
+            crate::ImageDecoder::new(),
             #[cfg(feature = "video")]
             neomacs_video::GpuGeneration::INITIAL,
             #[cfg(feature = "video")]

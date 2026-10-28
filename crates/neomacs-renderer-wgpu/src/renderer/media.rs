@@ -107,6 +107,7 @@ impl WgpuRenderer {
         frame: ImageFrameIndex,
         sequence: ImageSequenceId,
         identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
+        limit: neomacs_display_protocol::ImageSizeLimit,
     ) {
         self.caches.image.load_file_with_id(
             load,
@@ -120,6 +121,7 @@ impl WgpuRenderer {
             frame,
             sequence,
             identity,
+            limit,
         )
     }
 
@@ -153,6 +155,7 @@ impl WgpuRenderer {
         sequence: ImageSequenceId,
         resources: crate::SvgResourceContext,
         identity: neomacs_display_protocol::image_diagnostic::ImageLoadIdentity,
+        limit: neomacs_display_protocol::ImageSizeLimit,
     ) {
         self.caches.image.load_data_with_id(
             load,
@@ -167,6 +170,7 @@ impl WgpuRenderer {
             sequence,
             resources,
             identity,
+            limit,
         )
     }
 

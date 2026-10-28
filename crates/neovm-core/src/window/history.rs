@@ -91,6 +91,15 @@ impl FrameManager {
         Some(bumped_use_time)
     }
 
+    /// Commit the global selected-window history at GNU's window-change
+    /// recording boundary. Selection itself must not advance this history:
+    /// callers can observe the previous window until the next redisplay.
+    pub(crate) fn record_selected_window_after_redisplay(&mut self) -> Option<WindowId> {
+        let selected = self.selected_frame().map(|frame| frame.selected_window);
+        self.old_selected_window = selected;
+        selected
+    }
+
     /// Return the old selected window, when tracked.
     pub fn old_selected_window(&self) -> Option<WindowId> {
         self.old_selected_window
