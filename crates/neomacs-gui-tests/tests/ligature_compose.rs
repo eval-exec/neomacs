@@ -70,19 +70,22 @@ fn run_case(tag: &str, ligature_enabled: bool) -> (PathBuf, PathBuf) {
             .find(|(key, _)| key == "XDG_RUNTIME_DIR")
             .unwrap()
             .1;
-        let _mapped_editor = crate::wayland_readiness::wait_for_mapped_child(
+        let _mapped_editor = crate::wayland_readiness::wait_for_focused_child(
             std::path::Path::new(runtime),
             &input_artifacts,
         );
-        let output = std::process::Command::new(
-            std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
-        )
-        .envs(env)
-        .args([
-            "-d", "300", "-M", "ctrl", "-k", "l", "-k", "c", "-m", "ctrl", "-k", "t",
-        ])
-        .output()
-        .expect("install wtype");
+        let output = neomacs_gui_tests::run_input_tool(
+            {
+                let mut command = std::process::Command::new(
+                    std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
+                );
+                command.envs(env).args([
+                    "-d", "300", "-M", "ctrl", "-k", "l", "-k", "c", "-m", "ctrl", "-k", "t",
+                ]);
+                command
+            },
+            Duration::from_secs(20),
+        );
         assert!(
             output.status.success(),
             "{}",

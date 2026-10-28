@@ -51,15 +51,18 @@ fn completion_survives_the_deleted_invoking_window() {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        let output = std::process::Command::new(
-            std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
-        )
-        .envs(env)
-        .args([
-            "-k", "Shift_L", "-s", "100", "-d", "100", "Beta", "-k", "Return",
-        ])
-        .output()
-        .expect("install wtype");
+        let output = neomacs_gui_tests::run_input_tool(
+            {
+                let mut command = std::process::Command::new(
+                    std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
+                );
+                command.envs(env).args([
+                    "-k", "Shift_L", "-s", "100", "-d", "100", "Beta", "-k", "Return",
+                ]);
+                command
+            },
+            Duration::from_secs(20),
+        );
         assert!(
             output.status.success(),
             "{}",

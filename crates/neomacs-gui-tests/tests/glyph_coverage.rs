@@ -59,6 +59,7 @@ fn check_coverage(order: &str) {
         plan = plan.with_env(key.clone(), value.clone());
     }
     let env = session.env().to_vec();
+    let input_artifacts = artifacts.clone();
     let input = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while !ready.exists() {
@@ -68,16 +69,32 @@ fn check_coverage(order: &str) {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        let output = std::process::Command::new(
-            std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
-        )
-        .envs(env)
-        .args([
-            "-d", "100", "-k", "Shift_L", "-s", "300", "-M", "ctrl", "-k", "l", "-k", "c", "-m",
-            "ctrl", "-k", "t",
-        ])
-        .output()
-        .expect("install wtype");
+        // Lisp readiness can precede both mapping and keyboard focus during
+        // asynchronous startup. Require the owned view that owns Sway's
+        // keyboard focus before the first key, or the events land on the
+        // workspace instead of the editor.
+        let runtime = &env
+            .iter()
+            .find(|(key, _)| key == "XDG_RUNTIME_DIR")
+            .unwrap()
+            .1;
+        let _focused_editor = crate::wayland_readiness::wait_for_focused_child(
+            std::path::Path::new(runtime),
+            &input_artifacts,
+        );
+        let output = neomacs_gui_tests::run_input_tool(
+            {
+                let mut command = std::process::Command::new(
+                    std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()),
+                );
+                command.envs(env).args([
+                    "-d", "100", "-k", "Shift_L", "-s", "300", "-M", "ctrl", "-k", "l", "-k", "c",
+                    "-m", "ctrl", "-k", "t",
+                ]);
+                command
+            },
+            Duration::from_secs(20),
+        );
         assert!(
             output.status.success(),
             "{}",

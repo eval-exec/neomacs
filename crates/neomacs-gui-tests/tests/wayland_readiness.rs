@@ -17,6 +17,7 @@ use std::{
 pub(crate) struct MappedEditor {
     _node_id: u64,
     rect: NativeRect,
+    focused: bool,
 }
 
 /// The mapped editor also covers the chosen absolute pointer position.
@@ -33,6 +34,14 @@ impl PointerTarget {
 }
 
 impl MappedEditor {
+    /// The mapped view also owns the compositor's keyboard focus.  Keyboard
+    /// injection must wait for this: a visible view can be mapped a moment
+    /// before Sway activates it, and keys sent in between go to the workspace
+    /// instead of the editor.
+    fn focused(self) -> Option<Self> {
+        self.focused.then_some(self)
+    }
+
     fn pointer_target(self, x: u32, y: u32) -> Option<PointerTarget> {
         self.rect.contains(x, y).then_some(PointerTarget {
             _editor: self,
@@ -77,6 +86,18 @@ pub(crate) fn wait_for_mapped_child(runtime: &Path, artifacts: &Path) -> MappedE
         artifacts,
         || true,
         Some,
+    )
+}
+
+/// The mapped editor also owns keyboard focus, so it can receive injected
+/// keys.
+pub(crate) fn wait_for_focused_child(runtime: &Path, artifacts: &Path) -> MappedEditor {
+    wait_for_target(
+        runtime,
+        EditorOwner::DirectChildOf(std::process::id()),
+        artifacts,
+        || true,
+        MappedEditor::focused,
     )
 }
 
@@ -186,7 +207,11 @@ fn find_target<T>(
         && node["shell"].as_str() == Some("xdg_shell")
         && let Some(id) = node["id"].as_u64()
         && let Some(rect) = NativeRect::decode(&node["rect"])
-        && let Some(target) = proof(MappedEditor { _node_id: id, rect })
+        && let Some(target) = proof(MappedEditor {
+            _node_id: id,
+            rect,
+            focused: node["focused"].as_bool() == Some(true),
+        })
     {
         return Some(target);
     }
@@ -251,13 +276,23 @@ fn mapped_input_target_requires_a_visible_owned_native_window() {
 }
 
 #[test]
-fn keyboard_mapping_and_pointer_coverage_are_separate_native_proofs() {
-    let tree = serde_json::json!({"pid": 42, "id": 1, "visible": true, "shell": "xdg_shell",
+fn keyboard_focus_and_pointer_coverage_are_separate_native_proofs() {
+    let mut tree = serde_json::json!({"pid": 42, "id": 1, "visible": true,
+                                "shell": "xdg_shell", "focused": false,
                                 "rect": {"x": 0, "y": 0, "width": 100, "height": 100}});
     let owner = EditorOwner::ExactPid(42);
     assert!(
         find_target(&tree, owner, &Some).is_some(),
-        "a small mapped window accepts keyboard input"
+        "a mapped window is a native view"
+    );
+    assert!(
+        find_target(&tree, owner, &MappedEditor::focused).is_none(),
+        "a mapped window without keyboard focus cannot receive injected keys"
+    );
+    tree["focused"] = Value::Bool(true);
+    assert!(
+        find_target(&tree, owner, &MappedEditor::focused).is_some(),
+        "a focused mapped window accepts keyboard input"
     );
     assert!(find_target(&tree, owner, &|mapped| mapped.pointer_target(200, 200)).is_none());
     let target = find_target(&tree, owner, &|mapped| mapped.pointer_target(20, 30)).unwrap();

@@ -120,15 +120,15 @@ impl CloseFixture {
     }
 
     fn keys(&self, keys: &[&str]) {
-        let output =
-            Command::new(std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()))
-                // Activate the newly created virtual keyboard before meaningful keys;
-                // its first press can arrive as wl_keyboard.enter's held-key state.
-                .args(["-k", "Shift_L", "-s", "50"])
-                .args(keys)
-                .envs(self.display.env().iter().map(|(k, v)| (k, v)))
-                .output()
-                .expect("install wtype");
+        let mut command =
+            Command::new(std::env::var_os("NEOMACS_GUI_WTYPE").unwrap_or_else(|| "wtype".into()));
+        // Activate the newly created virtual keyboard before meaningful keys;
+        // its first press can arrive as wl_keyboard.enter's held-key state.
+        command
+            .args(["-k", "Shift_L", "-s", "50"])
+            .args(keys)
+            .envs(self.display.env().iter().map(|(k, v)| (k, v)));
+        let output = neomacs_gui_tests::run_input_tool(command, Duration::from_secs(20));
         assert!(
             output.status.success(),
             "wtype: {}",

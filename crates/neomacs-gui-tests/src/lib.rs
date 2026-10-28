@@ -461,6 +461,42 @@ pub trait GuiCommandRunner {
     ) -> io::Result<GuiCommandOutput>;
 }
 
+/// Run an input-injection tool (wtype, xdotool, ...) with a deadline.
+///
+/// These tools talk to a live compositor; when the compositor stops
+/// delivering input the child can block forever, and a bare `output()` would
+/// then hang the whole test until nextest's slow-timeout kills the run
+/// without saying why.  Kill the tool at the deadline and fail with its
+/// status and stderr instead.
+#[must_use]
+pub fn run_input_tool(
+    mut command: std::process::Command,
+    deadline: Duration,
+) -> std::process::Output {
+    use std::process::Stdio;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn input tool");
+    let start = Instant::now();
+    loop {
+        if child.try_wait().expect("wait for input tool").is_some() {
+            return child.wait_with_output().expect("collect input tool output");
+        }
+        if start.elapsed() >= deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().expect("collect input tool output");
+            panic!(
+                "input tool did not finish within {deadline:?}: status={:?} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ProcessGuiCommandRunner;
 
