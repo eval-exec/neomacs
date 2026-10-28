@@ -77,6 +77,9 @@ fn run_navigation(
         "the displayed viewport and mode line must reach EOF: {snapshot}"
     );
     let log = std::fs::read_to_string(&result.artifacts.stdout).unwrap();
+    // tracing renders field names and '=' in separate SGR spans when stdout
+    // is colorized, so every `name=value` probe must read the plain form.
+    let log = neomacs_gui_tests::interaction::linux::popup_trace::strip_ansi(&log);
     let stats = log
         .lines()
         .rfind(|line| line.contains("frame_sched_stats"))
