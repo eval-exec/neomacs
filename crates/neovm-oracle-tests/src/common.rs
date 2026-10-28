@@ -20,6 +20,9 @@ use oracle_sandbox::{OracleSandbox, ResultNormalization};
 
 #[cfg(unix)]
 fn apply_virtual_memory_limit(cmd: &mut Command, mem_limit: u64) {
+    if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
+        return;
+    }
     unsafe {
         cmd.pre_exec(move || {
             let rlim = libc::rlimit {

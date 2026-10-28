@@ -80,6 +80,9 @@ fn write_temp_elisp_file(
 /// crates/neovm-oracle-tests/src/common.rs apply_virtual_memory_limit.
 #[cfg(unix)]
 fn apply_memory_limit(cmd: &mut Command, mem_limit_bytes: u64) {
+    if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
+        return;
+    }
     // Safety: `pre_exec` runs between fork and exec in the child.
     // setrlimit is async-signal-safe, so this is sound.
     unsafe {
@@ -132,6 +135,14 @@ pub fn run_oracle_eval(form: &str) -> Result<String, String> {
     let mut cmd = Command::new(oracle_bin);
     cmd.env("NEOVM_ORACLE_FORM_FILE", form_path.as_os_str())
         .env("EMACSNATIVELOADPATH", "/dev/null")
+        // The canonical oracle and every frozen fixture were recorded under
+        // the oracle harness's SNAPSHOT_LOCALE (oracle_sandbox.rs:26).  A
+        // bare remote shell exports no locale, and GNU's
+        // `text-quoting-style' nil default follows it (`using_utf8',
+        // src/emacs.c:415,1656; src/doc.c:638-645), so an unpinned spawn
+        // quotes `like this' where both this suite and Neo quote ‘like this’.
+        .env("LANG", "en_US.UTF-8")
+        .env("LC_ALL", "en_US.UTF-8")
         .args([
             "--batch",
             "-Q",

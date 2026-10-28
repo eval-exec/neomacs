@@ -32,6 +32,17 @@ pub use config_env::{
 
 use std::path::PathBuf;
 
+/// Whether a spawned child's address space can be capped with `RLIMIT_AS`.
+///
+/// Linux enforces `RLIMIT_AS`.  Darwin defines the resource but rejects every
+/// finite value with EINVAL (measured on macOS 27: `bash -c 'ulimit -v 512000'`
+/// fails, and only `unlimited` is accepted), so a `pre_exec`
+/// `setrlimit (RLIMIT_AS)` aborts the spawn before `exec` and turns every
+/// oracle run into "Invalid argument (os error 22)".  Harnesses that limit a
+/// spawned GNU or Neomacs must ask this instead of applying the cap on every
+/// Unix host.
+pub const ADDRESS_SPACE_LIMIT_SUPPORTED: bool = !cfg!(target_os = "macos");
+
 /// The workspace root baked in at compile time.
 ///
 /// This is the **build** machine's path — for binaries shipped through

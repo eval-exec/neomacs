@@ -67,6 +67,9 @@ fn oracle_mem_limit_bytes() -> u64 {
 
 #[cfg(unix)]
 fn apply_memory_limit(cmd: &mut Command) {
+    if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
+        return;
+    }
     let limit = oracle_mem_limit_bytes() as libc::rlim_t;
     // Safety: `pre_exec` runs between fork and exec in the child.
     // setrlimit is async-signal-safe, so this is sound. Mirrors
