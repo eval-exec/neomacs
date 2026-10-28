@@ -1065,19 +1065,41 @@ impl ScrollReplay {
 }
 
 impl RetainedWindowMatrix {
-    /// Every enabled row of this matrix. A point move that may scroll has no
+    /// Every enabled row of this matrix, when a scroll continuation under
+    /// `curr` could still reuse them. A point move that may scroll has no
     /// replay to plan yet, but the leaf can discover the new start and continue
     /// as an ordinary scroll; that continuation reuses body rows and the
     /// retained/memoized chrome, so Phase A must admit all of their faces
     /// BEFORE the leaf starts. Retained face IDs cannot be admitted once the
     /// leaf has allocated fresh ones.
-    pub(crate) fn candidate_rows(&self) -> Vec<MatrixRow> {
-        self.matrix
-            .rows
-            .iter()
-            .filter(|row| row.enabled)
-            .cloned()
-            .collect()
+    ///
+    /// Every continuation (`scroll_replay`, `face_overlay_scroll_replay`,
+    /// `prepared_projection_prefix`) requires a valid matrix and a key that
+    /// changed at most in point, window start, text, properties and overlays.
+    /// Any other change -- `face_change_count` moving on `set-face-attribute` or
+    /// a theme load, a font, frame or display-variable change -- re-realizes
+    /// faces, including the basic chrome faces (`mode-line-active` keeps its
+    /// basic ID with new content), so the retained rows' face IDs name stale
+    /// realizations. Admitting them would claim those IDs for content the
+    /// fresh walk then contradicts. No continuation can use these rows, so
+    /// none of their faces may be admitted.
+    pub(crate) fn continuation_candidate_rows(
+        &self,
+        curr: &RetainedWindowKey,
+    ) -> Option<Vec<MatrixRow>> {
+        if self.validity != MatrixValidity::Valid
+            || WindowDelta::between(&self.key, curr).other_changed
+        {
+            return None;
+        }
+        Some(
+            self.matrix
+                .rows
+                .iter()
+                .filter(|row| row.enabled)
+                .cloned()
+                .collect(),
+        )
     }
 
     /// True for chrome rows (mode/header/tab line, tab bar) — re-walked every

@@ -822,3 +822,71 @@ fn point_only_automatic_scroll_reuses_retained_rows() {
         "automatic scrolling must reuse retained rows: {scrolls}"
     );
 }
+
+/// Which frame realization the face-change regression runs on.
+#[derive(Clone, Copy, Debug)]
+enum FaceChangeFrame {
+    Gui,
+    Tty,
+}
+
+/// A global face change after a laid-out frame moves `face_change_count`, so
+/// no retained row of that frame can be reused -- and Phase A must not admit
+/// those rows' face IDs for a scroll continuation either. The mode line's
+/// basic `mode-line-active` face keeps its ID with new content; admitting the
+/// retained, stale realization of that ID made the chrome walk panic with
+/// `FrameFaceConflict` ("row rendering must preserve its realized face
+/// identity"), which crashed every theme load and `set-face-attribute` on the
+/// mode line in a running editor (CI TUI treesit/gruvbox/leuven, 2026-10-28).
+fn mode_line_face_change_matches_full_layout(frame_kind: FaceChangeFrame) {
+    let text = "line of text\n".repeat(80);
+    let (mut eval, frame, _, _) = incr_editing_frame(&text, 800, 600);
+    match frame_kind {
+        FaceChangeFrame::Gui => realize_test_gui_frame(&mut eval, frame),
+        FaceChangeFrame::Tty => install_window_fill_test_tty_palette(&mut eval),
+    }
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame);
+    for (label, form) in [
+        (
+            "mode-line recolored",
+            r#"(progn
+                 (internal-set-lisp-face-attribute 'mode-line :foreground "black" (selected-frame))
+                 (internal-set-lisp-face-attribute 'mode-line :background "white" (selected-frame))
+                 (internal-set-lisp-face-attribute 'mode-line :box nil (selected-frame)))"#,
+        ),
+        (
+            "mode-line boxed again",
+            r#"(progn
+                 (internal-set-lisp-face-attribute 'mode-line :foreground "white" (selected-frame))
+                 (internal-set-lisp-face-attribute 'mode-line :background "black" (selected-frame))
+                 (internal-set-lisp-face-attribute
+                  'mode-line :box '(:line-width -1 :style released-button) (selected-frame)))"#,
+        ),
+        (
+            "default recolored with point motion",
+            r#"(progn
+                 (internal-set-lisp-face-attribute 'default :foreground "red" (selected-frame))
+                 (forward-line 3))"#,
+        ),
+    ] {
+        eval.eval_str(form).unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        assert_matches_full_layout(
+            &mut eval,
+            &mut engine,
+            frame,
+            &format!("{frame_kind:?}: {label}"),
+        );
+    }
+}
+
+#[test]
+fn face_change_does_not_admit_stale_retained_faces_on_gui_frames() {
+    mode_line_face_change_matches_full_layout(FaceChangeFrame::Gui);
+}
+
+#[test]
+fn face_change_does_not_admit_stale_retained_faces_on_tty_frames() {
+    mode_line_face_change_matches_full_layout(FaceChangeFrame::Tty);
+}

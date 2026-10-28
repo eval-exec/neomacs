@@ -2555,7 +2555,10 @@ impl LayoutEngine {
                     }
                     // A cursor-only decline or edit can discover a new viewport
                     // while measuring. Admit all retained row faces in Phase A
-                    // so a later scroll continuation can reuse any of those rows.
+                    // so a later scroll continuation can reuse any of those rows
+                    // -- but only while a continuation could reuse them at all:
+                    // after a face/font/display change their IDs name stale
+                    // realizations of faces the fresh walk re-realizes.
                     let scroll_continuation_faces = (cursor_only.is_none()
                         && (scroll.is_none() || is_edit))
                         .then(|| {
@@ -2563,7 +2566,11 @@ impl LayoutEngine {
                                 .get(&DisplayWindowId::new(params.window_id))
                         })
                         .flatten()
-                        .map(|previous| (previous.face_generation, previous.candidate_rows()));
+                        .and_then(|previous| {
+                            previous
+                                .continuation_candidate_rows(key)
+                                .map(|rows| (previous.face_generation, rows))
+                        });
                     IncrementalWindowPlan {
                         prepared_faces,
                         cursor_only,
