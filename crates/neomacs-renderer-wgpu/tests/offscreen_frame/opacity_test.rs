@@ -687,6 +687,17 @@ fn child_char_and_stretch_stipple_is_foreground_at_zero_background() {
     }
 }
 
+/// The name libtest uses for `test` inside this binary: `module_path!()`
+/// without its first segment (libtest never prints the crate name).  The
+/// consolidated test binary nests this file under `offscreen_frame`, so a
+/// hand-written `opacity_test::...` filter matches nothing and libtest exits
+/// successfully having run zero tests.
+fn budget_child_name(test: &str) -> String {
+    let module = module_path!();
+    let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+    format!("{module}::{test}")
+}
+
 /// Run the test named `exact` in a child test process under a 1 MiB GPU
 /// budget. Returns true inside that child, where the caller runs its body.
 /// In the parent it requires the child to have run exactly one test and
@@ -727,9 +738,9 @@ fn in_gpu_budget_child(exact: &str) -> bool {
 fn mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release() {
     // Isolate the budget knob in a child test process: never mutate the
     // environment of other concurrently running GPU tests.
-    if !in_gpu_budget_child(
-        "opacity_test::mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release",
-    ) {
+    if !in_gpu_budget_child(&budget_child_name(
+        "mandatory_child_picture_refusal_is_typed_and_recovers_after_lease_release",
+    )) {
         return;
     }
     let mut h = try_harness().expect("real GPU adapter required");
