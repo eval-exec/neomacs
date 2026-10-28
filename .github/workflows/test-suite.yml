@@ -235,13 +235,25 @@ jobs:
       - name: Fetch locked crates for trybuild's offline builds
         run: cargo fetch --locked
 
-      - name: Run the ignored compile-fail contracts
+      # The runners are compiled only with the `contract-fixtures` feature
+      # (41eaff923a moved them off #[ignore]). Without it the four test
+      # targets build empty and `cargo test` reports 0 passed, so the job
+      # also counts the runners that actually ran: one per target plus the
+      # lib's sole_owner_compile_contracts.
+      - name: Run the compile-fail contracts
         run: |
-          env -u TRYBUILD cargo test -p neovm-core \
-            --test p0s3_contracts --test p1rv_contracts \
-            --test thread_safety_contracts --test chartable_write_contracts \
-            -- --ignored
-          env -u TRYBUILD cargo test -p neovm-core --lib sole_owner_compile_contracts -- --ignored
+          set -o pipefail
+          {
+            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures \
+              --test p0s3_contracts --test p1rv_contracts \
+              --test thread_safety_contracts --test chartable_write_contracts
+            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures \
+              --lib sole_owner_compile_contracts
+          } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
+          ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
+            | awk '{s += $4} END {print s + 0}')
+          echo "compile-fail contract runners passed: $ran"
+          test "$ran" -ge 5
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
