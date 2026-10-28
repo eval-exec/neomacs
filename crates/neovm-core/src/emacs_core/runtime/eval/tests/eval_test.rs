@@ -1778,8 +1778,11 @@ fn read_key_sequence_keeps_events_after_an_earlier_decode_translation() {
     }
     let (tx, rx) = crossbeam_channel::unbounded();
     ev.input_rx = Some(rx);
-    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0x18, 0x03], 0))
-        .unwrap();
+    tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
+        vec![0x18, 0x03],
+        0,
+    ))
+    .unwrap();
     // Close the channel so a reader that lost C-c fails with quit instead of
     // waiting forever for another key.
     drop(tx);
