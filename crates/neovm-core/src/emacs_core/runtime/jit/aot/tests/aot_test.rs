@@ -20,10 +20,13 @@ fn object_emits_with_exported_entry_and_imported_shims() {
 
     let file = object::File::parse(&*bytes).expect("parse object bytes");
 
+    // The object writer adds the platform's C-symbol prefix (Mach-O: one
+    // underscore), so the file stores the mangled spelling of the C name.
+    let object_entry = object_symbol_name(entry);
     // Entry symbol: defined (not undefined) and global.
     let entry_sym = file
         .symbols()
-        .find(|s| s.name() == Ok(entry))
+        .find(|s| s.name() == Ok(object_entry.as_str()))
         .unwrap_or_else(|| panic!("entry symbol {entry} not found"));
     assert!(
         entry_sym.is_definition(),
@@ -33,9 +36,10 @@ fn object_emits_with_exported_entry_and_imported_shims() {
 
     // The cons shim must appear as an UNDEFINED import (the loader resolves it
     // against the host; AOT never bakes the shim address).
+    let object_cons_shim = object_symbol_name("neovm_jit_cons");
     let cons_shim = file
         .symbols()
-        .find(|s| s.name() == Ok("neovm_jit_cons"))
+        .find(|s| s.name() == Ok(object_cons_shim.as_str()))
         .expect("neovm_jit_cons import symbol present");
     assert!(
         cons_shim.is_undefined(),
@@ -69,7 +73,9 @@ fn baseline_cbsym_object_imports_the_fast_intrinsic_shims() {
         let file = object::File::parse(&*obj).expect("parse object");
         file.symbols()
             .filter(|s| s.is_undefined())
-            .filter_map(|s| s.name().ok().map(str::to_owned))
+            // Report the C names the shim table is written in, not the
+            // object format's mangled spelling.
+            .filter_map(|s| s.name().ok().map(|n| c_symbol_name(n).to_owned()))
             .collect()
     };
 
@@ -1000,7 +1006,11 @@ fn r2_build_preload_object_dedups_identical_bodies() {
         .filter(|s| {
             s.is_definition()
                 && s.name()
-                    .map(|n| n.starts_with("__neovm_aot_") && !n.starts_with("__neovm_aotd_"))
+                    .map(|n| {
+                        // Match the C name; the object format may prefix it.
+                        let n = c_symbol_name(n);
+                        n.starts_with("__neovm_aot_") && !n.starts_with("__neovm_aotd_")
+                    })
                     .unwrap_or(false)
         })
         .count();
@@ -1975,7 +1985,11 @@ fn issue554_throw_stays_jit_only_under_frozen_aot_imports() {
     let file = object::File::parse(&*object).expect("AOT object");
     assert!(
         !file.symbols().any(|symbol| {
-            symbol.is_undefined() && symbol.name() == Ok("neovm_jit_throw_with_symbols")
+            symbol.is_undefined()
+                && symbol
+                    .name()
+                    .map(|n| c_symbol_name(n) == "neovm_jit_throw_with_symbols")
+                    .unwrap_or(false)
         }),
         "unused Context throw shim must not be declared into AOT"
     );

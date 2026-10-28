@@ -316,6 +316,29 @@ pub(crate) fn aot_entry_symbol(content_hash: u128) -> String {
     format!("__neovm_aot_{content_hash:032x}_{ABI_TAG:08x}")
 }
 
+/// The prefix the object format prepends to a C identifier.
+///
+/// Mach-O (every macOS binary) stores C symbols with one leading underscore;
+/// ELF and x86-64 COFF store the name unchanged.  `dlsym` applies the
+/// convention itself, so only readers of the object file's symbol table -- the
+/// emit-time shim validation and the object-level tests -- need this.  This is
+/// the Apple ABI's name mangling, not a GNU behavior: GNU's own modules go
+/// through `dlsym` (src/module.c:279-293) and never parse an object file.
+#[cfg(target_os = "macos")]
+pub(crate) const OBJECT_SYMBOL_PREFIX: &str = "_";
+#[cfg(not(target_os = "macos"))]
+pub(crate) const OBJECT_SYMBOL_PREFIX: &str = "";
+
+/// The name `name` has inside the emitted object file.
+pub(crate) fn object_symbol_name(name: &str) -> String {
+    format!("{OBJECT_SYMBOL_PREFIX}{name}")
+}
+
+/// The C name behind an object-file symbol name.
+pub(crate) fn c_symbol_name(name: &str) -> &str {
+    name.strip_prefix(OBJECT_SYMBOL_PREFIX).unwrap_or(name)
+}
+
 // ---------------------------------------------------------------------------
 // R1c-3: per-Value rebuild recipe (canonical, pointer-free).
 //
@@ -2065,7 +2088,10 @@ fn assert_aot_imports_exported(obj: &[u8]) -> Result<(), CompileError> {
         .map_err(|e| module_init_err(format!("parse emitted AOT object: {e}")))?;
     for sym in file.symbols() {
         if sym.is_undefined()
-            && let Ok(name) = sym.name()
+            && let Ok(raw_name) = sym.name()
+            // The object writer has already applied the platform's C-symbol
+            // mangling; compare the C name every list here is written in.
+            && let name = c_symbol_name(raw_name)
             && name.starts_with("neovm_jit_")
             && !MIR_SHIM_NAMES.contains(&name)
         {
@@ -2084,9 +2110,14 @@ fn assert_aot_imports_exported(obj: &[u8]) -> Result<(), CompileError> {
 // R1c-6: `try_load_leaf` — the cache's AOT consult.
 // ---------------------------------------------------------------------------
 
-/// Link a relocatable object's bytes into a shared object at `so_path`, via
-/// `cc -shared`. The host process must export the `neovm_jit_*` shims (linked
-/// `-rdynamic`) so the loader can bind the `.so`'s undefined imports at dlopen.
+/// Link a relocatable object's bytes into a loadable module at `so_path`.
+/// The host process must export the `neovm_jit_*` shims (linked `-rdynamic`)
+/// so the loader can bind the module's undefined imports at dlopen.
+///
+/// ELF links a shared object with `-shared`, which leaves undefined symbols
+/// for the loader.  Mach-O has no equivalent to that default: an executable or
+/// bundle must opt into late binding with `-undefined dynamic_lookup`, and a
+/// bundle (`-bundle`) is the macOS shape for a dlopen'd plugin.
 pub(crate) fn link_object_to_so(
     obj_bytes: &[u8],
     so_path: &std::path::Path,
@@ -2097,8 +2128,12 @@ pub(crate) fn link_object_to_so(
     std::fs::File::create(&o_path)
         .and_then(|mut f| f.write_all(obj_bytes))
         .map_err(|e| module_init_err(format!("write .o: {e}")))?;
-    let status = std::process::Command::new("cc")
-        .arg("-shared")
+    let mut command = std::process::Command::new("cc");
+    #[cfg(target_os = "macos")]
+    command.args(["-bundle", "-undefined", "dynamic_lookup"]);
+    #[cfg(not(target_os = "macos"))]
+    command.arg("-shared");
+    let status = command
         .arg("-o")
         .arg(so_path)
         .arg(&o_path)
@@ -2107,7 +2142,7 @@ pub(crate) fn link_object_to_so(
     // Best-effort cleanup of the intermediate object.
     let _ = std::fs::remove_file(&o_path);
     if !status.success() {
-        return Err(module_init_err(format!("cc -shared failed: {status}")));
+        return Err(module_init_err(format!("cc module link failed: {status}")));
     }
     Ok(())
 }

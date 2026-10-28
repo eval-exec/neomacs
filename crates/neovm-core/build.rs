@@ -75,13 +75,23 @@ fn main() {
     // address-only-referenced fns to the dynamic table, so the preload `.so`'s
     // `neovm_jit_*` imports would otherwise fail to resolve at dlopen and abort on
     // first shim call. Do not assume `-rdynamic` alone suffices.
-    if std::env::var_os("CARGO_FEATURE_JIT").is_some() && cfg!(target_os = "linux") {
-        println!("cargo:rustc-link-arg-tests=-rdynamic");
-        // NEOVM_JIT_SHIM_NAMES is `include!`-ed at module scope (above) from the
-        // single-source shim_names.rs — same set aot.rs salts/exports.
-        for shim in NEOVM_JIT_SHIM_NAMES {
-            println!("cargo:rustc-link-arg-tests=-Wl,--export-dynamic-symbol={shim}");
+    if std::env::var_os("CARGO_FEATURE_JIT").is_some() {
+        #[cfg(target_os = "linux")]
+        {
+            println!("cargo:rustc-link-arg-tests=-rdynamic");
+            // NEOVM_JIT_SHIM_NAMES is `include!`-ed at module scope (above) from the
+            // single-source shim_names.rs — same set aot.rs salts/exports.
+            for shim in NEOVM_JIT_SHIM_NAMES {
+                println!("cargo:rustc-link-arg-tests=-Wl,--export-dynamic-symbol={shim}");
+            }
         }
+        // Mach-O has no `--export-dynamic-symbol`.  ld64's `-export_dynamic`
+        // (`-rdynamic` in Apple clang) puts every global — the
+        // `#[unsafe(no_mangle)]` shims included — into the test binary's
+        // dynamic symbol table, where a `-bundle -undefined dynamic_lookup`
+        // AOT module resolves them at dlopen.
+        #[cfg(target_os = "macos")]
+        println!("cargo:rustc-link-arg-tests=-rdynamic");
     }
     println!(
         "cargo:rerun-if-changed={}",
