@@ -4065,6 +4065,11 @@ impl crate::emacs_core::eval::Context {
             ) {
                 self.gnu_mark_frame_redisplay(frame);
                 self.gnu_mark_frame_window_change(frame);
+                // A child frame's size lives in its own geometry, which no
+                // parent redisplay signature covers, and a child frame's
+                // pixelwise resize arrives here as a host acknowledgement.
+                // Bump the legacy generation so the new size is published.
+                self.invalidate_redisplay();
             }
             if let Some(frame) = self.frames.get(fid) {
                 tracing::debug!(
@@ -4113,6 +4118,12 @@ impl crate::emacs_core::eval::Context {
         for frame in publications {
             self.gnu_mark_frame_redisplay(frame);
             self.gnu_mark_frame_window_change(frame);
+        }
+        if applied_resize {
+            // Same reason as `apply_resize_input_event`: the legacy policy
+            // has no publication queue, and a child's geometry is not part
+            // of the parent's redisplay signature.
+            self.invalidate_redisplay();
         }
         applied_resize
     }
