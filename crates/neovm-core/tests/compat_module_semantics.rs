@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::format_eval_result_with_eval;
@@ -12,7 +13,8 @@ use neovm_core::emacs_core::load::{
     apply_runtime_startup_state, create_bootstrap_evaluator_cached,
 };
 
-/// Build the test cdylib, returning the path to the .so file.
+/// Build the test cdylib, returning the path to the artifact this process
+/// alone can load.
 ///
 /// The nested build is told where to put its output instead of being allowed
 /// to inherit it.  `cargo` reads `CARGO_TARGET_DIR` from the environment, and
@@ -24,30 +26,68 @@ use neovm_core::emacs_core::load::{
 /// reported as a regression three separate times.  `--target-dir` is the
 /// argument form of the same setting and takes precedence over the variable,
 /// so the build and the search cannot disagree.
+///
+/// The target directory is PRIVATE to this build request, not the crate's
+/// shared `target/`: nextest runs every test in its own process, so fourteen
+/// concurrent cargos in one directory relink the cdylib while other processes
+/// are between their scan and `module-load`; the losing process then sees a
+/// partial image ("void-function" on whichever module functions it lacks).
+/// The module crate has no dependencies, so a private release build costs
+/// about a second.
 fn build_test_module() -> PathBuf {
+    static BUILD_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = BUILD_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let module_dir = neomacs_infra::crate_root!().join("tests/test-module");
-    let target_dir = module_dir.join("target");
+    let target_dir = std::env::temp_dir().join(format!(
+        "neovm-test-module-target-{}-{sequence}",
+        std::process::id()
+    ));
+    // A recycled pid (or a previous per-process build in the same process)
+    // could have left a tree behind; start clean.
+    let _ = std::fs::remove_dir_all(&target_dir);
     let status = Command::new("cargo")
         .args(["build", "--release", "--target-dir"])
         .arg(&target_dir)
         .current_dir(&module_dir)
         .status()
         .expect("failed to build test module");
-
     assert!(status.success(), "test module build failed");
 
-    let target_dir = target_dir.join("release");
-    for entry in std::fs::read_dir(&target_dir).expect("read target dir") {
-        let entry = entry.unwrap();
+    let release_dir = target_dir.join("release");
+    let artifact = find_module_cdylib(&release_dir)
+        .unwrap_or_else(|| panic!("test module cdylib not found in {release_dir:?}"));
+    let name = artifact
+        .file_name()
+        .expect("the cdylib has a file name")
+        .to_string_lossy()
+        .into_owned();
+    // Keep only the module file: move it out, then drop the private target
+    // tree.  One small file per build request outlives the build; the OS
+    // reclaims the temp directory.
+    let module_path = std::env::temp_dir().join(format!(
+        "neovm-test-module-{}-{sequence}-{name}",
+        std::process::id()
+    ));
+    std::fs::rename(&artifact, &module_path).expect("move the test module cdylib");
+    let _ = std::fs::remove_dir_all(&target_dir);
+    module_path
+}
+
+/// The test module's cdylib in `dir`, if present.
+fn find_module_cdylib(dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
         let name = entry.file_name();
-        let name_str = name.to_str().unwrap();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
         if name_str.starts_with("libneovm_test_module")
             && (name_str.ends_with(".so") || name_str.ends_with(".dylib"))
         {
-            return entry.path();
+            return Some(entry.path());
         }
     }
-    panic!("test module .so file not found in {:?}", target_dir);
+    None
 }
 
 fn setup_eval() -> Context {
