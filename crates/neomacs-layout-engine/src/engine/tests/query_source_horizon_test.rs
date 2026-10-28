@@ -4,6 +4,8 @@ use neovm_core::window::{FrameId, WindowId, WindowLayoutQueryScope};
 
 fn query_fixture(text: &str, setup: &str, start: usize) -> (Context, FrameId, WindowId) {
     let (mut eval, frame, buffer, window) = incr_editing_frame(text, 80, 24);
+    eval.eval_str("(setq mode-line-format nil header-line-format nil tab-line-format nil)")
+        .expect("source horizon fixture has only body rows");
     eval.eval_str(setup).expect("source properties");
     {
         let frame = eval.frame_manager_mut().get_mut(frame).unwrap();

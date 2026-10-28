@@ -652,6 +652,31 @@ thread_local! {
     > = std::cell::RefCell::new(rustc_hash::FxHashMap::default());
 }
 
+/// Request-local fingerprints; dropping the scope restores the enclosing
+/// redisplay's native record, including on a failed query or unwind.
+#[must_use]
+pub(crate) struct ChromeFingerprintRecordScope {
+    previous: rustc_hash::FxHashMap<i64, Vec<ChromeRowFingerprint>>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl ChromeFingerprintRecordScope {
+    pub(crate) fn isolate() -> Self {
+        Self {
+            previous: FINGERPRINT_RECORD.with(|record| std::mem::take(&mut *record.borrow_mut())),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for ChromeFingerprintRecordScope {
+    fn drop(&mut self) {
+        FINGERPRINT_RECORD.with(|record| {
+            std::mem::swap(&mut *record.borrow_mut(), &mut self.previous);
+        });
+    }
+}
+
 /// Forget the previous layout's record (start of a frame layout).
 pub(crate) fn reset_fingerprint_record() {
     FINGERPRINT_RECORD.with(|record| record.borrow_mut().clear());

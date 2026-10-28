@@ -984,9 +984,18 @@ impl crate::emacs_core::eval::Context {
         buffer_id: BufferId,
     ) -> Option<WindowDisplaySnapshotFreshness> {
         let frame = self.frames.get(frame_id)?;
-        let window = frame.window_layout_inputs(window_id)?;
+        let mut window = frame.window_layout_inputs(window_id)?;
         if window.buffer_id != buffer_id {
             return None;
+        }
+        // GNU window_point reads BUF_PT for the globally selected window,
+        // even before its saved marker is synchronized by the query adapter.
+        // Freshness admission happens first, so it must observe that same live
+        // point without mutating markers or borrowing the adapter.
+        if self.frames.selected_frame().is_some_and(|selected| {
+            selected.id == frame_id && selected.selected_window == window_id
+        }) {
+            window.point = self.buffers.get(buffer_id)?.point_lisp_char_pos();
         }
         Some(WindowDisplaySnapshotFreshness {
             fontset_generation: crate::emacs_core::fontset::fontset_generation(),

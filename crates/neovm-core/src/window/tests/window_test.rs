@@ -4584,3 +4584,86 @@ fn positions_left_of_a_rows_first_glyph_are_hidden_by_hscroll() {
         );
     }
 }
+
+#[test]
+fn selected_window_query_freshness_uses_live_point_before_marker_sync() {
+    for switch_current_buffer in [false, true] {
+        let mut eval = crate::emacs_core::Context::new();
+        let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+        eval.buffer_manager_mut()
+            .get_mut(buffer)
+            .unwrap()
+            .insert("a\nb\n");
+        let frame = eval
+            .frame_manager_mut()
+            .create_frame("live-query-point", 160, 96, buffer);
+        let window = eval.frame_manager().get(frame).unwrap().selected_window;
+        assert!(eval.frame_manager_mut().select_frame(frame));
+        eval.eval_str("(goto-char 1)").unwrap();
+        match eval
+            .frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        {
+            Window::Leaf { point, .. } => *point = LispCharPos1::ONE,
+            other => panic!("expected leaf window, got {other:?}"),
+        }
+        let other_frame =
+            eval.frame_manager_mut()
+                .create_frame("saved-query-point", 160, 96, buffer);
+        let other_window = eval
+            .frame_manager()
+            .get(other_frame)
+            .unwrap()
+            .selected_window;
+        assert!(eval.frame_manager_mut().select_frame(frame));
+        if switch_current_buffer {
+            eval.eval_str("(get-buffer-create \"*unrelated-query-buffer*\")")
+                .unwrap();
+        }
+        let other_before = eval
+            .window_display_snapshot_freshness(other_frame, other_window, buffer)
+            .unwrap();
+        let before = eval
+            .window_display_snapshot_freshness(frame, window, buffer)
+            .unwrap();
+        eval.eval_str("(goto-char 3)").unwrap();
+        if switch_current_buffer {
+            eval.eval_str("(set-buffer \"*unrelated-query-buffer*\")")
+                .unwrap();
+        }
+        // Like GNU's selected window, the buffer owns live point while the
+        // saved window marker still describes the previous redisplay.
+        assert_eq!(
+            eval.frame_manager()
+                .get(frame)
+                .unwrap()
+                .window_layout_inputs(window)
+                .unwrap()
+                .point,
+            LispCharPos1::ONE,
+            "the fixture must leave the saved marker unsynchronized"
+        );
+        let after = eval
+            .window_display_snapshot_freshness(frame, window, buffer)
+            .unwrap();
+        assert_ne!(
+            before, after,
+            "live selected-window point must invalidate exact freshness"
+        );
+        assert!(!before.same_query_row_content(&after));
+        let other_after = eval
+            .window_display_snapshot_freshness(other_frame, other_window, buffer)
+            .unwrap();
+        assert!(
+            other_before.same_query_row_content(&other_after),
+            "a different frame displaying the same buffer must keep its own saved point"
+        );
+        assert!(
+            before.same_position_rows_ignoring_point(&after),
+            "literal chrome without numbering still permits point-only row reuse"
+        );
+    }
+}

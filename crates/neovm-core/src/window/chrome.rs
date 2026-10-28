@@ -23,6 +23,10 @@ pub struct WindowChromePresence {
 }
 
 impl WindowChromePresence {
+    pub const fn is_empty(self) -> bool {
+        !(self.mode || self.header || self.tab)
+    }
+
     pub fn resolve(window: &Window, buffer: &Buffer, frame: &Frame, minibuffer: bool) -> Self {
         if !window.is_leaf() || minibuffer {
             return Self::default();

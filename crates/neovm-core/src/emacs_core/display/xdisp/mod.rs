@@ -457,6 +457,30 @@ fn note_column_spec_consumed() {
     COLUMN_SPEC_CONSUMED.with(|consumed| consumed.set(true));
 }
 
+/// Keep a nested geometry probe from changing its caller's column detector.
+#[must_use]
+pub struct ColumnSpecConsumptionScope {
+    previous: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl ColumnSpecConsumptionScope {
+    pub fn isolate() -> Self {
+        Self {
+            previous: COLUMN_SPEC_CONSUMED.with(|value| value.replace(false)),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for ColumnSpecConsumptionScope {
+    fn drop(&mut self) {
+        COLUMN_SPEC_CONSUMED.with(|value| value.set(self.previous));
+    }
+}
+
+static_assertions::assert_not_impl_any!(ColumnSpecConsumptionScope: Send, Sync);
+
 /// Arm the `%c`/`%C` detector for one mode-line expansion.
 pub fn reset_column_spec_consumed() {
     COLUMN_SPEC_CONSUMED.with(|consumed| consumed.set(false));

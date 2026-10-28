@@ -150,6 +150,16 @@ impl QueryCache {
             return None;
         }
         let current = evaluator.window_display_snapshot_freshness(frame, window, buffer)?;
+        let chrome_absent = {
+            let frame = evaluator.frame_manager().get(frame)?;
+            neovm_core::window::WindowChromePresence::resolve(
+                frame.find_window(window)?,
+                evaluator.buffer_manager().get(buffer)?,
+                frame,
+                frame.minibuffer_window == Some(window),
+            )
+            .is_empty()
+        };
         let source_point = evaluator
             .buffer_manager()
             .get(buffer)?
@@ -192,10 +202,13 @@ impl QueryCache {
             // A later target completes all earlier exact source points. A
             // hidden target resolved through a neighbor is insufficient: the
             // canonical earlier stop might not yet have emitted that neighbor.
-            let covers_scope = entry.scope == scope || matches!(
+            // A viewport/window-end observation preserves accepted chrome.
+            // Position visibility requires live chrome measurement, so that
+            // policy can be upgraded only when no chrome exists to measure.
+            let covers_scope = entry.scope == scope || (chrome_absent && matches!(
                 (entry.scope, scope),
                 (WindowLayoutQueryScope::Viewport, WindowLayoutQueryScope::Position { .. })
-            ) || matches!(
+            )) || matches!(
                 (entry.scope, scope),
                 (WindowLayoutQueryScope::Position { target: cached_target },
                  WindowLayoutQueryScope::Position { target })

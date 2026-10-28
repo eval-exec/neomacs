@@ -1852,12 +1852,11 @@ impl BufferSourceOutputSetup {
         // *measured* chrome heights so the window snapshot reports the real
         // (possibly taller, e.g. doom-modeline's bar) height rather than the
         // face-only estimate the text-area geometry was reserved from.
-        let chrome_source = if self.position_publication.is_synchronous_query() {
-            // GNU `Fwindow_end` builds a stack-local display iterator for the
-            // text area.  Reuse the already accepted partition instead of
-            // evaluating status-line Lisp as a side effect of a geometry
-            // query.  This result is discarded rather than presented, so no
-            // chrome rows need to be emitted.
+        let chrome_source = if self.position_publication.preserves_reserved_chrome() {
+            // GNU `Fwindow_end` preserves the accepted text partition. A
+            // position query instead preserves its freshly measured native
+            // heights across this one physical convergence retry. Neither
+            // case needs chrome rows or another status-line Lisp evaluation.
             WindowChromeRowSource::PreserveReservedMetrics(WindowChromeMetrics::from_params(params))
         } else {
             WindowChromeRowSource::Recompute

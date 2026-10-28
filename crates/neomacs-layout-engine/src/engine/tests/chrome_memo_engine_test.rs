@@ -11,10 +11,10 @@ use crate::incremental_layout::chrome_memo::{
     CHROME_MEMO_VERIFY_MISMATCHES, ChromeMemoMode, set_chrome_memo_mode_for_test,
 };
 
-struct MemoGuard;
+pub(super) struct MemoGuard;
 
 impl MemoGuard {
-    fn set(mode: ChromeMemoMode) -> Self {
+    pub(super) fn set(mode: ChromeMemoMode) -> Self {
         set_chrome_memo_mode_for_test(Some(mode));
         MemoGuard
     }
