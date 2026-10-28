@@ -353,7 +353,7 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
-            GuiRunOptions::with_timeout(Duration::from_secs(20)),
+            GuiRunOptions::with_timeout(Duration::from_secs(60)),
         )
         .unwrap();
     assert!(!result.timed_out, "{result:#?}");

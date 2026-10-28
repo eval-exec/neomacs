@@ -20,6 +20,12 @@
         :graphical-display (display-graphic-p (terminal-name))
         :display-frames (frames-on-display-list (terminal-name))))
 
+;; How long one stage may wait for an asynchronous desktop notification.
+;; The GSettings change reaches GNU (or Neomacs) through the D-Bus/gsettings
+;; stack, whose cold start on a loaded machine costs seconds; the stage
+;; asserts the resulting geometry, so the budget only covers propagation.
+(defvar desktop-font-live-stage-seconds 20)
+
 (defun desktop-font-live-await (predicate continuation deadline)
   (condition-case err
       (cond ((funcall predicate) (funcall continuation))
@@ -72,8 +78,8 @@
         (lambda ()
           (desktop-font-live-unchanged before font)
           (desktop-font-live-pass))
-        (+ (float-time) 8)))
-     (+ (float-time) 8))))
+        (+ (float-time) desktop-font-live-stage-seconds)))
+     (+ (float-time) desktop-font-live-stage-seconds))))
 
 (defun desktop-font-live-opt-in (&optional continuation)
   (setq font-use-system-font t)
@@ -90,7 +96,7 @@
      (unless (equal (font-get-system-normal-font) "Ubuntu 10")
        (error "Monospace update replaced the application preference"))
      (funcall (or continuation #'desktop-font-live-pass)))
-   (+ (float-time) 8)))
+   (+ (float-time) desktop-font-live-stage-seconds)))
 
 (defun desktop-font-live-explicit-and-future ()
   (set-frame-font "DejaVu Sans Mono 12")
@@ -156,8 +162,8 @@
                                     (desktop-font-live-frame-state)
                                     (desktop-font-live-receipt))
              (funcall (or continuation #'desktop-font-live-pass)))
-           (+ (float-time) 8))))))
-   (+ (float-time) 8)))
+           (+ (float-time) desktop-font-live-stage-seconds))))))
+   (+ (float-time) desktop-font-live-stage-seconds)))
 
 (defun desktop-font-live-overlapping-resize ()
   (menu-bar-mode -1)
@@ -176,8 +182,8 @@
         (lambda () (and (= (frame-width) 91) (= (frame-text-lines) 25)
                         (= (frame-char-width) 13) (= (frame-char-height) 25)
                         (desktop-font-live-presented submission)))
-        #'desktop-font-live-pass (+ (float-time) 8))))
-   (+ (float-time) 8)))
+        #'desktop-font-live-pass (+ (float-time) desktop-font-live-stage-seconds))))
+   (+ (float-time) desktop-font-live-stage-seconds)))
 
 (defun desktop-font-live-repeated ()
   (desktop-font-live-geometry
@@ -203,8 +209,8 @@
                     (desktop-font-live-grid-ready)
                     (desktop-font-live-presented submission)))
              #'desktop-font-live-pass
-             (+ (float-time) 8))))
-        (+ (float-time) 8))))))
+             (+ (float-time) desktop-font-live-stage-seconds))))
+        (+ (float-time) desktop-font-live-stage-seconds))))))
 
 (defun desktop-font-live-inhibited ()
   (desktop-font-live-geometry
@@ -229,7 +235,7 @@
          (error "Inhibited font update left stale columns: %S text=%S"
                 (desktop-font-live-frame-state) (frame-text-width)))
        (desktop-font-live-pass))
-     (+ (float-time) 8))))
+     (+ (float-time) desktop-font-live-stage-seconds))))
 
 (defun desktop-font-live-fullscreen ()
   (desktop-font-live-geometry
@@ -243,7 +249,7 @@
         (lambda ()
           (setq frame-inhibit-implied-resize nil)
           (desktop-font-live-keep-pixels))
-        (+ (float-time) 8))))))
+        (+ (float-time) desktop-font-live-stage-seconds))))))
 
 (defun desktop-font-live-grown-minibuffer ()
   (menu-bar-mode -1)
@@ -277,9 +283,9 @@
                            (window-pixel-height (minibuffer-window)))
                         (frame-text-height))
                      (desktop-font-live-presented submission)))
-              #'desktop-font-live-pass (+ (float-time) 8)))))
-        (+ (float-time) 8))))
-   (+ (float-time) 8)))
+              #'desktop-font-live-pass (+ (float-time) desktop-font-live-stage-seconds)))))
+        (+ (float-time) desktop-font-live-stage-seconds))))
+   (+ (float-time) desktop-font-live-stage-seconds)))
 
 (defun desktop-font-live-minimum (&optional vertical)
   (menu-bar-mode -1)
@@ -314,8 +320,8 @@
                          (= (frame-native-height) height)))
                   (desktop-font-live-presented submission)))
            #'desktop-font-live-pass
-           (+ (float-time) 8))))))
-   (+ (float-time) 8)))
+           (+ (float-time) desktop-font-live-stage-seconds))))))
+   (+ (float-time) desktop-font-live-stage-seconds)))
 
 (defun desktop-font-live-child (&optional chrome)
   (let ((child (make-frame `((parent-frame . ,(selected-frame))
@@ -351,8 +357,8 @@
                   (= (frame-text-width child) (* 40 13))
                   (= (frame-text-height child) (* 10 25))))
            #'desktop-font-live-pass
-           (+ (float-time) 8)))))
-     (+ (float-time) 8))))
+           (+ (float-time) desktop-font-live-stage-seconds)))))
+     (+ (float-time) desktop-font-live-stage-seconds))))
 
 (defun desktop-font-live-probe ()
   "Everything the isolation failure needs on a runner: the setting
