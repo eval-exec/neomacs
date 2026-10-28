@@ -30,6 +30,108 @@ fn requested_but_unsupported_counters_reject_the_collection() {
 }
 
 #[test]
+fn instruction_cache_miss_rows_preserve_the_typed_metric_in_reports() {
+    for event in [
+        "frontend_retired.l1i_miss:u",
+        "cpu_core/frontend_retired.l1i_miss/u",
+    ] {
+        let measurements = parse_perf_stat_csv(&format!("17,,{event},100000,100.00\n"))
+            .expect("parse the instruction-cache event");
+        assert_eq!(measurements.len(), 1);
+        assert_eq!(measurements[0].name, MetricName::L1InstructionCacheMisses);
+        assert_eq!(measurements[0].value, 17.0);
+        assert_eq!(measurements[0].unit, MetricUnit::Count);
+        assert_eq!(measurements[0].name.canonical_unit(), MetricUnit::Count);
+
+        let verdict = crate::RunVerdict::Valid { measurements };
+        let json = serde_json::to_string(&verdict).expect("serialize counter report");
+        assert!(json.contains("l1-instruction-cache-misses"));
+        let decoded: crate::RunVerdict =
+            serde_json::from_str(&json).expect("deserialize counter report");
+        assert_eq!(decoded, verdict);
+    }
+}
+
+#[test]
+fn missing_instruction_cache_counter_rejects_otherwise_complete_collection() {
+    use std::time::Duration;
+
+    let directory = crate::workspace_root().join("tmp");
+    std::fs::create_dir_all(&directory).expect("create owned test directory");
+    let scratch = tempfile::Builder::new()
+        .prefix("neomacs-perf-l1i-counter-")
+        .tempdir_in(directory)
+        .expect("create counter fixture");
+    let capture = super::PerfStatCapture::new(
+        scratch.path(),
+        crate::CounterScope::WholeProcess,
+        Duration::from_secs(1),
+    );
+    let other_counters = "1,,cycles:u,100000,100.00\n\
+                          2,,instructions:u,100000,100.00\n\
+                          3,,page-faults,100000,100.00\n\
+                          4,,branch-misses:u,100000,100.00\n\
+                          5,,cache-misses:u,100000,100.00\n\
+                          6,,L1-dcache-load-misses:u,100000,100.00\n\
+                          7,,dTLB-load-misses:u,100000,100.00\n";
+    for unavailable in [
+        "",
+        "<not supported>,,cpu_core/frontend_retired.l1i_miss/u,0,0.00\n",
+        "<not counted>,,cpu_core/frontend_retired.l1i_miss/u,0,0.00\n",
+    ] {
+        std::fs::write(&capture.output, format!("{other_counters}{unavailable}"))
+            .expect("write counter fixture");
+        let error = capture
+            .collect()
+            .expect_err("an unavailable requested counter must not become zero");
+        assert!(error.contains("L1InstructionCacheMisses"), "{error}");
+    }
+    std::fs::write(
+        &capture.output,
+        format!("{other_counters}0,,cpu_core/frontend_retired.l1i_miss/u,100000,100.00\n"),
+    )
+    .expect("write a measured zero");
+    let (measurements, _) = capture.collect().expect("a measured zero is available");
+    assert!(measurements.iter().any(|measurement| {
+        measurement.name == MetricName::L1InstructionCacheMisses && measurement.value == 0.0
+    }));
+}
+
+#[test]
+fn both_counter_capture_routes_request_the_instruction_cache_event() {
+    use crate::{CaptureRoute, CounterScope};
+    use std::process::Command;
+    use std::time::Duration;
+
+    let mut capture = super::PerfStatCapture::new(
+        &std::env::temp_dir(),
+        CounterScope::WholeProcess,
+        Duration::from_secs(1),
+    );
+    let arguments = capture.stat_arguments();
+    let events = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--event")
+        .expect("direct counter event argument")[1]
+        .to_str()
+        .expect("counter event names are UTF-8");
+    assert!(
+        events
+            .split(',')
+            .any(|event| event == "frontend_retired.l1i_miss:u")
+    );
+
+    let command = capture
+        .wrap(Command::new("true"), CaptureRoute::Adapter("PTY"))
+        .expect("configure adapter counter capture");
+    let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+    assert_eq!(
+        environment[std::ffi::OsStr::new("PTY_PERF_EVENTS")],
+        Some(std::ffi::OsStr::new(events))
+    );
+}
+
+#[test]
 fn hybrid_cpu_rows_use_the_counted_pmu_and_ignore_its_disabled_sibling() {
     let measurements = parse_perf_stat_csv(
         "<not counted>,,cpu_atom/cycles/u,0,0.00\n\
@@ -97,9 +199,11 @@ fn pty_stat_capture_selects_the_launched_editor_thread() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
+    let directory = crate::workspace_root().join("tmp");
+    fs::create_dir_all(&directory).expect("create owned test directory");
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-pty-stat-thread-")
-        .tempdir_in(crate::workspace_root().join("tmp"))
+        .tempdir_in(directory)
         .unwrap();
     let fake_perf = scratch.path().join("perf");
     fs::write(

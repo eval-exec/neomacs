@@ -17,6 +17,7 @@ const STANDARD_EVENTS: &[&str] = &[
     "branch-misses:u",
     "cache-misses:u",
     "L1-dcache-load-misses:u",
+    "frontend_retired.l1i_miss:u",
     "dTLB-load-misses:u",
 ];
 
@@ -122,6 +123,7 @@ fn counter_metric(event: &str) -> Option<MetricName> {
         "branch-misses" => Some(MetricName::BranchMisses),
         "cache-misses" => Some(MetricName::CacheMisses),
         "L1-dcache-load-misses" => Some(MetricName::L1DataCacheLoadMisses),
+        "frontend_retired.l1i_miss" => Some(MetricName::L1InstructionCacheMisses),
         "dTLB-load-misses" => Some(MetricName::DataTlbLoadMisses),
         _ => None,
     }

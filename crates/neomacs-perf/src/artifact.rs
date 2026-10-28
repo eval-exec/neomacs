@@ -80,6 +80,9 @@ pub enum MetricName {
     BranchMisses,
     CacheMisses,
     L1DataCacheLoadMisses,
+    /// Retired instructions that experienced a true L1 instruction-cache miss
+    /// (`frontend_retired.l1i_miss`), rather than all instruction fetch requests.
+    L1InstructionCacheMisses,
     DataTlbLoadMisses,
     PerOperationCpuTime,
     PerOperationWallTime,
@@ -204,6 +207,7 @@ impl MetricName {
             | Self::BranchMisses
             | Self::CacheMisses
             | Self::L1DataCacheLoadMisses
+            | Self::L1InstructionCacheMisses
             | Self::DataTlbLoadMisses => MetricUnit::Count,
             Self::OperationCount
             | Self::InputLatencyOverBudgetCount
