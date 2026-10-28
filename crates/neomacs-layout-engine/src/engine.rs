@@ -4713,6 +4713,7 @@ impl LayoutEngine {
         layout_box: WindowLayoutBox,
         evaluator: &neovm_core::emacs_core::Context,
     ) -> Option<ScrollReplay> {
+        use crate::incremental_layout::edit_sync::{self, BelowReuse, EditSyncMode};
         // Deliberately NOT restricted to the selected window. GNU's
         // `try_window_id` (xdisp.c:22560-22960) has no such condition -- it
         // runs for whichever window `redisplay_window` is laying out -- and the
@@ -4747,10 +4748,9 @@ impl LayoutEngine {
             // rejects the attempt and the retry rebuilds from the new inputs
             // rather than publishing rows this plan measured without them.
             if !self.allow_below_reuse
-                || !crate::incremental_layout::edit_sync::sync_layout_conditions(
-                    &curr_key,
-                    params.scroll_margin,
-                )
+                // The process-wide sync switch also governs this replay.
+                || edit_sync::edit_sync_mode() != EditSyncMode::Sync
+                || !edit_sync::sync_layout_conditions(&curr_key, params.scroll_margin)
                 // An alias can give an ordinary face overlay a structural
                 // meaning (for example, a display-property fallback).
                 || !crate::incremental_layout::face_overlay_aliases_supported(
@@ -4786,7 +4786,6 @@ impl LayoutEngine {
             return None;
         };
         let delta = curr_key.buffer_size - prev.key.buffer_size;
-        use crate::incremental_layout::edit_sync::{self, BelowReuse, EditSyncMode};
         use crate::incremental_layout::{EditReplayPositions, EditReplaySourceProof};
         let positions = EditReplayPositions::new(dirty_start, dirty_end, delta);
         let span_newlines = Self::span_source_newline_count(buffer, dirty_start, dirty_end);
