@@ -708,3 +708,8 @@ mod tests {
 #[cfg(test)]
 #[path = "test_utils/mock_redisplay.rs"]
 pub mod mock_redisplay;
+
+/// Host input published from fixture threads the way the frontend bridge does.
+#[path = "test_utils/input_publisher.rs"]
+mod input_publisher;
+pub use input_publisher::{InputPublishError, InputPublisher};

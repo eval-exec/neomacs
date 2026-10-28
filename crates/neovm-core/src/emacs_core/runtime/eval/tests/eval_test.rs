@@ -5984,7 +5984,7 @@ fn read_char_fires_bootstrapped_gnu_run_with_timer_while_waiting_for_input() {
     )
     .expect("schedule GNU Lisp timer");
 
-    let tx = input_wait::InputPublisher::install(&mut ev);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
     // Keep one sender alive: dropping the last tx disconnects the channel,
     // which the input machinery treats as terminal-gone -> quit (timing flake;
     // see the sit-for soak fix).
@@ -6026,7 +6026,7 @@ fn read_char_fires_bootstrapped_gnu_run_with_idle_timer_while_waiting_for_input(
     )
     .expect("schedule GNU Lisp idle timer");
 
-    let tx = input_wait::InputPublisher::install(&mut ev);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
     // Keep one sender alive: dropping the last tx disconnects the channel,
     // which the input machinery treats as terminal-gone -> quit (timing flake;
     // see the sit-for soak fix).
@@ -6089,7 +6089,7 @@ fn repeating_idle_timer_rearms_after_user_input_starts_new_idle_epoch() {
     )
     .expect("schedule repeating GNU Lisp idle timer");
 
-    let tx = input_wait::InputPublisher::install(&mut ev);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
     let _tx_keepalive = tx.clone();
     let sender = thread::spawn(move || {
         thread::sleep(Duration::from_millis(80));
@@ -6173,7 +6173,7 @@ fn read_key_sequence_clears_stale_this_command_keys_at_entry_for_idle_probe() {
     .expect("arm idle snapshot timer");
 
     // Deliver the real key only after a delay so the idle timer fires first.
-    let tx = input_wait::InputPublisher::install(&mut ev);
+    let tx = crate::test_utils::InputPublisher::install(&mut ev);
     let _tx_keepalive = tx.clone();
     let sender = thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(120));
@@ -24004,6 +24004,12 @@ fn command_loop_input_interval_triggers_auto_save_hook() {
 /// Emacs subsequently remains idle for `auto-save-timeout` seconds.  The
 /// timeout is independent of `auto-save-interval`; disabling the event-count
 /// trigger must not disable the idle trigger.
+///
+/// No clock decides when the loop stops: the auto-save hook itself queues the
+/// stop key on `unread-command-events`, which GNU `read_char` rereads right
+/// after the idle `Fdo_auto_save` (keyboard.c:2964-2970, 2990-2992).  The idle
+/// deadline is therefore the only timed step, and a starved runner can only
+/// delay it.
 #[test]
 fn command_loop_idle_timeout_triggers_auto_save_hook() {
     crate::test_utils::init_test_tracing();
@@ -24033,7 +24039,9 @@ fn command_loop_idle_timeout_triggers_auto_save_hook() {
              (setq auto-save-hook
                    (list (lambda ()
                            (setq neo-idle-auto-save-hook-count
-                                 (1+ neo-idle-auto-save-hook-count)))))
+                                 (1+ neo-idle-auto-save-hook-count))
+                           (setq unread-command-events
+                                 (append unread-command-events (list ?q))))))
              (fset 'neo-stop-idle-auto-save-probe-command
                    (lambda ()
                      (interactive)
@@ -24043,27 +24051,35 @@ fn command_loop_idle_timeout_triggers_auto_save_hook() {
     )
     .expect("install idle auto-save command-loop probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
-    let _tx_keepalive = tx.clone();
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(50));
-        tx.send(crate::keyboard::InputEvent::key_press(
+    let input = crate::test_utils::InputPublisher::install(&mut ev);
+    input
+        .send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('a'),
         ))
-        .expect("send editing keypress");
-        // Bound the test even while the idle auto-save implementation is
-        // absent: this real command stops the loop after the GNU deadline.
-        thread::sleep(Duration::from_millis(1_950));
-        tx.send(crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('q'),
-        ))
-        .expect("send stop keypress");
+        .expect("queue editing keypress");
+    // Without an idle auto-save the loop would wait for input forever.  The
+    // guard turns that regression into the assertion below instead of a
+    // nextest timeout; a passing run cancels it long before it fires.
+    let (loop_returned, cancel_guard) = crossbeam_channel::bounded::<()>(0);
+    let guard_input = input.clone();
+    let guard = thread::spawn(move || {
+        const HANG_GUARD: Duration = Duration::from_secs(300);
+        if let Err(crossbeam_channel::RecvTimeoutError::Timeout) =
+            cancel_guard.recv_timeout(HANG_GUARD)
+        {
+            guard_input
+                .send(crate::keyboard::InputEvent::key_press(
+                    crate::keyboard::KeyEvent::char('q'),
+                ))
+                .expect("stop a loop that never auto-saved");
+        }
     });
     ev.command_loop.running = true;
 
-    ev.recursive_edit_inner()
-        .expect("command loop should exit through the stop command");
+    let result = ev.recursive_edit_inner();
+    drop(loop_returned);
+    guard.join().expect("hang guard");
+    result.expect("command loop should exit through the stop command");
 
     assert_eq!(
         ev.eval_symbol("neo-idle-auto-save-hook-count")
