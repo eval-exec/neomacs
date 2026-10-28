@@ -219,6 +219,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `*mut *mut MarkerObj: Send`
            which is required by `neovm_core::Context: Send`
+           `Rc<xdisp::mode_line_output::OutputState>: Send`
+           which is required by `neovm_core::Context: Send`
            `Cell<CanonicalArm>: Sync`
            which is required by `neovm_core::Context: Send`
            `NonNull<ByteCodeFunction>: Send`

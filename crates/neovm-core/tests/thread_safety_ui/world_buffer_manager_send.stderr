@@ -79,6 +79,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `BufferManager: Send`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
            which is required by `BufferManager: Send`
+           `Rc<xdisp::mode_line_output::OutputState>: Send`
+           which is required by `BufferManager: Send`
            `NonNull<eval::owner_bindings::OwnerSlab>: Send`
            which is required by `BufferManager: Send`
            `Cell<CanonicalArm>: Sync`

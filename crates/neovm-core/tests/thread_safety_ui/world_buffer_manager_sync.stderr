@@ -79,6 +79,8 @@ error[E0599]: the associated function or constant `share` exists for struct `Thr
            which is required by `BufferManager: Sync`
            `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
            which is required by `BufferManager: Sync`
+           `Rc<xdisp::mode_line_output::OutputState>: Send`
+           which is required by `BufferManager: Sync`
            `NonNull<eval::owner_bindings::OwnerSlab>: Send`
            which is required by `BufferManager: Sync`
            `Cell<CanonicalArm>: Sync`
