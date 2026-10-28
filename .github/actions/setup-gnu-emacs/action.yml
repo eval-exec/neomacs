@@ -22,6 +22,13 @@ description: >-
   cached by commit; a dedicated test-suite.yml job warms that cache before the shards
   that spawn GNU start, and a cache hit costs one restore.
 
+  The recipe itself -- source fetch, autogen, the configure line, make,
+  install -- is scripts/ci/build-gnu-oracle.sh, and the assertions are
+  scripts/ci/check-gnu-oracle.sh.  The local NixOS shell
+  (nix/gnu-oracle-shell.nix) runs the same two files, so a local oracle is
+  the CI oracle by construction; this action only wires them into CI and
+  caches the result.
+
 inputs:
   cache-version:
     description: >-
@@ -105,89 +112,40 @@ runs:
       shell: bash
       env:
         EMACS_COMMIT: ${{ steps.pin.outputs.commit }}
-        EMACS_VERSION: ${{ steps.pin.outputs.version }}
       run: |
+        # The recipe -- source commit fetch, autogen, the configure line,
+        # make, install -- lives in scripts/ci/build-gnu-oracle.sh.  The local
+        # NixOS shell (nix/gnu-oracle-shell.nix) runs the same file, so a
+        # local oracle is the CI oracle by construction and the configure
+        # flags have exactly one definition.
+        #
+        # The cache key carries inputs.cache-version, not a hash of this file
+        # or the script; bump cache-version when the recipe changes (the
+        # input's description says so), so a comment edit does not throw away
+        # the 60 MB cache.
         set -euo pipefail
         # Runtime libraries are installed above; the build tools were
-        # installed by the miss-only step immediately before this one.
-        mkdir -p "$GITHUB_WORKSPACE/tmp"
-        src="$(mktemp -d "$GITHUB_WORKSPACE/tmp/gnu-emacs-oracle.XXXXXX")"
-        trap 'rm -rf "$src"' EXIT
-        git -C "$src" init -q
-        # Fetch the commit itself, not the tag: the tag is documentation, the
-        # commit is the identity the parity numbers were measured against.
-        git -C "$src" fetch -q --depth 1 https://github.com/emacs-mirror/emacs.git "$EMACS_COMMIT"
-        git -C "$src" checkout -q FETCH_HEAD
-        cd "$src"
-        ./autogen.sh
-        # Mirrors the pinned reference's configure:
-        #   --with-x-toolkit=gtk3, --with-tree-sitter, native compilation off.
-        # --without-pgtk holds the window system at X11+GTK3; the pin carries
-        # GTK3/X11 and no PGTK, and configure would otherwise prefer PGTK
-        # when the Wayland headers are present.
-        # Real package notification tests use this build as both a client
-        # and a private D-Bus service. Require the library rather than allowing
-        # configure to silently omit its native primitives.
-        #
-        # --without-compress-install keeps the installed Lisp tree as plain
-        # .el. GNU's `make install` gzips it by default (Makefile.in:312,
-        # configure.ac:2073: GZIP_PROG, disabled only by this flag), and
-        # jka-compr then prints "uncompressing FILE.el.gz...done" into the
-        # message stream the MELPA and TUI parity harnesses compare against
-        # Neomacs -- the local parity reference is an in-tree build with plain
-        # .el files, so those lines exist only on CI. Decompression also makes
-        # every first require slow enough to trip the 180 s MELPA RestartProbe
-        # watchdog on a 4-core runner.
-        ./configure --prefix=/opt/gnu-emacs-oracle \
-          --with-x-toolkit=gtk3 --without-pgtk \
-          --with-tree-sitter --with-dbus \
-          --with-native-compilation=no \
-          --without-compress-install \
-          --with-gnutls=ifavailable --with-xml2=ifavailable \
-          --with-libgmp=ifavailable \
-          --with-sound=no --without-gconf --without-gsettings \
-          --without-libsystemd --without-selinux --without-gpm \
-          --without-sqlite3
-        make -j"$(nproc)"
-        make install
+        # installed by the miss-only step immediately before this one, so a
+        # cache hit installs neither.
+        EMACS_ORACLE_WORKDIR="$RUNNER_TEMP" \
+          "$GITHUB_WORKSPACE/scripts/ci/build-gnu-oracle.sh" \
+          "$EMACS_COMMIT" /opt/gnu-emacs-oracle
 
     - name: Put the oracle on PATH and prove it is the pinned build
       shell: bash
       env:
         EMACS_VERSION: ${{ steps.pin.outputs.version }}
+        EMACS_COMMIT: ${{ steps.pin.outputs.commit }}
       run: |
         # A divergence is only meaningful against a known GNU *configuration*,
         # so this fails at the environment seam rather than inside an oracle
-        # test. Checking emacs-version alone is not enough: a TTY-only 31.1
-        # reports the same version and still changes every describe-bindings
-        # block. D-Bus is also required by the native notification fixtures.
+        # test.  The assertions are shared with the local NixOS build -- both
+        # run scripts/ci/check-gnu-oracle.sh, so there is no second copy to
+        # drift.  See that file for what each assertion catches.
         set -euo pipefail
-        emacs=/opt/gnu-emacs-oracle/bin/emacs
         echo "/opt/gnu-emacs-oracle/bin" >> "$GITHUB_PATH"
-        got="$("$emacs" --batch --quick --eval '(princ emacs-version)')"
-        if [[ "$got" != "$EMACS_VERSION" ]]; then
-          echo "GNU oracle reports emacs-version $got, parity-reference.toml pins $EMACS_VERSION" >&2
-          exit 1
-        fi
-        features="$("$emacs" --batch --quick --eval '(princ system-configuration-features)')"
-        echo "oracle features: $features"
-        missing=""
-        for want in X11 GTK3 TREE_SITTER PDUMPER DBUS; do
-          case " $features " in *" $want "*) ;; *) missing="$missing $want" ;; esac
-        done
-        case " $features " in *" NATIVE_COMP "*) missing="$missing -NATIVE_COMP" ;; esac
-        if [[ -n "$missing" ]]; then
-          echo "GNU oracle configuration does not match the pinned reference; missing:$missing" >&2
-          echo "The window system is required: without X11/GTK3 the oracle lacks the" >&2
-          echo "window-system mouse bindings that keep describe-bindings aligned." >&2
-          exit 1
-        fi
-        "$emacs" --batch --quick --eval "(progn
-          (require 'dbus)
-          (dolist (function '(dbus-call-method dbus-register-method))
-            (unless (fboundp function)
-              (error \"GNU oracle lacks D-Bus function %s\" function)))
-          (dolist (function '(dbus--init-bus dbus-get-unique-name dbus-message-internal))
-            (unless (and (fboundp function) (subrp (symbol-function function)))
-              (error \"GNU oracle lacks native D-Bus primitive %s\" function))))"
-        "$emacs" --version | head -n 1
+        "$GITHUB_WORKSPACE/scripts/ci/check-gnu-oracle.sh" \
+          /opt/gnu-emacs-oracle/bin/emacs \
+          "$EMACS_VERSION" \
+          /opt/gnu-emacs-oracle/share/gnu-emacs-oracle/build-manifest \
+          "$EMACS_COMMIT"
