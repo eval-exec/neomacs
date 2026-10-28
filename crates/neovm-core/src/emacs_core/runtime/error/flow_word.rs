@@ -33,7 +33,7 @@ const _: () = assert!(align_of::<ThrowData>() > TAG_MASK);
 const _: () = assert!(align_of::<ThreadBlockedData>() > TAG_MASK);
 
 /// One machine word, so `Result<Value, Flow>` is a ScalarPair (rax:rdx).
-/// Owns its payload box; `!Send`/`!Sync` like the enum carrier. Its payload's
+/// Owns its payload box and remains `!Send`/`!Sync`. Its payload's
 /// pin keeps roots in the owning Context registry, independent of activation.
 ///
 /// ```compile_fail

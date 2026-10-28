@@ -1,4 +1,4 @@
-//! P0.12 §11 GC and re-entrant unwind tests, compiled in both configurations.
+//! P0.12 §11 GC and re-entrant unwind tests for the one-word carrier.
 
 use super::EvalError;
 use crate::emacs_core::eval::{Context, ShutdownRequest};

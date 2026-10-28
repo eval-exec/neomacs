@@ -1,4 +1,4 @@
-//! P0.12 §11 ownership and carrier representation tests, in both configurations.
+//! P0.12 §11 ownership and one-word carrier representation tests.
 //! Register this as a child of error/mod.rs so private registry fields are visible.
 
 use super::{
@@ -14,7 +14,7 @@ use std::mem::size_of;
 
 // A unique inferred marker exists only if Flow does NOT implement the trait.
 // If it becomes Send/Sync, the two candidates make this assertion ambiguous.
-// This is checked by normal cargo check/nextest compilation in both configs,
+// This is checked by normal cargo check/nextest compilation in every build,
 // without cargo test doctests or a new static_assertions dependency.
 macro_rules! assert_not_impl {
     ($ty:ty, $bound:path) => {
@@ -115,22 +115,11 @@ fn heap_kinds() -> Vec<FlowKind> {
 
 #[test]
 fn flow_is_one_word_and_eval_result_two() {
-    #[cfg(feature = "flow-word")]
-    {
-        assert_eq!(size_of::<Flow>(), 8);
-        assert_eq!(size_of::<Option<Flow>>(), 8);
-        assert_eq!(size_of::<EvalResult>(), 16);
-        assert_eq!(size_of::<Option<EvalResult>>(), 16);
-        assert_eq!(size_of::<Result<(), Flow>>(), 8);
-    }
-    #[cfg(not(feature = "flow-word"))]
-    {
-        assert_eq!(size_of::<Flow>(), size_of::<FlowKind>());
-        assert_eq!(
-            size_of::<EvalResult>(),
-            size_of::<Result<Value, FlowKind>>()
-        );
-    }
+    assert_eq!(size_of::<Flow>(), 8);
+    assert_eq!(size_of::<Option<Flow>>(), 8);
+    assert_eq!(size_of::<EvalResult>(), 16);
+    assert_eq!(size_of::<Option<EvalResult>>(), 16);
+    assert_eq!(size_of::<Result<(), Flow>>(), 8);
 }
 
 #[test]

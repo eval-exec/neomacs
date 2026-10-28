@@ -119,11 +119,7 @@ inotify.workspace = true
 dbus = { version = "0.9", default-features = false }
 
 [features]
-default = ["jit", "sqlite", "flow-word"]
-# P0.12 one-word owning Flow carrier (default on since batch 19: every
-# elisp-benchmarks and board row measured fewer instructions). Build with
-# --no-default-features --features jit,sqlite for the two-word enum carrier.
-flow-word = []
+default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
 gc-memory-telemetry = ["dep:serde_json"]
 sqlite = ["dep:rusqlite"]
@@ -179,7 +175,7 @@ fuzzing = []
 # from rotting with `cargo check -p neovm-core --features perf-probes --tests`.
 perf-probes = []
 # Opt-in compiler-contract suites (trybuild): their fixtures compile with the
-# rust-src-bearing gate toolchain, so they stay out of the ordinary suite.
+# source-free gate toolchain, so they stay out of the ordinary suite.
 # The postgate compiles them with
 # `cargo check -p neovm-core --features contract-fixtures --tests`.
 contract-fixtures = []

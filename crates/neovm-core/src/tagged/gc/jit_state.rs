@@ -111,7 +111,6 @@ pub(crate) const HEAP_JIT_BARRIER_LEN: usize =
     target_os = "linux",
     target_pointer_width = "64",
     feature = "jit",
-    feature = "flow-word",
     not(feature = "gc-memory-telemetry")
 ))]
 const _: () = {

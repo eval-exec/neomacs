@@ -3645,8 +3645,8 @@ impl Context {
         // Deliberately NOT value-first: destructuring here moved the result
         // copy into `call_sort_predicate`/`merge_at`/`<` instead of removing it
         // (a `(sort l #'<)` probe: store-forward blocks 10.8M -> 23.1M, cycles
-        // +24%). The `flow-word` feature gives `EvalResult` a register return;
-        // the enum carrier keeps the established lowering when it is off.
+        // +24%). The one-word Flow carrier gives `EvalResult` a register
+        // return; keep this established lowering.
         if let Some(result) = self.dispatch_subr_entry_internal(entry, args, function) {
             result.map_err(|flow| self.validate_throw(flow))
         } else {
