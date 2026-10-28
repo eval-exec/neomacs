@@ -3011,26 +3011,41 @@ fn div_core_divergence_surface_case_table_word_casing_combo() {
 #[test]
 fn div_core_divergence_surface_process_attributes_running_child_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t \"/bin/sh -c sleep\\\\ 0.2\" \"\")""#]];
+    let expect = expect_test::expect![[
+        r#""OK (t t \"/bin/sh -c echo\\\\ ready;\\\\ read\\\\ line\" \"\")""#
+    ]];
     // Divergence surfaced 2026-06-24:
     // GNU Emacs: OK (t "/bin/sh -c sleep\\ 0.2" "")
     // Neomacs:   OK (nil "/bin/sh -c sleep 0.2" "pipe:[...]")
+    //
+    // The child reports "ready" and then blocks in `read', so the attributes
+    // are sampled after its exec and before it can exec anything else. With
+    // `sh -c "sleep 0.2"' the sample raced the child's own exec: a loaded
+    // host saw the not-yet-exec'd "[sh]" (empty cmdline) in both editors, and
+    // bash's single-command exec turns the child into "sleep 0.2" later on.
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((proc (make-process
-             :name "probe-attrs-child"
-             :command '("/bin/sh" "-c" "sleep 0.2")
-             :connection-type 'pipe)))
+(let* ((ready nil)
+       (proc (make-process
+              :name "probe-attrs-child"
+              :command '("/bin/sh" "-c" "echo ready; read line")
+              :connection-type 'pipe
+              :filter (lambda (_proc out)
+                        (when (string-match-p "ready" out) (setq ready t))))))
   (unwind-protect
-      (let* ((attrs (process-attributes (process-id proc)))
-             (args (cdr (assq 'args attrs)))
-             (ttname (cdr (assq 'ttname attrs))))
-        (list (process-running-child-p proc)
-              args
-              (if (and (stringp ttname)
-                       (string-match-p "\\`pipe:" ttname))
-                  "pipe:[...]"
-                ttname)))
+      (let ((deadline (+ (float-time) 10)))
+        (while (and (not ready) (< (float-time) deadline))
+          (accept-process-output proc 0.05))
+        (let* ((attrs (process-attributes (process-id proc)))
+               (args (cdr (assq 'args attrs)))
+               (ttname (cdr (assq 'ttname attrs))))
+          (list ready
+                (process-running-child-p proc)
+                args
+                (if (and (stringp ttname)
+                         (string-match-p "\\`pipe:" ttname))
+                    "pipe:[...]"
+                  ttname))))
     (when (process-live-p proc)
       (delete-process proc))))
 "##,
