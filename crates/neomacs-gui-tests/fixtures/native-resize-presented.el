@@ -43,7 +43,9 @@
                  (native-presented-enter-stage 'resized receipt)
                  (set-frame-width nil 91)))
               ('resized
-               (when (= width 844)
+               ;; 91 columns of Ubuntu Mono's 9-pixel cell plus the fringes
+               ;; and GNU's 16-pixel toolkit scroll bar (src/xfns.c:2393-2438).
+               (when (= width 851)
                  (native-presented-enter-stage 'fullscreen receipt)
                  (set-frame-parameter nil 'fullscreen 'fullboth)))
               ('fullscreen
@@ -51,13 +53,16 @@
                  (native-presented-enter-stage 'restored receipt)
                  (set-frame-parameter nil 'fullscreen nil)))
               ('restored
-               (when (= width 844)
+               (when (= width 851)
                  (unless (= (frame-width) 91)
                    (error "Restored presented frame must have 91 columns"))
                  (message "Confirmed scale-2 presentation across startup, resize, fullscreen and restoration: %S" receipt)
                  (cancel-timer native-presented-timer)
                  (kill-emacs 0)))))))
-    (error (message "Presentation regression: %S" err) (kill-emacs 1))))
+    (error
+     (princ (format "PRESENTATION-REGRESSION %S\n" err) 'external-debugging-output)
+     (message "Presentation regression: %S" err)
+     (kill-emacs 1))))
 
 ;; Poll a protocol receipt, not elapsed startup time. No stage advances merely
 ;; because a timer fired or the window's requested dimensions changed.

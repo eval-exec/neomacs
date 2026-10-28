@@ -388,6 +388,24 @@ focus_follows_mouse yes
         resized_strip.push(region_mean(&pixels, RESIZE_STRIP));
     }
 
+    // Poll for the crossfade's settled end: llvmpipe (and a loaded runner)
+    // presents the tail of the 3s crossfade well after its wall-clock ramp,
+    // so the last fixed capture can still sit inside it.  The ramp itself is
+    // already pinned by the captures above; this only waits for the endpoint
+    // the assertion is about.
+    let resize_background = region_mean(&background_pixels, RESIZE_STRIP);
+    let mut settled_resize = *resized_strip.last().unwrap();
+    let settled_deadline = Instant::now() + Duration::from_secs(20);
+    while settled_resize >= resize_background - 0.5 {
+        assert!(
+            Instant::now() < settled_deadline,
+            "the grown popup must cover the strip once the crossfade ends: {settled_resize} (captures {resized_strip:?})"
+        );
+        thread::sleep(Duration::from_millis(400));
+        let pixels = capture(&display_env, &artifacts, "resize-settled.png");
+        settled_resize = region_mean(&pixels, RESIZE_STRIP);
+    }
+
     let deleted = state_with_phase(
         &state_path,
         sample_count,
@@ -640,9 +658,8 @@ focus_follows_mouse yes
         resized_strip[0]
     );
     assert!(
-        *resized_strip.last().unwrap() < background - 0.5,
-        "the grown popup must cover the strip once the crossfade ends: {}",
-        resized_strip.last().unwrap()
+        settled_resize < resize_background - 0.5,
+        "the grown popup must cover the strip once the crossfade ends: {settled_resize} vs background {resize_background}"
     );
     assert!(
         resized_strip

@@ -167,16 +167,25 @@ fn check_receipt_timestamp(result: &GuiRunResult) {
         field(":nanoseconds")
     );
     let clock = format!(".clock_id({})", field(":clock-id"));
-    let wire = fs::read_to_string(&result.artifacts.stderr).unwrap();
     // Compare against independent native protocol traffic, not the renderer's
     // own confirmation log or a timestamp recomputed from its scheduler clock.
+    // libwayland 1.26 colorizes the dump and separates a method name from its
+    // argument list with a reset, so probe the stripped line (the runner's
+    // 1.22 prints plain).
+    let wire = fs::read_to_string(&result.artifacts.stderr).unwrap();
+    let wire: Vec<String> = wire
+        .lines()
+        .map(|line| {
+            neomacs_gui_tests::interaction::linux::popup_trace::strip_ansi(line).into_owned()
+        })
+        .collect();
     assert!(
-        wire.lines()
+        wire.iter()
             .any(|line| line.contains("wp_presentation_feedback") && line.contains(&timestamp)),
         "receipt timestamp absent from native Presented events: {receipt}"
     );
     assert!(
-        wire.lines()
+        wire.iter()
             .any(|line| line.contains("wp_presentation") && line.contains(&clock)),
         "receipt clock absent from native ClockId events: {receipt}"
     );

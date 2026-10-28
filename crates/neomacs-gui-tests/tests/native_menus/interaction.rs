@@ -492,11 +492,16 @@ fn popup_and_submenu_stay_on_screen_at_each_corner() {
             Corner::BottomLeft,
             Corner::BottomRight,
         ] {
+            // The right-edge clicks stay inside the window's TEXT area: GNU
+            // reserves a 16-pixel toolkit scroll bar there (src/xfns.c:2393-
+            // 2438), so the text ends at 1000 - 16 - 8 = 976 and a click at
+            // 980 lands on the scroll bar, which opens no context menu.
+            // 960 keeps the near-corner geometry that exercises flipping.
             let (x, y) = match corner {
                 Corner::TopLeft => (16, 60),
-                Corner::TopRight => (980, 60),
+                Corner::TopRight => (960, 60),
                 Corner::BottomLeft => (16, 640),
-                Corner::BottomRight => (980, 640),
+                Corner::BottomRight => (960, 640),
             };
             let before = configured_popups(artifacts).len();
             input(
@@ -636,7 +641,10 @@ fn tall_bottom_submenu_slides_up_and_last_item_remains_clickable() {
     with_native_menu(
         "menu-bottom-submenu.el",
         |env, window, _, artifacts, _, _| {
-            for (cycle, x) in [16, 980].into_iter().enumerate() {
+            // 960, not 980: the right-hand click must be inside the text area,
+            // which GNU's 16-pixel toolkit scroll bar ends at 976
+            // (src/xfns.c:2393-2438), while still forcing the child to flip.
+            for (cycle, x) in [16, 960].into_iter().enumerate() {
                 let before = configured_popups(artifacts).len();
                 input(
                     env,
