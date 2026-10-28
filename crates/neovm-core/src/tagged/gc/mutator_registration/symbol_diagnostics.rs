@@ -105,6 +105,7 @@ impl Drop for Guard<'_> {
         *self.cleanup.borrow_mut() = Cleanup::Complete(result);
     }
 }
+#[derive(Debug)]
 enum Receipt<T> {
     ActivationFailed(Error),
     Retired {

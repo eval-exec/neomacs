@@ -3,12 +3,6 @@
 //! not continuous VM-reader drain or representative editor-heap timings.
 use super::*;
 
-#[track_caller]
-fn protocol_error() -> Error {
-    eprintln!("[DEBUG-c6stop-site] {}", std::panic::Location::caller());
-    Error::Protocol
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Round {
     First,
@@ -98,7 +92,7 @@ struct StopRecord {
 fn check_abort(commands: &Receiver<Instruction>) -> Result<(), Error> {
     match commands.try_recv() {
         Ok(Instruction::Abort) => Err(Error::Aborted),
-        Ok(Instruction::Resume { .. }) => Err(protocol_error()),
+        Ok(Instruction::Resume { .. }) => Err(Error::Protocol),
         Err(TryRecvError::Empty) => Ok(()),
         Err(TryRecvError::Disconnected) => Err(Error::Channel),
     }
@@ -175,7 +169,7 @@ fn worker(
         }
         let home = match home {
             Home::Seeded(home) => home,
-            Home::Empty => return Err(protocol_error()),
+            Home::Empty => return Err(Error::Protocol),
         };
         let mut observations = Vec::new();
         for round in [Round::First, Round::Second] {
@@ -211,17 +205,13 @@ fn worker(
                         round: expected,
                         response,
                     } if expected == round => Ok(response),
-                    Instruction::Resume { .. } => Err(protocol_error()),
+                    Instruction::Resume { .. } => Err(Error::Protocol),
                     Instruction::Abort => Err(Error::Aborted),
                 }
             })?;
             let response = returned.result?;
             if returned.epoch != response.epoch() {
-                eprintln!(
-                    "[DEBUG-c6stop-epoch] round={round:?} owner={ordinal:?} expected={response:?} actual={}",
-                    returned.epoch
-                );
-                return Err(protocol_error());
+                return Err(Error::Protocol);
             }
             // Inspect the restored home BEFORE another read can overwrite it.
             let word = contention::retry(
@@ -298,16 +288,10 @@ fn ready(events: &[Receiver<Notice>], round: Round) -> Result<(), Error> {
                 round: actual,
                 owner,
             } if actual == round && owner == Ordinal(index) => {}
-            observed @ (Notice::Ready { .. }
+            Notice::Ready { .. }
             | Notice::Published { .. }
             | Notice::Restored { .. }
-            | Notice::Failed(_)) => {
-                eprintln!(
-                    "[DEBUG-c6stop-notice] expected_round={round:?} expected_owner={index} observed={observed:?} site={}",
-                    line!()
-                );
-                return Err(protocol_error());
-            }
+            | Notice::Failed(_) => return Err(Error::Protocol),
         }
     }
     Ok(())
@@ -328,7 +312,7 @@ fn round(
         contention::rendezvous,
     )? {
         Request::Active(epoch) => StopEpoch(epoch),
-        Request::Queued => return Err(protocol_error()),
+        Request::Queued => return Err(Error::Protocol),
     };
     *state = RequestState::Active(epoch);
     let mut publications = Vec::new();
@@ -342,16 +326,10 @@ fn round(
             } if actual == round && owner == Ordinal(index) && observed == epoch => {
                 publications.push((owner, at))
             }
-            observed @ (Notice::Ready { .. }
+            Notice::Ready { .. }
             | Notice::Published { .. }
             | Notice::Restored { .. }
-            | Notice::Failed(_)) => {
-                eprintln!(
-                    "[DEBUG-c6stop-notice] expected_round={round:?} expected_owner={index} observed={observed:?} site={}",
-                    line!()
-                );
-                return Err(protocol_error());
-            }
+            | Notice::Failed(_) => return Err(Error::Protocol),
         }
     }
     let mut stopped = stopped(era)?;
@@ -363,12 +341,7 @@ fn round(
         Scenario::Collect
         | Scenario::ControllerUnwindAfterFirst
         | Scenario::RefuseBeforeRequest(_) => {
-            let report = era.collect_stopped(&mut stopped).map_err(|error| {
-                eprintln!(
-                    "[DEBUG-c6stop-collector] round={round:?} epoch={epoch:?} error={error:?}"
-                );
-                error
-            })?;
+            let report = era.collect_stopped(&mut stopped)?;
             (Job::Collected(report), Response::Collected(epoch))
         }
         Scenario::Noop => {
@@ -395,20 +368,14 @@ fn round(
                 owner,
                 epoch: observed,
             } if actual == round && owner == Ordinal(index) && observed == response => {}
-            observed @ (Notice::Ready { .. }
+            Notice::Ready { .. }
             | Notice::Published { .. }
             | Notice::Restored { .. }
-            | Notice::Failed(_)) => {
-                eprintln!(
-                    "[DEBUG-c6stop-notice] expected_round={round:?} expected_owner={index} observed={observed:?} site={}",
-                    line!()
-                );
-                return Err(protocol_error());
-            }
+            | Notice::Failed(_) => return Err(Error::Protocol),
         }
     }
     if actual_epoch != epoch {
-        return Err(protocol_error());
+        return Err(Error::Protocol);
     }
     Ok(StopRecord {
         round,
@@ -479,7 +446,7 @@ fn scenario(backing: DiagnosticBacking, owners: Owners, scenario: Scenario) {
                 RequestState::Active(epoch) => (|| {
                     let mut stopped = stopped(&era)?;
                     if stopped.epoch() != epoch.0 {
-                        return Err(protocol_error());
+                        return Err(Error::Protocol);
                     }
                     stopped.trace(|_, _| Ok(()))?;
                     stopped
@@ -493,21 +460,12 @@ fn scenario(backing: DiagnosticBacking, owners: Owners, scenario: Scenario) {
         let after = census(&era);
         let finished = era.finish().unwrap();
         drop(finished);
-        if !matches!(&controller, Ok(Ok(_))) {
-            eprintln!(
-                "[DEBUG-c6stop-primary] controller={controller:?} recovery={recovery:?} before={before:?} after={after:?}"
-            );
-            for (index, receipt) in receipts.iter().enumerate() {
-                match receipt {
-                    Ok(Receipt::ActivationFailed(error)) => {
-                        eprintln!("[DEBUG-c6stop-owner] owner={index} activation={error:?}")
-                    }
-                    Ok(Receipt::Retired { body, cleanup }) => eprintln!(
-                        "[DEBUG-c6stop-owner] owner={index} body={body:?} cleanup={cleanup:?}"
-                    ),
-                    Err(error) => eprintln!("[DEBUG-c6stop-owner] owner={index} join={error:?}"),
-                }
-            }
+        match scenario {
+            Scenario::Collect | Scenario::Noop => assert!(
+                matches!(&controller, Ok(Ok(_))),
+                "stop controller: {controller:?}; owners: {receipts:?}; recovery: {recovery:?}"
+            ),
+            Scenario::ControllerUnwindAfterFirst | Scenario::RefuseBeforeRequest(_) => {}
         }
         assert_eq!(active.0.load(Ordering::Acquire), 0);
         assert_eq!(recovery, Ok(()));
@@ -516,7 +474,6 @@ fn scenario(backing: DiagnosticBacking, owners: Owners, scenario: Scenario) {
             Scenario::Noop | Scenario::RefuseBeforeRequest(_) => 0,
             Scenario::ControllerUnwindAfterFirst => 1,
         };
-        assert_eq!(after.0, before.0 + expected_collections);
         for receipt in receipts {
             match receipt.unwrap_or_else(|panic| std::panic::resume_unwind(panic)) {
                 Receipt::ActivationFailed(error) => panic!("stop activation: {error:?}"),
@@ -584,6 +541,7 @@ fn scenario(backing: DiagnosticBacking, owners: Owners, scenario: Scenario) {
                 Vec::new()
             }
         };
+        assert_eq!(after.0, before.0 + expected_collections);
         for (index, record) in records.iter().enumerate() {
             assert_eq!(
                 record.round,
