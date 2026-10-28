@@ -1806,12 +1806,7 @@ impl BufferSearchSuccess {
 
 impl StringSearchSuccess {
     fn from_byte_match(searched: SearchedString, bytes: EngineMatchData) -> Self {
-        let byte_start = EmacsBytePos::new(
-            bytes
-                .group(0)
-                .expect("successful engine search has group zero")
-                .start(),
-        );
+        let byte_start = engine_match_byte_start(&bytes);
         Self {
             byte_start,
             bytes,
@@ -4698,17 +4693,22 @@ pub(crate) fn string_match_full_with_case_fold_source_lisp_pattern_posix_syntax(
         .transpose()
 }
 
+/// The engine search behind every string `re_search` entry: compile the
+/// Lisp pattern for this string's text representation, run the engine, and
+/// hand back the raw register set. The caller decides whether the searched
+/// payload must be retained (`StringSearchSuccess`) or only its start is
+/// wanted (`string_search_start_...`), so a caller that publishes no match
+/// data never copies the string into a `SearchedString` just to retain it.
 #[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
-pub(crate) fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+fn string_search_engine(
     pattern: &LispString,
     string: &crate::heap_types::LispString,
-    searched_string: SearchedString,
     start: usize,
     case_fold: bool,
     posix: bool,
     translation_table: Option<super::value::Value>,
     syntax: &dyn SyntaxLookup,
-) -> Result<Option<StringSearchSuccess>, String> {
+) -> Result<Option<EngineMatchData>, String> {
     if start > string.byte_len() {
         return Ok(None);
     }
@@ -4731,16 +4731,70 @@ pub(crate) fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax
         syntax,
         STRING_MATCH_AT_DOT_UNREACHABLE,
     ) {
-        let byte_md = engine_match_data_from_registers(&regs, 0);
-        Ok(Some(StringSearchSuccess::from_byte_match(
-            searched_string,
-            byte_md,
-        )))
+        Ok(Some(engine_match_data_from_registers(&regs, 0)))
     } else if regex_emacs::take_matcher_overflow() {
         Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string())
     } else {
         Ok(None)
     }
+}
+
+fn engine_match_byte_start(bytes: &EngineMatchData) -> EmacsBytePos {
+    EmacsBytePos::new(
+        bytes
+            .group(0)
+            .expect("successful engine search has group zero")
+            .start(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
+pub(crate) fn string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+    pattern: &LispString,
+    string: &crate::heap_types::LispString,
+    searched_string: SearchedString,
+    start: usize,
+    case_fold: bool,
+    posix: bool,
+    translation_table: Option<super::value::Value>,
+    syntax: &dyn SyntaxLookup,
+) -> Result<Option<StringSearchSuccess>, String> {
+    Ok(string_search_engine(
+        pattern,
+        string,
+        start,
+        case_fold,
+        posix,
+        translation_table,
+        syntax,
+    )?
+    .map(|bytes| StringSearchSuccess::from_byte_match(searched_string, bytes)))
+}
+
+/// Engine search that publishes no match data: only the match's byte start.
+/// GNU `fast_string_match_internal` answers exactly this to
+/// `find-file-name-handler` and consumes the string by pointer, so callers
+/// with a borrowed `&LispString` need no owned copy to match.
+#[allow(clippy::too_many_arguments)] // matching options remain explicit at the GNU-regexp boundary
+pub(crate) fn string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
+    pattern: &LispString,
+    string: &crate::heap_types::LispString,
+    start: usize,
+    case_fold: bool,
+    posix: bool,
+    translation_table: Option<super::value::Value>,
+    syntax: &dyn SyntaxLookup,
+) -> Result<Option<EmacsBytePos>, String> {
+    Ok(string_search_engine(
+        pattern,
+        string,
+        start,
+        case_fold,
+        posix,
+        translation_table,
+        syntax,
+    )?
+    .map(|bytes| engine_match_byte_start(&bytes)))
 }
 
 pub(crate) fn string_match_full_with_case_fold_source_posix(

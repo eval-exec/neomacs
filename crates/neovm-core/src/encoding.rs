@@ -1749,7 +1749,7 @@ fn encode_lisp_string_eol_spent(
     if matches!(family, "undecided" | "prefer-utf-8")
         || is_byte_preserving_coding_system(coding_system)
     {
-        return lisp_string_coding_source_bytes(s);
+        return lisp_string_coding_source_bytes(s).into_owned();
     }
 
     if matches!(
@@ -1967,11 +1967,61 @@ fn is_byte_preserving_coding_system(coding_system: &str) -> bool {
     )
 }
 
-pub(crate) fn lisp_string_coding_source_bytes(s: &crate::heap_types::LispString) -> Vec<u8> {
+/// The byte sequence a coding operation consumes from a Lisp string.
+///
+/// A unibyte string already stores exactly the bytes GNU's `SDATA` exposes, so
+/// the common process/file-output conversion borrows them; only multibyte
+/// internal text needs the byte8 un-representation, which is materialized
+/// once. Callers that publish a new Lisp string ask for the owned form, paying
+/// exactly the copy the result object needs and nothing for detection,
+/// length-only or read-only consumers.
+#[derive(Debug)]
+pub(crate) enum CodingSourceBytes<'a> {
+    /// The string's own payload: nothing was copied.
+    Borrowed(&'a [u8]),
+    /// Internal multibyte text converted to its unibyte source form.
+    Converted(Vec<u8>),
+}
+
+impl<'a> CodingSourceBytes<'a> {
+    #[inline]
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Borrowed(bytes) => bytes,
+            Self::Converted(bytes) => bytes,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        self.as_bytes().len()
+    }
+
+    /// The owned form, for a consumer that must retain or publish the bytes.
+    #[inline]
+    pub(crate) fn into_owned(self) -> Vec<u8> {
+        match self {
+            Self::Borrowed(bytes) => bytes.to_vec(),
+            Self::Converted(bytes) => bytes,
+        }
+    }
+}
+
+impl std::ops::Deref for CodingSourceBytes<'_> {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+pub(crate) fn lisp_string_coding_source_bytes(
+    s: &crate::heap_types::LispString,
+) -> CodingSourceBytes<'_> {
     if s.is_multibyte() {
-        crate::emacs_core::emacs_char::str_as_unibyte(s.as_bytes())
+        CodingSourceBytes::Converted(crate::emacs_core::emacs_char::str_as_unibyte(s.as_bytes()))
     } else {
-        s.as_bytes().to_vec()
+        CodingSourceBytes::Borrowed(s.as_bytes())
     }
 }
 
@@ -2073,7 +2123,7 @@ fn coding_string_nocopy(args: &[Value]) -> bool {
 }
 
 fn coding_string_trivial_ascii_nocopy(bytes: &[u8], coding: &str, encode: bool) -> bool {
-    if !bytes.iter().all(u8::is_ascii) {
+    if !bytes.is_ascii() {
         return false;
     }
     if encode && bytes.contains(&b'\n') {
@@ -4065,7 +4115,7 @@ fn coding_ascii_identity_fast_path(
     let bytes = string.as_bytes();
     // For both unibyte and all-ASCII multibyte strings every storage byte is
     // < 0x80 (eight-bit and multibyte chars use >= 0x80 lead bytes).
-    if !bytes.iter().all(u8::is_ascii) {
+    if !bytes.is_ascii() {
         return false;
     }
     // EOL conversion forces the slow path unless the coding is unix EOL or the
@@ -5321,7 +5371,8 @@ fn builtin_coding_string_in_context(
         }
         let bytes = lisp_string_coding_source_bytes(
             args[0].as_lisp_string().expect("string validated above"),
-        );
+        )
+        .into_owned();
         return Ok(Value::heap_string(if encode {
             crate::heap_types::LispString::from_unibyte(bytes)
         } else {
@@ -5523,6 +5574,7 @@ fn builtin_coding_string_in_context(
                 args[0].as_lisp_string().expect("string validated above"),
             );
             run.record(SourceConsumed::all(&bytes));
+            let bytes = bytes.into_owned();
             if encode {
                 Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
             } else {
@@ -5637,20 +5689,19 @@ fn builtin_coding_string_in_context(
         args[0]
             .as_lisp_string()
             .expect("string argument validated above")
-            .clone()
     };
     let result = if encode {
         if let Some(imap) = utf7_coding {
-            let bytes = encode_via_utf7(&source_string(), imap);
+            let bytes = encode_via_utf7(source_string(), imap);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some(gb2312) = hz_coding {
-            let bytes = encode_via_hz(&source_string(), gb2312);
+            let bytes = encode_via_hz(source_string(), gb2312);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if emacs_mule {
-            let bytes = encode_via_emacs_mule(&source_string());
+            let bytes = encode_via_emacs_mule(source_string());
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if no_conv_multibyte {
-            let bytes = encode_utf8_plain(&source_string());
+            let bytes = encode_utf8_plain(source_string());
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if utf8_signature {
             let source = source_string();
@@ -5665,11 +5716,11 @@ fn builtin_coding_string_in_context(
                 vec![0xEF, 0xBB, 0xBF]
             };
             *state = CodingEncoderState::Utf8SignatureStarted;
-            bytes.extend(encode_utf8_plain(&source));
+            bytes.extend(encode_utf8_plain(source));
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some(spec) = ccl_coding {
             let bytes = encode_via_ccl(
-                &source_string(),
+                source_string(),
                 spec,
                 &coding,
                 encoding_boundary,
@@ -5685,16 +5736,16 @@ fn builtin_coding_string_in_context(
                 EncodingBoundary::ProcessChunk { process } => process_encoder_state(ctx, process)?,
                 EncodingBoundary::CompleteText | EncodingBoundary::FileRegion => &mut scratch,
             };
-            let bytes = encode_via_iso2022(&source, spec, charsets, encoding_boundary, state);
+            let bytes = encode_via_iso2022(source, spec, charsets, encoding_boundary, state);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some((spec, charsets)) = &euc_coding {
-            let bytes = encode_via_euc(&source_string(), spec, charsets);
+            let bytes = encode_via_euc(source_string(), spec, charsets);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some(charsets) = &sjis_coding {
-            let bytes = encode_via_sjis(&source_string(), charsets);
+            let bytes = encode_via_sjis(source_string(), charsets);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else if let Some(charset_list) = &charset_coding {
-            let bytes = encode_via_charset_list(&source_string(), charset_list);
+            let bytes = encode_via_charset_list(source_string(), charset_list);
             Value::heap_string(crate::heap_types::LispString::from_unibyte(bytes))
         } else {
             builtin_encode_coding_string_with_known(
@@ -5718,7 +5769,7 @@ fn builtin_coding_string_in_context(
             DosEolLookahead::NotRequired
         };
         let mut scratch = CodingDecoderState::default();
-        let source_bytes = lisp_string_coding_source_bytes(&source_string());
+        let source_bytes = lisp_string_coding_source_bytes(source_string());
         let decoded = if let Some(imap) = utf7_coding {
             // GNU implements utf-7 in Lisp, as a `:post-read-conversion` over
             // `raw-text` (lisp/international/utf-7.el), so the C decoder under
@@ -5743,7 +5794,7 @@ fn builtin_coding_string_in_context(
                 &source_bytes,
             ))
         } else if utf8_signature {
-            let mut src = source_bytes.clone();
+            let mut src = source_bytes.as_bytes().to_vec();
             let signature = if src.starts_with(&[0xEF, 0xBB, 0xBF]) {
                 src.drain(..3);
                 3
@@ -6622,14 +6673,14 @@ pub(crate) fn builtin_decode_coding_string_with_known(
     }
     if coding_string_trivial_ascii_nocopy(&bytes, &coding, false) {
         return Ok(Value::multibyte_string(
-            String::from_utf8(bytes).expect("ASCII bytes are valid UTF-8"),
+            String::from_utf8(bytes.into_owned()).expect("ASCII bytes are valid UTF-8"),
         ));
     }
     if is_byte_preserving_coding_system(&coding) {
         let bytes = if coding.starts_with("raw-text") {
             decode_eol_text(&bytes, &coding, eol_conversion)
         } else {
-            bytes
+            bytes.into_owned()
         };
         return Ok(Value::heap_string(
             crate::heap_types::LispString::from_unibyte(bytes),

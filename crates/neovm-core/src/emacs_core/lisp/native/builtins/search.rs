@@ -291,6 +291,55 @@ impl FastStringMatchSyntax {
             super::regex::SearchedString::Heap(value) => Some(*value),
             super::regex::SearchedString::Owned(_) => None,
         };
+        self.search_with(vars, buffers, string, heap_identity, |syntax| {
+            super::regex::string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
+                pattern,
+                string,
+                searched_string,
+                start,
+                case_fold,
+                false,
+                None,
+                syntax,
+            )
+        })
+    }
+
+    /// The same engine search for a caller that only needs the match's byte
+    /// start and publishes no registers. `SearchedString` exists to retain the
+    /// payload inside `MatchData`; passing one here would copy the string for
+    /// a retention the caller discards, so this path borrows instead (GNU's
+    /// `fast_string_match_internal` likewise consumes the string by pointer).
+    #[allow(clippy::too_many_arguments)] // matching options stay explicit at the GNU-regexp boundary
+    pub(crate) fn search_start(
+        &self,
+        vars: VariableView<'_>,
+        buffers: &crate::buffer::BufferManager,
+        pattern: &crate::heap_types::LispString,
+        string: &crate::heap_types::LispString,
+        start: usize,
+        case_fold: bool,
+    ) -> Result<Option<crate::buffer::EmacsBytePos>, FastStringMatchError> {
+        self.search_with(vars, buffers, string, None, |syntax| {
+            super::regex::string_search_start_with_case_fold_source_lisp_pattern_posix_syntax(
+                pattern, string, start, case_fold, false, None, syntax,
+            )
+        })
+    }
+
+    /// The syntax-source setup shared by every string engine entry: resolve
+    /// the current buffer's syntax/category tables and the searched string's
+    /// syntax properties once, then run `search` against that lookup.
+    fn search_with<T>(
+        &self,
+        vars: VariableView<'_>,
+        buffers: &crate::buffer::BufferManager,
+        string: &crate::heap_types::LispString,
+        heap_identity: Option<Value>,
+        search: impl for<'scan> FnOnce(
+            &'scan dyn crate::emacs_core::regex_emacs::SyntaxLookup,
+        ) -> Result<Option<T>, String>,
+    ) -> Result<Option<T>, FastStringMatchError> {
         let source = match heap_identity.as_ref() {
             Some(value) => crate::emacs_core::syntax::StringSyntaxPositionSource::try_from(value)
                 .map_err(FastStringMatchError::Source)?,
@@ -307,19 +356,7 @@ impl FastStringMatchSyntax {
                 base.word_boundary.symbol_mode()
             }),
         );
-        let result =
-            super::regex::with_string_syntax_lookup(self.base, source, properties, |syntax| {
-                super::regex::string_search_full_with_case_fold_source_lisp_pattern_posix_syntax(
-                    pattern,
-                    string,
-                    searched_string,
-                    start,
-                    case_fold,
-                    false,
-                    None,
-                    syntax,
-                )
-            })
+        let result = super::regex::with_string_syntax_lookup(self.base, source, properties, search)
             .map_err(FastStringMatchError::Syntax)?;
         result.map_err(FastStringMatchError::Regexp)
     }

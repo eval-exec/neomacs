@@ -4958,17 +4958,12 @@ fn find_file_name_handler_lisp_with_values(
             }
         }
 
-        // Match the regexp against the filename.
-        let match_pos = match syntax.search(
-            vars,
-            buffers,
-            regexp,
-            filename,
-            crate::emacs_core::regex::SearchedString::Owned(filename.clone()),
-            0,
-            false,
-        ) {
-            Ok(Some(success)) => success.into_byte_start(),
+        // Match the regexp against the filename. GNU `fast_string_match_internal`
+        // matches the string by pointer and publishes no match registers, so
+        // this borrows the filename instead of copying it into an owned
+        // `SearchedString` for every handler entry.
+        let match_pos = match syntax.search_start(vars, buffers, regexp, filename, 0, false) {
+            Ok(Some(byte_start)) => byte_start,
             _ => continue,
         };
 

@@ -24,6 +24,45 @@ fn encode_lisp_string(s: &crate::heap_types::LispString, coding_system: &str) ->
     super::encode_lisp_string(s, coding_system, EolConversion::Enabled)
 }
 
+/// The coding entry points consume GNU `SDATA`: a unibyte string's payload is
+/// already the source byte sequence, so the source-bytes view must borrow it
+/// and never allocate. Only internal multibyte text needs the byte8
+/// un-representation, which is materialized into its own vector.
+#[test]
+fn coding_source_bytes_borrows_unibyte_payload_and_materializes_byte8() {
+    crate::test_utils::init_test_tracing();
+    let unibyte = crate::heap_types::LispString::from_unibyte(b"abc\x80".to_vec());
+    match lisp_string_coding_source_bytes(&unibyte) {
+        CodingSourceBytes::Borrowed(bytes) => {
+            assert_eq!(
+                bytes.as_ptr(),
+                unibyte.as_bytes().as_ptr(),
+                "the source-byte view must be the string's own payload, not a copy"
+            );
+            assert_eq!(bytes, unibyte.as_bytes());
+        }
+        CodingSourceBytes::Converted(_) => {
+            panic!("a unibyte string already stores exactly its source bytes")
+        }
+    }
+    assert_eq!(
+        lisp_string_coding_source_bytes(&unibyte).len(),
+        unibyte.sbytes(),
+        "the length-only consumer must agree with the owned form"
+    );
+
+    // Emacs internal multibyte storage spells the eight-bit byte 0x80 as the
+    // two overlong bytes C0 80; the coding source is the single raw byte.
+    let multibyte = crate::heap_types::LispString::from_emacs_bytes(vec![b'a', 0xC0, 0x80]);
+    assert!(multibyte.is_multibyte());
+    match lisp_string_coding_source_bytes(&multibyte) {
+        CodingSourceBytes::Borrowed(_) => {
+            panic!("internal multibyte bytes differ from the coding source bytes")
+        }
+        CodingSourceBytes::Converted(bytes) => assert_eq!(bytes, b"a\x80".to_vec()),
+    }
+}
+
 #[test]
 fn ascii_width() {
     crate::test_utils::init_test_tracing();
