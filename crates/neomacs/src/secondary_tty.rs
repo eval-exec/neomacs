@@ -294,7 +294,7 @@ struct SecondaryTtySession {
 #[cfg(unix)]
 struct TtyDevice {
     file: std::fs::File,
-    original_termios: libc::termios,
+    original_termios: rustix::termios::Termios,
     /// `c_cc[VERASE]` from the modes saved before raw mode, which is what GNU
     /// publishes as `tty-erase-char` for this terminal (src/sysdep.c:1130).
     erase_char: u8,
@@ -317,15 +317,12 @@ impl TtyDevice {
         capabilities
             .attach(&file)
             .map_err(|error| error.to_string())?;
-        let mut original_termios = unsafe { std::mem::zeroed::<libc::termios>() };
-        if unsafe { libc::tcgetattr(file.as_raw_fd(), &mut original_termios) } != 0 {
-            return Err(format!(
-                "cannot read terminal modes for {path}: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let erase_char = original_termios.c_cc[libc::VERASE];
-        set_raw_mode(file.as_raw_fd(), &original_termios)?;
+        // Keep capture and restoration in the same termios representation:
+        // libc may canonicalize baud aliases that the kernel preserves.
+        let original_termios = rustix::termios::tcgetattr(&file)
+            .map_err(|error| format!("cannot read terminal modes for {path}: {error}"))?;
+        let erase_char = original_termios.special_codes[rustix::termios::SpecialCodeIndex::VERASE];
+        set_raw_mode(&file, &original_termios)?;
 
         // From this point onward every `?` drops an active TtyDevice and thus
         // restores termios.  This closes the partial-initialization hole.
@@ -350,8 +347,6 @@ impl TtyDevice {
     }
 
     fn suspend(&mut self) -> Result<(), String> {
-        use std::os::fd::AsRawFd;
-
         if !self.active {
             return Ok(());
         }
@@ -360,18 +355,13 @@ impl TtyDevice {
             .leave()
             .write_to(&mut self.file, &self.capabilities)
             .map_err(|error| format!("cannot suspend TTY renderer: {error}"));
-        let restore_result = if unsafe {
-            libc::tcsetattr(self.file.as_raw_fd(), libc::TCSANOW, &self.original_termios)
-        } == 0
-        {
-            self.active = false;
-            Ok(())
-        } else {
-            Err(format!(
-                "cannot restore terminal modes: {}",
-                std::io::Error::last_os_error()
-            ))
-        };
+        let restore_result = rustix::termios::tcsetattr(
+            &self.file,
+            rustix::termios::OptionalActions::Now,
+            &self.original_termios,
+        )
+        .map(|()| self.active = false)
+        .map_err(|error| format!("cannot restore terminal modes: {error}"));
         leave_result.and(restore_result)
     }
 
@@ -381,7 +371,7 @@ impl TtyDevice {
         if self.active {
             return Ok(());
         }
-        set_raw_mode(self.file.as_raw_fd(), &self.original_termios)?;
+        set_raw_mode(&self.file, &self.original_termios)?;
         self.active = true;
         let height = query_size(self.file.as_raw_fd()).map_or(24, |size| size.rows() as usize);
         if let Err(error) = self
@@ -530,16 +520,11 @@ impl Drop for SecondaryTtySession {
 }
 
 #[cfg(unix)]
-fn set_raw_mode(fd: std::os::fd::RawFd, original: &libc::termios) -> Result<(), String> {
-    let mut raw = *original;
-    unsafe { libc::cfmakeraw(&mut raw) };
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
-        return Err(format!(
-            "cannot set raw terminal modes: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(())
+fn set_raw_mode(file: &std::fs::File, original: &rustix::termios::Termios) -> Result<(), String> {
+    let mut raw = original.clone();
+    raw.make_raw();
+    rustix::termios::tcsetattr(file, rustix::termios::OptionalActions::Now, &raw)
+        .map_err(|error| format!("cannot set raw terminal modes: {error}"))
 }
 
 #[cfg(unix)]

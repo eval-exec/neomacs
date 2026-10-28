@@ -140,3 +140,157 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
         session.resume().unwrap();
     }
 }
+
+/// Retain both PTY ends so closing a TtyDevice cannot reset the modes before
+/// the restoration assertion observes them.
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct ModeRestorationPty {
+    _master: std::fs::File,
+    slave: std::fs::File,
+    path: String,
+}
+
+#[cfg(target_os = "linux")]
+impl ModeRestorationPty {
+    fn new() -> Self {
+        let master = std::fs::File::from(
+            rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
+                .expect("open restoration PTY"),
+        );
+        rustix::pty::grantpt(&master).expect("grant restoration PTY");
+        rustix::pty::unlockpt(&master).expect("unlock restoration PTY");
+        let path = rustix::pty::ptsname(&master, Vec::new())
+            .expect("restoration PTY name")
+            .into_string()
+            .expect("UTF-8 restoration PTY name");
+        let slave = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open restoration PTY slave");
+        Self {
+            _master: master,
+            slave,
+            path,
+        }
+    }
+
+    fn modes(&self) -> rustix::termios::Termios {
+        rustix::termios::tcgetattr(&self.slave).expect("read restoration PTY modes")
+    }
+
+    fn assert_modes(&self, expected: &rustix::termios::Termios) {
+        // Preserve the baud encoding as well as its decoded numeric speed.
+        assert_eq!(format!("{:?}", self.modes()), format!("{expected:?}"));
+    }
+
+    fn open_device(&self) -> super::TtyDevice {
+        super::TtyDevice::open(
+            &self.path,
+            super::super::tty_output::Capabilities::load("xterm-256color")
+                .expect("restoration PTY capabilities"),
+        )
+        .expect("open restoration TtyDevice")
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secondary_tty_restores_implicit_input_baud_alias_and_erase_character() {
+    let pty = ModeRestorationPty::new();
+    let mut initial = pty.modes();
+    // Linux permits an implicit input rate: CIBAUD=0 means use the output
+    // rate. A libc snapshot can replace that alias with an explicit rate.
+    initial
+        .control_modes
+        .remove(rustix::termios::ControlModes::from_bits_retain(
+            libc::CIBAUD,
+        ));
+    initial.special_codes[rustix::termios::SpecialCodeIndex::VERASE] = 8;
+    rustix::termios::tcsetattr(&pty.slave, rustix::termios::OptionalActions::Now, &initial)
+        .expect("install implicit input baud alias");
+    let original = pty.modes();
+    assert_eq!(original.control_modes.bits() & libc::CIBAUD, 0);
+    assert_eq!(original.input_speed(), original.output_speed());
+    let mut raw = original.clone();
+    raw.make_raw();
+
+    let mut device = pty.open_device();
+    assert_eq!(device.erase_char, 8);
+    pty.assert_modes(&raw);
+    for _ in 0..2 {
+        device.suspend().expect("suspend implicit-baud TTY");
+        pty.assert_modes(&original);
+        device.suspend().expect("suspend already suspended TTY");
+        pty.assert_modes(&original);
+        device.resume().expect("resume implicit-baud TTY");
+        pty.assert_modes(&raw);
+        device.resume().expect("resume already active TTY");
+        pty.assert_modes(&raw);
+    }
+    drop(device);
+    pty.assert_modes(&original);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secondary_tty_restores_distinct_input_and_output_speeds() {
+    let pty = ModeRestorationPty::new();
+    let mut initial = pty.modes();
+    initial.set_output_speed(38_400).expect("set output speed");
+    initial.set_input_speed(19_200).expect("set input speed");
+    rustix::termios::tcsetattr(&pty.slave, rustix::termios::OptionalActions::Now, &initial)
+        .expect("install distinct PTY speeds");
+    // This Linux-only control requires the kernel to retain distinct rates;
+    // it does not count an ignored input-rate request as coverage.
+    let original = pty.modes();
+    assert_eq!(original.input_speed(), 19_200);
+    assert_eq!(original.output_speed(), 38_400);
+    let mut raw = original.clone();
+    raw.make_raw();
+    let mut device = pty.open_device();
+    pty.assert_modes(&raw);
+    device.suspend().expect("suspend distinct-speed TTY");
+    pty.assert_modes(&original);
+    device.resume().expect("resume distinct-speed TTY");
+    pty.assert_modes(&raw);
+    drop(device);
+    pty.assert_modes(&original);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secondary_tty_guard_restores_modes_after_later_setup_failure() {
+    let pty = ModeRestorationPty::new();
+    let original = pty.modes();
+    let mut raw = original.clone();
+    raw.make_raw();
+    let failure = (|| -> std::io::Result<()> {
+        let _device = pty.open_device();
+        pty.assert_modes(&raw);
+        // A later setup operation must unwind through the already-owned
+        // TtyDevice rather than relying on the session becoming complete.
+        Err(std::io::Error::other("controlled later setup failure"))
+    })();
+    assert!(failure.is_err());
+    pty.assert_modes(&original);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secondary_tty_restores_modes_even_when_leaving_screen_fails() {
+    let pty = ModeRestorationPty::new();
+    let original = pty.modes();
+    let mut device = pty.open_device();
+    // A retained read-only descriptor still permits terminal ioctls, while
+    // screen-output writes fail. Exercise suspend's real output error path.
+    device.file = std::fs::OpenOptions::new()
+        .read(true)
+        .open(&pty.path)
+        .expect("open read-only PTY descriptor");
+    assert!(device.suspend().is_err(), "screen leave must fail to write");
+    pty.assert_modes(&original);
+    drop(device);
+    pty.assert_modes(&original);
+}

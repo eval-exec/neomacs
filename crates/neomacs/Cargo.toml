@@ -120,6 +120,9 @@ signal-hook.workspace = true
 crossterm = "0.29"
 hostname.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["termios"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemalloc-sys = { version = "0.7", optional = true, default-features = false }
 
