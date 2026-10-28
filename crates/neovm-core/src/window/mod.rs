@@ -3121,6 +3121,10 @@ pub struct WindowDisplaySnapshotFreshness {
     pub(crate) media_generation: u64,
     pub(crate) function_epoch: u64,
     pub(crate) symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision,
+    /// Every overlay in the buffer could only change faces when this token was
+    /// captured. This excludes structural overlays from point-only query reuse;
+    /// it does not prove that overlay modifications preserve row geometry.
+    pub(crate) overlays_face_only: bool,
 }
 
 impl WindowDisplaySnapshotFreshness {
@@ -3139,6 +3143,28 @@ impl WindowDisplaySnapshotFreshness {
     /// source context. The producer must also validate its captured reads.
     pub fn same_query_row_content(&self, current: &Self) -> bool {
         self.window.point == current.window.point && self.same_scroll_content(current)
+    }
+
+    /// Row geometry for a position query when only point and repaint requests
+    /// changed.
+    ///
+    /// A command moves point and then asks `posn-at-point` /
+    /// `pos-visible-in-window-p` before redisplay runs. Overlay revisions must
+    /// still match: even face-only overlays can change font metrics and wrapping.
+    /// Every actual row input -- text, properties, accessibility, prefixes,
+    /// display table, faces, fonts, geometry -- must still match, and BOTH
+    /// tokens must certify that the overlays present could only change faces
+    /// (an overlay with `display`/`invisible`/`category` never qualifies).
+    pub fn same_position_rows_ignoring_point(&self, current: &Self) -> bool {
+        if !(self.overlays_face_only && current.overlays_face_only) {
+            return false;
+        }
+        let mut expected = current.clone();
+        // Cursor decoration only.
+        expected.window.point = self.window.point;
+        // A request to repaint is not a body-content mutation.
+        expected.redisplay_generation = self.redisplay_generation;
+        self == &expected
     }
 
     /// A committed scroll may move start/point and hide part of the first row.

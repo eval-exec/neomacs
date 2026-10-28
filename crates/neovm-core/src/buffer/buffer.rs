@@ -2735,6 +2735,45 @@ impl Buffer {
         &mut self.overlays
     }
 
+    /// True when every live overlay can only change appearance, never row
+    /// geometry: at most 32 overlays whose plists carry only `face`,
+    /// `priority` or `window`. The bounded shape mirrors the layout engine's
+    /// face-overlay coverage so both consumers accept the same set.
+    ///
+    /// This certifies the properties present, not the metrics of the faces they
+    /// name. Callers must still invalidate retained row geometry when overlays
+    /// change, since face-only overlays can affect font metrics and wrapping.
+    pub fn overlays_are_face_only(&self) -> bool {
+        let overlays = &self.overlays;
+        if overlays.len() > 32 {
+            return false;
+        }
+        for overlay in overlays.overlays_in_gnu_lists_order() {
+            let Some(mut plist) = overlays.overlay_plist(overlay) else {
+                return false;
+            };
+            let mut pairs = 0;
+            while !plist.is_nil() {
+                if pairs == 16 || !plist.is_cons() {
+                    return false;
+                }
+                let key = plist.cons_car();
+                let rest = plist.cons_cdr();
+                if !rest.is_cons()
+                    || !matches!(
+                        key.as_bare_symbol_name().as_deref(),
+                        Some("face" | "priority" | "window")
+                    )
+                {
+                    return false;
+                }
+                plist = rest.cons_cdr();
+                pairs += 1;
+            }
+        }
+        true
+    }
+
     pub fn last_name_value(&self) -> Value {
         self.last_name
     }

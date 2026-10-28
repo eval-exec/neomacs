@@ -148,6 +148,7 @@ pub(crate) struct OutputTextWindowDisplayRangeInstallRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OutputRetryCheckpointRestoreRequest {
     pub(crate) transition_hints_len: usize,
+    pub(crate) face_fills_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -183,9 +184,10 @@ impl OutputTextWindowDisplayRangeInstallRequest {
 }
 
 impl OutputRetryCheckpointRestoreRequest {
-    pub(crate) fn new(transition_hints_len: usize) -> Self {
+    pub(crate) fn new(transition_hints_len: usize, face_fills_len: usize) -> Self {
         Self {
             transition_hints_len,
+            face_fills_len,
         }
     }
 }

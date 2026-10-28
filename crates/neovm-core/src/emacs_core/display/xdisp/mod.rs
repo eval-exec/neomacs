@@ -8632,9 +8632,49 @@ fn retained_rows_answer_for_live_window(
     let Some(buffer_id) = frame.find_window(wid).and_then(|window| window.buffer_id()) else {
         return Ok(true);
     };
-    Ok(eval
+    if eval
         .fresh_window_display_snapshot(fid, wid, buffer_id)
-        .is_some())
+        .is_some()
+    {
+        return Ok(true);
+    }
+    // A command can move point and ask for position geometry before redisplay.
+    // Reuse only when row inputs, including overlay revisions, still match.
+    // Relative and visual line numbers follow point and keep the canonical walk.
+    if !line_numbers_are_point_independent(eval, buffer_id) {
+        return Ok(false);
+    }
+    let Some(current) = eval.window_display_snapshot_freshness(fid, wid, buffer_id) else {
+        return Ok(false);
+    };
+    Ok(eval
+        .frames
+        .get(fid)
+        .and_then(|frame| frame.redisplay_snapshot(wid))
+        .and_then(|snapshot| snapshot.layout_freshness.as_ref())
+        .is_some_and(|recorded| {
+            recorded.same_position_rows_ignoring_point(&current)
+        }))
+}
+
+/// Whether display line numbers in BUFFER leave row geometry independent of
+/// point. Only nil and absolute numbering qualify; relative/visual modes derive
+/// every gutter value from point.
+fn line_numbers_are_point_independent(
+    eval: &super::eval::Context,
+    buffer_id: crate::buffer::BufferId,
+) -> bool {
+    let Some(value) = eval
+        .buffers
+        .get(buffer_id)
+        .and_then(|buffer| buffer.buffer_local_value("display-line-numbers"))
+    else {
+        return true;
+    };
+    if value.is_nil() || value == Value::T {
+        return true;
+    }
+    matches!(value.as_bare_symbol_name().as_deref(), Some("absolute"))
 }
 
 fn resolve_exact_visible_metrics(

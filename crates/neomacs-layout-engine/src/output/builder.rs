@@ -774,6 +774,10 @@ impl DisplayOutputBuilder {
         self.frame_state.phys_cursor()
     }
 
+    pub(crate) fn face_fills_len(&self) -> usize {
+        self.frame_state.face_fills_len()
+    }
+
     pub(crate) fn transition_hints(&self) -> &[ContentTransitionHint] {
         self.frame_state.transition_hints()
     }
