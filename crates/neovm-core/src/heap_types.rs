@@ -1745,7 +1745,7 @@ impl MarkerBuffer {
 /// `MarkerObj` alignment boundary, so the low three bits are always free.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct MarkerLink(usize);
+pub(crate) struct MarkerLink(usize);
 
 const MARKER_LINK_FLAG_BITS: usize = 0b111;
 const MARKER_LINK_INSERTION_TYPE: usize = 0b001;
@@ -1845,8 +1845,10 @@ pub struct LispMarker {
     pub buffer: MarkerBuffer,
     /// Intrusive chain link plus the three marker flags. `next_ptr()` is null
     /// at the chain tail. `unchain_dead_markers` walks these before
-    /// `sweep_objects` frees unmarked markers.
-    pub next_marker: MarkerLink,
+    /// `sweep_objects` frees unmarked markers. Crate-private: the link's
+    /// representation (pointer + flag bits) may only be handled by
+    /// [`MarkerLink`], never by a struct-literal field write.
+    pub(crate) next_marker: MarkerLink,
     /// Char offset in buffer (0-based; authoritative after T6/T7).
     pub charpos: CharPos0,
     /// Byte offset in buffer (0-based Emacs byte position; authoritative).
