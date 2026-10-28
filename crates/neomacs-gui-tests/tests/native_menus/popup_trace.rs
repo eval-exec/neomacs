@@ -38,6 +38,10 @@ pub(super) fn primary_surface_presented(log: &str) -> bool {
     let mut committed_callbacks = HashSet::new();
 
     for line in log.lines() {
+        // Whether the dump carries ANSI color depends on the libwayland
+        // version (1.26 colorizes by default, the CI runner's 1.22 prints
+        // plain text), so every probe below reads the uncolored form.
+        let line = &strip_ansi(line);
         if let Some((_, args)) = line.split_once(".get_xdg_surface(new id ")
             && let Some((role, surface)) = args.split_once(", ")
             && let (Some(role), Some(surface)) = (
@@ -156,5 +160,21 @@ fn primary_presentation_accepts_ubuntu_wayland_object_syntax() {
 [2193541.624] -> wl_surface@20.commit()
 [2193985.403] wl_callback@49.done(224282)
 "#;
+    assert!(primary_surface_presented(log));
+}
+
+#[test]
+fn primary_presentation_accepts_colorized_libwayland_1_26_trace() {
+    // Actual libwayland 1.26 trace from a local run; that version colorizes
+    // every object and request with CSI sequences, while the CI runner's
+    // 1.22 prints the plain form above.  Both must read identically.
+    let log = concat!(
+        "\x1b[32m[17:02:50.198916] \x1b[31m\x1b[0m -> \x1b[34mxdg_wm_base\x1b[35m#12\x1b[36m.get_xdg_surface\x1b[0m(new id xdg_surface#21, wl_surface#20)\x1b[0m\n",
+        "\x1b[32m[17:02:50.198926] \x1b[31m\x1b[0m -> \x1b[34mxdg_surface\x1b[35m#21\x1b[36m.get_toplevel\x1b[0m(new id xdg_toplevel#22)\x1b[0m\n",
+        "\x1b[32m[17:02:50.807965] \x1b[31m\x1b[0m -> \x1b[34mwl_surface\x1b[35m#20\x1b[36m.frame\x1b[0m(new id wl_callback#86)\x1b[0m\n",
+        "\x1b[32m[17:02:50.818201] \x1b[33m{mesa vk display queue} \x1b[31m\x1b[0m -> \x1b[34mwl_surface\x1b[35m#20\x1b[36m.attach\x1b[0m(wl_buffer#81, 0, 0)\x1b[0m\n",
+        "\x1b[32m[17:02:50.818237] \x1b[33m{mesa vk display queue} \x1b[31m\x1b[0m -> \x1b[34mwl_surface\x1b[35m#20\x1b[36m.commit\x1b[0m()\x1b[0m\n",
+        "\x1b[32m[17:02:50.837791] \x1b[31m\x1b[0m\x1b[34mwl_callback\x1b[35m#86\x1b[36m.done\x1b[0m(1320762472)\x1b[0m\n",
+    );
     assert!(primary_surface_presented(log));
 }
