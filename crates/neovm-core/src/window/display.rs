@@ -759,6 +759,17 @@ impl crate::emacs_core::eval::Context {
                 return crate::window::WindowLayoutQueryOutcome::Unavailable;
             }
             WindowLayoutQueryAdapter::Running => {
+                // A position query can measure chrome whose :eval asks for
+                // another position. The outer adapter owns the walk; let the
+                // nested consumer fall back to accepted geometry instead of
+                // turning an ordinary chrome expression into a layout error.
+                if matches!(
+                    scope,
+                    crate::window::WindowLayoutQueryScope::Position { .. }
+                ) && crate::emacs_core::xdisp::mode_line_display_active(self)
+                {
+                    return crate::window::WindowLayoutQueryOutcome::Unavailable;
+                }
                 return crate::window::WindowLayoutQueryOutcome::LayoutBusy;
             }
             WindowLayoutQueryAdapter::Ready(query) => query,

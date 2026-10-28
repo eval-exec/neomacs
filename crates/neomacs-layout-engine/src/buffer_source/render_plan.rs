@@ -170,6 +170,11 @@ pub(crate) struct BufferSourceOutputSetup {
     body_install_context: BufferSourceBodyInstallContext,
     retry_bounds: BufferSourceRetryBounds,
     position_publication: WindowPositionPublication,
+    /// A Position query evaluates chrome on its first attempt. Its retry runs
+    /// with the measured metrics already seeded into `WindowParams`, so chrome
+    /// must not be evaluated a second time (GNU `pos_visible_p` evaluates once
+    /// before walking the body).
+    remeasure_chrome: bool,
 }
 
 #[cfg(test)]
@@ -591,6 +596,7 @@ impl BufferSourceOutputSetup {
                 (text_y + text_height - walk_setup.window_top).round() as i64,
             ),
             position_publication: WindowPositionPublication::Redisplay,
+            remeasure_chrome: false,
         }
     }
 
@@ -600,6 +606,57 @@ impl BufferSourceOutputSetup {
     ) -> Self {
         self.position_publication = publication;
         self
+    }
+
+    pub(crate) fn with_remeasure_chrome(mut self, remeasure: bool) -> Self {
+        self.remeasure_chrome = remeasure;
+        self
+    }
+
+    /// A retained chrome partition can consume the whole body after a resize.
+    /// Its current format must still get a chance to shrink before we skip it.
+    pub(crate) fn measure_chrome_for_empty_body<FS: crate::neovm_bridge::FaceServices>(
+        self,
+        state: BufferSourceRenderAttemptContext<'_, '_, FS>,
+        request: WindowChromeRowsRenderRequest<'_, '_>,
+        params: &WindowParams,
+    ) -> BufferSourceRenderAttemptOutcome {
+        let (mut output, font_metrics, face_resolver, mut face_ids, _) = state.into_parts();
+        if !self.remeasure_chrome
+            || !self.position_publication.remeasures_chrome()
+            || neovm_core::emacs_core::xdisp::mode_line_display_active(output.evaluator())
+        {
+            return BufferSourceRenderAttemptOutcome::Skipped;
+        }
+        let freshness_before_chrome = match freshness_before_window_chrome(
+            output.evaluator(),
+            self.begin_request.frame_id(),
+            params,
+        ) {
+            Ok(freshness) => freshness,
+            Err(changed) => return changed.into(),
+        };
+        let mut emitter = output.begin_text_window_output(self.begin_request);
+        let (output, evaluator) = output.into_parts();
+        let services =
+            ChromeRowRenderServices::new(font_metrics, face_resolver.resolver(), &mut face_ids);
+        match render_or_retain_window_chrome(
+            output,
+            &mut emitter,
+            evaluator,
+            request,
+            services,
+            WindowChromeRowSource::Recompute,
+        ) {
+            Ok((measured, chrome_lisp_admission)) => {
+                BufferSourceRenderAttemptOutcome::EmptyBodyChromeMeasured {
+                    measured,
+                    freshness_before_chrome,
+                    chrome_lisp_admission,
+                }
+            }
+            Err(changed) => changed.into(),
+        }
     }
 }
 
@@ -1852,7 +1909,20 @@ impl BufferSourceOutputSetup {
         // *measured* chrome heights so the window snapshot reports the real
         // (possibly taller, e.g. doom-modeline's bar) height rather than the
         // face-only estimate the text-area geometry was reserved from.
-        let chrome_source = if self.position_publication.is_synchronous_query() {
+        // A chrome `:eval` may itself ask for a position (GNU guards that
+        // re-entry, src/xdisp.c:1725-1731). Keep the accepted partition while
+        // a chrome formatter is already running instead of recursing.
+        let chrome_source = if self.remeasure_chrome
+            && self.position_publication.remeasures_chrome()
+            && !neovm_core::emacs_core::xdisp::mode_line_display_active(evaluator)
+        {
+            // GNU `pos_visible_p` re-evaluates and measures mode/header/tab
+            // lines on every call, before walking the body (src/xdisp.c:1732-
+            // 1770). Measure here too: a mismatch with the reserved metrics
+            // becomes `WindowLayoutOutcome::NeedsRelayout`, and the retry lays
+            // the body out under the measured text-area partition.
+            WindowChromeRowSource::Recompute
+        } else if self.position_publication.is_synchronous_query() {
             // GNU `Fwindow_end` builds a stack-local display iterator for the
             // text area.  Reuse the already accepted partition instead of
             // evaluating status-line Lisp as a side effect of a geometry

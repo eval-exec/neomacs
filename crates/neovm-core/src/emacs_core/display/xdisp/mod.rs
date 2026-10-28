@@ -77,7 +77,8 @@ use crate::buffer::{
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
 use crate::window::{
-    DisplayRowSnapshot, FrameId, FrameManager, Window, WindowDisplaySnapshot, WindowId,
+    DisplayRowSnapshot, FrameId, FrameManager, Window, WindowChromeLine, WindowChromePresence,
+    WindowDisplaySnapshot, WindowId,
 };
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
@@ -2224,6 +2225,7 @@ pub fn try_format_mode_line_for_display_with_sources(
     buffer: Value,
     target_cols: usize,
 ) -> Result<ModeLineDisplayOutput, Flow> {
+    let _display_scope = eval.mode_line_output_owner().enter_display();
     try_format_mode_line_display(
         eval,
         format_val,
@@ -2233,6 +2235,12 @@ pub fn try_format_mode_line_for_display_with_sources(
             columns: DisplayColumn::new(target_cols),
         },
     )
+}
+
+/// Whether a mode/header/tab-line formatter is currently executing Lisp.
+/// This is independent of a deferred nonlocal exit from that formatter.
+pub fn mode_line_display_active(eval: &super::eval::Context) -> bool {
+    eval.mode_line_output_owner().display_active()
 }
 
 /// Frame-title evaluation uses the same safe evaluator, but unlike actual
@@ -8636,10 +8644,12 @@ fn retained_rows_answer_for_live_window(
     {
         return Ok(true);
     }
-    // Stable format definitions do not prove stable geometry after point
-    // moves: the current line-number face can change row metrics even with
-    // absolute numbering.
-    if !line_numbers_are_point_independent(eval, fid, buffer_id) {
+    // Stable format/face definitions do not prove stable geometry after point
+    // moves: chrome can evaluate Lisp, and the current line-number face can
+    // change row metrics even with absolute numbering.
+    if !line_numbers_are_point_independent(eval, fid, buffer_id)
+        || !chrome_is_point_independent(eval, fid, wid, buffer_id)
+    {
         return Ok(false);
     }
     let Some(current) = eval.window_display_snapshot_freshness(fid, wid, buffer_id) else {
@@ -8711,6 +8721,52 @@ fn line_number_faces_are_remapped(eval: &super::eval::Context, buffer: &Buffer) 
     }
     let remapping = crate::face::FaceRemapping::from_lisp(&value);
     remapping.get("line-number").is_some() || remapping.get("line-number-current-line").is_some()
+}
+
+/// Whether the chrome partition is proven not to change when point moves.
+///
+/// GNU `pos_visible_p` re-evaluates all three chrome formats and measures
+/// their rendered rows on *every* query (src/xdisp.c:1732-1770, 28216-28399),
+/// so a `:eval` that reads point is answered from fresh geometry. This port
+/// answers from retained rows whose measured chrome heights came from an
+/// earlier point. A position query remeasures chrome and retries the body if
+/// its partition changes, so point-only reuse requires that no chrome line is
+/// present. Presence, not the format value, is the
+/// question GNU asks here (`window_wants_mode_line` and friends,
+/// src/window.c:6037-6101): a format on a window too short to show it, or on
+/// the minibuffer, cannot affect the text area.
+///
+/// Any present chrome requires the canonical query and its chrome measurement.
+/// That is deliberately stronger than scanning
+/// the format for `:eval`: chrome percentages and `%M`/`%m` splice arbitrary
+/// propertized strings, and a static proof of row height would have to model
+/// every display spec and face metric those strings can introduce.
+fn chrome_is_point_independent(
+    eval: &super::eval::Context,
+    frame_id: FrameId,
+    window_id: WindowId,
+    buffer_id: crate::buffer::BufferId,
+) -> bool {
+    let (Some(frame), Some(buffer)) = (eval.frames.get(frame_id), eval.buffers.get(buffer_id))
+    else {
+        return false;
+    };
+    let Some(window) = frame.find_window(window_id) else {
+        return false;
+    };
+    let presence = WindowChromePresence::resolve(
+        window,
+        buffer,
+        frame,
+        eval.frames.is_minibuffer_window_id(window_id),
+    );
+    ![
+        WindowChromeLine::ModeLine,
+        WindowChromeLine::HeaderLine,
+        WindowChromeLine::TabLine,
+    ]
+    .into_iter()
+    .any(|line| presence.contains(line))
 }
 
 fn resolve_exact_visible_metrics(

@@ -43,6 +43,7 @@ enum OutputKind {
 struct OutputState {
     element: Cell<ModeLineElementId>,
     target: Cell<OutputKind>,
+    display_active: Cell<bool>,
 }
 
 /// Native state of one evaluator World; no Lisp values or retained output.
@@ -55,6 +56,17 @@ static_assertions::assert_not_impl_any!(ModeLineOutputOwner: Send, Sync);
 static_assertions::assert_eq_size!(ModeLineOutputOwner, usize);
 
 impl ModeLineOutputOwner {
+    pub(super) fn display_active(&self) -> bool {
+        self.0.display_active.get()
+    }
+
+    pub(super) fn enter_display(&self) -> ModeLineDisplayScope {
+        ModeLineDisplayScope {
+            owner: self.clone(),
+            previous: self.0.display_active.replace(true),
+        }
+    }
+
     fn advance(&self) -> Result<ModeLineElementId, Flow> {
         let next = self.0.element.get().next()?;
         self.0.element.set(next);
@@ -72,6 +84,19 @@ impl ModeLineOutputOwner {
             owner: self.clone(),
             previous_target,
         }
+    }
+}
+
+/// Keep the active display extent across Lisp callbacks without borrowing Context.
+/// Drop restores the enclosing extent on both normal return and unwinding.
+pub(super) struct ModeLineDisplayScope {
+    owner: ModeLineOutputOwner,
+    previous: bool,
+}
+
+impl Drop for ModeLineDisplayScope {
+    fn drop(&mut self) {
+        self.owner.0.display_active.set(self.previous);
     }
 }
 

@@ -26,6 +26,8 @@ mod approx_window_text_test;
 #[cfg(test)]
 #[path = "mode_line_prop_borrow_test.rs"]
 mod mode_line_prop_borrow_test;
+#[path = "position_chrome_query_test.rs"]
+mod position_chrome_query_test;
 
 #[cfg(test)]
 #[path = "mode_line_plain_field_test.rs"]
