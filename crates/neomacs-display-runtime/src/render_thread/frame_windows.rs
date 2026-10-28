@@ -1121,6 +1121,11 @@ impl GuiFrameRenderState {
     }
 
     pub(super) fn clear_ime_preedit(&mut self) {
+        // Cursor synchronization calls this on every poll when the selected
+        // window hides its cursor. An already-empty composition owes no paint.
+        if !self.input_method.has_preedit() {
+            return;
+        }
         self.input_method.clear();
         self.compositor.dirty = true;
     }
