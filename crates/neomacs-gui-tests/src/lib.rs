@@ -471,12 +471,30 @@ impl GuiCommandRunner for ProcessGuiCommandRunner {
         _artifacts: &GuiArtifactSet,
         options: &GuiRunOptions,
     ) -> io::Result<GuiCommandOutput> {
-        let mut child = Command::new(&command.program)
+        let mut process = Command::new(&command.program);
+        process
             .args(&command.args)
             .envs(command.env.iter().map(|(key, value)| (key, value)))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+        // A scenario's session is exactly one window system.  Inheriting the
+        // other backend's variables from the developer's desktop (or a CI
+        // step) makes winit/wgpu observe a second, usually unreachable,
+        // display: a Wayland scenario with DISPLAY set stalls before its
+        // first present, and an X11 scenario can silently bind a stale
+        // Wayland socket.  Scrub them so the test exercises the backend it
+        // names, on every host.
+        match command.env_value("WINIT_UNIX_BACKEND") {
+            Some("wayland") => {
+                process.env_remove("DISPLAY");
+            }
+            Some("x11") => {
+                process.env_remove("WAYLAND_DISPLAY");
+                process.env_remove("WAYLAND_SOCKET");
+            }
+            _ => {}
+        }
+        let mut child = process.spawn()?;
 
         let stdout = child.stdout.take().expect("stdout pipe should be captured");
         let stderr = child.stderr.take().expect("stderr pipe should be captured");
