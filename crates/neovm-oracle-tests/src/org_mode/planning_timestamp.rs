@@ -41,9 +41,9 @@ fn org_read_date_relative_default_time_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[
-        r#""OK (\"2026-06-10\" \"2026-05-30\" \"2026-11-27 08:15\" ((\"<2026-05-27 Wed>\" \"2026-05-27 00:00\" nil) (\"[2026-05-27 Wed 09:30]\" \"2026-05-27 09:30\" 9) (\"<2026-05-27 Wed 09:30-10:45>\" \"2026-05-27 09:30\" 9)))""#
+        r#""OK (\"2026-06-10\" \"2026-05-30\" \"2026-07-15 08:15\" ((\"<2026-05-27 Wed>\" \"2026-05-27 00:00\" nil) (\"[2026-05-27 Wed 09:30]\" \"2026-05-27 09:30\" 9) (\"<2026-05-27 Wed 09:30-10:45>\" \"2026-05-27 09:30\" 9)))""#
     ]];
-    crate::common::assert_oracle_parity_expect(
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
   (require 'org-element)
@@ -184,9 +184,9 @@ fn org_todo_auto_repeat_planning_logbook_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[
-        r#""OK (#(\"NEXT\" 0 4 (org-todo-head \"TODO\")) \".+2d\" \"[2026-05-27 Wed 12:00]\" ((#(\"Repeating task\" 0 14 (org-todo-head \"TODO\")) #(\"NEXT\" 0 4 (org-todo-head \"TODO\")) \"<2026-10-29 Thu .+2d>\" \"<2026-05-27 Wed +1w -2d>\" \"[2026-05-27 Wed 12:00]\")) \"* NEXT Repeating task\\nSCHEDULED: <2026-10-29 Thu .+2d> DEADLINE: <2026-05-27 Wed +1w -2d>\\n:PROPERTIES:\\n:REPEAT_TO_STATE: NEXT\\n:LAST_REPEAT: [2026-05-27 Wed 12:00]\\n:END:\\nBody timestamp <2026-06-20 Sat +1m>\\n:LOGBOOK:\\nCLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\\n:END:\\n\" \"* NEXT Repeating task\\nSCHEDULED: <2026-10-29 Thu .+0d> DEADLINE: <2026-05-27 Wed +0w -2d>\\n:PROPERTIES:\\n:REPEAT_TO_STATE: NEXT\\n:LAST_REPEAT: [2026-05-27 Wed 12:00]\\n:END:\\nBody timestamp <2026-06-20 Sat +0m>\\n:LOGBOOK:\\nCLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\\n:END:\\n\" ((headline \"NEXT\" \"Repeating task\") (planning \"<2026-10-29 Thu .+0d>\" \"<2026-05-27 Wed +0w -2d>\") (property \"REPEAT_TO_STATE\" \"NEXT\") (property \"LAST_REPEAT\" \"[2026-05-27 Wed 12:00]\") (timestamp \"<2026-06-20 Sat +0m>\" cumulate 0 month nil nil)))""#
+        r#""OK (#(\"NEXT\" 0 4 (org-todo-head \"TODO\")) \".+2d\" \"[2026-05-27 Wed 12:00]\" ((#(\"Repeating task\" 0 14 (org-todo-head \"TODO\")) #(\"NEXT\" 0 4 (org-todo-head \"TODO\")) \"<2026-06-17 Wed .+2d>\" \"<2026-05-27 Wed +1w -2d>\" \"[2026-05-27 Wed 12:00]\")) \"* NEXT Repeating task\\nSCHEDULED: <2026-06-17 Wed .+2d> DEADLINE: <2026-05-27 Wed +1w -2d>\\n:PROPERTIES:\\n:REPEAT_TO_STATE: NEXT\\n:LAST_REPEAT: [2026-05-27 Wed 12:00]\\n:END:\\nBody timestamp <2026-06-20 Sat +1m>\\n:LOGBOOK:\\nCLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\\n:END:\\n\" \"* NEXT Repeating task\\nSCHEDULED: <2026-06-17 Wed .+0d> DEADLINE: <2026-05-27 Wed +0w -2d>\\n:PROPERTIES:\\n:REPEAT_TO_STATE: NEXT\\n:LAST_REPEAT: [2026-05-27 Wed 12:00]\\n:END:\\nBody timestamp <2026-06-20 Sat +0m>\\n:LOGBOOK:\\nCLOCK: [2026-05-26 Tue 09:00]--[2026-05-26 Tue 10:15] =>  1:15\\n:END:\\n\" ((headline \"NEXT\" \"Repeating task\") (planning \"<2026-06-17 Wed .+0d>\" \"<2026-05-27 Wed +0w -2d>\") (property \"REPEAT_TO_STATE\" \"NEXT\") (property \"LAST_REPEAT\" \"[2026-05-27 Wed 12:00]\") (timestamp \"<2026-06-20 Sat +0m>\" cumulate 0 month nil nil)))""#
     ]];
-    crate::common::assert_oracle_parity_expect(
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
   (require 'org-clock)
