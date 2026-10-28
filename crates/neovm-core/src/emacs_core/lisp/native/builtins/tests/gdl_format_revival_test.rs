@@ -94,7 +94,10 @@ fn gdl_format__gdl_decimal_float() {
                        (list (concat "a%" width "x") 1.0e+INF)))
       (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
   (nreverse out)))"#,
-        include_str!("gdl_format_revival/gdl_format--gdl_decimal_float.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/gdl_format--gdl_decimal_float.expect"),
+            include_str!("gdl_format_revival/gdl_format--gdl_decimal_float.macos.expect"),
+        ),
     );
 }
 
@@ -135,7 +138,10 @@ fn format_float_gnu__precision() {
 fn format_float_gnu__signs() {
     assert_case(
         r#"(list (format "%+f" -0.0) (format "% g" -0.0) (format "%+e" -0.0) (format "%+f" 1.0e+INF) (format "% f" 0.0e+NaN) (format "%05f|" 1.0e+INF) (format "%+08f|" -1.0e+INF) (format "%010.3e" -0.0e+NaN) (format "%+g" 0.0e+NaN) (format "% 08.3f" 3.14159) (format "%08f" -0.0) (format "%#g" 12.0))"#,
-        include_str!("gdl_format_revival/format_float_gnu--signs.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/format_float_gnu--signs.expect"),
+            include_str!("gdl_format_revival/format_float_gnu--signs.macos.expect"),
+        ),
     );
 }
 
@@ -144,7 +150,10 @@ fn format_float_gnu__signs() {
 fn format_float_gnu__integers() {
     assert_case(
         r#"(list (format "%.0f" 9007199254740993) (format "%.0f" (1- (expt 2 64))) (format "%.20e" most-positive-fixnum) (format "%f" most-positive-fixnum) (format "%.20g" (1- (expt 2 63))) (format "%.0f" (- 1 (expt 2 63))) (format "%.0f" (expt 2 64)) (format "%.0f" (1+ (expt 2 64))) (format "%.0f" (- (expt 2 63))))"#,
-        include_str!("gdl_format_revival/format_float_gnu--integers.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/format_float_gnu--integers.expect"),
+            include_str!("gdl_format_revival/format_float_gnu--integers.macos.expect"),
+        ),
     );
 }
 
@@ -331,7 +340,10 @@ fn gdl_integer_oracle__gdl_decimal_float() {
                        (list (concat "a%" width "x") 1.0e+INF)))
       (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
   (nreverse out)))))"#,
-        include_str!("gdl_format_revival/gdl_integer_oracle--gdl_decimal_float.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/gdl_integer_oracle--gdl_decimal_float.expect"),
+            include_str!("gdl_format_revival/gdl_integer_oracle--gdl_decimal_float.macos.expect"),
+        ),
     );
 }
 
@@ -396,7 +408,12 @@ fn gdl_float_oracle__oracle_gdl_float_precision() {
 fn gdl_float_oracle__oracle_gdl_float_signs() {
     assert_case(
         r#"(list (format "%+f" -0.0) (format "% g" -0.0) (format "%+e" -0.0) (format "%+f" 1.0e+INF) (format "% f" 0.0e+NaN) (format "%05f|" 1.0e+INF) (format "%+08f|" -1.0e+INF) (format "%010.3e" -0.0e+NaN) (format "%+g" 0.0e+NaN) (format "% 08.3f" 3.14159) (format "%08f" -0.0) (format "%#g" 12.0))"#,
-        include_str!("gdl_format_revival/gdl_float_oracle--oracle_gdl_float_signs.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/gdl_float_oracle--oracle_gdl_float_signs.expect"),
+            include_str!(
+                "gdl_format_revival/gdl_float_oracle--oracle_gdl_float_signs.macos.expect"
+            ),
+        ),
     );
 }
 
@@ -405,7 +422,12 @@ fn gdl_float_oracle__oracle_gdl_float_signs() {
 fn gdl_float_oracle__oracle_gdl_float_integers() {
     assert_case(
         r#"(list (format "%.0f" 9007199254740993) (format "%.0f" (1- (expt 2 64))) (format "%.20e" most-positive-fixnum) (format "%f" most-positive-fixnum) (format "%.20g" (1- (expt 2 63))) (format "%.0f" (- 1 (expt 2 63))) (format "%.0f" (expt 2 64)) (format "%.0f" (1+ (expt 2 64))) (format "%.0f" (- (expt 2 63))))"#,
-        include_str!("gdl_format_revival/gdl_float_oracle--oracle_gdl_float_integers.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/gdl_float_oracle--oracle_gdl_float_integers.expect"),
+            include_str!(
+                "gdl_format_revival/gdl_float_oracle--oracle_gdl_float_integers.macos.expect"
+            ),
+        ),
     );
 }
 
@@ -422,7 +444,14 @@ fn gdl_float_oracle__oracle_gdl_float_byte_compiled() {
               (funcall f "%.20g" (1- (expt 2 63)))
               (funcall f "% 08.3f" 3.14159)
               (length (funcall f "%.70000e" 0.1)))))"#,
-        include_str!("gdl_format_revival/gdl_float_oracle--oracle_gdl_float_byte_compiled.expect"),
+        super::gnu_float_fixture(
+            include_str!(
+                "gdl_format_revival/gdl_float_oracle--oracle_gdl_float_byte_compiled.expect"
+            ),
+            include_str!(
+                "gdl_format_revival/gdl_float_oracle--oracle_gdl_float_byte_compiled.macos.expect"
+            ),
+        ),
     );
 }
 
@@ -521,7 +550,10 @@ fn minimal__decimal_float_zero() {
 fn minimal__decimal_nonfinite_padding() {
     assert_case(
         r#"(list (format "%+d" 1.0e+INF) (format "%05d" -1.0e+INF) (format "%.4d" -0.0e+NaN))"#,
-        include_str!("gdl_format_revival/minimal--decimal-nonfinite-padding.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/minimal--decimal-nonfinite-padding.expect"),
+            include_str!("gdl_format_revival/minimal--decimal-nonfinite-padding.macos.expect"),
+        ),
     );
 }
 
@@ -557,7 +589,10 @@ fn minimal__float_signs() {
 fn minimal__integer_long_double() {
     assert_case(
         r#"(format "%.0f" 9007199254740993)"#,
-        include_str!("gdl_format_revival/minimal--integer-long-double.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/minimal--integer-long-double.expect"),
+            include_str!("gdl_format_revival/minimal--integer-long-double.macos.expect"),
+        ),
     );
 }
 
@@ -584,7 +619,10 @@ fn minimal__ascii_char_width_policy() {
 fn minimal__ascii_char_excess_precision() {
     assert_case(
         r#"(list (length (format "%.20000c" ?a)) (substring (format "%.20000c" ?a) 0 3) (substring (format "%.20000c" ?a) -1))"#,
-        include_str!("gdl_format_revival/minimal--ascii-char-excess-precision.expect"),
+        super::gnu_float_fixture(
+            include_str!("gdl_format_revival/minimal--ascii-char-excess-precision.expect"),
+            include_str!("gdl_format_revival/minimal--ascii-char-excess-precision.macos.expect"),
+        ),
     );
 }
 

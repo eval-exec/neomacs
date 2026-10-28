@@ -1,5 +1,11 @@
 //! GNU editfns.c:3840-4170 float-format regressions. Fixtures come from GNU only.
 
+/// The frozen transcript recorded on this host's C library (a compile-time
+/// choice; see `platform_facts::FloatTranscriptSet`).
+const fn gnu_float_fixture(gnu_linux: &'static str, apple: &'static str) -> &'static str {
+    crate::emacs_core::platform_facts::FLOAT_TRANSCRIPTS.pick(gnu_linux, apple)
+}
+
 const CASES: &[(&str, &str, &str)] = &[
     (
         "precision",
@@ -23,12 +29,18 @@ const CASES: &[(&str, &str, &str)] = &[
     (
         "signs",
         r#"(list (format "%+f" -0.0) (format "% g" -0.0) (format "%+e" -0.0) (format "%+f" 1.0e+INF) (format "% f" 0.0e+NaN) (format "%05f|" 1.0e+INF) (format "%+08f|" -1.0e+INF) (format "%010.3e" -0.0e+NaN) (format "%+g" 0.0e+NaN) (format "% 08.3f" 3.14159) (format "%08f" -0.0) (format "%#g" 12.0))"#,
-        include_str!("format_float_gnu/signs.expect"),
+        gnu_float_fixture(
+            include_str!("format_float_gnu/signs.expect"),
+            include_str!("format_float_gnu/signs.macos.expect"),
+        ),
     ),
     (
         "integers",
         r#"(list (format "%.0f" 9007199254740993) (format "%.0f" (1- (expt 2 64))) (format "%.20e" most-positive-fixnum) (format "%f" most-positive-fixnum) (format "%.20g" (1- (expt 2 63))) (format "%.0f" (- 1 (expt 2 63))) (format "%.0f" (expt 2 64)) (format "%.0f" (1+ (expt 2 64))) (format "%.0f" (- (expt 2 63))))"#,
-        include_str!("format_float_gnu/integers.expect"),
+        gnu_float_fixture(
+            include_str!("format_float_gnu/integers.expect"),
+            include_str!("format_float_gnu/integers.macos.expect"),
+        ),
     ),
 ];
 

@@ -1077,10 +1077,12 @@ fn builtin_set_time_zone_rule_invalid_spec() {
 }
 
 /// GNU delegates an explicit numeric/named ZONE to libc `tzalloc` via a POSIX
-/// TZ string (`timefns.c` `tzlookup`), so the offset is clamped to +/-24h and a
-/// too-short/invalid abbreviation falls back to UTC. Every expectation below was
-/// captured from `emacs -Q --batch` (host-TZ-independent, since the ZONE is
-/// explicit).
+/// TZ string (src/timefns.c:240,306-314), so the C library owns the parsing
+/// rules.  glibc clamps offsets to +/-24h and rejects a too-short
+/// abbreviation; Darwin's libc keeps both.  Every expectation below was
+/// captured from GNU 31.1 `-Q --batch` on the corresponding host (the ZONE is
+/// explicit, so the process TZ does not enter).  See
+/// `platform_facts::PosixTzSemantics`.
 #[test]
 #[cfg(unix)]
 fn builtin_current_time_zone_validates_and_clamps_explicit_zone() {
@@ -1090,6 +1092,58 @@ fn builtin_current_time_zone_validates_and_clamps_explicit_zone() {
 
     let t = Value::fixnum(1_700_000_000);
     let named = |off: i64, name: &str| Value::list(vec![Value::fixnum(off), Value::string(name)]);
+
+    if crate::emacs_core::platform_facts::POSIX_TZ_SEMANTICS
+        == crate::emacs_core::platform_facts::PosixTzSemantics::Darwin
+    {
+        // GNU 31.1 on macOS: the ZONE string reaches Darwin libc's tzalloc
+        // (src/timefns.c:240,306-314), which keeps a short abbreviation and an
+        // out-of-range offset exactly as given, and reads the malformed
+        // "X1Y,J1,J365" as a UTC zone named "Y".  Recorded from GNU on the
+        // Mac; see platform_facts::PosixTzSemantics.
+        for (zone, expected) in [
+            (
+                named(5400, "X"),
+                Value::list(vec![Value::fixnum(5400), Value::string("X")]),
+            ),
+            (
+                named(5400, "ABC"),
+                Value::list(vec![Value::fixnum(5400), Value::string("ABC")]),
+            ),
+            (
+                named(90000, "ABC"),
+                Value::list(vec![Value::fixnum(90000), Value::string("ABC")]),
+            ),
+            (
+                Value::fixnum(-90000),
+                Value::list(vec![Value::fixnum(-90000), Value::string("-25")]),
+            ),
+            (
+                Value::fixnum(172800),
+                Value::list(vec![Value::fixnum(172800), Value::string("+48")]),
+            ),
+            (
+                Value::fixnum(86400),
+                Value::list(vec![Value::fixnum(86400), Value::string("+24")]),
+            ),
+            (
+                Value::fixnum(5400),
+                Value::list(vec![Value::fixnum(5400), Value::string("+0130")]),
+            ),
+            (
+                Value::fixnum(3661),
+                Value::list(vec![Value::fixnum(3661), Value::string("+010101")]),
+            ),
+            (
+                Value::string("X1Y,J1,J365"),
+                Value::list(vec![Value::fixnum(0), Value::string("Y")]),
+            ),
+        ] {
+            assert_eq!(builtin_current_time_zone(vec![t, zone]).unwrap(), expected);
+        }
+        reset_tz_rule();
+        return;
+    }
 
     // (OFFSET NAME) with NAME shorter than 3 chars is invalid -> UTC fallback
     // with the numeric "+00" abbreviation (libc empties the zone; GNU
@@ -1146,9 +1200,10 @@ fn builtin_current_time_zone_validates_and_clamps_explicit_zone() {
     reset_tz_rule();
 }
 
-/// `decode-time` with a too-short (OFFSET NAME) ZONE likewise falls back to UTC,
-/// so the broken-down time and UTCOFF use offset 0 (GNU reports hour 22, UTCOFF
-/// 0 for `(decode-time 1700000000 (list -18000 "E"))`).
+/// `decode-time` with a too-short (OFFSET NAME) ZONE follows the host C
+/// library's tzalloc rules: glibc rejects it and falls back to UTC (GNU on
+/// GNU/Linux reports hour 22, UTCOFF 0), Darwin applies the given offset (GNU
+/// on macOS reports hour 17, UTCOFF -18000).
 #[test]
 #[cfg(unix)]
 fn builtin_decode_time_short_named_zone_falls_back_to_utc() {
@@ -1162,8 +1217,12 @@ fn builtin_decode_time_short_named_zone_falls_back_to_utc() {
     ])
     .unwrap();
     let items = list_to_vec(&decoded).unwrap();
-    assert_eq!(items[2].as_int(), Some(22)); // hour: UTC, not 17
-    assert_eq!(items[8].as_int(), Some(0)); // UTCOFF clamped to 0
+    let (hour, utcoff) = match crate::emacs_core::platform_facts::POSIX_TZ_SEMANTICS {
+        crate::emacs_core::platform_facts::PosixTzSemantics::Glibc => (22, 0),
+        crate::emacs_core::platform_facts::PosixTzSemantics::Darwin => (17, -18000),
+    };
+    assert_eq!(items[2].as_int(), Some(hour));
+    assert_eq!(items[8].as_int(), Some(utcoff));
 
     // A valid named offset still applies normally.
     let valid = builtin_decode_time(vec![

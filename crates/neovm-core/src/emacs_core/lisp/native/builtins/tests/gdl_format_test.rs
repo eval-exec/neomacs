@@ -1,5 +1,14 @@
 //! GNU 31.1 format regressions from retained successful oracle receipts.
 
+/// The frozen transcript recorded on this host's C library.
+///
+/// GNU's float conversions depend on the host's long-double width and
+/// `sprintf` (src/editfns.c:3905-3955), so the two recordings are platform
+/// facts, not alternatives; see `platform_facts::FloatTranscriptSet`.
+fn gnu_float_fixture(gnu_linux: &'static str, apple: &'static str) -> &'static str {
+    crate::emacs_core::platform_facts::FLOAT_TRANSCRIPTS.pick(gnu_linux, apple)
+}
+
 fn assert_gnu(_name: &str, form: &str, frozen: &str) {
     crate::test_utils::init_test_tracing();
     let expected = frozen.trim_end_matches('\n').to_owned();
@@ -111,7 +120,10 @@ fn gdl_decimal_float() {
                        (list (concat "a%" width "x") 1.0e+INF)))
       (push (condition-case e (funcall call (car case) (cadr case)) (error e)) out)))
   (nreverse out)))"#,
-        include_str!("gdl_format/gdl_decimal_float.expect"),
+        gnu_float_fixture(
+            include_str!("gdl_format/gdl_decimal_float.expect"),
+            include_str!("gdl_format/gdl_decimal_float.macos.expect"),
+        ),
     );
 }
 

@@ -299,6 +299,8 @@ pub(crate) mod os_signal;
 pub mod path_exec;
 #[path = "system/perf_trace/mod.rs"]
 pub mod perf_trace;
+#[path = "system/platform/platform_facts.rs"]
+pub(crate) mod platform_facts;
 #[path = "system/post_image_init/mod.rs"]
 pub(crate) mod post_image_init;
 #[path = "system/process/mod.rs"]

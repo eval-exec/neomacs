@@ -7,9 +7,29 @@ use std::process::Command;
 /// `UPDATE_EXPECT=1` refreshes the fixture from the GNU binary in `EMACS`
 /// (default: the workspace oracle resolver), run through the campaign's Lisp sandbox.
 fn gnu_expectation(name: &str, form: &str) -> String {
+    gnu_expectation_with_suffix(name, form, "")
+}
+
+/// Like [`gnu_expectation`], recorded in a file suffixed for the host's C
+/// library TZ rules.
+///
+/// An explicit ZONE reaches libc `tzalloc` (src/timefns.c:240,306-314) and
+/// the C library's POSIX TZ parsing decides the answer; see
+/// `platform_facts::PosixTzSemantics`.  Tests whose form is ZONE-explicit and
+/// whose answer differs read the matching recording; every other boundary
+/// test keeps the single shared file.
+fn gnu_expectation_for_platform(name: &str, form: &str) -> String {
+    let suffix = match crate::emacs_core::platform_facts::POSIX_TZ_SEMANTICS {
+        crate::emacs_core::platform_facts::PosixTzSemantics::Glibc => "",
+        crate::emacs_core::platform_facts::PosixTzSemantics::Darwin => ".darwin",
+    };
+    gnu_expectation_with_suffix(name, form, suffix)
+}
+
+fn gnu_expectation_with_suffix(name: &str, form: &str, suffix: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/emacs_core/system/timefns/tests")
-        .join(format!("tsb-{name}.expect"));
+        .join(format!("tsb-{name}{suffix}.expect"));
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
         let sandbox = neomacs_infra::workspace_root()
             .ancestors()
@@ -112,7 +132,7 @@ fn legacy_time_seconds_overflow_matches_gnu() {
 
 #[test]
 fn encode_time_clamps_numeric_zone_like_gnu() {
-    let expected = gnu_expectation(
+    let expected = gnu_expectation_for_platform(
         "encode-numeric-zone",
         "(list (encode-time 0 0 0 1 1 2000 most-positive-fixnum) (encode-time 0 0 0 1 1 2000 most-negative-fixnum))",
     );
