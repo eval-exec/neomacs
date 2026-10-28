@@ -50,6 +50,14 @@ const MPLUS_1_CODE_THIN_NAME: &str = "MPLUS1Code-Thin.ttf";
 const MPLUS_1_CODE_THIN_URL: &str = "https://raw.githubusercontent.com/coz-m/MPLUS_FONTS/9e2b62ba986047127eb0a73b3ca70d75a50114bd/fonts/MPLUS1Code/ttf/MPLUS1Code-Thin.ttf";
 const MPLUS_1_CODE_THIN_SHA256: &str =
     "730c24ad92d46ef913d92dd2ffcd41a535609604b8213d8326292d2664ffd107";
+// The variable build Google Fonts ships for the same family the host may
+// install as static faces: one face whose `wght` axis spans 100..900, so an
+// in-range request must stay a synthesized instance weight instead of
+// snapping to a nearest static sibling.
+const NOTO_SANS_MONO_VARIABLE_NAME: &str = "NotoSansMono-variable.ttf";
+const NOTO_SANS_MONO_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notosansmono/NotoSansMono%5Bwdth,wght%5D.ttf";
+const NOTO_SANS_MONO_VARIABLE_SHA256: &str =
+    "2cb2adb378a8f574213e23df697050b83c54c27df465a2015552740b2769a081";
 const LXGW_NERD_RELEASE: &str = "lxgw-wenkai-nerd-1.522";
 const LXGW_NERD_ARCHIVE_URL: &str = "https://github.com/Yikai-Liao/LxgwWenKaiNerdFont/releases/download/v1.522/lxgw-wenkai-nerd-1.522.tar.gz";
 const LXGW_NERD_ARCHIVE_SHA256: &str =
@@ -93,6 +101,7 @@ static SPLEEN_FIXTURES: OnceLock<SpleenFixtures> = OnceLock::new();
 static WOFF2_COLLECTION_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_SANS_MONO_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_COLRV1_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NABLA_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
@@ -318,6 +327,27 @@ pub fn mplus_1_code_thin() -> &'static Path {
             )
             .unwrap_or_else(|error| {
                 panic!("failed to prepare pinned M PLUS Thin test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// Noto Sans Mono's variable build: one face whose `wght` axis spans
+/// 100..900.  Unlike an installed static family (each face a discrete
+/// weight), an in-range request here must resolve to a synthesized instance
+/// weight, so tests can exercise variable-family weight preservation on any
+/// host regardless of which Noto package its fontconfig sees.
+#[must_use]
+pub fn noto_sans_mono_variable() -> &'static Path {
+    NOTO_SANS_MONO_VARIABLE_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                NOTO_SANS_MONO_VARIABLE_NAME,
+                NOTO_SANS_MONO_VARIABLE_URL,
+                NOTO_SANS_MONO_VARIABLE_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned variable Noto Sans Mono test font: {error}")
             })
         })
         .as_path()

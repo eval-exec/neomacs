@@ -2451,16 +2451,21 @@ fn select_font_for_char_reports_realized_face_metadata() {
 #[test]
 fn select_font_for_char_preserves_resolved_weight_for_variable_family_reports() {
     let mut svc = make_svc();
-    if !svc.font_system.db().faces().any(|face| {
-        face.families
-            .iter()
-            .any(|(name, _)| name.eq_ignore_ascii_case("Noto Sans Mono"))
-    }) {
-        return;
-    }
+    // Pin the variable face under a synthetic family: the host's own "Noto
+    // Sans Mono" is static on the Ubuntu runner and variable under Nix, so
+    // only a pinned face can state this invariant on every host.  The
+    // synthetic family is unknown to fontconfig, which leaves the weight to
+    // the family's `wght` axis rather than to a static sibling's metadata.
+    let fixture = neomacs_test_fonts::noto_sans_mono_variable()
+        .to_string_lossy()
+        .into_owned();
+    let family = svc
+        .pin_file_as_family(&fixture, 0)
+        .expect("pin the variable Noto Sans Mono fixture")
+        .to_owned();
 
     let selected = svc
-        .select_font_for_char('A', "Noto Sans Mono", 600, false, 24.0)
+        .select_font_for_char('A', &family, 600, false, 24.0)
         .expect("selected font for variable family");
     assert_eq!(selected.resolved.weight, 600);
 }
