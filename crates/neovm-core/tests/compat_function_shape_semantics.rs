@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_function_shape_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping function shape audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((symbols '(if
                         throw
                         load
@@ -44,13 +37,6 @@ fn compat_function_shape_semantics_matches_gnu_emacs() {
 
 #[test]
 fn compat_public_evaluator_subr_masking_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping public evaluator subr masking audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((before
          (list
           (list 'if (fboundp 'if) (special-form-p 'if)
@@ -84,13 +70,6 @@ fn compat_public_evaluator_subr_masking_matches_gnu_emacs() {
 
 #[test]
 fn compat_gnu_lisp_macro_surface_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping GNU Lisp macro surface audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((symbols '(eval-when-compile
                         declare
                         eval-and-compile
@@ -124,13 +103,6 @@ fn compat_gnu_lisp_macro_surface_matches_gnu_emacs() {
 
 #[test]
 fn compat_gnu_owned_callables_masking_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping GNU-owned callable masking audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((cases
          '((setq-default . (setq-default vm-mask-a 1))
            (define-error . (define-error 'vm-mask-error "Mask error"))
@@ -168,13 +140,6 @@ fn compat_gnu_owned_callables_masking_matches_gnu_emacs() {
 
 #[test]
 fn compat_loaddefs_runtime_helper_surface_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping loaddefs runtime helper audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((symbols '(function-put
                         register-definition-prefixes
                         custom-autoload

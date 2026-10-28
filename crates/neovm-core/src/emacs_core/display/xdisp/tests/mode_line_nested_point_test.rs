@@ -1,7 +1,7 @@
 //! Live-point nesting and restriction history, with GNU31.1 oracle literals.
 //! Collected through sandbox-run.sh by:
 //! bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
-//! tmp/editpath-cont16/collect-nested-r1.py /home/exec/.local/bin/emacs nested-gnu-r1
+//! tmp/editpath-cont16/collect-nested-r1.py $NEOVM_FORCE_ORACLE_PATH nested-gnu-r1
 //! Actual values: tmp/editpath-cont16/nested-gnu-r1/values.el.
 use super::*;
 use crate::emacs_core::Context;
@@ -208,7 +208,7 @@ fn mode_line_buffer_install_clears_the_live_numeric_base() {
 
 // GNU31.1 collected through sandbox-run.sh by:
 // bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
-// tmp/editpath-cont16/collect-repeat-line-r3.py /home/exec/.local/bin/emacs repeat-line-gnu-r3
+// tmp/editpath-cont16/collect-repeat-line-r3.py $NEOVM_FORCE_ORACLE_PATH repeat-line-gnu-r3
 // Actual values: tmp/editpath-cont16/repeat-line-gnu-r3/values.el.
 #[test]
 fn mode_line_repeated_line_specs_reseat_like_observed_gnu() {

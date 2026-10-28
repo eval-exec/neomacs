@@ -72,10 +72,7 @@ const TIMED_READ_REDISPLAY_FORM: &str = r#"(progn
 #[test]
 fn gnu_timed_read_zero_timeout_preliminary_redisplay_matches_oracle() {
     crate::test_utils::init_test_tracing();
-    let Some(emacs) = std::env::var_os("NEOVM_FORCE_ORACLE_PATH") else {
-        tracing::debug!("skipping timed-read GNU oracle: set NEOVM_FORCE_ORACLE_PATH");
-        return;
-    };
+    let emacs = crate::test_utils::gnu_oracle().executable_path();
     let gnu_form = format!(
         r#"(progn
           (unless (string= emacs-version "31.1")

@@ -17,11 +17,7 @@ fn gnu_fixture(form: &str) -> String {
         .join("../../tmp")
         .join(format!("tier-i-bindings-{}.el", std::process::id()));
     std::fs::write(&script, format!("(prin1 {form})\n")).expect("GNU fixture input");
-    let emacs = std::env::var_os("EMACS").unwrap_or_else(|| {
-        std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-            .join(".local/bin/emacs")
-            .into_os_string()
-    });
+    let emacs = crate::test_utils::gnu_oracle().executable_path();
     let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {
         let mut command = std::process::Command::new(sandbox);
         command.arg(emacs);

@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct WindowDisplayCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct WindowDisplayCase {
 
 #[test]
 fn compat_window_batch_display_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping window batch display audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         WindowDisplayCase {
             name: "window_scroll_bars_batch_round_trip",

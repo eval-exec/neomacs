@@ -31,17 +31,10 @@
 
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_defvar_non_special_exceptions_match_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping DEFVAR non-special audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     // The three exceptions, then four controls that GNU declares with the same
     // `DEFVAR_LISP` and does NOT un-declare.  Without the controls this pin
     // would pass just as well against a port that made every name lexical.
@@ -77,13 +70,6 @@ fn compat_defvar_non_special_exceptions_match_gnu_emacs() {
 /// `features` must not be able to forge an answer out of it.
 #[test]
 fn compat_lexical_features_binding_does_not_reach_featurep() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping lexical `features' audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(list
  (let ((features '(l176-not-really-provided)))
    (featurep 'l176-not-really-provided))

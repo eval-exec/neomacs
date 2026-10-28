@@ -121,10 +121,7 @@ const READ_TIMER_GENERATIONS_FORM: &str = r#"(progn
 
 fn assert_gnu_oracle(form: &str, fixture_name: &str, fixture: &str) {
     crate::test_utils::init_test_tracing();
-    let Some(emacs) = std::env::var_os("NEOVM_FORCE_ORACLE_PATH") else {
-        tracing::debug!("skipping read-timer GNU oracle: set NEOVM_FORCE_ORACLE_PATH");
-        return;
-    };
+    let emacs = crate::test_utils::gnu_oracle().executable_path();
     let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {
         let mut command = std::process::Command::new(sandbox);
         command.arg(&emacs);

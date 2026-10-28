@@ -7,3 +7,4 @@ license.workspace = true
 publish = false
 
 [dependencies]
+neomacs-parity-reference.workspace = true

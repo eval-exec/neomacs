@@ -3859,6 +3859,7 @@ dependencies = [
  "neomacs-infra",
  "neomacs-layout-engine",
  "neomacs-terminfo",
+ "neomacs-test-oracle",
  "neomacs-video-model",
  "neomacs-webview",
  "neovm-core",
@@ -4073,6 +4074,7 @@ dependencies = [
  "fs4",
  "neomacs-infra",
  "neomacs-parity-reference",
+ "neomacs-test-oracle",
  "serde_json",
  "sha2",
  "tempfile",
@@ -4116,6 +4118,7 @@ dependencies = [
  "linux-perf-data",
  "neomacs-infra",
  "neomacs-melpa-test-support",
+ "neomacs-test-oracle",
  "rustix 1.1.4",
  "serde",
  "serde_json",
@@ -4190,6 +4193,9 @@ dependencies = [
 [[package]]
 name = "neomacs-test-oracle"
 version = "0.0.20"
+dependencies = [
+ "neomacs-parity-reference",
+]
 
 [[package]]
 name = "neomacs-tui-tests"
@@ -4320,6 +4326,7 @@ dependencies = [
  "memmap2",
  "neomacs-display-protocol",
  "neomacs-infra",
+ "neomacs-test-oracle",
  "neomacs-video-model",
  "neovm-host-abi",
  "network-interface",

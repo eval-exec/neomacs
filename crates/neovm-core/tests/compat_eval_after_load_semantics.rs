@@ -1,15 +1,8 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 fn assert_case(name: &str, form: &str) {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping eval-after-load semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let gnu = run_oracle_eval(form)
         .unwrap_or_else(|err| panic!("GNU Emacs evaluation failed for {}: {err}", name));
     let neovm = run_neovm_eval(form)

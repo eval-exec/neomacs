@@ -429,7 +429,7 @@ fn reported_emacs_version(executable: &Path) -> Result<String, AttestationError>
 ///
 /// A bare name is looked up on `PATH`; anything with a separator is taken as
 /// given.  Canonicalizing matters here because the pin is reached through a
-/// symlink (`~/.local/bin/emacs`), and it was a BROKEN one of those that caused
+/// user-level `bin/emacs` symlink, and it was a BROKEN one of those that caused
 /// the incident behind ledger 211 section 10.1.
 fn resolve_executable(executable: &Path) -> Result<PathBuf, AttestationError> {
     let candidate = if executable.components().count() > 1 || executable.is_absolute() {

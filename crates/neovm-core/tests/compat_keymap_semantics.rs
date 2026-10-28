@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct KeymapCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct KeymapCase {
 
 #[test]
 fn compat_keymap_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping keymap semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         KeymapCase {
             name: "keymap_text_property_precedes_minor_local_and_global_maps",
@@ -241,13 +234,6 @@ fn compat_keymap_semantics_matches_gnu_emacs() {
 
 #[test]
 fn command_dispatch_accepts_default_keymap_bindings_like_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping default keymap dispatch audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defvar neovm-default-binding-events nil)
   (defun neovm-default-binding-local-fallback ()

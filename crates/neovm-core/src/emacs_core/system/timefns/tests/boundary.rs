@@ -5,7 +5,7 @@ use std::process::Command;
 /// GNU 31.1's answer to FORM, saved as `tsb-NAME.expect` beside this file.
 ///
 /// `UPDATE_EXPECT=1` refreshes the fixture from the GNU binary in `EMACS`
-/// (default `~/.local/bin/emacs`), run through the campaign's Lisp sandbox.
+/// (default: the workspace oracle resolver), run through the campaign's Lisp sandbox.
 fn gnu_expectation(name: &str, form: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src/emacs_core/system/timefns/tests")
@@ -16,12 +16,7 @@ fn gnu_expectation(name: &str, form: &str) -> String {
             .map(|root| root.join("tmp/v10x/sandbox-run.sh"))
             .find(|path| path.is_file())
             .expect("GNU oracle refresh requires the Lisp sandbox");
-        let emacs = std::env::var_os("EMACS")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-                    .join(".local/bin/emacs")
-            });
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let output = Command::new(sandbox)
             .arg(emacs)
             .args(["-Q", "--batch", "--eval"])

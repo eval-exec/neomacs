@@ -31,8 +31,8 @@ fn pair(hooks: bool) -> (TuiSession, TuiSession, TuiTempDirectory) {
     std::fs::write(&script, INIT).expect("write shared transition fixture");
     // Resolve GNU through the attested oracle chokepoint the rest of the TUI
     // and MELPA parity tests use (NEOVM_FORCE_ORACLE_PATH, the melpa override,
-    // the adjacent emacs-mirror checkout, then PATH). Resolving ORACLE_EMACS or
-    // $HOME/.local/bin/emacs here spawned ENOENT in CI, where neither exists.
+    // the adjacent emacs-mirror checkout, then PATH). Resolving through a per-test env var or a
+    // user-level bin symlink here spawned ENOENT in CI, where neither exists.
     let gnu_program = neomacs_melpa_test_support::EmacsRuntime::gnu_emacs().executable;
     let terminal = || TuiTerminalConfig::new("xterm-256color", 32, 96);
     let mut gnu = TuiSession::spawn_launch_on_terminal(

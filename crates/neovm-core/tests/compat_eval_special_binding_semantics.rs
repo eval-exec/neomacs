@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_eval_special_binding_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping eval special binding audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(list
   (list 'quit-flag
         (boundp 'quit-flag)

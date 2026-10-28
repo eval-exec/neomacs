@@ -2541,7 +2541,7 @@ fn motion_parity_audit_run_fails_when_the_sweep_wrote_no_probes() {
 #[cfg(unix)]
 fn motion_parity_audit_run_says_when_the_editor_itself_could_not_be_run() {
     // Ledger 211, from a real incident.  A rebuild in the SHARED GNU mirror
-    // deleted `src/emacs' mid-session, so `/home/exec/.local/bin/emacs' became
+    // deleted `src/emacs' mid-session, so the shared user-level `emacs' symlink became
     // a broken symlink and the sweep's GNU side exited 127 with an EMPTY pty
     // log.
     //

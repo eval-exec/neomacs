@@ -156,11 +156,7 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
     };
 
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
-        let emacs = std::env::var_os("EMACS")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/bin/emacs")
-            });
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let form = format!(
             "(progn (condition-case e (module-load {:?}) (error (prin1 (car e)))) (princ \":\") (princ ({function})))",
             library.to_str().unwrap(),

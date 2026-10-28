@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct FeatureCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct FeatureCase {
 
 #[test]
 fn compat_provide_require_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping provide/require semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         FeatureCase {
             name: "basic_feature_lifecycle",

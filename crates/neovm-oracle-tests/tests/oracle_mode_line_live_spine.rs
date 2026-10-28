@@ -2,27 +2,21 @@
 
 use crate::common;
 
-use std::path::Path;
 use std::process::Command;
 
 use common::oracle_sandbox::{OracleSandbox, project_root};
 use common::return_if_neovm_enable_oracle_proptest_not_set;
 
 fn run_active_gnu(form: &str) -> String {
-    let requested = std::env::var("NEOVM_FORCE_ORACLE_PATH").unwrap_or_else(|_| "emacs".into());
-    let reference = neomacs_parity_reference::attest(
-        Path::new(&requested),
-        neomacs_parity_reference::AttestationDepth::Fingerprint,
-    )
-    .expect("active mode-line oracle must use the pinned GNU reference");
-    tracing::debug!(reference = %reference.stamp(), "active mode-line oracle attested");
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+    tracing::debug!(reference = %oracle.stamp(), "active mode-line oracle attested");
     let artifacts = OracleSandbox::create_fixture_tempdir().expect("oracle artifact directory");
     let display = neomacs_infra::display::start_xvfb(artifacts.path())
         .expect("active GNU mode-line oracle requires Xvfb");
     let result_path = artifacts.path().join("mode-line-result.txt");
     let sandbox = OracleSandbox::new(form, &[], &project_root().join("lisp"))
         .expect("mode-line oracle sandbox");
-    let mut command = Command::new(reference.executable());
+    let mut command = Command::new(oracle.executable());
     sandbox.configure(&mut command);
     command
         .envs(display.env().iter().map(|(key, value)| (key, value)))

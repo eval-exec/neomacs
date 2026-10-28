@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_bootstrap_runtime_state_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping bootstrap runtime state audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((features '(cl-lib cl-macs cl-seq cl-extra gv icons pcase))
       (vars '(gensym-counter
               macroexp--pending-eager-loads

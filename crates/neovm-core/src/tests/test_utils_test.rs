@@ -521,6 +521,12 @@ pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
     eval
 }
 
+/// The one GNU oracle resolver for tests in this crate.
+///
+/// Re-exported so unit tests write `crate::test_utils::gnu_oracle()` rather
+/// than each carrying its own environment/default-path discovery.
+pub use neomacs_test_oracle::gnu::{GnuOracle, gnu_oracle};
+
 /// Construct a legacy-GC fixture with the knob selected before heap creation.
 /// Nextest gives each test its own process. Restore the caller's environment
 /// on return or unwind; an existing heap's generation mode is never changed.

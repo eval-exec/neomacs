@@ -114,10 +114,7 @@ fn direct_help_echo_rows() -> String {
 
 #[test]
 fn gnu_help_echo_substitution_direct_helper_matches_actual_event_path() {
-    let Some(emacs) = std::env::var_os("NEOVM_FORCE_ORACLE_PATH") else {
-        tracing::debug!("skipping help-echo GNU oracle: set NEOVM_FORCE_ORACLE_PATH");
-        return;
-    };
+    let emacs = crate::test_utils::gnu_oracle().executable_path();
     let output = std::process::Command::new(emacs)
         .args(["-Q", "--batch", "--eval", GNU_HELP_ECHO_FORM])
         .output()

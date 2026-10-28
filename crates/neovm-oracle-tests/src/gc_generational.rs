@@ -3,7 +3,7 @@
 //! ONE nextest test runs ten independent oracle cases sequentially. This
 //! keeps expect-test's RT/Patchwork in one process when refreshing this file.
 //! Generate every expectation from the attested GNU 31.1 binary:
-//! NEOVM_FORCE_ORACLE_PATH=/home/exec/.local/bin/emacs
+//! NEOVM_FORCE_ORACLE_PATH=/path/to/attested/emacs
 //! NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1
 //! Select gc_generational_contract_and_old_lifecycle_match_gnu in isolation.
 //!

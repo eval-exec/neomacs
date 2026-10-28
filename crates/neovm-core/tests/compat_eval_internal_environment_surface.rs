@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_eval_internal_environment_surface_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping internal interpreter environment audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((sym (intern-soft "internal-interpreter-environment")))
   (list
    sym

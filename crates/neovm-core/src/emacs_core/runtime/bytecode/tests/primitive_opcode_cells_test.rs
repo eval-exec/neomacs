@@ -1,6 +1,6 @@
 //! GNU primitive opcodes bypass function cells; genuine Bcall/eval/funcall
 //! and apply still resolve them. Refresh fixtures from GNU 31.1 with
-//! `UPDATE_EXPECT=1 EMACS=$HOME/.local/bin/emacs cargo nextest run ...`.
+//! `UPDATE_EXPECT=1 NEOVM_FORCE_ORACLE_PATH=/path/to/emacs cargo nextest run ...`.
 //! Threading: evaluator state and Lisp roots belong to this test's mutator;
 //! scoped compiler overrides contain only scalar settings and restore on exit.
 
@@ -185,11 +185,7 @@ fn gnu_expect(name: &str, program: &str, fixture: &str) -> String {
     std::fs::write(&script, format!(
         ";;; -*- lexical-binding: t; -*-\n(require 'bytecomp)\n(let ((print-length nil) (print-level nil)) (prin1 {program}))\n"
     )).expect("GNU oracle input");
-    let emacs = std::env::var_os("EMACS").unwrap_or_else(|| {
-        PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-            .join(".local/bin/emacs")
-            .into_os_string()
-    });
+    let emacs = crate::test_utils::gnu_oracle().executable_path();
     let output = std::process::Command::new(emacs)
         .args(["--batch", "-Q", "-l"])
         .arg(&script)

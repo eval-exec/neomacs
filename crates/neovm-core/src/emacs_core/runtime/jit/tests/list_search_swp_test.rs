@@ -8,7 +8,7 @@
 //! before.
 //!
 //! The expected matrix below is GNU 31.1's answers, produced with
-//!   tmp/v10x/sandbox-run.sh ~/.local/bin/emacs -Q --batch -l tmp/memq/swp-oracle.el
+//!   tmp/v10x/sandbox-run.sh $NEOVM_FORCE_ORACLE_PATH -Q --batch -l tmp/memq/swp-oracle.el
 //! inside `nix develop /home/exec/Projects/github.com/eval-exec/neomacs-main`
 //! (rows `OP swp=N TARGET ELEMENT INDEX`, the index of the matched cell).
 //! Each case is checked against GNU's expected value, against the builtin

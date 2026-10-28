@@ -34,6 +34,7 @@ gstreamer-pbutils = { workspace = true, features = ["v1_20"], optional = true }
 
 [dev-dependencies]
 neomacs-infra.workspace = true
+neomacs-test-oracle.workspace = true
 tempfile.workspace = true
 
 [lints]

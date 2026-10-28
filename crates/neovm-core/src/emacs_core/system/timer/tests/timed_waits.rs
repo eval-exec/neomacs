@@ -41,8 +41,7 @@ fn sleep_for_fine_elapsed_matches_gnu() {
         "crates/neovm-core/src/emacs_core/system/timer/tests/fixtures/sleep_fine_elapsed.txt",
     );
     if std::env::var("UPDATE_EXPECT").as_deref() == Ok("1") {
-        let emacs = std::env::var_os("NEOVM_FORCE_ORACLE_PATH")
-            .expect("set NEOVM_FORCE_ORACLE_PATH to the GNU reference");
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let output = std::process::Command::new(emacs)
             .args(["--quick", "--batch", "--eval", &format!("(prin1 {FORM})")])
             .output()

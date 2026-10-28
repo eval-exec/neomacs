@@ -2,17 +2,10 @@ use crate::common;
 
 use std::fs;
 
-use common::{elisp_string, oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{elisp_string, run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_file_lock_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping file lock semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let temp = tempfile::NamedTempFile::new().expect("temp file");
     fs::write(temp.path(), b"x").expect("seed file");
     let file = elisp_string(temp.path());

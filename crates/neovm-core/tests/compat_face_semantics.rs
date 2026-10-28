@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct FaceCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct FaceCase {
 
 #[test]
 fn compat_face_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping face semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         FaceCase {
             name: "face_attributes_as_vector_permissive_merge",

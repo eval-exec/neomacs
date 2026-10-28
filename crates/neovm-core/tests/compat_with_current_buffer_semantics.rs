@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_with_current_buffer_macro_shape_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping with-current-buffer macro audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((fn (symbol-function 'with-current-buffer)))
   (list
    (fboundp 'with-current-buffer)
@@ -33,13 +26,6 @@ fn compat_with_current_buffer_macro_shape_matches_gnu_emacs() {
 
 #[test]
 fn compat_with_current_buffer_runtime_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping with-current-buffer runtime audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let* ((a (get-buffer-create "wcb-a"))
          (b (get-buffer-create "wcb-b")))
   (save-current-buffer

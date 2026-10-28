@@ -16,32 +16,15 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub fn oracle_emacs_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("NEOVM_FORCE_ORACLE_PATH") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-
-    let mut dir = repo_root();
-    for _ in 0..4 {
-        let candidate = dir.join("emacs-mirror/emacs/src/emacs");
-        if candidate.exists() {
-            return Some(candidate);
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-
-    None
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub fn oracle_enabled() -> bool {
-    oracle_emacs_path().is_some()
+/// The attested GNU oracle every comparison in this test crate runs against.
+///
+/// Resolution and identity attestation are centralized in
+/// `neomacs_test_oracle::gnu`: `NEOVM_FORCE_ORACLE_PATH` when set, otherwise
+/// the pinned reference check on the `emacs` found on `PATH`.  A missing or
+/// mismatched oracle PANICS here; a parity test must never skip or compare
+/// against an unpinned editor.
+pub fn oracle_emacs_path() -> PathBuf {
+    neomacs_test_oracle::gnu::gnu_oracle().executable_path()
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -119,9 +102,7 @@ fn apply_memory_limit(_cmd: &mut Command, _mem_limit_bytes: u64) {}
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub fn run_oracle_eval(form: &str) -> Result<String, String> {
-    let Some(oracle_bin) = oracle_emacs_path() else {
-        return Err("GNU Emacs oracle binary not found".to_string());
-    };
+    let oracle_bin = oracle_emacs_path();
 
     let form_path = write_temp_elisp_file("neovm-oracle-form-", ".el", form)?;
     let program = r#"(condition-case err

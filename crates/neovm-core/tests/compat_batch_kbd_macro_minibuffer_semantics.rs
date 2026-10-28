@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn batch_keyboard_macro_drives_the_minibuffer_like_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping batch keyboard-macro minibuffer audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defun neovm-test-read-string ()
     (interactive)
@@ -33,13 +26,6 @@ fn batch_keyboard_macro_drives_the_minibuffer_like_gnu_emacs() {
 
 #[test]
 fn dynamically_bound_minibuffer_hooks_observe_the_real_minibuffer_lifecycle() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping dynamically bound minibuffer hook audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defvar neovm-test-minibuffer-hook-log nil)
   (defvar neovm-test-minibuffer-result nil)

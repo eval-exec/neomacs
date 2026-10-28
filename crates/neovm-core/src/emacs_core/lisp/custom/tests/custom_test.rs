@@ -220,11 +220,7 @@ Multiple lines, just like the bindings.el version."
     )
     .expect("write source");
     // Byte-compile via GNU Emacs.
-    let gnu_emacs = "/home/exec/.local/bin/emacs";
-    if !std::path::Path::new(gnu_emacs).exists() {
-        eprintln!("skipping: GNU Emacs not available at {gnu_emacs}");
-        return;
-    }
+    let gnu_emacs = crate::test_utils::gnu_oracle().executable_path();
     let status = std::process::Command::new(gnu_emacs)
         .args(["--batch", "--eval"])
         .arg(format!("(byte-compile-file \"{}\")", src_path.display()))

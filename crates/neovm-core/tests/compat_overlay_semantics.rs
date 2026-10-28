@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 use neovm_core::emacs_core::value_reader;
 
 const EMPTY_OVERLAY_QUERIES_AND_CROSS_BUFFER_MOVE_FORM: &str = r#"(let ((a (get-buffer-create " *compat-overlay-a*"))
@@ -44,13 +44,6 @@ struct OverlayCase {
 
 #[test]
 fn compat_overlay_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping overlay semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         OverlayCase {
             name: "priority_and_boundary_queries",

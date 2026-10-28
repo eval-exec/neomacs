@@ -280,9 +280,8 @@ fn run_probe(name: &str, program: PathBuf, scenario: Scenario, extra: &[&str]) -
 }
 
 fn assert_order_matches_gnu(scenario: Scenario) {
-    // The attested oracle chokepoint every other parity suite uses; the old
-    // $HOME/.local/bin/emacs path does not exist on CI runners and spawned
-    // ENOENT.
+    // The attested oracle chokepoint every other parity suite uses; a
+    // user-level bin symlink does not exist on CI runners and spawned ENOENT.
     let gnu = run_probe(
         "GNU",
         neomacs_melpa_test_support::EmacsRuntime::gnu_emacs().executable,

@@ -21,11 +21,7 @@ fn assert_gnu(name: &str, form: &str) {
             ),
         )
         .unwrap();
-        let emacs = std::env::var_os("EMACS")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/bin/emacs")
-            });
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         // Campaign refreshes supply their PID/memory sandbox; ordinary fixture
         // refreshes remain portable to checkouts without campaign tooling.
         let mut command = if let Some(sandbox) = std::env::var_os("NEOVM_LISP_SANDBOX") {

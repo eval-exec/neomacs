@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_write_region_shift_jis_bytes_match_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping write coding audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((file (make-temp-file "compat-write-shift-jis-")))
   (unwind-protect
       (with-temp-buffer
@@ -34,13 +27,6 @@ fn compat_write_region_shift_jis_bytes_match_gnu_emacs() {
 
 #[test]
 fn compat_write_region_legacy_codings_parse_unibyte_sources_like_gnu() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping write coding audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((payload (unibyte-string
                          105 196 224 216 106 123 4 48
                          216 205 183 128 112 180 197 90)))

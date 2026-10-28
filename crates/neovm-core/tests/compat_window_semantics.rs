@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct WindowCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct WindowCase {
 
 #[test]
 fn compat_window_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping window semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         WindowCase {
             name: "window_tree_navigation_and_normal_size",

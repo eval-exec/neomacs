@@ -5,6 +5,8 @@
 //! evaluation either returns a normalized printed Lisp value or signals
 //! normalized printed Lisp error data.
 
+pub mod gnu;
+
 use std::fmt;
 
 /// A normalized, comparable editor evaluation.

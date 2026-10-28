@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_oracle_eval};
+use common::run_oracle_eval;
 use neovm_core::emacs_core::{Context, format_eval_result_with_eval};
 
 fn run_neovm_eval_minimal(form: &str) -> Result<String, String> {
@@ -11,13 +11,6 @@ fn run_neovm_eval_minimal(form: &str) -> Result<String, String> {
 
 #[test]
 fn compat_overlay_insert_before_markers_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping overlay insert semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((buf (get-buffer-create " *compat-overlay-before-markers*")))
   (unwind-protect
       (progn
@@ -59,13 +52,6 @@ fn compat_overlay_insert_before_markers_matches_gnu_emacs() {
 
 #[test]
 fn compat_overlay_print_and_deleted_identity_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping overlay print semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((buf (get-buffer-create " *compat-overlay-deleted*")))
   (unwind-protect
       (progn
@@ -102,13 +88,6 @@ fn compat_overlay_print_and_deleted_identity_matches_gnu_emacs() {
 
 #[test]
 fn compat_empty_front_advance_overlay_insert_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping empty overlay insert audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(let ((buf (get-buffer-create " *compat-overlay-empty-front*")))
   (unwind-protect
       (progn

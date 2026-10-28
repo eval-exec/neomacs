@@ -186,26 +186,10 @@ fn elb_interval_runs_all_eight_fixture_protocol_regressions_with_forced_gnu() {
     use std::process::{Command, Output};
     use std::time::Duration;
 
-    let requested = std::env::var_os("NEOVM_FORCE_ORACLE_PATH")
-        .filter(|path| !path.is_empty())
-        .expect(
-            "ELB protocol regressions require NEOVM_FORCE_ORACLE_PATH; do not skip the GNU oracle",
-        );
-    let requested = PathBuf::from(requested);
-    // Resolve a relative forced path against nextest's original working
-    // directory before setting the child's fixture working directory.
-    let oracle = if requested.is_absolute() {
-        requested
-    } else {
-        std::env::current_dir()
-            .expect("nextest working directory")
-            .join(requested)
-    };
-    assert!(
-        oracle.is_file(),
-        "forced GNU oracle does not exist: {}",
-        oracle.display()
-    );
+    // The workspace's one resolver: NEOVM_FORCE_ORACLE_PATH when set, else the
+    // pinned reference on PATH, attested either way.  It canonicalizes to an
+    // absolute path and fails loudly when no attested oracle is available.
+    let oracle = neomacs_test_oracle::gnu::gnu_oracle().executable_path();
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = manifest.join("fixtures/elisp-benchmarks-tests.el");
     assert!(

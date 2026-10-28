@@ -10,8 +10,8 @@ use crate::coverage_manifest::{
     ORACLE_TESTED_SPECIAL_FORM_NAMES,
 };
 
-fn oracle_emacs_path() -> String {
-    std::env::var("NEOVM_FORCE_ORACLE_PATH").unwrap_or_else(|_| "emacs".to_string())
+fn oracle_emacs_path() -> std::path::PathBuf {
+    neomacs_test_oracle::gnu::gnu_oracle().executable_path()
 }
 
 fn run_oracle_name_dump(program: &str) -> Result<BTreeSet<String>, String> {

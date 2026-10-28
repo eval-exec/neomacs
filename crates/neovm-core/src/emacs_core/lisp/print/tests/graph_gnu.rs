@@ -17,7 +17,7 @@ fn compare(name: &str, form: &str, saved: &str) {
             ),
         )
         .unwrap();
-        let emacs = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/bin/emacs");
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let mut command = match std::env::var_os("NEOMACS_PROBE_SANDBOX") {
             Some(sandbox) => {
                 let mut command = std::process::Command::new(sandbox);

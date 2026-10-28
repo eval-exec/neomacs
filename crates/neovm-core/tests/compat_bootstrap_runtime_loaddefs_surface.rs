@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use common::{oracle_enabled, repo_root, run_neovm_eval, run_oracle_eval};
+use common::{repo_root, run_neovm_eval, run_oracle_eval};
 
 fn collect_autoload_symbols(
     path: &Path,
@@ -46,13 +46,6 @@ fn lisp_symbol_list(symbols: &BTreeSet<String>) -> String {
 
 #[test]
 fn compat_bootstrap_runtime_generated_loaddefs_surface_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping generated loaddefs runtime audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let root = repo_root();
     let mut symbols = collect_autoload_symbols(&root.join("lisp/emacs-lisp/cl-loaddefs.el"), None);
     let runtime_files = BTreeSet::from(["gv", "icons", "pcase"]);

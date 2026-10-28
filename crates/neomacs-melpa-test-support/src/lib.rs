@@ -235,7 +235,7 @@ pub struct EmacsRuntime {
     pub timeout: Duration,
     /// Set only by [`EmacsRuntime::gnu_emacs`], and only when a reference was
     /// actually attested.  `None` on this port's own runtime, where no pin
-    /// applies, and on a GNU that is absent.
+    /// applies.
     reference: Option<neomacs_parity_reference::ReferenceUse>,
 }
 
@@ -254,66 +254,20 @@ impl EmacsRuntime {
         Self::new("neomacs", neomacs_binary())
     }
 
-    /// GNU Emacs oracle selected explicitly by environment, then from the
-    /// developer's adjacent source checkout, and finally from `PATH`.
+    /// GNU Emacs oracle resolved by the workspace's one resolver and attested
+    /// against `parity-reference.toml`.
     ///
-    /// # The reference is ATTESTED here (ledger 214)
-    ///
-    /// This is the single chokepoint through which every melpa and TUI parity
-    /// test reaches GNU, and until ledger 214 it checked nothing at all: the
-    /// three environment variables, the hard-coded checkout and `PATH` are FOUR
-    /// resolution rules, and the other harnesses have their own, so two suites
-    /// in one session could have scored against two different GNUs without a
-    /// word.  Attesting here means a mismatch cannot reach a comparison.
-    ///
-    /// A mismatch panics rather than returning an error on purpose.  Every
-    /// caller is a parity test whose only possible response is to stop, and a
-    /// `Result` here would be a door for someone to score anyway.  A GNU that
-    /// is simply ABSENT is left to the caller as before --- that is a skip, not
-    /// a wrong answer.
+    /// `neomacs_test_oracle::gnu` owns the only two inputs ---
+    /// `NEOVM_FORCE_ORACLE_PATH`, else the pinned reference check on the
+    /// `emacs` found on `PATH` --- and PANICS when no attested oracle is
+    /// available.  Every caller is a parity test whose only possible response
+    /// to an absent or mismatched oracle is to stop: a skip here would be a
+    /// green run that measured nothing.
     pub fn gnu_emacs() -> Self {
-        let mut runtime = Self::new("gnu-emacs", Self::gnu_emacs_executable());
-        match neomacs_parity_reference::attest(
-            &runtime.executable,
-            neomacs_parity_reference::AttestationDepth::Fingerprint,
-        ) {
-            Ok(reference) => {
-                runtime.executable = reference.executable().to_path_buf();
-                runtime.reference = Some(reference);
-            }
-            Err(
-                error @ neomacs_parity_reference::AttestationError::ExecutableUnresolved { .. },
-            ) => {
-                // No GNU here at all; the caller's own missing-editor handling
-                // reports it.  Ledger 211 section 10.1's distinction: an editor
-                // that could not be RUN is not an editor that answered wrongly.
-                let _ = error;
-            }
-            Err(error) => panic!(
-                "the GNU oracle is present but is NOT the pinned reference, so a parity \
-                 comparison against it is not comparable with any published number.\n{error}"
-            ),
-        }
+        let oracle = neomacs_test_oracle::gnu::gnu_oracle();
+        let mut runtime = Self::new("gnu-emacs", oracle.executable_path());
+        runtime.reference = Some(oracle.reference().clone());
         runtime
-    }
-
-    fn gnu_emacs_executable() -> PathBuf {
-        for variable in [
-            "NEOMACS_MELPA_ORACLE_EMACS",
-            "NEOVM_FORCE_ORACLE_PATH",
-            "NEOVM_ORACLE_EMACS",
-            "ORACLE_EMACS",
-        ] {
-            if let Some(path) = std::env::var_os(variable) {
-                return PathBuf::from(path);
-            }
-        }
-        let source_checkout =
-            PathBuf::from("/home/exec/Projects/github.com/emacs-mirror/emacs/src/emacs");
-        if source_checkout.is_file() {
-            return source_checkout;
-        }
-        PathBuf::from("emacs")
     }
 
     /// What this runtime was attested to be, when it is GNU and was checked.

@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct TextPropertyCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct TextPropertyCase {
 
 #[test]
 fn compat_text_property_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping text property semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         TextPropertyCase {
             name: "string_overlapping_ranges_and_boundary_walk",

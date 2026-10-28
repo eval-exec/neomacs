@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct BufferLocalsCase {
     name: &'static str,
@@ -8,13 +8,6 @@ struct BufferLocalsCase {
 }
 
 fn run_case(case: BufferLocalsCase) {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping buffer locals audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let gnu = run_oracle_eval(case.form).expect("GNU Emacs evaluation");
     let neovm = run_neovm_eval(case.form).expect("NeoVM evaluation");
     assert_eq!(

@@ -8,11 +8,7 @@ fn oracle(name: &str, form: &str, fixture: &str) {
             .join("../../tmp")
             .join(format!("settings-{name}-{}.el", std::process::id()));
         std::fs::write(&input, format!("(prin1 {form})\n")).expect("GNU probe");
-        let emacs = std::env::var_os("EMACS").unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-                .join(".local/bin/emacs")
-                .into_os_string()
-        });
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let output = std::process::Command::new(emacs)
             .args(["-Q", "--batch", "-l"])
             .arg(input)

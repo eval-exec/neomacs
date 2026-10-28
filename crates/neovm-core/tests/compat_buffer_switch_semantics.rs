@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct BufferSwitchCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct BufferSwitchCase {
 
 #[test]
 fn compat_buffer_switch_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping buffer switch semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         BufferSwitchCase {
             name: "noncurrent_indirect_point_and_narrowing_track_base_insert",

@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct SwitchCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct SwitchCase {
 
 #[test]
 fn compat_switch_to_buffer_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping switch-to-buffer audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         SwitchCase {
             name: "switch_to_buffer_updates_selected_window_and_display_count",

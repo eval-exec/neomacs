@@ -18,6 +18,7 @@
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 /// Captured outcome of running a binary with a specific argv.
@@ -38,61 +39,15 @@ impl From<Output> for ProbeResult {
     }
 }
 
-/// Path to the GNU `emacs` binary used as the parity oracle.
+/// The attested GNU `emacs` every parity test in this crate runs against.
 ///
-/// Resolution order, mirroring `crates/neovm-oracle-tests/src/common.rs:125`:
-/// 1. `NEOVM_FORCE_ORACLE_PATH` environment variable.
-/// 2. A nearby `emacs-mirror/emacs/src/emacs` checkout, walking up to
-///    four levels from the Cargo workspace root.
-/// 3. Fall through to `emacs` on `$PATH`.
-pub fn oracle_emacs_path() -> String {
-    if let Ok(path) = std::env::var("NEOVM_FORCE_ORACLE_PATH") {
-        return path;
-    }
-    let mut dir = neomacs_infra::workspace_root();
-    for _ in 0..4 {
-        let candidate = dir.join("emacs-mirror/emacs/src/emacs");
-        if candidate.exists() {
-            return candidate.to_string_lossy().into_owned();
-        }
-        if !dir.pop() {
-            break;
-        }
-    }
-    "emacs".to_string()
-}
-
-/// True when oracle parity tests should run. Mirrors
-/// `crates/neovm-oracle-tests/src/common.rs:84`.
-///
-/// We gate on the same `NEOVM_FORCE_ORACLE_PATH` env var so a single
-/// invocation flag opts the entire workspace into oracle testing.
-pub fn oracle_enabled() -> bool {
-    std::env::var_os("NEOVM_FORCE_ORACLE_PATH").is_some()
-}
-
-/// Skip the current test when oracle parity is not enabled.
-///
-/// Use as the first line of a `#[test]` body:
-///
-/// ```ignore
-/// #[test]
-/// fn parity_check() {
-///     skip_unless_oracle!();
-///     // …
-/// }
-/// ```
-#[macro_export]
-macro_rules! skip_unless_oracle {
-    () => {
-        if !$crate::common::oracle_enabled() {
-            eprintln!(
-                "skipping {}: set NEOVM_FORCE_ORACLE_PATH=/path/to/emacs",
-                module_path!()
-            );
-            return;
-        }
-    };
+/// Resolution and identity attestation are centralized in
+/// `neomacs_test_oracle::gnu`: `NEOVM_FORCE_ORACLE_PATH` when set, otherwise
+/// the pinned-reference check on the `emacs` found on `PATH`.  A missing or
+/// mismatched oracle PANICS in the helper below; a parity test must never
+/// skip or compare against an unpinned editor.
+pub fn oracle_emacs_path() -> PathBuf {
+    neomacs_test_oracle::gnu::gnu_oracle().executable_path()
 }
 
 /// Memory limit (bytes) imposed on each spawned subprocess to keep a
@@ -168,7 +123,11 @@ pub fn run_oracle_emacs_with_stdin(argv: &[&str], stdin: &str) -> ProbeResult {
     let mut cmd = Command::new(&oracle);
     cmd.args(argv);
     cmd.env("HOME", std::env::temp_dir());
-    run_with_stdin(&mut cmd, stdin, &format!("oracle emacs at {oracle}"))
+    run_with_stdin(
+        &mut cmd,
+        stdin,
+        &format!("oracle emacs at {}", oracle.display()),
+    )
 }
 
 fn run_with_stdin(cmd: &mut Command, stdin: &str, label: &str) -> ProbeResult {

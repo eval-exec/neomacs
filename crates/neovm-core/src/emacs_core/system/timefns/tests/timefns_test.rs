@@ -1373,7 +1373,7 @@ fn parse_zone_rule_accepts_raw_unibyte_string_without_panicking() {
 // -----------------------------------------------------------------------
 // Exact (TICKS . HZ) rational time core — byte-exact vs GNU Emacs 31.0.50.
 // Each assertion was reproduced against
-// `/home/exec/Projects/github.com/emacs-mirror/emacs/src/emacs --batch`.
+// the attested GNU oracle (`$NEOVM_FORCE_ORACLE_PATH --batch`).
 // -----------------------------------------------------------------------
 
 #[test]

@@ -21,11 +21,7 @@ fn diagnostic_symbol_string_matches_gnu_live_names_and_quoting() {
         "(let ((print-gensym nil) (print-circle nil) (print-level nil) (print-length nil))\n  (dolist (symbol {SYMBOLS}) (prin1 (append (prin1-to-string symbol) nil)) (terpri)))\n"
     );
     std::fs::write(&script, program).expect("GNU diagnostic symbol probe");
-    let emacs = std::env::var_os("NEOVM_FORCE_ORACLE_PATH").unwrap_or_else(|| {
-        PathBuf::from(std::env::var_os("HOME").expect("HOME"))
-            .join(".local/bin/emacs")
-            .into_os_string()
-    });
+    let emacs = crate::test_utils::gnu_oracle().executable_path();
     // Campaign nextest runs inside the PID/memory sandbox, including its GNU child.
     let mut command = if let Some(wrapper) = std::env::var_os("NEOMACS_PROBE_SANDBOX") {
         let mut command = std::process::Command::new(wrapper);

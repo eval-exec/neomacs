@@ -17,7 +17,7 @@ use crate::test_utils::runtime_startup_eval_one;
 // DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus
 // taskset -c 0-3,14-31 nix develop /home/exec/Projects/github.com/eval-exec/neomacs-main -c \
 // /home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/v10x/sandbox-run.sh \
-// /home/exec/.local/bin/emacs -Q --batch -l \
+// $NEOVM_FORCE_ORACLE_PATH -Q --batch -l \
 // /home/exec/Projects/github.com/eval-exec/neomacs-main/tmp/wt-lead-vmcall/tmp/vmcall/undofix-oracle-v1/capture.el
 // Full input, argv, environment, stdout/stderr, exit and hashes are retained in
 // tmp/vmcall/undofix-oracle-v1/. The original sixteen-case GNU result was freshly

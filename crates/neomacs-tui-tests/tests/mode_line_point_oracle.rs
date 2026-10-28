@@ -10,9 +10,9 @@ const PROBE_EL: &str = include_str!("mode_line_point_probe.el");
 
 // GNU Emacs 31.1, interactive 40x120 xterm-256color, C.UTF-8. Collected with:
 // bash tmp/editpath-cont11/run-net-cg-nix-r1.sh python3 -B
-//   tmp/editpath-cont16/collect-point.py /home/exec/.local/bin/emacs point-gnu-r1
+//   tmp/editpath-cont16/collect-point.py $NEOVM_FORCE_ORACLE_PATH point-gnu-r1
 // The controller runs tmp/v10x/sandbox-run.sh <python> -B point-pty.py
-//   /home/exec/.local/bin/emacs -nw -Q -no-comp-spawn
+//   $NEOVM_FORCE_ORACLE_PATH -nw -Q -no-comp-spawn
 //   --eval="(setq native-comp-jit-compilation nil native-comp-async-report-warnings-errors 'silent)"
 //   -l crates/neomacs-tui-tests/tests/mode_line_point_probe.el
 // Original GNU output is retained in tmp/editpath-cont16/point-gnu-r1/values.el.

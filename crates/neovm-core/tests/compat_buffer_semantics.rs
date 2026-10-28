@@ -1,6 +1,6 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 struct BufferCase {
     name: &'static str,
@@ -9,13 +9,6 @@ struct BufferCase {
 
 #[test]
 fn compat_buffer_semantics_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping buffer semantics audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let cases = [
         BufferCase {
             name: "modified_and_restore_transitions",
@@ -291,9 +284,6 @@ fn compat_buffer_semantics_matches_gnu_emacs() {
 
 #[test]
 fn edit_preparation_remeasures_after_before_change_hooks() {
-    if !oracle_enabled() {
-        return;
-    }
     for command in [
         "(delete-region 3 5)",
         "(goto-char 3) (delete-char 2)",
@@ -538,9 +528,6 @@ fn edit_commands_keep_text_valid_when_change_callbacks_rewrite_the_buffer() {
 /// same text, point and return value.
 #[test]
 fn edit_commands_remeasure_after_change_callbacks_like_gnu() {
-    if !oracle_enabled() {
-        return;
-    }
     let mut cases = Vec::new();
     for (name, text, command, _) in P41_COMMANDS {
         for (hook_name, hook) in P41_HOOKS {
@@ -610,9 +597,6 @@ fn edit_commands_remeasure_after_change_callbacks_like_gnu() {
 
 #[test]
 fn kill_buffer_hooks_restore_caller_excursion() {
-    if !oracle_enabled() {
-        return;
-    }
     for hook in ["kill-buffer-hook", "kill-buffer-query-functions"] {
         for body in [
             "(error \"tse-kill-hook\")",
@@ -644,9 +628,6 @@ fn kill_buffer_hooks_restore_caller_excursion() {
 
 #[test]
 fn treesit_parse_string_restores_caller_before_parser_creation() {
-    if !oracle_enabled() {
-        return;
-    }
     // tsA owns condition-name parity; this probe observes caller state on
     // language-loader failure without pinning the independent error symbol.
     let form = r#"(with-temp-buffer
@@ -663,9 +644,6 @@ fn treesit_parse_string_restores_caller_before_parser_creation() {
 
 #[test]
 fn buffer_property_hook_errors_restore_current_buffer() {
-    if !oracle_enabled() {
-        return;
-    }
     for command in [
         "(put-text-property 1 2 'face 'bold other)",
         "(add-text-properties 1 2 '(face bold) other)",
@@ -695,9 +673,6 @@ fn buffer_property_hook_errors_restore_current_buffer() {
 
 #[test]
 fn replace_region_contents_remeasures_each_live_diff_run() {
-    if !oracle_enabled() {
-        return;
-    }
     for hook in [
         "(goto-char 1) (insert \"xx\")",
         "(goto-char 1) (delete-char 1)",
@@ -721,9 +696,6 @@ fn replace_region_contents_remeasures_each_live_diff_run() {
 
 #[test]
 fn replace_match_preparation_updates_registers_before_after_hooks() {
-    if !oracle_enabled() {
-        return;
-    }
     for hook in [
         "(goto-char 1) (insert \"xx\")",
         "(goto-char 1) (delete-char 1)",
@@ -755,9 +727,6 @@ fn replace_match_preparation_updates_registers_before_after_hooks() {
 
 #[test]
 fn replace_match_retains_original_official_point_after_hook_relocation() {
-    if !oracle_enabled() {
-        return;
-    }
     for hook in [
         "(goto-char 1) (insert \"xx\")",
         "(goto-char 1) (delete-char 1)",
@@ -778,9 +747,6 @@ fn replace_match_retains_original_official_point_after_hook_relocation() {
 
 #[test]
 fn move_to_column_force_remeasures_each_stage_after_hooks() {
-    if !oracle_enabled() {
-        return;
-    }
     for stage in [1, 2] {
         for action in [
             "(erase-buffer)",
@@ -809,9 +775,6 @@ fn move_to_column_force_remeasures_each_stage_after_hooks() {
 }
 
 fn ts_e_file_scope_case(name: &str, form_template: &str) {
-    if !oracle_enabled() {
-        return;
-    }
     let directory = common::workspace_root().join("tmp");
     std::fs::create_dir_all(&directory).unwrap();
     let output = directory.join(format!("ts-e-{name}-{}.out", std::process::id()));
@@ -919,9 +882,6 @@ fn insert_file_contents_signal_preserves_selected_buffer_and_disabled_undo() {
 
 #[test]
 fn edit_preparation_before_hook_selected_buffer_persists_and_is_edited() {
-    if !oracle_enabled() {
-        return;
-    }
     let form = r#"(let ((source (generate-new-buffer " *owned-prepare-source*"))
                        (target (generate-new-buffer " *owned-prepare-target*")))
       (unwind-protect
@@ -945,9 +905,6 @@ fn edit_preparation_before_hook_selected_buffer_persists_and_is_edited() {
 
 #[test]
 fn edit_preparation_killed_marker_signals_without_editing_selected_buffer() {
-    if !oracle_enabled() {
-        return;
-    }
     let form = r#"(let ((source (generate-new-buffer " *owned-prepare-source*"))
                        (target (generate-new-buffer " *owned-prepare-target*")))
       (unwind-protect
@@ -972,9 +929,6 @@ fn edit_preparation_killed_marker_signals_without_editing_selected_buffer() {
 
 #[test]
 fn edit_preparation_deactivate_watcher_signal_aborts_mutation() {
-    if !oracle_enabled() {
-        return;
-    }
     let form = r#"(with-temp-buffer
       (insert "abcdef")
       (let ((watcher (lambda (_symbol value operation _where)
@@ -996,11 +950,6 @@ fn edit_preparation_deactivate_watcher_signal_aborts_mutation() {
 
 #[test]
 fn compat_subst_region_shared_edit_geometry_matches_gnu() {
-    if !oracle_enabled() {
-        tracing::debug!("skipping shared edit helper audit: GNU Emacs oracle unavailable");
-        return;
-    }
-
     let form = r###"(let (rows)
   (dolist (multiby '(nil t))
     (dolist (properties '(nil t))
@@ -1032,11 +981,6 @@ fn compat_subst_region_shared_edit_geometry_matches_gnu() {
 
 #[test]
 fn compat_word_casing_shared_replace_expansion_matches_gnu() {
-    if !oracle_enabled() {
-        tracing::debug!("skipping shared edit helper audit: GNU Emacs oracle unavailable");
-        return;
-    }
-
     let form = r###"(let (rows)
   (dolist (properties '(nil t))
     (dolist (command '(upcase-word capitalize-word downcase-word))
@@ -1061,9 +1005,6 @@ fn compat_word_casing_shared_replace_expansion_matches_gnu() {
 
 #[test]
 fn write_region_literal_start_restores_coding_callback_restriction() {
-    if !oracle_enabled() {
-        return;
-    }
     ts_e_file_scope_case(
         "literal-coding-success",
         r#"(with-temp-buffer
@@ -1088,9 +1029,6 @@ fn write_region_literal_start_restores_coding_callback_restriction() {
 
 #[test]
 fn write_region_literal_start_restores_signaling_coding_callback_restriction() {
-    if !oracle_enabled() {
-        return;
-    }
     ts_e_file_scope_case(
         "literal-coding-signal",
         r#"(with-temp-buffer
@@ -1112,9 +1050,6 @@ fn write_region_literal_start_restores_signaling_coding_callback_restriction() {
 
 #[test]
 fn write_region_handler_precedes_native_restriction_scope() {
-    if !oracle_enabled() {
-        return;
-    }
     ts_e_file_scope_case(
         "handler-before-restriction",
         r#"(with-temp-buffer
@@ -1137,9 +1072,6 @@ fn write_region_handler_precedes_native_restriction_scope() {
 
 #[test]
 fn kill_buffer_post_hook_callbacks_preserve_selected_buffer_and_point() {
-    if !oracle_enabled() {
-        return;
-    }
     let template = r#"(let ((orig (generate-new-buffer " *tse-kill-boundary-orig*"))
       (victim (generate-new-buffer " *tse-kill-boundary-victim*"))
       (other (generate-new-buffer " *tse-kill-boundary-other*")))
@@ -1170,9 +1102,6 @@ fn kill_buffer_post_hook_callbacks_preserve_selected_buffer_and_point() {
 }
 
 fn tse_excursion_window_oracle_case(form: &str, expected_state: &str) {
-    if !oracle_enabled() {
-        return;
-    }
     let expected = run_oracle_eval(form).expect("GNU saved excursion window oracle");
     assert_eq!(
         expected, expected_state,
@@ -1313,9 +1242,6 @@ fn saved_excursion_frame_rewind_exchanges_original_window_point() {
 
 #[test]
 fn compat_casing_hook_mutations_keep_gnu_live_source_and_full_state() {
-    if !oracle_enabled() {
-        return;
-    }
     let cases = [
         (
             "upcase-region-none",
@@ -1767,10 +1693,6 @@ fn compat_casing_hook_mutations_keep_gnu_live_source_and_full_state() {
 // changed source characters, including expansions; :570 adjusts old length.
 #[test]
 fn compat_expanded_casing_after_change_extents_match_gnu() {
-    if !oracle_enabled() {
-        return;
-    }
-
     let form = r#"(mapcar
  (lambda (spec)
   (with-temp-buffer
@@ -1818,9 +1740,6 @@ fn compat_expanded_casing_after_change_extents_match_gnu() {
 /// boundaries. Record both buffers and the callback-selected current buffer;
 /// the GNU oracle supplies the expected result instead of a guessed snapshot.
 fn assert_delete_preparation_matches_gnu(seam: &str, effect: &str) {
-    if !oracle_enabled() {
-        return;
-    }
     let form = format!(
         r#"(let ((seam '{seam}) (effect '{effect}))
   (let* ((origin (current-buffer))

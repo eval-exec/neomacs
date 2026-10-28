@@ -325,7 +325,7 @@ fn gnu_fixture(name: &str, form: &str) -> String {
             .map(|path| path.join("tmp/v10x/sandbox-run.sh"))
             .find(|path| path.is_file())
             .expect("GNU refresh requires the campaign sandbox-run.sh");
-        let emacs = std::env::var_os("NEOVM_FORCE_ORACLE_PATH").expect("GNU oracle path");
+        let emacs = crate::test_utils::gnu_oracle().executable_path();
         let output = std::process::Command::new(sandbox)
             .args(["timeout", "30"])
             .arg(emacs)

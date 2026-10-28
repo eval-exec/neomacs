@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn compat_bootstrap_runtime_core_surface_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping bootstrap runtime core surface audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(list
   (list 'frame
         (featurep 'frame)

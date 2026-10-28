@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 use native_regex::Regex as NativeRegex;
 
 fn gnu_xfaces_c_path() -> Option<std::path::PathBuf> {
@@ -44,13 +44,6 @@ fn parse_symbol_list(output: &str) -> BTreeSet<String> {
 
 #[test]
 fn compat_face_surface_matches_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping face surface audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let Some(gnu_xfaces_c) = gnu_xfaces_c_path() else {
         eprintln!("skipping face surface audit: GNU xfaces.c not found");
         return;

@@ -2,9 +2,10 @@
 //!
 //! Each test asserts that GNU `emacs` and our `neomacs` produce
 //! comparable observable startup state when invoked with the same argv.
-//! Tests gate on `NEOVM_FORCE_ORACLE_PATH` (the same env var
-//! `neovm-oracle-tests` uses); when unset, every test exits early so
-//! CI without GNU Emacs available still passes.
+//! Every test resolves GNU through the workspace's one oracle resolver
+//! (`neomacs_test_oracle::gnu`): `NEOVM_FORCE_ORACLE_PATH` when set, otherwise
+//! the pinned reference checked on the `emacs` found on `PATH`.  A test that
+//! cannot resolve an attested oracle fails; it never skips.
 //!
 //! Background: see `drafts/argv-parity-audit.md` for the ground-truth
 //! `standard_args[]` table from `emacs.c:2646-2766` and the per-flag
@@ -18,11 +19,8 @@
 //! specific test remains ignored with that gap stated on the test itself.
 
 use crate::common;
-use crate::skip_unless_oracle;
-
 use common::{
-    ProbeResult, oracle_enabled, run_neomacs, run_neomacs_with_stdin, run_oracle_emacs,
-    run_oracle_emacs_with_stdin,
+    ProbeResult, run_neomacs, run_neomacs_with_stdin, run_oracle_emacs, run_oracle_emacs_with_stdin,
 };
 
 fn assert_status_eq(neomacs: &ProbeResult, emacs: &ProbeResult, label: &str) {
@@ -62,16 +60,13 @@ fn batch_read_from_minibuffer_honors_read_and_default_with_stdin() {
     assert_eq!(n.status, 0, "batch minibuffer read failed: {n:?}");
     assert_eq!(n.stdout.trim(), "((a b) 42 \"plain\")", "{n:?}");
 
-    if oracle_enabled() {
-        let e = run_oracle_emacs_with_stdin(&argv, stdin);
-        assert_status_eq(&n, &e, "batch read-from-minibuffer exit");
-        assert_stdout_parity(&n, &e, "batch read-from-minibuffer result");
-    }
+    let e = run_oracle_emacs_with_stdin(&argv, stdin);
+    assert_status_eq(&n, &e, "batch read-from-minibuffer exit");
+    assert_stdout_parity(&n, &e, "batch read-from-minibuffer result");
 }
 
 #[test]
 fn version_flag_exits_zero_and_prints_something() {
-    skip_unless_oracle!();
     // GNU emacs.c:1508 / 2222 — `--version` prints version info and
     // exits 0. We also handle this via `classify_early_cli_action`
     // which short-circuits before `parse_startup_options`.
@@ -90,7 +85,6 @@ fn version_flag_exits_zero_and_prints_something() {
 
 #[test]
 fn help_flag_exits_zero_and_prints_something() {
-    skip_unless_oracle!();
     // GNU emacs.c:1720 — `--help` prints usage and exits 0. We do the
     // same via `classify_early_cli_action`. The exact text differs (we
     // ship our own usage table) but both must exit 0 with non-empty
@@ -104,7 +98,6 @@ fn help_flag_exits_zero_and_prints_something() {
 
 #[test]
 fn chdir_to_nonexistent_path_fails_with_nonzero_exit() {
-    skip_unless_oracle!();
     // GNU emacs.c:1551 — chdir failure prints "X: Can't chdir to Y: Z"
     // to stderr and exits 1. Phase 3a mirrors this exit path. We don't
     // diff the exact stderr text (GNU prefixes with argv[0], which
@@ -128,7 +121,6 @@ fn chdir_to_nonexistent_path_fails_with_nonzero_exit() {
 
 #[test]
 fn batch_eval_prints_result() {
-    skip_unless_oracle!();
     let argv = ["--batch", "--eval", "(princ (+ 1 2))"];
     let n = run_neomacs(&argv);
     let e = run_oracle_emacs(&argv);
@@ -137,7 +129,6 @@ fn batch_eval_prints_result() {
 
 #[test]
 fn chdir_changes_default_directory() {
-    skip_unless_oracle!();
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = tmp.path().canonicalize().unwrap();
     let dir_str = dir.to_string_lossy().into_owned();
@@ -155,7 +146,6 @@ fn chdir_changes_default_directory() {
 
 #[test]
 fn quick_passes_through_to_lisp() {
-    skip_unless_oracle!();
     // -Q must remain in command-line-args after the C-side peek so the
     // Lisp side can also act on it (Phase 3d).
     let argv = [
@@ -171,7 +161,6 @@ fn quick_passes_through_to_lisp() {
 
 #[test]
 fn no_site_lisp_drops_site_lisp_from_load_path() {
-    skip_unless_oracle!();
     let argv = [
         "--no-site-lisp",
         "--batch",
@@ -185,7 +174,6 @@ fn no_site_lisp_drops_site_lisp_from_load_path() {
 
 #[test]
 fn batch_implies_noninteractive() {
-    skip_unless_oracle!();
     let argv = ["--batch", "--eval", "(princ (if noninteractive 't 'nil))"];
     let n = run_neomacs(&argv);
     let e = run_oracle_emacs(&argv);
@@ -194,7 +182,6 @@ fn batch_implies_noninteractive() {
 
 #[test]
 fn sort_args_orders_options_canonically() {
-    skip_unless_oracle!();
     // The sort_args (Phase 2) parity check: any permutation of the
     // same flag set must produce the same canonical command-line-args
     // when walked by lisp/startup.el.
@@ -220,7 +207,6 @@ fn sort_args_orders_options_canonically() {
 
 #[test]
 fn double_dash_terminator_passes_through() {
-    skip_unless_oracle!();
     let argv = [
         "--batch",
         "--eval",
@@ -254,7 +240,6 @@ fn double_dash_terminator_passes_through() {
 /// (ledger 203).
 #[test]
 fn batch_never_runs_emacs_startup_hook() {
-    skip_unless_oracle!();
     let probe = "(progn \
                    (add-hook 'emacs-startup-hook \
                              (lambda () (princ \"STARTUP-HOOK-RAN\"))) \
@@ -284,7 +269,6 @@ fn batch_never_runs_emacs_startup_hook() {
 /// 255 with it.
 #[test]
 fn batch_startup_hook_signal_cannot_reach_a_completed_session() {
-    skip_unless_oracle!();
     let probe = "(progn \
                    (require 'server) \
                    (add-hook 'emacs-startup-hook \

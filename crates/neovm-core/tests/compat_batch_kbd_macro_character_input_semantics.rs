@@ -1,16 +1,9 @@
 use crate::common;
 
-use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
+use common::{run_neovm_eval, run_oracle_eval};
 
 #[test]
 fn batch_keyboard_macro_drives_character_readers_like_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping batch keyboard-macro character-input audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defun neovm-test-read-char ()
     (interactive)
@@ -48,13 +41,6 @@ fn batch_keyboard_macro_drives_character_readers_like_gnu_emacs() {
 
 #[test]
 fn minibuffer_recursive_command_starts_with_fresh_command_keys_like_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping minibuffer recursive command-key audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defvar neovm-minibuffer-command-keys-log nil)
   (defun neovm-minibuffer-command-keys-record ()
@@ -86,13 +72,6 @@ fn minibuffer_recursive_command_starts_with_fresh_command_keys_like_gnu_emacs() 
 
 #[test]
 fn pre_command_hook_sees_the_previous_macro_command_like_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping keyboard-macro command-history audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defvar neovm-command-lifecycle-log nil)
   (defun neovm-command-lifecycle-a () (interactive))
@@ -120,13 +99,6 @@ fn pre_command_hook_sees_the_previous_macro_command_like_gnu_emacs() {
 
 #[test]
 fn batch_keyboard_macro_prefixes_do_not_create_echo_area_buffers_like_gnu_emacs() {
-    if !oracle_enabled() {
-        eprintln!(
-            "skipping batch key-prefix echo audit: set NEOVM_FORCE_ORACLE_PATH or place GNU Emacs mirror alongside the repo"
-        );
-        return;
-    }
-
     let form = r#"(progn
   (defun neovm-batch-prefix-command () (interactive))
   (let ((global-map (copy-keymap global-map)))

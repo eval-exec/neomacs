@@ -40,7 +40,7 @@ fn mode_line_display_point_tracks_eval_moves_and_restrictions() {
     let value = format_mode_line_for_display(&mut eval, format, Value::NIL, Value::NIL, 120);
     // Literal from interactive GNU31.1, same fields in mode_line_point_probe.el:
     // sandbox-run.sh <python> -B tmp/editpath-cont16/point-pty.py
-    //   /home/exec/.local/bin/emacs -nw -Q -no-comp-spawn
+    //   $NEOVM_FORCE_ORACLE_PATH -nw -Q -no-comp-spawn
     //   --eval="(setq native-comp-jit-compilation nil native-comp-async-report-warnings-errors 'silent)"
     //   -l crates/neomacs-tui-tests/tests/mode_line_point_probe.el
     // Original authority: tmp/editpath-cont16/point-gnu-r1/values.el.
