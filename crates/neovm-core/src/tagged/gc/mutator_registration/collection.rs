@@ -5,7 +5,7 @@ use super::super::generational::{
 };
 use super::super::young_registry::YoungBlockLog;
 use super::super::*;
-use super::image::{CollectionHistory, CollectionWork};
+use super::image::{CollectionHistory, CollectionWork, ResponsePacing};
 use super::rendezvous::entry_state;
 use super::*;
 
@@ -544,13 +544,18 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
         let total_allocated_bytes = heap.total_allocated_bytes();
         let generational = heap.generational_enabled();
         history.restore(heap, generational);
+        let response_pacing = if generational {
+            ResponsePacing::Reset
+        } else {
+            ResponsePacing::Preserve
+        };
         images.images[0].1 =
             Some(PublishedGcImage::from_legacy(heap).map_err(RegistrationError::from)?);
         for (_, image) in &mut images.images[1..] {
             image
                 .as_mut()
                 .expect("published peer")
-                .finish_collection_response(generational);
+                .finish_collection_response(response_pacing);
         }
         let image_words: usize = images
             .work
