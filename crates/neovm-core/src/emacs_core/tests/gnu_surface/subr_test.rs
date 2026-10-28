@@ -132,6 +132,23 @@ enum WhyThisBuildDeclaresIt {
         /// The build condition around that line, and why it holds here.
         gnu_build_guard: &'static str,
     },
+    /// GNU has a `DEFUN` for the name inside an Objective-C source, and the
+    /// `#ifdef` around its `defsubr` is TRUE for a build shaped like this one
+    /// and FALSE for the reference GNU.
+    ///
+    /// `GNU_SUBR_DOCS` is generated from a `src/*.c` scan (verified against a
+    /// GNU/Linux `make-docfile`), so it cannot carry this row even though
+    /// GNU's own DOC does: `doc_obj = $(base_obj) $(NS_OBJC_OBJ)`
+    /// (src/Makefile.in:470,663-667) means a NextStep GNU build documents
+    /// these primitives.  Both citations are still GNU source lines.
+    GnuDeclaresItInThisBuildsOwnObjectiveCBranch {
+        /// The `DEFUN` line in the Objective-C source.
+        gnu_defun: &'static str,
+        /// The `defsubr` line in GNU's `syms_of_*`.
+        gnu_defsubr: &'static str,
+        /// The build condition around that line, and why it holds here.
+        gnu_build_guard: &'static str,
+    },
     /// GNU's `src/` has no `DEFUN` for the name anywhere: it is this port's
     /// own primitive, carried in this port's own namespace exactly as GNU
     /// carries `w32-`, `ns-`, `haiku-` and `android-` ones.  The namespace is
@@ -215,7 +232,9 @@ const BOTH_EDITORS_DECLARE_IT: &[BothEditorsDeclareItButTheDocTableCannotSeeIt] 
 /// `mapatoms` list of names whose `symbol-function` satisfies
 /// `subr-primitive-p` and subtracting one from the other.
 ///
-/// 23 xwidget names + `x-load-color-file` + 40 port names = 64.
+/// 23 xwidget names + `x-load-color-file` + 40 port names = 64.  The two
+/// NextStep names the first macOS run (2026-10-28) exposed live in the
+/// platform-gated [`NEXTSTEP_DECLARED_HERE`] companion table.
 const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
     DeclaredHere {
         name: "delete-xwidget-view",
@@ -609,6 +628,46 @@ const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
     },
 ];
 
+/// Ledger rows for primitives this build declares only in its NextStep branch.
+///
+/// GNU registers them only when `HAVE_NS` compiles `nsfns.m`
+/// (src/Makefile.in:480, `ns_OBJ`), and the reference GNU is a GNU/Linux
+/// build, where `with_ns=no` (configure.ac:2773-2911).  Keeping them out of
+/// the shared table lets the stale-name check below still require every row
+/// it reads on every host.
+#[cfg(target_os = "macos")]
+const NEXTSTEP_DECLARED_HERE: &[DeclaredHere] = &[
+    DeclaredHere {
+        name: "ns-get-resource",
+        why: WhyThisBuildDeclaresIt::GnuDeclaresItInThisBuildsOwnObjectiveCBranch {
+            gnu_defun: "src/nsfns.m:1897",
+            gnu_defsubr: "src/nsfns.m:4250",
+            gnu_build_guard: "src/Makefile.in:480 puts nsfns.o in ns_OBJ, built only when \
+                              HAVE_NS (configure.ac:2773-2911 --with-ns; the reference GNU is \
+                              a GNU/Linux build, where with_ns=no)",
+        },
+    },
+    DeclaredHere {
+        name: "ns-set-resource",
+        why: WhyThisBuildDeclaresIt::GnuDeclaresItInThisBuildsOwnObjectiveCBranch {
+            gnu_defun: "src/nsfns.m:1917",
+            gnu_defsubr: "src/nsfns.m:4251",
+            gnu_build_guard: "src/Makefile.in:480 puts nsfns.o in ns_OBJ, built only when \
+                              HAVE_NS (configure.ac:2773-2911 --with-ns; the reference GNU is \
+                              a GNU/Linux build, where with_ns=no)",
+        },
+    },
+];
+#[cfg(not(target_os = "macos"))]
+const NEXTSTEP_DECLARED_HERE: &[DeclaredHere] = &[];
+
+/// Every ledger row that applies to this build's platform.
+fn declared_here_rows() -> impl Iterator<Item = &'static DeclaredHere> {
+    DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU
+        .iter()
+        .chain(NEXTSTEP_DECLARED_HERE)
+}
+
 /// Every name this port declares in its own namespace really is in its own
 /// namespace.
 ///
@@ -619,7 +678,7 @@ const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
 #[test]
 fn port_namespace_rows_really_are_in_the_ports_namespace() {
     crate::test_utils::init_test_tracing();
-    for row in DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU {
+    for row in declared_here_rows() {
         if matches!(
             row.why,
             WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace
@@ -649,18 +708,36 @@ fn port_namespace_rows_really_are_in_the_ports_namespace() {
 #[test]
 fn rows_that_claim_a_gnu_defun_have_one() {
     crate::test_utils::init_test_tracing();
-    for row in DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU {
-        if let WhyThisBuildDeclaresIt::GnuDeclaresItInThisBuildsOwnBranch {
-            gnu_defsubr,
-            gnu_build_guard,
-        } = row.why
-        {
-            assert!(
-                GNU_SUBR_DOCS.iter().any(|(n, _)| *n == row.name),
-                "{:?} cites {gnu_defsubr} ({gnu_build_guard}) but GNU's src/*.c has \
-                 no documented DEFUN of that name",
-                row.name
-            );
+    for row in declared_here_rows() {
+        match row.why {
+            WhyThisBuildDeclaresIt::GnuDeclaresItInThisBuildsOwnBranch {
+                gnu_defsubr,
+                gnu_build_guard,
+            } => {
+                assert!(
+                    GNU_SUBR_DOCS.iter().any(|(n, _)| *n == row.name),
+                    "{:?} cites {gnu_defsubr} ({gnu_build_guard}) but GNU's src/*.c has \
+                     no documented DEFUN of that name",
+                    row.name
+                );
+            }
+            WhyThisBuildDeclaresIt::GnuDeclaresItInThisBuildsOwnObjectiveCBranch {
+                gnu_defun,
+                gnu_defsubr,
+                ..
+            } => {
+                // GNU's DOC includes NS_OBJC_OBJ (src/Makefile.in:470,663-667),
+                // but this table is generated from a src/*.c scan verified
+                // against a GNU/Linux make-docfile, so the row cannot appear
+                // here.  The citations must at least be Objective-C DEFUNs.
+                assert!(
+                    gnu_defun.contains(".m:") && gnu_defsubr.contains(".m:"),
+                    "{:?} is filed as an Objective-C branch declaration without an \
+                     .m DEFUN/defsubr citation: {gnu_defun:?} {gnu_defsubr:?}",
+                    row.name
+                );
+            }
+            WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace => {}
         }
     }
 }
@@ -761,10 +838,7 @@ fn every_subr_gnus_c_has_no_defun_for_is_accounted_for() {
         if GNU_SUBR_DOCS.iter().any(|(n, _)| n == name) {
             continue;
         }
-        if DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU
-            .iter()
-            .any(|row| row.name == *name)
-        {
+        if declared_here_rows().any(|row| row.name == *name) {
             continue;
         }
         if BOTH_EDITORS_DECLARE_IT.iter().any(|row| row.name == *name) {
@@ -785,7 +859,7 @@ fn every_subr_gnus_c_has_no_defun_for_is_accounted_for() {
     );
 
     let mut stale = Vec::new();
-    for row in DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU {
+    for row in declared_here_rows() {
         if !names.contains(&row.name) {
             stale.push(row.name);
         }

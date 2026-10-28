@@ -906,9 +906,15 @@ fn subr_arity_command_read_primitives_match_oracle() {
     assert_subr_arity("handle-switch-frame", 1, Some(1));
     assert_subr_arity("help--describe-vector", 7, Some(7));
     assert_subr_arity("init-image-library", 1, Some(1));
-    assert_subr_arity("inotify-add-watch", 3, Some(3));
-    assert_subr_arity("inotify-rm-watch", 1, Some(1));
-    assert_subr_arity("inotify-valid-p", 1, Some(1));
+    // GNU compiles exactly one local file-notification backend, and its three
+    // DEFUNs share one #ifdef with its Fprovide (src/inotify.c:370,490,511;
+    // src/kqueue.c:338,475,505; src/w32notify.c:515,640,681), so the registered
+    // set is a property of the build, not of the test's host assumption.
+    if let Some([add_watch, rm_watch, valid_p]) = crate::emacs_core::builtins::BACKEND_SUBRS {
+        assert_subr_arity(add_watch, 3, Some(3));
+        assert_subr_arity(rm_watch, 1, Some(1));
+        assert_subr_arity(valid_p, 1, Some(1));
+    }
     assert_subr_arity("innermost-minibuffer-p", 0, Some(1));
     assert_subr_arity("interactive-form", 1, Some(1));
     assert_subr_arity("local-variable-if-set-p", 1, Some(2));

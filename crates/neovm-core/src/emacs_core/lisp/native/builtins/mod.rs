@@ -461,6 +461,11 @@ pub(crate) use types::*;
 // `search` modules, already crate-visible).
 mod byte_code;
 mod file_notify;
+// The compiled-in backend's three primitive names; GNU's one-`#ifdef` rule
+// means a test may ask which watch primitives this build can answer without
+// naming one OS (see `file_notify/platform/mod.rs`).
+#[cfg(test)]
+pub(crate) use file_notify::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
 pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
 pub(crate) mod gnutls;

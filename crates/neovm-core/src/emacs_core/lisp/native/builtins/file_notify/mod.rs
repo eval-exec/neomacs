@@ -7,6 +7,11 @@ mod model;
 mod platform;
 mod registry;
 
+// The compiled-in backend's primitive names, re-exported from the private
+// selection module so tests can ask the build instead of naming an OS.
+#[cfg(test)]
+pub(crate) use platform::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchSemantics};
+
 // Private to the subsystem: every caller is inside `file_notify`, and keeping
 // it here means minting a `file-notify-error` stays within the module that
 // owns `ErrorDetail`.  Descendants still reach it through `use super::*`.

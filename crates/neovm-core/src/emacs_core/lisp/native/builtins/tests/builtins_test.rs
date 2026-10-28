@@ -11284,33 +11284,95 @@ fn gnu_treesit_el_high_level_helpers_work_with_runtime_json_grammar() {
 }
 
 #[test]
-fn dispatch_builtin_pure_handles_inotify_watch_lifecycle() {
+fn dispatch_builtin_pure_handles_native_watch_lifecycle() {
     crate::test_utils::init_test_tracing();
+    // GNU compiles exactly one local file-notification backend; its three
+    // DEFUNs and its Fprovide share one #ifdef (src/inotify.c:370,490,511 and
+    // :589; src/kqueue.c:338,475,505 and :545; src/w32notify.c:515,640,681 and
+    // :739).  Ask the build which set it compiled instead of naming one OS.
+    let Some([add_watch, rm_watch, valid_p]) = BACKEND_SUBRS else {
+        // No native backend here, exactly as on a GNU build configured without
+        // one: another platform's primitives must not resolve either.
+        assert!(
+            dispatch_builtin_pure(
+                "inotify-add-watch",
+                vec![Value::string("."), Value::NIL, Value::symbol("ignore")],
+            )
+            .is_none(),
+            "a build without a native file-notification backend answered inotify-add-watch"
+        );
+        return;
+    };
+    // GNU's kqueue-add-watch checks `FUNCTIONP (callback)' eagerly
+    // (src/kqueue.c:389-390), so the callback must be a real function even in
+    // a bare Context, where Lisp-level definitions such as `ignore' are not
+    // installed yet.  The lifecycle below never fires an event.
     let watch = dispatch_builtin_pure(
-        "inotify-add-watch",
-        vec![Value::string("."), Value::NIL, Value::symbol("ignore")],
+        add_watch,
+        vec![Value::string("."), Value::NIL, Value::symbol("car")],
     )
-    .expect("inotify-add-watch should resolve")
-    .expect("inotify-add-watch should evaluate");
-    let active = dispatch_builtin_pure("inotify-valid-p", vec![watch])
-        .expect("inotify-valid-p should resolve")
-        .expect("inotify-valid-p should evaluate");
+    .expect("add-watch should resolve")
+    .expect("add-watch should evaluate");
+    let active = dispatch_builtin_pure(valid_p, vec![watch])
+        .expect("valid-p should resolve")
+        .expect("valid-p should evaluate");
     assert_eq!(active, Value::T);
 
-    let removed = dispatch_builtin_pure("inotify-rm-watch", vec![watch])
-        .expect("inotify-rm-watch should resolve")
-        .expect("inotify-rm-watch should evaluate");
-    assert_eq!(removed, Value::T);
+    let semantics =
+        REMOVE_WATCH_SEMANTICS.expect("a backend that registers subrs has remove semantics");
+    let expect_file_notify_error = |result: Option<EvalResult>, message: &str| {
+        let flow = result
+            .expect("the subr resolves")
+            .expect_err("the backend must signal file-notify-error");
+        match flow.into_kind() {
+            FlowKind::Signal(signal) => {
+                assert_eq!(signal.symbol_name(), "file-notify-error");
+                assert_eq!(
+                    signal.data.first().and_then(|value| value.as_utf8_str()),
+                    Some(message)
+                );
+            }
+            other => panic!("expected a file-notify-error, got {other:?}"),
+        }
+    };
 
-    let inactive = dispatch_builtin_pure("inotify-valid-p", vec![watch])
-        .expect("inotify-valid-p should resolve")
-        .expect("inotify-valid-p should evaluate");
+    let removed = dispatch_builtin_pure(rm_watch, vec![watch]).expect("rm-watch should resolve");
+    match semantics {
+        // inotify: success is t.
+        RemoveWatchSemantics::Inotify => {
+            assert_eq!(removed.expect("inotify rm-watch evaluates"), Value::T);
+        }
+        // kqueue: success is t.
+        RemoveWatchSemantics::Kqueue => {
+            assert_eq!(removed.expect("kqueue rm-watch evaluates"), Value::T);
+        }
+        // w32notify: success is nil (src/w32notify.c:665-667).
+        RemoveWatchSemantics::W32Notify => {
+            assert_eq!(removed.expect("w32notify rm-watch evaluates"), Value::NIL);
+        }
+    }
+
+    let inactive = dispatch_builtin_pure(valid_p, vec![watch])
+        .expect("valid-p should resolve")
+        .expect("valid-p should evaluate");
     assert_eq!(inactive, Value::NIL);
 
-    let removed_again = dispatch_builtin_pure("inotify-rm-watch", vec![watch])
-        .expect("inotify-rm-watch should resolve")
-        .expect("inotify-rm-watch should evaluate");
-    assert_eq!(removed_again, Value::T);
+    let removed_again =
+        dispatch_builtin_pure(rm_watch, vec![watch]).expect("rm-watch should resolve");
+    match semantics {
+        // inotify validates only the descriptor shape, so a repeat is t.
+        RemoveWatchSemantics::Inotify => {
+            assert_eq!(removed_again.expect("inotify rm-watch evaluates"), Value::T);
+        }
+        // kqueue looks the descriptor up in its list.
+        RemoveWatchSemantics::Kqueue => {
+            expect_file_notify_error(Some(removed_again), "Not a watch descriptor");
+        }
+        // w32notify's invalid descriptor signals with its own wording.
+        RemoveWatchSemantics::W32Notify => {
+            expect_file_notify_error(Some(removed_again), "Invalid watch descriptor");
+        }
+    }
 }
 
 #[test]
