@@ -5178,25 +5178,34 @@ const PRELUDE: &str = r####"
                   failure-recovery))
     (error "Tide unknown scenario: %S" scenario))
   (let ((raw-workspace (getenv "NEOMACS_TEST_WORKSPACE_ROOT"))
-        (raw-sandbox (getenv "NEOMACS_TEST_SANDBOX_ROOT")))
-    (dolist (entry `((:workspace . ,raw-workspace) (:sandbox . ,raw-sandbox)))
-      (unless (and (stringp (cdr entry)) (file-name-absolute-p (cdr entry))
+        (raw-scratch (getenv "NEOMACS_TEST_SCRATCH_ROOT"))
+        (raw-sandbox (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
+        (raw-tmp (getenv "TMPDIR")))
+    (dolist (entry `((:workspace . ,raw-workspace) (:scratch . ,raw-scratch)
+                     (:sandbox . ,raw-sandbox) (:tmp . ,raw-tmp)))
+      (unless (and (stringp (cdr entry)) (not (string-empty-p (cdr entry)))
+                   (file-name-absolute-p (cdr entry))
                    (file-directory-p (cdr entry)))
         (error "Tide unsafe oracle root: %S" entry)))
     (let* ((workspace (file-name-as-directory (file-truename raw-workspace)))
-           (workspace-tmp
-            (file-name-as-directory
-             (file-truename (expand-file-name "tmp" workspace))))
+           (scratch (file-name-as-directory (file-truename raw-scratch)))
            (sandbox (file-name-as-directory (file-truename raw-sandbox)))
+           (tmp (file-name-as-directory (file-truename raw-tmp)))
            (owner (expand-file-name
                    (format "tide368-%s-owner-%s/" scenario (emacs-pid)) sandbox))
            (root (expand-file-name "project space 界/" owner))
            (control (expand-file-name ".tide368/" owner)))
-      (unless (and (string-prefix-p workspace-tmp sandbox)
+      ;; The MELPA harness creates scenario sandboxes under the scratch root
+      ;; (`melpa_cache_root', honoring CARGO_TARGET_DIR), not under
+      ;; <workspace>/tmp.  NEOMACS_TEST_SCRATCH_ROOT is the approval channel
+      ;; for that relocation; the workspace/tmp prefix was only the default
+      ;; layout and refused every relocated target directory.
+      (unless (and (file-in-directory-p sandbox scratch)
+                   (file-in-directory-p tmp scratch)
                    (tide368-test-direct-child-p owner sandbox)
                    (not (file-exists-p owner)))
         (error "Tide refuses owned root allocation: %S"
-               (list workspace-tmp sandbox owner)))
+               (list scratch sandbox tmp owner)))
       (make-directory owner nil)
       (condition-case condition
           (progn
