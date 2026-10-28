@@ -2462,6 +2462,101 @@ fn text_quoting_style_domain_matches_gnu_symbols() {
     );
 }
 
+/// The nil-`text-quoting-style` decision, branch for branch against GNU
+/// `default_to_grave_quoting_style` (`src/doc.c:638-650`).
+#[test]
+fn text_quoting_style_nil_reads_flag_and_standard_display_table() {
+    use crate::emacs_core::chartable::{ct_set_single, make_char_table_with_extra_slots};
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let style =
+        |eval: &Context| builtin_text_quoting_style(eval, vec![]).expect("text-quoting-style");
+
+    // Library contexts are batch-shaped and assume the parity harness's UTF-8
+    // locale; a bare context has no display table, so nil is `curve`
+    // (src/doc.c:644-645: not a display table -> false).
+    assert_eq!(style(&eval), Value::symbol("curve"));
+
+    // `if (!text_quoting_flag) return true;` (src/doc.c:642-643): grave, and
+    // the display table is never consulted, whatever it holds.
+    eval.obarray
+        .set_symbol_value("internal--text-quoting-flag", Value::NIL);
+    eval.obarray
+        .set_symbol_value("standard-display-table", Value::T);
+    assert_eq!(style(&eval), Value::symbol("grave"));
+
+    // Flag set again: a display table whose U+2018 entry is exactly [?`]
+    // resolves to grave (src/doc.c:646-649).
+    eval.obarray
+        .set_symbol_value("internal--text-quoting-flag", Value::T);
+    let display_table = |entry: Value| {
+        let table =
+            make_char_table_with_extra_slots(Value::symbol("display-table"), Value::NIL, 18);
+        ct_set_single(&table, 0x2018, entry);
+        table
+    };
+    eval.obarray.set_symbol_value(
+        "standard-display-table",
+        display_table(Value::vector(vec![Value::fixnum(b'`' as i64)])),
+    );
+    assert_eq!(style(&eval), Value::symbol("grave"));
+
+    // Any other substitution is not the literal backtick doc.c looks for:
+    // another character, two glyphs, or the homoglyph-faced glyph code
+    // `startup--setup-quote-display` installs (lisp/startup.el:1080-1086).
+    for entry in [
+        Value::vector(vec![Value::fixnum(b'<' as i64)]),
+        Value::vector(vec![Value::fixnum(b'`' as i64), Value::fixnum(b'`' as i64)]),
+        Value::vector(vec![Value::fixnum(i64::from(b'`') | (22_i64 << 22))]),
+        Value::string("`"),
+    ] {
+        eval.obarray
+            .set_symbol_value("standard-display-table", display_table(entry));
+        assert_eq!(style(&eval), Value::symbol("curve"), "entry {entry:?}");
+    }
+
+    // DISP_TABLE_P also checks the purpose and the extra-slot count
+    // (src/disptab.h:26-29); a char-table that fails either is no display
+    // table and cannot trigger grave.
+    let wrong_purpose =
+        make_char_table_with_extra_slots(Value::symbol("foo-table"), Value::NIL, 18);
+    ct_set_single(
+        &wrong_purpose,
+        0x2018,
+        Value::vector(vec![Value::fixnum(b'`' as i64)]),
+    );
+    eval.obarray
+        .set_symbol_value("standard-display-table", wrong_purpose);
+    assert_eq!(style(&eval), Value::symbol("curve"));
+
+    let wrong_extras =
+        make_char_table_with_extra_slots(Value::symbol("display-table"), Value::NIL, 0);
+    ct_set_single(
+        &wrong_extras,
+        0x2018,
+        Value::vector(vec![Value::fixnum(b'`' as i64)]),
+    );
+    eval.obarray
+        .set_symbol_value("standard-display-table", wrong_extras);
+    assert_eq!(style(&eval), Value::symbol("curve"));
+
+    // A display table with no own entry inherits its parent's through
+    // `char_table_ref` (src/xdisp.c:18425-18432).
+    let parent = display_table(Value::vector(vec![Value::fixnum(b'`' as i64)]));
+    let child = make_char_table_with_extra_slots(Value::symbol("display-table"), Value::NIL, 18);
+    let _ = child.with_char_table_mut(|obj| obj.set_parent(parent));
+    eval.obarray
+        .set_symbol_value("standard-display-table", child);
+    assert_eq!(style(&eval), Value::symbol("grave"));
+
+    // The nil case of the variable is what consults these inputs; explicit
+    // values never do (src/doc.c:666-671).
+    eval.obarray
+        .set_symbol_value("text-quoting-style", Value::symbol("straight"));
+    assert_eq!(style(&eval), Value::symbol("straight"));
+}
+
 #[test]
 fn text_quoting_style_variable_defaults_to_nil() {
     crate::test_utils::init_test_tracing();

@@ -435,7 +435,9 @@ fn defvar_bool_coerces_every_variable_in_the_table_like_gnu() {
 /// Every row of the table is registered, is `special`, and still holds the
 /// value the table gives it once the rest of the bootstrap has run -- which is
 /// what stops a leftover plain-cell seed elsewhere from quietly deciding a
-/// `DEFVAR_BOOL` variable's default.
+/// `DEFVAR_BOOL` variable's default.  The two rows GNU's `main` installs after
+/// the declaration (`main_value`: argv and the process locale) hold that
+/// running value, not the pre-main declared one.
 #[test]
 fn every_gnu_defvar_bool_variable_is_bound_and_reads_back_canonically() {
     use crate::emacs_core::defvar_bool::GNU_BOOL_VARIABLES;
@@ -453,9 +455,16 @@ fn every_gnu_defvar_bool_variable_is_bound_and_reads_back_canonically() {
             "OK t",
             "{name} should be special"
         );
+        // `main_value' is the running value GNU's `main' installs after a
+        // declaration that does not decide it (argv, the process locale); a
+        // `Context` is past that point, so it is the expected default there.
         assert_eq!(
             format_eval_result(&eval.eval_str(&format!("(default-value '{name})"))),
-            if var.initial { "OK t" } else { "OK nil" },
+            if var.main_value.unwrap_or(var.initial) {
+                "OK t"
+            } else {
+                "OK nil"
+            },
             "{name} default"
         );
     }

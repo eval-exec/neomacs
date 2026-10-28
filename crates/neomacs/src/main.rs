@@ -5723,6 +5723,19 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
             Value::NIL
         },
     );
+    // GNU `main' reads the locale from the environment and snapshots
+    // `using_utf8 ()` into `text_quoting_flag` before any Lisp runs
+    // (src/emacs.c:1653-1656); Lisp reads that bool as
+    // `internal--text-quoting-flag` (src/doc.c:735-736).  A pdump carries the
+    // value that built it, but GNU's C bool cannot be dumped, so every process
+    // must restate it from its own locale -- and it must happen before
+    // `normal-top-level`, where `startup--setup-quote-display` and
+    // `(setq internal--text-quoting-flag t)` run interactively
+    // (lisp/startup.el:1619-1620).
+    eval.set_variable(
+        "internal--text-quoting-flag",
+        Value::bool_val(neovm_core::emacs_core::coding::process_locale_uses_utf8()),
+    );
     if startup.noninteractive {
         // GNU emacs.c raises this after initialization for batch jobs so
         // short-lived noninteractive commands spend less time in GC.

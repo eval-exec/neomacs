@@ -81,6 +81,14 @@ pub struct GnuBoolVariable {
     /// `bool *': a `DEFVAR_BOOL' variable seeded with something that is not a
     /// Boolean is not a state either program can be in.
     pub initial: bool,
+    /// `Some(running)` when GNU's `main` replaces the declared value after the
+    /// declaration: `text_quoting_flag = using_utf8 ()` (`src/emacs.c:1656`)
+    /// and `noninteractive1 = noninteractive` (`src/emacs.c:1953`).  `initial`
+    /// stays the value the C slot held *before* `main`; a library `Context` is
+    /// always past that point, so construction applies `running` (its
+    /// batch-shaped value) and the `neomacs` binary restates it from its own
+    /// argv and locale.
+    pub main_value: Option<bool>,
     /// Whether the byte optimizer is told about the coercion.
     pub byte_boolean_vars: ByteBooleanVars,
 }
@@ -90,6 +98,7 @@ impl GnuBoolVariable {
         Self {
             name,
             initial,
+            main_value: None,
             byte_boolean_vars: ByteBooleanVars::Listed,
         }
     }
@@ -98,7 +107,19 @@ impl GnuBoolVariable {
         Self {
             name,
             initial,
+            main_value: None,
             byte_boolean_vars: ByteBooleanVars::ErasedByLreadInit,
+        }
+    }
+
+    /// A `DEFVAR_BOOL' whose running value `main` installs after the
+    /// declaration; `declared` is what the C slot holds before that.
+    const fn set_by_main(name: &'static str, declared: bool, running: bool) -> Self {
+        Self {
+            name,
+            initial: declared,
+            main_value: Some(running),
+            byte_boolean_vars: ByteBooleanVars::Listed,
         }
     }
 }
@@ -180,71 +201,75 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::listed("cursor-in-echo-area", false),      // dispnew.c:7539
     V::listed("mouse-prefer-closest-glyph", false), // dispnew.c:7542
     V::listed("documentation-dynamic-reload", true), // doc.c:720
-    V::listed("internal--text-quoting-flag", true), // doc.c:735
+    // GNU's declaration leaves the C bool false; `main` replaces it with
+    // `using_utf8 ()` (`src/emacs.c:1653-1656`).  A library context's
+    // batch-shaped value is the UTF-8 one, and the `neomacs` binary restates
+    // it from its own process locale at startup.
+    V::set_by_main("internal--text-quoting-flag", false, true), // doc.c:735-736
     // `noninteractive1 = noninteractive' (`src/emacs.c:1953') -- argv, not a
-    // constant.  neomacs seeds a batch-shaped default here for contexts that
-    // never see a command line, and `load::init_command_line_vars' overwrites
-    // it from the parsed argv in the real binary.
-    V::listed("noninteractive", true),              // emacs.c:3535
-    V::listed("inhibit-x-resources", false),        // emacs.c:3597
-    V::listed("create-lockfiles", true),            // filelock.c:818
-    V::listed("indent-tabs-mode", true),            // indent.c:2575
+    // constant.  The declaration leaves false; a library context's
+    // batch-shaped value is true, and the `neomacs` binary overwrites it from
+    // the parsed argv in `configure_gnu_startup_state`.
+    V::set_by_main("noninteractive", false, true), // emacs.c:3535
+    V::listed("inhibit-x-resources", false),       // emacs.c:3597
+    V::listed("create-lockfiles", true),           // filelock.c:818
+    V::listed("indent-tabs-mode", true),           // indent.c:2575
     V::listed("inhibit-modification-hooks", false), // insdel.c:2575
     V::listed("read-buffer-completion-ignore-case", false), // minibuf.c:2548
-    V::listed("history-delete-duplicates", false),  // minibuf.c:2572
-    V::listed("completion-ignore-case", false),     // minibuf.c:2585
+    V::listed("history-delete-duplicates", false), // minibuf.c:2572
+    V::listed("completion-ignore-case", false),    // minibuf.c:2585
     V::listed("enable-recursive-minibuffers", false), // minibuf.c:2593
-    V::listed("minibuffer-auto-raise", false),      // minibuf.c:2654
+    V::listed("minibuffer-auto-raise", false),     // minibuf.c:2654
     V::listed("minibuffer-allow-text-properties", false), // minibuf.c:2673
-    V::listed("inhibit-interaction", false),        // minibuf.c:2697
+    V::listed("inhibit-interaction", false),       // minibuf.c:2697
     V::listed("read-minibuffer-restore-windows", true), // minibuf.c:2706
-    V::listed("delete-exited-processes", true),     // process.c:8916
+    V::listed("delete-exited-processes", true),    // process.c:8916
     V::listed("process-prioritize-lower-fds", false), // process.c:8943
-    V::listed("fast-read-process-output", true),    // process.c:8980
-    V::listed("current-time-list", true),           // timefns.c:2112
+    V::listed("fast-read-process-output", true),   // process.c:8980
+    V::listed("current-time-list", true),          // timefns.c:2112
     V::listed("scroll-bar-adjust-thumb-portion", true), // frame.c:7465
-    V::listed("frame-resize-pixelwise", false),     // frame.c:7623
+    V::listed("frame-resize-pixelwise", false),    // frame.c:7623
     V::listed("tooltip-reuse-hidden-frame", false), // frame.c:7710
-    V::listed("use-system-tooltips", true),         // frame.c:7725
+    V::listed("use-system-tooltips", true),        // frame.c:7725
     V::listed("parse-sexp-ignore-comments", false), // syntax.c:3764
     V::listed("parse-sexp-lookup-properties", false), // syntax.c:3767
-    V::listed("words-include-escapes", false),      // syntax.c:3780
+    V::listed("words-include-escapes", false),     // syntax.c:3780
     V::listed("multibyte-syntax-as-symbol", false), // syntax.c:3783
     V::listed("open-paren-in-column-0-is-defun-start", true), // syntax.c:3787
     V::listed("comment-end-can-be-escaped", false), // syntax.c:3811
-    V::listed("system-uses-terminfo", true),        // term.c:5224
-    V::listed("visible-cursor", true),              // term.c:5246
+    V::listed("system-uses-terminfo", true),       // term.c:5224
+    V::listed("visible-cursor", true),             // term.c:5246
     V::listed("tty-menu-calls-mouse-position-function", false), // term.c:5253
     V::listed("tty-cursor-movement-use-TAB-BS", false), // term.c:5260
-    V::listed("undo-inhibit-record-point", false),  // undo.c:487
+    V::listed("undo-inhibit-record-point", false), // undo.c:487
     V::listed("mode-line-in-non-selected-windows", true), // window.c:9225
-    V::listed("auto-window-vscroll", true),         // window.c:9243
-    V::listed("window-resize-pixelwise", false),    // window.c:9519
+    V::listed("auto-window-vscroll", true),        // window.c:9243
+    V::listed("window-resize-pixelwise", false),   // window.c:9519
     V::listed("fast-but-imprecise-scrolling", false), // window.c:9530
     V::listed("window-auto-redraw-on-parameter-change", true), // window.c:9549
     V::listed("scroll-minibuffer-conservatively", true), // xdisp.c:38208
-    V::listed("inhibit-message", false),            // xdisp.c:38215
-    V::listed("x-stretch-cursor", false),           // xdisp.c:38423
+    V::listed("inhibit-message", false),           // xdisp.c:38215
+    V::listed("x-stretch-cursor", false),          // xdisp.c:38423
     V::listed("nobreak-char-ascii-display", false), // xdisp.c:38459
-    V::listed("word-wrap-by-category", false),      // xdisp.c:38579
+    V::listed("word-wrap-by-category", false),     // xdisp.c:38579
     V::listed("highlight-nonselected-windows", false), // xdisp.c:38609
-    V::listed("multiple-frames", false),            // xdisp.c:38615
-    V::listed("auto-raise-tab-bar-buttons", true),  // xdisp.c:38704
+    V::listed("multiple-frames", false),           // xdisp.c:38615
+    V::listed("auto-raise-tab-bar-buttons", true), // xdisp.c:38704
     V::listed("auto-raise-tool-bar-buttons", true), // xdisp.c:38717
-    V::listed("make-window-start-visible", false),  // xdisp.c:38731
-    V::listed("tab-bar-truncate", false),           // xdisp.c:38737
+    V::listed("make-window-start-visible", false), // xdisp.c:38731
+    V::listed("tab-bar-truncate", false),          // xdisp.c:38737
     V::listed("unibyte-display-via-language-environment", false), // xdisp.c:38815
-    V::listed("message-truncate-lines", false),     // xdisp.c:38898
-    V::listed("inhibit-menubar-update", false),     // xdisp.c:38915
+    V::listed("message-truncate-lines", false),    // xdisp.c:38898
+    V::listed("inhibit-menubar-update", false),    // xdisp.c:38915
     V::listed("display-line-numbers-widen", false), // xdisp.c:38993
     V::listed("display-fill-column-indicator", false), // xdisp.c:39008
     V::listed("inhibit-eval-during-redisplay", false), // xdisp.c:39050
     V::listed("inhibit-free-realized-faces", false), // xdisp.c:39054
-    V::listed("inhibit-bidi-mirroring", false),     // xdisp.c:39058
-    V::listed("bidi-inhibit-bpa", false),           // xdisp.c:39064
-    V::listed("display-hourglass", true),           // xdisp.c:39102
-    V::listed("redisplay--inhibit-bidi", true),     // xdisp.c:39235
-    V::listed("display-raw-bytes-as-hex", false),   // xdisp.c:39241
+    V::listed("inhibit-bidi-mirroring", false),    // xdisp.c:39058
+    V::listed("bidi-inhibit-bpa", false),          // xdisp.c:39064
+    V::listed("display-hourglass", true),          // xdisp.c:39102
+    V::listed("redisplay--inhibit-bidi", true),    // xdisp.c:39235
+    V::listed("display-raw-bytes-as-hex", false),  // xdisp.c:39241
     V::listed("mouse-fine-grained-tracking", false), // xdisp.c:39247
     V::listed("tab-bar--dragging-in-progress", false), // xdisp.c:39256
     V::listed("redisplay-skip-initial-frame", true), // xdisp.c:39260
@@ -252,27 +277,27 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
     V::listed("redisplay-adhoc-scroll-in-resize-mini-windows", true), // xdisp.c:39281
     V::listed("composition-break-at-point", false), // xdisp.c:39289
     V::listed("inhibit-compacting-font-caches", false), // font.c:6019
-    V::listed("xft-ignore-color-fonts", true),      // font.c:6039
-    V::listed("query-all-font-backends", false),    // font.c:6046
-    V::listed("cross-disabled-images", false),      // image.c:13259
+    V::listed("xft-ignore-color-fonts", true),     // font.c:6039
+    V::listed("query-all-font-backends", false),   // font.c:6046
+    V::listed("cross-disabled-images", false),     // image.c:13259
     V::listed("x-use-underline-position-properties", true), // xterm.c:32667
     V::listed("x-underline-at-descent-line", false), // xterm.c:32678
     V::listed("x-mouse-click-focus-ignore-position", false), // xterm.c:32689
     V::listed("x-frame-normalize-before-maximize", false), // xterm.c:32812
-    V::listed("x-gtk-use-window-move", true),       // xterm.c:32825
-    V::listed("x-gtk-use-native-input", false),     // xterm.c:32839
-    V::listed("x-input-grab-touch-events", true),   // xterm.c:32860
-    V::listed("x-dnd-fix-motif-leave", true),       // xterm.c:32870
-    V::listed("x-dnd-disable-motif-drag", false),   // xterm.c:32878
+    V::listed("x-gtk-use-window-move", true),      // xterm.c:32825
+    V::listed("x-gtk-use-native-input", false),    // xterm.c:32839
+    V::listed("x-input-grab-touch-events", true),  // xterm.c:32860
+    V::listed("x-dnd-fix-motif-leave", true),      // xterm.c:32870
+    V::listed("x-dnd-disable-motif-drag", false),  // xterm.c:32878
     V::listed("x-dnd-preserve-selection-data", false), // xterm.c:32947
     V::listed("x-dnd-disable-motif-protocol", false), // xterm.c:32954
-    V::listed("x-dnd-use-unsupported-drop", true),  // xterm.c:32960
-    V::listed("x-fast-protocol-requests", false),   // xterm.c:32967
-    V::listed("x-gtk-use-old-file-dialog", false),  // xfns.c:10460
-    V::listed("x-gtk-show-hidden-files", false),    // xfns.c:10467
+    V::listed("x-dnd-use-unsupported-drop", true), // xterm.c:32960
+    V::listed("x-fast-protocol-requests", false),  // xterm.c:32967
+    V::listed("x-gtk-use-old-file-dialog", false), // xfns.c:10460
+    V::listed("x-gtk-show-hidden-files", false),   // xfns.c:10467
     V::listed("x-gtk-file-dialog-help-text", true), // xfns.c:10473
     V::listed("use-default-font-for-symbols", true), // fontset.c:2206
-    V::listed("font-use-system-font", false),       // xsettings.c:1395
+    V::listed("font-use-system-font", false),      // xsettings.c:1395
 ];
 
 /// Install every row as a GNU `DEFVAR_BOOL' variable.
@@ -287,11 +312,34 @@ pub static GNU_BOOL_VARIABLES: &[GnuBoolVariable] = &[
 /// Running first also makes the table, and not a plain-cell seed elsewhere,
 /// what a `DEFVAR_BOOL' variable's default comes from; the values these
 /// variables acquire later from the command line or from `startup.el' --
-/// `noninteractive', `inhibit-x-resources', `redisplay--inhibit-bidi' -- go
-/// through the forwarder like any other assignment.
+/// `inhibit-x-resources', `redisplay--inhibit-bidi' -- go through the
+/// forwarder like any other assignment.  The two rows `main` itself decides
+/// (`noninteractive`, `internal--text-quoting-flag`) get their batch-shaped
+/// library values from [`apply_post_main_batch_defaults`].
 pub fn register_bootstrap_vars(obarray: &mut Obarray) {
     for var in GNU_BOOL_VARIABLES {
         obarray.define_bool_variable(var.name, var.initial, var.byte_boolean_vars);
+    }
+}
+
+/// Apply the running values GNU's `main` installs after the declarations.
+///
+/// Two rows are decided by `main` rather than by their `DEFVAR_BOOL' line:
+/// `text_quoting_flag` from the process locale (`src/emacs.c:1656`) and
+/// `noninteractive1` from argv (`src/emacs.c:1953`).  GNU cannot dump either,
+/// so its `main` sets them in every process; a library `Context` is the
+/// analogue of "past main", and gets the batch-shaped value the table records
+/// in [`GnuBoolVariable::main_value`].  The `neomacs` binary later restates
+/// both from its own argv and locale in `configure_gnu_startup_state`.
+///
+/// This must run after [`register_bootstrap_vars`] -- writing through a
+/// forwarder that does not exist yet would leave a plain cell that the later
+/// `DEFVAR_BOOL` then discards.
+pub fn apply_post_main_batch_defaults(obarray: &mut Obarray) {
+    for var in GNU_BOOL_VARIABLES {
+        if let Some(running) = var.main_value {
+            obarray.seed_value(var.name, super::value::Value::bool_val(running));
+        }
     }
 }
 

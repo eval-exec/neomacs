@@ -510,11 +510,225 @@ impl TextQuotingStyle {
     }
 }
 
-/// Resolve the effective text-quoting style from `text-quoting-style`,
-/// mirroring GNU `Ftext_quoting_style` (`src/doc.c:652-678`): `grave',
-/// `straight', and `curve' are returned verbatim; nil (and any other value)
-/// resolve to `curve' (the display-capability fallback always picks `curve'
-/// in batch/UTF-8, matching `builtin_text_quoting_style').
+/// GNU `using_utf8` (`src/emacs.c:414-436`): whether the C library locale's
+/// character set decodes UTF-8.
+///
+/// `main` reads the environment into the locale (`setlocale (LC_ALL, "")`,
+/// `src/emacs.c:1653`) and snapshots this answer into `text_quoting_flag`
+/// (`src/emacs.c:1656`), which Lisp sees as
+/// `internal--text-quoting-flag` (`src/doc.c:735-736`).  The test is GNU's
+/// own: `mbrtowc` must decode U+0100 from its UTF-8 bytes (`src/emacs.c:431`).
+///
+/// The answer is asked of a fresh `LC_CTYPE` locale object built from the
+/// environment rather than of the process-wide locale.  GNU has already called
+/// `setlocale` by this point, but changing this process's locale here would
+/// silently change every other C-library caller in this runtime; a fresh
+/// object reads the same environment without that side effect.  A locale the C
+/// library cannot provide makes `newlocale` fail, which is the state GNU's
+/// failed `setlocale` leaves in "C" as well (`src/emacs.c:1653-1656`).
+#[cfg(unix)]
+unsafe extern "C" {
+    /// The C library's multibyte-to-wide conversion entry point.  GNU calls
+    /// this exact function (`mbrtowc (&wc, "\xc4\x80", 2, &mbs)`,
+    /// `src/emacs.c:431`); the libc crate does not bind it on Linux or Darwin.
+    /// A null `ps` is the initial conversion state (C11 7.29.6.3.2), which is
+    /// what GNU's zeroed `mbstate_t` gives for its one call.
+    fn mbrtowc(
+        pwc: *mut libc::wchar_t,
+        s: *const libc::c_char,
+        n: libc::size_t,
+        ps: *mut core::ffi::c_void,
+    ) -> libc::size_t;
+}
+
+#[cfg(unix)]
+fn locale_uses_utf8() -> bool {
+    use std::ptr;
+
+    // `""` names the environment, exactly as in `setlocale` (`src/emacs.c:1653`).
+    let locale = unsafe { libc::newlocale(libc::LC_CTYPE_MASK, c"".as_ptr(), ptr::null_mut()) };
+    if locale.is_null() {
+        return false;
+    }
+    let previous = unsafe { libc::uselocale(locale) };
+    let mut wide: libc::wchar_t = 0;
+    let bytes = [0xC4_u8, 0x80_u8];
+    let decoded = unsafe {
+        mbrtowc(
+            &mut wide,
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            ptr::null_mut(),
+        )
+    };
+    unsafe {
+        libc::uselocale(previous);
+        libc::freelocale(locale);
+    }
+    // `mbrtowc (&wc, "\xc4\x80", 2, &mbs) == 2 && wc == 0x100`
+    // (`src/emacs.c:431`).  `wchar_t` is signed on some hosts, so compare the
+    // numeric code point rather than a bit pattern.
+    decoded == 2 && wide as u32 == 0x100
+}
+
+/// GNU compiles `mbrtowc` out on WINDOWSNT and returns false there
+/// (`src/emacs.c:418-436`).
+#[cfg(not(unix))]
+fn locale_uses_utf8() -> bool {
+    false
+}
+
+/// Whether GNU's `main` would have set `text_quoting_flag` in this process
+/// (`src/emacs.c:1656`).
+///
+/// GNU snapshots the answer once, before any Lisp runs, so it is cached for
+/// the life of the process; a later `setlocale` does not move it.
+pub fn process_locale_uses_utf8() -> bool {
+    static ANSWER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ANSWER.get_or_init(locale_uses_utf8)
+}
+
+/// `LEFT_SINGLE_QUOTATION_MARK`, the character `default_to_grave_quoting_style`
+/// asks the display table about (`src/doc.c:646-647`).
+const LEFT_SINGLE_QUOTATION_MARK: i64 = 0x2018;
+
+/// `DISP_TABLE_EXTRA_SLOTS` (`src/disptab.h:52`): a char-table whose purpose
+/// is `display-table` must carry exactly these 18 extra slots before
+/// `DISP_TABLE_P` (`src/disptab.h:26-29`) calls it a display table.
+/// `display-table`'s `char-table-extra-slots` property is the same number
+/// (`lisp/disp-table.el:31`), so this is what `make-display-table` produces.
+const DISPLAY_TABLE_EXTRA_SLOTS: usize = 18;
+
+/// GNU `text_quoting_flag` (`src/doc.c:735-736`), the first input of
+/// `default_to_grave_quoting_style` (`src/doc.c:642-643`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TextQuotingFlag {
+    /// nil: a nil `text-quoting-style` is `grave`, and the display table is
+    /// never consulted.
+    Clear,
+    /// non-nil: curved quotes may be displayable; the display table decides.
+    Set,
+}
+
+impl TextQuotingFlag {
+    fn from_value(value: Value) -> Self {
+        if value.is_nil() {
+            Self::Clear
+        } else {
+            Self::Set
+        }
+    }
+}
+
+/// What `standard-display-table` substitutes for U+2018, the second input of
+/// `default_to_grave_quoting_style` (`src/doc.c:644-649`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeftSingleQuoteDisplay {
+    /// `standard-display-table` is not a display table, has no entry for
+    /// U+2018, or the entry is anything but a one-element vector holding the
+    /// fixnum `` ` `` (`src/doc.c:644-649`).
+    NotAsciiBacktick,
+    /// The entry is `` [?`] ``: the table replaces the curved quote with the
+    /// ASCII backtick character itself (`src/doc.c:648-649`).
+    AsciiBacktick,
+}
+
+/// The two inputs of GNU `default_to_grave_quoting_style`
+/// (`src/doc.c:638-650`), named so the decision reads as the C does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NilQuotingStyleInputs {
+    flag: TextQuotingFlag,
+    left_single_quote: LeftSingleQuoteDisplay,
+}
+
+impl NilQuotingStyleInputs {
+    /// `default_to_grave_quoting_style` (`src/doc.c:638-650`).
+    fn resolves_to_grave(self) -> bool {
+        match self.flag {
+            // `if (!text_quoting_flag) return true;` (`src/doc.c:642-643`).
+            TextQuotingFlag::Clear => true,
+            // `return (VECTORP (dv) && ASIZE (dv) == 1
+            //          && BASE_EQ (AREF (dv, 0), make_fixnum ('\`')));`
+            // (`src/doc.c:648-649`).  Only the literal backtick character
+            // triggers `grave`; the homoglyph-faced glyph code that
+            // `startup--setup-quote-display` installs (`lisp/startup.el:1026-1029`)
+            // does not.
+            TextQuotingFlag::Set => self.left_single_quote == LeftSingleQuoteDisplay::AsciiBacktick,
+        }
+    }
+}
+
+/// `DISP_TABLE_P` plus `DISP_CHAR_VECTOR` for U+2018 (`src/disptab.h:26-63`).
+fn left_single_quote_display(table: Value, mode: SymbolMode) -> LeftSingleQuoteDisplay {
+    // DISP_TABLE_P (`src/disptab.h:26-29`): a char-table, its purpose is the
+    // interned symbol `display-table` (EQ, so an uninterned lookalike is not
+    // one), and it has exactly DISP_TABLE_EXTRA_SLOTS extra slots.
+    if !table.is_char_table() {
+        return LeftSingleQuoteDisplay::NotAsciiBacktick;
+    }
+    let Some(obj) = table.as_char_table_obj() else {
+        return LeftSingleQuoteDisplay::NotAsciiBacktick;
+    };
+    let purpose = obj.purpose.get();
+    if !eq_value_swp(
+        &purpose,
+        &Value::symbol("display-table"),
+        mode == SymbolMode::Positioned,
+    ) {
+        return LeftSingleQuoteDisplay::NotAsciiBacktick;
+    }
+    if obj.extras.len() != DISPLAY_TABLE_EXTRA_SLOTS {
+        return LeftSingleQuoteDisplay::NotAsciiBacktick;
+    }
+    // DISP_CHAR_VECTOR (`src/disptab.h:56-63`): a non-ASCII character is
+    // resolved by `disp_char_vector` (`src/xdisp.c:18413-18433`), which is
+    // `char_table_ref` -- the entry, else the default, else the parent.
+    let entry = crate::emacs_core::chartable::ct_ref(&table, LEFT_SINGLE_QUOTATION_MARK);
+    if !entry.is_vector() {
+        return LeftSingleQuoteDisplay::NotAsciiBacktick;
+    }
+    let Some(elements) = entry.as_vector_data() else {
+        return LeftSingleQuoteDisplay::NotAsciiBacktick;
+    };
+    if elements.len() == 1 && elements[0].as_fixnum() == Some(i64::from(b'`')) {
+        LeftSingleQuoteDisplay::AsciiBacktick
+    } else {
+        LeftSingleQuoteDisplay::NotAsciiBacktick
+    }
+}
+
+/// GNU `Ftext_quoting_style` (`src/doc.c:652-678`) as one decision.
+///
+/// `grave`, `straight` and `curve` are returned verbatim; nil asks
+/// `default_to_grave_quoting_style` (`src/doc.c:666-671`), and every other
+/// non-nil value is `curve` (`src/doc.c:677`).  Both `(text-quoting-style)`
+/// and the internal callers share this function so the Lisp answer and the
+/// quoting actually applied to messages cannot disagree.
+fn resolve_text_quoting_style(
+    var: Value,
+    flag: TextQuotingFlag,
+    left_single_quote: LeftSingleQuoteDisplay,
+    mode: SymbolMode,
+) -> TextQuotingStyle {
+    if var.is_nil() {
+        let inputs = NilQuotingStyleInputs {
+            flag,
+            left_single_quote,
+        };
+        return if inputs.resolves_to_grave() {
+            TextQuotingStyle::Grave
+        } else {
+            TextQuotingStyle::Curve
+        };
+    }
+    TextQuotingStyle::from_symbol_value(var, mode).unwrap_or(TextQuotingStyle::Curve)
+}
+
+/// Resolve the effective text-quoting style from the current variables,
+/// mirroring GNU `Ftext_quoting_style` (`src/doc.c:652-678`): the variable's
+/// `grave`, `straight` and `curve` are returned verbatim, any other non-nil
+/// value is `curve`, and nil reads `internal--text-quoting-flag` and the
+/// standard display table's U+2018 entry (`src/doc.c:638-650`).
 pub(crate) fn effective_text_quoting_style(
     vars: crate::emacs_core::eval::VariableView<'_>,
     mode: SymbolMode,
@@ -522,10 +736,46 @@ pub(crate) fn effective_text_quoting_style(
     let var = vars
         .value_by_name("text-quoting-style")
         .unwrap_or(Value::NIL);
-    if var.is_nil() {
-        return TextQuotingStyle::Curve;
-    }
-    TextQuotingStyle::from_symbol_value(var, mode).unwrap_or(TextQuotingStyle::Curve)
+    let flag = vars
+        .value_by_name("internal--text-quoting-flag")
+        .unwrap_or(Value::NIL);
+    let table = vars
+        .value_by_name("standard-display-table")
+        .unwrap_or(Value::NIL);
+    resolve_text_quoting_style(
+        var,
+        TextQuotingFlag::from_value(flag),
+        // `default_to_grave_quoting_style` returns at the flag check without
+        // looking at the table (`src/doc.c:642-645`); keep that short circuit
+        // so a non-UTF-8 locale costs no char-table lookup.
+        if flag.is_nil() {
+            LeftSingleQuoteDisplay::NotAsciiBacktick
+        } else {
+            left_single_quote_display(table, mode)
+        },
+        mode,
+    )
+}
+
+/// The `(text-quoting-style)` builtin's half of the same decision, from a
+/// `Context` whose dynamic bindings must be respected.
+pub(crate) fn context_text_quoting_style(eval: &Context, args: Vec<Value>) -> EvalResult {
+    expect_args("text-quoting-style", &args, 0)?;
+    let lookup = |name: &str| eval.eval_symbol_by_id(intern(name)).unwrap_or(Value::NIL);
+    let var = lookup("text-quoting-style");
+    let flag = lookup("internal--text-quoting-flag");
+    let table = lookup("standard-display-table");
+    let style = resolve_text_quoting_style(
+        var,
+        TextQuotingFlag::from_value(flag),
+        if flag.is_nil() {
+            LeftSingleQuoteDisplay::NotAsciiBacktick
+        } else {
+            left_single_quote_display(table, eval.symbol_mode())
+        },
+        eval.symbol_mode(),
+    );
+    Ok(style.to_symbol())
 }
 
 /// Requote the grave accent (`` ` ``) and apostrophe (`'`) in a C-level error
@@ -5490,33 +5740,16 @@ pub(crate) fn builtin_set_safe_terminal_coding_system_internal(
 /// Mirrors GNU `Ftext_quoting_style` (`src/doc.c:652-678`):
 ///   - If `text-quoting-style' is `grave', `straight', or `curve', return it.
 ///   - If nil (the default), return `grave' when curved quotes cannot be
-///     displayed, otherwise `curve'.
+///     displayed, otherwise `curve' (`default_to_grave_quoting_style',
+///     `src/doc.c:638-650`, reading `internal--text-quoting-flag' and the
+///     standard display table's U+2018 entry).
 ///   - Any other value is treated as `curve'.
 ///   - Never returns nil.
-///
-/// The display-capability fallback (GNU's `default_to_grave_quoting_style')
-/// is currently a stub that always picks `curve' — neomacs does not yet
-/// query the active display table for curved-quote support. This matches
-/// GNU's behavior on a graphical/UTF-8 terminal.
 pub(crate) fn builtin_text_quoting_style(
     eval: &super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    expect_args("text-quoting-style", &args, 0)?;
-    let var = eval
-        .eval_symbol_by_id(crate::emacs_core::intern::intern("text-quoting-style"))
-        .unwrap_or(Value::NIL);
-    if var.is_nil() {
-        // GNU `default_to_grave_quoting_style' inspects the standard
-        // display table to decide whether curved quotes are renderable.
-        // Stub: always pick `curve'. Bringing in real display-capability
-        // detection is a separate task.
-        return Ok(TextQuotingStyle::Curve.to_symbol());
-    }
-    if let Some(style) = TextQuotingStyle::from_symbol_value(var, eval.symbol_mode()) {
-        return Ok(style.to_symbol());
-    }
-    Ok(TextQuotingStyle::Curve.to_symbol())
+    context_text_quoting_style(eval, args)
 }
 
 /// `(set-text-conversion-style STYLE &optional WHERE)` -- set conversion style.

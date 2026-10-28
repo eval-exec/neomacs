@@ -124,6 +124,9 @@ mod compat_syntax_table_semantics;
 #[path = "compat_text_property_semantics.rs"]
 mod compat_text_property_semantics;
 
+#[path = "compat_text_quoting_semantics.rs"]
+mod compat_text_quoting_semantics;
+
 #[path = "compat_window_batch_display_semantics.rs"]
 mod compat_window_batch_display_semantics;
 

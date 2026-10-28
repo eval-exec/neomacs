@@ -22,3 +22,32 @@ fn table_has_no_duplicate_rows() {
     names.dedup();
     assert_eq!(names.len(), before, "duplicate DEFVAR_BOOL row");
 }
+
+/// The two running values GNU's `main` installs after the declarations, and
+/// the declaration value it replaces: `text_quoting_flag` from the process
+/// locale (`src/emacs.c:1653-1656`) and `noninteractive1` from argv
+/// (`src/emacs.c:1953`).  Any other row marked here would claim a value no
+/// GNU `main` sets; a missing row would leave a library context at the
+/// pre-main value.
+#[test]
+fn only_the_main_decided_rows_carry_a_running_value() {
+    let mut main_decided: Vec<(&str, bool)> = GNU_BOOL_VARIABLES
+        .iter()
+        .filter_map(|v| v.main_value.map(|running| (v.name, running)))
+        .collect();
+    main_decided.sort_unstable();
+    assert_eq!(
+        main_decided,
+        [
+            ("internal--text-quoting-flag", true),
+            ("noninteractive", true)
+        ]
+    );
+    for var in GNU_BOOL_VARIABLES.iter().filter(|v| v.main_value.is_some()) {
+        assert!(
+            !var.initial,
+            "{}: GNU's declaration leaves the slot false",
+            var.name
+        );
+    }
+}

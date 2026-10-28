@@ -1382,6 +1382,15 @@ impl Context {
         // `display-fill-column-indicator', `display-line-numbers-widen' --
         // has to be forwarded before that happens or the coercion is dropped.
         super::super::defvar_bool::register_bootstrap_vars(obarray);
+        // A `Context` is always past GNU's `main`, which is what installs
+        // `noninteractive' from argv and `text_quoting_flag' from the process
+        // locale (`src/emacs.c:1953', `:1653-1656').  The rows say so and
+        // carry the batch-shaped value a library context uses; the `neomacs`
+        // binary restates both from its own argv and locale in
+        // `configure_gnu_startup_state`, and interactive startup sets the
+        // quoting flag to t after `startup--setup-quote-display'
+        // (`lisp/startup.el:1619-1620`).
+        super::super::defvar_bool::apply_post_main_batch_defaults(obarray);
         super::super::alloc::register_bootstrap_vars(obarray);
         super::super::load::register_bootstrap_vars(obarray);
         super::super::fileio::register_bootstrap_vars(obarray);
