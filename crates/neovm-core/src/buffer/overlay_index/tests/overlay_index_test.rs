@@ -1,19 +1,18 @@
 use super::*;
 use crate::buffer::BufferId;
-use crate::heap_types::OverlayData;
+use crate::heap_types::OverlayDataInit;
 
 #[cfg(test)]
 #[path = "local_move_test.rs"]
 mod local_move;
 
 fn overlay(start: usize, end: usize) -> Value {
-    Value::make_overlay(OverlayData {
-        serial: 0,
+    Value::make_overlay(OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
         buffer: Some(BufferId(1)),
         start,
         end,
-        position_handle: None,
         front_advance: false,
         rear_advance: false,
     })

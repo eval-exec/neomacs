@@ -197,7 +197,7 @@ fn property_keys_preserve_category_alias_default_nil_overlay_and_extent_order() 
             Value::NIL
         ));
         overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 0,
+            serial: neovm_core::heap_types::OverlaySerialSource::Mint,
             plist: Value::NIL,
             buffer: Some(buffer_id),
             start: 4,

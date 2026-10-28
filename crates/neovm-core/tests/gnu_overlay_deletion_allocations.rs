@@ -43,7 +43,7 @@ fn gde_review_equal_start_delete_has_no_ordering_scratch_allocations() {
     let mut list = OverlayList::new();
     for _ in 0..2 {
         list.insert_overlay(Value::make_overlay(OverlayDataInit {
-            serial: 0,
+            serial: neovm_core::heap_types::OverlaySerialSource::Mint,
             plist: Value::NIL,
             buffer: Some(BufferId(1)),
             start: 4,

@@ -1,5 +1,15 @@
 use super::*;
 
+/// Growth helper mirroring the production insert resize policy closely enough
+/// to force rehashes during the concurrent-mark stress test.
+fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
+    let len = ht.data.len() as i64;
+    if len >= ht.size {
+        ht.size = if ht.size == 0 { 6 } else { ht.size * 2 };
+        ht.data.reserve(ht.size as usize);
+    }
+}
+
 /// Promotion and reclamation may reborrow the heap between consecutive
 /// unlinks, including while the cursor still points at the list head.
 #[test]

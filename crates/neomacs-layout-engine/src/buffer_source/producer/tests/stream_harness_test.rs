@@ -528,7 +528,7 @@ impl Fixture {
                 let end =
                     buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(overlay.end_char));
                 let value = Value::make_overlay(OverlayDataInit {
-                    serial: 0,
+                    serial: neovm_core::heap_types::OverlaySerialSource::Mint,
                     plist: Value::NIL,
                     buffer: Some(buffer_id),
                     start: start.get(),

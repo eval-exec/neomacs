@@ -1816,11 +1816,17 @@ impl<'a> LoadDecoder<'a> {
                 value
             }
             DumpHeapObject::Overlay(overlay) => {
-                // A restored live object compares by its relocated identity,
-                // not the identity saved by a former process. Observer-only
-                // snapshot clones preserve their source key separately.
-                let mut data = crate::heap_types::OverlayData {
-                    serial: 0,
+                // The image preserves the overlay's creation-order precedence
+                // identity; only the object's address is relocated.
+                let serial = crate::heap_types::OverlaySerial::from_u64(overlay.serial)
+                    .ok_or_else(|| {
+                        DumpError::ImageFormatError("overlay serial must be non-zero".to_string())
+                    })?;
+                // A mapped object is written in place instead of allocated by
+                // `alloc_overlay`, so resume the World counter explicitly.
+                with_tagged_heap(|heap| heap.observe_overlay_serial(serial));
+                let data = crate::heap_types::OverlayData {
+                    serial,
                     plist: Value::NIL,
                     buffer: overlay.buffer.map(|id| BufferId(id.0)),
                     start: overlay.start,
@@ -1836,7 +1842,6 @@ impl<'a> LoadDecoder<'a> {
                         let value = Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>());
                         // Initialize before the decoder publishes this fresh
                         // live object to its exclusively owned restoring heap.
-                        data.serial = value.bits() as u64;
                         std::ptr::write(
                             ptr,
                             OverlayObj {
@@ -1847,7 +1852,15 @@ impl<'a> LoadDecoder<'a> {
                         value
                     }
                 } else {
-                    Value::make_overlay(data)
+                    Value::make_overlay(crate::heap_types::OverlayDataInit {
+                        serial: crate::heap_types::OverlaySerialSource::Preserved(serial),
+                        plist: data.plist,
+                        buffer: data.buffer,
+                        start: data.start,
+                        end: data.end,
+                        front_advance: data.front_advance,
+                        rear_advance: data.rear_advance,
+                    })
                 }
             }
             DumpHeapObject::Buffer(id) => self.load_cached_buffer(id.0),
@@ -3657,10 +3670,10 @@ fn dump_text_property_table(
 fn dump_overlay(encoder: &mut DumpEncoder, o: &Overlay) -> DumpOverlay {
     let (start, end) = o.current_range();
     DumpOverlay {
-        // Both restore paths derive a fresh precedence key from the relocated
-        // object. The producer's tagged address is dead image metadata; live
-        // overlays and immutable observer copies retain their original keys.
-        serial: 0,
+        // The serial is the overlay's creation-order precedence identity.
+        // Images preserve it, and load resumes the World counter above the
+        // largest restored serial, so ties stay deterministic across a dump.
+        serial: o.serial.get(),
         plist: encoder.dump_value(&o.plist),
         buffer: o.buffer.map(|id| DumpBufferId(id.0)),
         start,
@@ -5940,13 +5953,14 @@ fn load_buffer(
                 .overlays
                 .iter()
                 .map(|d| {
-                    Value::make_overlay(crate::heap_types::OverlayData {
-                        serial: 0,
+                    let serial = crate::heap_types::OverlaySerial::from_u64(d.serial)
+                        .expect("a versioned image carries non-zero overlay serials");
+                    Value::make_overlay(crate::heap_types::OverlayDataInit {
+                        serial: crate::heap_types::OverlaySerialSource::Preserved(serial),
                         plist: decoder.load_value(&d.plist),
                         buffer: d.buffer.map(|id| BufferId(id.0)),
                         start: d.start,
                         end: d.end,
-                        position_handle: None,
                         front_advance: d.front_advance,
                         rear_advance: d.rear_advance,
                     })

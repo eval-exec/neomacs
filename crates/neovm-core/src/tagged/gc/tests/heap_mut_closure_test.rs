@@ -91,7 +91,7 @@ fn every_heap_mutation_closure_has_a_guard() {
     {
         let owner = heap.alloc_overlay(
             OverlayDataInit {
-                serial: 0,
+                serial: crate::heap_types::OverlaySerialSource::Mint,
                 plist: TaggedValue::NIL,
                 buffer: None,
                 start: 0,

@@ -542,3 +542,101 @@ fn oracle_prop_overlay_complex_nested_boundaries() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+// ---------------------------------------------------------------------------
+// Deterministic precedence ties
+//
+// GNU `compare_overlays` ends a fully equal tie with the overlay object's
+// address and documents that order as arbitrary between invocations
+// (src/buffer.c:3277-3281).  These forms are the minimal recordings of that
+// branch; GNU 31.1 returns the same answer in repeated runs and picks the
+// later creation each time.  Neomacs mints a creation serial per overlay, so
+// the recorded winners are stable across runs, heap layouts and dump/load.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn oracle_prop_overlay_tie_two_equal_overlays_use_creation_order() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r####"(with-temp-buffer
+  (insert "AAAAA")
+  (let ((first (make-overlay 1 6))
+        (second (make-overlay 1 6)))
+    (overlay-put first 'face '(:foreground "A"))
+    (overlay-put second 'face '(:foreground "B"))
+    (list
+     (get-char-property 3 'face)
+     (mapcar (lambda (o) (overlay-get o 'face)) (overlays-at 3)))))
+"####;
+    let expect = expect_test::expect![[
+        r#""OK ((:foreground \"B\") ((:foreground \"B\") (:foreground \"A\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_overlay_tie_three_equal_overlays_use_creation_order() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r####"(with-temp-buffer
+  (insert "AAAAA")
+  (let ((first (make-overlay 1 6))
+        (second (make-overlay 1 6))
+        (third (make-overlay 1 6)))
+    (overlay-put first 'face '(:foreground "A"))
+    (overlay-put second 'face '(:foreground "B"))
+    (overlay-put third 'face '(:foreground "C"))
+    (list
+     (get-char-property 3 'face)
+     (mapcar (lambda (o) (overlay-get o 'face)) (overlays-at 3)))))
+"####;
+    let expect = expect_test::expect![[
+        r#""OK ((:foreground \"C\") ((:foreground \"C\") (:foreground \"B\") (:foreground \"A\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_overlay_tie_delete_and_recreate_uses_the_new_creation() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r####"(with-temp-buffer
+  (insert "AAAAA")
+  (let ((first (make-overlay 1 6))
+        (second (make-overlay 1 6)))
+    (overlay-put first 'face '(:foreground "A"))
+    (overlay-put second 'face '(:foreground "B"))
+    (delete-overlay second)
+    (let ((replacement (make-overlay 1 6)))
+      (overlay-put replacement 'face '(:foreground "C"))
+      (list
+       (get-char-property 3 'face)
+       (mapcar (lambda (o) (overlay-get o 'face)) (overlays-at 3))))))
+"####;
+    let expect = expect_test::expect![[
+        r#""OK ((:foreground \"C\") ((:foreground \"C\") (:foreground \"A\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+#[test]
+fn oracle_prop_overlay_tie_copy_overlay_is_a_new_creation() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r####"(with-temp-buffer
+  (insert "AAAAA")
+  (let* ((first (make-overlay 1 6))
+         (second (make-overlay 1 6))
+         (copy (copy-overlay first)))
+    (overlay-put first 'face '(:foreground "A"))
+    (overlay-put second 'face '(:foreground "B"))
+    (overlay-put copy 'face '(:foreground "A-copy"))
+    (list
+     (get-char-property 3 'face)
+     (mapcar (lambda (o) (overlay-get o 'face)) (overlays-at 3)))))
+"####;
+    let expect = expect_test::expect![[
+        r#""OK ((:foreground \"A-copy\") ((:foreground \"A-copy\") (:foreground \"B\") (:foreground \"A\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}

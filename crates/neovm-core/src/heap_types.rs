@@ -1537,13 +1537,89 @@ mod clear_string_in_place_tests;
 #[path = "heap_types/tests/declared_string_safety.rs"]
 mod declared_string_safety_tests;
 
+/// Creation-order identity of one overlay, used only for the final
+/// precedence tie-break in GNU `compare_overlays` (`src/buffer.c:3256-3282`).
+///
+/// GNU breaks a fully equal tie (same priority, same range, same secondary
+/// priority) by the overlay object's address and documents that ordering as
+/// arbitrary and possibly different between invocations. Neomacs keeps the
+/// branch deterministic: every freshly created overlay is minted a strictly
+/// larger serial from its World's counter, so later creation sorts later and
+/// wins. Distinct-key precedence is untouched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(transparent)]
+pub struct OverlaySerial(std::num::NonZeroU64);
+
+impl OverlaySerial {
+    /// An identity read back from an image. Zero was never a valid serial.
+    #[inline]
+    pub fn from_u64(raw: u64) -> Option<Self> {
+        std::num::NonZeroU64::new(raw).map(Self)
+    }
+
+    #[inline]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+// The serial rides inside `OverlayData`; it must not grow the overlay object.
+const _: () = assert!(std::mem::size_of::<OverlaySerial>() == 8);
+const _: () = assert!(std::mem::size_of::<Option<OverlaySerial>>() == 8);
+// The World-owned counter is one atomic word appended to the heap's tail.
+const _: () = assert!(std::mem::size_of::<OverlaySerialCounter>() == 8);
+
+/// Which precedence identity a not-yet-published overlay gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverlaySerialSource {
+    /// A new Lisp object: mint the World's next creation serial.
+    Mint,
+    /// A redisplay observer copy, buffered copy or loaded image keeps the
+    /// identity it already carries.
+    Preserved(OverlaySerial),
+}
+
+/// The World's overlay creation counter. Exactly one per `TaggedHeap`, which
+/// is itself owned by the World allocation: not process-global, not TLS. It
+/// is atomic so the World is ready for several mutators; ordering between
+/// distinct serials only needs the atomic read-modify-write, hence `Relaxed`.
+#[derive(Debug, Default)]
+pub struct OverlaySerialCounter(std::sync::atomic::AtomicU64);
+
+impl OverlaySerialCounter {
+    pub const fn new() -> Self {
+        Self(std::sync::atomic::AtomicU64::new(0))
+    }
+
+    /// Issue the next creation serial. The counter stores the last issued
+    /// value; a `fetch_add` therefore yields the successor.
+    #[inline]
+    pub fn mint(&self) -> OverlaySerial {
+        let next = self
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .checked_add(1)
+            .expect("overlay serial space exhausted");
+        OverlaySerial(
+            std::num::NonZeroU64::new(next).expect("a minted overlay serial is never zero"),
+        )
+    }
+
+    /// Resume above an image's largest preserved serial, so every later
+    /// creation still sorts after every restored overlay.
+    #[inline]
+    pub fn observe(&self, serial: OverlaySerial) {
+        self.0
+            .fetch_max(serial.get(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[derive(Debug)]
 pub struct OverlayData {
-    /// Original tagged object identity used by GNU's `compare_overlays`
-    /// (`XLI (overlay)`). Initialized before the owning mutator publishes its
-    /// fresh allocation; immutable observer copies preserve this scalar key.
-    /// Address ordering is arbitrary and need not follow allocation order.
-    pub serial: u64,
+    /// Creation-order identity for the final precedence tie-break. Minted
+    /// before the owning mutator publishes a fresh allocation; observer
+    /// copies and loaded images preserve it (see [`OverlaySerial`]).
+    pub serial: OverlaySerial,
     pub plist: crate::emacs_core::value::Value,
     pub buffer: Option<BufferId>,
     pub start: usize,
@@ -1565,7 +1641,9 @@ pub struct OverlayData {
 /// authority until an overlay list attaches it.
 #[derive(Clone, Debug)]
 pub struct OverlayDataInit {
-    pub serial: u64,
+    /// `Mint` for a new Lisp object; `Preserved` for observer copies,
+    /// buffered copies and image loads.
+    pub serial: OverlaySerialSource,
     pub plist: crate::emacs_core::value::Value,
     pub buffer: Option<BufferId>,
     pub start: usize,
@@ -1574,10 +1652,13 @@ pub struct OverlayDataInit {
     pub rear_advance: bool,
 }
 
-impl From<OverlayDataInit> for OverlayData {
-    fn from(init: OverlayDataInit) -> Self {
+impl OverlayData {
+    /// Build the live payload with the identity the allocator resolved for it.
+    /// The serial is passed separately because `Mint` needs the World's
+    /// counter, which only the heap owns.
+    pub(crate) fn from_init(init: OverlayDataInit, serial: OverlaySerial) -> Self {
         Self {
-            serial: init.serial,
+            serial,
             plist: init.plist,
             buffer: init.buffer,
             start: init.start,

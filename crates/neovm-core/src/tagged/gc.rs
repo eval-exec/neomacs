@@ -952,6 +952,12 @@ pub struct TaggedHeap {
     /// Executing mutator's protocol followed by this heap's stopped-handshake
     /// window mirrors. The journal allocation stays with ObservationWorld.
     store: std::mem::MaybeUninit<super::collection_reads::StoreState>,
+
+    /// Creation-order identities for the final overlay precedence tie-break
+    /// (`OverlaySerial`). One counter per World's heap; atomic so the World
+    /// is N-mutator ready. Appended after the frozen store ABI fields, so no
+    /// pinned offset moves.
+    overlay_serial: crate::heap_types::OverlaySerialCounter,
 }
 
 impl Default for TaggedHeap {
@@ -1070,6 +1076,7 @@ impl TaggedHeap {
             image_premarked: false,
             #[cfg(test)]
             mapped_veclike_traces: 0,
+            overlay_serial: crate::heap_types::OverlaySerialCounter::new(),
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,
@@ -2912,17 +2919,6 @@ mod symbol_with_pos_arena_tests;
 #[cfg(test)]
 #[path = "gc/tests/vec_scan_test.rs"]
 mod vec_scan_tests;
-
-/// Test-only growth helper mirroring the production insert resize policy closely
-/// enough to force rehashes during the concurrent-mark stress test.
-#[cfg(test)]
-fn maybe_resize_for_test(ht: &mut crate::emacs_core::value::LispHashTable) {
-    let len = ht.data.len() as i64;
-    if len >= ht.size {
-        ht.size = if ht.size == 0 { 6 } else { ht.size * 2 };
-        ht.data.reserve(ht.size as usize);
-    }
-}
 
 #[cfg(test)]
 #[path = "gc/tests/age_mirror_test.rs"]

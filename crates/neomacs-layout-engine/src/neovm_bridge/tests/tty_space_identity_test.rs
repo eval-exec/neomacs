@@ -87,7 +87,9 @@ fn ordinary_buffer_only_bypasses_generic_lookup_without_raw_overlays() {
         TtySpaceIdentity::CanonicalDefault
     );
     let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-        serial: 1,
+        serial: neovm_core::heap_types::OverlaySerialSource::Preserved(
+            neovm_core::heap_types::OverlaySerial::from_u64(1).expect("non-zero test serial"),
+        ),
         plist: Value::NIL,
         buffer: Some(buffer.id()),
         start: 0,

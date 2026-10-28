@@ -1482,8 +1482,14 @@ impl<'a> Cursor<'a> {
     }
 
     fn read_overlay(&mut self) -> Result<DumpOverlay, DumpError> {
+        let serial = self.read_u64("overlay serial")?;
+        if serial == 0 {
+            return Err(DumpError::ImageFormatError(
+                "overlay serial must be non-zero".to_string(),
+            ));
+        }
         Ok(DumpOverlay {
-            serial: self.read_u64("overlay serial")?,
+            serial,
             plist: self.read_value()?,
             buffer: self.read_opt_buffer_id()?,
             start: self.read_usize("overlay start")?,

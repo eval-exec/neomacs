@@ -3007,9 +3007,11 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_marker(data))
     }
 
-    /// Allocate an overlay.
-    pub fn make_overlay(data: impl Into<crate::heap_types::OverlayData>) -> Self {
-        with_tagged_heap(|h| h.alloc_overlay(data.into()))
+    /// Allocate an overlay. A fresh object's precedence serial is minted by
+    /// the World's heap before the value is published; `Preserved` sources
+    /// (observer copies, buffered copies, image loads) keep their identity.
+    pub fn make_overlay(init: crate::heap_types::OverlayDataInit) -> Self {
+        with_tagged_heap(|h| h.alloc_overlay(init))
     }
 
     /// Allocate a buffer reference.

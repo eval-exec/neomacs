@@ -40,7 +40,7 @@ fn canonical_rows(content: &str, presentation: bool) -> (WindowDisplaySnapshot, 
         let buffer = eval.buffer_manager_mut().get_mut(buffer).expect("buffer");
         let eob = buffer.point_max_emacs_byte_pos().get();
         let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 0,
+            serial: neovm_core::heap_types::OverlaySerialSource::Mint,
             plist: Value::NIL,
             buffer: Some(buffer.id()),
             start: eob,

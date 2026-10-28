@@ -18,6 +18,13 @@ use neovm_core::emacs_core::value::StringTextPropertyRun;
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::heap_types::LispString;
 
+fn preserved_overlay_serial(raw: u64) -> neovm_core::heap_types::OverlaySerialSource {
+    use neovm_core::heap_types::{OverlaySerial, OverlaySerialSource};
+    OverlaySerialSource::Preserved(
+        OverlaySerial::from_u64(raw).expect("test overlay serials are non-zero"),
+    )
+}
+
 #[test]
 fn ordinary_run_acquisition_horizon_bounds_payload_without_changing_semantic_end() {
     let (id, snapshot, end) = snapshot_with_text("abcdefλ");
@@ -1985,7 +1992,7 @@ fn overlay_mouse_face_uses_the_highest_priority_effective_property() {
         buffer.insert("x");
         for (serial, priority, face) in [(1, 1, "low-mouse"), (2, 20, "high-mouse")] {
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial,
+                serial: preserved_overlay_serial(serial as u64),
                 plist: Value::NIL,
                 buffer: Some(buffer_id),
                 start: 0,
@@ -2041,7 +2048,7 @@ fn an_overlay_category_decides_priority_against_another_overlay() {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
         buffer.insert("xy");
         let loser = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 1,
+            serial: preserved_overlay_serial(1),
             plist: Value::NIL,
             buffer: Some(buffer_id),
             start: 0,
@@ -2059,7 +2066,7 @@ fn an_overlay_category_decides_priority_against_another_overlay() {
             .overlay_put(loser, Value::symbol("face"), Value::symbol("own-face"))
             .unwrap();
         let winner = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 2,
+            serial: preserved_overlay_serial(2),
             plist: Value::list(vec![
                 Value::symbol("category"),
                 Value::symbol("winning-category"),
@@ -2098,7 +2105,7 @@ fn overlay_mouse_face_resolves_through_its_category() {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
         buffer.insert("xy");
         let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 1,
+            serial: preserved_overlay_serial(1),
             plist: Value::list(vec![
                 Value::symbol("category"),
                 Value::symbol("mouse-face-category"),
@@ -2223,7 +2230,7 @@ fn overlay_mouse_face_interrupts_and_then_reveals_text_mouse_face() {
             Value::symbol("highlight"),
         );
         let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 1,
+            serial: preserved_overlay_serial(1),
             plist: Value::list(vec![
                 Value::symbol("mouse-face"),
                 Value::symbol("high-mouse"),
@@ -2318,7 +2325,7 @@ fn overlay_mouse_face_started_before_the_cursor_keeps_its_maximal_source_range()
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
         buffer.insert("abcd");
         let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 1,
+            serial: preserved_overlay_serial(1),
             plist: Value::list(vec![
                 Value::symbol("mouse-face"),
                 Value::symbol("highlight"),
@@ -2370,7 +2377,7 @@ fn long_overlay_mouse_face_skips_unrelated_offscreen_overlay_endpoints() {
         let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
         buffer.insert(&"x".repeat(BUFFER_LEN));
         let mouse_face = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 1,
+            serial: preserved_overlay_serial(1),
             plist: Value::list(vec![
                 Value::symbol("mouse-face"),
                 Value::symbol("highlight"),
@@ -2385,7 +2392,7 @@ fn long_overlay_mouse_face_skips_unrelated_offscreen_overlay_endpoints() {
         for index in 0..2_000 {
             let start = index * 2;
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial: index as u64 + 2,
+                serial: preserved_overlay_serial(index as u64 + 2),
                 plist: Value::list(vec![Value::symbol("face"), Value::symbol("bold")]),
                 buffer: Some(buffer_id),
                 start,
@@ -2445,7 +2452,7 @@ fn short_text_mouse_face_does_not_sweep_unrelated_later_overlays() {
         for index in 0..OVERLAY_COUNT {
             let start = TEXT_START + 2 + index;
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial: index as u64 + 1,
+                serial: preserved_overlay_serial(index as u64 + 1),
                 plist: Value::list(vec![Value::symbol("face"), Value::symbol("bold")]),
                 buffer: Some(buffer_id),
                 start,
@@ -2504,7 +2511,7 @@ fn unrelated_property_and_overlay_boundaries_keep_one_mouse_face_extent() {
             Value::T,
         );
         let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-            serial: 9,
+            serial: preserved_overlay_serial(9),
             plist: Value::NIL,
             buffer: Some(buffer_id),
             start: 1,
@@ -2611,7 +2618,7 @@ fn absent_mouse_face_skips_overlay_extent_across_unrelated_empty_overlays() {
         for line in 0..LINE_COUNT {
             let anchor = line * 2;
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial: line as u64 + 1,
+                serial: preserved_overlay_serial(line as u64 + 1),
                 plist: Value::list(vec![
                     Value::symbol("before-string"),
                     before_string,
@@ -2707,7 +2714,7 @@ fn cons_priority_uses_gnu_primary_before_nested_subpriority() {
             ),
         ] {
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial,
+                serial: preserved_overlay_serial(serial as u64),
                 plist: Value::NIL,
                 buffer: Some(buffer_id),
                 start,
@@ -2757,7 +2764,7 @@ fn nested_equal_priority_overlay_owns_only_its_effective_segment() {
         buffer.insert("abcd");
         for (serial, start, end, face) in [(1, 0, 4, "low-mouse"), (2, 1, 3, "high-mouse")] {
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial,
+                serial: preserved_overlay_serial(serial as u64),
                 plist: Value::NIL,
                 buffer: Some(buffer_id),
                 start,
@@ -2822,7 +2829,7 @@ fn equal_priority_tie_and_nil_overlay_match_shared_gnu_selection() {
             (12, Value::NIL),
         ] {
             let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-                serial,
+                serial: preserved_overlay_serial(serial as u64),
                 plist: Value::NIL,
                 buffer: Some(buffer_id),
                 start: 0,
@@ -3694,7 +3701,7 @@ fn character_source_reuses_property_boundaries_and_recovers_after_rewinds() {
         Value::T,
     );
     let overlay = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
-        serial: 1,
+        serial: preserved_overlay_serial(1),
         plist: Value::NIL,
         buffer: Some(buffer_id),
         start: 24,

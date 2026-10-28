@@ -458,28 +458,34 @@ fn deterministic_order_restart_gc_stats_exclude_history_without_mutating_live_st
 }
 
 #[test]
-fn deterministic_order_overlay_files_exclude_old_identity_and_restore_fresh_identity() {
-    use crate::heap_types::OverlayData;
+fn deterministic_order_overlay_serials_survive_dump_and_resume_the_counter() {
+    use crate::heap_types::{OverlayDataInit, OverlaySerial, OverlaySerialSource};
+
+    const DETACHED_SERIAL: u64 = 1_000_000_101;
+    const ATTACHED_SERIAL: u64 = 1_000_000_202;
+    let preserved = |raw: u64| {
+        OverlaySerialSource::Preserved(
+            OverlaySerial::from_u64(raw).expect("test serials are non-zero"),
+        )
+    };
 
     let mut eval = Context::new();
     let buffer = eval.buffers.create_buffer("pdump-overlay-serial");
-    let detached = Value::make_overlay(OverlayData {
-        serial: 101,
+    let detached = Value::make_overlay(OverlayDataInit {
+        serial: preserved(DETACHED_SERIAL),
         plist: Value::list(vec![Value::symbol("face"), Value::symbol("bold")]),
         buffer: None,
         start: 2,
         end: 9,
-        position_handle: None,
         front_advance: true,
         rear_advance: false,
     });
-    let attached = Value::make_overlay(OverlayData {
-        serial: 202,
+    let attached = Value::make_overlay(OverlayDataInit {
+        serial: preserved(ATTACHED_SERIAL),
         plist: Value::NIL,
         buffer: Some(buffer),
         start: 1,
         end: 1,
-        position_handle: None,
         front_advance: false,
         rear_advance: true,
     });
@@ -490,34 +496,28 @@ fn deterministic_order_overlay_files_exclude_old_identity_and_restore_fresh_iden
         .insert_overlay(attached);
     eval.set_variable("pdump-overlay-detached", detached);
     eval.set_variable("pdump-overlay-attached", attached);
+
+    // Redisplay snapshots are observers: their cloned objects keep the
+    // creation serial of the overlay they observe.
     let observer = eval.buffers.get(buffer).unwrap().overlays.snapshot_clone();
     let observer_values = observer.dump_overlays();
-    assert_eq!(observer_values[0].as_overlay_data().unwrap().serial, 202);
+    assert_eq!(
+        observer_values[0].as_overlay_data().unwrap().serial.get(),
+        ATTACHED_SERIAL
+    );
 
     let dir = tempfile::tempdir().unwrap();
     let first = dir.path().join("first.pdump");
     let second = dir.path().join("second.pdump");
     super::dump_to_file(&eval, &first).unwrap();
-    // Simulate another producer's relocated identities without changing the
-    // rooted graphs or their precedence relation. The live keys remain owned
-    // by the source process, including immutable redisplay observer copies.
-    detached
-        .with_overlay_data_mut(|data| data.serial = 501)
-        .unwrap();
-    attached
-        .with_overlay_data_mut(|data| data.serial = 602)
-        .unwrap();
     super::dump_to_file(&eval, &second).unwrap();
-    assert_eq!(detached.as_overlay_data().unwrap().serial, 501);
-    assert_eq!(attached.as_overlay_data().unwrap().serial, 602);
-    assert_eq!(observer_values[0].as_overlay_data().unwrap().serial, 202);
     assert_eq!(
         std::fs::read(&first).unwrap(),
         std::fs::read(&second).unwrap(),
-        "discarded source-process identities must not change complete image bytes"
+        "serials are part of the image and must dump deterministically"
     );
 
-    let loaded = super::load_from_dump(&second).unwrap();
+    let mut loaded = super::load_from_dump(&second).unwrap();
     let a = loaded
         .obarray
         .symbol_value_copied("pdump-overlay-detached")
@@ -527,11 +527,21 @@ fn deterministic_order_overlay_files_exclude_old_identity_and_restore_fresh_iden
         .symbol_value_copied("pdump-overlay-attached")
         .unwrap();
     assert!(!crate::emacs_core::value::eq_value(&a, &b));
-    for value in [a, b] {
-        assert_eq!(value.as_overlay_data().unwrap().serial, value.bits() as u64);
-    }
+    assert_eq!(a.as_overlay_data().unwrap().serial.get(), DETACHED_SERIAL);
+    assert_eq!(b.as_overlay_data().unwrap().serial.get(), ATTACHED_SERIAL);
     let restored_buffer = loaded.buffers.get(buffer).unwrap();
     for value in restored_buffer.overlays.dump_overlays() {
-        assert_eq!(value.as_overlay_data().unwrap().serial, value.bits() as u64);
+        assert_eq!(
+            value.as_overlay_data().unwrap().serial.get(),
+            ATTACHED_SERIAL
+        );
     }
+
+    // The restored World resumes minting above every preserved serial, so a
+    // post-load overlay still sorts after every overlay that came from the
+    // image.
+    let fresh = loaded
+        .eval_str("(make-overlay (point-min) (point-min))")
+        .expect("create a fresh overlay after image load");
+    assert!(fresh.as_overlay_data().unwrap().serial.get() > ATTACHED_SERIAL);
 }

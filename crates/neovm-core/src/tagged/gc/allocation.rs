@@ -845,27 +845,38 @@ impl TaggedHeap {
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
-    /// Allocate an overlay.
-    pub fn alloc_overlay(&mut self, data: crate::heap_types::OverlayData) -> TaggedValue {
+    /// Allocate an overlay, resolving its precedence identity before the
+    /// object is linked or published.
+    pub fn alloc_overlay(&mut self, init: crate::heap_types::OverlayDataInit) -> TaggedValue {
+        use crate::heap_types::OverlaySerialSource;
+        // GNU `compare_overlays`' final branch is address order, which GNU
+        // documents as arbitrary. Neomacs makes it deterministic creation
+        // order: a fresh Lisp object mints the World's next serial, while an
+        // observer copy or image load keeps the identity it carries.
+        let serial = match init.serial {
+            OverlaySerialSource::Mint => self.overlay_serial.mint(),
+            OverlaySerialSource::Preserved(serial) => serial,
+        };
+        // A resumed image must not hand out a serial at or below one it
+        // already contains; this is the load-side "restore to max+1".
+        self.overlay_serial.observe(serial);
         let obj = Box::new(OverlayObj {
             header: VecLikeHeader::new(VecLikeType::Overlay),
-            data,
+            data: crate::heap_types::OverlayData::from_init(init, serial),
         });
         let ptr = Box::into_raw(obj);
         let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
-        // GNU compare_overlays uses raw object identity, which need not follow
-        // allocation order. Initialize before linking/publishing the new
-        // object; explicit identities are retained for snapshot observers.
-        // This write is local to the owning mutator's fresh allocation.
-        unsafe {
-            if (*ptr).data.serial == 0 {
-                (*ptr).data.serial = value.bits() as u64;
-            }
-        }
         self.link_veclike(ptr as *mut VecLikeHeader);
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<OverlayObj>());
         value
+    }
+
+    /// Resume the World's overlay counter above `serial` after an image or
+    /// mapped-object load bypassed [`Self::alloc_overlay`]. Never lowers it.
+    #[inline]
+    pub fn observe_overlay_serial(&mut self, serial: crate::heap_types::OverlaySerial) {
+        self.overlay_serial.observe(serial);
     }
 
     /// Allocate a marker.

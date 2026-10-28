@@ -352,8 +352,14 @@ fn write_overlay(out: &mut Vec<u8>, overlay: &DumpOverlay) -> Result<(), DumpErr
 }
 
 fn read_overlay(cursor: &mut Cursor<'_>) -> Result<DumpOverlay, DumpError> {
+    let serial = cursor.read_u64("overlay serial")?;
+    if serial == 0 {
+        return Err(DumpError::ImageFormatError(
+            "overlay serial must be non-zero".to_string(),
+        ));
+    }
     Ok(DumpOverlay {
-        serial: cursor.read_u64("overlay serial")?,
+        serial,
         plist: cursor.read_value()?,
         buffer: read_opt_buffer_id(cursor)?,
         start: read_usize(cursor, "overlay start")?,

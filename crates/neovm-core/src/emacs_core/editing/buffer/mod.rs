@@ -5709,13 +5709,12 @@ pub(crate) fn builtin_make_overlay_in_buffers(
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
 
     let byte_range = elisp_range_to_byte_clipped_full(buf, beg, end);
-    let overlay = Value::make_overlay(crate::heap_types::OverlayData {
-        serial: 0,
+    let overlay = Value::make_overlay(crate::heap_types::OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
         buffer: Some(buf_id),
         start: byte_range.start().get(),
         end: byte_range.end().get(),
-        position_handle: None,
         front_advance,
         rear_advance,
     });

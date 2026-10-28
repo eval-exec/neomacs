@@ -356,16 +356,20 @@ impl OverlayList {
                 let plist = crate::emacs_core::builtins::builtin_copy_sequence(vec![data.plist])
                     .expect("a live overlay must carry a copyable plist");
                 push_scratch_gc_root(plist);
-                let copy = Value::make_overlay(OverlayData {
+                // GNU `copy_overlays` publishes distinct objects; redisplay
+                // observer copies must preserve the source's precedence
+                // identity or taking a snapshot could change a tie's winner.
+                let copy = Value::make_overlay(crate::heap_types::OverlayDataInit {
                     serial: match identity {
-                        OverlayCloneIdentity::Fresh => 0,
-                        OverlayCloneIdentity::PreservePrecedence => data.serial,
+                        OverlayCloneIdentity::Fresh => crate::heap_types::OverlaySerialSource::Mint,
+                        OverlayCloneIdentity::PreservePrecedence => {
+                            crate::heap_types::OverlaySerialSource::Preserved(data.serial)
+                        }
                     },
                     plist,
                     buffer: data.buffer,
                     start: range.start().get(),
                     end: range.end().get(),
-                    position_handle: None,
                     front_advance: data.front_advance,
                     rear_advance: data.rear_advance,
                 });
@@ -1903,7 +1907,7 @@ struct OverlayPrecedence {
     priority: i64,
     subpriority: i64,
     range: EmacsByteRange,
-    identity: u64,
+    identity: crate::heap_types::OverlaySerial,
 }
 
 fn overlay_precedence(
@@ -2021,21 +2025,20 @@ fn compare_overlay_precedence_keys(
     } else if eq_value(&left, &right) {
         Ordering::Equal
     } else if left_key.identity < right_key.identity {
-        // GNU buffer.c:3281 compares XLI(overlay), not allocation order.
-        // The stored identity preserves that original raw object key when
-        // an immutable observer copies an overlay.
+        // GNU buffer.c:3281 compares XLI(overlay) here, an order it documents
+        // as arbitrary. The identity is instead the overlay's creation serial
+        // (OverlaySerial): later creation sorts later and wins, deterministically.
         Ordering::Less
     } else {
         Ordering::Greater
     }
 }
 
-fn overlay_identity_key(overlay: Value) -> u64 {
+fn overlay_identity_key(overlay: Value) -> crate::heap_types::OverlaySerial {
     overlay
         .as_overlay_data()
-        .map(|data| data.serial)
-        .filter(|serial| *serial != 0)
-        .unwrap_or(overlay.bits() as u64)
+        .expect("overlay identity needs an overlay payload")
+        .serial
 }
 
 /// The symbol `priority', interned once.

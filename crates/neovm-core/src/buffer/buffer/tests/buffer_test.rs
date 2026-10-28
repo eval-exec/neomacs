@@ -2,7 +2,7 @@ use super::*;
 use crate::buffer::text::{BufferTextBytesSnapshot, ImplementedBufferTextBackendKind};
 use crate::buffer::{CharRange, LispCharPos1};
 use crate::emacs_core::value::ValueKind;
-use crate::heap_types::{LispString, OverlayData};
+use crate::heap_types::{LispString, OverlayDataInit};
 
 #[cfg(test)]
 #[path = "fixnum_positions_test.rs"]
@@ -805,13 +805,12 @@ fn cloned_indirect_buffers_copy_overlay_objects_and_indexes() {
     let mut mgr = BufferManager::new();
     let base_id = mgr.current_buffer_id().expect("scratch buffer");
     let _ = mgr.insert_into_buffer(base_id, "abcdef");
-    let original = Value::make_overlay(OverlayData {
-        serial: 0,
+    let original = Value::make_overlay(OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::list(vec![Value::symbol("face"), Value::symbol("bold")]),
         buffer: Some(base_id),
         start: 1,
         end: 4,
-        position_handle: None,
         front_advance: true,
         rear_advance: false,
     });
@@ -870,13 +869,12 @@ fn indirect_buffer_overlays_track_shared_edits() {
             .create_indirect_buffer(base_id, "*indirect-overlays*", false)
             .expect("indirect buffer");
 
-        let overlay = Value::make_overlay(OverlayData {
-            serial: 0,
+        let overlay = Value::make_overlay(OverlayDataInit {
+            serial: crate::heap_types::OverlaySerialSource::Mint,
             plist: Value::NIL,
             buffer: Some(indirect_id),
             start: 2,
             end: 4,
-            position_handle: None,
             front_advance: false,
             rear_advance: false,
         });
@@ -999,13 +997,12 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
 
             let left_overlay_start = buffer_byte_pos_for_char(&mgr, left_id, 1);
             let left_overlay_end = buffer_byte_pos_for_char(&mgr, left_id, 4);
-            let left_overlay = Value::make_overlay(OverlayData {
-                serial: 0,
+            let left_overlay = Value::make_overlay(OverlayDataInit {
+                serial: crate::heap_types::OverlaySerialSource::Mint,
                 plist: Value::NIL,
                 buffer: Some(left_id),
                 start: left_overlay_start,
                 end: left_overlay_end,
-                position_handle: None,
                 front_advance: false,
                 rear_advance: true,
             });
@@ -1016,13 +1013,12 @@ fn implemented_text_backends_match_buffer_swap_text_side_effects() {
 
             let right_overlay_start = buffer_byte_pos_for_char(&mgr, right_id, 2);
             let right_overlay_end = buffer_byte_pos_for_char(&mgr, right_id, 6);
-            let right_overlay = Value::make_overlay(OverlayData {
-                serial: 0,
+            let right_overlay = Value::make_overlay(OverlayDataInit {
+                serial: crate::heap_types::OverlaySerialSource::Mint,
                 plist: Value::NIL,
                 buffer: Some(right_id),
                 start: right_overlay_start,
                 end: right_overlay_end,
-                position_handle: None,
                 front_advance: true,
                 rear_advance: false,
             });
@@ -2548,13 +2544,12 @@ fn run_shared_insert_policy_script(kind: BufferTextBackendKind) -> SharedInsertP
     );
 
     let overlay_end = buffer_byte_pos_for_char(&mgr, indirect_id, 5);
-    let indirect_overlay = Value::make_overlay(OverlayData {
-        serial: 0,
+    let indirect_overlay = Value::make_overlay(OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
         buffer: Some(indirect_id),
         start: insert_pos,
         end: overlay_end,
-        position_handle: None,
         front_advance: false,
         rear_advance: true,
     });
@@ -2669,13 +2664,12 @@ fn run_backend_migration_script(
         bold
     ));
     register_marker_for_test(&mut buf, 77, 4, InsertionType::After);
-    let overlay = Value::make_overlay(OverlayData {
-        serial: 0,
+    let overlay = Value::make_overlay(OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
         buffer: Some(buf.id),
         start: 3,
         end: 8,
-        position_handle: None,
         front_advance: false,
         rear_advance: true,
     });

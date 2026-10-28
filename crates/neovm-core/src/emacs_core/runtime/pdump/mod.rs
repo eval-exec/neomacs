@@ -157,7 +157,13 @@ use crate::emacs_core::value;
 // contract v56 and v57 gave Boolean and integer slots, and the same two new
 // kinds for a BLV that `make_blv` copied one of them into.
 // v60: full-width bytecode depth and explicit parameter-domain codecs.
-const FORMAT_VERSION: u32 = 60;
+// v61: overlay precedence identity is the overlay's creation serial
+//   (`OverlaySerial`, minted from the World's counter), not the tagged object
+//   address. The image preserves each serial and load resumes the counter
+//   above the largest one; a zero serial is rejected. GNU's final
+//   `compare_overlays` branch is address order, which GNU documents as
+//   arbitrary; later creation now deterministically wins.
+const FORMAT_VERSION: u32 = 61;
 
 const FINGERPRINT_PLACEHOLDER: [u8; 32] = *b"NEOMACS_PDUMP_FINGERPRINT_SLOT!!";
 

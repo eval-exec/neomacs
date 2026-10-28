@@ -2,13 +2,12 @@ use super::*;
 use crate::buffer::BufferId;
 
 fn alloc_overlay(start: usize, end: usize) -> Value {
-    Value::make_overlay(OverlayData {
-        serial: 0,
+    Value::make_overlay(crate::heap_types::OverlayDataInit {
+        serial: crate::heap_types::OverlaySerialSource::Mint,
         plist: Value::NIL,
         buffer: Some(BufferId(1)),
         start,
         end,
-        position_handle: None,
         front_advance: false,
         rear_advance: false,
     })
@@ -477,7 +476,7 @@ fn lazy_edit_index_matches_simple_overlay_reference_model() {
                 list.index.range(expected.value),
                 Some(emacs_byte_range(expected.start, expected.end)),
                 "range diverged at edit step {step}, position {position}, length {length}, serial {}",
-                expected.value.as_overlay_data().unwrap().serial,
+                expected.value.as_overlay_data().unwrap().serial.get(),
             );
             assert_eq!(
                 expected.value.as_overlay_data().unwrap().current_range(),
@@ -639,25 +638,24 @@ fn next_boundary_uses_one_logarithmic_endpoint_search() {
 }
 
 #[test]
-fn sorted_overlay_precedence_matches_gnu_same_range_identity_order() {
+fn sorted_overlay_precedence_breaks_same_range_ties_by_creation_serial() {
     crate::test_utils::init_test_tracing();
     let mut list = OverlayList::new();
     let first = alloc_overlay(2, 5);
     let second = alloc_overlay(2, 5);
     list.insert_overlay(first);
     list.insert_overlay(second);
+    let first_serial = first.as_overlay_data().unwrap().serial;
+    let second_serial = second.as_overlay_data().unwrap().serial;
+    assert!(
+        first_serial < second_serial,
+        "allocation must mint creation-ordered serials"
+    );
 
     let mut overlays = overlays_at(&list, 3);
     list.sort_overlay_ids_by_priority_desc(&mut overlays);
-    let mut expected = [first.bits(), second.bits()];
-    expected.sort_unstable_by_key(|bits| std::cmp::Reverse(*bits));
-    assert_eq!(
-        overlays
-            .iter()
-            .map(|overlay| overlay.bits())
-            .collect::<Vec<_>>(),
-        expected
-    );
+    // Later creation wins the fully equal tie, independent of heap addresses.
+    assert_eq!(overlays, vec![second, first]);
 }
 
 #[test]
