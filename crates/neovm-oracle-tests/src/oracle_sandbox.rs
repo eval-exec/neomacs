@@ -60,6 +60,7 @@ pub(crate) struct OracleSandbox {
     home_root: PathBuf,
     form_path: PathBuf,
     load_root: PathBuf,
+    load_root_owner: LoadRootOwner,
     load_files: Vec<PathBuf>,
     project_root: PathBuf,
     case_filesystem: CaseFilesystemPolicy,
@@ -84,6 +85,33 @@ impl ResultNormalization {
         match self {
             Self::Exact => "exact",
             Self::IgnoreVolatileFontification => "ignore-volatile-fontification",
+        }
+    }
+}
+
+/// Who owns the sandbox's load root.
+///
+/// The project `lisp/` tree is Neomacs's own runtime and a FOREIGN tree to
+/// GNU, which must keep its installed lisp; only the engine that owns the
+/// tree may have it prepended to `load-path`.  A root a probe supplied
+/// explicitly (a fixture or package checkout, via the `*_with_load_root`
+/// helpers) is a request that BOTH engines put it first, so `(require ...)`
+/// resolves the probe's files on GNU too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum LoadRootOwner {
+    #[default]
+    Project,
+    Probe,
+}
+
+impl LoadRootOwner {
+    /// Environment variable carrying [`LoadRootOwner`] into the eval program.
+    const ENV: &'static str = "NEOVM_ORACLE_LOAD_ROOT_OWNER";
+
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Probe => "probe",
         }
     }
 }
@@ -126,12 +154,20 @@ impl OracleSandbox {
             home_root,
             form_path,
             load_root: load_root.to_path_buf(),
+            load_root_owner: LoadRootOwner::Project,
             load_files,
             project_root,
             case_filesystem: CaseFilesystemPolicy::Private,
             result_normalization: ResultNormalization::Exact,
             extra_env: Vec::new(),
         })
+    }
+
+    /// Mark the load root as supplied by the probe itself (a fixture or
+    /// package checkout) rather than the project's `lisp/` tree.
+    pub(crate) fn with_probe_load_root(mut self) -> Self {
+        self.load_root_owner = LoadRootOwner::Probe;
+        self
     }
 
     pub(crate) fn expose_case_root_as_test_tmpdir(mut self) -> Self {
@@ -219,6 +255,7 @@ impl OracleSandbox {
         command
             .env("NEOVM_ORACLE_FORM_FILE", &self.form_path)
             .env("NEOVM_ORACLE_LOAD_ROOT", &self.load_root)
+            .env(LoadRootOwner::ENV, self.load_root_owner.as_env_value())
             .env("NEOVM_ORACLE_PROJECT_ROOT", &self.project_root)
             .env("NEOVM_ORACLE_SCRATCH_ROOT", scratch_root)
             .env("NEOVM_ORACLE_HOME", &self.home_root)

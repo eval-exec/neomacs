@@ -829,7 +829,7 @@ pub(crate) fn run_oracle_eval_with_load_root(
     load_files: &[&str],
     load_root: &Path,
 ) -> Result<String, String> {
-    let sandbox = OracleSandbox::new(form, load_files, load_root)?;
+    let sandbox = OracleSandbox::new(form, load_files, load_root)?.with_probe_load_root();
     match OracleMode::from_env() {
         OracleMode::Snapshot => {
             run_neomacs_binary_eval_with_sandbox(&sandbox, EvalProgram::Normalized)
@@ -1565,7 +1565,7 @@ pub(crate) fn assert_oracle_parity_with_load_root_expect(
     load_root: &Path,
     expected: expect_test::Expect,
 ) {
-    let sandbox = oracle_sandbox(form, load_files, load_root);
+    let sandbox = oracle_sandbox(form, load_files, load_root).with_probe_load_root();
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
@@ -1576,7 +1576,7 @@ pub(crate) fn assert_oracle_parity_with_load_root(
     load_files: &[&str],
     load_root: &Path,
 ) {
-    let sandbox = oracle_sandbox(form, load_files, load_root);
+    let sandbox = oracle_sandbox(form, load_files, load_root).with_probe_load_root();
     let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox, EvalProgram::Normalized)
         .expect("neomacs binary eval should run");
     if OracleMode::from_env() == OracleMode::Snapshot {
