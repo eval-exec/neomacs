@@ -457,6 +457,30 @@ fn note_column_spec_consumed() {
     COLUMN_SPEC_CONSUMED.with(|consumed| consumed.set(true));
 }
 
+/// Keep a nested geometry probe from changing its caller's column detector.
+#[must_use]
+pub struct ColumnSpecConsumptionScope {
+    previous: bool,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl ColumnSpecConsumptionScope {
+    pub fn isolate() -> Self {
+        Self {
+            previous: COLUMN_SPEC_CONSUMED.with(|value| value.replace(false)),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for ColumnSpecConsumptionScope {
+    fn drop(&mut self) {
+        COLUMN_SPEC_CONSUMED.with(|value| value.set(self.previous));
+    }
+}
+
+static_assertions::assert_not_impl_any!(ColumnSpecConsumptionScope: Send, Sync);
+
 /// Arm the `%c`/`%C` detector for one mode-line expansion.
 pub fn reset_column_spec_consumed() {
     COLUMN_SPEC_CONSUMED.with(|consumed| consumed.set(false));
@@ -8639,11 +8663,8 @@ fn retained_rows_answer_for_live_window(
         return Ok(true);
     }
     // A command can move point and ask for position geometry before redisplay.
-    // Reuse only when row inputs, including overlay revisions, still match.
-    // Relative and visual line numbers follow point and keep the canonical walk.
-    if !line_numbers_are_point_independent(eval, buffer_id) {
-        return Ok(false);
-    }
+    // Reuse only when the canonical token certifies point-independent row
+    // geometry and all other inputs, including overlay revisions, still match.
     let Some(current) = eval.window_display_snapshot_freshness(fid, wid, buffer_id) else {
         return Ok(false);
     };
@@ -8653,28 +8674,6 @@ fn retained_rows_answer_for_live_window(
         .and_then(|frame| frame.redisplay_snapshot(wid))
         .and_then(|snapshot| snapshot.layout_freshness.as_ref())
         .is_some_and(|recorded| recorded.same_position_rows_ignoring_point(&current)))
-}
-
-/// Whether display line numbers in BUFFER leave row geometry independent of
-/// point. Only nil and absolute numbering qualify; relative/visual modes derive
-/// every gutter value from point.
-fn line_numbers_are_point_independent(
-    eval: &super::eval::Context,
-    buffer_id: crate::buffer::BufferId,
-) -> bool {
-    let Some(buffer) = eval.buffers.get(buffer_id) else {
-        return true;
-    };
-    let Some(value) = eval.variable_value_in_buffer(
-        Some(buffer),
-        crate::emacs_core::intern::intern("display-line-numbers"),
-    ) else {
-        return true;
-    };
-    if value.is_nil() || value == Value::T {
-        return true;
-    }
-    matches!(value.as_bare_symbol_name().as_deref(), Some("absolute"))
 }
 
 fn resolve_exact_visible_metrics(

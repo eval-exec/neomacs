@@ -48,7 +48,9 @@ use super::gui_chrome::{
 use super::types::*;
 #[cfg(test)]
 use super::window_output::RowMetricsSnapshot;
-use crate::buffer_source::render_attempt::{QueryRowCoverage, WindowPositionPublication};
+use crate::buffer_source::render_attempt::{
+    PositionQueryChrome, QueryRowCoverage, WindowPositionPublication,
+};
 use crate::buffer_source::window_geometry::BufferWindowGeometryRequest;
 use crate::buffer_source::window_render::{
     BufferSourceRenderAttemptContext, BufferSourceRenderAttemptOutcome, BufferWindowRenderRequest,
@@ -387,12 +389,18 @@ fn window_position_publication(
     params: &WindowParams,
     purpose: WindowLayoutWalkPurpose,
     source: WindowDisplaySource,
+    chrome: PositionQueryChrome,
 ) -> WindowPositionPublication {
-    if matches!(
-        purpose,
-        WindowLayoutWalkPurpose::SynchronousQuery(_) | WindowLayoutWalkPurpose::MiniPreparation
-    ) {
-        return WindowPositionPublication::SynchronousQueryEnd;
+    match purpose {
+        WindowLayoutWalkPurpose::SynchronousQuery(
+            neovm_core::window::WindowLayoutQueryScope::Position { .. },
+        ) => {
+            return WindowPositionPublication::SynchronousPositionQuery { chrome };
+        }
+        WindowLayoutWalkPurpose::SynchronousQuery(_) | WindowLayoutWalkPurpose::MiniPreparation => {
+            return WindowPositionPublication::SynchronousQueryEnd;
+        }
+        WindowLayoutWalkPurpose::Redisplay | WindowLayoutWalkPurpose::Snapshot => {}
     }
     if source == WindowDisplaySource::InactiveEchoArea {
         return WindowPositionPublication::InactiveEchoArea;
@@ -1997,6 +2005,7 @@ impl LayoutEngine {
             ..RedisplayLispLedger::default()
         };
         let mut window_chrome_metrics = self.retained_window_chrome_metrics.clone();
+        let mut next_position_query_chrome = PositionQueryChrome::Measure;
         let committed_face_arena = self
             .frame_face_arenas
             .get(&frame_id)
@@ -2029,6 +2038,7 @@ impl LayoutEngine {
             accepted_window_navigation_intents,
             accepted_frame_navigation_intent,
         ) = 'frame_layout: loop {
+            let position_query_chrome = std::mem::take(&mut next_position_query_chrome);
             // Re-entering this loop means the preceding physical frame walk
             // was rejected. Restore every leaf publication before collecting
             // the next attempt's canonical previous-viewport evidence.
@@ -2710,6 +2720,7 @@ impl LayoutEngine {
                                 &live_inputs.window,
                                 layout_walk_purpose,
                                 live_inputs.source,
+                                position_query_chrome,
                             ),
                             WindowPositionPublication::RedisplayMinibufferMeasurement
                         )
@@ -2724,7 +2735,22 @@ impl LayoutEngine {
                     &live_inputs.window,
                     layout_walk_purpose,
                     live_inputs.source,
+                    position_query_chrome,
                 );
+                if matches!(
+                    position_publication,
+                    WindowPositionPublication::SynchronousPositionQuery {
+                        chrome: PositionQueryChrome::Measure,
+                    }
+                ) && (live_inputs.window.mode_line_height > 0.0
+                    || live_inputs.window.header_line_height > 0.0
+                    || live_inputs.window.tab_line_height > 0.0)
+                {
+                    // Status-line Lisp can read arbitrary scalar variables.
+                    // Collection/source certificates cannot memoize it, even
+                    // when a physical retry later emits no chrome strings.
+                    self.query_body_reuse_allowed = false;
+                }
                 let mut window_geometry = WindowFrameGeometryRequest::new(
                     &live_inputs.window,
                     &live_inputs.frame,
@@ -2958,6 +2984,7 @@ impl LayoutEngine {
                                 &live_inputs.window,
                                 layout_walk_purpose,
                                 live_inputs.source,
+                                position_query_chrome,
                             );
                             is_edit = false;
                             // A hook effect re-enters this leaf from its live
@@ -3043,6 +3070,14 @@ impl LayoutEngine {
                         }
                         window_chrome_metrics
                             .insert(DisplayWindowId::new(params.window_id), measured);
+                        if matches!(
+                            position_publication,
+                            WindowPositionPublication::SynchronousPositionQuery {
+                                chrome: PositionQueryChrome::Measure,
+                            }
+                        ) {
+                            next_position_query_chrome = PositionQueryChrome::Measured;
+                        }
                         continue 'frame_layout;
                     }
                 };
@@ -4458,6 +4493,11 @@ impl LayoutEngine {
                 return Ok(query);
             }
         }
+        let _chrome_records = matches!(
+            scope,
+            neovm_core::window::WindowLayoutQueryScope::Position { .. }
+        )
+        .then(crate::display_status_line::ChromeQueryRecordScope::isolate);
         self.query_body_reuse_allowed = true;
         self.query_restart_rows.clear();
         self.query_row_coverage = QueryRowCoverage::Complete;

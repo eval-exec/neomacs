@@ -37777,3 +37777,168 @@ mod overlay_string_window_wrap_test;
 #[cfg(test)]
 #[path = "narrow_root_eob_test.rs"]
 mod narrow_root_eob_test;
+
+#[test]
+fn position_query_remeasures_point_dependent_chrome_without_publishing() {
+    use neovm_core::window::WindowLayoutQueryScope;
+    for prime_end_query in [false, true] {
+        let (mut eval, frame, _buffer, window) = incr_editing_frame(&"a\n".repeat(200), 320, 160);
+        assert!(eval.frame_manager_mut().select_frame(frame));
+        eval.frame_manager_mut()
+            .get_mut(frame)
+            .unwrap()
+            .set_window_system(Some(Value::symbol("neo")));
+        eval.set_variable("point-query-window", Value::make_window(window.0));
+        eval.eval_str(
+            r#"(progn
+      (setq mode-line-format nil tab-line-format nil query-chrome-evals 0)
+      (setq header-line-format
+        '((:eval (propertize (progn (setq query-chrome-evals (1+ query-chrome-evals)) "H") 'face
+          (if (= (point) 1) '(:height 1.0) '(:height 4.0))))))
+      (goto-char 1))"#,
+        )
+        .unwrap();
+        let mut engine = LayoutEngine::new();
+        engine.layout_frame_rust(&mut eval, frame);
+        let warm = eval
+            .frame_manager()
+            .get(frame)
+            .unwrap()
+            .redisplay_snapshot(window)
+            .unwrap()
+            .clone();
+        let target = warm
+            .rows
+            .last()
+            .and_then(|row| row.start_buffer_pos)
+            .expect("last visible text row");
+        assert!(warm.point_for_buffer_pos(target).is_some());
+        eval.eval_str("(progn (goto-char 3) (set-window-point point-query-window (point)) (setq query-chrome-evals 0))")
+        .unwrap();
+        if prime_end_query {
+            let end_query = engine
+                .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
+                .expect("window-end query converges");
+            assert_eq!(
+                end_query.geometry().unwrap().header_line_height,
+                warm.header_line_height,
+                "window-end preserves accepted chrome dimensions"
+            );
+            assert_eq!(
+                eval.eval_str("query-chrome-evals").unwrap(),
+                Value::fixnum(0),
+                "window-end must not evaluate chrome"
+            );
+        }
+        let query = engine
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position { target },
+            )
+            .expect("position query converges");
+        let geometry = query.geometry().unwrap();
+        assert!(
+            geometry.header_line_height > warm.header_line_height,
+            "GNU pos_visible_p measures the live header before walking the body; preceding window-end={prime_end_query}"
+        );
+        assert!(
+            geometry.point_for_buffer_pos(target).is_none(),
+            "the larger header hides the old last body row"
+        );
+        assert_eq!(
+            eval.frame_manager()
+                .get(frame)
+                .unwrap()
+                .redisplay_snapshot(window),
+            Some(&warm),
+            "a position query must not replace accepted redisplay geometry"
+        );
+        assert_eq!(
+            eval.eval_str("query-chrome-evals").unwrap(),
+            Value::fixnum(1),
+            "physical chrome-height convergence must not repeat observable Lisp evaluation"
+        );
+        engine
+            .query_window_layout(
+                &mut eval,
+                frame,
+                window,
+                WindowLayoutQueryScope::Position { target },
+            )
+            .expect("a later position request measures chrome again");
+        assert_eq!(
+            eval.eval_str("query-chrome-evals").unwrap(),
+            Value::fixnum(2),
+            "request-local measured heights must not certify a later query cache hit"
+        );
+    }
+}
+
+#[test]
+fn position_query_preserves_enclosing_chrome_tracking_records() {
+    use crate::incremental_layout::chrome_memo::{ChromeMemoMode, recorded_fingerprints};
+    use neovm_core::window::WindowLayoutQueryScope;
+    let _memo = chrome_memo_engine_test::MemoGuard::set(ChromeMemoMode::On);
+    let (mut eval, frame, buffer, window) = incr_editing_frame("a\nb\n", 320, 160);
+    assert!(eval.frame_manager_mut().select_frame(frame));
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .unwrap()
+        .set_buffer_local("mode-line-format", Value::string("%c"));
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame);
+    assert!(
+        neovm_core::emacs_core::xdisp::column_spec_consumed(),
+        "fixture displayed a column"
+    );
+    let count = crate::display_status_line::mode_line_eval_count();
+    let fingerprints = recorded_fingerprints(window.0 as i64);
+    assert!(
+        fingerprints.is_some(),
+        "fixture must carry a chrome fingerprint"
+    );
+    let generation = || {
+        let mut entries: Vec<_> = crate::display_status_line::chrome_generation_record()
+            .into_iter()
+            .map(|(id, record)| (id, record.uses_column))
+            .collect();
+        entries.sort_unstable();
+        entries
+    };
+    let generated = generation();
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .unwrap()
+        .set_buffer_local("mode-line-format", Value::string("FIXED"));
+    engine
+        .query_window_layout(
+            &mut eval,
+            frame,
+            window,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::ONE,
+            },
+        )
+        .unwrap();
+    assert!(
+        neovm_core::emacs_core::xdisp::column_spec_consumed(),
+        "an unpublished query must preserve its caller's column-consumption record"
+    );
+    assert_eq!(
+        crate::display_status_line::mode_line_eval_count(),
+        count,
+        "query evaluations do not belong to the enclosing redisplay's counter"
+    );
+    assert_eq!(
+        generation(),
+        generated,
+        "a query must not acknowledge enclosing chrome generation"
+    );
+    assert_eq!(
+        recorded_fingerprints(window.0 as i64),
+        fingerprints,
+        "a query must not replace the enclosing redisplay's chrome fingerprints"
+    );
+}

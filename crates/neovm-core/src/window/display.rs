@@ -984,9 +984,18 @@ impl crate::emacs_core::eval::Context {
         buffer_id: BufferId,
     ) -> Option<WindowDisplaySnapshotFreshness> {
         let frame = self.frames.get(frame_id)?;
-        let window = frame.window_layout_inputs(window_id)?;
+        let mut window = frame.window_layout_inputs(window_id)?;
         if window.buffer_id != buffer_id {
             return None;
+        }
+        // GNU window_point reads BUF_PT for the globally selected window,
+        // even before its saved marker is synchronized by the query adapter.
+        // Freshness admission happens first, so it must observe that same live
+        // point without mutating markers or borrowing the adapter.
+        if self.frames.selected_frame().is_some_and(|selected| {
+            selected.id == frame_id && selected.selected_window == window_id
+        }) {
+            window.point = self.buffers.get(buffer_id)?.point_lisp_char_pos();
         }
         Some(WindowDisplaySnapshotFreshness {
             fontset_generation: crate::emacs_core::fontset::fontset_generation(),
@@ -1006,6 +1015,32 @@ impl crate::emacs_core::eval::Context {
                 .buffers
                 .get(buffer_id)
                 .is_some_and(|buffer| buffer.overlays_are_face_only()),
+            point_geometry_reuse: {
+                let live_window = frame.find_window(window_id)?;
+                let buffer = self.buffers.get(buffer_id)?;
+                // Absolute numbers are not a geometry proof: moving point
+                // changes the row receiving line-number-current-line, whose
+                // font can change both the gutter width and the row height.
+                // Until the producer certifies equivalent face metrics, all
+                // active numbering requires the canonical targeted query.
+                if self
+                    .variable_value_in_buffer(
+                        Some(buffer),
+                        super::WindowLayoutVariable::DisplayLineNumbers.sym_id(),
+                    )
+                    .is_some_and(|value| value.is_truthy())
+                {
+                    super::PointGeometryReuse::RequiresMeasurement
+                } else {
+                    super::WindowChromePresence::resolve(
+                        live_window,
+                        buffer,
+                        frame,
+                        frame.minibuffer_window == Some(window_id),
+                    )
+                    .point_geometry_reuse(live_window, buffer)
+                }
+            },
         })
     }
 

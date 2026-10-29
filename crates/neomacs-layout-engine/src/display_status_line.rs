@@ -144,6 +144,45 @@ thread_local! {
         std::cell::RefCell::new(HashMap::new());
 }
 
+/// A position probe may shape live chrome, but cannot replace records owned
+/// by the enclosing redisplay. All stored state is native; no Lisp output is
+/// retained across a physical query retry.
+#[must_use]
+pub(crate) struct ChromeQueryRecordScope {
+    generation: HashMap<i64, ChromeGenerationRecord>,
+    mode_count: u32,
+    header_count: u32,
+    tab_count: u32,
+    _fingerprints: crate::incremental_layout::chrome_memo::ChromeFingerprintRecordScope,
+    _columns: neovm_core::emacs_core::xdisp::ColumnSpecConsumptionScope,
+}
+
+impl ChromeQueryRecordScope {
+    pub(crate) fn isolate() -> Self {
+        Self {
+            generation: CHROME_GENERATION_RECORD
+                .with(|record| std::mem::take(&mut *record.borrow_mut())),
+            mode_count: MODE_LINE_EVAL_COUNT.with(|count| count.replace(0)),
+            header_count: HEADER_LINE_EVAL_COUNT.with(|count| count.replace(0)),
+            tab_count: TAB_LINE_EVAL_COUNT.with(|count| count.replace(0)),
+            _fingerprints:
+                crate::incremental_layout::chrome_memo::ChromeFingerprintRecordScope::isolate(),
+            _columns: neovm_core::emacs_core::xdisp::ColumnSpecConsumptionScope::isolate(),
+        }
+    }
+}
+
+impl Drop for ChromeQueryRecordScope {
+    fn drop(&mut self) {
+        CHROME_GENERATION_RECORD.with(|record| {
+            std::mem::swap(&mut *record.borrow_mut(), &mut self.generation);
+        });
+        MODE_LINE_EVAL_COUNT.with(|count| count.set(self.mode_count));
+        HEADER_LINE_EVAL_COUNT.with(|count| count.set(self.header_count));
+        TAB_LINE_EVAL_COUNT.with(|count| count.set(self.tab_count));
+    }
+}
+
 /// Reset the per-redisplay chrome generation record. Called with
 /// [`reset_mode_line_eval_count`] at the start of `layout_frame_rust`.
 pub(crate) fn reset_chrome_generation_record() {

@@ -4085,26 +4085,49 @@ fn posn_at_point_queries_the_target_instead_of_completing_the_viewport() {
 }
 
 #[test]
-fn line_numbers_point_independence_uses_defaults_and_local_overrides() {
+fn point_only_row_reuse_honors_default_and_local_line_number_settings() {
     for (setup, expected) in [
         ("(set-default 'display-line-numbers 'relative)", false),
         ("(set-default 'display-line-numbers 'visual)", false),
         ("(set-default 'display-line-numbers nil)", true),
-        ("(set-default 'display-line-numbers t)", true),
+        ("(set-default 'display-line-numbers t)", false),
         (
             "(progn (set-default 'display-line-numbers 'relative) (set (make-local-variable 'display-line-numbers) nil))",
             true,
         ),
         (
             "(progn (set-default 'display-line-numbers 'relative) (set (make-local-variable 'display-line-numbers) t))",
-            true,
+            false,
         ),
     ] {
         let mut eval = interactive_context();
         let buffer = eval.buffers.current_buffer().unwrap().id;
+        eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+        let frame = eval
+            .frames
+            .create_frame("line-number-point-reuse", 160, 96, buffer);
+        let window = eval.frames.get(frame).unwrap().selected_window;
         eval.eval_str(setup).unwrap();
+        let before = eval
+            .window_display_snapshot_freshness(frame, window, buffer)
+            .unwrap();
+        eval.eval_str("(goto-char 3)").unwrap();
+        match eval
+            .frames
+            .get_mut(frame)
+            .unwrap()
+            .find_window_mut(window)
+            .unwrap()
+        {
+            crate::window::Window::Leaf { point, .. } => *point = LispCharPos1::new(3),
+            other => panic!("expected leaf window, got {other:?}"),
+        }
+        let after = eval
+            .window_display_snapshot_freshness(frame, window, buffer)
+            .unwrap();
+        assert_ne!(before, after, "the fixture must move window point");
         assert_eq!(
-            line_numbers_are_point_independent(&eval, buffer),
+            before.same_position_rows_ignoring_point(&after),
             expected,
             "{setup}"
         );
@@ -4191,7 +4214,6 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
         freshness, moved,
         "the fixture must change snapshot freshness"
     );
-    assert!(freshness.same_position_rows_ignoring_point(&moved));
     query(&mut eval);
     assert_eq!(
         scopes.borrow().as_slice(),
@@ -4199,6 +4221,207 @@ fn posn_at_point_requeries_warm_rows_after_point_moves_with_default_relative_num
             target: LispCharPos1::new(3),
         }],
         "default relative numbering must requery after point moves"
+    );
+}
+
+#[test]
+fn posn_at_point_requeries_warm_rows_when_point_changes_header_height() {
+    use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let frame = eval
+        .frames
+        .create_frame("point-header-query", 160, 96, buffer);
+    let window = eval.frames.get(frame).unwrap().selected_window;
+    eval.frames.get_mut(frame).unwrap().initial = false;
+    eval.eval_str(
+        r#"(progn
+      (goto-char 1)
+      (setq header-line-format
+        '((:eval (propertize "H" 'face
+          (if (= (point) 1) '(:height 1.0) '(:height 4.0)))))))"#,
+    )
+    .unwrap();
+    let freshness = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    let warm = crate::window::WindowDisplaySnapshot {
+        window_id: window,
+        header_line_height: 16,
+        points: vec![crate::window::DisplayPointSnapshot {
+            role: crate::window::DisplayPointRole::Glyph,
+            buffer_pos: LispCharPos1::new(3),
+            x: 0,
+            y: 32,
+            width: 8,
+            height: 16,
+            row: 1,
+            col: 0,
+        }],
+        rows: vec![crate::window::DisplayRowSnapshot {
+            row: 1,
+            y: 32,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::new(3)),
+            end_buffer_pos: Some(LispCharPos1::new(4)),
+            ..Default::default()
+        }],
+        layout_freshness: Some(freshness.clone()),
+        ..Default::default()
+    };
+    eval.frames
+        .get_mut(frame)
+        .unwrap()
+        .commit_redisplay_cache_for_test(vec![warm]);
+    let query = |eval: &mut Context| {
+        builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)]).unwrap()
+    };
+    assert!(
+        !query(&mut eval).is_nil(),
+        "the last body row is initially visible"
+    );
+    // The layout provider's independently remeasured header consumes the last
+    // body row. No visible glyph remains for position 3 after point moves.
+    eval.install_window_layout_query(move |_, fid, wid, scope| {
+        assert_eq!((fid, wid), (frame, window));
+        assert_eq!(
+            scope,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(3)
+            }
+        );
+        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(
+            LispCharPos1::ONE,
+            Some(crate::window::WindowDisplaySnapshot {
+                window_id: window,
+                header_line_height: 64,
+                ..Default::default()
+            }),
+        ))
+    });
+    eval.eval_str("(goto-char 3)").unwrap();
+    match eval
+        .frames
+        .get_mut(frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+    {
+        crate::window::Window::Leaf { point, .. } => *point = LispCharPos1::new(3),
+        other => panic!("expected leaf window, got {other:?}"),
+    }
+    let moved = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    assert_ne!(
+        freshness, moved,
+        "the fixture must change canonical freshness"
+    );
+    assert!(
+        query(&mut eval).is_nil(),
+        "a taller point-dependent header must hide the last body row"
+    );
+}
+
+#[test]
+fn posn_at_point_requeries_absolute_numbers_when_current_line_face_is_taller() {
+    use crate::window::{WindowLayoutQuery, WindowLayoutQueryOutcome, WindowLayoutQueryScope};
+    let mut eval = interactive_context();
+    let buffer = eval.buffers.current_buffer().unwrap().id;
+    eval.buffers.get_mut(buffer).unwrap().insert("a\nb\n");
+    let frame = eval
+        .frames
+        .create_frame("current-line-face-query", 160, 96, buffer);
+    let window = eval.frames.get(frame).unwrap().selected_window;
+    eval.frames.get_mut(frame).unwrap().initial = false;
+    eval.eval_str("(progn (setq display-line-numbers t) (goto-char 1) (internal-make-lisp-face 'line-number-current-line))").unwrap();
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut eval,
+        vec![
+            Value::symbol("line-number-current-line"),
+            Value::keyword("height"),
+            Value::make_float(2.0),
+            Value::make_frame(frame.0),
+        ],
+    )
+    .unwrap();
+    let freshness = eval
+        .window_display_snapshot_freshness(frame, window, buffer)
+        .unwrap();
+    let snapshot = |y| crate::window::WindowDisplaySnapshot {
+        window_id: window,
+        points: vec![crate::window::DisplayPointSnapshot {
+            role: crate::window::DisplayPointRole::Glyph,
+            buffer_pos: LispCharPos1::new(3),
+            x: 0,
+            y,
+            width: 8,
+            height: 16,
+            row: 1,
+            col: 0,
+        }],
+        rows: vec![crate::window::DisplayRowSnapshot {
+            row: 1,
+            y,
+            height: 16,
+            start_buffer_pos: Some(LispCharPos1::new(3)),
+            end_buffer_pos: Some(LispCharPos1::new(4)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let mut warm = snapshot(32);
+    warm.layout_freshness = Some(freshness.clone());
+    eval.frames
+        .get_mut(frame)
+        .unwrap()
+        .commit_redisplay_cache_for_test(vec![warm]);
+    let query = |eval: &mut Context| {
+        builtin_posn_at_point(eval, vec![Value::fixnum(3), Value::make_window(window.0)])
+            .unwrap()
+            .cons_cdr()
+            .cons_cdr()
+            .cons_car()
+    };
+    assert_eq!(
+        query(&mut eval),
+        Value::cons(Value::fixnum(0), Value::fixnum(32))
+    );
+    let refreshed = snapshot(16);
+    eval.install_window_layout_query(move |_, fid, wid, scope| {
+        assert_eq!((fid, wid), (frame, window));
+        assert_eq!(
+            scope,
+            WindowLayoutQueryScope::Position {
+                target: LispCharPos1::new(3)
+            }
+        );
+        WindowLayoutQueryOutcome::Ready(WindowLayoutQuery::new(
+            LispCharPos1::ONE,
+            Some(refreshed.clone()),
+        ))
+    });
+    eval.eval_str("(goto-char 3)").unwrap();
+    match eval
+        .frames
+        .get_mut(frame)
+        .unwrap()
+        .find_window_mut(window)
+        .unwrap()
+    {
+        crate::window::Window::Leaf { point, .. } => *point = LispCharPos1::new(3),
+        other => panic!("expected leaf window, got {other:?}"),
+    }
+    assert_ne!(
+        freshness,
+        eval.window_display_snapshot_freshness(frame, window, buffer)
+            .unwrap()
+    );
+    assert_eq!(
+        query(&mut eval),
+        Value::cons(Value::fixnum(0), Value::fixnum(16)),
+        "the preceding row becomes shorter when the tall current-line face moves away"
     );
 }
 

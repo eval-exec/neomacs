@@ -45,6 +45,15 @@ pub(crate) struct BufferSourceRenderAttemptContext<
     window_snapshots: &'a mut Vec<WindowPresentationSnapshot>,
 }
 
+/// A Position query expands live chrome once. Only the immediately following
+/// physical chrome-height retry may reuse its measured native dimensions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PositionQueryChrome {
+    #[default]
+    Measure,
+    Measured,
+}
+
 /// Which live window state may be published by a completed row walk.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum WindowPositionPublication {
@@ -74,6 +83,11 @@ pub(crate) enum WindowPositionPublication {
     /// start/end nor a window-scroll-functions effect to the live minibuffer.
     InactiveEchoArea,
     SynchronousQueryEnd,
+    /// GNU pos_visible_p remeasures live chrome before answering visibility.
+    /// Like window-end, this probe cannot publish a start/end or redisplay.
+    SynchronousPositionQuery {
+        chrome: PositionQueryChrome,
+    },
 }
 
 impl WindowPositionPublication {
@@ -84,15 +98,31 @@ impl WindowPositionPublication {
     pub(crate) const fn uses_exact_window_start(self) -> bool {
         matches!(
             self,
-            Self::Snapshot | Self::InactiveEchoArea | Self::SynchronousQueryEnd
+            Self::Snapshot
+                | Self::InactiveEchoArea
+                | Self::SynchronousQueryEnd
+                | Self::SynchronousPositionQuery { .. }
         )
     }
 
-    /// A synchronous GNU `window-end` query walks only the text area using
-    /// the chrome dimensions accepted by the last redisplay.  It must not
-    /// evaluate mode/header/tab-line Lisp while answering the query.
     pub(crate) const fn is_synchronous_query(self) -> bool {
-        matches!(self, Self::SynchronousQueryEnd)
+        matches!(
+            self,
+            Self::SynchronousQueryEnd | Self::SynchronousPositionQuery { .. }
+        )
+    }
+
+    /// Preserve either the accepted window-end partition or the native heights
+    /// just measured for this position request. Initial position visibility
+    /// measures live mode/header/tab lines, as GNU pos_visible_p does.
+    pub(crate) const fn preserves_reserved_chrome(self) -> bool {
+        matches!(
+            self,
+            Self::SynchronousQueryEnd
+                | Self::SynchronousPositionQuery {
+                    chrome: PositionQueryChrome::Measured,
+                }
+        )
     }
 
     pub(crate) const fn keeps_complete_minibuffer_measurement_start(self) -> bool {
@@ -133,7 +163,10 @@ impl WindowPositionPublication {
                     window_start_lisp,
                 );
             }
-            Self::Snapshot | Self::InactiveEchoArea | Self::SynchronousQueryEnd => {}
+            Self::Snapshot
+            | Self::InactiveEchoArea
+            | Self::SynchronousQueryEnd
+            | Self::SynchronousPositionQuery { .. } => {}
         }
         None
     }
@@ -440,7 +473,8 @@ impl BufferSourceRedisplayPublishRequest {
             // discarded attempt.
             WindowPositionPublication::Snapshot
             | WindowPositionPublication::InactiveEchoArea
-            | WindowPositionPublication::SynchronousQueryEnd => {}
+            | WindowPositionPublication::SynchronousQueryEnd
+            | WindowPositionPublication::SynchronousPositionQuery { .. } => {}
         }
     }
 
