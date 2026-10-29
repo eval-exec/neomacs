@@ -394,3 +394,7 @@ proptest! {
 #[cfg(test)]
 #[path = "window_tree_generative/restore_config.rs"]
 mod restore_config;
+
+#[cfg(test)]
+#[path = "window_tree_generative/combination_resize.rs"]
+mod combination_resize;
