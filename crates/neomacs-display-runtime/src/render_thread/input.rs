@@ -436,7 +436,9 @@ impl RenderApp {
         let border = 5.0_f32;
         let on_left = x < border;
         let on_right = x >= w - border;
-        let on_top = y < border;
+        // Without a custom titlebar the top rows are buffer text. Only a
+        // positive custom-titlebar height makes the top edge a resize zone.
+        let on_top = chrome.titlebar_height > 0.0 && y < border;
         let on_bottom = y >= h - border;
         match (on_left, on_right, on_top, on_bottom) {
             (true, _, true, _) => Some(ResizeDirection::NorthWest),
