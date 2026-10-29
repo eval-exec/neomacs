@@ -326,6 +326,7 @@ fn every_profile_pair_is_a_typed_pin() {
         CanonicalPin::OracleSystemName,
         CanonicalPin::GitCeilingDirectories,
         CanonicalPin::RustBacktrace,
+        CanonicalPin::PythonNoDebugRanges,
         CanonicalPin::XdgConfigHome,
         CanonicalPin::XdgCacheHome,
         CanonicalPin::XdgDataHome,

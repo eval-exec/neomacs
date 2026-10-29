@@ -140,6 +140,9 @@ pub enum CanonicalPin {
     GitCeilingDirectories,
     /// `RUST_BACKTRACE` (the package profile's recorded value).
     RustBacktrace,
+    /// `PYTHONNODEBUGRANGES` (CPython 3.11+ traceback decoration is a host
+    /// property; every editor-spawned python gets the undecorated form).
+    PythonNoDebugRanges,
     /// `XDG_CONFIG_HOME`.
     XdgConfigHome,
     /// `XDG_CACHE_HOME`.
@@ -176,6 +179,7 @@ impl CanonicalPin {
             Self::OracleSystemName => &["NEOVM_ORACLE_SYSTEM_NAME"],
             Self::GitCeilingDirectories => &["GIT_CEILING_DIRECTORIES"],
             Self::RustBacktrace => &["RUST_BACKTRACE"],
+            Self::PythonNoDebugRanges => &["PYTHONNODEBUGRANGES"],
             Self::XdgConfigHome => &["XDG_CONFIG_HOME"],
             Self::XdgCacheHome => &["XDG_CACHE_HOME"],
             Self::XdgDataHome => &["XDG_DATA_HOME"],
@@ -203,6 +207,7 @@ impl CanonicalPin {
             "NEOVM_ORACLE_SYSTEM_NAME" => Some(Self::OracleSystemName),
             "GIT_CEILING_DIRECTORIES" => Some(Self::GitCeilingDirectories),
             "RUST_BACKTRACE" => Some(Self::RustBacktrace),
+            "PYTHONNODEBUGRANGES" => Some(Self::PythonNoDebugRanges),
             "XDG_CONFIG_HOME" => Some(Self::XdgConfigHome),
             "XDG_CACHE_HOME" => Some(Self::XdgCacheHome),
             "XDG_DATA_HOME" => Some(Self::XdgDataHome),
