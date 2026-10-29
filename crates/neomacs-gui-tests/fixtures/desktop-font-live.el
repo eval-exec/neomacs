@@ -205,7 +205,7 @@
                (and (equal (font-get-system-font) "Ubuntu Mono 13")
                     (equal (face-attribute 'default :family) "Ubuntu Mono")
                     (= (face-attribute 'default :height) 128)
-                    (= (window-font-width) 9) (= (window-font-height) 18)
+                    (= (window-font-width) 10) (= (window-font-height) 20)
                     (desktop-font-live-grid-ready)
                     (desktop-font-live-presented submission)))
              #'desktop-font-live-pass
@@ -226,7 +226,7 @@
      (lambda ()
        (and (equal (font-get-system-font) "Ubuntu Mono 13")
             (equal (face-attribute 'default :family) "Ubuntu Mono")
-            (= (window-font-width) 9) (= (window-font-height) 18)
+            (= (window-font-width) 10) (= (window-font-height) 20)
             (desktop-font-live-presented submission)))
      (lambda ()
        (unless (equal pixels (list (frame-pixel-width) (frame-pixel-height)))
@@ -339,7 +339,13 @@
      (lambda () (and (= (frame-text-width child) (* 40 (frame-char-width child)))
                      (= (frame-text-height child) (* 10 (frame-char-height child)))
                      (or (not (eq chrome 'scrollbar))
-                         (and (/= (frame-char-width child) (frame-char-width))
+                         ;; The child realized its own font, not the parent's.
+                         ;; A char-width difference was only a proxy: with
+                         ;; fonts-ubuntu 0.869 (noble) Ubuntu Mono 13 and
+                         ;; DejaVu Sans Mono 12 are both 10px wide, so compare
+                         ;; the realized default families instead.
+                         (and (not (equal (face-attribute 'default :family child)
+                                          (face-attribute 'default :family)))
                               (> (frame-scroll-bar-width child) 0)))
                      (or (not chrome)
                          (= (frame-native-width child)

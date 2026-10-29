@@ -70,10 +70,12 @@ fn hidpi_scale_change_never_shrinks_the_logical_frame() {
         "must exercise native scale discovery"
     );
     for resize in scale_two_resizes {
-        // Ubuntu Mono 13: 80 columns at 9 logical pixels plus 25px of chrome,
+        // Ubuntu Mono 13: 80 columns at 10 logical pixels plus 32px of chrome,
         // the scroll bar being GNU's 16 px toolkit default (src/xfns.c:2393-2438).
+        // 10px is the cell fonts-ubuntu 0.869 (noble) realizes at 96 DPI; the
+        // pre-0.869 9px font gave 752.
         assert!(
-            resize.contains("width: 752,"),
+            resize.contains("width: 832,"),
             "scale discovery changed logical width: {resize}"
         );
     }
