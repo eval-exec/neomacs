@@ -14,18 +14,64 @@ const MULTI_TERM_TEST_PRELUDE: &str = r####"
 (require 'multi-term)
 
 (defun neomacs-multi-term-test-write-driver (program)
-  "Write a deterministic terminal program to PROGRAM."
+  "Write a deterministic terminal program to PROGRAM.
+The driver owns its input dispositions: `stty -isig' makes the VQUIT
+byte (0x1c) that `term-quit-subjob' writes arrive as ordinary input,
+which the driver logs; SIGHUP from `kill-buffer' is then its only
+terminator, so the exit status is deterministic on every host."
   (with-temp-file program
     (insert "#!/bin/sh\n"
-            "stty -echo\n"
+            "stty -echo -icanon -isig min 1 time 0\n"
+            "log=${NEOMACS_MULTI_TERM_QUIT_LOG:-quit-request.log}\n"
             "printf 'READY\\n'\n"
-            "while IFS= read -r line; do\n"
-            "  case \"$line\" in\n"
-            "    quit) printf 'BYE\\n'; exit 0 ;;\n"
-            "    *) printf 'ECHO:%s\\n' \"$line\" ;;\n"
-            "  esac\n"
+            "line=\n"
+            "while :; do\n"
+            "  byte=$(dd bs=1 count=1 2>/dev/null | od -An -tu1 | tr -d ' \\n')\n"
+            "  if [ -z \"$byte\" ]; then break; fi\n"
+            "  if [ \"$byte\" = 28 ]; then\n"
+            "    printf 'QUIT-REQUEST\\n' >> \"$log\"\n"
+            "    continue\n"
+            "  fi\n"
+            "  if [ \"$byte\" = 13 ] || [ \"$byte\" = 10 ]; then\n"
+            "    case \"$line\" in\n"
+            "      quit) printf 'BYE\\n'; exit 0 ;;\n"
+            "      '') : ;;\n"
+            "      *) printf 'ECHO:%s\\n' \"$line\" ;;\n"
+            "    esac\n"
+            "    line=\n"
+            "    continue\n"
+            "  fi\n"
+            "  line=$line$(printf \"\\\\$(printf '%03o' \"$byte\")\")\n"
             "done\n"))
   (set-file-modes program #o755))
+
+(defvar neomacs-multi-term-test-quit-log nil
+  "File the sandbox terminal driver logs a delivered VQUIT byte to.")
+
+(defvar neomacs-multi-term-test-quit-witnessed nil
+  "Non-nil once the terminal driver logged the VQUIT byte of a buffer kill.")
+
+(defun neomacs-multi-term-test-quit-witness ()
+  "Wait for the terminal driver to log the VQUIT byte.
+This runs from the victim buffer's `kill-buffer-hook' after Multi-term's
+own hook has typed the quit character into the pty, and before
+`kill_buffer_processes' sends SIGHUP (GNU runs `kill-buffer-hook' first,
+src/buffer.c:1986 vs :2073).  The driver runs with `stty -isig', so the
+byte arrives as data; the log therefore proves the quit request reached
+the pty before the hangup."
+  (let ((deadline (+ (float-time) 5.0)))
+    (while (and neomacs-multi-term-test-quit-log
+                (not (file-exists-p neomacs-multi-term-test-quit-log))
+                (< (float-time) deadline))
+      (sleep-for 0.01))
+    (setq neomacs-multi-term-test-quit-witnessed
+          (and neomacs-multi-term-test-quit-log
+               (file-exists-p neomacs-multi-term-test-quit-log)
+               (with-temp-buffer
+                 (insert-file-contents neomacs-multi-term-test-quit-log)
+                 (goto-char (point-min))
+                 (search-forward "QUIT-REQUEST" nil t))
+               t))))
 
 (defun neomacs-multi-term-test-buffer-text (buffer)
   "Return BUFFER's visible terminal text without properties."
@@ -97,8 +143,16 @@ const MULTI_TERM_TEST_PRELUDE: &str = r####"
           (multi-term-dedicated-skip-other-window-p nil)
           (multi-term-dedicated-select-after-open-p nil)
           (multi-term-dedicated-close-back-to-open-buffer-p nil)
-          (default-directory root))
+          (default-directory root)
+          (neomacs-multi-term-test-quit-log
+           (expand-file-name "quit-request.log" root))
+          (process-environment
+           (cons (concat "NEOMACS_MULTI_TERM_QUIT_LOG="
+                         neomacs-multi-term-test-quit-log)
+                 process-environment)))
      (make-directory root t)
+     (ignore-errors (delete-file neomacs-multi-term-test-quit-log))
+     (setq neomacs-multi-term-test-quit-witnessed nil)
      (neomacs-multi-term-test-write-driver program)
      (unwind-protect
          (save-window-excursion
