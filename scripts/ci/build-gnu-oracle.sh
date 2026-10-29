@@ -227,6 +227,15 @@ if [[ $profile == linux-gtk3 ]]; then
     rm -rf "$ts_work"
     ts_work=
     export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    # GNU runs the freshly linked temacs to dump bootstrap-emacs.pdmp while
+    # `make` is still running, BEFORE `make install` and the RUNPATH patchelf
+    # pass below.  temacs links the pinned runtime from $prefix/lib, so the
+    # dynamic loader must find it during the build too; without this the
+    # bootstrap dump fails with "libtree-sitter.so.0.26: cannot open shared
+    # object file".  LD_LIBRARY_PATH is build-environment only: configure
+    # does not record it in system-configuration-options, and the installed
+    # oracle still resolves the runtime through its baked-in RUNPATH.
+    export LD_LIBRARY_PATH="$prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 
 log "configure (prefix $prefix)"
