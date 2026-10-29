@@ -300,6 +300,7 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
             .unwrap()
             .success()
     );
+    let fontconfig = crate::desktop_font_pins::desktop_font_fontconfig(&artifacts);
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .unwrap();
@@ -322,6 +323,7 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
         ),
     )
     .with_program(binary)
+    .with_env("FONTCONFIG_FILE", fontconfig.to_string_lossy())
     .with_env("GSETTINGS_BACKEND", "keyfile")
     .with_env("NEOMACS_GUI_LIVE_FONT_CASE", case.as_ref())
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())

@@ -233,6 +233,7 @@ fn check_fixture_with_font(
             .unwrap()
             .success()
     );
+    let fontconfig = crate::desktop_font_pins::desktop_font_fontconfig(&artifacts);
     let backend = GuiBackend::LinuxWayland;
     let session = start_weston_with_desktop(&artifacts, output, desktop).unwrap();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
@@ -248,6 +249,7 @@ fn check_fixture_with_font(
         ),
     )
     .with_program(binary)
+    .with_env("FONTCONFIG_FILE", fontconfig.to_string_lossy())
     .with_env("WAYLAND_DEBUG", "client")
     .with_env(
         "NEOMACS_GUI_PRESENTATION_RECEIPT",

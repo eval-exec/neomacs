@@ -38,3 +38,51 @@ fn downloads_and_verifies_pinned_arabic_hebrew_and_serif_faces() {
         verify_sha256(path, expected).expect("pinned shaping face checksum");
     }
 }
+
+#[test]
+fn downloads_and_verifies_the_desktop_font_set() {
+    let directory = desktop_fonts().directory();
+    for name in [
+        "UbuntuMono[wght].ttf",
+        "UbuntuMono-Italic[wght].ttf",
+        "Ubuntu[wdth,wght].ttf",
+        "Ubuntu-Italic[wdth,wght].ttf",
+        "DejaVuSansMono.ttf",
+        "DejaVuSansMono-Bold.ttf",
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf",
+    ] {
+        let path = directory.join(name);
+        assert!(path.is_file(), "{}", path.display());
+        assert!(std::fs::metadata(&path).unwrap().len() > 0, "{name}");
+    }
+    // The suite's fontconfig points at this directory alone; a stray face
+    // would change family selection behind the fixtures' backs.  Ignore
+    // non-font leftovers (a crash can leave a `.partial`), which fontconfig
+    // does not scan.
+    let mut faces: Vec<_> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("ttf" | "otf")
+            )
+        })
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    faces.sort();
+    assert_eq!(
+        faces,
+        [
+            "DejaVuSans-Bold.ttf",
+            "DejaVuSans.ttf",
+            "DejaVuSansMono-Bold.ttf",
+            "DejaVuSansMono.ttf",
+            "Ubuntu-Italic[wdth,wght].ttf",
+            "UbuntuMono-Italic[wght].ttf",
+            "UbuntuMono[wght].ttf",
+            "Ubuntu[wdth,wght].ttf",
+        ]
+    );
+}

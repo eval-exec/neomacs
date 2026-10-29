@@ -43,6 +43,9 @@ mod desktop_font_startup;
 #[path = "desktop_font_updates.rs"]
 mod desktop_font_updates;
 
+#[path = "desktop_font_pins.rs"]
+mod desktop_font_pins;
+
 #[path = "display_line_numbers.rs"]
 mod display_line_numbers;
 

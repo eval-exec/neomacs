@@ -70,6 +70,58 @@ const NOTO_SANS_HEBREW_VARIABLE_NAME: &str = "NotoSansHebrew-variable.ttf";
 const NOTO_SANS_HEBREW_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notosanshebrew/NotoSansHebrew%5Bwdth,wght%5D.ttf";
 const NOTO_SANS_HEBREW_VARIABLE_SHA256: &str =
     "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88";
+
+// The Linux GUI CI job installs fonts-ubuntu 0.869+git20240321 and
+// fonts-dejavu-core 2.37 from noble; the desktop-font fixtures capture pixel
+// grids for those exact faces ("Ubuntu Mono 13" is a 10x20 cell, "DejaVu Sans
+// Mono 12" 10x20 / "16" 13x25).  Pin both packages by hash so the suites
+// resolve the same faces on any host instead of whatever it has installed.
+// The upstream orig tarball's members are byte-identical to the installed
+// `/usr/share/fonts/truetype/ubuntu` files (verified against the noble .deb).
+const UBUNTU_FONTS_RELEASE: &str = "fonts-ubuntu-0.869+git20240321";
+const UBUNTU_FONTS_ARCHIVE_URL: &str = "https://archive.ubuntu.com/ubuntu/pool/main/f/fonts-ubuntu/fonts-ubuntu_0.869+git20240321.orig.tar.gz";
+const UBUNTU_FONTS_ARCHIVE_SHA256: &str =
+    "a3583a3d112b3a19957189474507ec13431187a582f484d600a46a34150233e8";
+const UBUNTU_FONTS: [(&str, &str); 4] = [
+    (
+        "UbuntuMono[wght].ttf",
+        "fbf1e748836994f730e602f7dcf2525564d6d78aa336080cbb73af909d0e08ee",
+    ),
+    (
+        "UbuntuMono-Italic[wght].ttf",
+        "4148a3a8e6a702da461992047bcc07179f1eed12a3020384be754d015240678a",
+    ),
+    (
+        "Ubuntu[wdth,wght].ttf",
+        "28c4c189a44803b1986fd16074187034dc6d94ad35f5e87de13dd0e786b70b73",
+    ),
+    (
+        "Ubuntu-Italic[wdth,wght].ttf",
+        "f5689f6ae7f16f7ede2012702abd605ac1afa03c950713523b9953d600937975",
+    ),
+];
+const DEJAVU_FONTS_RELEASE: &str = "dejavu-fonts-ttf-2.37";
+const DEJAVU_FONTS_ARCHIVE_URL: &str = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip";
+const DEJAVU_FONTS_ARCHIVE_SHA256: &str =
+    "7576310b219e04159d35ff61dd4a4ec4cdba4f35c00e002a136f00e96a908b0a";
+const DEJAVU_FONTS: [(&str, &str); 4] = [
+    (
+        "DejaVuSansMono.ttf",
+        "b4a6c3e4faab8773f4ff761d56451646409f29abedd68f05d38c2df667d3c582",
+    ),
+    (
+        "DejaVuSansMono-Bold.ttf",
+        "bce60f1b4421acd9ea51ba6623d7024ecbe6817a953e3654df62a5e6bdf8f769",
+    ),
+    (
+        "DejaVuSans.ttf",
+        "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954",
+    ),
+    (
+        "DejaVuSans-Bold.ttf",
+        "e6476c1b80502924294eed40894c5b18e06c181444ca953e5334262df9c27724",
+    ),
+];
 const LXGW_NERD_RELEASE: &str = "lxgw-wenkai-nerd-1.522";
 const LXGW_NERD_ARCHIVE_URL: &str = "https://github.com/Yikai-Liao/LxgwWenKaiNerdFont/releases/download/v1.522/lxgw-wenkai-nerd-1.522.tar.gz";
 const LXGW_NERD_ARCHIVE_SHA256: &str =
@@ -120,6 +172,7 @@ static NOTO_SANS_HEBREW_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_COLRV1_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NABLA_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static DESKTOP_FONTS_FIXTURE: OnceLock<DesktopFontFixtures> = OnceLock::new();
 
 /// The reported dual-width fixed-pitch font from issue #516, pinned to v3.1.0.
 #[must_use]
@@ -420,6 +473,214 @@ pub fn noto_serif_variable() -> &'static Path {
             })
         })
         .as_path()
+}
+
+/// The Ubuntu and DejaVu faces the Linux GUI job installs.
+#[derive(Clone, Debug)]
+pub struct DesktopFontFixtures {
+    directory: PathBuf,
+}
+
+impl DesktopFontFixtures {
+    /// Directory containing exactly the pinned faces. Point a fontconfig
+    /// `<dir>` at this directory and at nothing else.
+    #[must_use]
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+}
+
+/// Download and verify the desktop font set the Linux GUI CI job installs.
+///
+/// The desktop-font suites capture pixel grids ("Ubuntu Mono 13" is a 10x20
+/// cell, "DejaVu Sans Mono 12" 10x20), so resolving whatever Ubuntu or DejaVu
+/// build the host happens to carry — the pre-0.869 Ubuntu Mono was 9x18, and
+/// fontconfig 2.18 ranks Noto above DejaVu — makes those suites host tests.
+/// The returned directory holds the exact 0.869 and 2.37 faces, verified by
+/// per-file SHA-256 after the hash-verified archives are unpacked.
+#[must_use]
+pub fn desktop_fonts() -> &'static DesktopFontFixtures {
+    DESKTOP_FONTS_FIXTURE.get_or_init(|| {
+        prepare_desktop_fonts().unwrap_or_else(|error| panic!("desktop font fixtures: {error}"))
+    })
+}
+
+fn prepare_desktop_fonts() -> Result<DesktopFontFixtures, FixtureError> {
+    let cache_root = workspace_root().join("tmp/font-fixtures");
+    create_dir_all(&cache_root)?;
+    let lock_path = cache_root.join(".desktop-fonts.lock");
+    let lock = open_lock(&lock_path)?;
+    lock.lock().map_err(|source| FixtureError::Io {
+        path: lock_path.clone(),
+        source,
+    })?;
+    let result = prepare_desktop_fonts_locked(&cache_root);
+    FileExt::unlock(&lock).map_err(|source| FixtureError::Io {
+        path: lock_path,
+        source,
+    })?;
+    result
+}
+
+fn prepare_desktop_fonts_locked(cache_root: &Path) -> Result<DesktopFontFixtures, FixtureError> {
+    let directory = cache_root.join("desktop-fonts");
+    if desktop_font_files_match(&directory)? {
+        return Ok(DesktopFontFixtures { directory });
+    }
+    let ubuntu_archive = neomacs_infra::pinned::pinned_file_with_limit(
+        &format!("{UBUNTU_FONTS_RELEASE}.orig.tar.gz"),
+        UBUNTU_FONTS_ARCHIVE_URL,
+        UBUNTU_FONTS_ARCHIVE_SHA256,
+        64 * 1024 * 1024,
+    )
+    .map_err(|source| FixtureError::Fixture {
+        name: format!("{UBUNTU_FONTS_RELEASE}.orig.tar.gz"),
+        source,
+    })?;
+    let dejavu_archive = neomacs_infra::pinned::pinned_file_with_limit(
+        &format!("{DEJAVU_FONTS_RELEASE}.zip"),
+        DEJAVU_FONTS_ARCHIVE_URL,
+        DEJAVU_FONTS_ARCHIVE_SHA256,
+        64 * 1024 * 1024,
+    )
+    .map_err(|source| FixtureError::Fixture {
+        name: format!("{DEJAVU_FONTS_RELEASE}.zip"),
+        source,
+    })?;
+    if directory.exists() {
+        fs::remove_dir_all(&directory).map_err(|source| FixtureError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+    }
+    create_dir_all(&directory)?;
+    for (name, sha256) in UBUNTU_FONTS {
+        let member = Path::new(UBUNTU_FONTS_RELEASE).join(name);
+        extract_verified_tar_member(&ubuntu_archive, &member, &directory.join(name), sha256)?;
+    }
+    for (name, sha256) in DEJAVU_FONTS {
+        let member = format!("{DEJAVU_FONTS_RELEASE}/ttf/{name}");
+        extract_verified_zip_member(&dejavu_archive, &member, &directory.join(name), sha256)?;
+    }
+    Ok(DesktopFontFixtures { directory })
+}
+
+fn desktop_font_files_match(directory: &Path) -> Result<bool, FixtureError> {
+    for (name, sha256) in UBUNTU_FONTS.into_iter().chain(DEJAVU_FONTS) {
+        let path = directory.join(name);
+        if !path.is_file() || verify_sha256(&path, sha256).is_err() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn extract_verified_tar_member(
+    archive_path: &Path,
+    member: &Path,
+    destination: &Path,
+    sha256: &'static str,
+) -> Result<(), FixtureError> {
+    let file = File::open(archive_path).map_err(|source| FixtureError::Io {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let mut archive = tar::Archive::new(GzDecoder::new(file));
+    for entry in archive.entries().map_err(|source| FixtureError::Io {
+        path: archive_path.to_path_buf(),
+        source,
+    })? {
+        let mut entry = entry.map_err(|source| FixtureError::Io {
+            path: archive_path.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path().map_err(|source| FixtureError::Io {
+            path: archive_path.to_path_buf(),
+            source,
+        })?;
+        if path.as_ref() != member {
+            continue;
+        }
+        if entry.size() > MAX_PINNED_FIXTURE_BYTES {
+            return Err(FixtureError::InvalidArchiveEntry(path.into_owned()));
+        }
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|source| FixtureError::Io {
+                path: archive_path.to_path_buf(),
+                source,
+            })?;
+        return write_verified(destination, &bytes, sha256);
+    }
+    Err(FixtureError::MissingArchiveEntry {
+        archive: archive_path.to_path_buf(),
+        entry: member.display().to_string(),
+    })
+}
+
+fn extract_verified_zip_member(
+    archive_path: &Path,
+    member: &str,
+    destination: &Path,
+    sha256: &'static str,
+) -> Result<(), FixtureError> {
+    let file = File::open(archive_path).map_err(|source| FixtureError::Io {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|source| FixtureError::Zip {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let mut entry = match zip.by_name(member) {
+        Ok(entry) => entry,
+        Err(zip::result::ZipError::FileNotFound) => {
+            return Err(FixtureError::MissingArchiveEntry {
+                archive: archive_path.to_path_buf(),
+                entry: member.to_owned(),
+            });
+        }
+        Err(source) => {
+            return Err(FixtureError::Zip {
+                path: archive_path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if entry.size() > MAX_PINNED_FIXTURE_BYTES {
+        return Err(FixtureError::InvalidArchiveEntry(PathBuf::from(member)));
+    }
+    let mut bytes = Vec::new();
+    entry
+        .take(MAX_PINNED_FIXTURE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| FixtureError::Io {
+            path: archive_path.to_path_buf(),
+            source,
+        })?;
+    write_verified(destination, &bytes, sha256)
+}
+
+fn write_verified(
+    destination: &Path,
+    bytes: &[u8],
+    expected: &'static str,
+) -> Result<(), FixtureError> {
+    let actual = sha256_bytes(bytes);
+    if actual != expected {
+        return Err(FixtureError::Checksum {
+            path: destination.to_path_buf(),
+            expected,
+            actual,
+        });
+    }
+    let partial = destination.with_extension("partial");
+    write_all(&partial, bytes)?;
+    fs::rename(&partial, destination).map_err(|source| FixtureError::Io {
+        path: destination.to_path_buf(),
+        source,
+    })
 }
 
 /// Exact reporter family, published by the Nerd Font patch maintainer. The
