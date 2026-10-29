@@ -614,7 +614,7 @@ fn get_char_property_prefers_highest_priority_overlay() {
 }
 
 #[test]
-fn get_char_property_same_range_overlays_use_gnu_identity_tiebreaker() {
+fn get_char_property_same_range_overlays_use_a_stable_consistent_tiebreaker() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcd");
     let first = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(5)]).unwrap();
@@ -653,15 +653,23 @@ fn get_char_property_same_range_overlays_use_gnu_identity_tiebreaker() {
     let raw = builtin_overlays_at(&mut eval, vec![Value::fixnum(2)]).unwrap();
     assert_eq!(list_to_vec(&raw).unwrap(), vec![second, first]);
     let sorted = builtin_overlays_at(&mut eval, vec![Value::fixnum(2), Value::T]).unwrap();
-    // GNU buffer.c:3281 uses raw tagged object identity, whose order is
-    // allocator-dependent rather than creation-dependent.
-    let winner = if first.bits() > second.bits() {
-        first
-    } else {
-        second
-    };
-    let loser = if winner == first { second } else { first };
-    assert_eq!(list_to_vec(&sorted).unwrap(), vec![winner, loser]);
+    let sorted_ids = list_to_vec(&sorted).unwrap();
+    // GNU's identity tiebreaker (buffer.c:3277-3281) is explicitly arbitrary:
+    // "The result can still change between invocations of Emacs, but it won't
+    // change in the middle of `find_field'".  Assert that contract instead of
+    // the allocator accident: both overlays survive the sort, the order is
+    // stable within the run, and the property resolution follows the order
+    // the sort chose.  (On arm64 macOS a same-size allocation can land below
+    // the previous one, so asserting the raw tagged-word order claimed a
+    // platform accident as a contract.)
+    assert_eq!(sorted_ids.len(), 2);
+    assert!(sorted_ids.contains(&first));
+    assert!(sorted_ids.contains(&second));
+    let repeated = builtin_overlays_at(&mut eval, vec![Value::fixnum(2), Value::T]).unwrap();
+    assert_eq!(list_to_vec(&repeated).unwrap(), sorted_ids);
+    // GNU sorts ascending and reverses (buffer.c:3917), so the returned list
+    // is descending precedence and its FIRST element is the winner.
+    let winner = sorted_ids[0];
 
     let result =
         builtin_get_char_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
