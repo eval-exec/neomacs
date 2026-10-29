@@ -5650,6 +5650,58 @@ fn word_wrap_is_inert_under_the_batch_motion_engine_like_gnu() {
     assert_eq!(result, "OK (24 47 70 24 24)");
 }
 
+/// `word-wrap-by-category` non-nil lets a row break inside a CJK run.
+///
+/// GNU's `char_can_wrap_after` / `char_can_wrap_before` (src/xdisp.c:577-617)
+/// keep their whitespace-only answer while `word-wrap-by-category` is nil, but
+/// under non-nil they also consult the `|` (`LINE_BREAKABLE`) category and the
+/// kinsoku `'<'`/`'>'` categories set up in `characters.el`/`kinsoku.el`.  A
+/// row can therefore break between ordinary CJK characters, which contain no
+/// spaces.
+///
+/// Ground truth, GNU Emacs 31.1 behavior in a 24-column TTY window over
+/// "supertag v0.4 " followed by 60 `提`: a TTY window reserves one column for
+/// the continuation glyph, so the row edge is column 23.  The 14 ASCII columns
+/// plus four two-column CJK characters use 22 columns, and the fifth CJK
+/// character would need columns 23-24, so `(vertical-motion 1)` from
+/// `point-min` answers 19.  With `word-wrap-by-category` nil the only saved
+/// candidate is the position before the first CJK character, and the answer is
+/// 15.  Neomacs currently answers 15 in both cases.
+#[test]
+fn word_wrap_by_category_allows_a_cjk_break_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one_with_frame(
+        r#"(let ((b (get-buffer-create " *probe-word-wrap-category*")))
+             (unwind-protect
+                 (progn
+                   (delete-other-windows)
+                   (switch-to-buffer b)
+                   (erase-buffer)
+                   (insert "supertag v0.4 " (make-string 60 ?提))
+                   (let ((w2 (split-window nil -24 'right))
+                         (noninteractive nil))
+                     (select-window w2)
+                     (switch-to-buffer b)
+                     (setq-local truncate-lines nil)
+                     (setq-local truncate-partial-width-windows nil)
+                     (setq-local word-wrap t)
+                     (list (window-body-width)
+                           (char-width ?提)
+                           (let ((word-wrap-by-category t))
+                             (goto-char (point-min))
+                             (vertical-motion 1)
+                             (point))
+                           (let ((word-wrap-by-category nil))
+                             (goto-char (point-min))
+                             (vertical-motion 1)
+                             (point)))))
+               (if (buffer-live-p b)
+                   (kill-buffer b))
+               (delete-other-windows)))"#,
+    );
+    assert_eq!(result, "OK (24 2 19 15)");
+}
+
 /// The oracle's own probe (`div_l0_word_wrap_at_spaces`), as a unit pin on
 /// both engines: one 201-character line whose only space sits at column 100,
 /// in an 80-column window.
