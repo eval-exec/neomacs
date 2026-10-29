@@ -420,11 +420,11 @@ fn only_final_publisher_drop_wakes_after_sender_disconnect_and_buffered_tail() {
 fn installing_host_input_preserves_running_state_until_explicit_activation() {
     let mut context = Context::new();
     let running = context.command_loop.running;
-    assert!(context.input_rx.is_none());
+    assert!(context.input_rx.as_ref().is_none());
 
     let _publisher = HostInputPublisher::install(&mut context);
 
-    assert!(context.input_rx.is_some());
+    assert!(context.input_rx.as_ref().is_some());
     assert_eq!(context.command_loop.running, running);
     context.init_input_system();
     assert!(context.command_loop.running);

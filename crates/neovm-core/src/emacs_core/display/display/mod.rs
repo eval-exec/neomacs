@@ -1869,7 +1869,7 @@ impl NativePopupSession<'_> {
 pub(crate) fn builtin_x_popup_dialog(ctx: &mut Context, args: Vec<Value>) -> EvalResult {
     validate_x_popup_dialog_args(&args)?;
 
-    if ctx.input_rx.is_none() {
+    if ctx.input_rx.as_ref().is_none() {
         tracing::info!("x-popup-dialog interactive: no input receiver");
         return Ok(Value::NIL);
     }
@@ -1947,7 +1947,7 @@ fn x_popup_menu_interactive(ctx: &mut Context, position: Value, menu: Value) -> 
         tracing::info!("x-popup-menu interactive: menu has no entries");
         return Ok(Value::NIL);
     }
-    if ctx.input_rx.is_none() {
+    if ctx.input_rx.as_ref().is_none() {
         tracing::info!("x-popup-menu interactive: no input receiver");
         return Ok(Value::NIL);
     }
@@ -2511,7 +2511,7 @@ pub(crate) fn builtin_x_popup_menu(ctx: &mut Context, args: Vec<Value>) -> EvalR
     let position = args[0];
     let menu = args[1];
 
-    if ctx.display_host.is_some() && ctx.input_rx.is_some() && !position.is_nil() {
+    if ctx.display_host.is_some() && ctx.input_rx.as_ref().is_some() && !position.is_nil() {
         let map = super::keymap::get_keymap_in_runtime(ctx, &menu, false, true)?;
         if !map.is_nil() {
             return x_popup_menu_interactive(ctx, position, map);

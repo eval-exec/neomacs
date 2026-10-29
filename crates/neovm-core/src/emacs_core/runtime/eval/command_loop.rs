@@ -245,12 +245,12 @@ impl Context {
         }
     }
 
-    #[tracing::instrument(skip_all, fields(depth = self.command_loop.recursive_depth, has_input = self.input_rx.is_some()))]
+    #[tracing::instrument(skip_all, fields(depth = self.command_loop.recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
     pub(crate) fn recursive_edit_inner(&mut self) -> EvalResult {
         self.run_exit_wrapped_command_loop(true)
     }
 
-    #[tracing::instrument(skip_all, fields(depth = self.command_loop.recursive_depth, has_input = self.input_rx.is_some()))]
+    #[tracing::instrument(skip_all, fields(depth = self.command_loop.recursive_depth, has_input = self.input_rx.as_ref().is_some()))]
     pub(crate) fn minibuffer_command_loop_inner(&mut self) -> EvalResult {
         self.run_exit_wrapped_command_loop(false)
     }
@@ -281,7 +281,7 @@ impl Context {
         // different: GNU still runs `top-level`/`normal-top-level` and lets
         // `read_char` terminate the loop via noninteractive EOF, even when
         // there is no input channel at all.
-        if self.input_rx.is_none() && !self.command_loop_noninteractive() {
+        if self.input_rx.as_ref().is_none() && !self.command_loop_noninteractive() {
             tracing::info!("recursive_edit_inner: no input receiver, returning immediately");
             return Ok(Value::NIL);
         }
@@ -3635,7 +3635,7 @@ impl Context {
         // input path sets `quit-flag` when real keyboard input is available.
         // Neomacs has to poll the host channel for `throw-on-input`, but only
         // when such a channel exists or the command loop is interactive.
-        self.input_rx.is_some() || !self.command_loop_noninteractive()
+        self.input_rx.as_ref().is_some() || !self.command_loop_noninteractive()
     }
 
     pub(super) fn poll_pending_input_for_throw_on_input(&mut self) -> Result<(), Flow> {

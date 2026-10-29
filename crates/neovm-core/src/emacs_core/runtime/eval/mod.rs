@@ -4727,7 +4727,7 @@ impl Context {
     }
 
     pub(crate) fn has_input_receiver(&self) -> bool {
-        self.input_rx.is_some()
+        self.input_rx.as_ref().is_some()
     }
 
     pub(crate) fn pop_unread_command_event(&mut self) -> Option<Value> {

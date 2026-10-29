@@ -6058,7 +6058,7 @@ impl crate::emacs_core::eval::Context {
 
             tracing::debug!(
                 "read_char: blocking on input (input_rx={})...",
-                self.input_rx.is_some()
+                self.input_rx.as_ref().is_some()
             );
 
             if self.sync_pending_resize_events() {
@@ -6083,7 +6083,7 @@ impl crate::emacs_core::eval::Context {
             }
 
             if deadline.is_none()
-                && self.input_rx.is_none()
+                && self.input_rx.as_ref().is_none()
                 && !crate::emacs_core::builtins::has_active_file_notify_watches()
                 && !crate::emacs_core::dbusbind::has_active_watches()
                 && self.processes.live_process_ids().is_empty()

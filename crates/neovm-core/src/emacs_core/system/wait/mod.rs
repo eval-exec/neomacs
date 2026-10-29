@@ -1641,7 +1641,7 @@ impl super::eval::Context {
                 (true, false) => {
                     if self.processes.live_process_ids().is_empty() {
                         WaitBlock::Poller(NotificationsOnly)
-                    } else if self.input_rx.is_some() {
+                    } else if self.input_rx.as_ref().is_some() {
                         // Live process fds we won't service → channel, no spin.
                         WaitBlock::HostInputChannel
                     } else {
@@ -1665,7 +1665,7 @@ impl super::eval::Context {
         }
 
         // No poller (creation failed / headless): explicit degraded fallbacks.
-        if wants_input && self.input_rx.is_some() {
+        if wants_input && self.input_rx.as_ref().is_some() {
             WaitBlock::HostInputChannel
         } else if wants_processes {
             WaitBlock::ProcessOutputSleep

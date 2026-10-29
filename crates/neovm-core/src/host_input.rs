@@ -18,16 +18,6 @@ pub(crate) struct HostInputReceiver(Option<Receiver<InputEvent>>);
 
 impl HostInputReceiver {
     #[inline]
-    pub(crate) fn is_some(&self) -> bool {
-        self.0.is_some()
-    }
-
-    #[inline]
-    pub(crate) fn is_none(&self) -> bool {
-        self.0.is_none()
-    }
-
-    #[inline]
     pub(crate) fn as_ref(&self) -> Option<&Receiver<InputEvent>> {
         self.0.as_ref()
     }
