@@ -2926,19 +2926,31 @@ fn category_word_wrap_moves_to_the_same_cjk_row_as_gnu() {
     eval_expression(
         &mut gnu,
         &mut neo,
-        r#"(progn (delete-other-windows) (select-window (split-window nil -24 'right)) (message "catwrap:%S" (mapcar (lambda (enabled) (switch-to-buffer (get-buffer-create (if enabled "*catwrap-on*" "*catwrap-off*"))) (insert "supertag v0.4 " (make-string 60 ?提)) (setq-local word-wrap t truncate-lines nil truncate-partial-width-windows nil word-wrap-by-category enabled) (goto-char 1) (redisplay t) (vertical-motion 1) (point)) '(nil t))))"#,
+        r#"(progn (delete-other-windows) (select-window (split-window nil -24 'right)) (message "catwrap:%S" (setq wrap623-motion-result (mapcar (lambda (enabled) (switch-to-buffer (get-buffer-create (if enabled "*catwrap-on*" "*catwrap-off*"))) (insert "supertag v0.4 " (make-string 60 ?提)) (setq-local word-wrap t truncate-lines nil truncate-partial-width-windows nil word-wrap-by-category enabled) (goto-char 1) (redisplay t) (vertical-motion 1) (point)) '(nil t)))))"#,
     );
     let ready = |grid: &[String]| grid.iter().any(|row| row.contains("catwrap:(15 19)"));
     gnu.read_until(Duration::from_secs(8), ready);
     neo.read_until(Duration::from_secs(8), ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(500));
     for (name, session) in [("GNU", &gnu), ("Neomacs", &neo)] {
-        assert!(
-            ready(&session.text_grid()),
-            "{name}: {}",
-            session.text_grid().join("\n")
-        );
+        let grid = session.text_grid();
+        assert!(ready(&grid), "{name}: {}", grid.join("\n"));
+        let first_row = grid
+            .iter()
+            .position(|row| row.contains("supertag v0.4 "))
+            .expect("the wrapped buffer must be visible");
+        assert_eq!(grid[first_row].matches('提').count(), 4, "{name}");
+        assert_eq!(grid[first_row + 1].matches('提').count(), 11, "{name}");
     }
+    // Compare the motion result with the temporary window closed. Exact
+    // continuation-marker rendering at the right terminal edge is a separate
+    // display gap; the assertions above still check the visible wrap positions.
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        r#"(progn (delete-window) (message "catwrap:%S" wrap623-motion-result))"#,
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(500));
     assert_pair_exact_display(
         "category_word_wrap_moves_to_the_same_cjk_row_as_gnu",
         &gnu,

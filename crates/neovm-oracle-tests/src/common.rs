@@ -80,7 +80,7 @@ fn oracle_timing_enabled() -> bool {
 /// Execution strategy for oracle tests that embed GNU Emacs expectations in
 /// the Rust test source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum OracleMode {
+pub(crate) enum OracleMode {
     /// Fast path: run only Neomacs and compare its result with the checked-in
     /// inline GNU expectation.
     Snapshot,
@@ -96,7 +96,7 @@ enum OracleMode {
 }
 
 impl OracleMode {
-    fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         match std::env::var("NEOVM_ORACLE_MODE")
             .unwrap_or_else(|_| "snapshot".to_string())
             .to_ascii_lowercase()
