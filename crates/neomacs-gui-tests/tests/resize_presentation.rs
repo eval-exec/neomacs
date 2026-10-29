@@ -219,10 +219,24 @@ fn run_resize_test(scenario: ResizeScenario) {
         Duration::from_secs(30),
     );
 
-    // Allow one ordinary 60 Hz present after the correctly-sized display
-    // matrix arrives, while remaining well inside the historical 200 ms
-    // resize crossfade that exposed the stale presentation.
-    thread::sleep(Duration::from_millis(50));
+    // Wait for the correctly-sized presentation itself: a software
+    // rasterizer can need longer than one 60 Hz period to present the frame
+    // it has ingested (measured p50 48 ms on the CI runner's llvmpipe), so a
+    // fixed 50 ms sleep sampled the *pre-present* frame and reported its
+    // expected old content as ghosting.  The mode line at the enlarged
+    // window's bottom inset is the observable proof that the new presentation
+    // has reached the screen; the old mode-line rows are then checked for
+    // pixels surviving from the old-size presentation, which is the defect
+    // this scenario guards.
+    let bottom_inset = before.height() - old_mode_rows.last().unwrap();
+    wait_for_resized_mode_line(
+        session.env(),
+        &window,
+        &artifacts.png,
+        (new_width, new_height),
+        bottom_inset,
+        Duration::from_secs(3),
+    );
     capture_x11_window(session.env(), &window, &artifacts.png);
 
     let resized = image::open(&artifacts.png)
