@@ -967,6 +967,9 @@ impl FrameFaceAttempt {
             }
         }
         let mut state = self.state.borrow_mut();
+        // The admitted set is known here; reserve it once instead of walking
+        // the table's growth ladder on this per-frame path.
+        state.faces.reserve(face_ids.len());
         for face_id in face_ids {
             state.faces.insert(face_id, arena.faces[&face_id].clone());
         }

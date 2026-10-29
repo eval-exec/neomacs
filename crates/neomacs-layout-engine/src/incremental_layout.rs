@@ -1126,7 +1126,11 @@ impl RetainedWindowMatrix {
     /// [`Self::chrome_reusable_after_edit`].
     pub(crate) fn retained_chrome(&self) -> Option<RetainedChrome> {
         let mut rows: Vec<(usize, MatrixRow)> = Vec::new();
-        let mut indices: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+        let mut indices: rustc_hash::FxHashSet<usize> =
+            rustc_hash::FxHashSet::with_capacity_and_hasher(
+                self.matrix.rows.len(),
+                Default::default(),
+            );
         for (idx, row) in self.matrix.rows.iter().enumerate() {
             if row.enabled && Self::is_chrome_role(row.role) {
                 indices.insert(idx);
@@ -1408,7 +1412,11 @@ impl RetainedWindowMatrix {
         }
         let new_point = curr.point;
         let mut body_rows: Vec<(usize, MatrixRow)> = Vec::new();
-        let mut body_indices: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+        let mut body_indices: rustc_hash::FxHashSet<usize> =
+            rustc_hash::FxHashSet::with_capacity_and_hasher(
+                self.matrix.rows.len(),
+                Default::default(),
+            );
         let mut retained_cursor_row_index: Option<usize> = None;
         let mut new_cursor: Option<(usize, &GlyphRow)> = None;
         for (idx, row) in self.matrix.rows.iter().enumerate() {
@@ -1714,7 +1722,8 @@ impl RetainedWindowMatrix {
         let dvpos = projected_y.unwrap_or(body[0].1.pixel_y) - body[s].1.pixel_y;
         let dvpos_i64 = dvpos.round() as i64;
         // old matrix row index → new matrix row index for each reused row.
-        let mut remap: rustc_hash::FxHashMap<i64, i64> = rustc_hash::FxHashMap::default();
+        let mut remap: rustc_hash::FxHashMap<i64, i64> =
+            rustc_hash::FxHashMap::with_capacity_and_hasher(last - s + 1, Default::default());
         let mut reused_rows = Vec::with_capacity(last - s + 1);
         for p in s..=last {
             // A shift mutates placement (pixel_y), so this reuse is a real
@@ -2020,7 +2029,8 @@ impl RetainedWindowMatrix {
         let first_dirty = first_dirty_by_charpos.min(stable_prefix);
         let pointer_shrunk_prefix = first_dirty < first_dirty_by_charpos;
         let mut reused_rows = Vec::with_capacity(first_dirty);
-        let mut above_indices: rustc_hash::FxHashSet<i64> = rustc_hash::FxHashSet::default();
+        let mut above_indices: rustc_hash::FxHashSet<i64> =
+            rustc_hash::FxHashSet::with_capacity_and_hasher(first_dirty, Default::default());
         for &(idx, row) in body.iter().take(first_dirty) {
             // Verbatim reuse is a refcount bump; only a row still carrying
             // cursor decoration pays a copy to strip it.
@@ -2223,7 +2233,10 @@ impl RetainedWindowMatrix {
                     )
                 };
                 let mut below_indices: rustc_hash::FxHashSet<i64> =
-                    rustc_hash::FxHashSet::default();
+                    rustc_hash::FxHashSet::with_capacity_and_hasher(
+                        body.len().saturating_sub(span_last + 1),
+                        Default::default(),
+                    );
                 for &(idx, row) in body.iter().skip(span_last + 1) {
                     // A props-only frame (delta 0) shifts nothing: verbatim
                     // refcount reuse unless a stale cursor must be stripped.

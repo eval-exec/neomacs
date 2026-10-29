@@ -330,7 +330,8 @@ pub(crate) fn backward_scroll_plan(
     body: &[(usize, &MatrixRow)],
 ) -> Option<EditSyncPlan> {
     let &(first_index, first_row) = body.first()?;
-    let mut indices = rustc_hash::FxHashSet::default();
+    let mut indices =
+        rustc_hash::FxHashSet::with_capacity_and_hasher(body.len(), Default::default());
     let rows = body
         .iter()
         .map(|&(index, row)| {
@@ -573,7 +574,10 @@ impl EditSyncPlan {
             };
         }
         let dy_px = dy.round() as i64;
-        let mut kept = rustc_hash::FxHashMap::<i64, i64>::default();
+        let mut kept = rustc_hash::FxHashMap::<i64, i64>::with_capacity_and_hasher(
+            candidate_rows.len(),
+            Default::default(),
+        );
         let mut rows = Vec::with_capacity(candidate_rows.len());
         for (old_index, row) in candidate_rows {
             let new_y = row.pixel_y + if shift_y { dy } else { 0.0 };
@@ -1045,7 +1049,8 @@ fn materialize_suffix(
     }
     #[cfg(test)]
     dense_index_test_support::note_legacy_plan();
-    let mut indices = rustc_hash::FxHashSet::default();
+    let mut indices =
+        rustc_hash::FxHashSet::with_capacity_and_hasher(candidates.len(), Default::default());
     let rows = CandidateRows::prepare(
         candidates.iter().map(|&(index, row)| {
             indices.insert(index as i64);

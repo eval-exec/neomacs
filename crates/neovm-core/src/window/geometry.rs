@@ -254,7 +254,8 @@ impl PresentationWindow {
             .regions_materialized
             .then(|| WindowRegions::from_transport(&snapshot.regions))
             .transpose()?;
-        let mut body_rows = HashMap::default();
+        let mut body_rows =
+            HashMap::with_capacity_and_hasher(snapshot.body_rows.len(), Default::default());
         for row in &snapshot.body_rows {
             if body_rows.insert(row.output_row, *row).is_some() {
                 return Err(GeometryError::DuplicateBodyRow {
@@ -263,11 +264,11 @@ impl PresentationWindow {
                 });
             }
         }
-        let row_heights: HashMap<_, _> = snapshot
-            .rows
-            .iter()
-            .map(|row| (row.row, row.height))
-            .collect();
+        let mut row_heights =
+            HashMap::with_capacity_and_hasher(snapshot.rows.len(), Default::default());
+        for row in &snapshot.rows {
+            row_heights.insert(row.row, row.height);
+        }
         let positions =
             PresentationPositions::from_snapshot(snapshot, body_rows, row_heights, mode)?;
         let cursor = snapshot.logical_cursor_pos().and_then(|cursor| {

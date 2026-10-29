@@ -7609,8 +7609,11 @@ impl FrameManager {
             return None;
         }
         let mut current = id;
-        let mut seen = HashSet::default();
-        while seen.insert(current) {
+        // Frame parent chains are a handful of links; keep the cycle guard
+        // inline so the common case does not allocate a hash set per call.
+        let mut seen: smallvec::SmallVec<[FrameId; 8]> = smallvec::SmallVec::new();
+        while !seen.contains(&current) {
+            seen.push(current);
             let Some(parent) = self.frame_parent_id(current) else {
                 return Some(current);
             };
@@ -7622,8 +7625,9 @@ impl FrameManager {
     /// Return true when ANCESTOR is in DESCENDANT's parent-frame chain.
     pub fn frame_ancestor_p(&self, ancestor: FrameId, descendant: FrameId) -> bool {
         let mut current = descendant;
-        let mut seen = HashSet::default();
-        while seen.insert(current) {
+        let mut seen: smallvec::SmallVec<[FrameId; 8]> = smallvec::SmallVec::new();
+        while !seen.contains(&current) {
+            seen.push(current);
             let Some(parent) = self.frame_parent_id(current) else {
                 return false;
             };
