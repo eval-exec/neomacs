@@ -1159,32 +1159,42 @@ impl Context {
         let current_len = self.eval_temp_roots.len();
         let base = scope.saved_len.min(current_len);
         let keep = current_len - base;
-        let mut dst = base;
-        if let Some(&frame) = self.sequence_temp_root_frames.last()
-            && base >= frame.eval_base
-        {
-            // Clamp against a boundary restore that truncated below the run.
-            let old_lo = frame.let_floor.min(current_len);
-            let old_hi = (frame.let_floor + frame.let_len)
-                .min(current_len)
-                .max(old_lo);
-            if base == old_hi {
-                dst = old_lo;
-                if dst != base && keep > 0 {
-                    self.eval_temp_roots.copy_within(base..current_len, dst);
-                }
-            } else {
-                for root in &mut self.eval_temp_roots[old_lo..old_hi] {
-                    *root = Value::NIL;
-                }
-            }
-            let frame = self
-                .sequence_temp_root_frames
-                .last_mut()
-                .expect("frame observed above");
-            frame.let_floor = dst;
-            frame.let_len = keep;
+        let Some(&frame) = self.sequence_temp_root_frames.last() else {
+            // No body sequence owns a run past this form: its scope is over.
+            // GNU drops the range here (SAFE_ALLOCA_LISP in Flet,
+            // exec_byte_code's stack discipline), so retaining it would keep
+            // the form's values alive past their binding scope.
+            self.eval_temp_roots.truncate(base);
+            return;
+        };
+        if base < frame.eval_base {
+            // The run starts below the enclosing sequence frame: no frame
+            // bookkeeping can ever retire it, so end its scope here.
+            self.eval_temp_roots.truncate(base);
+            return;
         }
+        // Clamp against a boundary restore that truncated below the run.
+        let mut dst = base;
+        let old_lo = frame.let_floor.min(current_len);
+        let old_hi = (frame.let_floor + frame.let_len)
+            .min(current_len)
+            .max(old_lo);
+        if base == old_hi {
+            dst = old_lo;
+            if dst != base && keep > 0 {
+                self.eval_temp_roots.copy_within(base..current_len, dst);
+            }
+        } else {
+            for root in &mut self.eval_temp_roots[old_lo..old_hi] {
+                *root = Value::NIL;
+            }
+        }
+        let frame = self
+            .sequence_temp_root_frames
+            .last_mut()
+            .expect("frame observed above");
+        frame.let_floor = dst;
+        frame.let_len = keep;
         self.eval_temp_roots.truncate(dst + keep);
     }
 

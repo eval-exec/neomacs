@@ -553,3 +553,35 @@ fn verify_catches_nothing_on_a_loop_heavy_body() {
     assert!(eval.tier_i.stats().count(TierIEvent::Run) >= 2);
     let _ = Value::NIL;
 }
+
+/// A `let` value that only a weak table references must become collectable
+/// when the binding's scope ends, in the tree walker and in both Tier-I
+/// modes. GNU answers 0 for the interpreted and byte-compiled forms (Flet's
+/// SAFE_ALLOCA and exec_byte_code restore the stack range); a retained
+/// sequence temp root used to keep the lexical value alive past the binding.
+#[test]
+fn weak_references_drop_when_a_let_scope_ends_in_every_tier() {
+    let src = r#"
+(defvar ti-wr-cell nil)
+(defun ti-wr-make (tbl) (let ((o (list 1 2))) (puthash o t tbl) o))
+(defun ti-wr (tbl)
+  (setq ti-wr-cell (ti-wr-make tbl))
+  (setq ti-wr-cell nil)
+  (garbage-collect)
+  (hash-table-count tbl))
+(ti-wr (make-hash-table :weakness 'key))
+"#;
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        "OK 0",
+        "the tree walker kept the weak entry alive after the let scope"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        let results = run(mode, src).0;
+        assert_eq!(
+            results, off,
+            "{mode:?} kept the weak entry alive after the let scope"
+        );
+    }
+}
