@@ -76,9 +76,12 @@ manifest_version=
 manifest_commit=
 tree_sitter_version=
 tree_sitter_sha256=
+manifest_system_configuration=
+manifest_x_bitmap_file_path=
 # Manifests written before the profile line are the Linux GTK3 oracle.
 profile=linux-gtk3
 configure_args=()
+configure_env=()
 while IFS= read -r line; do
     case $line in
         '#'*) ;;
@@ -87,8 +90,11 @@ while IFS= read -r line; do
         commit=*) manifest_commit=${line#commit=} ;;
         profile=*) profile=${line#profile=} ;;
         tree_sitter_version=*) tree_sitter_version=${line#tree_sitter_version=} ;;
+        system_configuration=*) manifest_system_configuration=${line#system_configuration=} ;;
+        x_bitmap_file_path=*) manifest_x_bitmap_file_path=${line#x_bitmap_file_path=} ;;
         tree_sitter_sha256=*) tree_sitter_sha256=${line#tree_sitter_sha256=} ;;
         configure_arg=*) configure_args+=("${line#configure_arg=}") ;;
+        configure_env=*) configure_env+=("${line#configure_env=}") ;;
     esac
 done <"$manifest"
 
@@ -111,6 +117,26 @@ if [[ $got_version != "$version" ]]; then
 fi
 if [[ $manifest_version != "$version" ]]; then
     fail "manifest records emacs_version $manifest_version, expected $version"
+fi
+
+# system-configuration is a configure-time host input: on Darwin config.guess
+# appends the build host's kernel release.  A manifest written by the current
+# recipe records it, and the oracle must still answer that value; otherwise
+# the "reference" the tests compare against has drifted from its own recipe
+# (an OS update between build and test is the usual cause).
+if [[ -n $manifest_system_configuration ]]; then
+    got_system_configuration=$("$emacs" --batch --quick --eval '(princ system-configuration)')
+    if [[ $got_system_configuration != "$manifest_system_configuration" ]]; then
+        fail "oracle reports system-configuration $got_system_configuration, manifest records $manifest_system_configuration"
+    fi
+fi
+# x-bitmap-file-path is the configure bitmapdir substitution, another
+# build-host input (configure.ac:2754-2769, src/image.c:13270).
+if [[ -n $manifest_x_bitmap_file_path ]]; then
+    got_x_bitmap_file_path=$("$emacs" --batch --quick --eval '(princ (if (boundp (quote x-bitmap-file-path)) (prin1-to-string x-bitmap-file-path) "unbound"))')
+    if [[ $got_x_bitmap_file_path != "$manifest_x_bitmap_file_path" ]]; then
+        fail "oracle reports x-bitmap-file-path $got_x_bitmap_file_path, manifest records $manifest_x_bitmap_file_path"
+    fi
 fi
 
 features=$("$emacs" --batch --quick --eval '(princ system-configuration-features)')
@@ -163,6 +189,35 @@ kqueue is Darwin's notification backend and the build must be
 window-system-less (--without-x --without-ns), as characterized."
         fi
         ;;
+    macos-x11)
+        # Decision (a): the macOS oracle with the Linux reference's window
+        # system.  X11 is the compile-time input that restores syms_of_image,
+        # the x-* functions and the window-system faces; XPM/PNG/JPEG/GIF/
+        # TIFF/WEBP/RSVG/LCMS2 are the image libraries the face fixtures use.
+        # The build uses no X toolkit: GTK3 is unavailable against Homebrew's
+        # Quartz-only GTK, and Lucid/Motif would add toolkit-specific Lisp
+        # names (lucid--menu-grab-keyboard, motif-version-string) that the
+        # toolkit-neutral Linux X11 surface does not have.
+        for want in \
+            X11 TREE_SITTER PDUMPER KQUEUE GNUTLS LIBXML2 GMP GSETTINGS \
+            PNG JPEG GIF TIFF WEBP RSVG LCMS2 ZLIB XPM CAIRO HARFBUZZ FREETYPE; do
+            case " $features " in
+                *" $want "*) ;;
+                *) missing="$missing $want" ;;
+            esac
+        done
+        for forbidden in NATIVE_COMP NS PGTK GCONF SOUND LIBSYSTEMD DBUS SQLITE3 LUCID MOTIF; do
+            case " $features " in
+                *" $forbidden "*) missing="$missing -$forbidden" ;;
+            esac
+        done
+        if [[ -n $missing ]]; then
+            fail "GNU oracle configuration does not match the pinned macOS X11 reference; wrong:$missing
+The X11 X toolkit and image libraries are required: without them the
+window-system Lisp surface (image support, x-* functions, face :font)
+differs from the Linux reference."
+        fi
+        ;;
     *)
         fail "$manifest records unknown profile '$profile'"
         ;;
@@ -177,6 +232,14 @@ for arg in "${configure_args[@]}"; do
         *) expected+="${expected:+ }$arg" ;;
     esac
 done
+# Configure appends exported CFLAGS/CPPFLAGS/LDFLAGS to the options string
+# (configure.ac:64-93), in that order; a manifest written by the X11 recipe
+# records the ones it exported.
+if [[ ${#configure_env[@]} -gt 0 ]]; then
+    for assignment in "${configure_env[@]}"; do
+        expected+="${expected:+ }$assignment"
+    done
+fi
 
 options=$("$emacs" --batch --quick --eval '(princ system-configuration-options)')
 prefix_token="--prefix=$prefix"

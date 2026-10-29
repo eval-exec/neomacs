@@ -36,7 +36,7 @@ inputs:
       Bump when the configure flags, dependency lists, or build script change.
       Comment and description edits must not invalidate the cached oracle.
     required: false
-    default: "2"
+    default: "3"
 
 runs:
   using: 'composite'

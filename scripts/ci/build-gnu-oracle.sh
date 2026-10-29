@@ -74,6 +74,11 @@ readonly commit=$1
 readonly prefix=$2
 readonly workdir=${3:-${EMACS_ORACLE_WORKDIR:-${TMPDIR:-/tmp}}}
 readonly repo=${EMACS_ORACLE_REPO:-https://github.com/emacs-mirror/emacs.git}
+# A host family can offer more than one characterized reference.  The macOS
+# CI action builds the default `macos-batch` oracle; `EMACS_ORACLE_PROFILE=
+# macos-x11` builds the X11-window-system profile used to compare the
+# window-system Lisp surface against the Linux reference (decision (a)).
+readonly profile_override=${EMACS_ORACLE_PROFILE:-}
 # GNU/Linux has nproc; Darwin does not (and its bash 3.2 does not either).
 if [[ $(uname -s) == Darwin ]]; then
     readonly jobs=${EMACS_ORACLE_JOBS:-$(sysctl -n hw.ncpu)}
@@ -101,33 +106,96 @@ log() { printf 'build-gnu-oracle: %s\n' "$*" >&2; }
 # what that commit is configured with.  There is one recipe per host family,
 # because a window system is not portable: the Linux oracle is a GTK3 build
 # whose window-system bindings and face realization the TUI/describe-bindings
-# parity depends on, while macOS has neither X11 nor NS in CI and its
-# neovm-core parity questions (long double formatting, load suffixes, file
-# notification, time zones, file names) are batch behaviors.  Both are recorded
-# in the manifest and asserted by check-gnu-oracle.sh, and the cache key in
-# each setup action hashes this file, so changing a line rebuilds the oracle.
+# parity depends on, while macOS CI has neither X11 nor NS and its neovm-core
+# parity questions (long double formatting, load suffixes, file notification,
+# time zones, file names) are batch behaviors.  macOS also offers a second,
+# opt-in profile via EMACS_ORACLE_PROFILE=macos-x11: Homebrew X11 libraries
+# without an X toolkit, no XQuartz and no sudo, used to compare the
+# window-system Lisp surface against the Linux reference (decision (a)).  The
+# profile is recorded in the manifest and asserted by check-gnu-oracle.sh, and
+# the cache key in each setup action hashes this file, so changing a line
+# rebuilds the oracle.
 case $(uname -s) in
     Darwin)
-        profile=macos-batch
-        configure_args=(
-            # No window system: CI has no X server, and an NS build would
-            # answer different face questions than the reference the macOS
-            # suite was characterized against.
-            --without-x
-            --without-ns
-            --with-native-compilation=no
-            --without-compress-install
-            # Darwin's file-notify backend (src/kqueue.c); asking for it
-            # explicitly keeps configure from silently dropping notification.
-            --with-file-notification=kqueue
-            --with-gnutls=ifavailable
-            --with-xml2=ifavailable
-            --with-libgmp=ifavailable
-            --with-sound=no
-            --without-dbus
-        )
+        if [[ $profile_override == macos-x11 ]]; then
+            # Decision (a): the Mac oracle with the Linux reference's
+            # window-system feature set.  XQuartz is not needed -- configure
+            # only needs the X libraries' headers -- and Homebrew's X11
+            # formulae are user installs.  GTK3 is not an option: Homebrew's
+            # is Quartz-only and GNU's GTK code requires the X11 backend
+            # (gdk_x11_* symbols, src/gtkutil.c:207 onward).
+            #
+            # The build uses no X toolkit.  The Linux GTK3 reference adds no
+            # toolkit-specific C declaration -- every x-* variable lives in
+            # xterm.c/xfns.c/xselect.c unconditionally -- but Lucid would add
+            # `lucid--menu-grab-keyboard' (`USE_LUCID', src/keyboard.c:14082-
+            # 14089), a knob for a toolkit Neomacs neither has nor emulates.
+            # X11 without a toolkit keeps the whole HAVE_WINDOW_SYSTEM surface
+            # (syms_of_image, the x-* functions, faces) and adds no
+            # toolkit name the way Lucid (one DEFVAR_BOOL) and Motif
+            # (`motif-version-string') would.  `x-toolkit-scroll-bars' is
+            # nil without USE_TOOLKIT_SCROLL_BARS (src/xterm.c:32699-32718);
+            # no oracle case compares it.
+            profile=macos-x11
+            brew_prefix=$(brew --prefix)
+            # gmp is keg-only in Homebrew, so its headers/libs are not in
+            # $brew_prefix/include|lib; AC_PATH_X accepts colon-separated
+            # lists and applies them to every later probe
+            # (configure.ac:3507-3515), which is also what lets the image
+            # header tests find Homebrew's <png.h>, <jpeglib.h>, ... without
+            # unrecorded CPPFLAGS/LDFLAGS.
+            brew_gmp=$(brew --prefix gmp)
+            configure_args=(
+                --with-x
+                --without-ns
+                --with-x-toolkit=no
+                --with-native-compilation=no
+                --without-compress-install
+                --with-file-notification=kqueue
+                --with-gnutls=ifavailable
+                --with-xml2=ifavailable
+                --with-libgmp=ifavailable
+                --with-sound=no
+                --without-dbus
+                --without-gconf
+                --without-libsystemd
+                --without-selinux
+                --without-gpm
+                --without-sqlite3
+                --with-tree-sitter
+                --x-includes="$brew_prefix/include:$brew_gmp/include"
+                --x-libraries="$brew_prefix/lib:$brew_gmp/lib"
+            )
+        else
+            if [[ -n $profile_override && $profile_override != macos-batch ]]; then
+                echo "build-gnu-oracle: profile '$profile_override' is not available on $(uname -s)" >&2
+                exit 2
+            fi
+            profile=macos-batch
+            configure_args=(
+                # No window system: CI has no X server, and an NS build would
+                # answer different face questions than the reference the macOS
+                # suite was characterized against.
+                --without-x
+                --without-ns
+                --with-native-compilation=no
+                --without-compress-install
+                # Darwin's file-notify backend (src/kqueue.c); asking for it
+                # explicitly keeps configure from silently dropping notification.
+                --with-file-notification=kqueue
+                --with-gnutls=ifavailable
+                --with-xml2=ifavailable
+                --with-libgmp=ifavailable
+                --with-sound=no
+                --without-dbus
+            )
+        fi
         ;;
     *)
+        if [[ -n $profile_override && $profile_override != linux-gtk3 ]]; then
+            echo "build-gnu-oracle: profile '$profile_override' is not available on $(uname -s)" >&2
+            exit 2
+        fi
         profile=linux-gtk3
         configure_args=(
             # X11 + GTK3, never PGTK: configure would otherwise prefer PGTK
@@ -210,6 +278,22 @@ log "autogen.sh"
 # generation.  CI exports none of them; be explicit rather than trusting the
 # caller's environment.
 unset CFLAGS CPPFLAGS LDFLAGS
+
+if [[ $profile == macos-x11 ]]; then
+    # PNG, WEBP, librsvg, lcms2, freetype and tree-sitter are found through
+    # pkg-config; the path is a build-environment input, not a configure
+    # argument, so it does not enter system-configuration-options.
+    export PKG_CONFIG_PATH="$brew_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    # gnulib's GMP probe runs before AC_PATH_X, so --x-includes cannot reach
+    # it; Homebrew's gmp is keg-only (no /opt/homebrew/include/gmp.h), and
+    # without system GMP GNU falls back to bundled mini-gmp and drops the
+    # GMP feature the Linux reference has.  CPPFLAGS/LDFLAGS are configure's
+    # documented environment inputs and ARE recorded in
+    # system-configuration-options; the manifest records them too and
+    # check-gnu-oracle.sh compares the recorded form.
+    export CPPFLAGS="-I$brew_gmp/include"
+    export LDFLAGS="-L$brew_gmp/lib"
+fi
 
 if [[ $profile == linux-gtk3 ]]; then
     log "tree-sitter $tree_sitter_version into $prefix"
@@ -294,6 +378,18 @@ mkdir -p "$manifest_dir"
     printf 'emacs_version=%s\n' "$version"
     printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'cc=%s\n' "$(cc --version | head -n 1)"
+    # The configure-time host triple.  On Darwin config.guess appends the
+    # build host's kernel release (build-aux/config.guess:1457-1458), so this
+    # string is a host input the oracle tests must pin rather than infer;
+    # check-gnu-oracle.sh compares it with the installed binary.
+    printf 'system_configuration=%s\n' \
+        "$("$prefix/bin/emacs" --batch --quick --eval '(princ system-configuration)')"
+    # The configure-time `bitmapdir` substitution that initializes
+    # x-bitmap-file-path (configure.ac:2754-2769, src/image.c:13270).  Like
+    # system-configuration it is a build-host input; a batch profile has no
+    # syms_of_image and records `unbound`.
+    printf 'x_bitmap_file_path=%s\n' \
+        "$("$prefix/bin/emacs" --batch --quick --eval '(princ (if (boundp (quote x-bitmap-file-path)) (prin1-to-string x-bitmap-file-path) "unbound"))')"
     if [[ $profile == linux-gtk3 ]]; then
         printf 'tree_sitter_version=%s\n' "$tree_sitter_version"
         printf 'tree_sitter_sha256=%s\n' "$tree_sitter_sha256"
@@ -303,6 +399,14 @@ mkdir -p "$manifest_dir"
     for arg in "${configure_args[@]}"; do
         printf 'configure_arg=%s\n' "$arg"
     done
+    # Configure appends exported CFLAGS/CPPFLAGS/LDFLAGS to
+    # system-configuration-options (configure.ac:64-93); the macOS X11
+    # profile sets CPPFLAGS/LDFLAGS for keg-only gmp, so record them with
+    # the configure line they became part of.
+    if [[ $profile == macos-x11 ]]; then
+        printf 'configure_env=CPPFLAGS=%s\n' "$CPPFLAGS"
+        printf 'configure_env=LDFLAGS=%s\n' "$LDFLAGS"
+    fi
 } >"$manifest.tmp"
 mv -f "$manifest.tmp" "$manifest"
 
