@@ -160,3 +160,50 @@ fn gc_preserves_retained_load_name_interval_plists() {
         }
     }
 }
+
+/// `apply_lambda`'s specpdl root is load-bearing on the symbol-cell call
+/// path: the callee can clear its own function cell (and the `fset`
+/// `function-history` record) while that cell is the only strong reference
+/// to the running closure. No lexical binding may hold it, so the installer
+/// puts an unbound inner lambda straight into the cell.
+///
+/// The weak table entry must survive the collection the callee forces. The
+/// committed test stops there: this collector never
+/// drops a weak key that has already survived one collection, so a post-call
+/// collection assertion would test that separate divergence, not this root.
+#[test]
+fn apply_lambda_keeps_a_callable_alive_after_its_cell_is_cleared() {
+    let mut ctx = Context::new();
+    ctx.eval_str(
+        r#"
+(progn
+  (setq jitcall26-tbl (make-hash-table :weakness 'key))
+  (setq jitcall26-seen nil)
+  (fset 'jitcall26-probe
+        (lambda ()
+          (setq jitcall26-seen (hash-table-count jitcall26-tbl))))
+  (fset 'jitcall26-install
+        (lambda ()
+          (puthash (symbol-function 'jitcall26-install) t jitcall26-tbl)
+          (fset 'jitcall26-install
+                (lambda ()
+                  (fset 'jitcall26-install nil)
+                  (put 'jitcall26-install 'function-history nil)
+                  (garbage-collect)
+                  (funcall 'jitcall26-probe)
+                  42))
+          (funcall 'jitcall26-install)
+          nil))
+  nil)
+"#,
+    )
+    .unwrap();
+    ctx.eval_str("(funcall 'jitcall26-install)").unwrap();
+    let seen = ctx.eval_str("jitcall26-seen").unwrap();
+    assert_eq!(
+        seen,
+        Value::fixnum(1),
+        "the running outer closure was collected while its only strong \
+         reference was the function cell the callee cleared"
+    );
+}

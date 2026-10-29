@@ -632,8 +632,9 @@ impl Context {
             let arg_values = value_list_to_values(&original_args);
             let bt_count = self.specpdl.len();
             self.push_backtrace_frame(original_fun, &arg_values);
-            let expanded =
-                self.with_macro_expansion_scope(|eval| eval.apply_lambda(func, arg_values));
+            let expanded = self.with_macro_expansion_scope(|eval| {
+                eval.apply_lambda(CallableRoot::Specpdl, func, arg_values)
+            });
             let expanded = self.unbind_to_with_result(bt_count, expanded);
             let expanded = expanded?;
             let expanded_root_count = self.specpdl.len();

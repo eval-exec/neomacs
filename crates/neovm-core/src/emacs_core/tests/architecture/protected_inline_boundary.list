@@ -438,6 +438,7 @@ never	emacs_core/lisp/native/builtins/higher_order.rs	builtin_mapc_2	root
 never	emacs_core/lisp/native/builtins/higher_order.rs	builtin_mapcar_2	root
 never	emacs_core/runtime/bytecode/vm.rs	Vm::run_loop	root
 exempt	emacs_core/runtime/eval/apply.rs	Context::funcall_general_untraced	root	# protected function, but also inlined at one other site; #[inline(never)] would change that caller
+exempt	emacs_core/runtime/eval/apply.rs	Context::funcall_general_with_root	funcall_general_untraced	# the shared dispatch body: the unrooted `funcall_general_untraced` entry forwards to it, the witnessed call sites call it directly; left out of line
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterFunction::new	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
 exempt	emacs_core/runtime/bytecode/vm.rs	RunLoopDepthGuard::enter	Vm::run_loop	# called by Vm::run_loop, but leaves no code at the protected site (folded, cfg-gated or debug-only)
 exempt	emacs_core/runtime/bytecode/vm.rs	Vm::cons_car_observed	run_loop	# intentional collection-capture slow path; retain #[cold] and #[inline(never)]; the new boundary awaits the lead's protected fat-build comparison

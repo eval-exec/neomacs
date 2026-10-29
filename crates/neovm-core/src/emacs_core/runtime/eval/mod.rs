@@ -7683,6 +7683,7 @@ mod var_fast;
 mod cconv_memo;
 mod cconv_shape;
 mod cconv_trust;
+pub(crate) use apply::{CallableRoot, RootedCallable};
 pub(crate) use cconv_memo::note_function_epoch_move;
 mod tier_i;
 #[cfg(test)]

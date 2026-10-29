@@ -15,8 +15,8 @@ use crate::emacs_core::builtins;
 use crate::emacs_core::builtins::IntegerOp;
 use crate::emacs_core::error::*;
 use crate::emacs_core::eval::{
-    BytecodeBacktraceFrame, BytecodeStackCallDispatch, ConditionFrame, LispArgVec, ResumeTarget,
-    lookup_global_subr_entry, subr_call_entry_from_value,
+    BytecodeBacktraceFrame, BytecodeStackCallDispatch, CallableRoot, ConditionFrame, LispArgVec,
+    ResumeTarget, RootedCallable, lookup_global_subr_entry, subr_call_entry_from_value,
 };
 use crate::emacs_core::intern::{SymId, intern, lookup_interned, resolve_sym};
 // storage_char_len and storage_substring no longer needed here — using emacs_char + LispString
@@ -4072,10 +4072,15 @@ impl<'a> Vm<'a> {
                 ))
             }
             ResolvedStackCallTarget::Generic => {
+                let bt_base = self.ctx.specpdl.len();
                 let backtrace = self
                     .ctx
                     .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
-                let result = self.call_function_untraced_from_stack(func_val, args_start, nargs);
+                let root = CallableRoot::Witnessed(RootedCallable::from_backtrace(
+                    &*self.ctx, bt_base, func_val,
+                ));
+                let result =
+                    self.call_function_untraced_from_stack(root, func_val, args_start, nargs);
                 let result = self.ctx.dispatch_signal_result_if_needed(result);
                 InterpreterStackCall::Complete(
                     self.ctx
@@ -8248,10 +8253,14 @@ impl<'a> Vm<'a> {
         // setup_frame's PUSH loop), and the caller pops them only after the
         // call returns. No LispArgVec, no per-arg rooting: bc_buf is
         // GC-traced.
+        let bt_base = self.ctx.specpdl.len();
         let backtrace = self
             .ctx
             .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
-        let result = self.call_function_untraced_from_stack(func_val, args_start, nargs);
+        let root = CallableRoot::Witnessed(RootedCallable::from_backtrace(
+            &*self.ctx, bt_base, func_val,
+        ));
+        let result = self.call_function_untraced_from_stack(root, func_val, args_start, nargs);
         let result = self.ctx.dispatch_signal_result_if_needed(result);
         // GNU Bcall/Breturn exit: pop this call's own backtrace entry with a
         // single-entry pop (specpdl_ptr-- shape); imbalanced/debug-on-exit
@@ -8270,6 +8279,7 @@ impl<'a> Vm<'a> {
     #[inline(never)]
     fn call_function_untraced_from_stack(
         &mut self,
+        root: CallableRoot<'_>,
         func_val: Value,
         args_start: usize,
         nargs: usize,
@@ -8296,13 +8306,13 @@ impl<'a> Vm<'a> {
                         let args = LispArgVec::from_slice(
                             &self.ctx.bc_buf[args_start..args_start + nargs],
                         );
-                        self.ctx.funcall_general_untraced(func_val, args)
+                        self.ctx.funcall_general_with_root(root, func_val, args)
                     }
                 }
             }
             _ => {
                 let args = LispArgVec::from_slice(&self.ctx.bc_buf[args_start..args_start + nargs]);
-                self.ctx.funcall_general_untraced(func_val, args)
+                self.ctx.funcall_general_with_root(root, func_val, args)
             }
         }
     }

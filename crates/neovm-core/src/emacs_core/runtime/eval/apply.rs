@@ -5,6 +5,70 @@
 
 use super::*;
 
+/// The GC root that keeps an interpreted callable alive for one
+/// [`Context::apply_lambda`] call.
+#[derive(Clone, Copy)]
+pub(crate) enum CallableRoot<'a> {
+    /// No traced carrier holds the callable: `apply_lambda` pushes a
+    /// specpdl `GcRoot` for the closure, its body and its environment.
+    Specpdl,
+    /// The caller witnessed the callable in a GC-traced carrier that
+    /// outlives the call, so no specpdl root is pushed.
+    Witnessed(RootedCallable<'a>),
+}
+
+/// Zero-sized proof that a callable is held by a GC-traced carrier for the
+/// whole call: the caller's `bc_buf` operand span, or the specpdl
+/// `Backtrace` entry recorded for this call.
+///
+/// Constructible only through the carrier-named constructors below. A
+/// borrowed lifetime cannot express the invariant: the witness has to
+/// survive into `&mut Context` dispatch, so it borrows nothing. The
+/// constructors verify the carrier in debug builds and compile away in
+/// release; the type makes every call site state which carrier roots its
+/// callable, and an unrooted site must spell out [`CallableRoot::Specpdl`].
+#[derive(Clone, Copy)]
+pub(crate) struct RootedCallable<'a> {
+    _scope: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> RootedCallable<'a> {
+    /// `ctx.bc_buf[func_slot]` holds `function` inside the caller's live
+    /// span; the "bc" root group traces every slot for the whole call.
+    #[inline(always)]
+    pub(crate) fn from_bc_span(ctx: &Context, func_slot: usize, function: Value) -> Self {
+        debug_assert_eq!(
+            ctx.bc_buf.get(func_slot).map(|value| value.bits()),
+            Some(function.bits()),
+            "the witnessed bc_buf slot must hold the callable"
+        );
+        Self {
+            _scope: std::marker::PhantomData,
+        }
+    }
+
+    /// The specpdl `Backtrace` entry at `base` records `function`; the
+    /// "specpdl" root group traces it until the call's token is popped.
+    #[inline(always)]
+    pub(crate) fn from_backtrace(ctx: &Context, base: usize, function: Value) -> Self {
+        debug_assert!(
+            matches!(
+                ctx.specpdl.get(base),
+                Some(
+                    SpecBinding::Backtrace { function: recorded, .. }
+                        | SpecBinding::Backtrace1 { function: recorded, .. }
+                        | SpecBinding::Backtrace2 { function: recorded, .. }
+                        | SpecBinding::BacktraceNative { function: recorded, .. }
+                ) if recorded.bits() == function.bits()
+            ),
+            "the witnessed specpdl entry must hold the callable"
+        );
+        Self {
+            _scope: std::marker::PhantomData,
+        }
+    }
+}
+
 cached_symbol_id!(optional_arg_symbol, "&optional");
 cached_symbol_id!(rest_arg_symbol, "&rest");
 
@@ -2124,9 +2188,14 @@ impl Context {
         self.maybe_quit_before_gc()?;
         self.enter_interpreted_eval_depth()?;
         let bt_count = self.specpdl.len();
-        if record_backtrace {
+        let call_root = if record_backtrace {
             self.push_backtrace_frame(function, &args);
-        }
+            // The entry at BT_COUNT records FUNCTION for the whole call and
+            // the specpdl walk traces it, so a lambda callee needs no root.
+            CallableRoot::Witnessed(RootedCallable::from_backtrace(self, bt_count, function))
+        } else {
+            CallableRoot::Specpdl
+        };
         let result = {
             if self.gc_safe_point_exact_should_collect() {
                 self.gc_collect_from_current_roots();
@@ -2151,9 +2220,9 @@ impl Context {
             // in stacker::maybe_grow.
             match entered {
                 Err(flow) => Err(flow),
-                Ok(()) => {
-                    self.maybe_grow_eval_stack(|ctx| ctx.funcall_general_untraced(function, args))
-                }
+                Ok(()) => self.maybe_grow_eval_stack(|ctx| {
+                    ctx.funcall_general_with_root(call_root, function, args)
+                }),
             }
         };
         self.depth -= 1;
@@ -3064,6 +3133,18 @@ impl Context {
         function: Value,
         args: impl Into<LispArgVec>,
     ) -> EvalResult {
+        self.funcall_general_with_root(CallableRoot::Specpdl, function, args)
+    }
+
+    /// [`Self::funcall_general_untraced`] for a callable the caller holds in
+    /// a GC-traced carrier; lambda, macro and cons-lambda callees skip the
+    /// specpdl `GcRoot` and run through [`Self::apply_lambda`].
+    pub(crate) fn funcall_general_with_root(
+        &mut self,
+        root: CallableRoot<'_>,
+        function: Value,
+        args: impl Into<LispArgVec>,
+    ) -> EvalResult {
         let args = args.into();
         match function.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => {
@@ -3076,8 +3157,8 @@ impl Context {
                 let bc_data = function.get_bytecode_data().unwrap();
                 self.execute_bytecode_call(bc_data, args, function)
             }
-            ValueKind::Veclike(VecLikeType::Lambda) => self.apply_lambda(function, args),
-            ValueKind::Veclike(VecLikeType::Macro) => self.apply_lambda(function, args),
+            ValueKind::Veclike(VecLikeType::Lambda) => self.apply_lambda(root, function, args),
+            ValueKind::Veclike(VecLikeType::Macro) => self.apply_lambda(root, function, args),
             ValueKind::Subr(_) => self.apply_subr_object(function, args, true),
             ValueKind::Veclike(VecLikeType::Subr) => self.apply_subr_object(function, args, true),
             ValueKind::Veclike(VecLikeType::ModuleFunction) => {
@@ -3147,7 +3228,7 @@ impl Context {
                 } else if cons_head_symbol_id(&function, self.symbol_mode())
                     == Some(lambda_symbol())
                 {
-                    self.apply_lambda(function, args)
+                    self.apply_lambda(root, function, args)
                 } else {
                     Err(signal(LispCondition::InvalidFunction, vec![function]))
                 }
@@ -4047,8 +4128,17 @@ impl Context {
         walk_lambda_formals(fun, arglist, args, &mut DynamicFormalBindings(self))
     }
 
+    /// Apply FUNC_VALUE to ARGS. `root` names the GC root that keeps the
+    /// callable alive for the whole call: the specpdl `GcRoot` pushed here
+    /// ([`CallableRoot::Specpdl`]), or a caller-witnessed traced carrier
+    /// ([`CallableRoot::Witnessed`]), in which case none is pushed.
     #[inline(never)]
-    pub(super) fn apply_lambda(&mut self, func_value: Value, args: LispArgVec) -> EvalResult {
+    pub(super) fn apply_lambda(
+        &mut self,
+        root: CallableRoot<'_>,
+        func_value: Value,
+        args: LispArgVec,
+    ) -> EvalResult {
         let raw_cons_lambda = func_value.is_cons();
         let (arglist, body, env) = if raw_cons_lambda {
             let tail = func_value.cons_cdr();
@@ -4066,10 +4156,15 @@ impl Context {
             (arglist, body, func_value.closure_env().unwrap_or(None))
         };
 
-        // Root the function value on the specpdl so GC can trace it
-        // (keeping body, env, and params alive through the call).
         let root_count = self.specpdl.len();
-        self.push_specpdl_with(|| SpecBinding::GcRoot { value: func_value });
+        match root {
+            CallableRoot::Specpdl => {
+                // Root the function value on the specpdl so GC can trace it
+                // (keeping body, env, and params alive through the call).
+                self.push_specpdl_with(|| SpecBinding::GcRoot { value: func_value });
+            }
+            CallableRoot::Witnessed(_) => {}
+        }
         // A lexical closure, in GNU `funcall_lambda`'s shape: the formals
         // are consed onto the captured environment in a local, which is then
         // installed with one `LexicalEnv` entry (GNU's one `specbind` of
@@ -4136,9 +4231,13 @@ impl Context {
             return Err(signal(LispCondition::InvalidFunction, vec![func]));
         };
         let Some(env) = env else {
-            // A dynamic closure: `apply_lambda`'s whole dynamic path.
+            // A dynamic closure: `apply_lambda`'s whole dynamic path. The
+            // function slot below its arguments stays in the caller's traced
+            // span for the whole call, so no specpdl GcRoot is pushed.
             let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
-            return self.apply_lambda(func, args);
+            let root =
+                CallableRoot::Witnessed(RootedCallable::from_bc_span(self, first_arg - 1, func));
+            return self.apply_lambda(root, func, args);
         };
         let new_env = bind_lexical_formals(
             env,
