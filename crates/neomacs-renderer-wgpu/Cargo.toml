@@ -42,6 +42,11 @@ neomacs-font-materializer.workspace = true
 neomacs-layout-engine.workspace = true
 neomacs-video = { workspace = true, optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation.workspace = true
+objc2-core-graphics.workspace = true
+objc2-core-text.workspace = true
+
 [dev-dependencies]
 neomacs-infra.workspace = true
 neomacs-test-fonts.workspace = true

@@ -26,7 +26,14 @@ pub fn default_subpixel_order() -> FontconfigSubpixelOrder {
     {
         crate::font::fontconfig::default_subpixel_order()
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        // macOS text uses grayscale antialiasing. Unknown is an LCD/RGB
+        // fallback elsewhere; using it here enables Swash's three-channel
+        // masks even on Retina displays.
+        FontconfigSubpixelOrder::None
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         FontconfigSubpixelOrder::Unknown
     }
