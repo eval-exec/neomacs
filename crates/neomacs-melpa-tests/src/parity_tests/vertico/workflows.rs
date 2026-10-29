@@ -199,6 +199,17 @@ fn file_completion_enters_a_directory_then_selects_a_real_file() -> ParityBatchC
          (configs (expand-file-name "configs/" root))
          (vertico-preselect 'directory)
          (completion-ignored-extensions '(".bak"))
+         ;; The batch macro pins Vertico's display order to the completion
+         ;; table's order (`vertico-sort-override-function' = identity).  For
+         ;; file-name completion that order is the filesystem's readdir
+         ;; order, which differs between hosts (creation order on the CI
+         ;; runner, name order here).  Sort this case's candidates explicitly
+         ;; so the displayed list is a property of the fixture, not of the
+         ;; directory implementation.  Other cases use table-backed
+         ;; candidates whose order is meaningful and stay on identity.
+         (vertico-sort-override-function
+          (lambda (candidates)
+            (sort (copy-sequence candidates) #'string<)))
          result)
     (make-directory configs t)
     (dolist (file '("production.toml" "preview.toml" "production.bak"))
