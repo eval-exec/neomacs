@@ -326,3 +326,7 @@ mod heapborrow_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "parallel_admission/tests.rs"]
+mod tests;

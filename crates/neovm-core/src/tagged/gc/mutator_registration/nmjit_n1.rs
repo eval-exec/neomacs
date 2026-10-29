@@ -1,10 +1,11 @@
 //! N1 missing-entry witnesses, not a substitute parallel JIT implementation.
 //!
 //! The only executed operations are existing symbol authority/root operations.
-//! The manifest below deliberately refuses every future feature. Each red must
-//! reach its named assertion, release its real lease and root homes, finish the
-//! era, and only then resume the original assertion. No production admission,
-//! machine code, table publication or grace receipt is minted here.
+//! Completed manifest arms exercise their real boundary before entering the
+//! lease fixture. Every remaining red reaches its named assertion, releases
+//! its real lease and root homes, finishes the era, and only then resumes the
+//! original assertion. No machine code, table publication or grace receipt is
+//! minted here.
 
 use super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::{Mutator, OwnerRootSlot, RegistrationError, RunAccess, SymbolHandle};
@@ -20,13 +21,17 @@ enum MissingFeature {
     Gen1Admission,
 }
 
-/// An explicit N1 absence manifest, never an executable engine entry point.
-/// Replace these refusal witnesses only when the corresponding real boundary
-/// exists and the same fixture can exercise it. Exhaustiveness makes a newly
-/// named feature require a deliberate N1 disposition.
+/// The staged boundary manifest. An arm becomes green only by exercising its
+/// actual boundary; later-stage refusal witnesses remain plain failing tests.
+/// Exhaustiveness makes each new feature require a deliberate disposition.
 fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
     match feature {
-        MissingFeature::Gen1Admission => Err(feature),
+        MissingFeature::Gen1Admission => {
+            Context::nmjit_n2_production_boundary_for_test().map_err(|reason| {
+                eprintln!("NMJIT_N2_PRODUCTION_BOUNDARY_FAILURE {reason}");
+                feature
+            })
+        }
     }
 }
 
@@ -145,15 +150,15 @@ fn fixture(
 }
 
 fn missing_case(feature: MissingFeature) {
+    // Completed entries run before the real lease fixture. Constructing a
+    // second Context while that old era/lease lives would test a nested World
+    // transition instead of this production admission boundary.
+    let entry = missing_entry(feature);
     let result = fixture(FixtureCase::Missing(feature), |run, handle, _home| {
         // This is a real reader lease, intentionally live at the assertion.
         // Unwinding must release it before FixtureGuard retires the owner.
         let _reader = run.symbol_ref(handle).expect("N1 real symbol reader lease");
-        assert_eq!(
-            missing_entry(feature),
-            Ok(()),
-            "NMJIT_N1_MISSING_FEATURE {feature:?}"
-        );
+        assert_eq!(entry, Ok(()), "NMJIT_N1_MISSING_FEATURE {feature:?}");
     });
     if let Err(assertion) = result {
         std::panic::resume_unwind(assertion);
