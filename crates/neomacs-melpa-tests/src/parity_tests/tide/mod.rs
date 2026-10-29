@@ -5392,7 +5392,15 @@ const PRELUDE: &str = r####"
           (plist-put tide368-test-world :environment environment))))
 
 (defun tide368-test-forbidden-external (symbol &rest _arguments)
-  (error "Tide attempted forbidden external boundary: %S" symbol))
+  ;; Name the caller: the boundary trip reports which package function tried
+  ;; to leave the sandbox, so a CI-only occurrence is attributable from the
+  ;; log alone.  The backtrace is best-effort; its failure must not replace
+  ;; the original diagnosis.
+  (error "Tide attempted forbidden external boundary: %S caller-backtrace=%S"
+         symbol
+         (condition-case nil
+             (mapcar (lambda (frame) (nth 1 frame)) (backtrace-frames))
+           (error nil))))
 
 (defun tide368-test-start-file-process
     (original name buffer program &rest arguments)
