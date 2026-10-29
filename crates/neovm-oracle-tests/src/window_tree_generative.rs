@@ -20,8 +20,9 @@
 //!
 //! # What is compared
 //!
-//! For each step: whether the operation succeeded or signalled, and the full
-//! window tree (combination direction, buffer names, window edges). Error
+//! For each step: whether the operation succeeded or signalled, the full
+//! window tree (combination direction, buffer names, window edges), and every
+//! window's normal sizes on both axes, internal windows included. Error
 //! *messages* are deliberately not compared — the fact of an error is a
 //! behavioural contract, the wording is not (neomacs embeds frame pointers in
 //! some window errors, which would be pure noise here).
@@ -29,6 +30,13 @@
 //! Comparing after every step, rather than only at the end, means a failure
 //! reports the first diverging operation instead of a final tree that has to be
 //! reverse-engineered.
+//!
+//! The normal sizes are compared because edges alone hide a wrong share until
+//! some later operation spends it: `delete-window` and `balance-windows` under
+//! `window-combination-resize` distribute space by them. window-oracle-nightly
+//! (2026-10-29) needed a fourth operation to expose a split that had restated
+//! its siblings' normal sizes from pixels (27/80 instead of 1/3); comparing
+//! them reports the split itself.
 
 use proptest::prelude::*;
 
@@ -303,7 +311,7 @@ fn op_elisp(op: WindowOp, step: usize) -> String {
 }
 
 /// Build the full elisp program: run each op inside `condition-case`, and after
-/// each one record `ok`/`err` plus the whole tree.
+/// each one record `ok`/`err`, the whole tree, and every window's normal sizes.
 fn program(ops: &[WindowOp]) -> String {
     let mut src = String::from(
         r#"
@@ -316,12 +324,20 @@ fn program(ops: &[WindowOp]) -> String {
 (defun oracle--nth-window (n)
   (let ((ws (window-list nil 'no-minibuf nil)))
     (nth (mod n (length ws)) ws)))
+(defun oracle--normals (window)
+  (cons (list (window-normal-size window) (window-normal-size window t))
+        (let ((child (window-child window)) children)
+          (while child
+            (push (oracle--normals child) children)
+            (setq child (window-next-sibling child)))
+          (nreverse children))))
 (defvar oracle--log nil)
 (defvar oracle--config nil)
 (defmacro oracle--step (&rest body)
   `(setq oracle--log
          (cons (list (condition-case nil (progn ,@body 'ok) (error 'err))
-                     (oracle--wt (car (window-tree))))
+                     (oracle--wt (car (window-tree)))
+                     (oracle--normals (frame-root-window)))
                oracle--log)))
 "#,
     );
