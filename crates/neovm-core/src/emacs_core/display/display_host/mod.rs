@@ -446,6 +446,16 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Move a top-level GUI frame's outer window to absolute display
+    /// coordinates, in the same pixel units as the frame's size.
+    fn set_gui_frame_position(
+        &mut self,
+        _frame_id: crate::window::FrameId,
+        _x: i32,
+        _y: i32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Apply the `undecorated` frame parameter to the platform window.
     ///
     /// GNU dispatches each frame parameter to a backend setter through

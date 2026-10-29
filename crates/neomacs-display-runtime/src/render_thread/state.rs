@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use neomacs_display_protocol::frame_time::EventTime;
 
-use winit::dpi::{LogicalSize, PhysicalSize, Size};
+use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position, Size};
 
 use crate::clipboard::ClipboardService;
 pub use crate::thread_comm::MonitorInfo;
@@ -305,6 +305,15 @@ pub(super) fn window_size_from_emacs_pixels(width: u32, height: u32) -> Size {
         // already scales font sizes, so window dimensions are already at
         // the correct physical size.
         Size::Physical(PhysicalSize::new(width, height))
+    }
+}
+
+/// Outer-window position in the same units as `window_size_from_emacs_pixels`.
+pub(super) fn window_position_from_emacs_pixels(x: i32, y: i32) -> Position {
+    if backend_uses_winit_logical_pixels() {
+        Position::Logical(LogicalPosition::new(f64::from(x), f64::from(y)))
+    } else {
+        Position::Physical(PhysicalPosition::new(x, y))
     }
 }
 
@@ -1123,6 +1132,7 @@ impl RenderApp {
                     ..WindowChrome::default()
                 },
                 geometry_hints: None,
+                pending_position: None,
             },
             render: GuiFrameRenderState::new_without_device(
                 0,
