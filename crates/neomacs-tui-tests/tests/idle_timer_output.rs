@@ -1,6 +1,6 @@
 //! Real timer and subprocess wakeups preserve the command loop's idle epoch.
 
-use neomacs_tui_tests::{TuiLaunch, TuiSession};
+use neomacs_tui_tests::{QUIET_NATIVE_COMP_EVAL, TuiLaunch, TuiSession};
 use std::{fs, time::Duration};
 
 #[test]
@@ -33,7 +33,7 @@ fn idle_timer_fires_amid_ordinary_timers_and_subprocess_output() {
                 control.clone().into_os_string(),
             );
         if name == "GNU" {
-            launch = launch.arg("-no-comp-spawn");
+            launch = launch.arg(QUIET_NATIVE_COMP_EVAL);
         }
         launch = launch.arg("-l").arg(fixture.clone().into_os_string());
         let mut session = TuiSession::spawn_launch(launch, name);
