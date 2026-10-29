@@ -1308,15 +1308,6 @@ fn render_command_set_extra_spacing() {
 }
 
 #[test]
-fn render_command_set_ligatures_enabled() {
-    let cmd = RenderCommand::Config(ConfigCommand::SetLigaturesEnabled { enabled: true });
-    match cmd {
-        RenderCommand::Config(ConfigCommand::SetLigaturesEnabled { enabled }) => assert!(enabled),
-        other => panic!("Expected SetLigaturesEnabled, got {:?}", other),
-    }
-}
-
-#[test]
 fn render_command_remove_child_frame() {
     let cmd = RenderCommand::Window(WindowCommand::RemoveChildFrame { frame_id: 0xDEAD });
     match cmd {

@@ -669,9 +669,6 @@ of the frame."
 
 ;;; GPU Toolbar
 
-(declare-function neomacs-set-toolbar-config "neomacsterm.c"
-  (&optional icon-size padding))
-
 (defcustom neomacs-toolbar-icon-theme 'vscode-like
   "Icon theme used for GPU tool-bar image lookup.
 The value `gnu' keeps GNU Emacs image lookup unchanged.  Other values
@@ -694,29 +691,6 @@ Files should use GNU tool-bar image base names, for example \"save.svg\" or
                  directory)
   :group 'frames)
 
-(defcustom neomacs-toolbar-icon-size 24
-  "Size of toolbar icons in pixels."
-  :type 'integer
-  :group 'frames
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (fboundp 'neomacs-set-toolbar-config)
-           (neomacs-set-toolbar-config
-            val (if (boundp 'neomacs-toolbar-padding)
-                    neomacs-toolbar-padding 6)))))
-
-(defcustom neomacs-toolbar-padding 6
-  "Padding around toolbar icons in pixels."
-  :type 'integer
-  :group 'frames
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (fboundp 'neomacs-set-toolbar-config)
-           (neomacs-set-toolbar-config
-            (if (boundp 'neomacs-toolbar-icon-size)
-                neomacs-toolbar-icon-size 24)
-            val))))
-
 ;;; Extra spacing (line-height and letter-spacing)
 
 (declare-function neomacs-set-extra-spacing "neomacsterm.c"
@@ -729,10 +703,9 @@ Applied at the render level on top of Emacs line-spacing."
   :group 'frames
   :set (lambda (sym val)
          (set-default sym val)
-         (when (fboundp 'neomacs-set-extra-spacing)
-           (neomacs-set-extra-spacing
-            val (if (boundp 'neomacs-extra-letter-spacing)
-                    neomacs-extra-letter-spacing 0)))))
+         (neomacs-set-extra-spacing
+          val (if (boundp 'neomacs-extra-letter-spacing)
+                  neomacs-extra-letter-spacing 0))))
 
 (defcustom neomacs-extra-letter-spacing 0
   "Extra horizontal spacing between characters in pixels.
@@ -741,47 +714,10 @@ Applied at the render level."
   :group 'frames
   :set (lambda (sym val)
          (set-default sym val)
-         (when (fboundp 'neomacs-set-extra-spacing)
-           (neomacs-set-extra-spacing
-            (if (boundp 'neomacs-extra-line-spacing)
-                neomacs-extra-line-spacing 0)
-            val))))
-
-;;; Font ligatures
-
-(declare-function neomacs-set-ligatures-enabled "neomacsterm.c" (enabled))
-
-(defcustom neomacs-ligatures-enabled nil
-  "Enable font ligature support.
-When non-nil, the layout engine groups same-face character runs so that
-HarfBuzz can perform ligature substitution.  This makes programming
-ligature fonts like JetBrains Mono and Fira Code render connected glyphs
-for sequences like ->, =>, !=, == etc."
-  :type 'boolean
-  :group 'frames
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (fboundp 'neomacs-set-ligatures-enabled)
-           (neomacs-set-ligatures-enabled val))))
-
-;;; Font metrics backend
-
-(declare-function neomacs-set-font-backend "neomacsterm.c" (backend))
-
-(defcustom neomacs-font-backend 'cosmic
-  "Font metrics backend for the layout engine.
-`cosmic' (default) uses cosmic-text font metrics, matching the render
-thread's font resolution.  This eliminates width mismatches between
-layout and rendering when C fontconfig and cosmic-text resolve
-different font files.
-`emacs' uses the legacy C/fontconfig font metrics."
-  :type '(choice (const :tag "Emacs C (fontconfig)" emacs)
-                 (const :tag "Cosmic-text" cosmic))
-  :group 'frames
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (fboundp 'neomacs-set-font-backend)
-           (neomacs-set-font-backend val))))
+         (neomacs-set-extra-spacing
+          (if (boundp 'neomacs-extra-line-spacing)
+              neomacs-extra-line-spacing 0)
+          val)))
 
 ;;; Background gradient
 

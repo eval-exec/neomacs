@@ -680,8 +680,6 @@ pub enum UiCommand {
 // constructors and destructuring code.
 #[allow(clippy::large_enum_variant)]
 pub enum ConfigCommand {
-    /// Enable or disable font ligatures
-    SetLigaturesEnabled { enabled: bool },
     /// Replace the complete, already validated visual configuration snapshot.
     SetVisualConfig(VisualConfig),
     /// Replace the compiled NS modifier policy (issue #442).

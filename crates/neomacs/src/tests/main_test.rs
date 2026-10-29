@@ -3666,6 +3666,54 @@ fn primary_window_display_host_forwards_visual_config_to_renderer() {
 }
 
 #[test]
+fn primary_window_display_host_forwards_chrome_controls_to_renderer() {
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let mut host = PrimaryWindowDisplayHost {
+        frame_opacity: Default::default(),
+        resources: Default::default(),
+        system_fonts: Default::default(),
+        font_entities: Default::default(),
+        tooltip_client: Default::default(),
+        cmd_tx: cmd_tx.clone(),
+        render_waker: None,
+        font_sizing: FontSizing::gnu_x11_fallback(),
+        primary_frame: PrimaryFrame::Adopted(FrameId(0x100000001)),
+        gui_startup: None,
+        last_window_titles: Mutex::new(std::collections::HashMap::new()),
+        font_metrics: None,
+        primary_window_size: shared_primary_window_size(843, 489),
+        image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
+        #[cfg(feature = "video")]
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
+        resolved_webkits: Mutex::new(std::collections::HashMap::new()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
+        render_capabilities: Arc::new(SharedRenderCapabilities::default()),
+        requested_frame_shader: Mutex::new(None),
+        #[cfg(feature = "neo-term")]
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
+    };
+
+    neovm_core::emacs_core::DisplayHost::set_scroll_indicators(&mut host, true)
+        .expect("scroll indicator command should forward");
+    neovm_core::emacs_core::DisplayHost::set_extra_spacing(&mut host, 4.0, 2.0)
+        .expect("extra spacing command should forward");
+
+    let commands: Vec<_> = cmd_rx.try_iter().collect();
+    assert_eq!(commands.len(), 2);
+    assert!(matches!(
+        &commands[0],
+        RenderCommand::Config(ConfigCommand::SetScrollIndicators { enabled: true })
+    ));
+    assert!(matches!(
+        &commands[1],
+        RenderCommand::Config(ConfigCommand::SetExtraSpacing {
+            line_spacing,
+            letter_spacing,
+        }) if *line_spacing == 4.0 && *letter_spacing == 2.0
+    ));
+}
+
+#[test]
 fn primary_window_display_host_round_trips_clipboard_requests_through_renderer() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let worker = std::thread::spawn(move || {
