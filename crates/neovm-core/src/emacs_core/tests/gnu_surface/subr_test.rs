@@ -385,7 +385,15 @@ const DECLARED_HERE_AND_NOT_BY_THE_REFERENCE_GNU: &[DeclaredHere] = &[
         why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
     },
     DeclaredHere {
+        name: "neomacs-set-extra-spacing",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
         name: "neomacs-set-mouse-absolute-pixel-position",
+        why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
+    },
+    DeclaredHere {
+        name: "neomacs-set-scroll-indicators",
         why: WhyThisBuildDeclaresIt::PortOwnPrimitiveInThePortsOwnNamespace,
     },
     DeclaredHere {

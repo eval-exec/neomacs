@@ -2256,6 +2256,23 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_scroll_indicators(&mut self, enabled: bool) -> Result<(), String> {
+        self.send_render_command(
+            RenderCommand::Config(ConfigCommand::SetScrollIndicators { enabled }),
+            "failed to set scroll indicators",
+        )
+    }
+
+    fn set_extra_spacing(&mut self, line_spacing: f32, letter_spacing: f32) -> Result<(), String> {
+        self.send_render_command(
+            RenderCommand::Config(ConfigCommand::SetExtraSpacing {
+                line_spacing,
+                letter_spacing,
+            }),
+            "failed to set extra spacing",
+        )
+    }
+
     fn set_modifier_policy(
         &mut self,
         policy: neomacs_display_protocol::ModifierPolicy,

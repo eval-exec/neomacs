@@ -119,8 +119,9 @@ fn term_common_win_is_preloaded_because_this_build_has_a_window_system() {
 /// `lisp/term/` are `tvi970.el:102` and `vt100.el:41`, and both are TTY files
 /// loaded at runtime and never dumped.  So a window-system file that pulls
 /// `easy-mmode` in is not a GNU shape, and `lisp/term/neo-win.el` was pulling
-/// it in for exactly two `:global t` modes and nothing else -- the file's only
-/// reference to the library is the `require` itself.
+/// it in for its one `:global t` mode, `neomacs-scroll-indicator-mode`, and
+/// nothing else -- the file's only reference to the library is the `require`
+/// itself.
 ///
 /// `define-minor-mode` is a macro, and a `:global t` mode without `:keymap`
 /// expands to `defcustom` / `defun` / `add-minor-mode`, none of which lives in
@@ -135,7 +136,7 @@ fn term_common_win_is_preloaded_because_this_build_has_a_window_system() {
 /// The two anchors are what stop this from going green by attrition:
 /// `(featurep 'term/neo-win)` is `lisp/term/neo-win.el:713`, so an emptied or
 /// unloadable file reports nil rather than an absent library; and
-/// `neomacs-scroll-indicator-mode` must be `fboundp`, so deleting the modes is
+/// `neomacs-scroll-indicator-mode` must be `fboundp`, so deleting the mode is
 /// not a way to pass.
 ///
 /// Ledger 194.  RED before: `OK (t t t)`.

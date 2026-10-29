@@ -206,9 +206,6 @@ impl RenderApp {
 
     pub(super) fn handle_config(&mut self, cmd: ConfigCommand) {
         match cmd {
-            ConfigCommand::SetLigaturesEnabled { enabled } => {
-                tracing::info!("Ligatures enabled: {}", enabled);
-            }
             ConfigCommand::SetVisualConfig(config) => {
                 self.requested_visual_config = config;
                 self.apply_requested_visual_config();

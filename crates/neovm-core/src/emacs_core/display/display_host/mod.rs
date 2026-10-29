@@ -785,6 +785,19 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Toggle the render thread's scroll-position indicators and
+    /// active-window focus ring.
+    fn set_scroll_indicators(&mut self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+    /// Set the renderer's extra line and letter spacing in logical pixels.
+    fn set_extra_spacing(
+        &mut self,
+        _line_spacing: f32,
+        _letter_spacing: f32,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// Publish the compiled NS modifier policy to the display backend.
     ///
     /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every

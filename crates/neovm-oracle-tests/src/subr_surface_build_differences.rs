@@ -45,7 +45,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 /// 23 xwidget subrs (`src/xwidget.c`, whole file behind `XWIDGETS_OBJ`,
 /// `configure.ac:4455-4507`), `x-load-color-file` (`src/xfaces.c:7583`, whose
 /// guard is `#ifndef HAVE_X_WINDOWS` -- GNU declares it in the NON-X branch,
-/// which is this build's branch), and 40 primitives of this port's own in this
+/// which is this build's branch), and 42 primitives of this port's own in this
 /// port's own namespace, as GNU carries `w32-`, `ns-` and `haiku-` ones.
 const DECLARED_HERE_ONLY: &str = "
   delete-xwidget-view get-buffer-xwidgets kill-xwidget
@@ -58,8 +58,9 @@ const DECLARED_HERE_ONLY: &str = "
   neomacs-frame-shader neomacs-frame-shader-set-uniform neomacs-image-extent
   neomacs-mouse-absolute-pixel-position neomacs-open-tls-stream neomacs-primary-selection-get
   neomacs-primary-selection-owner neomacs-primary-selection-set neomacs-set-buffer-text-backend
-  neomacs-set-default-buffer-text-backend
-  neomacs-set-mouse-absolute-pixel-position neomacs-surface-available-p neomacs-surface-create
+  neomacs-set-default-buffer-text-backend neomacs-set-extra-spacing
+  neomacs-set-mouse-absolute-pixel-position neomacs-set-scroll-indicators
+  neomacs-surface-available-p neomacs-surface-create
   neomacs-surface-destroy neomacs-surface-set-uniform neomacs-terminal-create
   neomacs-terminal-destroy neomacs-terminal-get-text neomacs-terminal-resize
   neomacs-terminal-set-float neomacs-terminal-write neomacs-tls-available-p
