@@ -181,7 +181,6 @@ perf-probes = []
 contract-fixtures = []
 
 [dev-dependencies]
-proc-macro2 = "1"
 serde_json.workspace = true
 static_assertions.workspace = true
 neomacs-test-oracle.workspace = true
@@ -195,6 +194,7 @@ proptest.workspace = true
 tracing-test.workspace = true
 tree-sitter-json = "0.24"
 syn = { version = "3.0.3", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 
 [build-dependencies]
 cc = "1.4.5"
