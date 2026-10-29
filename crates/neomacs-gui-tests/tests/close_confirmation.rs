@@ -145,7 +145,7 @@ impl CloseFixture {
             .unwrap_or_default()
             .lines()
             .map(|line| {
-                neomacs_gui_tests::interaction::linux::popup_trace::strip_ansi(line).into_owned()
+                neomacs_gui_tests::interaction::strip_ansi(line).into_owned()
             })
             .filter(|line| line.contains("xdg_popup") && line.contains(".configure("))
             .count()

@@ -10,6 +10,37 @@ pub mod linux;
 #[cfg(unix)]
 pub mod macos;
 
+/// Drop ANSI CSI sequences (ESC [ ... final-byte) from one captured trace
+/// line, borrowing the original when it carries none.
+///
+/// The dumps the GUI harness parses are colorized on hosts whose tools emit
+/// SGR (newer libwayland versions do), plain on others, and `tracing`'s
+/// colorized stdout splits `name=value` into separate spans.  Every substring
+/// probe of a captured log therefore goes through this, on every host: it is
+/// deliberately outside the Linux-only `linux` adapter so a platform-neutral
+/// test target can use it.
+pub fn strip_ansi(line: &str) -> std::borrow::Cow<'_, str> {
+    if !line.as_bytes().contains(&0x1b) {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            // A CSI sequence ends at the first byte in 0x40..=0x7e.
+            for byte in chars.by_ref() {
+                if ('@'..='~').contains(&byte) {
+                    break;
+                }
+            }
+        } else {
+            out.push(character);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
 #[derive(Debug)]
 pub enum DriverError {
     Blocked(Vec<String>),

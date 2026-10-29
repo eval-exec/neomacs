@@ -176,7 +176,7 @@ fn check_receipt_timestamp(result: &GuiRunResult) {
     let wire: Vec<String> = wire
         .lines()
         .map(|line| {
-            neomacs_gui_tests::interaction::linux::popup_trace::strip_ansi(line).into_owned()
+            neomacs_gui_tests::interaction::strip_ansi(line).into_owned()
         })
         .collect();
     assert!(

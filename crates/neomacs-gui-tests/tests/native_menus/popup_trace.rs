@@ -1,6 +1,5 @@
-pub(super) use neomacs_gui_tests::interaction::linux::popup_trace::{
-    ParentRect, configured, strip_ansi,
-};
+pub(super) use neomacs_gui_tests::interaction::linux::popup_trace::{ParentRect, configured};
+pub(super) use neomacs_gui_tests::interaction::strip_ansi;
 
 // Lisp readiness precedes native realization during asynchronous startup.
 // Track the toplevel role, a committed content buffer, and that surface's
