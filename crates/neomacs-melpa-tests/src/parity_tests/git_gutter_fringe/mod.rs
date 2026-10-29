@@ -34,14 +34,28 @@ const TEST_PRELUDE: &str = r####"
   (let* ((sandbox (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
          (scratch (getenv "NEOMACS_TEST_SCRATCH_ROOT"))
          (approved (and scratch
-                        (file-name-as-directory (file-truename scratch)))))
+                        (file-name-as-directory (file-truename scratch))))
+         (sandbox-truename (and (stringp sandbox) (file-truename sandbox)))
+         (inside (and approved sandbox-truename
+                      (file-in-directory-p sandbox-truename
+                                           (file-truename approved)))))
     (unless (and (stringp sandbox) (> (length sandbox) 1)
                  (file-name-absolute-p sandbox)
-                 approved
-                 (file-in-directory-p (file-truename sandbox)
-                                      (file-truename approved)))
-      (error "GGF351: unsafe sandbox root %S below approved %S"
-             sandbox approved))
+                 approved inside)
+      ;; Report the failed predicate, not just the two roots: the roots are
+      ;; masked by the oracle normalizer, and "is the sandbox below the
+      ;; approved scratch root" has several inputs.  `:relative' is the
+      ;; child name when containment holds and "../..." when it does not, so
+      ;; the relation survives normalization.  A CI-only occurrence is then
+      ;; attributable from one log without another instrumented run.
+      (error "GGF351: unsafe sandbox root %S below approved %S (%S)"
+             sandbox approved
+             (list :absolute (and (stringp sandbox)
+                                  (file-name-absolute-p sandbox))
+                   :inside inside
+                   :relative (and (stringp sandbox) scratch
+                                  (file-relative-name sandbox scratch))
+                   :sandbox-truename sandbox-truename)))
     (let ((root (expand-file-name (concat "git-gutter-fringe-" name) sandbox)))
       (when (file-exists-p root)
         (error "GGF351: owned root already exists: %s" root))
