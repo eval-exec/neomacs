@@ -40,7 +40,9 @@ fn child_frame_keeps_border_properties_and_exact_pixel_placement() {
         )
         .expect("set child-frame border background");
 
-    let mut engine = LayoutEngine::new();
+    // Border placement is expressed in explicit frame pixels; native font
+    // discovery is not an input to this geometry fixture.
+    let mut engine = LayoutEngine::new_without_font_metrics();
     let state = match engine.redisplay_frame_attempt(&mut evaluator, child_id) {
         FrameLayoutAttempt::Prepared(state) => state,
         FrameLayoutAttempt::Aborted => panic!("child-frame fixture layout aborted"),

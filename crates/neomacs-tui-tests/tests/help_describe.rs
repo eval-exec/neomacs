@@ -328,6 +328,7 @@ fn info_directory_via_ch_i_opens_info_buffer() {
 #[test]
 fn calendar_via_mx_opens_calendar_and_q_quits() {
     let (mut gnu, mut neo) = boot_pair("");
+    pin_calendar_fixture_date(&mut gnu, &mut neo);
 
     invoke_mx_command(&mut gnu, &mut neo, "calendar");
     let day_header_count = |grid: &[String]| {

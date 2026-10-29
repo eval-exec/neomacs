@@ -266,6 +266,7 @@ fn keyboard_quit_from_mx_via_cg() {
 #[test]
 fn execute_extended_command_history_via_mx_mp_recalls_previous_command() {
     let (mut gnu, mut neo) = boot_pair("");
+    pin_calendar_fixture_date(&mut gnu, &mut neo);
 
     invoke_mx_command(&mut gnu, &mut neo, "calendar");
     let day_header_count = |grid: &[String]| {

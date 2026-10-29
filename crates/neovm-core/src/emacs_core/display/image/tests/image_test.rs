@@ -2183,6 +2183,9 @@ fn messages_text(eval: &Context) -> String {
 #[test]
 fn a_failed_image_reaches_messages_with_gnus_quoting() {
     let mut eval = Context::new();
+    // This fixture tests GNU curve quoting, independently of the host locale.
+    eval.obarray_mut()
+        .set_symbol_value("text-quoting-style", Value::symbol("curve"));
     eval.set_display_host(Box::new(FailingImageDisplayHost::new(vec![
         ImageDiagnostic::FileNotFound {
             file: "/tmp/imgmsg/does-not-exist.png".to_owned(),
@@ -2204,6 +2207,9 @@ fn a_failed_image_reaches_messages_with_gnus_quoting() {
 #[test]
 fn a_drained_failure_is_not_logged_twice() {
     let mut eval = Context::new();
+    // This fixture tests GNU curve quoting, independently of the host locale.
+    eval.obarray_mut()
+        .set_symbol_value("text-quoting-style", Value::symbol("curve"));
     eval.set_display_host(Box::new(FailingImageDisplayHost::new(vec![
         ImageDiagnostic::InvalidSize,
     ])));

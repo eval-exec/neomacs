@@ -1136,7 +1136,9 @@ fn real_layout_publication_routes_overlapping_children_by_published_z_order() {
             frame.top_pos = 15;
         }
     }
-    let mut engine = neomacs_layout_engine::LayoutEngine::new();
+    // Publication/z-order uses explicit logical metrics, as the nested-child
+    // fixture below does. No native font selection is part of this contract.
+    let mut engine = neomacs_layout_engine::LayoutEngine::new_without_font_metrics();
     let mut layout = |frame_id| match engine.redisplay_frame_attempt(&mut eval, frame_id) {
         neomacs_layout_engine::engine::FrameLayoutAttempt::Prepared(frame) => frame.materialize(),
         neomacs_layout_engine::engine::FrameLayoutAttempt::Aborted => {

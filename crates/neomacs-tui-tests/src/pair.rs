@@ -81,6 +81,21 @@ pub fn boot_pair_with_erase_char(
     (gnu, neo)
 }
 
+/// Pin the calendar fixture's date without changing the host clock.
+///
+/// GNU `calendar-current-date` (calendar.el:2028) obtains the civil date from
+/// `decode-time`, then implements OFFSET through Gregorian absolute days.
+/// These command-workflow tests supply May 8, 2026 at that clock boundary;
+/// the real calendar command, offset conversion and raw display stay intact.
+/// The override belongs to these two test processes and ends with them.
+pub fn pin_calendar_fixture_date(gnu: &mut TuiSession, neo: &mut TuiSession) {
+    eval_expression(
+        gnu,
+        neo,
+        r#"(progn (require 'calendar) (defun calendar-current-date (&optional offset) (if (zerop (or offset 0)) '(5 8 2026) (calendar-gregorian-from-absolute (+ (or offset 0) (calendar-absolute-from-gregorian '(5 8 2026)))))) nil)"#,
+    );
+}
+
 /// Read `session` until its rendered grid stops changing, with no round cap.
 pub fn settle_session(session: &mut TuiSession) {
     let mut previous = session.text_grid();
