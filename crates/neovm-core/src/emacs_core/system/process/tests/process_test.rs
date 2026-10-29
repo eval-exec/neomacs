@@ -5486,9 +5486,16 @@ fn signal_process_observes_stop_continue_output_and_exit_like_gnu() {
     ));
 
     // GNU process.c:780-811 uses the host's strsignal text; both branches
-    // were observed with GNU 31.1 on their respective platforms.
+    // were observed with GNU 31.1 on their respective platforms.  The mac
+    // branch also carries a kernel fact: Darwin raises `SIGCHLD` for the
+    // stop but not for the `SIGCONT` that continues a stopped child, and GNU
+    // learns child transitions only from `SIGCHLD` (`handle_child_signal`,
+    // src/process.c:7691-7749).  So GNU on macOS never sees the continuation:
+    // the child stays `stop`, the sentinel does not run again, and `resumed`
+    // is not sent.  Measured against GNU 31.1 on macOS 27; a polling port
+    // must answer the same (`platform_facts::SIGCHLD_ON_CHILD_CONTINUE`).
     let expected = if cfg!(target_os = "macos") {
-        "OK (t t exit \"resumed\n\" ((stop \"suspended (signal): 17\n\") (run \"run\") (exit \"finished\n\")))"
+        "OK (t nil stop \"\" ((stop \"suspended (signal): 17\n\")))"
     } else {
         "OK (t t exit \"resumed\n\" ((stop \"stopped (signal)\n\") (run \"run\") (exit \"finished\n\")))"
     };
@@ -10279,10 +10286,13 @@ fn process_network_interface_and_signal_runtime_surface() {
                      network-interface-info
                      network-lookup-address-info
                      signal-names))
-           (let* ((ifname (or (and (fboundp 'network-interface-list)
-                                   (stringp (car (car (network-interface-list))))
-                                   (car (car (network-interface-list))))
-                              "lo")))
+           ;; A name this host actually reports.  GNU's primitives answer only
+           ;; what the kernel reports (src/process.c:4324-4400, 4485-4505), so
+           ;; the host's first IPv4 interface stands in for the old
+           ;; hard-coded "lo", a Linux-only name.  On a host with no IPv4
+           ;; interface the dependent probes are skipped rather than failing.
+           (let* ((ifname (and (fboundp 'network-interface-list)
+                               (car (car (network-interface-list nil 'ipv4))))))
              (list
               (format-network-address [127 0 0 1 80])
               (format-network-address [127 0 0 1 80] t)
@@ -10362,21 +10372,23 @@ fn process_network_interface_and_signal_runtime_surface() {
                     (setq ok (and (vectorp addr) (= (length addr) 9))))
                   (setq entries (cdr entries)))
                 ok)
-              (let ((info (network-interface-info ifname)))
-                (and (listp info)
-                     (= (length info) 5)
-                     (vectorp (car info))
-                     (vectorp (nth 1 info))
-                     (vectorp (nth 2 info))
-                     (or (null (nth 3 info))
-                         (consp (nth 3 info)))
-                     (listp (nth 4 info))))
-              (let ((lo-info (network-interface-info "lo")))
-                (and (listp lo-info)
-                     (= (length lo-info) 5)
-                     (vectorp (car lo-info))
-                     (vectorp (nth 1 lo-info))
-                     (vectorp (nth 2 lo-info))))
+              (or (null ifname)
+                  (let ((info (network-interface-info ifname)))
+                    (and (listp info)
+                         (= (length info) 5)
+                         (vectorp (car info))
+                         (vectorp (nth 1 info))
+                         (vectorp (nth 2 info))
+                         (or (null (nth 3 info))
+                             (consp (nth 3 info)))
+                         (listp (nth 4 info)))))
+              (or (null ifname)
+                  (let ((lo-info (network-interface-info ifname)))
+                    (and (listp lo-info)
+                         (= (length lo-info) 5)
+                         (vectorp (car lo-info))
+                         (vectorp (nth 1 lo-info))
+                         (vectorp (nth 2 lo-info)))))
               (let* ((ifname (car (car (network-interface-list nil 'ipv4))))
                      (info (and ifname (network-interface-info ifname)))
                      (entries (network-interface-list nil 'ipv4))
@@ -10388,22 +10400,25 @@ fn process_network_interface_and_signal_runtime_surface() {
                         (setq found t)))
                   (setq entries (cdr entries)))
                 (or (null ifname) found))
-              (let* ((info (network-interface-info ifname))
-                     (addr (car info))
-                     (bc (nth 1 info))
-                     (mask (nth 2 info))
-                     (len (length addr)))
-                (and (or (= len 5) (= len 9))
-                     (= (length bc) len)
-                     (= (length mask) len)))
-              (let* ((lo-info (network-interface-info "lo"))
-                     (addr (car lo-info))
-                     (bc (nth 1 lo-info))
-                     (mask (nth 2 lo-info)))
-                (and (= (length addr) (length bc))
-                     (= (length addr) (length mask))))
-              (equal (network-interface-info (concat "lo" (string 0) "x"))
-                     (network-interface-info "lo"))
+              (or (null ifname)
+                  (let* ((info (network-interface-info ifname))
+                         (addr (car info))
+                         (bc (nth 1 info))
+                         (mask (nth 2 info))
+                         (len (length addr)))
+                    (and (or (= len 5) (= len 9))
+                         (= (length bc) len)
+                         (= (length mask) len))))
+              (or (null ifname)
+                  (let* ((lo-info (network-interface-info ifname))
+                         (addr (car lo-info))
+                         (bc (nth 1 lo-info))
+                         (mask (nth 2 lo-info)))
+                    (and (= (length addr) (length bc))
+                         (= (length addr) (length mask)))))
+              (or (null ifname)
+                  (equal (network-interface-info (concat ifname (string 0) "x"))
+                         (network-interface-info ifname)))
               (condition-case err (network-interface-info nil) (error err))
               (condition-case err (network-interface-info "abcdefghijklmnop") (error err))
               (condition-case err (network-interface-info (concat "abcdefghijklmnop" (string 0))) (error err))

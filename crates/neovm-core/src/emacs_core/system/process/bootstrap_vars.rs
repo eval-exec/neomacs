@@ -1023,42 +1023,6 @@ pub(super) fn int_vector(values: &[i64]) -> Value {
     Value::vector(values.iter().map(|v| Value::fixnum(*v)).collect())
 }
 
-pub(super) fn loopback_ipv4_address() -> Value {
-    int_vector(&[127, 0, 0, 1, 0])
-}
-
-pub(super) fn loopback_ipv4_broadcast() -> Value {
-    int_vector(&[0, 0, 0, 0, 0])
-}
-
-pub(super) fn loopback_ipv4_netmask() -> Value {
-    int_vector(&[255, 0, 0, 0, 0])
-}
-
-pub(super) fn loopback_ipv6_address() -> Value {
-    int_vector(&[0, 0, 0, 0, 0, 0, 0, 1, 0])
-}
-
-pub(super) fn loopback_ipv6_broadcast() -> Value {
-    int_vector(&[0, 0, 0, 0, 0, 0, 0, 1, 0])
-}
-
-pub(super) fn loopback_ipv6_netmask() -> Value {
-    int_vector(&[65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 0])
-}
-
-pub(super) fn loopback_hwaddr() -> Value {
-    Value::cons(Value::fixnum(772), int_vector(&[0, 0, 0, 0, 0, 0]))
-}
-
-pub(super) fn loopback_flags() -> Value {
-    Value::list(vec![
-        Value::symbol("running"),
-        Value::symbol("loopback"),
-        Value::symbol("up"),
-    ])
-}
-
 pub(super) fn zero_network_address(family: NetworkAddressFamily) -> Value {
     match family {
         NetworkAddressFamily::Ipv4 => int_vector(&[0, 0, 0, 0, 0]),
@@ -1192,21 +1156,6 @@ pub(super) fn resolve_network_lookup_addresses(
     }
 
     out
-}
-
-pub(super) fn interface_entry(name: &str, address: Value, full: bool) -> Value {
-    if !full {
-        return Value::cons(Value::string(name), address);
-    }
-
-    let (broadcast, netmask) = match address.kind() {
-        ValueKind::Veclike(VecLikeType::Vector) if address.as_vector_data().unwrap().len() == 9 => {
-            (loopback_ipv6_broadcast(), loopback_ipv6_netmask())
-        }
-        _ => (loopback_ipv4_broadcast(), loopback_ipv4_netmask()),
-    };
-
-    Value::list(vec![Value::string(name), address, broadcast, netmask])
 }
 
 pub(super) fn format_ipv4_network_address(items: &[i64], omit_port: bool) -> Option<String> {

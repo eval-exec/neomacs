@@ -2943,6 +2943,17 @@ pub(super) fn process_child_status_change_from_wait(wait: sys::ChildWait) -> Chi
         sys::ChildWait::Stopped(sig) => {
             ChildStatusChange::StillOurs(process_status_stop_value(sig as i64))
         }
+        // GNU only ever sees a continuation through the `SIGCHLD` its handler
+        // runs on (src/process.c:7691-7749).  A kernel that does not signal
+        // continuations -- Darwin, which also reports a spurious
+        // `WCONTINUED` for a bare `SIGCONT` -- would have GNU stay silent,
+        // so the poll-driven port must stay silent too or every
+        // `continue-process` runs the sentinel twice.
+        sys::ChildWait::Continued
+            if !crate::emacs_core::platform_facts::SIGCHLD_ON_CHILD_CONTINUE =>
+        {
+            ChildStatusChange::NoChange
+        }
         sys::ChildWait::Continued => ChildStatusChange::StillOurs(process_status_run_value()),
         sys::ChildWait::Error => ChildStatusChange::Reaped(process_status_exit_value(1)),
     }

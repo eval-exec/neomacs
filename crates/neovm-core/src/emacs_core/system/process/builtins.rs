@@ -710,6 +710,11 @@ pub(crate) fn builtin_network_interface_list_impl(args: Vec<Value>) -> EvalResul
     let include_ipv4 = requested_family.is_none_or(|family| family == NetworkAddressFamily::Ipv4);
     let include_ipv6 = requested_family.is_none_or(|family| family == NetworkAddressFamily::Ipv6);
 
+    // GNU answers exactly what `getifaddrs` reports and `nil` when it reports
+    // nothing (`network_interface_list`, src/process.c:4324-4340: a failing
+    // getifaddrs returns Qnil, and the loop only walks the entries the kernel
+    // gave it).  Nothing is synthesized: a host without an IPv6 address has
+    // no IPv6 entry, and a sandbox with no interfaces produces an empty list.
     let mut entries = Vec::new();
     if let Some(host_entries) = sys::interface_snapshot() {
         for entry in host_entries.into_iter().rev() {
@@ -731,15 +736,6 @@ pub(crate) fn builtin_network_interface_list_impl(args: Vec<Value>) -> EvalResul
             } else {
                 entries.push(Value::cons(Value::string(entry.name), entry.address));
             }
-        }
-    }
-
-    if entries.is_empty() {
-        if include_ipv6 {
-            entries.push(interface_entry("lo", loopback_ipv6_address(), full));
-        }
-        if include_ipv4 {
-            entries.push(interface_entry("lo", loopback_ipv4_address(), full));
         }
     }
     Ok(Value::list(entries))
@@ -794,16 +790,12 @@ pub(crate) fn builtin_network_interface_info_impl(args: Vec<Value>) -> EvalResul
         }
     }
 
-    if ifname == "lo" {
-        return Ok(Value::list(vec![
-            loopback_ipv4_address(),
-            loopback_ipv4_broadcast(),
-            loopback_ipv4_netmask(),
-            loopback_hwaddr(),
-            loopback_flags(),
-        ]));
-    }
-
+    // GNU asks the kernel about the named interface (`network_interface_info`,
+    // src/process.c:4485-4505: an ioctl that fails for a name this host does
+    // not have leaves `any` false and the function returns Qnil).  There is no
+    // fallback record for a name the host does not report -- `"lo"` is a
+    // Linux name, and on Darwin the loopback interface is `"lo0"`, so GNU
+    // answers nil there.
     Ok(Value::NIL)
 }
 
@@ -2753,17 +2745,31 @@ pub(crate) fn builtin_make_network_process(
         let immediate_start = nowait_tcp_immediate_addrs(host_value, &host_str, port, family)
             .map(|addrs| start_pending_tcp_stream_connect(addrs, &socket_options))
             .transpose()?;
-        let pending_dns = if immediate_start.is_none() {
-            Some(start_async_network_dns_lookup(
-                host_str.clone(),
-                port,
-                family,
-                NetworkSocketType::Stream,
-                socket_options.clone(),
-                eval.processes.wait_notifier(),
-            ))
+        let (immediate_start, pending_dns) = if immediate_start.is_some() {
+            (immediate_start, None)
+        } else if crate::emacs_core::platform_facts::ASYNC_GETADDRINFO {
+            (
+                None,
+                Some(start_async_network_dns_lookup(
+                    host_str.clone(),
+                    port,
+                    family,
+                    NetworkSocketType::Stream,
+                    socket_options.clone(),
+                    eval.processes.wait_notifier(),
+                )),
+            )
         } else {
-            None
+            // GNU without `getaddrinfo_a` resolves even a `:nowait` client
+            // synchronously and signals a lookup failure before the process
+            // exists (src/process.c:4203-4205); a successful lookup still
+            // starts the non-blocking connect below.
+            let addrs =
+                resolve_network_socket_addrs(&host_str, port, family, NetworkSocketType::Stream)?;
+            (
+                Some(start_pending_tcp_stream_connect(addrs, &socket_options)?),
+                None,
+            )
         };
 
         let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
