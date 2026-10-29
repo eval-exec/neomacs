@@ -1265,20 +1265,7 @@ pub fn file_symlink_target_lisp(
 
 /// Return true if FILENAME is on a case-insensitive filesystem.
 pub fn file_name_case_insensitive_p(filename: &str) -> bool {
-    let mut probe = PathBuf::from(filename);
-    while !probe.exists() {
-        if !probe.pop() || probe.as_os_str().is_empty() {
-            return false;
-        }
-    }
-    #[cfg(windows)]
-    {
-        true
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    file_name_case_insensitive_path(Path::new(filename))
 }
 
 /// Return true if FILE1 has a newer modification time than FILE2.
@@ -3464,21 +3451,88 @@ fn file_regular_path(path: &Path) -> bool {
     path.is_file()
 }
 
+/// GNU `file_name_case_insensitive_err` (src/fileio.c:2647-2686).
+///
+/// `Some(true)`/`Some(false)` are GNU's `-1`/`0` answers; `None` is GNU's
+/// `1`, "no answer for this path, climb to the parent and ask again".
+#[cfg(target_vendor = "apple")]
+fn file_name_case_insensitive_probe(path: &Path) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `c_path` is a valid NUL-terminated path and pathconf only reads
+    // it.
+    let result = unsafe { libc::pathconf(c_path.as_ptr(), libc::_PC_CASE_SENSITIVE) };
+    if result >= 0 {
+        // GNU: `return - (res == 0)` -- 0 means case-insensitive.
+        return Some(result == 0);
+    }
+    if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+        // The file system could not answer; GNU assumes case-sensitivity on
+        // macOS when the probe is inconclusive.
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// GNU's platform fallback when the C library cannot answer:
+/// case-sensitive on every non-DOS system, insensitive on Windows.
+#[cfg(not(target_vendor = "apple"))]
+fn file_name_case_insensitive_probe(_path: &Path) -> Option<bool> {
+    Some(cfg!(windows))
+}
+
 fn file_name_case_insensitive_path(path: &Path) -> bool {
     let mut probe = path.to_path_buf();
-    while !probe.exists() {
-        if !probe.pop() || probe.as_os_str().is_empty() {
-            return false;
+    loop {
+        match file_name_case_insensitive_probe(&probe) {
+            Some(answer) => return answer,
+            None => {
+                let Some(parent) = case_probe_parent(&probe) else {
+                    return false;
+                };
+                if parent == probe {
+                    return false;
+                }
+                probe = parent;
+            }
         }
     }
-    #[cfg(windows)]
-    {
-        true
+}
+
+/// GNU `Ffile_name_directory` (src/fileio.c) as the case probe's climb uses
+/// it: the directory part of `path`, keeping its trailing separator.
+///
+/// A name that already ends in a separator IS its own directory part, so GNU
+/// returns it unchanged and `file-name-case-insensitive-p`'s climb stops on
+/// its `parent == filename` guard.  This is observable: on Darwin a missing
+/// path reached through a directory form answers nil, while the same path
+/// without the trailing separator climbs to the existing parent and answers
+/// that filesystem's case behavior.
+#[cfg(target_vendor = "apple")]
+fn case_probe_parent(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = path.as_os_str().as_bytes();
+    if bytes.is_empty() {
+        return None;
     }
-    #[cfg(not(windows))]
-    {
-        false
+    if bytes.last() == Some(&b'/') {
+        // The filesystem root is its own directory part; report no parent so
+        // the caller's fixed-point guard terminates the climb.
+        return path.parent().map(|_| path.to_path_buf());
     }
+    let separator = bytes.iter().rposition(|byte| *byte == b'/')?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(
+        &bytes[..separator + 1],
+    )))
+}
+
+/// The non-Apple probe always answers (GNU compiles the climb only with
+/// `_PC_CASE_INSENSITIVE`/`_PC_CASE_SENSITIVE`, i.e. Cygwin and macOS), so the
+/// parent step is unreachable there.
+#[cfg(not(target_vendor = "apple"))]
+fn case_probe_parent(_path: &Path) -> Option<PathBuf> {
+    None
 }
 
 fn file_modes_path(path: &Path, nofollow: bool) -> Option<u32> {
@@ -3780,27 +3834,227 @@ pub(crate) fn builtin_file_executable_p(eval: &mut Context, args: Vec<Value>) ->
     )))
 }
 
-/// `(file-acl FILENAME)` — return native ACL text, or nil when ACL support is
-/// not compiled in.
+/// GNU's `USE_ACL` is fixed when the C library is probed: macOS libSystem
+/// provides the POSIX.1e entry points (`acl_get_file`, `acl_to_text`,
+/// `acl_set_file`), while the Linux oracle reference GNU is built without
+/// libacl and compiles the whole `#if USE_ACL` body out of `Ffile_acl`
+/// (src/fileio.c:3541-3577) and `Fset_file_acl` (src/fileio.c:3597-3631).
+/// The enum records which body this host's GNU reference has, so the no-ACL
+/// branch is a property of the platform, not a silent stub.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AclSupport {
+    /// GNU's no-ACL build: arity only, then nil.
+    Absent,
+    /// macOS libSystem ACL calls, the `HAVE_ACL_SET_FILE` arm.
+    Native,
+}
+
+const ACL_SUPPORT: AclSupport = if cfg!(target_vendor = "apple") {
+    AclSupport::Native
+} else {
+    AclSupport::Absent
+};
+
+/// `(file-acl FILENAME)` — GNU `src/fileio.c:Ffile_acl`.
 ///
-/// GNU `src/fileio.c:Ffile_acl` puts filename expansion and file-name-handler
-/// dispatch inside `#if USE_ACL`.  In a no-ACL build, the function only has the
-/// DEFUN arity contract and then returns nil; it does not type-check FILENAME
-/// and does not dispatch file-name handlers.  Neomacs currently has no native
-/// ACL backend, so mirror that no-ACL build path exactly.
+/// On a no-ACL build the function only has the DEFUN arity contract and then
+/// returns nil: FILENAME is neither type-checked nor expanded and no file-name
+/// handler runs.  A native-ACL build expands FILENAME first (so a non-string
+/// signals `wrong-type-argument`), dispatches the file-name handler, then asks
+/// the C library for the extended ACL and returns its textual form.
 pub(crate) fn builtin_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("file-acl", &args, 1)?;
-    let _ = eval;
-    let _ = &args[0];
+    if ACL_SUPPORT == AclSupport::Absent {
+        return Ok(Value::NIL);
+    }
+    let filename = expect_lisp_string_strict(&args[0])?;
+    let absname = expand_and_dir_to_file_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "file-acl", &absname)? {
+        return Ok(result);
+    }
+    native_file_acl(&absname)
+}
+
+/// `(set-file-acl FILENAME ACL-STRING)` — GNU `src/fileio.c:Fset_file_acl`.
+///
+/// The no-ACL build returns nil after the arity check.  The native build
+/// expands FILENAME (type-checking it), dispatches the handler, then converts
+/// ACL-STRING to an ACL and applies it.
+pub(crate) fn builtin_set_file_acl(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("set-file-acl", &args, 2)?;
+    if ACL_SUPPORT == AclSupport::Absent {
+        return Ok(Value::NIL);
+    }
+    let filename = expect_lisp_string_strict(&args[0])?;
+    // GNU uses `Fexpand_file_name`, not `expand_and_dir_to_file`, here.
+    let absname = expand_file_name_lisp_for_file_predicate(eval, &filename)?;
+    if let Some(result) = dispatch_expanded_file_handler(eval, "set-file-acl", &absname)? {
+        return Ok(result);
+    }
+    native_set_file_acl(&absname, &args[1])
+}
+
+/// GNU `lib/acl-errno-valid.c:acl_errno_valid`: does ERRNUM mean the system
+/// supports ACLs at all?  EBUSY/EINVAL/ENOSYS/ENOTSUP/EOPNOTSUPP describe a
+/// mount or platform without ACLs; ENOENT joins them on Apple.
+#[cfg(target_vendor = "apple")]
+fn acl_errno_valid(errno: i32) -> bool {
+    if matches!(
+        errno,
+        libc::EBUSY | libc::EINVAL | libc::ENOSYS | libc::EOPNOTSUPP
+    ) {
+        return false;
+    }
+    if errno == libc::ENOENT {
+        return false;
+    }
+    if libc::ENOTSUP != libc::EOPNOTSUPP && errno == libc::ENOTSUP {
+        return false;
+    }
+    true
+}
+
+/// GNU `USE_ACL` is absent here, so the body is compile-time unreachable.
+#[cfg(not(target_vendor = "apple"))]
+fn native_file_acl(_filename: &LispString) -> EvalResult {
     Ok(Value::NIL)
 }
 
-/// (set-file-acl FILENAME ACL) -> nil
-pub(crate) fn builtin_set_file_acl(args: Vec<Value>) -> EvalResult {
-    expect_args("set-file-acl", &args, 2)?;
-    let _filename = &args[0];
-    let _acl = &args[1];
+#[cfg(not(target_vendor = "apple"))]
+fn native_set_file_acl(_filename: &LispString, _acl_string: &Value) -> EvalResult {
     Ok(Value::NIL)
+}
+
+/// The Apple `HAVE_ACL_SET_FILE` arm of `Ffile_acl`.
+///
+/// macOS exposes extended (NFSv4-style) ACLs through `ACL_TYPE_EXTENDED`;
+/// `acl_get_file` fails with ENOENT for a file that simply has no extended
+/// entries, which GNU maps to nil.
+#[cfg(target_vendor = "apple")]
+fn native_file_acl(filename: &LispString) -> EvalResult {
+    let encoded = acl_c_string(&lisp_file_name_to_path_buf(filename));
+    // SAFETY: `encoded` is a valid C string; the returned ACL is freed below.
+    let acl = unsafe { apple_acl::acl_get_file(encoded.as_ptr(), apple_acl::ACL_TYPE_EXTENDED) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        let errno = error.raw_os_error().unwrap_or(0);
+        if errno == libc::ENOENT || errno == libc::ENOTDIR || !acl_errno_valid(errno) {
+            return Ok(Value::NIL);
+        }
+        return Err(get_file_errno_data(
+            &error,
+            "Getting ACLs",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    let mut length: isize = 0;
+    // SAFETY: `acl` is live; `length` is an out-parameter.
+    let text = unsafe { apple_acl::acl_to_text(acl, &raw mut length) };
+    if text.is_null() {
+        let error = std::io::Error::last_os_error();
+        // GNU captures errno before acl_free (src/fileio.c:3564-3568).
+        unsafe { apple_acl::acl_free(acl) };
+        return Err(get_file_errno_data(
+            &error,
+            "Getting ACLs",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    // SAFETY: acl_to_text returned a NUL-terminated buffer of `length` bytes;
+    // it is copied before both allocations are freed.
+    let bytes = unsafe { CStr::from_ptr(text) }.to_bytes().to_vec();
+    unsafe {
+        apple_acl::acl_free(text as *mut std::ffi::c_void);
+        apple_acl::acl_free(acl);
+    }
+    Ok(Value::make_string(
+        String::from_utf8_lossy(&bytes).into_owned(),
+    ))
+}
+
+/// The Apple `HAVE_ACL_SET_FILE` arm of `Fset_file_acl`.
+#[cfg(target_vendor = "apple")]
+fn native_set_file_acl(filename: &LispString, acl_string: &Value) -> EvalResult {
+    let ValueKind::String = acl_string.kind() else {
+        return Ok(Value::NIL);
+    };
+    let text = acl_string
+        .as_lisp_string()
+        .expect("ValueKind::String must carry LispString payload");
+    let c_text = acl_c_string_bytes(text.as_bytes());
+    // SAFETY: `c_text` is a valid C string.
+    let acl = unsafe { apple_acl::acl_from_text(c_text.as_ptr()) };
+    if acl.is_null() {
+        let error = std::io::Error::last_os_error();
+        let errno = error.raw_os_error().unwrap_or(0);
+        if !acl_errno_valid(errno) {
+            return Ok(Value::NIL);
+        }
+        return Err(get_file_errno_data(
+            &error,
+            "Converting ACL",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    let encoded = acl_c_string(&lisp_file_name_to_path_buf(filename));
+    // SAFETY: both arguments are valid; the ACL is freed afterwards.
+    let fail =
+        unsafe { apple_acl::acl_set_file(encoded.as_ptr(), apple_acl::ACL_TYPE_ACCESS, acl) } != 0;
+    unsafe { apple_acl::acl_free(acl) };
+    if fail {
+        // GNU reads errno after acl_free (src/fileio.c:3625-3628).
+        let error = std::io::Error::last_os_error();
+        let errno = error.raw_os_error().unwrap_or(0);
+        if !acl_errno_valid(errno) {
+            return Ok(Value::NIL);
+        }
+        return Err(get_file_errno_data(
+            &error,
+            "Setting ACL",
+            vec![Value::heap_string(filename.clone())],
+        ));
+    }
+    Ok(Value::T)
+}
+
+/// GNU passes `SSDATA (ENCODE_FILE (absname))` to the ACL calls: a C string,
+/// so an embedded NUL ends the name.
+#[cfg(target_vendor = "apple")]
+fn acl_c_string(path: &Path) -> CString {
+    acl_c_string_bytes(path.as_os_str().as_bytes())
+}
+
+#[cfg(target_vendor = "apple")]
+fn acl_c_string_bytes(bytes: &[u8]) -> CString {
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
+    CString::new(&bytes[..end]).expect("the prefix before a NUL contains no NUL")
+}
+
+/// The macOS libSystem ACL entry points GNU links through `-lacl` on other
+/// systems; on Apple they live in libSystem.
+#[cfg(target_vendor = "apple")]
+mod apple_acl {
+    use std::ffi::{c_char, c_int, c_void};
+
+    /// `sys/acl.h`: extended ACL entries, the type GNU requests for
+    /// `file-acl` (`HAVE_ACL_TYPE_EXTENDED`).
+    pub(super) const ACL_TYPE_EXTENDED: c_int = 0x0000_0100;
+    /// `sys/acl.h`: access ACL, the type GNU applies in `set-file-acl`.
+    pub(super) const ACL_TYPE_ACCESS: c_int = 0x0000_0000;
+
+    /// `acl_t` (`struct __acl *`).
+    pub(super) type Acl = *mut c_void;
+
+    unsafe extern "C" {
+        pub(super) fn acl_get_file(path: *const c_char, acl_type: c_int) -> Acl;
+        pub(super) fn acl_to_text(acl: Acl, len_p: *mut isize) -> *mut c_char;
+        pub(super) fn acl_from_text(text: *const c_char) -> Acl;
+        pub(super) fn acl_set_file(path: *const c_char, acl_type: c_int, acl: Acl) -> c_int;
+        pub(super) fn acl_free(obj: *mut c_void) -> c_int;
+    }
 }
 
 /// `(file-locked-p FILENAME)`
