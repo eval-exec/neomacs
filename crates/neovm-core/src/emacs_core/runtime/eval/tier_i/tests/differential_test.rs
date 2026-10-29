@@ -554,6 +554,30 @@ fn verify_catches_nothing_on_a_loop_heavy_body() {
     let _ = Value::NIL;
 }
 
+/// GNU `Fprogn` reads the rest of the body list before evaluating each
+/// form; both tiers must keep the saved tail when a form mutates the list.
+#[test]
+fn progn_keeps_the_saved_body_tail_when_a_form_mutates_the_list() {
+    let src = r#"
+(progn
+  (setq ti-pcdr-l (list 'progn '(setcdr (cdr ti-pcdr-l) nil) '(setq ti-pcdr-x 1)))
+  (progn (eval ti-pcdr-l) ti-pcdr-x))
+"#;
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        "OK 1",
+        "the tree walker lost the saved body tail after the list was mutated"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        assert_eq!(
+            run(mode, src).0,
+            off,
+            "{mode:?} lost the saved body tail after the list was mutated"
+        );
+    }
+}
+
 /// A `let` value that only a weak table references must become collectable
 /// when the binding's scope ends, in the tree walker and in both Tier-I
 /// modes. GNU answers 0 for the interpreted and byte-compiled forms (Flet's

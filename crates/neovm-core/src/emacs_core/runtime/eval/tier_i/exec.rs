@@ -205,11 +205,17 @@ impl Context {
         let mut last = Value::NIL;
         let mut index = 0;
         while cursor.is_cons() {
-            match self.ti_nth(act, cursor.cons_car(), seq, index).kinded() {
+            // As `sf_progn_value`: GNU Fprogn reads the rest of the list
+            // before the form runs, so a form that mutates the list cannot
+            // skip its later siblings.
+            let form = cursor.cons_car();
+            let rest = cursor.cons_cdr();
+            cursor = rest;
+            match self.ti_nth(act, form, seq, index).kinded() {
                 Ok(value) => last = value,
                 Err(FlowKind::ThreadBlocked(blocked)) => {
                     let remaining_forms = if blocked.remaining_forms.is_nil() {
-                        cursor.cons_cdr()
+                        rest
                     } else {
                         blocked.remaining_forms
                     };
@@ -217,7 +223,6 @@ impl Context {
                 }
                 Err(flow) => return Err(Flow::from_kind(flow)),
             }
-            cursor = cursor.cons_cdr();
             index += 1;
         }
         Ok(last)
@@ -904,11 +909,17 @@ impl Context {
         let mut last = Value::NIL;
         let mut index = 0;
         while cursor.is_cons() {
-            match self.ti_nth(act, cursor.cons_car(), seq, index).kinded() {
+            // As `sf_progn_value`: GNU Fprogn reads the rest of the list
+            // before the form runs, so a form that mutates the list cannot
+            // skip its later siblings.
+            let form = cursor.cons_car();
+            let rest = cursor.cons_cdr();
+            cursor = rest;
+            match self.ti_nth(act, form, seq, index).kinded() {
                 Ok(value) => last = value,
                 Err(FlowKind::ThreadBlocked(blocked)) => {
                     let remaining_forms = if blocked.remaining_forms.is_nil() {
-                        cursor.cons_cdr()
+                        rest
                     } else {
                         blocked.remaining_forms
                     };
@@ -916,7 +927,6 @@ impl Context {
                 }
                 Err(flow) => return Err(Flow::from_kind(flow)),
             }
-            cursor = cursor.cons_cdr();
             index += 1;
         }
         if !cursor.is_nil() {

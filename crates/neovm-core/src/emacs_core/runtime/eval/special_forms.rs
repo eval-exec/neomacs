@@ -756,11 +756,17 @@ impl Context {
             let mut cursor = forms;
             let mut last = Value::NIL;
             while cursor.is_cons() {
-                match self.eval_sub(cursor.cons_car()).kinded() {
+                // GNU Fprogn (eval.c:440-445) reads the rest of the list
+                // BEFORE evaluating the form: a form that mutates its own
+                // containing list cannot skip its later siblings.
+                let form = cursor.cons_car();
+                let rest = cursor.cons_cdr();
+                cursor = rest;
+                match self.eval_sub(form).kinded() {
                     Ok(value) => last = value,
                     Err(FlowKind::ThreadBlocked(blocked)) => {
                         let remaining_forms = if blocked.remaining_forms.is_nil() {
-                            cursor.cons_cdr()
+                            rest
                         } else {
                             blocked.remaining_forms
                         };
@@ -768,7 +774,6 @@ impl Context {
                     }
                     Err(flow) => return Err(Flow::from_kind(flow)),
                 }
-                cursor = cursor.cons_cdr();
             }
             if !cursor.is_nil() {
                 return Err(self.listp_error(forms));
