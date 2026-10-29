@@ -5637,11 +5637,26 @@ writer; the bounded deadline keeps a genuinely missing record fatal."
     (prog1 (funcall original process message)
       (push record tide368-test-process-terminals))))
 
+(defun tide368-test-no-tscompiler (&rest _arguments)
+  ;; `tide-project-config' shells out to `node tsc --showConfig' through
+  ;; `tide-command-to-string' when it can locate a TypeScript compiler, so
+  ;; whether the host happens to install typescript decides whether the probe
+  ;; tries to leave the sandbox.  The probe is about tide's internal workflow;
+  ;; pin the locater to "no compiler" on every host.  The recorded snapshots
+  ;; are the no-compiler behavior (a developer nix shell has no tsc; the CI
+  ;; image installs one globally).
+  nil)
+
 (defun tide368-test-install-observers ()
   (dolist (symbol tide368-test-forbidden-external-functions)
     (let ((fn (apply-partially #'tide368-test-forbidden-external symbol)))
       (advice-add symbol :override fn)
       (push (cons symbol fn) tide368-test-external-advices)))
+  (advice-add 'tide-locate-tscompiler-executable :override
+              #'tide368-test-no-tscompiler)
+  (push (cons 'tide-locate-tscompiler-executable
+              #'tide368-test-no-tscompiler)
+        tide368-test-external-advices)
   (advice-add 'start-file-process :around #'tide368-test-start-file-process)
   (push (cons 'start-file-process #'tide368-test-start-file-process)
         tide368-test-external-advices)
