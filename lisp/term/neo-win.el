@@ -655,51 +655,17 @@ URGENCY is one of `low', `normal' (default), or `critical'."
    :app-name "Neomacs"
    :urgency (or urgency 'normal)))
 
-;;; Custom title bar
-
-(declare-function neomacs-set-titlebar-height "neomacsterm.c" (height))
-
-(define-minor-mode neomacs-custom-titlebar-mode
-  "Toggle custom title bar for borderless windows.
-When enabled, a 30-pixel title bar with close/maximize/minimize buttons
-is drawn by the render thread.  When disabled the title bar is hidden."
-  :global t
-  :group 'frames
-  :init-value nil
-  (neomacs-set-titlebar-height (if neomacs-custom-titlebar-mode 30 0)))
-
 ;;; Borderless mode toggle
 
 (defun neomacs-toggle-decorations (&optional frame)
   "Toggle between decorated and borderless window mode.
-In borderless mode, enable the custom title bar and rounded corners.
-In decorated mode, disable them."
+Borderless mode only removes the native window decorations, as GNU Emacs
+does for the `undecorated' frame parameter.  Buffer text starts at the top
+of the frame."
   (interactive)
   (let* ((f (or frame (selected-frame)))
-         (currently-undecorated (frame-parameter f 'undecorated))
-         (go-borderless (not currently-undecorated)))
-    (set-frame-parameter f 'undecorated go-borderless)
-    (when (fboundp 'neomacs-set-titlebar-height)
-      (neomacs-set-titlebar-height (if go-borderless 30 0)))
-    (when (fboundp 'neomacs-set-corner-radius)
-      (neomacs-set-corner-radius
-       (if go-borderless
-           (if (boundp 'neomacs-corner-radius) neomacs-corner-radius 8)
-         0)))))
-
-;;; Rounded corners
-
-(declare-function neomacs-set-corner-radius "neomacsterm.c" (radius))
-
-(defcustom neomacs-corner-radius 8
-  "Corner radius in pixels for borderless window rounding.
-Only takes effect when window decorations are disabled."
-  :type 'integer
-  :group 'frames
-  :set (lambda (sym val)
-         (set-default sym val)
-         (when (fboundp 'neomacs-set-corner-radius)
-           (neomacs-set-corner-radius val))))
+         (currently-undecorated (frame-parameter f 'undecorated)))
+    (set-frame-parameter f 'undecorated (not currently-undecorated))))
 
 ;;; GPU Toolbar
 
