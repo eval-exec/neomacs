@@ -460,15 +460,16 @@ pub(crate) struct MenuBarPopupAnchor {
 // Re-export the main public API
 pub use bytecode::{ByteCodeFunction, Vm as ByteVm};
 pub use display_host::{DisplayHost, GraphicalFaceAttribute, SelectionOwner};
-pub use error::{
-    EvalError, format_eval_result, format_eval_result_bytes_with_eval,
-    format_eval_result_with_eval, print_value_bytes_with_eval, print_value_with_eval,
-};
+pub use error::EvalError;
 pub use eval::{
     Context, GuiFrameHostRequest, MenuBarRebuildGeneration, PopupMenuEntry, PopupMenuRequest,
 };
 pub use intern::SymId;
-pub use print::{print_value, print_value_bytes, print_value_with_buffers};
+pub use print::{
+    format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval,
+    print_value, print_value_bytes, print_value_bytes_with_eval, print_value_with_buffers,
+    print_value_with_eval,
+};
 pub use symbol::Obarray;
 pub use value::{LambdaData, LambdaParams, Value, ValueKind, VecLikeType};
 

@@ -6,6 +6,19 @@ pub(crate) use float_output::format_float_with_output_format;
 mod princ_text;
 pub(crate) use princ_text::{PrincStringDestination, PrincStringOutput, princ_string_bytes};
 
+mod error_format;
+pub(crate) use error_format::{
+    PrintShorthandSymbol, builtin_error_message_string, format_flow_with_eval,
+    format_opaque_handle_in_state, format_signal_data_with_eval,
+    format_value_bytes_in_state_with_options, format_window_handle_in_state,
+    print_options_from_state, print_value_bytes_in_state, print_value_bytes_in_state_with_options,
+    print_value_in_state, print_value_in_state_with_options,
+};
+pub use error_format::{
+    format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval, map_flow,
+    print_value_bytes_escaped_with_eval, print_value_bytes_with_eval, print_value_with_eval,
+};
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -722,7 +735,7 @@ fn refresh_print_options_after_callback(state: &mut PrintState) {
         return;
     };
     let buffer = state.settings_source.buffer(context);
-    let dynamic = super::error::print_options_from_state(context.variables(), buffer);
+    let dynamic = print_options_from_state(context.variables(), buffer);
     let table = context
         .variables()
         .value_in_buffer_by_name(buffer, "print-number-table")
@@ -1726,7 +1739,7 @@ fn write_value_stateful_inner(
         }
         if let PrinterContext::Evaluator(context) = &state.context {
             if !options_buffer_princ(state.options, *value)
-                && let Some(handle) = super::error::format_opaque_handle_in_state(
+                && let Some(handle) = format_opaque_handle_in_state(
                     &context.buffers,
                     &context.frames,
                     &context.threads,
@@ -3864,7 +3877,7 @@ fn print_list_shorthand_bytes(value: &Value, options: PrintOptions) -> Option<Ve
     Some(out)
 }
 
-fn quote_payload(value: &Value) -> Option<Value> {
+pub(crate) fn quote_payload(value: &Value) -> Option<Value> {
     let items = list_to_vec(value)?;
     if items.len() != 2 {
         return None;

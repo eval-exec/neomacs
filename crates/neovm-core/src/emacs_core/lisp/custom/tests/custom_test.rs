@@ -291,7 +291,7 @@ fn defcustom_quoted_symbol_default_followed_by_defun_using_var() {
                (list mode-line-test-edge (mode--line-test))"#,
         )
         .iter()
-        .map(crate::emacs_core::error::format_eval_result)
+        .map(crate::emacs_core::format_eval_result)
         .collect();
     // GNU verified via:
     //   emacs --batch --eval '(progn (defcustom ...) (defun ...) (list ...))'

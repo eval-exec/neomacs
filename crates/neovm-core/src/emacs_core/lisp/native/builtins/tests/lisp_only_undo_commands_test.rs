@@ -46,7 +46,7 @@ fn the_two_undo_commands_are_void_on_a_bare_evaluator_like_gnu() {
     for primitive in C_UNDO_PRIMITIVES {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK t",
             "{primitive} is DEFUN'ed in GNU src/ and must remain a subr",
         );
@@ -55,7 +55,7 @@ fn the_two_undo_commands_are_void_on_a_bare_evaluator_like_gnu() {
     for name in LISP_ONLY_UNDO_COMMANDS {
         let result = eval.eval_str(&format!("(fboundp '{name})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK nil",
             "{name} must be void before lisp/simple.el loads: GNU's src/ has \
              no DEFUN of that name, so a bare evaluator has nothing to answer \

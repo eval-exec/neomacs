@@ -9018,7 +9018,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
 
     let binding_count = ctx.specpdl.len();
     if let Err(flow) = ctx.try_specbind_or_unwind_to(binding_count, hook_sym, Value::NIL) {
-        let rendered = super::error::format_flow_with_eval(ctx, &flow);
+        let rendered = crate::emacs_core::print::format_flow_with_eval(ctx, &flow);
         tracing::warn!(
             "error binding redisplay fontification hook at {}: {}",
             pos,
@@ -9039,7 +9039,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
             ModeLineSymbol::InhibitRedisplay.id(),
             Value::T,
         ) {
-            let rendered = super::error::format_flow_with_eval(ctx, &flow);
+            let rendered = crate::emacs_core::print::format_flow_with_eval(ctx, &flow);
             tracing::warn!(
                 "error binding redisplay inhibition at {}: {}",
                 pos,
@@ -9051,7 +9051,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
         let result = ctx.apply(function, vec![arg]);
         let result = ctx.unbind_to_with_result(call_count, result);
         if let Err(flow) = result {
-            let rendered = super::error::format_flow_with_eval(ctx, &flow);
+            let rendered = crate::emacs_core::print::format_flow_with_eval(ctx, &flow);
             tracing::warn!(
                 "error during redisplay fontification at {}: {}",
                 pos,
@@ -9061,7 +9061,7 @@ fn call_fontification_functions_at<O: FontificationDemandObserver>(
     }
 
     if let Err(flow) = ctx.unbind_to_with_result(binding_count, Ok(Value::NIL)) {
-        let rendered = super::error::format_flow_with_eval(ctx, &flow);
+        let rendered = crate::emacs_core::print::format_flow_with_eval(ctx, &flow);
         tracing::warn!(
             "error restoring redisplay fontification bindings at {}: {}",
             pos,

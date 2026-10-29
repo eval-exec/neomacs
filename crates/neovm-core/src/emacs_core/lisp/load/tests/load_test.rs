@@ -3311,15 +3311,15 @@ fn bootstrap_runtime_source_preload_retires_window_sequences_without_reusing_ide
         "OK (nil nil)"
     );
     assert_eq!(
-        crate::emacs_core::error::print_value_with_eval(&eval, &retired),
+        crate::emacs_core::print_value_with_eval(&eval, &retired),
         "#<window 0>"
     );
     assert_eq!(
-        crate::emacs_core::error::print_value_with_eval(&eval, &Value::make_window(root.0)),
+        crate::emacs_core::print_value_with_eval(&eval, &Value::make_window(root.0)),
         "#<window 1 on *scratch*>"
     );
     assert_eq!(
-        crate::emacs_core::error::print_value_bytes_with_eval(&eval, &retired),
+        crate::emacs_core::print_value_bytes_with_eval(&eval, &retired),
         b"#<window 0>"
     );
 }
@@ -11726,7 +11726,7 @@ fn elc_loading_defines_defcustom_variables() {
 
     let result = eval
         .eval_sub(form0)
-        .map_err(crate::emacs_core::error::map_flow);
+        .map_err(crate::emacs_core::print::map_flow);
     eprintln!("Form 0 result: {:?}", result);
 
     let gds_bound = eval

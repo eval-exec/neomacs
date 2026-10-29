@@ -3,6 +3,7 @@ use crate::buffer::LispCharPos1;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::emacs_core::eval::{ConditionFrame, Context, GuiFrameHostSize, ResumeTarget};
+use crate::emacs_core::print::map_flow;
 use crate::emacs_core::value::HashTableTest;
 use crate::window::{SplitDirection, SplitPlacement};
 use std::cell::RefCell;
@@ -82,7 +83,7 @@ fn with_vm_eval_bootstrap_context_state<R>(
 
 fn vm_eval_str(src: &str) -> String {
     with_vm_eval(src, false, |result| {
-        crate::emacs_core::error::format_eval_result(&result)
+        crate::emacs_core::format_eval_result(&result)
     })
 }
 
@@ -93,12 +94,12 @@ fn vm_eval_str(src: &str) -> String {
 fn vm_bootstrap_eval_str(src: &str) -> String {
     let mut eval = crate::test_utils::runtime_startup_context();
     let result = eval.eval_str(src);
-    crate::emacs_core::error::format_eval_result(&result)
+    crate::emacs_core::format_eval_result(&result)
 }
 
 fn vm_eval_lexical_str(src: &str) -> String {
     with_vm_eval(src, true, |result| {
-        crate::emacs_core::error::format_eval_result(&result)
+        crate::emacs_core::format_eval_result(&result)
     })
 }
 
@@ -106,14 +107,14 @@ fn vm_eval_with_init_str(src: &str, init: impl FnOnce(&mut Context)) -> String {
     let mut eval = Context::new_vm_runtime_harness();
     init(&mut eval);
     let result = eval.eval_str(src);
-    crate::emacs_core::error::format_eval_result(&result)
+    crate::emacs_core::format_eval_result(&result)
 }
 
 fn vm_eval_interactive_str(src: &str) -> String {
     let mut eval = Context::new_vm_runtime_harness();
     eval.set_variable("noninteractive", Value::NIL);
     let result = eval.eval_str(src);
-    crate::emacs_core::error::format_eval_result(&result)
+    crate::emacs_core::format_eval_result(&result)
 }
 
 fn vm_eval_interactive_with_init_str(src: &str, init: impl FnOnce(&mut Context)) -> String {
@@ -121,24 +122,21 @@ fn vm_eval_interactive_with_init_str(src: &str, init: impl FnOnce(&mut Context))
     eval.set_variable("noninteractive", Value::NIL);
     init(&mut eval);
     let result = eval.eval_str(src);
-    crate::emacs_core::error::format_eval_result(&result)
+    crate::emacs_core::format_eval_result(&result)
 }
 
 fn vm_bootstrap_eval_with_init_str(src: &str, init: impl FnOnce(&mut Context)) -> String {
     let mut eval = crate::test_utils::runtime_startup_context();
     init(&mut eval);
     let result = eval.eval_str(src);
-    crate::emacs_core::error::format_eval_result(&result)
+    crate::emacs_core::format_eval_result(&result)
 }
 
 #[test]
 fn vm_catch_leaves_shared_condition_stack_balanced() {
     crate::test_utils::init_test_tracing();
     with_vm_eval_state("(catch 'tag (throw 'tag 42))", false, |result, eval| {
-        assert_eq!(
-            crate::emacs_core::error::format_eval_result(&result),
-            "OK 42"
-        );
+        assert_eq!(crate::emacs_core::format_eval_result(&result), "OK 42");
         assert_eq!(eval.condition_stack_depth_for_test(), 0);
     });
 }
@@ -150,10 +148,7 @@ fn vm_condition_case_leaves_shared_condition_stack_balanced() {
         "(condition-case err (signal 'error 1) (error (car err)))",
         false,
         |result, eval| {
-            assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
-                "OK error"
-            );
+            assert_eq!(crate::emacs_core::format_eval_result(&result), "OK error");
             assert_eq!(eval.condition_stack_depth_for_test(), 0);
         },
     );
@@ -265,10 +260,7 @@ fn vm_handler_bind_1_leaves_shared_condition_stack_balanced() {
          (error (car err)))",
         false,
         |result, eval| {
-            assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
-                "OK error"
-            );
+            assert_eq!(crate::emacs_core::format_eval_result(&result), "OK error");
             assert_eq!(eval.condition_stack_depth_for_test(), 0);
         },
     );
@@ -288,7 +280,7 @@ fn vm_handler_bind_1_runs_for_void_variable_before_outer_condition_case() {
         false,
         |result, eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK ((void-variable missing-variable) (void-variable missing-variable))"
             );
             assert_eq!(eval.condition_stack_depth_for_test(), 0);
@@ -310,7 +302,7 @@ fn vm_handler_bind_1_runs_for_eval_void_variable_before_outer_condition_case() {
         false,
         |result, eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK ((void-variable missing-variable) (void-variable missing-variable))"
             );
             assert_eq!(eval.condition_stack_depth_for_test(), 0);
@@ -334,7 +326,7 @@ fn vm_handler_bind_1_runs_inside_signal_dynamic_extent() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (inner-catch err)"
             );
         },
@@ -359,7 +351,7 @@ fn vm_handler_bind_1_mutes_lower_condition_handlers() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK wrong-type-argument"
             );
         },
@@ -383,7 +375,7 @@ fn vm_handler_bind_1_handlers_do_not_apply_within_handlers() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK wrong-type-argument"
             );
         },
@@ -404,7 +396,7 @@ fn vm_signal_hook_function_sees_raw_signal_payload_before_condition_case() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (error . 1)"
             );
         },
@@ -425,7 +417,7 @@ fn vm_signal_nil_error_object_uses_embedded_symbol_and_skips_signal_hook() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK ((error 1) nil)"
             );
         },
@@ -444,7 +436,7 @@ fn vm_signal_hook_runs_before_invalid_error_symbol_canonicalization() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (neomacs-invalid-signal 1)"
             );
         },
@@ -515,7 +507,7 @@ fn vm_condition_case_suppresses_debugger_without_debug_marker() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (handled nil)"
             );
         },
@@ -537,7 +529,7 @@ fn vm_condition_case_debug_marker_calls_debugger_before_handler() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (handled (error (error . 1)))"
             );
         },
@@ -560,7 +552,7 @@ fn vm_debug_on_signal_overrides_condition_case_debugger_suppression() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (handled debugger)"
             );
         },
@@ -583,7 +575,7 @@ fn vm_debug_ignored_errors_blocks_debugger_even_with_debug_marker() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (handled nil)"
             );
         },
@@ -1374,7 +1366,7 @@ fn vm_runtime_harness_exposes_public_builtin_surface() {
         false,
         |result, _| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (t 1 7 (1 . 1))"
             );
         },
@@ -1513,7 +1505,7 @@ fn vm_execute_kbd_macro_real_key_events_use_command_loop_dispatch() {
              (execute-kbd-macro \"a\")
              vm-kmacro-command-loop-count))",
         false,
-        |result, _| crate::emacs_core::error::format_eval_result(&result),
+        |result, _| crate::emacs_core::format_eval_result(&result),
     );
     assert_eq!(result, "OK 1");
 }
@@ -1537,7 +1529,7 @@ fn vm_execute_kbd_macro_named_symbol_uses_function_indirection_chain() {
            (execute-kbd-macro 'vm-kmacro-alias)
            vm-kmacro-named-symbol-count)",
         false,
-        |result, _| crate::emacs_core::error::format_eval_result(&result),
+        |result, _| crate::emacs_core::format_eval_result(&result),
     );
     assert_eq!(result, "OK 1");
 }
@@ -1563,7 +1555,7 @@ fn vm_execute_kbd_macro_zero_count_uses_loopfunc() {
              (execute-kbd-macro \"a\" 0 'vm-kmacro-loopfunc)
              (list vm-kmacro-loop-count vm-kmacro-loopfunc-count)))",
         false,
-        |result, _| crate::emacs_core::error::format_eval_result(&result),
+        |result, _| crate::emacs_core::format_eval_result(&result),
     );
     assert_eq!(result, "OK (2 3)");
 }
@@ -1591,7 +1583,7 @@ fn vm_execute_kbd_macro_runs_termination_hook_after_error() {
              (error nil))
            (list vm-kmacro-term-ok real-this-command))",
         false,
-        |result, _| crate::emacs_core::error::format_eval_result(&result),
+        |result, _| crate::emacs_core::format_eval_result(&result),
     );
     assert_eq!(result, "OK (t vm-outer-real)");
 }
@@ -3713,7 +3705,7 @@ fn vm_switch_byte_compiled_jump_tables_answer_like_gnu() {
     for (form, gnu) in &cases {
         let result = eval.eval_str(form);
         assert_eq!(
-            crate::emacs_core::error::format_eval_result(&result),
+            crate::emacs_core::format_eval_result(&result),
             *gnu,
             "{form}"
         );
@@ -4034,10 +4026,7 @@ fn vm_nested_condition_case_uses_current_shared_condition_slice() {
          (error (car outer)))",
         false,
         |result, _eval| {
-            assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
-                "OK error"
-            );
+            assert_eq!(crate::emacs_core::format_eval_result(&result), "OK error");
         },
     );
 }
@@ -5097,7 +5086,7 @@ fn vm_call_interactively_number_specs_need_subr_el() {
         false,
         |result, _eval| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (4 end-of-file end-of-file)"
             );
         },
@@ -5402,10 +5391,7 @@ fn vm_macroexpand_preserves_visible_lexical_binding_like_gnu() {
     eval.lexenv = Value::NIL;
 
     let result = eval.eval_str("(list (macroexpand '(vm-lb-macro)) lexical-binding)");
-    assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
-        "OK (t t)"
-    );
+    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK (t t)");
 }
 
 #[test]
@@ -5483,10 +5469,7 @@ fn vm_mapatoms_and_maphash_root_full_traversal_across_exact_gc() {
                sum))"#,
         false,
         |result, eval| {
-            assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
-                "OK (2 3)"
-            );
+            assert_eq!(crate::emacs_core::format_eval_result(&result), "OK (2 3)");
             assert!(eval.gc_count > 0, "callback-triggered GC should run");
         },
     );
@@ -5985,7 +5968,7 @@ fn vm_run_hook_wrapped_stops_on_first_non_nil_wrapper_result() {
         false,
         |result, _| {
             assert_eq!(
-                crate::emacs_core::error::format_eval_result(&result),
+                crate::emacs_core::format_eval_result(&result),
                 "OK (stop (vm-hook-wrap-a))"
             );
         },
@@ -7378,12 +7361,12 @@ fn vm_process_control_and_send_builtins_use_shared_runtime_state() {
         .unwrap_or_else(|err| {
             panic!(
                 "process control/send builtins should execute: {}",
-                crate::emacs_core::error::format_eval_result(&Err(err))
+                crate::emacs_core::format_eval_result(&Err(err))
             )
         });
 
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&Ok(result)),
+        crate::emacs_core::format_eval_result(&Ok(result)),
         "OK (t t t t t t t t t t t t t t t t t)"
     );
     assert!(crate::emacs_core::value::equal_value(
@@ -12755,7 +12738,7 @@ fn array_opcode_function(ops: Vec<Op>, nargs: usize, max_stack: usize) -> ByteCo
 fn run_array_opcode(eval: &mut Context, func: &ByteCodeFunction, args: Value) -> String {
     let args = crate::emacs_core::value::list_to_vec(&args).expect("argument list");
     let result = new_vm(eval).execute(func, args).map_err(map_flow);
-    let printed = crate::emacs_core::error::format_eval_result(&result);
+    let printed = crate::emacs_core::format_eval_result(&result);
     match printed
         .strip_prefix("ERR (")
         .and_then(|rest| rest.strip_suffix("))"))

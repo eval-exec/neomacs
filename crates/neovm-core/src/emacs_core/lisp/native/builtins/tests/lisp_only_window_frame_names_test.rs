@@ -146,7 +146,7 @@ fn the_eighteen_window_frame_names_are_void_on_a_bare_evaluator_like_gnu() {
     for primitive in C_PRIMITIVES_BENEATH_THEM {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK t",
             "{primitive} is DEFUN'ed in GNU src/ and must remain a subr",
         );
@@ -155,7 +155,7 @@ fn the_eighteen_window_frame_names_are_void_on_a_bare_evaluator_like_gnu() {
     for name in LISP_ONLY_WINDOW_FRAME_NAMES {
         let result = eval.eval_str(&format!("(fboundp '{name})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK nil",
             "{name} must be void before window.el/faces.el/frame.el load: \
              GNU's src/ has no DEFUN of that name, so a bare evaluator has \
@@ -615,7 +615,7 @@ fn the_loadup_frame_has_gnus_loadup_parameters_not_invented_ones() {
         "(sort (mapcar #'car (frame-parameters (selected-frame))) #'string<)",
     ]
     .iter()
-    .map(|form| crate::emacs_core::error::format_eval_result(&eval.eval_str(form)))
+    .map(|form| crate::emacs_core::format_eval_result(&eval.eval_str(form)))
     .collect();
 
     assert_eq!(

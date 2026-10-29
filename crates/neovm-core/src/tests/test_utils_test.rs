@@ -6,8 +6,8 @@
 #[path = "test_utils/input_wait.rs"]
 pub(crate) mod input_wait;
 
-use crate::emacs_core::error::map_flow;
 use crate::emacs_core::eval::VariableView;
+use crate::emacs_core::print::map_flow;
 use crate::emacs_core::symbol::CanonicalAccess;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()

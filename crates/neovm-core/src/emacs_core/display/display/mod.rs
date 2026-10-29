@@ -188,7 +188,7 @@ fn display_does_not_exist_error(display: &str) -> Flow {
 
 fn format_get_device_terminal_arg_eval(eval: &super::eval::Context, value: &Value) -> String {
     match value.as_window_id() {
-        Some(window) => super::error::format_window_handle_in_state(
+        Some(window) => crate::emacs_core::print::format_window_handle_in_state(
             &eval.buffers,
             &eval.frames,
             WindowId(window),

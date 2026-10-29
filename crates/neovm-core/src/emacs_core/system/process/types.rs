@@ -9076,7 +9076,7 @@ impl super::super::eval::Context {
         match result {
             Ok(_) => Ok(()),
             Err(err) if err.is_signal() => {
-                let rendered = super::super::error::format_flow_with_eval(self, &err);
+                let rendered = crate::emacs_core::print::format_flow_with_eval(self, &err);
                 tracing::warn!("{} callback error: {}", kind.label(), rendered);
                 let Some(sig) = err.as_signal() else {
                     unreachable!("matched Flow::Signal above")

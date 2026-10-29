@@ -3,10 +3,10 @@
 //! the contract a one-word `Flow` must keep (same views, same `Debug` text).
 
 use super::{
-    EvalError, Flow, FlowKind, FlowRef, FlowResultExt, LispCondition, flow_from_eval_error,
-    map_flow, signal,
+    EvalError, Flow, FlowKind, FlowRef, FlowResultExt, LispCondition, flow_from_eval_error, signal,
 };
 use crate::emacs_core::eval::ShutdownRequest;
+use crate::emacs_core::print::map_flow;
 use crate::emacs_core::{Context, Value};
 
 fn every_kind() -> Vec<Flow> {

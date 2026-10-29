@@ -4,10 +4,11 @@
 use super::{
     EvalError, EvalResult, Flow, FlowKind, FlowRef, InFlightRegistryHandle, InFlightRootPin,
     LispCondition, SignalData, ThreadBlockedData, ThrowData, current_in_flight_registry_handle,
-    flow_from_eval_error, map_flow, signal,
+    flow_from_eval_error, signal,
 };
 use crate::emacs_core::eval::{Context, ResumeTarget, ShutdownRequest};
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::print::map_flow;
 use crate::emacs_core::value::Value;
 use std::collections::BTreeSet;
 use std::mem::size_of;

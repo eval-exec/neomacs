@@ -266,7 +266,7 @@ fn third_batch_and_symbols_with_pos_list_searches_match_gnu() {
         .unwrap_or_else(|error| {
             panic!(
                 "third batch form: {}",
-                crate::emacs_core::error::format_eval_result(&Err(error))
+                crate::emacs_core::format_eval_result(&Err(error))
             )
         });
     assert_eq!(result.as_utf8_str(), Some(THIRD_BATCH_GNU));

@@ -172,11 +172,11 @@ fn native_callback_cache_raw_same_body_arity_rewrite_retains_deferred_error() {
     let specpdl = ctx.specpdl.len();
     let expected = crate::emacs_core::format_eval_result(
         &ctx.apply1(designator, Value::NIL)
-            .map_err(crate::emacs_core::error::map_flow),
+            .map_err(crate::emacs_core::print::map_flow),
     );
     let actual = crate::emacs_core::format_eval_result(
         &ctx.apply1_checked_subr(designator, subr, epoch, proof, Value::NIL)
-            .map_err(crate::emacs_core::error::map_flow),
+            .map_err(crate::emacs_core::print::map_flow),
     );
     assert_eq!(actual, expected);
     assert!(actual.contains("wrong-number-of-arguments"));
@@ -387,7 +387,7 @@ fn native_callback_cache_preserves_signal_throw_and_debug_exit_unwind() {
                 ctx.apply1(designator, Value::fixnum(mode))
             };
             let outcome = crate::emacs_core::format_eval_result(
-                &result.map_err(crate::emacs_core::error::map_flow),
+                &result.map_err(crate::emacs_core::print::map_flow),
             );
             assert_eq!((ctx.depth, ctx.specpdl.len()), (depth, specpdl));
             assert_eq!(

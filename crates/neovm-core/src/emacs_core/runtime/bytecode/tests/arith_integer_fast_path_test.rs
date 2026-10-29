@@ -42,9 +42,7 @@ fn slow(eval: &mut Context, kind: ArithGenericKind, args: &[Value]) -> String {
     let result = Vm::call_arith_builtin_slow_on_context(eval, kind, args_start, args.len())
         .expect("static arithmetic subr");
     eval.bc_buf.truncate(args_start);
-    crate::emacs_core::error::format_eval_result(
-        &result.map_err(crate::emacs_core::error::map_flow),
-    )
+    crate::emacs_core::format_eval_result(&result.map_err(crate::emacs_core::print::map_flow))
 }
 
 #[test]
@@ -238,9 +236,7 @@ fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
         let want = slow(&mut eval, ArithGenericKind::Div, &[a, b]);
         let got = Vm::from_context(&mut eval).execute(&f, vec![a, b]);
         assert_eq!(
-            crate::emacs_core::error::format_eval_result(
-                &got.map_err(crate::emacs_core::error::map_flow)
-            ),
+            crate::emacs_core::format_eval_result(&got.map_err(crate::emacs_core::print::map_flow)),
             want,
             "{lhs} / {rhs}"
         );

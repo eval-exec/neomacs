@@ -4416,9 +4416,7 @@ fn split_window_internal_validates_core_argument_types() {
     .unwrap_or_else(|flow| {
         panic!(
             "split-window-internal must not type-check SIDE: {}",
-            crate::emacs_core::error::format_eval_result(&Err(crate::emacs_core::error::map_flow(
-                flow
-            )))
+            crate::emacs_core::format_eval_result(&Err(crate::emacs_core::print::map_flow(flow)))
         )
     });
     assert!(side_not_checked.is_window());

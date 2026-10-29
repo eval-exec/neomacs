@@ -4205,7 +4205,7 @@ fn forward_word_with_boundary_table_reaches_buffer_end() {
                    (list (point) (point-max))))"#,
         )
         .expect("forward-word with boundary table");
-    let rendered = crate::emacs_core::error::format_eval_result(&Ok(result));
+    let rendered = crate::emacs_core::format_eval_result(&Ok(result));
     assert_eq!(rendered, "OK (6 6)");
 }
 

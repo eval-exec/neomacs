@@ -1,6 +1,7 @@
-use super::{EvalError, Flow, PrintShorthandSymbol, format_flow_with_eval, quote_payload, signal};
+use super::{EvalError, Flow, signal};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
+use crate::emacs_core::print::{PrintShorthandSymbol, format_flow_with_eval, quote_payload};
 use crate::emacs_core::{Context, Value, print_value_bytes_with_eval, print_value_with_eval};
 
 #[test]
@@ -524,7 +525,7 @@ fn eval_error_signal_payload_survives_a_collection() {
 
     // `map_flow` consumes the `Flow`, so the flow's own pin is gone by the
     // time this returns: only the `EvalError`'s pin can keep the payload.
-    let err = crate::emacs_core::error::map_flow(crate::emacs_core::error::signal_with_data(
+    let err = crate::emacs_core::print::map_flow(crate::emacs_core::error::signal_with_data(
         LispCondition::Error,
         Value::list(vec![Value::string("boundary datum")]),
     ));
@@ -549,7 +550,7 @@ fn eval_error_uncaught_throw_payload_survives_a_collection() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
 
-    let err = crate::emacs_core::error::map_flow(Flow::throw(
+    let err = crate::emacs_core::print::map_flow(Flow::throw(
         Value::symbol("neovm-boundary-throw"),
         Value::list(vec![Value::string("boundary thrown")]),
     ));

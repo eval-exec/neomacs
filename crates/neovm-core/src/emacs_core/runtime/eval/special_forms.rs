@@ -1721,7 +1721,7 @@ impl Context {
             symbol_mode,
         ) {
             Err(e) => {
-                let rendered = super::super::error::format_flow_with_eval(self, &e);
+                let rendered = crate::emacs_core::print::format_flow_with_eval(self, &e);
                 tracing::error!(
                     feature = ?feature_name,
                     filename = ?filename_str,
@@ -1782,7 +1782,7 @@ impl Context {
                             let noerror_val =
                                 noerror.as_ref().map(|v| !v.is_nil()).unwrap_or(false);
                             let path_str = path.display().to_string();
-                            let rendered = super::super::error::format_flow_with_eval(self, e);
+                            let rendered = crate::emacs_core::print::format_flow_with_eval(self, e);
                             tracing::error!(
                                 feature_name = ?feature_name,
                                 path = %path_str,

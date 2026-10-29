@@ -580,12 +580,11 @@ fn buffer_substring_no_properties_reports_the_right_length_for_multibyte_text() 
         "(buffer-substring-no-properties 3 3)",
         "(buffer-substring-no-properties (point-min) 5)",
     ] {
-        let got = crate::emacs_core::error::format_eval_result(&ev.eval_str(expr));
+        let got = crate::emacs_core::format_eval_result(&ev.eval_str(expr));
         // `length` walks the string's own character count, so it disagrees
         // with the bytes exactly when the cached count is wrong.
-        let len =
-            crate::emacs_core::error::format_eval_result(&ev.eval_str(&format!("(length {expr})")));
-        let via_chars = crate::emacs_core::error::format_eval_result(
+        let len = crate::emacs_core::format_eval_result(&ev.eval_str(&format!("(length {expr})")));
+        let via_chars = crate::emacs_core::format_eval_result(
             &ev.eval_str(&format!("(length (append {expr} nil))")),
         );
         assert_eq!(
@@ -595,7 +594,7 @@ fn buffer_substring_no_properties_reports_the_right_length_for_multibyte_text() 
     }
 
     // Narrowing moves point-min/point-max; the count must follow.
-    let narrowed = crate::emacs_core::error::format_eval_result(&ev.eval_str(
+    let narrowed = crate::emacs_core::format_eval_result(&ev.eval_str(
         "(progn (narrow-to-region 4 9)
                 (let ((s (buffer-substring-no-properties (point-min) (point-max))))
                   (prog1 (list (length s) (length (append s nil))) (widen))))",

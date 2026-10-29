@@ -1401,7 +1401,7 @@ fn equal_including_properties_honors_symbols_with_pos_enabled() {
                  (equal-including-properties a 'foo)))",
     );
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&off),
+        crate::emacs_core::format_eval_result(&off),
         "OK (nil nil)",
         "flag off: position-symbols are distinct (GNU 31 parity)"
     );
@@ -1413,7 +1413,7 @@ fn equal_including_properties_honors_symbols_with_pos_enabled() {
                    (equal-including-properties a 'foo))))",
     );
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&on),
+        crate::emacs_core::format_eval_result(&on),
         "OK (t t)",
         "flag on: position ignored, compared eq-wise (GNU 31 parity)"
     );
@@ -1449,7 +1449,7 @@ fn equal_including_properties_gnu_parity_edges() {
                                        (propertize \"abc\" 'face 'bold)))",
     );
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&edges),
+        crate::emacs_core::format_eval_result(&edges),
         "OK (t nil nil t nil t nil t nil t nil t)",
         "equal-including-properties edge behavior must match GNU Emacs 31"
     );

@@ -268,7 +268,7 @@ impl Context {
             // kill-emacs unwinds the recursive edit; the pending shutdown
             // request carries the exit code to the caller.
             Err(flow) if flow.is_shutdown() => Ok(()),
-            Err(flow) => Err(super::super::error::format_flow_with_eval(self, &flow)),
+            Err(flow) => Err(crate::emacs_core::print::format_flow_with_eval(self, &flow)),
         }
     }
 
@@ -559,7 +559,7 @@ impl Context {
                 Ok(Value::NIL)
             }
             Err(FlowKind::Signal(sig)) => {
-                let rendered = super::super::error::format_signal_data_with_eval(self, &sig);
+                let rendered = crate::emacs_core::print::format_signal_data_with_eval(self, &sig);
                 tracing::warn!("command_loop_top_level_1: top-level SIGNALED: {}", rendered);
                 if self
                     .display_host
@@ -750,7 +750,7 @@ impl Context {
     /// dispatches through Lisp's buffer-local `command-error-function'.
     pub(super) fn command_error_message(&mut self, sig: &SignalData) -> String {
         let error_data = make_signal_binding_value(sig);
-        crate::emacs_core::errors::builtin_error_message_string(self, vec![error_data])
+        crate::emacs_core::print::builtin_error_message_string(self, vec![error_data])
             .ok()
             .and_then(|value| {
                 value
@@ -774,7 +774,7 @@ impl Context {
             severity: self.command_error_severity(sig),
             condition: format_symbol_name_for_diagnostic(sig.symbol),
             message: self.command_error_message(sig),
-            signal: super::super::error::format_signal_data_with_eval(self, sig),
+            signal: crate::emacs_core::print::format_signal_data_with_eval(self, sig),
             backtrace: self
                 .last_uncaught_signal_backtrace
                 .take()
@@ -1357,7 +1357,7 @@ impl Context {
             Value::NIL
         };
         if let Err(flow) = self.apply(Value::symbol(&DO_AUTO_SAVE), vec![no_message, Value::NIL]) {
-            let rendered = super::super::error::format_flow_with_eval(self, &flow);
+            let rendered = crate::emacs_core::print::format_flow_with_eval(self, &flow);
             tracing::warn!("auto-save from {trigger} failed: {rendered}");
         }
     }

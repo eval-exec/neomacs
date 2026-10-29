@@ -3508,7 +3508,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "error-message-string",
-        NativeFn::ContextVec(crate::emacs_core::errors::builtin_error_message_string),
+        NativeFn::ContextVec(crate::emacs_core::print::builtin_error_message_string),
         SubrArity::new(1, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed2(

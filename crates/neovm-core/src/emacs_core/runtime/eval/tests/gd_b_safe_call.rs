@@ -138,7 +138,7 @@ fn gd_b_safe_call_its_own_binding_is_outside_the_qt_handler() {
             .safe_funcall(callback, vec![])
             .expect_err("binding signal must escape");
         assert_eq!(
-            crate::emacs_core::error::format_flow_with_eval(&ctx, &flow),
+            crate::emacs_core::print::format_flow_with_eval(&ctx, &flow),
             "(error (\"safe binding\"))"
         );
         assert!(ctx.condition_stack.is_empty());

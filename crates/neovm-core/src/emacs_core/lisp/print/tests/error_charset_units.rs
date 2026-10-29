@@ -59,7 +59,7 @@ fn immutable_error_string_path_preserves_gnu_charset_policy() {
             }],
         );
         assert_eq!(
-            crate::emacs_core::error::print_value_in_state(&context, &value),
+            crate::emacs_core::print::print_value_in_state(&context, &value),
             expected
         );
     }

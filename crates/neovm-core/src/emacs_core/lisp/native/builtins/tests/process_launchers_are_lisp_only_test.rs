@@ -41,7 +41,7 @@ fn the_four_launchers_are_void_on_a_bare_evaluator_like_gnu() {
     for primitive in ["make-process", "processp", "process-command"] {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK t",
             "{primitive} is DEFUN'ed in GNU src/ and must remain a subr",
         );
@@ -49,7 +49,7 @@ fn the_four_launchers_are_void_on_a_bare_evaluator_like_gnu() {
     for (name, _) in LISP_ONLY_LAUNCHERS {
         let result = eval.eval_str(&format!("(fboundp '{name})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK nil",
             "{name} must be void before its .el loads: GNU's src/ has no \
              DEFUN of that name, so a bare evaluator has nothing to answer with",

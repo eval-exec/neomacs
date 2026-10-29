@@ -52,7 +52,7 @@ fn custom_hash_test_names_preserve_raw_bytes_escaping_and_symbol_identity() {
                     character_codes(escaped),
                     character_codes(print_value_bytes_with_options(&table, noescape)),
                     character_codes(
-                        crate::emacs_core::error::print_value_bytes_in_state_with_options(
+                        crate::emacs_core::print::print_value_bytes_in_state_with_options(
                             &ctx, &table, noescape,
                         ),
                     ),

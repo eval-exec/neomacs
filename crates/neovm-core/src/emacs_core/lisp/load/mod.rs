@@ -1,9 +1,10 @@
 //! File loading and module system (require/provide/load).
 
 use super::builtins::collections::builtin_make_hash_table;
-use super::error::{EvalError, Flow, FlowRef, map_flow, signal};
+use super::error::{EvalError, Flow, FlowRef, signal};
 use super::intern::{format_symbol_name_for_diagnostic, intern, resolve_sym};
 use super::keymap::is_list_keymap;
+use super::print::map_flow;
 use super::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use super::value_reader::ReadSymbolShorthands;
 use crate::emacs_core::error::{LispCondition, signal_error_with_arg};
@@ -303,11 +304,11 @@ fn format_eval_error_in_state(eval: &super::eval::Context, err: &EvalError) -> S
             ..
         } => {
             let payload = if let Some(raw) = raw_data {
-                crate::emacs_core::error::print_value_in_state(eval, raw)
+                crate::emacs_core::print::print_value_in_state(eval, raw)
             } else if data.is_empty() {
                 "nil".to_string()
             } else {
-                crate::emacs_core::error::print_value_in_state(eval, &Value::list(data.clone()))
+                crate::emacs_core::print::print_value_in_state(eval, &Value::list(data.clone()))
             };
             format!(
                 "({} {})",
@@ -317,8 +318,8 @@ fn format_eval_error_in_state(eval: &super::eval::Context, err: &EvalError) -> S
         }
         EvalError::UncaughtThrow { tag, value, .. } => format!(
             "(throw {} {})",
-            crate::emacs_core::error::print_value_in_state(eval, tag),
-            crate::emacs_core::error::print_value_in_state(eval, value),
+            crate::emacs_core::print::print_value_in_state(eval, tag),
+            crate::emacs_core::print::print_value_in_state(eval, value),
         ),
         EvalError::Shutdown(request) => format!("(kill-emacs {})", request.exit_code),
     }
@@ -2770,7 +2771,7 @@ fn load_file_body(
 
     if is_module_path(path) {
         return crate::emacs_core::dynamic_module::load_module(eval, path.to_path_buf())
-            .map_err(crate::emacs_core::error::map_flow);
+            .map_err(crate::emacs_core::print::map_flow);
     }
 
     if !is_elc
@@ -2789,7 +2790,7 @@ fn load_file_body(
                     Value::bool_val(options.messages.as_nomessage()),
                 ],
             )
-            .map_err(crate::emacs_core::error::map_flow);
+            .map_err(crate::emacs_core::print::map_flow);
     }
 
     // GNU src/lread.c:1473, reached only once `load-source-file-function` has

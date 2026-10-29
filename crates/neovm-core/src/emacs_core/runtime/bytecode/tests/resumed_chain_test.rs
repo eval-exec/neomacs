@@ -181,7 +181,7 @@ fn context_with(program: &str) -> Context {
 fn printed(result: &Result<Value, crate::emacs_core::error::EvalError>) -> String {
     match result {
         Ok(value) => print_value(value),
-        Err(_) => crate::emacs_core::error::format_eval_result(result),
+        Err(_) => crate::emacs_core::format_eval_result(result),
     }
 }
 

@@ -147,12 +147,12 @@ fn assoc_callbacks_cached_errors_restore_the_call_frame() {
     let expected = crate::emacs_core::format_eval_result(
         &eval
             .apply2(designator, left, right)
-            .map_err(crate::emacs_core::error::map_flow),
+            .map_err(crate::emacs_core::print::map_flow),
     );
     let actual = crate::emacs_core::format_eval_result(
         &eval
             .apply2_assoc_predicate(designator, &captured, left, right)
-            .map_err(crate::emacs_core::error::map_flow),
+            .map_err(crate::emacs_core::print::map_flow),
     );
     assert_eq!(actual, expected);
     assert_eq!((eval.depth, eval.specpdl.len()), (depth, specpdl));

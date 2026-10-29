@@ -71,7 +71,7 @@ fn evaluator_quote_policy_refresh_affects_later_vector_children() {
     let value = context
         .eval_str("(vector (make-marker) '(quote a))")
         .unwrap();
-    let options = crate::emacs_core::error::print_options_from_state(context.variables(), None);
+    let options = crate::emacs_core::print::print_options_from_state(context.variables(), None);
     assert_eq!(
         print_value_bytes_in_context(&mut context, &value, options, PrintSettingsSource::Globals)
             .unwrap(),

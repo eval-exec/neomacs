@@ -1,5 +1,6 @@
 use super::super::intern::intern;
 use super::*;
+use crate::emacs_core::print::builtin_error_message_string;
 
 fn init_runtime_errors(context: &mut crate::emacs_core::eval::Context) {
     // SAFETY: standard-error setup only initializes native condition/message
@@ -1741,7 +1742,7 @@ fn resignal_eval(src: &str) -> String {
              (put 'scan-error 'error-message "Scan error"))"#,
     )
     .expect("install scan-error conditions");
-    super::super::error::format_eval_result(&eval.eval_str(src))
+    crate::emacs_core::format_eval_result(&eval.eval_str(src))
 }
 
 #[test]

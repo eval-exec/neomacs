@@ -1,8 +1,9 @@
 //! OOM descriptor validation follows GNU Fget/CHECK_SYMBOL with owning policy.
 use super::{
     MemorySignalBinding, MemorySignalBindingError, SignalDelivery, collect_in_flight_flow_gc_roots,
-    flow_from_eval_error, make_signal_binding_value, map_flow, memory_signal_from_binding_value,
+    flow_from_eval_error, make_signal_binding_value, memory_signal_from_binding_value,
 };
+use crate::emacs_core::print::map_flow;
 use crate::emacs_core::{Context, Value, alloc::AllocationFailure};
 use crate::tagged::SymbolMode;
 

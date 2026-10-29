@@ -186,7 +186,7 @@ fn observe_ensure(mode: FontificationBoundaryMode, setup: &str) -> (String, Stri
     let result = ensure_fontified_for_redisplay_with_mode(&mut ctx, target, 0, 10, mode);
     let outcome = match result {
         Ok(outcome) => format!("{outcome:?}"),
-        Err(flow) => crate::emacs_core::error::format_flow_with_eval(&mut ctx, &flow),
+        Err(flow) => crate::emacs_core::print::format_flow_with_eval(&mut ctx, &flow),
     };
     let current = ctx
         .buffer_manager()

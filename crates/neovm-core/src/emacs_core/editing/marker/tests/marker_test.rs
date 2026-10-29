@@ -215,7 +215,7 @@ fn numeric_comparisons_use_live_marker_positions() {
         )
         .expect("evaluation succeeds");
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&Ok(result)),
+        crate::emacs_core::format_eval_result(&Ok(result)),
         "OK (12 nil t)"
     );
 }
@@ -298,7 +298,7 @@ fn copy_marker_from_integer_tracks_insertions_before_it() {
         )
         .expect("evaluation succeeds");
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&Ok(result)),
+        crate::emacs_core::format_eval_result(&Ok(result)),
         r#"OK (5 "aXbc")"#
     );
 }
@@ -318,10 +318,7 @@ fn set_marker_uses_live_source_marker_position_after_insertions() {
              (marker-position dst))"#,
         )
         .expect("evaluation succeeds");
-    assert_eq!(
-        crate::emacs_core::error::format_eval_result(&Ok(result)),
-        "OK 5"
-    );
+    assert_eq!(crate::emacs_core::format_eval_result(&Ok(result)), "OK 5");
 }
 
 /// `set-marker` into the buffer the marker is ALREADY in must not touch the

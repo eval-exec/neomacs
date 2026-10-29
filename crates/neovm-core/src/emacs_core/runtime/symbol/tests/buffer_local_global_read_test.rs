@@ -19,8 +19,8 @@
 //! Every expectation below was produced by running the same form under
 //! GNU Emacs 31.0.90 (`emacs -Q --batch`), never derived from the C source.
 
-use crate::emacs_core::error::format_eval_result;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::format_eval_result;
 
 fn ev() -> Context {
     crate::test_utils::init_test_tracing();

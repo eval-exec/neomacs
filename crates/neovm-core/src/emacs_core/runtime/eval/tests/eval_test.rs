@@ -14492,10 +14492,7 @@ fn while_no_input_catches_pending_key_queued_during_body() {
            (error err))",
     );
 
-    assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
-        "OK t"
-    );
+    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK t");
 }
 
 #[test]
@@ -14547,10 +14544,7 @@ fn while_no_input_catches_pending_key_across_load_boundary() {
             neo-loaded-after-input))",
     );
 
-    assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
-        "OK (t nil)"
-    );
+    assert_eq!(crate::emacs_core::format_eval_result(&result), "OK (t nil)");
 }
 
 #[test]
@@ -14597,7 +14591,7 @@ fn with_selected_window_restores_after_while_no_input_keyboard_interrupt() {
     );
 
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
+        crate::emacs_core::format_eval_result(&result),
         // GNU 31.0.90 (`-nw` under tmux, C-n typed while the body ran): the
         // interrupting key stays pending — `input-pending-p' is t afterwards for a
         // `sleep-for' body and for a pure CPU loop. `(read-event nil nil 0)'
@@ -14652,7 +14646,7 @@ fn while_no_input_unwinds_inner_with_selected_window_on_keyboard_input() {
     );
 
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
+        crate::emacs_core::format_eval_result(&result),
         // GNU 31.0.90 (`-nw` under tmux, C-n typed while the body ran): the
         // interrupting key stays pending — `input-pending-p' is t afterwards for a
         // `sleep-for' body and for a pure CPU loop. `(read-event nil nil 0)'
@@ -14698,7 +14692,7 @@ fn sit_for_requeues_delayed_input_after_with_selected_window_cleanup() {
         WaitWitness::InputWaitEntered
     );
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
+        crate::emacs_core::format_eval_result(&result),
         "OK (nil t t 14)"
     );
 }
@@ -14763,7 +14757,7 @@ fn safe_run_hook_preserves_selected_window_after_while_no_input_interrupt() {
     );
 
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&result),
+        crate::emacs_core::format_eval_result(&result),
         // GNU 31.0.90 (`-nw` under tmux, C-n typed while the body ran): the
         // interrupting key stays pending — `input-pending-p' is t afterwards for a
         // `sleep-for' body and for a pure CPU loop. `(read-event nil nil 0)'
@@ -17145,7 +17139,7 @@ fn jit_subr_spec_tracks_redefinition_and_rearms() {
 fn jit_subr_spec_arity_and_variadic_stay_generic() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    use crate::emacs_core::error::map_flow;
+    use crate::emacs_core::print::map_flow;
     let mut ev = Context::new();
 
     // n=2 < put's min_args=3: no site; identical signal hot vs cold.
@@ -17270,7 +17264,7 @@ fn jit_subr_spec_string_queries_match_interpreter() {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
                 assert_eq!(sig.data.last(), Some(&Value::fixnum(nargs as i64)));
                 errors.push(format_eval_result(&Err(
-                    crate::emacs_core::error::map_flow(flow),
+                    crate::emacs_core::print::map_flow(flow),
                 )));
             }
             assert_eq!(errors[0], errors[1], "{name}: arity {nargs}");
@@ -17380,7 +17374,7 @@ fn jit_subr_spec_position_queries_match_interpreter() {
                     }
                 }
                 results.push(format_eval_result(
-                    &result.map_err(crate::emacs_core::error::map_flow),
+                    &result.map_err(crate::emacs_core::print::map_flow),
                 ));
             }
             assert_eq!(results[0], results[1], "{name}: {form}");
@@ -17404,7 +17398,7 @@ fn jit_subr_spec_position_queries_match_interpreter() {
                 assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
                 assert_eq!(sig.data.last(), Some(&Value::fixnum(nargs as i64)));
                 errors.push(format_eval_result(&Err(
-                    crate::emacs_core::error::map_flow(flow),
+                    crate::emacs_core::print::map_flow(flow),
                 )));
             }
             assert_eq!(errors[0], errors[1], "{name}: arity {nargs}");
@@ -17538,7 +17532,7 @@ fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
             } else {
                 assert!(result.is_err(), "non-local return must propagate");
             }
-            let result = format_eval_result(&result.map_err(crate::emacs_core::error::map_flow));
+            let result = format_eval_result(&result.map_err(crate::emacs_core::print::map_flow));
             let state = ev
                 .eval_str("(list neo-return-binding neo-return-debug neo-return-hook)")
                 .expect("return protocol state");
@@ -17778,7 +17772,7 @@ fn jit_subr_spec_many_side_effect_goldens_match_interp() {
 fn jit_subr_spec_many_signal_parity_armed_vs_interp() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    use crate::emacs_core::error::map_flow;
+    use crate::emacs_core::print::map_flow;
     let mut ev = Context::new();
     ev.eval_str("(insert \"hello (world\")").expect("buffer"); // unbalanced paren
 
@@ -17863,7 +17857,7 @@ fn jit_subr_spec_many_signal_parity_armed_vs_interp() {
 fn jit_subr_spec_many_put_text_property_arity_and_effect() {
     crate::test_utils::init_test_tracing();
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    use crate::emacs_core::error::map_flow;
+    use crate::emacs_core::print::map_flow;
     let mut ev = Context::new();
     ev.eval_str("(insert \"hello world\")").expect("buffer");
 
@@ -22559,7 +22553,7 @@ fn eval_sub_exact_gc_retains_cons_form() {
     ]);
     let result = ev
         .eval_sub(form)
-        .map_err(crate::emacs_core::error::map_flow);
+        .map_err(crate::emacs_core::print::map_flow);
 
     assert_eq!(format_eval_result(&result), "OK 9");
     assert!(ev.gc_count > 0, "exact eval_sub path should trigger GC");
@@ -22574,7 +22568,7 @@ fn apply_exact_gc_retains_rooted_args() {
     let arg = Value::cons(Value::fixnum(12), Value::fixnum(13));
     let result = ev
         .apply(Value::symbol("car"), vec![arg])
-        .map_err(crate::emacs_core::error::map_flow);
+        .map_err(crate::emacs_core::print::map_flow);
 
     assert_eq!(format_eval_result(&result), "OK 12");
     assert!(ev.gc_count > 0, "exact apply path should trigger GC");
@@ -24366,7 +24360,7 @@ fn command_loop_dispatches_select_window_before_following_key() {
         .unwrap_or_else(|error| {
             panic!(
                 "create second window: {}",
-                crate::emacs_core::error::format_eval_result(&Err(error))
+                crate::emacs_core::format_eval_result(&Err(error))
             )
         });
     let target_window_id = target_window

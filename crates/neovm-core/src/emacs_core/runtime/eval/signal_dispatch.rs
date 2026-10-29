@@ -531,7 +531,7 @@ impl Context {
                 let message = if let Some(message) = error_message {
                     message
                 } else {
-                    let rendered = crate::emacs_core::errors::builtin_error_message_string(
+                    let rendered = crate::emacs_core::print::builtin_error_message_string(
                         self,
                         vec![error_data],
                     )?;
@@ -632,7 +632,7 @@ impl Context {
         tracing::error!(
             "entering Lisp debugger for signal: symbol={} data={}",
             format_symbol_name_for_diagnostic(sig.symbol),
-            super::super::error::format_signal_data_with_eval(self, sig)
+            crate::emacs_core::print::format_signal_data_with_eval(self, sig)
         );
         // GNU `call_debugger (list2 (Qdebug, ...))` from `maybe_call_debugger`:
         // one shared entry point with the `debug-on-next-call` and

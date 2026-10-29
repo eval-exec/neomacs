@@ -437,7 +437,7 @@ fn actual_source_killing_callback_preserves_legacy_outcome_and_never_no_demand()
             }
             let outcome = match result {
                 Ok(outcome) => format!("{outcome:?}"),
-                Err(flow) => crate::emacs_core::error::format_flow_with_eval(&mut eval, &flow),
+                Err(flow) => crate::emacs_core::print::format_flow_with_eval(&mut eval, &flow),
             };
             let calls = crate::emacs_core::print::print_value(
                 &eval.eval_str("ttykey-demand-calls").unwrap(),

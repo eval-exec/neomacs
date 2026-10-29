@@ -45,7 +45,7 @@ fn the_eleven_names_are_void_on_a_bare_evaluator_like_gnu() {
     for primitive in ["null", "set-marker", "string-equal", "string-lessp"] {
         let result = eval.eval_str(&format!("(fboundp '{primitive})"));
         assert_eq!(
-            crate::emacs_core::error::format_eval_result_with_eval(&eval, &result),
+            crate::emacs_core::format_eval_result_with_eval(&eval, &result),
             "OK t",
             "{primitive} is DEFUN'ed in GNU src/ and must remain a subr",
         );
@@ -56,7 +56,7 @@ fn the_eleven_names_are_void_on_a_bare_evaluator_like_gnu() {
     {
         let probe = format!("(fboundp '{name})");
         let result = eval.eval_str(&probe);
-        let printed = crate::emacs_core::error::format_eval_result_with_eval(&eval, &result);
+        let printed = crate::emacs_core::format_eval_result_with_eval(&eval, &result);
         assert_eq!(
             printed, "OK nil",
             "{name} must be void before its .el loads: GNU's src/ has no \

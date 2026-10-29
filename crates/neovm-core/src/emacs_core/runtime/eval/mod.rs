@@ -38,6 +38,7 @@ use super::keymap::{list_keymap_define, list_keymap_set_parent, make_sparse_list
 use super::kmacro::KmacroManager;
 use super::minibuffer::MinibufferManager;
 use super::mode::ModeRegistry;
+use super::print::map_flow;
 use super::process::ProcessManager;
 use super::rect::RectangleState;
 use super::regex::MatchData;
@@ -62,6 +63,7 @@ pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews}
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
 
 mod callback;
+mod command_error;
 mod lexenv_cache;
 mod lexical_symbols;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;

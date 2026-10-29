@@ -592,7 +592,7 @@ fn make_byte_code_decodes_lazily_at_first_execution() {
            (error err))",
     );
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&refused),
+        crate::emacs_core::format_eval_result(&refused),
         "OK (error \"bytecode decode error: jump target byte offset 9 not found \
          (from instruction at byte 0)\")"
     );
@@ -629,7 +629,7 @@ fn make_byte_code_full_decode_baseline_still_defers() {
            (error err))",
     );
     assert_eq!(
-        crate::emacs_core::error::format_eval_result(&refused),
+        crate::emacs_core::format_eval_result(&refused),
         "OK (error \"bytecode decode error: jump target byte offset 9 not found \
          (from instruction at byte 0)\")"
     );
