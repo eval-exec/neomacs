@@ -65,7 +65,10 @@ fn attempt(context: &mut Context) -> Attempt {
                 .map_err(|error| format!("cancelled production summaries: {error:?}"))?
                 .census()
                 .map_err(|error| format!("cancelled production census: {error:?}"))?;
-            if census.cancelled_starts != 2 || census.entries != 3 {
+            // Census entries counts published images, not cancelled starts.
+            // Owner zero retains the one image; the two new permits never
+            // activated and must appear only in cancelled_starts.
+            if census.cancelled_starts != 2 || census.entries != 1 {
                 return Err(format!("two cancelled production permits: {census:?}"));
             }
             if keys[0].heap_identity() != era.heap_identity()
@@ -106,6 +109,13 @@ fn check_serial_recovery(context: &mut Context, expected: i64) -> Result<(), Str
 }
 
 fn exercise_actual_context(mut context: Context) -> Result<(), String> {
+    // Minimal construction leaves temporary weak-table payloads that the
+    // strict era fence correctly excludes. Use the same sole-owner cleanup
+    // as collection_fixture_context: admission is tested on an eligible heap,
+    // not by permitting weak tables or bypassing the production fence.
+    context.setup_thread_locals();
+    context.set_variable("window-dead-windows-table", TaggedValue::NIL);
+    context.gc_collect_exact();
     let actual = ActualMode::read(&context);
     context.set_variable(VALUE_NAME, TaggedValue::fixnum(41));
     let first = attempt(&mut context);
