@@ -51,3 +51,6 @@ mod coding_detection;
 
 #[path = "font_coverage.rs"]
 mod font_coverage;
+
+#[path = "nmjit_n1.rs"]
+mod nmjit_n1;
