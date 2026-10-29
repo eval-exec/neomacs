@@ -18,6 +18,8 @@ mod cons_catalog;
 mod gate;
 mod image;
 mod native_extent;
+#[cfg(test)]
+mod nmjit_n1;
 mod root_slot;
 mod run_slice;
 mod table_allocation;
