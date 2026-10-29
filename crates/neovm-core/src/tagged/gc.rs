@@ -2777,13 +2777,14 @@ pub use facade_mark::{
 pub(crate) use mutator_registration::symbol_functions::boundary as function_boundary_testkit;
 pub use mutator_registration::{
     AllStopped, AllStoppedFailure, CollectionError, CollectionReport, FunctionActivation,
-    FunctionCallCache, FunctionError, FunctionStep, GlobalError, InitialInternError, KeeperSymbols,
-    KeeperTableMut, MinorCollectionError, Mode, Mutator, MutatorEntry, MutatorFinishFailure,
-    MutatorKey, MutatorPermit, MutatorStartFailure, NativeReturn, NativeRoots, OwnerPublication,
-    OwnerRootSlot, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationCensus,
-    RegistrationError, Rendezvous, RendezvousError, Request, ResumeGcImage, ResumeGcImageFailure,
-    RootedRetireFailure, RunAccess, RunSlice, SealedTableAccess, SliceRoot, Snapshot,
-    StoppedSummaries, SymbolHandle, SymbolMut, SymbolRef, TableMut, TableRef, YoungWorkerLoan,
+    FunctionCallCache, FunctionError, FunctionStep, Gen1Admission, Gen1AdmissionError, GlobalError,
+    InitialInternError, KeeperSymbols, KeeperTableMut, MinorCollectionError, Mode, Mutator,
+    MutatorEntry, MutatorFinishFailure, MutatorKey, MutatorPermit, MutatorStartFailure,
+    NativeReturn, NativeRoots, OwnerPublication, OwnerRootSlot, ParallelHeapEra, Phase,
+    PlainSymbolBacking, RegistrationCensus, RegistrationError, Rendezvous, RendezvousError,
+    Request, ResumeGcImage, ResumeGcImageFailure, RootedRetireFailure, RunAccess, RunSlice,
+    SealedTableAccess, SliceRoot, Snapshot, StoppedSummaries, SymbolHandle, SymbolMut, SymbolRef,
+    TableMut, TableRef, YoungWorkerLoan,
 };
 
 pub(crate) use mutator_registration::{

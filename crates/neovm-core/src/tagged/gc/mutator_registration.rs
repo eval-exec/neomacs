@@ -15,6 +15,8 @@ mod authority_word;
 mod collection;
 mod cons_allocation;
 mod cons_catalog;
+mod construction;
+pub use construction::{Gen1Admission, Gen1AdmissionError};
 mod gate;
 mod image;
 mod native_extent;
