@@ -1519,11 +1519,23 @@ pub(crate) fn builtin_file_attributes_lessp(
     // GNU (src/dired.c): `return Fstring_lessp (Fcar (f1), Fcar (f2));`.
     // It performs NO type-check on the cars itself — it simply delegates to
     // `string-lessp`, which accepts strings *and* symbols (including `nil`,
-    // via SYMBOL_NAME) and only rejects other types.  C function-argument
-    // evaluation runs right-to-left with the system compiler, so `Fcar (f2)`
-    // is observed before `Fcar (f1)`; mirror that ordering for error-equivalence.
-    let car2 = file_attributes_lessp_car(&args[1])?;
-    let car1 = file_attributes_lessp_car(&args[0])?;
+    // via SYMBOL_NAME) and only rejects other types.  C argument evaluation
+    // order is unspecified, and the compiler that built the reference GNU is
+    // observable here: with two bad arguments the signal names whichever
+    // `Fcar` ran first (GCC x86-64: the second; Apple Clang: the first).
+    use crate::emacs_core::platform_facts::{C_ARGUMENT_EVALUATION, CArgumentEvaluation};
+    let (car1, car2) = match C_ARGUMENT_EVALUATION {
+        CArgumentEvaluation::RightToLeft => {
+            let car2 = file_attributes_lessp_car(&args[1])?;
+            let car1 = file_attributes_lessp_car(&args[0])?;
+            (car1, car2)
+        }
+        CArgumentEvaluation::LeftToRight => {
+            let car1 = file_attributes_lessp_car(&args[0])?;
+            let car2 = file_attributes_lessp_car(&args[1])?;
+            (car1, car2)
+        }
+    };
 
     super::builtins::builtin_string_lessp_2(eval, car1, car2)
 }

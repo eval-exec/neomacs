@@ -1025,7 +1025,13 @@ fn test_file_attributes_lessp_bad_args_match_gnu_order() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(sig.data[0].as_bare_symbol_name(), Some("listp"));
-            assert_eq!(sig.data[1].as_str_owned().as_deref(), Some("beta"));
+            // The reference GNU's C compiler decides which `Fcar` ran first:
+            // GCC x86-64 names the second argument, Apple Clang the first.
+            let offending = match crate::emacs_core::platform_facts::C_ARGUMENT_EVALUATION {
+                crate::emacs_core::platform_facts::CArgumentEvaluation::RightToLeft => "beta",
+                crate::emacs_core::platform_facts::CArgumentEvaluation::LeftToRight => "alpha",
+            };
+            assert_eq!(sig.data[1].as_str_owned().as_deref(), Some(offending));
         }
         other => panic!("expected signal, got {other:?}"),
     }

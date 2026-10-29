@@ -132,6 +132,30 @@ pub(crate) const STRING_COLLATION: StringCollation = if cfg!(target_vendor = "ap
     StringCollation::LocaleAware
 };
 
+/// The order the C compiler that built the reference GNU evaluates function
+/// arguments in.
+///
+/// C leaves argument evaluation order unspecified, and GNU's Lisp surface can
+/// observe it: `Ffile_attributes_lessp` is `Fstring_lessp (Fcar (f1),
+/// Fcar (f2))` (src/dired.c:1137-1144), so with two bad arguments the
+/// `wrong-type-argument` payload names whichever `Fcar` ran first.  GCC on
+/// x86-64 evaluates right-to-left; the Apple Clang build of GNU evaluates
+/// left-to-right.  Mirrored where a multi-argument C call can signal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CArgumentEvaluation {
+    /// GCC x86-64: the last argument's nested calls run first.
+    RightToLeft,
+    /// Apple Clang: the first argument's nested calls run first.
+    LeftToRight,
+}
+
+/// The evaluation order of this host's GNU reference build.
+pub(crate) const C_ARGUMENT_EVALUATION: CArgumentEvaluation = if cfg!(target_vendor = "apple") {
+    CArgumentEvaluation::LeftToRight
+} else {
+    CArgumentEvaluation::RightToLeft
+};
+
 /// The POSIX TZ rules of the C library this binary is linked against.
 pub(crate) const POSIX_TZ_SEMANTICS: PosixTzSemantics = if cfg!(target_os = "macos") {
     PosixTzSemantics::Darwin
