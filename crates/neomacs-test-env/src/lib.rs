@@ -26,9 +26,11 @@
 //!   `C.UTF-8` for the mode line's mule-info segment.
 //!
 //! A value that a suite's expectations pin per case (a test that deliberately
-//! selects another locale, time zone or TMPDIR) is applied *after* the
-//! canonical set through [`PinnedCommand::env`]; that override is part of the
-//! case, while the default is not negotiable.
+//! selects another locale, time zone or TMPDIR) is applied after the canonical
+//! set through [`PinnedCommand::override_pin`]; that override is part of the
+//! case, while the default is not negotiable.  [`PinnedCommand::env`] refuses a
+//! pinned name outright, so an override is always a deliberate, greppable
+//! statement rather than an accident of `envs(std::env::vars())`.
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -101,6 +103,133 @@ impl CanonicalProfile {
             Self::Package | Self::Tui => false,
         }
     }
+}
+
+/// One canonical variable group a harness may deliberately override.
+///
+/// The pins were previously only names in [`CanonicalEnvironment::env_pairs`].
+/// The type makes the set closed: [`PinnedCommand::env`] looks a name up here
+/// and refuses pinned names, and [`PinnedCommand::override_pin`] is the one
+/// statement that can change them.  A group can own several environment
+/// variables (`LANG`/`LC_ALL`, `TMPDIR`/`TMP`/`TEMP`, `USER`/`LOGNAME`); an
+/// override sets all of them, because the recorded environment gives them one
+/// value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum CanonicalPin {
+    /// `LANG` and `LC_ALL`.
+    Locale,
+    /// `TZ`.
+    TimeZone,
+    /// `TMPDIR`, `TMP` and `TEMP`.
+    TmpDir,
+    /// `HOME`.
+    Home,
+    /// `USER` and `LOGNAME`.
+    LoginName,
+    /// `NAME` (GNU's `$NAME` preference over passwd GECOS).
+    FullName,
+    /// `HOSTNAME`.
+    HostName,
+    /// `EMAIL`.
+    Email,
+    /// `TERM`.
+    Term,
+    /// `NEOVM_ORACLE_SYSTEM_NAME` (the oracle profile's stable `system-name`).
+    OracleSystemName,
+    /// `GIT_CEILING_DIRECTORIES`.
+    GitCeilingDirectories,
+    /// `RUST_BACKTRACE` (the package profile's recorded value).
+    RustBacktrace,
+    /// `XDG_CONFIG_HOME`.
+    XdgConfigHome,
+    /// `XDG_CACHE_HOME`.
+    XdgCacheHome,
+    /// `XDG_DATA_HOME`.
+    XdgDataHome,
+    /// `XDG_STATE_HOME`.
+    XdgStateHome,
+    /// `XDG_RUNTIME_DIR`.
+    XdgRuntimeDir,
+    /// `NEOMACS_TEST_SANDBOX_ROOT`.
+    TestSandboxRoot,
+    /// `NEOMACS_TEST_WORKSPACE_ROOT`.
+    TestWorkspaceRoot,
+    /// `NEOMACS_TEST_SCRATCH_ROOT`.
+    TestScratchRoot,
+    /// `MIMETYPES` (the suite's own mailcap database).
+    MimeTypes,
+}
+
+impl CanonicalPin {
+    /// Every environment variable this pin owns.
+    pub const fn names(self) -> &'static [&'static str] {
+        match self {
+            Self::Locale => &["LANG", "LC_ALL"],
+            Self::TimeZone => &["TZ"],
+            Self::TmpDir => &["TMPDIR", "TMP", "TEMP"],
+            Self::Home => &["HOME"],
+            Self::LoginName => &["USER", "LOGNAME"],
+            Self::FullName => &["NAME"],
+            Self::HostName => &["HOSTNAME"],
+            Self::Email => &["EMAIL"],
+            Self::Term => &["TERM"],
+            Self::OracleSystemName => &["NEOVM_ORACLE_SYSTEM_NAME"],
+            Self::GitCeilingDirectories => &["GIT_CEILING_DIRECTORIES"],
+            Self::RustBacktrace => &["RUST_BACKTRACE"],
+            Self::XdgConfigHome => &["XDG_CONFIG_HOME"],
+            Self::XdgCacheHome => &["XDG_CACHE_HOME"],
+            Self::XdgDataHome => &["XDG_DATA_HOME"],
+            Self::XdgStateHome => &["XDG_STATE_HOME"],
+            Self::XdgRuntimeDir => &["XDG_RUNTIME_DIR"],
+            Self::TestSandboxRoot => &["NEOMACS_TEST_SANDBOX_ROOT"],
+            Self::TestWorkspaceRoot => &["NEOMACS_TEST_WORKSPACE_ROOT"],
+            Self::TestScratchRoot => &["NEOMACS_TEST_SCRATCH_ROOT"],
+            Self::MimeTypes => &["MIMETYPES"],
+        }
+    }
+
+    /// The pin owning `name`, if this is a pinned environment variable.
+    pub fn from_env_name(name: &str) -> Option<Self> {
+        match name {
+            "LANG" | "LC_ALL" => Some(Self::Locale),
+            "TZ" => Some(Self::TimeZone),
+            "TMPDIR" | "TMP" | "TEMP" => Some(Self::TmpDir),
+            "HOME" => Some(Self::Home),
+            "USER" | "LOGNAME" => Some(Self::LoginName),
+            "NAME" => Some(Self::FullName),
+            "HOSTNAME" => Some(Self::HostName),
+            "EMAIL" => Some(Self::Email),
+            "TERM" => Some(Self::Term),
+            "NEOVM_ORACLE_SYSTEM_NAME" => Some(Self::OracleSystemName),
+            "GIT_CEILING_DIRECTORIES" => Some(Self::GitCeilingDirectories),
+            "RUST_BACKTRACE" => Some(Self::RustBacktrace),
+            "XDG_CONFIG_HOME" => Some(Self::XdgConfigHome),
+            "XDG_CACHE_HOME" => Some(Self::XdgCacheHome),
+            "XDG_DATA_HOME" => Some(Self::XdgDataHome),
+            "XDG_STATE_HOME" => Some(Self::XdgStateHome),
+            "XDG_RUNTIME_DIR" => Some(Self::XdgRuntimeDir),
+            "NEOMACS_TEST_SANDBOX_ROOT" => Some(Self::TestSandboxRoot),
+            "NEOMACS_TEST_WORKSPACE_ROOT" => Some(Self::TestWorkspaceRoot),
+            "NEOMACS_TEST_SCRATCH_ROOT" => Some(Self::TestScratchRoot),
+            "MIMETYPES" => Some(Self::MimeTypes),
+            _ => None,
+        }
+    }
+}
+
+/// Refuse a raw override of a pinned variable.
+fn refuse_pin_override(name: &OsStr) {
+    let Some(name) = name.to_str() else {
+        return;
+    };
+    let Some(pin) = CanonicalPin::from_env_name(name) else {
+        return;
+    };
+    panic!(
+        "PinnedCommand would silently overwrite the canonical {pin:?} pin `{name}`; \
+         use override_pin(CanonicalPin::{pin:?}, value) so the override is \
+         deliberate and greppable"
+    );
 }
 
 /// A rejected canonical environment.
@@ -515,26 +644,55 @@ impl std::fmt::Debug for PinnedCommand {
 }
 
 impl PinnedCommand {
-    /// Add or override one variable.  Overriding a canonical pin is how a case
-    /// that deliberately selects another locale, time zone or TMPDIR says so;
-    /// the default remains the builder's.
+    /// Add a per-case variable.
+    ///
+    /// A canonical pin is refused: changing one is an explicit
+    /// [`Self::override_pin`] statement, so no bulk `envs(std::env::vars())`
+    /// can silently undo the recorded environment.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `name` is a [`CanonicalPin`] name; the message names the
+    /// variable and the pin to override.
     pub fn env(&mut self, name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
+        refuse_pin_override(name.as_ref());
         self.command.env(name, value);
         self
     }
 
+    /// Add several per-case variables; a pinned name anywhere panics before it
+    /// is applied (see [`Self::env`]).
     pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: AsRef<OsStr>,
         V: AsRef<OsStr>,
     {
-        self.command.envs(vars);
+        for (name, value) in vars {
+            refuse_pin_override(name.as_ref());
+            self.command.env(name, value);
+        }
         self
     }
 
+    /// Remove a non-pinned variable.  Removing a pin is also an override and
+    /// is refused; use [`Self::override_pin`].
     pub fn env_remove(&mut self, name: impl AsRef<OsStr>) -> &mut Self {
+        refuse_pin_override(name.as_ref());
         self.command.env_remove(name);
+        self
+    }
+
+    /// Deliberately replace one canonical pin.
+    ///
+    /// This is the only way to change a pinned variable on a constructed
+    /// command, and the only statement a reviewer has to search for when
+    /// asking why a case's environment differs from the recorded one.  Every
+    /// environment variable the pin owns receives `value`.
+    pub fn override_pin(&mut self, pin: CanonicalPin, value: impl AsRef<OsStr>) -> &mut Self {
+        for name in pin.names() {
+            self.command.env(name, value.as_ref());
+        }
         self
     }
 
@@ -590,19 +748,77 @@ impl PinnedCommand {
         self
     }
 
-    /// The only escape hatch, for child-side setup such as `RLIMIT_AS`; it
-    /// cannot remove the pins, which were applied when this value was built.
+    /// Cap the child's virtual address space with `RLIMIT_AS`.
+    ///
+    /// The only thing this runs between fork and exec is `setrlimit`, which is
+    /// async-signal-safe; there is no general closure hatch through which a
+    /// multi-threaded test process could reach an allocator or a lock.
+    ///
+    /// # Panics
+    ///
+    /// `bytes` must fit the platform's `rlim_t`; the value is otherwise
+    /// passed through unchanged.
     #[cfg(unix)]
-    pub fn pre_exec(
-        &mut self,
-        f: impl FnMut() -> std::io::Result<()> + Send + Sync + 'static,
-    ) -> &mut Self {
+    pub fn limit_address_space(&mut self, bytes: u64) -> &mut Self {
         use std::os::unix::process::CommandExt;
-        // Safety: the caller upholds `CommandExt::pre_exec`'s contract; the
-        // pins are environment entries, not child-side state, so this cannot
-        // undo them.
+        let limit = libc::rlim_t::try_from(bytes)
+            .expect("an address-space limit must fit the platform rlim_t");
+        // Safety: `pre_exec` runs between fork and exec; setrlimit is
+        // async-signal-safe and the closure captures only `limit`.
         unsafe {
-            self.command.pre_exec(f);
+            self.command.pre_exec(move || {
+                let rlim = libc::rlimit {
+                    rlim_cur: limit,
+                    rlim_max: limit,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        self
+    }
+
+    /// Restrict the child to `cpus` with `sched_setaffinity`.
+    ///
+    /// The CPU set is built here, in the parent; the child closure only calls
+    /// the async-signal-safe `sched_setaffinity` syscall.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `cpus` is empty or a CPU number does not fit the
+    /// platform's `cpu_set_t`.
+    #[cfg(target_os = "linux")]
+    pub fn limit_to_cpus(&mut self, cpus: &[usize]) -> &mut Self {
+        use std::os::unix::process::CommandExt;
+        assert!(!cpus.is_empty(), "a CPU restriction needs at least one CPU");
+        let mut selected: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        // Safety: CPU_ZERO/CPU_SET only touch the stack-local cpu_set_t.
+        unsafe {
+            libc::CPU_ZERO(&mut selected);
+            for cpu in cpus {
+                assert!(
+                    *cpu < libc::CPU_SETSIZE as usize,
+                    "CPU {cpu} does not fit cpu_set_t"
+                );
+                libc::CPU_SET(*cpu, &mut selected);
+            }
+        }
+        // Safety: `pre_exec` runs between fork and exec; sched_setaffinity is
+        // async-signal-safe and the closure captures only the prepared set.
+        unsafe {
+            self.command.pre_exec(move || {
+                if libc::sched_setaffinity(
+                    0,
+                    std::mem::size_of::<libc::cpu_set_t>(),
+                    &raw const selected,
+                ) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
         }
         self
     }

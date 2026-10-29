@@ -104,22 +104,7 @@ fn apply_memory_limit(cmd: &mut PinnedCommand) {
     if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
         return;
     }
-    let limit = oracle_mem_limit_bytes() as libc::rlim_t;
-    // Safety: `pre_exec` runs between fork and exec in the child.
-    // setrlimit is async-signal-safe, so this is sound. Mirrors
-    // crates/neovm-oracle-tests/src/common.rs:278.
-    unsafe {
-        cmd.pre_exec(move || {
-            let rlim = libc::rlimit {
-                rlim_cur: limit,
-                rlim_max: limit,
-            };
-            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    cmd.limit_address_space(oracle_mem_limit_bytes());
 }
 
 /// RLIMIT_AS is Unix-only; non-Unix hosts run spawned probes unlimited.

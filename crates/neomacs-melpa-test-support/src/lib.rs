@@ -211,16 +211,14 @@ impl MelpaSandbox {
         command
     }
 
-    /// Apply this sandbox's environment to a pinned command built for the
-    /// same roots (useful when an adapter adds its own program arguments
-    /// between construction and the spawn).
+    /// Finish a command built by [`Self::command`]: start it in the scenario
+    /// root.
+    ///
+    /// The environment is not re-applied here.  `command()` builds it from
+    /// this sandbox's [`CanonicalEnvironment`], and the pin guards refuse a
+    /// second raw application; a deliberate per-case change is an
+    /// `override_pin` statement at the call site.
     pub fn configure(&self, command: &mut PinnedCommand) {
-        for (name, value) in self.environment.env_pairs() {
-            command.env(name, value);
-        }
-        for name in self.environment.removed_vars() {
-            command.env_remove(name);
-        }
         command.current_dir(self.root());
     }
 }

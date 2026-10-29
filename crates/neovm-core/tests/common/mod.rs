@@ -114,20 +114,7 @@ fn apply_memory_limit(cmd: &mut PinnedCommand, mem_limit_bytes: u64) {
     if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
         return;
     }
-    // Safety: `pre_exec` runs between fork and exec in the child.
-    // setrlimit is async-signal-safe, so this is sound.
-    unsafe {
-        cmd.pre_exec(move || {
-            let rlim = libc::rlimit {
-                rlim_cur: mem_limit_bytes as libc::rlim_t,
-                rlim_max: mem_limit_bytes as libc::rlim_t,
-            };
-            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    cmd.limit_address_space(mem_limit_bytes);
 }
 
 /// RLIMIT_AS is Unix-only; non-Unix hosts run the oracle unlimited.

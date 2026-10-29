@@ -24,18 +24,7 @@ fn apply_virtual_memory_limit(cmd: &mut PinnedCommand, mem_limit: u64) {
     if !neomacs_infra::ADDRESS_SPACE_LIMIT_SUPPORTED {
         return;
     }
-    unsafe {
-        cmd.pre_exec(move || {
-            let rlim = libc::rlimit {
-                rlim_cur: mem_limit as libc::rlim_t,
-                rlim_max: mem_limit as libc::rlim_t,
-            };
-            if libc::setrlimit(libc::RLIMIT_AS, &rlim) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    cmd.limit_address_space(mem_limit);
 }
 
 #[cfg(not(unix))]

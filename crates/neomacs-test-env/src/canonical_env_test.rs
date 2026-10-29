@@ -172,10 +172,240 @@ fn pinned_command_carries_pins_and_per_case_overrides_but_no_constructor() {
             .find_map(|(key, value)| (key == "LANGUAGE").then_some(value)),
         Some(None)
     );
-    // A case that deliberately selects another locale applies it after the
-    // pins; it is part of the expectation, not a hole in the layer.
-    command.env("LC_ALL", "C");
+    // A case that deliberately selects another locale says so with the typed
+    // override; it is part of the expectation, not a hole in the layer.
+    command.override_pin(CanonicalPin::Locale, "C");
+    assert_eq!(env_value(&command, "LANG"), Some(OsString::from("C")));
     assert_eq!(env_value(&command, "LC_ALL"), Some(OsString::from("C")));
+}
+
+/// Rule 1: a raw `env` may not overwrite a pin; the panic names the variable
+/// and the typed override to use instead.
+#[test]
+fn raw_env_refuses_a_pinned_name() {
+    let environment = oracle_env();
+    let mut command = environment.command("/bin/emacs");
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        command.env("TMPDIR", "/tmp/elsewhere");
+    }))
+    .expect_err("env must refuse a pinned name");
+    let message = panic_message(&panic);
+    assert!(
+        message.contains("TMPDIR"),
+        "panic did not name TMPDIR: {message}"
+    );
+    assert!(
+        message.contains("override_pin(CanonicalPin::TmpDir"),
+        "panic did not point at override_pin: {message}"
+    );
+    // The pinned value is untouched.
+    assert_eq!(
+        env_value(&command, "TMPDIR"),
+        Some(OsString::from("/tmp/nv-tmp"))
+    );
+}
+
+/// Rule 2: the bulk `envs` form cannot silently undo the pins either.
+#[test]
+fn raw_envs_refuses_a_pinned_name() {
+    let environment = oracle_env();
+    let mut command = environment.command("/bin/emacs");
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        command.envs([("A_CASE_VAR", "ok"), ("LC_ALL", "C")]);
+    }))
+    .expect_err("envs must refuse a pinned name");
+    let message = panic_message(&panic);
+    assert!(
+        message.contains("LC_ALL"),
+        "panic did not name LC_ALL: {message}"
+    );
+    assert!(
+        message.contains("override_pin(CanonicalPin::Locale"),
+        "panic did not point at override_pin: {message}"
+    );
+}
+
+/// Rule 3: removing a pin is an override too, and is refused.
+#[test]
+fn raw_env_remove_refuses_a_pinned_name() {
+    let environment = oracle_env();
+    let mut command = environment.command("/bin/emacs");
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        command.env_remove("HOME");
+    }))
+    .expect_err("env_remove must refuse a pinned name");
+    let message = panic_message(&panic);
+    assert!(
+        message.contains("HOME"),
+        "panic did not name HOME: {message}"
+    );
+}
+
+/// Rule 4: `override_pin` is the deliberate statement, and it sets every
+/// environment variable the pin owns.
+#[test]
+fn override_pin_sets_every_name_of_the_pin() {
+    let environment = oracle_env();
+    let mut command = environment.command("/bin/emacs");
+    command.override_pin(CanonicalPin::TmpDir, "/tmp/case-tmp");
+    for name in ["TMPDIR", "TMP", "TEMP"] {
+        assert_eq!(
+            env_value(&command, name),
+            Some(OsString::from("/tmp/case-tmp"))
+        );
+    }
+    command.override_pin(CanonicalPin::LoginName, "case-user");
+    for name in ["USER", "LOGNAME"] {
+        assert_eq!(env_value(&command, name), Some(OsString::from("case-user")));
+    }
+    command.override_pin(CanonicalPin::TimeZone, "UTC");
+    assert_eq!(env_value(&command, "TZ"), Some(OsString::from("UTC")));
+}
+
+/// Rule 5: non-pinned per-case variables are still ordinary `env` entries.
+#[test]
+fn raw_env_allows_unpinned_names() {
+    let environment = oracle_env();
+    let mut command = environment.command("/bin/emacs");
+    command
+        .env("NEOVM_ORACLE_FORM_FILE", "/tmp/form.el")
+        .env_remove("LD_PRELOAD")
+        .envs([("FAKETIME", "@2026-06-15 12:00:00")]);
+    assert_eq!(
+        env_value(&command, "NEOVM_ORACLE_FORM_FILE"),
+        Some(OsString::from("/tmp/form.el"))
+    );
+    assert_eq!(
+        env_value(&command, "FAKETIME"),
+        Some(OsString::from("@2026-06-15 12:00:00"))
+    );
+}
+
+/// The typed pin set is closed over what the profiles actually pin: every
+/// environment pair a profile emits is a `CanonicalPin` name, every removed
+/// variable is not one, and no two pins own the same name.
+#[test]
+fn every_profile_pair_is_a_typed_pin() {
+    let package = CanonicalEnvironment::package(
+        "/tmp/mh",
+        "/tmp/mt",
+        PackagePaths {
+            scratch_root: "/workspace/case".into(),
+            workspace_root: "/workspace".into(),
+            runtime_dir: "/workspace/runtime".into(),
+            melpa_cache_root: "/workspace/target/melpa".into(),
+        },
+    )
+    .expect("package environment");
+    let tui = CanonicalEnvironment::new(CanonicalProfile::Tui, "/tmp/th", "/tmp/tt", "/workspace")
+        .expect("tui environment");
+    for environment in [oracle_env(), package, tui] {
+        for (name, _) in environment.env_pairs() {
+            CanonicalPin::from_env_name(name)
+                .unwrap_or_else(|| panic!("{name} is pinned but has no CanonicalPin"));
+        }
+        for removed in environment.removed_vars() {
+            assert!(
+                CanonicalPin::from_env_name(removed).is_none(),
+                "removed variable {removed} must not be a pin"
+            );
+        }
+    }
+    // Every declared name is claimed by exactly one pin group.
+    let mut names = std::collections::HashSet::new();
+    for pin in [
+        CanonicalPin::Locale,
+        CanonicalPin::TimeZone,
+        CanonicalPin::TmpDir,
+        CanonicalPin::Home,
+        CanonicalPin::LoginName,
+        CanonicalPin::FullName,
+        CanonicalPin::HostName,
+        CanonicalPin::Email,
+        CanonicalPin::Term,
+        CanonicalPin::OracleSystemName,
+        CanonicalPin::GitCeilingDirectories,
+        CanonicalPin::RustBacktrace,
+        CanonicalPin::XdgConfigHome,
+        CanonicalPin::XdgCacheHome,
+        CanonicalPin::XdgDataHome,
+        CanonicalPin::XdgStateHome,
+        CanonicalPin::XdgRuntimeDir,
+        CanonicalPin::TestSandboxRoot,
+        CanonicalPin::TestWorkspaceRoot,
+        CanonicalPin::TestScratchRoot,
+        CanonicalPin::MimeTypes,
+    ] {
+        for name in pin.names() {
+            assert!(names.insert(*name), "{name} is owned by two pins");
+            assert_eq!(CanonicalPin::from_env_name(name), Some(pin));
+        }
+    }
+}
+
+/// The typed memory operation really sets RLIMIT_AS in the child; the crate
+/// offers no general pre-exec closure that could do something else.
+#[cfg(target_os = "linux")]
+#[test]
+fn limit_address_space_sets_the_child_rlimit() {
+    let environment = oracle_env();
+    let limit = 512 * 1024 * 1024u64;
+    let mut command = environment.command("/bin/sh");
+    let output = command
+        .args(["-c", "ulimit -v"])
+        .limit_address_space(limit)
+        .output()
+        .expect("spawn sh under the address-space limit");
+    assert!(output.status.success(), "sh failed: {output:?}");
+    let reported_kb: u64 = String::from_utf8(output.stdout)
+        .expect("ulimit output is ASCII")
+        .trim()
+        .parse()
+        .expect("ulimit -v prints a number");
+    assert_eq!(reported_kb * 1024, limit);
+}
+
+/// The typed affinity operation really restricts the child to the requested
+/// CPU, and it builds the CPU set in the parent.
+#[cfg(target_os = "linux")]
+#[test]
+fn limit_to_cpus_restricts_the_child() {
+    let mut allowed: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+    // Safety: sched_getaffinity writes only into the stack-local set.
+    assert_eq!(
+        unsafe {
+            libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &raw mut allowed)
+        },
+        0
+    );
+    let cpu = (0..libc::CPU_SETSIZE as usize)
+        .find(|cpu| unsafe { libc::CPU_ISSET(*cpu, &allowed) })
+        .expect("the test process has an allowed CPU");
+    let environment = oracle_env();
+    let mut command = environment.command("/bin/sh");
+    let output = command
+        .args(["-c", "grep Cpus_allowed_list /proc/self/status"])
+        .limit_to_cpus(&[cpu])
+        .output()
+        .expect("spawn sh pinned to one CPU");
+    assert!(output.status.success(), "grep failed: {output:?}");
+    let text = String::from_utf8(output.stdout).expect("proc status is ASCII");
+    let list = text
+        .split_once(':')
+        .expect("Cpus_allowed_list has a colon")
+        .1
+        .trim();
+    assert_eq!(list, cpu.to_string(), "child allowed {list}, wanted {cpu}");
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = panic.downcast_ref::<String>() {
+        return message.clone();
+    }
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    "<non-string panic>".to_string()
 }
 
 /// The in-process form installs exactly the spawned environment's answers:

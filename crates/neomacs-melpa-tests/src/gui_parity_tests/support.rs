@@ -62,28 +62,7 @@ impl LinuxCpuAffinity {
     }
 
     fn apply(&self, command: &mut neomacs_test_env::PinnedCommand) {
-        let cpus = self.cpus.clone();
-        // SAFETY: `pre_exec` runs after fork. The closure performs only
-        // stack-local CPU-set operations and the async-signal-safe
-        // sched_setaffinity syscall, then returns immediately.
-        unsafe {
-            command.pre_exec(move || {
-                let mut selected = std::mem::zeroed::<libc::cpu_set_t>();
-                libc::CPU_ZERO(&mut selected);
-                for cpu in &cpus {
-                    libc::CPU_SET(*cpu, &mut selected);
-                }
-                if libc::sched_setaffinity(
-                    0,
-                    std::mem::size_of::<libc::cpu_set_t>(),
-                    &raw const selected,
-                ) != 0
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        command.limit_to_cpus(&self.cpus);
     }
 }
 

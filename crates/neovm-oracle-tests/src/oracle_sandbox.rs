@@ -11,7 +11,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use neomacs_test_env::{CanonicalEnvironment, CanonicalProfile, PinnedCommand, bounded_temp_dir};
+use neomacs_test_env::{
+    CanonicalEnvironment, CanonicalPin, CanonicalProfile, PinnedCommand, bounded_temp_dir,
+};
 use tempfile::{NamedTempFile, TempDir};
 
 #[path = "form_source.rs"]
@@ -212,7 +214,14 @@ impl OracleSandbox {
     /// the default is the recorded one.
     pub(crate) fn configure(&self, command: &mut PinnedCommand) {
         for (name, value) in &self.extra_env {
-            command.env(name, value);
+            match name.to_str().and_then(CanonicalPin::from_env_name) {
+                Some(pin) => {
+                    command.override_pin(pin, value);
+                }
+                None => {
+                    command.env(name, value);
+                }
+            }
         }
         // This is harness-owned typed state, not an arbitrary per-test
         // override.  Apply it after `extra_env' so callers cannot create a
@@ -231,13 +240,13 @@ impl OracleSandbox {
             .map(|(_, value)| value.clone());
         let session_tmpdir = match self.case_filesystem {
             CaseFilesystemPolicy::WorkingDirectoryAndTempDirectory => {
-                command.env("TMPDIR", scratch_root);
+                command.override_pin(CanonicalPin::TmpDir, scratch_root);
                 Some(scratch_root.as_os_str().to_os_string())
             }
             CaseFilesystemPolicy::Private | CaseFilesystemPolicy::ExposedAsTestTempDirectory => {
                 let tmpdir = explicit_tmpdir
                     .unwrap_or_else(|| self.session_root.path().as_os_str().to_os_string());
-                command.env("TMPDIR", &tmpdir);
+                command.override_pin(CanonicalPin::TmpDir, &tmpdir);
                 Some(tmpdir)
             }
         };
