@@ -7647,7 +7647,7 @@ fn write_region_without_handler(
             WriteRegionCompletion::from_append_argument(args.get(3).copied().unwrap_or(Value::NIL));
         crate::emacs_core::builtins::builtin_message(
             eval,
-            vec![
+            &[
                 Value::string(completion.message_format()),
                 Value::heap_string(visit.file_name().clone()),
             ],

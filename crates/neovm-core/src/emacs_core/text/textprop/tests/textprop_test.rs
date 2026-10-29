@@ -239,7 +239,7 @@ fn indirect_buffers_share_text_property_updates() {
 
     builtin_remove_text_properties(
         &mut eval,
-        vec![
+        &vec![
             Value::fixnum(1),
             Value::fixnum(6),
             Value::list(vec![Value::symbol("face"), Value::NIL]),
@@ -527,7 +527,7 @@ fn get_char_property_and_overlay_shape() {
         (pair_car, pair_cdr)
     };
     assert!(value.is_bare_symbol_named("bar"));
-    let overlayp = builtin_overlayp(&mut eval, vec![overlay]).unwrap();
+    let overlayp = builtin_overlayp(&mut eval, &vec![overlay]).unwrap();
     assert!(overlayp.is_t());
 }
 
@@ -1230,7 +1230,7 @@ fn remove_text_properties_basic() {
     .unwrap();
 
     let props = Value::list(vec![Value::symbol("face"), Value::NIL]);
-    builtin_remove_text_properties(&mut eval, vec![Value::fixnum(1), Value::fixnum(6), props])
+    builtin_remove_text_properties(&mut eval, &vec![Value::fixnum(1), Value::fixnum(6), props])
         .unwrap();
 
     let result =
@@ -1790,7 +1790,7 @@ fn text_property_any_found() {
 
     let result = builtin_text_property_any(
         &mut eval,
-        vec![
+        &vec![
             Value::fixnum(1),
             Value::fixnum(10),
             Value::symbol("face"),
@@ -1808,7 +1808,7 @@ fn text_property_any_not_found() {
     let mut eval = eval_with_text("hello");
     let result = builtin_text_property_any(
         &mut eval,
-        vec![
+        &vec![
             Value::fixnum(1),
             Value::fixnum(6),
             Value::symbol("face"),
@@ -1989,7 +1989,7 @@ fn deleted_overlay_preserves_plist_and_identity() {
     .unwrap();
     builtin_delete_overlay(&mut eval, vec![ov]).unwrap();
 
-    let overlayp = builtin_overlayp(&mut eval, vec![ov]).unwrap();
+    let overlayp = builtin_overlayp(&mut eval, &vec![ov]).unwrap();
     assert!(overlayp.is_t());
 
     let face = builtin_overlay_get(&mut eval, vec![ov, Value::symbol("face")]).unwrap();
@@ -2046,7 +2046,7 @@ fn overlayp_true() {
     let mut eval = eval_with_text("hello");
     let ov = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(6)]).unwrap();
 
-    let result = builtin_overlayp(&mut eval, vec![ov]).unwrap();
+    let result = builtin_overlayp(&mut eval, &vec![ov]).unwrap();
     assert!(result.is_t());
 }
 
@@ -2054,7 +2054,7 @@ fn overlayp_true() {
 fn overlayp_false() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let result = builtin_overlayp(&mut eval, vec![Value::fixnum(42)]).unwrap();
+    let result = builtin_overlayp(&mut eval, &vec![Value::fixnum(42)]).unwrap();
     assert!(result.is_nil());
 }
 
@@ -2652,7 +2652,7 @@ fn text_property_any_rejects_too_many_args() {
     let mut eval = eval_with_text("hello");
     let result = builtin_text_property_any(
         &mut eval,
-        vec![
+        &vec![
             Value::fixnum(1),
             Value::fixnum(2),
             Value::symbol("face"),

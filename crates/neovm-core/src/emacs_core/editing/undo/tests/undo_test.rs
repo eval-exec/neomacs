@@ -202,7 +202,7 @@ fn primitive_undo_modtime_arm_compares_against_the_visited_file_like_gnu() {
 fn test_undo_boundary_no_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let result = builtin_undo_boundary(&mut eval, vec![]);
+    let result = builtin_undo_boundary(&mut eval, &vec![]);
     assert!(result.is_ok());
     assert!(result.unwrap().is_nil());
 }
@@ -217,7 +217,7 @@ fn test_undo_boundary_eval_inserts_boundary_marker() {
         let buffer = eval.buffers.current_buffer_mut().expect("scratch buffer");
         buffer.insert("x");
     }
-    let result = builtin_undo_boundary(&mut eval, vec![]);
+    let result = builtin_undo_boundary(&mut eval, &vec![]);
     assert!(result.is_ok());
     let buffer = eval.buffers.current_buffer().expect("scratch buffer");
     let ul = buffer.get_undo_list();
@@ -228,7 +228,7 @@ fn test_undo_boundary_eval_inserts_boundary_marker() {
 fn test_undo_boundary_wrong_args() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let result = builtin_undo_boundary(&mut eval, vec![Value::fixnum(1)]);
+    let result = builtin_undo_boundary(&mut eval, &vec![Value::fixnum(1)]);
     assert!(result.is_err());
 }
 

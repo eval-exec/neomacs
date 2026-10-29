@@ -3643,10 +3643,7 @@ fn apply_format_prop_spans(result: Value, spans: &[FormatPropSpan]) {
     }
 }
 
-pub(crate) fn builtin_format_message(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_format_message(ctx: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     builtin_format_message_slice(ctx, &args)
 }
 

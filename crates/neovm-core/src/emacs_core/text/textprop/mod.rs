@@ -2730,7 +2730,7 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
 /// (remove-text-properties BEG END PROPS &optional OBJECT)
 pub(crate) fn builtin_remove_text_properties(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("remove-text-properties", &args, 3)?;
     expect_max_args("remove-text-properties", &args, 4)?;
@@ -2757,7 +2757,7 @@ pub(crate) fn builtin_remove_text_properties(
 
 pub(crate) fn builtin_remove_text_properties_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("remove-text-properties", &args, 3)?;
     expect_max_args("remove-text-properties", &args, 4)?;
@@ -3781,7 +3781,7 @@ pub(crate) fn builtin_next_property_change_in_buffers(
 /// (text-property-any BEG END PROP VAL &optional OBJECT)
 pub(crate) fn builtin_text_property_any(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     builtin_text_property_any_in_state(eval.variables(), &eval.buffers, args)
 }
@@ -3789,7 +3789,7 @@ pub(crate) fn builtin_text_property_any(
 pub(crate) fn builtin_text_property_any_in_state(
     vars: crate::emacs_core::eval::VariableView<'_>,
     buffers: &BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("text-property-any", &args, 4)?;
     expect_max_args("text-property-any", &args, 5)?;

@@ -779,7 +779,7 @@ fn eol_type_unix() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8-unix")],
+        &vec![Value::symbol("utf-8-unix")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -792,7 +792,7 @@ fn eol_type_dos() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8-dos")],
+        &vec![Value::symbol("utf-8-dos")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -805,7 +805,7 @@ fn eol_type_mac() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8-mac")],
+        &vec![Value::symbol("utf-8-mac")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -818,7 +818,7 @@ fn eol_type_undecided_returns_vector() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8")],
+        &vec![Value::symbol("utf-8")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -840,7 +840,7 @@ fn eol_type_latin_alias_uses_iso_latin_display_variants() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("latin-1")],
+        &vec![Value::symbol("latin-1")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -861,7 +861,7 @@ fn eol_type_gbk_alias_uses_chinese_gbk_display_variants() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("gbk")],
+        &vec![Value::symbol("gbk")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -882,7 +882,7 @@ fn eol_type_nil_maps_to_no_conversion() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::NIL],
+        &vec![Value::NIL],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -896,7 +896,7 @@ fn eol_type_non_symbol_designator_returns_nil() {
     assert!(
         builtin_coding_system_eol_type(
             &m,
-            vec![Value::string("utf-8")],
+            &vec![Value::string("utf-8")],
             crate::tagged::value::SymbolMode::Bare
         )
         .unwrap()
@@ -905,7 +905,7 @@ fn eol_type_non_symbol_designator_returns_nil() {
     assert!(
         builtin_coding_system_eol_type(
             &m,
-            vec![Value::fixnum(1)],
+            &vec![Value::fixnum(1)],
             crate::tagged::value::SymbolMode::Bare
         )
         .unwrap()
@@ -919,7 +919,7 @@ fn eol_type_unknown_returns_nil() {
     let m = mgr();
     let result = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("nonexistent")],
+        &vec![Value::symbol("nonexistent")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .unwrap();
@@ -3518,13 +3518,13 @@ fn eol_type_vector_answers_are_fresh_each_call() {
     let m = mgr();
     let a = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8")],
+        &vec![Value::symbol("utf-8")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .expect("eol");
     let b = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8")],
+        &vec![Value::symbol("utf-8")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .expect("eol");
@@ -3532,7 +3532,7 @@ fn eol_type_vector_answers_are_fresh_each_call() {
     assert_ne!(a.bits(), b.bits(), "two calls, two vectors");
     let fixnum = builtin_coding_system_eol_type(
         &m,
-        vec![Value::symbol("utf-8-unix")],
+        &vec![Value::symbol("utf-8-unix")],
         crate::tagged::value::SymbolMode::Bare,
     )
     .expect("eol");

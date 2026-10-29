@@ -2903,7 +2903,7 @@ fn read_char_disconnected_input_uses_noelisp_terminal_teardown() {
     assert!(
         crate::emacs_core::terminal::pure::builtin_terminal_live_p(
             &mut ev,
-            vec![crate::emacs_core::terminal::pure::terminal_handle_value()]
+            &vec![crate::emacs_core::terminal::pure::terminal_handle_value()]
         )
         .unwrap()
         .is_nil(),
@@ -11816,7 +11816,7 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     let buf2 = ev.buffers.create_buffer("wcch-b");
     ev.switch_current_buffer(buf1).expect("switch to buf1");
 
-    let selected_window = crate::emacs_core::window_cmds::builtin_selected_window(&mut ev, vec![])
+    let selected_window = crate::emacs_core::window_cmds::builtin_selected_window(&mut ev, &vec![])
         .expect("selected window");
     crate::emacs_core::window_cmds::builtin_set_window_buffer(
         &mut ev,

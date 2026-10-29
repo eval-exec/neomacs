@@ -4631,7 +4631,7 @@ pub(crate) fn builtin_face_id(args: Vec<Value>) -> EvalResult {
     ))
 }
 
-pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     expect_min_args("face-font", &args, 1)?;
     expect_max_args("face-font", &args, 3)?;

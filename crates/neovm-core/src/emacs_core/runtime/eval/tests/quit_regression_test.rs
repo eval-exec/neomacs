@@ -758,7 +758,7 @@ fn discard_local_binding_does_not_allocate_ambient_buffer_wrapper() {
     owner.obarray.set_symbol_value_id(symbol, Value::fixnum(10));
     crate::emacs_core::custom::builtin_make_local_variable(
         &mut owner,
-        vec![Value::from_sym_id(symbol)],
+        &vec![Value::from_sym_id(symbol)],
     )
     .expect("localized existing cell");
     let count = owner.specpdl.len();
@@ -820,7 +820,7 @@ fn discard_local_binding_keeps_existing_void_cell_without_lisp_allocation() {
     let symbol = intern("local-drop-void-cell");
     crate::emacs_core::custom::builtin_make_local_variable(
         &mut owner,
-        vec![Value::from_sym_id(symbol)],
+        &vec![Value::from_sym_id(symbol)],
     )
     .expect("void localized cell");
     let count = owner.specpdl.len();

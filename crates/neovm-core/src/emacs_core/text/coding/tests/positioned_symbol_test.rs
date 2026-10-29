@@ -74,12 +74,12 @@ fn positioned_coding_metadata_cache_never_bypasses_disabled_symbol_checks() {
         );
     }
     assert_eq!(
-        builtin_coding_system_eol_type(&ctx.coding_systems, vec![coding], SymbolMode::Positioned)
+        builtin_coding_system_eol_type(&ctx.coding_systems, &vec![coding], SymbolMode::Positioned)
             .unwrap(),
         Value::fixnum(0)
     );
     assert_eq!(
-        builtin_coding_system_eol_type(&ctx.coding_systems, vec![coding], SymbolMode::Bare)
+        builtin_coding_system_eol_type(&ctx.coding_systems, &vec![coding], SymbolMode::Bare)
             .unwrap(),
         Value::NIL
     );

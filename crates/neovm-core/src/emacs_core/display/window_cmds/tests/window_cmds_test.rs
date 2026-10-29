@@ -1868,7 +1868,7 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
         )
         .expect("presented GUI geometry");
     assert_eq!(
-        super::builtin_window_body_width(&mut ev, vec![Value::NIL, Value::T])
+        super::builtin_window_body_width(&mut ev, &vec![Value::NIL, Value::T])
             .expect("window-body-width"),
         // GNU `window-body-width` also subtracts the frame-default right
         // scroll-bar area when a GUI frame inherits `vertical-scroll-bar = t`.
@@ -1885,12 +1885,12 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
     // `top-body + (window-body-height W t)', so the two numbers it would have
     // added come from these C primitives; the width is asserted above.
     assert_eq!(
-        super::builtin_window_body_height(&mut ev, vec![Value::NIL, Value::T])
+        super::builtin_window_body_height(&mut ev, &vec![Value::NIL, Value::T])
             .expect("window-body-height"),
         Value::fixnum(568)
     );
     assert_eq!(
-        super::builtin_window_fringes(&mut ev, vec![Value::NIL]).expect("window-fringes"),
+        super::builtin_window_fringes(&mut ev, &vec![Value::NIL]).expect("window-fringes"),
         Value::list(vec![
             Value::fixnum(8),
             Value::fixnum(12),
@@ -1899,7 +1899,7 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
         ])
     );
     assert_eq!(
-        super::builtin_window_margins(&mut ev, vec![Value::NIL]).expect("window-margins"),
+        super::builtin_window_margins(&mut ev, &vec![Value::NIL]).expect("window-margins"),
         Value::cons(Value::fixnum(1), Value::fixnum(2))
     );
 }
@@ -1944,7 +1944,7 @@ fn gui_window_fringes_default_to_frame_defaults_when_reset() {
 
     publish_selected_gui_window_regions(&mut ev, fid, 1, regions_with_fringes(8.0, 8.0));
     assert_eq!(
-        super::builtin_window_fringes(&mut ev, vec![Value::NIL]).expect("default fringes"),
+        super::builtin_window_fringes(&mut ev, &vec![Value::NIL]).expect("default fringes"),
         Value::list(vec![
             Value::fixnum(8),
             Value::fixnum(8),
@@ -1960,7 +1960,7 @@ fn gui_window_fringes_default_to_frame_defaults_when_reset() {
     .expect("set explicit fringes");
     publish_selected_gui_window_regions(&mut ev, fid, 2, regions_with_fringes(0.0, 4.0));
     assert_eq!(
-        super::builtin_window_fringes(&mut ev, vec![Value::NIL]).expect("explicit fringes"),
+        super::builtin_window_fringes(&mut ev, &vec![Value::NIL]).expect("explicit fringes"),
         Value::list(vec![
             Value::fixnum(0),
             Value::fixnum(4),
@@ -1973,7 +1973,7 @@ fn gui_window_fringes_default_to_frame_defaults_when_reset() {
         .expect("reset fringes");
     publish_selected_gui_window_regions(&mut ev, fid, 3, regions_with_fringes(8.0, 8.0));
     assert_eq!(
-        super::builtin_window_fringes(&mut ev, vec![Value::NIL]).expect("reset fringes"),
+        super::builtin_window_fringes(&mut ev, &vec![Value::NIL]).expect("reset fringes"),
         Value::list(vec![
             Value::fixnum(8),
             Value::fixnum(8),
@@ -2235,7 +2235,7 @@ fn get_buffer_window_list_includes_active_minibuffer_by_default() {
     let active_minibuffer =
         super::builtin_active_minibuffer_window(&mut ev, vec![]).expect("active minibuffer");
     let default_list =
-        super::builtin_window_list_1(&mut ev, vec![Value::NIL, Value::NIL, Value::NIL])
+        super::builtin_window_list_1(&mut ev, &vec![Value::NIL, Value::NIL, Value::NIL])
             .expect("window-list-1 with nil minibuf");
     let default_windows =
         crate::emacs_core::value::list_to_vec(&default_list).expect("default window list");
@@ -2245,7 +2245,7 @@ fn get_buffer_window_list_includes_active_minibuffer_by_default() {
     );
 
     let excluded_list =
-        super::builtin_window_list_1(&mut ev, vec![Value::NIL, Value::symbol("not"), Value::NIL])
+        super::builtin_window_list_1(&mut ev, &vec![Value::NIL, Value::symbol("not"), Value::NIL])
             .expect("window-list-1 with non-nil non-t minibuf");
     let excluded_windows =
         crate::emacs_core::value::list_to_vec(&excluded_list).expect("excluded window list");
@@ -3460,7 +3460,7 @@ fn an_integer_is_not_a_frame_even_when_it_matches_a_frame_id() {
         "an integer equal to a live frame's id is still not a frame"
     );
     assert_eq!(
-        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, vec![as_integer])
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &vec![as_integer])
             .expect("frame-live-p must not signal"),
         Value::NIL,
         "an integer equal to a live frame's id is still not a live frame"
@@ -7055,11 +7055,11 @@ fn shared_tty_child_minibuffer_window_apis_use_owner_frame() {
     );
     assert!(ev.frames.lookup_window(root_minibuffer).is_some());
     assert_eq!(
-        super::builtin_window_frame(&mut ev, vec![root_minibuffer_value]).expect("window-frame"),
+        super::builtin_window_frame(&mut ev, &vec![root_minibuffer_value]).expect("window-frame"),
         root
     );
     assert!(
-        super::builtin_window_buffer(&mut ev, vec![root_minibuffer_value])
+        super::builtin_window_buffer(&mut ev, &vec![root_minibuffer_value])
             .expect("window-buffer")
             .is_buffer()
     );
@@ -8311,7 +8311,7 @@ fn deleting_last_frame_on_terminal_deletes_terminal_too() {
     assert!(
         crate::emacs_core::terminal::pure::builtin_terminal_live_p(
             &mut ev,
-            vec![secondary_terminal]
+            &vec![secondary_terminal]
         )
         .unwrap()
         .is_nil(),
@@ -8375,7 +8375,7 @@ fn frame_builtins_accept_frame_handle_values() {
         Value::T
     );
     assert_eq!(
-        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, vec![frame]).unwrap(),
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, &vec![frame]).unwrap(),
         Value::T
     );
     assert_eq!(
@@ -8656,7 +8656,7 @@ fn gui_frame_font_parameter_exposes_font_name_not_font_object() {
     let frame_value = Value::make_frame(fid.0);
     let direct = crate::emacs_core::frame::builtin_frame_parameter(
         &mut ev,
-        vec![frame_value, FrameParam::Font.symbol()],
+        &vec![frame_value, FrameParam::Font.symbol()],
     )
     .expect("frame-parameter");
     assert_eq!(direct.as_utf8_str(), Some(public_font_name_text.as_str()));
@@ -10365,11 +10365,11 @@ fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() 
         Value::fixnum(35)
     );
     assert_eq!(
-        super::builtin_window_header_line_height(&mut ev, vec![]).expect("header-line height"),
+        super::builtin_window_header_line_height(&mut ev, &vec![]).expect("header-line height"),
         Value::fixnum(35)
     );
     assert_eq!(
-        super::builtin_window_tab_line_height(&mut ev, vec![]).expect("tab-line height"),
+        super::builtin_window_tab_line_height(&mut ev, &vec![]).expect("tab-line height"),
         Value::fixnum(34)
     );
 }
@@ -10626,33 +10626,33 @@ fn gui_geometry_queries_distinguish_logical_layout_from_presented_output() {
         .set_bounds(crate::window::Rect::new(901.0, 902.0, 903.0, 904.0));
 
     assert_eq!(
-        super::builtin_window_pixel_width(&mut ev, vec![])
+        super::builtin_window_pixel_width(&mut ev, &vec![])
             .expect("GNU exposes the synchronous logical pixel width")
             .as_int(),
         Some(903),
         "window-pixel-width reads the window's current layout before first presentation"
     );
     assert_eq!(
-        super::builtin_window_pixel_height(&mut ev, vec![])
+        super::builtin_window_pixel_height(&mut ev, &vec![])
             .expect("GNU exposes the synchronous logical pixel height")
             .as_int(),
         Some(904),
         "window-pixel-height reads the window's current layout before first presentation"
     );
     assert_eq!(
-        super::builtin_window_pixel_left(&mut ev, vec![])
+        super::builtin_window_pixel_left(&mut ev, &vec![])
             .expect("GNU exposes the synchronous logical pixel origin")
             .as_int(),
         Some(901)
     );
     assert_eq!(
-        super::builtin_window_pixel_top(&mut ev, vec![])
+        super::builtin_window_pixel_top(&mut ev, &vec![])
             .expect("GNU exposes the synchronous logical pixel origin")
             .as_int(),
         Some(902)
     );
     assert_eq!(
-        super::builtin_window_body_height(&mut ev, vec![Value::NIL, Value::T])
+        super::builtin_window_body_height(&mut ev, &vec![Value::NIL, Value::T])
             .expect("logical body geometry exists before first presentation")
             .as_int(),
         Some(888),
@@ -10770,8 +10770,8 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
         )
         .expect("presented geometry");
 
-    let fringes = super::builtin_window_fringes(&mut ev, vec![]).expect("fringes");
-    let scrollbars = super::builtin_window_scroll_bars(&mut ev, vec![]).expect("scrollbars");
+    let fringes = super::builtin_window_fringes(&mut ev, &vec![]).expect("fringes");
+    let scrollbars = super::builtin_window_scroll_bars(&mut ev, &vec![]).expect("scrollbars");
     assert_eq!(crate::emacs_core::print::print_value(&fringes), "(8 0 t t)");
     assert_eq!(
         crate::emacs_core::print::print_value(&scrollbars),
@@ -10793,7 +10793,7 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
         display.horizontal_scroll_bar_type = Value::T;
         display.scroll_bars_persistent = false;
     }
-    let inherited = super::builtin_window_scroll_bars(&mut ev, vec![]).expect("scrollbars");
+    let inherited = super::builtin_window_scroll_bars(&mut ev, &vec![]).expect("scrollbars");
     assert_eq!(
         crate::emacs_core::print::print_value(&inherited),
         // Inherited COLUMNS = FRAME_CONFIG_SCROLL_BAR_COLS = ceil(16 / 8) = 2 (src/xfns.c:2393-2407,
@@ -11614,7 +11614,7 @@ fn scroll_down_page_scans_buffer_once_not_once_per_screen_row() {
     crate::emacs_core::indent::reset_screen_line_scan_steps_for_test();
     crate::emacs_core::indent::reset_display_stop_recomputes_for_test();
     super::builtin_scroll_down(&mut ev, vec![Value::NIL]).expect("page up from end");
-    let after_start = super::builtin_window_start(&mut ev, vec![Value::make_window(window_id.0)])
+    let after_start = super::builtin_window_start(&mut ev, &vec![Value::make_window(window_id.0)])
         .expect("window-start after page up")
         .as_fixnum()
         .expect("window-start is an integer");

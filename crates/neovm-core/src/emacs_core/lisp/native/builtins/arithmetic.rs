@@ -1560,7 +1560,7 @@ fn minmax_driver(eval: &super::eval::Context, args: &[Value], cmp: NumCmp) -> Ev
 ///
 /// Promotes `MOST_NEGATIVE_FIXNUM` to a bignum (audit §2.6) instead
 /// of signaling overflow-error.
-pub(crate) fn builtin_abs(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_abs(args: &[Value]) -> EvalResult {
     expect_args("abs", &args, 1)?;
     match args[0].kind() {
         ValueKind::Fixnum(n) => match n.checked_abs() {
@@ -2106,7 +2106,7 @@ pub(crate) fn builtin_num_ne_2(
 // Conversion
 // ===========================================================================
 
-pub(crate) fn builtin_float(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_float(args: &[Value]) -> EvalResult {
     expect_args("float", &args, 1)?;
     match args[0].kind() {
         ValueKind::Fixnum(n) => Ok(Value::make_float(n as f64)),

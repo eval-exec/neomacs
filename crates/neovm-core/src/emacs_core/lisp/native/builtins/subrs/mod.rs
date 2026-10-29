@@ -341,12 +341,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "run-hook-with-args",
-        NativeFn::ContextVec(builtin_run_hook_with_args),
+        NativeFn::ContextSlice(builtin_run_hook_with_args),
         SubrArity::new(1, None),
     ));
     ctx.register_subr(SubrSpec::new(
         "run-hook-with-args-until-success",
-        NativeFn::ContextVec(builtin_run_hook_with_args_until_success),
+        NativeFn::ContextSlice(builtin_run_hook_with_args_until_success),
         SubrArity::new(1, None),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -356,7 +356,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "run-hook-wrapped",
-        NativeFn::ContextVec(builtin_run_hook_wrapped),
+        NativeFn::ContextSlice(builtin_run_hook_wrapped),
         SubrArity::new(2, None),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -419,7 +419,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "buffer-live-p",
-        NativeFn::ContextVec(builtin_buffer_live_p),
+        NativeFn::ContextSlice(builtin_buffer_live_p),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -455,7 +455,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(SubrSpec::fixed0("current-buffer", builtin_current_buffer_0));
     ctx.register_subr(SubrSpec::new(
         "buffer-name",
-        NativeFn::ContextVec(builtin_buffer_name),
+        NativeFn::ContextSlice(builtin_buffer_name),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -929,13 +929,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "format-mode-line",
-        NativeFn::ContextVec(crate::emacs_core::xdisp::builtin_format_mode_line_ctx),
+        NativeFn::ContextSlice(crate::emacs_core::xdisp::builtin_format_mode_line_ctx),
         SubrArity::new(1, Some(4)),
     ));
     ctx.register_subr(
         SubrSpec::new(
             "window-line-height",
-            NativeFn::ContextVec(crate::emacs_core::xdisp::builtin_window_line_height),
+            NativeFn::ContextSlice(crate::emacs_core::xdisp::builtin_window_line_height),
             SubrArity::new(0, Some(2)),
         )
         .placeholder(NoEvalPlaceholder::WindowLineHeight),
@@ -1488,7 +1488,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "backward-prefix-chars",
-        NativeFn::ContextVec(crate::emacs_core::syntax::builtin_backward_prefix_chars),
+        NativeFn::ContextSlice(crate::emacs_core::syntax::builtin_backward_prefix_chars),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(
@@ -1600,7 +1600,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "remove-text-properties",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_remove_text_properties),
+        NativeFn::ContextSlice(crate::emacs_core::textprop::builtin_remove_text_properties),
         SubrArity::new(3, Some(4)),
     ));
     ctx.register_subr(SubrSpec::fixed2(
@@ -1645,7 +1645,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "text-property-any",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_text_property_any),
+        NativeFn::ContextSlice(crate::emacs_core::textprop::builtin_text_property_any),
         SubrArity::new(4, Some(5)),
     ));
     ctx.register_subr(SubrSpec::fixed5(
@@ -1720,7 +1720,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "overlayp",
-        NativeFn::ContextVec(crate::emacs_core::buffer::builtin_overlayp),
+        NativeFn::ContextSlice(crate::emacs_core::buffer::builtin_overlayp),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::fixed0(
@@ -1830,7 +1830,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "make-local-variable",
-            NativeFn::ContextVec(crate::emacs_core::custom::builtin_make_local_variable),
+            NativeFn::ContextSlice(crate::emacs_core::custom::builtin_make_local_variable),
             SubrArity::new(1, Some(1)),
         )
         .interactive(
@@ -1936,7 +1936,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     crate::emacs_core::indent::register_subrs(ctx);
     ctx.register_subr(SubrSpec::new(
         "selected-window",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_selected_window),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_selected_window),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(
@@ -1954,7 +1954,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-parameter",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_parameter),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_parameter),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2021,12 +2021,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-buffer",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_buffer),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_buffer),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-start",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_start),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_start),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2084,47 +2084,47 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-pixel-left",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_pixel_left),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_pixel_left),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-pixel-top",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_pixel_top),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_pixel_top),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-hscroll",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_hscroll),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_hscroll),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-vscroll",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_vscroll),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_vscroll),
         SubrArity::new(0, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-margins",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_margins),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_margins),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-fringes",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_fringes),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_fringes),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-scroll-bars",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_scroll_bars),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_scroll_bars),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-pixel-height",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_pixel_height),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_pixel_height),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-pixel-width",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_pixel_width),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_pixel_width),
         SubrArity::new(0, Some(1)),
     ));
     // `window-edges' (lisp/window.el:3839), `window-pixel-edges' (:3922) and
@@ -2138,12 +2138,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // `window-edges' itself, not over any primitive.
     ctx.register_subr(SubrSpec::new(
         "window-body-height",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_body_height),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_body_height),
         SubrArity::new(0, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-body-width",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_body_width),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_body_width),
         SubrArity::new(0, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2174,7 +2174,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "window-list-1",
-            NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_list_1),
+            NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_list_1),
             SubrArity::new(0, Some(3)),
         )
         .requires_eval_state(),
@@ -2186,7 +2186,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-dedicated-p",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_dedicated_p),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_dedicated_p),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2204,7 +2204,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(SubrSpec::new(
         "window-live-p",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_live_p),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_live_p),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2229,7 +2229,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "set-window-vscroll",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_set_window_vscroll),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_set_window_vscroll),
         SubrArity::new(2, Some(4)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2435,12 +2435,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(SubrSpec::new(
         "frame-char-height",
-        NativeFn::ContextVec(crate::emacs_core::frame::builtin_frame_char_height),
+        NativeFn::ContextSlice(crate::emacs_core::frame::builtin_frame_char_height),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-char-width",
-        NativeFn::ContextVec(crate::emacs_core::frame::builtin_frame_char_width),
+        NativeFn::ContextSlice(crate::emacs_core::frame::builtin_frame_char_width),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2534,7 +2534,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-live-p",
-        NativeFn::ContextVec(crate::emacs_core::frame::builtin_frame_live_p),
+        NativeFn::ContextSlice(crate::emacs_core::frame::builtin_frame_live_p),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2549,7 +2549,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-root-window",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_frame_root_window),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_frame_root_window),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2559,7 +2559,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-valid-p",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_valid_p),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_valid_p),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2569,7 +2569,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-frame",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_frame),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_frame),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2674,7 +2674,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "call-interactively",
-        NativeFn::ContextVec(crate::emacs_core::interactive::builtin_call_interactively),
+        NativeFn::ContextSlice(crate::emacs_core::interactive::builtin_call_interactively),
         SubrArity::new(1, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -2742,7 +2742,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     );
     ctx.register_subr(SubrSpec::new(
         "current-message",
-        NativeFn::ContextVec(builtin_current_message),
+        NativeFn::ContextSlice(builtin_current_message),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -3086,7 +3086,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "undo-boundary",
-            NativeFn::ContextVec(crate::emacs_core::undo::builtin_undo_boundary),
+            NativeFn::ContextSlice(crate::emacs_core::undo::builtin_undo_boundary),
             SubrArity::new(0, Some(0)),
         )
         .requires_eval_state(),
@@ -3131,12 +3131,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "marker-buffer",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_marker_buffer),
+        NativeFn::ContextSlice(crate::emacs_core::marker::builtin_marker_buffer),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "copy-marker",
-        NativeFn::ContextVec(crate::emacs_core::marker::builtin_copy_marker),
+        NativeFn::ContextSlice(crate::emacs_core::marker::builtin_copy_marker),
         SubrArity::new(0, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -3268,7 +3268,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "delete-char",
-            NativeFn::ContextVec(crate::emacs_core::editfns::builtin_delete_char),
+            NativeFn::ContextSlice(crate::emacs_core::editfns::builtin_delete_char),
             SubrArity::new(1, Some(2)),
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("p\nP")),
@@ -3286,7 +3286,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "face-font",
-        NativeFn::ContextVec(crate::emacs_core::xfaces::builtin_face_font),
+        NativeFn::ContextSlice(crate::emacs_core::xfaces::builtin_face_font),
         SubrArity::new(1, Some(3)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -3463,7 +3463,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-parameter",
-        NativeFn::ContextVec(crate::emacs_core::frame::builtin_frame_parameter),
+        NativeFn::ContextSlice(crate::emacs_core::frame::builtin_frame_parameter),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -3504,7 +3504,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "terminal-live-p",
-            NativeFn::ContextVec(crate::emacs_core::terminal::pure::builtin_terminal_live_p),
+            NativeFn::ContextSlice(crate::emacs_core::terminal::pure::builtin_terminal_live_p),
             SubrArity::new(1, Some(1)),
         )
         .requires_eval_state(),
@@ -3649,7 +3649,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "message",
-            NativeFn::ContextVec(message_traced),
+            NativeFn::ContextSlice(message_traced),
             SubrArity::new(1, None),
         )
         .requires_eval_state(),
@@ -3676,7 +3676,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "coding-system-eol-type",
-        NativeFn::ContextVec(coding_system_eol_type),
+        NativeFn::ContextSlice(coding_system_eol_type),
         SubrArity::new(1, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -3728,7 +3728,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "make-marker",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::marker::builtin_make_marker(args)),
+        NativeFn::ContextSlice(|_ctx, args| crate::emacs_core::marker::builtin_make_marker(args)),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4310,7 +4310,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-internal-border-width",
-        NativeFn::ContextVec(crate::emacs_core::frame::builtin_frame_internal_border_width),
+        NativeFn::ContextSlice(crate::emacs_core::frame::builtin_frame_internal_border_width),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -6145,13 +6145,13 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-header-line-height",
-        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_header_line_height),
+        NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_header_line_height),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(
         SubrSpec::new(
             "window-tab-line-height",
-            NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_tab_line_height),
+            NativeFn::ContextSlice(crate::emacs_core::window_cmds::builtin_window_tab_line_height),
             SubrArity::new(0, Some(1)),
         )
         .placeholder(NoEvalPlaceholder::FixnumZero),
@@ -6470,13 +6470,11 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         1,
         Some(1)
     );
-    register_pure_subr!(
-        ctx,
+    ctx.register_subr(SubrSpec::new(
         "subrp",
-        crate::emacs_core::builtins_extra::builtin_subrp,
-        1,
-        Some(1)
-    );
+        NativeFn::ContextSlice(|_ctx, args| crate::emacs_core::builtins_extra::builtin_subrp(args)),
+        SubrArity::new(1, Some(1)),
+    ));
     register_pure_subr!(
         ctx,
         "byte-code-function-p",
@@ -6583,7 +6581,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "abs",
-        NativeFn::ContextVec(|_ctx, args| builtin_abs(args)),
+        NativeFn::ContextSlice(|_ctx, args| builtin_abs(args)),
         SubrArity::new(1, Some(1)),
     ));
 
@@ -6715,7 +6713,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "arrayp",
-        NativeFn::ContextVec(|_ctx, args| builtin_arrayp(args)),
+        NativeFn::ContextSlice(|_ctx, args| builtin_arrayp(args)),
         SubrArity::new(1, Some(1)),
     ));
     // `ignore' is not here: it is a `defun' at lisp/subr.el:501, and the
@@ -7026,7 +7024,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- Float / math / conversion --
     ctx.register_subr(SubrSpec::new(
         "float",
-        NativeFn::ContextVec(|_ctx, args| builtin_float(args)),
+        NativeFn::ContextSlice(|_ctx, args| builtin_float(args)),
         SubrArity::new(1, Some(1)),
     ));
     // GNU's rounding functions are fixed 1..2-argument subrs: a missing
@@ -8154,7 +8152,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "line-pixel-height",
-        NativeFn::ContextVec(|_ctx, args| {
+        NativeFn::ContextSlice(|_ctx, args| {
             crate::emacs_core::xdisp::builtin_line_pixel_height(args)
         }),
         SubrArity::new(0, Some(0)),

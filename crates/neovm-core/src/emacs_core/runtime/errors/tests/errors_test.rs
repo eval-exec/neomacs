@@ -1450,7 +1450,7 @@ fn builtin_error_message_string_formats_frame_and_window_handles() {
     assert!(frame_text.starts_with("Args out of range: #<frame"));
     assert!(frame_text.ends_with(", 0"));
 
-    let window = super::super::window_cmds::builtin_selected_window(&mut evaluator, vec![])
+    let window = super::super::window_cmds::builtin_selected_window(&mut evaluator, &vec![])
         .expect("selected-window should succeed");
     let window_err = Value::list(vec![
         Value::symbol("args-out-of-range"),

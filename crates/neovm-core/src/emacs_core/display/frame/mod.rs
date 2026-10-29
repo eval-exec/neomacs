@@ -410,7 +410,7 @@ pub(crate) fn builtin_visible_frame_list(
 /// GNU Emacs returns the default character height in pixels for FRAME.
 pub(crate) fn builtin_frame_char_height(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-char-height", &args, 1)?;
@@ -429,7 +429,7 @@ pub(crate) fn builtin_frame_char_height(
 /// GNU Emacs returns the default character width in pixels for FRAME.
 pub(crate) fn builtin_frame_char_width(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-char-width", &args, 1)?;
@@ -1445,7 +1445,7 @@ pub(crate) fn builtin_set_frame_window_state_change(
 
 pub(crate) fn builtin_frame_parameter(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("frame-parameter", &args, 2)?;
     expect_max_args("frame-parameter", &args, 2)?;
@@ -1625,7 +1625,7 @@ pub(crate) fn builtin_frame_child_frame_border_width(
 
 pub(crate) fn builtin_frame_internal_border_width(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_max_args("frame-internal-border-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
@@ -2173,10 +2173,7 @@ pub(crate) fn builtin_framep(eval: &mut super::eval::Context, args: Vec<Value>) 
 }
 
 /// `(frame-live-p OBJ)` -> t if OBJ is a live frame object or frame id.
-pub(crate) fn builtin_frame_live_p(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_frame_live_p(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let frames = &eval.frames;
     expect_args("frame-live-p", &args, 1)?;
     let id = match args[0].kind() {

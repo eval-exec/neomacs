@@ -414,10 +414,7 @@ pub(crate) fn builtin_delete_all_overlays(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_buffer_live_p(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_buffer_live_p(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let buffers = &eval.buffers;
     expect_args("buffer-live-p", &args, 1)?;
     match args[0].kind() {
@@ -871,7 +868,7 @@ pub(crate) fn builtin_current_buffer_0(eval: &mut super::eval::Context) -> EvalR
     }
 }
 
-pub(crate) fn builtin_buffer_name(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_buffer_name(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let buffers = &eval.buffers;
     expect_max_args("buffer-name", &args, 1)?;
     let id = if args.is_empty() || args[0].is_nil() {
@@ -985,7 +982,7 @@ fn update_buffer_properties_for_access(
     if !fontified_property.is_nil() {
         let needs_fontification = super::textprop::builtin_text_property_any(
             eval,
-            vec![
+            &[
                 Value::fixnum(start.as_i64()),
                 Value::fixnum(end.as_i64()),
                 fontified_property,
@@ -999,7 +996,7 @@ fn update_buffer_properties_for_access(
 
     builtin_run_hook_with_args(
         eval,
-        vec![
+        &[
             Value::symbol("buffer-access-fontify-functions"),
             Value::fixnum(start.as_i64()),
             Value::fixnum(end.as_i64()),
@@ -5837,11 +5834,11 @@ pub(crate) fn builtin_overlay_get(eval: &mut super::eval::Context, args: Vec<Val
 }
 
 /// (overlayp OBJ)
-pub(crate) fn builtin_overlayp(_eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_overlayp(_eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     builtin_overlayp_pure(args)
 }
 
-pub(crate) fn builtin_overlayp_pure(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_overlayp_pure(args: &[Value]) -> EvalResult {
     expect_args("overlayp", &args, 1)?;
     if args[0].is_overlay() {
         return Ok(Value::T);

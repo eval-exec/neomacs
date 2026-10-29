@@ -129,7 +129,7 @@ fn terminal_list_returns_singleton_list() {
     let result = builtin_terminal_list(vec![]).unwrap();
     let items = crate::emacs_core::value::list_to_vec(&result).unwrap();
     assert_eq!(items.len(), 1);
-    let live = builtin_terminal_live_p(&mut eval, vec![items[0]]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![items[0]]).unwrap();
     assert_eq!(live, Value::T);
 }
 
@@ -139,7 +139,7 @@ fn terminal_live_p_nil_is_live() {
     reset_terminal_thread_locals();
     let mut eval = Context::new();
     assert_eq!(
-        builtin_terminal_live_p(&mut eval, vec![Value::NIL]).unwrap(),
+        builtin_terminal_live_p(&mut eval, &vec![Value::NIL]).unwrap(),
         Value::T
     );
 }
@@ -173,11 +173,11 @@ fn terminal_live_p_reports_frame_terminal_type_not_selected_global_type() {
         builtin_frame_terminal(&mut eval, vec![Value::make_frame(gui_frame.0)]).unwrap();
 
     assert_eq!(
-        builtin_terminal_live_p(&mut eval, vec![gui_terminal]).unwrap(),
+        builtin_terminal_live_p(&mut eval, &vec![gui_terminal]).unwrap(),
         Value::symbol("neo")
     );
     assert_eq!(
-        builtin_terminal_live_p(&mut eval, vec![hidden_terminal]).unwrap(),
+        builtin_terminal_live_p(&mut eval, &vec![hidden_terminal]).unwrap(),
         Value::T
     );
 }
@@ -187,7 +187,7 @@ fn terminal_live_p_int_is_not_live() {
     crate::test_utils::init_test_tracing();
     reset_terminal_thread_locals();
     let mut eval = Context::new();
-    let result = builtin_terminal_live_p(&mut eval, vec![Value::fixnum(42)]).unwrap();
+    let result = builtin_terminal_live_p(&mut eval, &vec![Value::fixnum(42)]).unwrap();
     assert!(result.is_nil());
 }
 
@@ -514,7 +514,7 @@ fn delete_terminal_force_marks_terminal_dead_and_clears_terminal_list() {
         Value::NIL
     );
     assert!(
-        builtin_terminal_live_p(&mut eval, vec![handle])
+        builtin_terminal_live_p(&mut eval, &vec![handle])
             .unwrap()
             .is_nil(),
         "deleted terminal should no longer be live"
@@ -677,7 +677,7 @@ fn delete_terminal_noelisp_bypasses_sole_terminal_check_and_defers_hooks() {
     );
     assert!(eval.frame_manager().frame_list().is_empty());
     assert!(
-        builtin_terminal_live_p(&mut eval, vec![terminal_handle_value()])
+        builtin_terminal_live_p(&mut eval, &vec![terminal_handle_value()])
             .unwrap()
             .is_nil(),
         "noelisp delete should mark the terminal dead even when it is the sole terminal"
@@ -716,7 +716,7 @@ fn delete_terminal_noelisp_ignores_host_delete_failures() {
         Value::NIL
     );
     assert!(
-        builtin_terminal_live_p(&mut eval, vec![terminal_handle_value()])
+        builtin_terminal_live_p(&mut eval, &vec![terminal_handle_value()])
             .unwrap()
             .is_nil(),
         "noelisp delete should finish even if the host is already gone"
@@ -1055,7 +1055,7 @@ fn selected_terminal_returns_live_handle() {
     reset_terminal_thread_locals();
     let mut eval = Context::new();
     let handle = builtin_selected_terminal(vec![]).unwrap();
-    let live = builtin_terminal_live_p(&mut eval, vec![handle]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
 }
 
@@ -1065,7 +1065,7 @@ fn frame_terminal_returns_live_handle() {
     reset_terminal_thread_locals();
     let mut eval = Context::new();
     let handle = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
-    let live = builtin_terminal_live_p(&mut eval, vec![handle]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
 }
 

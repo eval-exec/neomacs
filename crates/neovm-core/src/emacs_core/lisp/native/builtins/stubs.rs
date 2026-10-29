@@ -1074,7 +1074,7 @@ pub(crate) fn builtin_frame_fringe_width(args: Vec<Value>) -> EvalResult {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_frame_internal_border_width(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_frame_internal_border_width(args: &[Value]) -> EvalResult {
     expect_args_range("frame-internal-border-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
         expect_frame_in_domain(frame, FrameDomain::Any)?;

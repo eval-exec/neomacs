@@ -381,7 +381,7 @@ fn plan_scroll(
         .ok_or_else(|| failure("Scroll buffer was deleted"))?;
     let height = crate::emacs_core::window_cmds::builtin_window_body_height(
         eval,
-        vec![Value::make_window(window_id.0), Value::T],
+        &[Value::make_window(window_id.0), Value::T],
     )?
     .as_fixnum()
     .unwrap_or(1)

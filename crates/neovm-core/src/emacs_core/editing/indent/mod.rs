@@ -403,15 +403,14 @@ fn vertical_motion_screen_extent(
     window: Option<Value>,
 ) -> ScreenLineExtent {
     let window_arg = window.unwrap_or(Value::NIL);
-    let body_width =
-        super::window_cmds::builtin_window_body_width(eval, vec![window_arg, Value::NIL])
-            .ok()
-            .and_then(|v| v.as_fixnum())
-            .filter(|n| *n > 1)
-            .map(|n| (n as usize).saturating_sub(1))
-            .unwrap_or(79)
-            .max(1);
-    let hscroll = super::window_cmds::builtin_window_hscroll(eval, vec![window_arg])
+    let body_width = super::window_cmds::builtin_window_body_width(eval, &[window_arg, Value::NIL])
+        .ok()
+        .and_then(|v| v.as_fixnum())
+        .filter(|n| *n > 1)
+        .map(|n| (n as usize).saturating_sub(1))
+        .unwrap_or(79)
+        .max(1);
+    let hscroll = super::window_cmds::builtin_window_hscroll(eval, &[window_arg])
         .ok()
         .and_then(|v| v.as_fixnum())
         .filter(|n| *n > 0)
@@ -938,7 +937,7 @@ fn truncated_logical_line_step(
 /// display properties, etc. In live frames, use fresh measured rows, querying
 /// the canonical producer when necessary. Until offscreen queries are supported,
 /// motion outside measured coverage still falls back to buffer scanning.
-pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_args_range("vertical-motion", &args, 1, 3)?;
     // First arg can be LINES (integer) or (COLS . LINES) cons pair.
     // When (COLS . LINES), move LINES then position at column COLS.
@@ -3414,7 +3413,7 @@ pub(crate) fn compute_motion(eval: &mut super::eval::Context, args: Vec<Value>) 
 /// except the symbol `columns' returns that gutter in canonical columns.
 pub(crate) fn line_number_display_width(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_args_range("line-number-display-width", &args, 0, 1)?;
     let Some(frame) = eval.frames.selected_frame() else {

@@ -503,7 +503,7 @@ fn call_interactively_evaluates_registry_form_specs() {
         InteractiveSpec::from_value(Value::list(vec![Value::symbol("list"), Value::fixnum(7)])),
     );
 
-    let result = builtin_call_interactively(&mut ev, vec![Value::symbol("registry-form-command")])
+    let result = builtin_call_interactively(&mut ev, &vec![Value::symbol("registry-form-command")])
         .expect("call-interactively should evaluate registry form spec");
     assert_eq!(result, Value::fixnum(7));
 }
@@ -618,7 +618,7 @@ fn defalias_replaces_stale_noarg_registry_spec_with_live_interactive_form() {
     .expect("install live interactive form");
 
     let result =
-        builtin_call_interactively(&mut ev, vec![Value::symbol("vm-stale-interactive-form")])
+        builtin_call_interactively(&mut ev, &vec![Value::symbol("vm-stale-interactive-form")])
             .expect("call-interactively should use the live interactive form");
     assert_eq!(result, Value::fixnum(7));
 }
@@ -3197,7 +3197,7 @@ fn call_interactively_rejects_non_vector_keys_argument() {
     let mut ev = Context::new();
     let result = builtin_call_interactively(
         &mut ev,
-        vec![Value::symbol("ignore"), Value::NIL, Value::string("b")],
+        &vec![Value::symbol("ignore"), Value::NIL, Value::string("b")],
     )
     .expect_err("call-interactively should reject non-vector keys argument");
     match result.into_kind() {
@@ -3218,7 +3218,7 @@ fn call_interactively_accepts_vector_keys_argument() {
         .expect("quoted lambda command");
     let result = builtin_call_interactively(
         &mut ev,
-        vec![command, Value::NIL, Value::vector(vec![Value::fixnum(98)])],
+        &vec![command, Value::NIL, Value::vector(vec![Value::fixnum(98)])],
     )
     .expect("call-interactively should accept vector keys argument");
     assert!(result.is_nil());
@@ -3233,7 +3233,7 @@ fn call_interactively_does_not_record_keys_argument_in_recent_history() {
         .expect("quoted lambda command");
     let result = builtin_call_interactively(
         &mut ev,
-        vec![command, Value::NIL, Value::vector(vec![Value::fixnum(98)])],
+        &vec![command, Value::NIL, Value::vector(vec![Value::fixnum(98)])],
     )
     .expect("call-interactively should accept vector keys argument");
     assert!(result.is_nil());
@@ -3254,7 +3254,7 @@ fn call_interactively_keys_vector_keeps_this_command_keys_empty_in_batch() {
 
     let result = builtin_call_interactively(
         &mut ev,
-        vec![
+        &vec![
             Value::symbol("neo-rk-loop-probe"),
             Value::NIL,
             Value::vector(vec![Value::symbol("foo")]),
@@ -3272,7 +3272,7 @@ fn call_interactively_rejects_list_keys_argument_without_recording_recent_histor
     let mut ev = Context::new();
     let keys = Value::list(vec![Value::fixnum(97), Value::fixnum(98)]);
     let result =
-        builtin_call_interactively(&mut ev, vec![Value::symbol("ignore"), Value::NIL, keys])
+        builtin_call_interactively(&mut ev, &vec![Value::symbol("ignore"), Value::NIL, keys])
             .expect_err("call-interactively should reject list keys argument");
     match result.into_kind() {
         FlowKind::Signal(sig) => {
@@ -3290,7 +3290,7 @@ fn call_interactively_rejects_too_many_arguments() {
     let mut ev = Context::new();
     let result = builtin_call_interactively(
         &mut ev,
-        vec![Value::symbol("ignore"), Value::NIL, Value::NIL, Value::NIL],
+        &vec![Value::symbol("ignore"), Value::NIL, Value::NIL, Value::NIL],
     )
     .expect_err("call-interactively should reject too many arguments");
     match result.into_kind() {
@@ -4812,7 +4812,7 @@ fn interactive_lambda_e_spec_prefers_existing_command_keys_context() {
 fn call_interactively_non_command_signals_commandp_error() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let result = builtin_call_interactively(&mut ev, vec![Value::symbol("car")])
+    let result = builtin_call_interactively(&mut ev, &vec![Value::symbol("car")])
         .expect_err("call-interactively should reject non-command symbols");
     match result.into_kind() {
         FlowKind::Signal(sig) => {
@@ -4837,8 +4837,9 @@ fn call_interactively_propagates_noninteractive_autoload_failure_before_commandp
     )
     .expect("install non-interactive autoload");
 
-    let result = builtin_call_interactively(&mut ev, vec![Value::symbol("neovm-ci-missing-plain")])
-        .expect_err("call-interactively should propagate the autoload failure");
+    let result =
+        builtin_call_interactively(&mut ev, &vec![Value::symbol("neovm-ci-missing-plain")])
+            .expect_err("call-interactively should propagate the autoload failure");
     match result.into_kind() {
         FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "file-missing"),
         other => panic!("unexpected flow: {other:?}"),
@@ -4849,7 +4850,7 @@ fn call_interactively_propagates_noninteractive_autoload_failure_before_commandp
 fn call_interactively_eval_expression_reads_stdin_in_batch() {
     crate::test_utils::init_test_tracing();
     let mut ev = gnu_simple_eval_expression_eval();
-    let result = builtin_call_interactively(&mut ev, vec![Value::symbol("eval-expression")])
+    let result = builtin_call_interactively(&mut ev, &vec![Value::symbol("eval-expression")])
         .expect_err("call-interactively eval-expression should signal end-of-file in batch");
     match result.into_kind() {
         FlowKind::Signal(sig) => {
@@ -4943,7 +4944,7 @@ fn call_interactively_eval_expression_executes_read_expression_result() {
         "#,
     );
 
-    let result = builtin_call_interactively(&mut ev, vec![Value::symbol("eval-expression")])
+    let result = builtin_call_interactively(&mut ev, &vec![Value::symbol("eval-expression")])
         .expect("call-interactively eval-expression should succeed");
     let rendered = crate::emacs_core::print::print_value(&result);
     let current_message = ev

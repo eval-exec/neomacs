@@ -611,11 +611,11 @@ fn eval_terminal_parameter_accepts_live_frame_designator() {
 fn terminal_live_p_reflects_designator_shape() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
-    let live_nil = builtin_terminal_live_p(&mut eval, vec![Value::NIL]).unwrap();
-    let live_handle = builtin_terminal_live_p(&mut eval, vec![terminal_handle_value()]).unwrap();
+    let live_nil = builtin_terminal_live_p(&mut eval, &vec![Value::NIL]).unwrap();
+    let live_handle = builtin_terminal_live_p(&mut eval, &vec![terminal_handle_value()]).unwrap();
     let live_string =
-        builtin_terminal_live_p(&mut eval, vec![Value::string("initial_terminal")]).unwrap();
-    let live_int = builtin_terminal_live_p(&mut eval, vec![Value::fixnum(1)]).unwrap();
+        builtin_terminal_live_p(&mut eval, &vec![Value::string("initial_terminal")]).unwrap();
+    let live_int = builtin_terminal_live_p(&mut eval, &vec![Value::fixnum(1)]).unwrap();
     assert_eq!(live_nil, Value::T);
     assert_eq!(live_handle, Value::T);
     assert!(live_string.is_nil());
@@ -627,10 +627,10 @@ fn eval_terminal_live_p_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
-    let live = builtin_terminal_live_p(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![Value::make_frame(frame_id)]).unwrap();
     assert_eq!(live, Value::T);
 
-    let stale = builtin_terminal_live_p(&mut eval, vec![Value::fixnum(999_999)]).unwrap();
+    let stale = builtin_terminal_live_p(&mut eval, &vec![Value::fixnum(999_999)]).unwrap();
     assert!(stale.is_nil());
 }
 
@@ -680,7 +680,7 @@ fn frame_terminal_returns_live_terminal_handle() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let handle = builtin_frame_terminal(&mut eval, vec![Value::NIL]).unwrap();
-    let live = builtin_terminal_live_p(&mut eval, vec![handle]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
     assert_eq!(handle.type_name(), "terminal");
 }
@@ -690,7 +690,7 @@ fn selected_terminal_returns_live_terminal_handle() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let handle = builtin_selected_terminal(vec![]).unwrap();
-    let live = builtin_terminal_live_p(&mut eval, vec![handle]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
 }
 
@@ -722,7 +722,7 @@ fn eval_frame_terminal_accepts_live_frame_designator() {
     let mut eval = crate::emacs_core::Context::new();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let handle = builtin_frame_terminal(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
-    let live = builtin_terminal_live_p(&mut eval, vec![handle]).unwrap();
+    let live = builtin_terminal_live_p(&mut eval, &vec![handle]).unwrap();
     assert_eq!(live, Value::T);
 }
 
@@ -777,7 +777,7 @@ fn eval_frame_edges_live_window_designator_includes_buffer_context() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     let result = builtin_frame_edges(&mut eval, vec![window]);
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
@@ -876,7 +876,7 @@ fn eval_internal_show_cursor_accepts_live_window_designator() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     let result = builtin_internal_show_cursor(&mut eval, vec![window, Value::T]).unwrap();
     assert!(result.is_nil());
 }
@@ -887,7 +887,7 @@ fn eval_internal_show_cursor_p_accepts_live_window_designator() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     let result = builtin_internal_show_cursor_p(&mut eval, vec![window]).unwrap();
     assert!((result.is_t() || result.is_nil()));
 }
@@ -899,7 +899,7 @@ fn eval_internal_show_cursor_tracks_per_window_state() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     // GNU's `split-window` stages the old window's new size before calling
     // the primitive, which rejects an unstaged split.
     eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")
@@ -3460,7 +3460,7 @@ fn eval_monitor_attributes_include_bootstrapped_frame() {
         Value::T
     );
     assert_eq!(
-        crate::emacs_core::frame::builtin_frame_live_p(&mut eval, vec![frames[0]]).unwrap(),
+        crate::emacs_core::frame::builtin_frame_live_p(&mut eval, &vec![frames[0]]).unwrap(),
         Value::T
     );
 }
@@ -3757,7 +3757,7 @@ fn eval_display_monitor_errors_render_window_designators() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
 
     let list_err = builtin_display_monitor_attributes_list(&mut eval, vec![window])
         .expect_err("window designator should be rejected");
@@ -3792,7 +3792,7 @@ fn get_device_terminal_formatter_keeps_integer_literals() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let window =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
 
     let rendered_window = format_get_device_terminal_arg_eval(&eval, &window);
     assert!(rendered_window.contains("#<window"));

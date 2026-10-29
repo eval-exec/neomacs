@@ -32,12 +32,12 @@ crate::emacs_core::subr::define_subrs! {
     ),
     SubrSpec::new(
         "line-number-display-width",
-        NativeFn::ContextVec(line_number_display_width),
+        NativeFn::ContextSlice(line_number_display_width),
         SubrArity::new(0, Some(1)),
     ),
     SubrSpec::new(
         "vertical-motion",
-        NativeFn::ContextVec(vertical_motion),
+        NativeFn::ContextSlice(vertical_motion),
         SubrArity::new(1, Some(3)),
     )
     .requires_eval_state(),

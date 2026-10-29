@@ -1865,7 +1865,7 @@ pub(crate) fn selected_window_id(eval: &mut super::eval::Context) -> Result<Wind
 /// `(selected-window)` -> window object.
 pub(crate) fn builtin_selected_window(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_args("selected-window", &args, 0)?;
     Ok(window_value(selected_window_id(eval)?))
@@ -2257,7 +2257,7 @@ pub(crate) fn builtin_frame_first_window(
 /// `(frame-root-window &optional FRAME-OR-WINDOW)` -> root window on frame.
 pub(crate) fn builtin_frame_root_window(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-root-window", &args, 1)?;
@@ -2335,10 +2335,7 @@ fn active_minibuffer_window_id(eval: &super::eval::Context) -> Option<WindowId> 
     eval.active_minibuffer_window_id()
 }
 /// `(window-frame &optional WINDOW)` -> frame of WINDOW.
-pub(crate) fn builtin_window_frame(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_window_frame(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-frame", &args, 1)?;
     let (fid, _wid) =
@@ -2346,10 +2343,7 @@ pub(crate) fn builtin_window_frame(
     Ok(Value::make_frame(fid.0))
 }
 /// `(window-buffer &optional WINDOW)` -> buffer object.
-pub(crate) fn builtin_window_buffer(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_window_buffer(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-buffer", &args, 1)?;
     let resolve_buffer = |frames: &FrameManager, fid: FrameId, wid: WindowId| -> EvalResult {
@@ -2517,7 +2511,7 @@ fn is_valid_cursor_type(value: Value) -> bool {
 /// `(window-parameter WINDOW PARAMETER)` -> window parameter or nil.
 pub(crate) fn builtin_window_parameter(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("window-parameter", &args, 2)?;
@@ -2709,10 +2703,7 @@ pub(crate) fn builtin_window_normal_size(
     })
 }
 /// `(window-start &optional WINDOW)` -> integer position.
-pub(crate) fn builtin_window_start(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_window_start(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-start", &args, 1)?;
     let (fid, wid) =
@@ -3373,7 +3364,7 @@ fn tty_batch_pixel_top(window: &Window, char_height: f32) -> i64 {
 /// batch-mode GNU Emacs, this helper reports character-cell units instead.
 pub(crate) fn builtin_window_pixel_left(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-left", &args, 1)?;
@@ -3396,7 +3387,7 @@ pub(crate) fn builtin_window_pixel_left(
 /// batch-mode GNU Emacs, this helper reports character-cell units instead.
 pub(crate) fn builtin_window_pixel_top(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-top", &args, 1)?;
@@ -3416,7 +3407,7 @@ pub(crate) fn builtin_window_pixel_top(
 /// `(window-hscroll &optional WINDOW)` -> integer.
 pub(crate) fn builtin_window_hscroll(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-hscroll", &args, 1)?;
@@ -3583,7 +3574,7 @@ pub(crate) fn builtin_scroll_right(
 /// report zero; GUI windows report either pixels or canonical line units.
 pub(crate) fn builtin_window_vscroll(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-vscroll", &args, 2)?;
@@ -3598,7 +3589,7 @@ pub(crate) fn builtin_window_vscroll(
 /// `(set-window-vscroll WINDOW VSCROLL &optional PIXELWISE PRESERVE)` -> number.
 pub(crate) fn builtin_set_window_vscroll(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_min_args("set-window-vscroll", &args, 2)?;
@@ -3655,7 +3646,7 @@ pub(crate) fn builtin_set_window_margins(
 /// `(window-margins &optional WINDOW)` -> margins pair or nil.
 pub(crate) fn builtin_window_margins(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-margins", &args, 1)?;
@@ -3699,7 +3690,7 @@ pub(crate) fn builtin_window_margins(
 /// `(window-fringes &optional WINDOW)` -> fringe tuple.
 pub(crate) fn builtin_window_fringes(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-fringes", &args, 1)?;
@@ -3797,7 +3788,7 @@ pub(crate) fn builtin_set_window_fringes(
 /// `(window-scroll-bars &optional WINDOW)` -> scroll-bar tuple.
 pub(crate) fn builtin_window_scroll_bars(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-scroll-bars", &args, 1)?;
@@ -3951,7 +3942,7 @@ pub(crate) fn builtin_window_mode_line_height(
 /// `(window-header-line-height &optional WINDOW)` -> integer.
 pub(crate) fn builtin_window_header_line_height(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-header-line-height", &args, 1)?;
@@ -3968,7 +3959,7 @@ pub(crate) fn builtin_window_header_line_height(
 /// `(window-tab-line-height &optional WINDOW)` -> integer.
 pub(crate) fn builtin_window_tab_line_height(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-tab-line-height", &args, 1)?;
@@ -3988,7 +3979,7 @@ pub(crate) fn builtin_window_tab_line_height(
 /// In batch-mode GNU Emacs, these "pixel" helpers report character-cell units.
 pub(crate) fn builtin_window_pixel_height(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-height", &args, 1)?;
@@ -4004,7 +3995,7 @@ pub(crate) fn builtin_window_pixel_height(
 /// In batch-mode GNU Emacs, these "pixel" helpers report character-cell units.
 pub(crate) fn builtin_window_pixel_width(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-width", &args, 1)?;
@@ -4022,7 +4013,7 @@ pub(crate) fn builtin_window_pixel_width(
 /// Body excludes the window's actual chrome, scroll bar and divider areas.
 pub(crate) fn builtin_window_body_height(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_max_args("window-body-height", &args, 2)?;
     let unit = window_body_unit_from_lisp(args.get(1));
@@ -4109,7 +4100,7 @@ fn window_body_height_for_window(
 /// default face, and every other non-nil value uses pixels.
 pub(crate) fn builtin_window_body_width(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_max_args("window-body-width", &args, 2)?;
     let unit = window_body_unit_from_lisp(args.get(1));
@@ -4332,10 +4323,7 @@ pub(crate) fn builtin_window_list(eval: &mut super::eval::Context, args: Vec<Val
     Ok(Value::list(ids))
 }
 /// `(window-list-1 &optional WINDOW MINIBUF ALL-FRAMES)` -> list of live windows.
-pub(crate) fn builtin_window_list_1(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_window_list_1(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let active_minibuffer_window = active_minibuffer_window_id(eval);
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-list-1", &args, 3)?;
@@ -4487,7 +4475,7 @@ pub(crate) fn builtin_get_buffer_window(
 /// `(window-dedicated-p &optional WINDOW)` -> t or nil.
 pub(crate) fn builtin_window_dedicated_p(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-dedicated-p", &args, 1)?;
@@ -4548,7 +4536,7 @@ pub(crate) fn builtin_windowp(eval: &mut super::eval::Context, args: Vec<Value>)
 /// `(window-valid-p OBJ)` -> t if OBJ is a live window.
 pub(crate) fn builtin_window_valid_p(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let frames = &eval.frames;
     expect_args("window-valid-p", &args, 1)?;
@@ -4559,10 +4547,7 @@ pub(crate) fn builtin_window_valid_p(
     Ok(Value::bool_val(frames.is_valid_window_id(wid)))
 }
 /// `(window-live-p OBJ)` -> t if OBJ is a live leaf window.
-pub(crate) fn builtin_window_live_p(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_window_live_p(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let frames = &eval.frames;
     expect_args("window-live-p", &args, 1)?;
     let wid = match window_id_from_designator(&args[0]) {

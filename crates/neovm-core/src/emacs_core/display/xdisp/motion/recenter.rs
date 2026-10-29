@@ -103,7 +103,7 @@ fn measure(
     let mut start = measurement::backtrack(source, origin, 1);
     let body_height = crate::emacs_core::window_cmds::builtin_window_body_height(
         eval,
-        vec![Value::make_window(window.0), Value::T],
+        &[Value::make_window(window.0), Value::T],
     )?
     .as_fixnum()
     .unwrap_or(0);

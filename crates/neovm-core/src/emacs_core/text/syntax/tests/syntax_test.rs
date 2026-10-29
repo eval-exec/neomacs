@@ -2583,7 +2583,7 @@ fn backward_prefix_chars_default_is_noop() {
         buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 2)));
     }
 
-    let out = builtin_backward_prefix_chars(&mut eval, vec![]).unwrap();
+    let out = builtin_backward_prefix_chars(&mut eval, &vec![]).unwrap();
     assert_eq!(out, Value::NIL);
     let point_1 = eval
         .buffers
@@ -2614,7 +2614,7 @@ fn backward_prefix_chars_moves_over_prefix_flag_chars() {
         buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(char_pos_to_byte(buf, 2)));
     }
 
-    builtin_backward_prefix_chars(&mut eval, vec![]).unwrap();
+    builtin_backward_prefix_chars(&mut eval, &vec![]).unwrap();
     let point_1 = eval
         .buffers
         .current_buffer()
@@ -2629,7 +2629,7 @@ fn backward_prefix_chars_moves_over_prefix_flag_chars() {
 fn backward_prefix_chars_validates_arity() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    match builtin_backward_prefix_chars(&mut eval, vec![Value::fixnum(1)]).kinded() {
+    match builtin_backward_prefix_chars(&mut eval, &vec![Value::fixnum(1)]).kinded() {
         Err(crate::emacs_core::error::FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
             assert_eq!(

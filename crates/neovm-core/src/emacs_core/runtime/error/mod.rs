@@ -2498,7 +2498,7 @@ impl super::eval::Context {
                 .map(|_| ());
         }
         let text = format!("{context_text}{rendered}");
-        super::builtins::misc_pure::builtin_message(self, vec![Value::string(text)])?;
+        super::builtins::misc_pure::builtin_message(self, &[Value::string(text)])?;
         Ok(())
     }
 

@@ -534,7 +534,7 @@ pub(crate) fn validate_call_interactively_args(args: &[Value]) -> Result<(), Flo
 /// `(call-interactively FUNCTION &optional RECORD-FLAG KEYS)`
 /// Call FUNCTION interactively, reading arguments according to its
 /// interactive spec.
-pub(crate) fn builtin_call_interactively(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_call_interactively(eval: &mut Context, args: &[Value]) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     validate_call_interactively_args(&args)?;
     let func_val = args[0];

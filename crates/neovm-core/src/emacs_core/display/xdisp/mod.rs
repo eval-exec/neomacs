@@ -2131,7 +2131,7 @@ pub(crate) fn format_mode_line_from_state(
 
 pub(crate) fn builtin_format_mode_line_ctx(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     finish_format_mode_line_in_eval(eval, &args)
 }
@@ -5681,7 +5681,7 @@ pub(crate) fn builtin_invisible_p(eval: &mut super::eval::Context, args: Vec<Val
 /// (line-pixel-height) -> integer
 ///
 /// Batch-compatible behavior returns 1.
-pub(crate) fn builtin_line_pixel_height(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_line_pixel_height(args: &[Value]) -> EvalResult {
     expect_args("line-pixel-height", &args, 0)?;
     Ok(Value::fixnum(1))
 }
@@ -6614,7 +6614,7 @@ pub(crate) fn builtin_fringe_bitmaps_at_pos(
 /// `simple.el` can reason about visual line movement without batch fallbacks.
 pub(crate) fn builtin_window_line_height(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let noninteractive = eval.noninteractive();
     window_line_height_impl(&mut eval.frames, &mut eval.buffers, noninteractive, args)
@@ -6624,7 +6624,7 @@ fn window_line_height_impl(
     frames: &mut crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
     noninteractive: bool,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_args_range("window-line-height", &args, 0, 2)?;
     validate_optional_window_designator_in_state(
@@ -7077,12 +7077,11 @@ pub(crate) fn builtin_move_to_window_line(
 
     // GNU `displayed_window_lines (w)`.
     let window_value = Value::make_window(wid.0);
-    let lines =
-        super::window_cmds::builtin_window_body_height(eval, vec![window_value, Value::NIL])
-            .ok()
-            .and_then(|value| value.as_fixnum())
-            .unwrap_or(1)
-            .max(1);
+    let lines = super::window_cmds::builtin_window_body_height(eval, &[window_value, Value::NIL])
+        .ok()
+        .and_then(|value| value.as_fixnum())
+        .unwrap_or(1)
+        .max(1);
 
     let accessible = match eval.buffers.get(buf_id) {
         Some(buf) => buf.accessible_emacs_byte_region(),
@@ -7111,7 +7110,7 @@ pub(crate) fn builtin_move_to_window_line(
             let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, byte);
         }
         None => {
-            super::indent::vertical_motion(eval, vec![Value::fixnum(-(lines / 2))])?;
+            super::indent::vertical_motion(eval, &[Value::fixnum(-(lines / 2))])?;
             let point = eval
                 .buffers
                 .get(current_id)
@@ -7130,7 +7129,7 @@ pub(crate) fn builtin_move_to_window_line(
         arg += 1;
     }
 
-    super::indent::vertical_motion(eval, vec![Value::fixnum(arg), window_value])
+    super::indent::vertical_motion(eval, &[Value::fixnum(arg), window_value])
 }
 
 /// (tool-bar-height &optional FRAME PIXELWISE) -> integer

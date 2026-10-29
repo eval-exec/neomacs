@@ -1826,11 +1826,11 @@ fn eval_buffer_live_p_tracks_killed_buffers() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
     let buf = builtin_get_buffer_create(&mut eval, vec![Value::string("*blp*")]).unwrap();
-    let live = builtin_buffer_live_p(&mut eval, vec![buf]).unwrap();
+    let live = builtin_buffer_live_p(&mut eval, &vec![buf]).unwrap();
     assert_eq!(live, Value::T);
 
     let _ = builtin_kill_buffer(&mut eval, vec![buf]).unwrap();
-    let dead = builtin_buffer_live_p(&mut eval, vec![buf]).unwrap();
+    let dead = builtin_buffer_live_p(&mut eval, &vec![buf]).unwrap();
     assert_eq!(dead, Value::NIL);
 }
 
@@ -1846,7 +1846,7 @@ fn kill_buffer_optional_arg_and_error_semantics() {
     let killed_current = builtin_kill_buffer(&mut eval, vec![]).unwrap();
     assert_eq!(killed_current, Value::T);
     assert_eq!(
-        builtin_buffer_live_p(&mut eval, vec![a]).unwrap(),
+        builtin_buffer_live_p(&mut eval, &vec![a]).unwrap(),
         Value::NIL
     );
     assert!(
@@ -1966,9 +1966,9 @@ fn set_buffer_does_not_record_buffer_list_order_like_gnu() {
 fn eval_buffer_live_p_non_buffer_objects_return_nil() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
-    let by_name = builtin_buffer_live_p(&mut eval, vec![Value::string("*scratch*")]).unwrap();
+    let by_name = builtin_buffer_live_p(&mut eval, &vec![Value::string("*scratch*")]).unwrap();
     assert_eq!(by_name, Value::NIL);
-    let nil_arg = builtin_buffer_live_p(&mut eval, vec![Value::NIL]).unwrap();
+    let nil_arg = builtin_buffer_live_p(&mut eval, &vec![Value::NIL]).unwrap();
     assert_eq!(nil_arg, Value::NIL);
 }
 
@@ -2195,7 +2195,7 @@ fn buffer_base_buffer_and_last_name_semantics() {
     );
 
     let created = create_unique_test_buffer(&mut eval, "*bln-created*");
-    let created_name = builtin_buffer_name(&mut eval, vec![created]).unwrap();
+    let created_name = builtin_buffer_name(&mut eval, &vec![created]).unwrap();
     assert_eq!(
         builtin_buffer_last_name(&mut eval, vec![created]).unwrap(),
         created_name,
@@ -2249,7 +2249,7 @@ fn buffer_base_buffer_and_last_name_semantics() {
     }
 
     let dead = create_unique_test_buffer(&mut eval, "*bln-dead*");
-    let live_name = builtin_buffer_name(&mut eval, vec![dead]).unwrap();
+    let live_name = builtin_buffer_name(&mut eval, &vec![dead]).unwrap();
     let _ = builtin_kill_buffer(&mut eval, vec![dead]).unwrap();
 
     assert_eq!(
@@ -14022,20 +14022,20 @@ fn message_nil_returns_nil() {
     eval.set_variable("noninteractive", Value::NIL);
 
     let eval_result =
-        builtin_message(&mut eval, vec![Value::NIL]).expect("message eval should accept nil");
+        builtin_message(&mut eval, &vec![Value::NIL]).expect("message eval should accept nil");
     assert!(eval_result.is_nil());
 
-    let displayed = builtin_message(&mut eval, vec![Value::string("hello echo")])
+    let displayed = builtin_message(&mut eval, &vec![Value::string("hello echo")])
         .expect("message eval should store echo text");
     assert_eq!(displayed, Value::string("hello echo"));
-    let current = builtin_current_message(&mut eval, vec![])
+    let current = builtin_current_message(&mut eval, &vec![])
         .expect("current-message should read stored echo text");
     assert_eq!(current, Value::string("hello echo"));
 
-    let cleared = builtin_message(&mut eval, vec![Value::NIL]).expect("message eval should clear");
+    let cleared = builtin_message(&mut eval, &vec![Value::NIL]).expect("message eval should clear");
     assert!(cleared.is_nil());
     let current_after_clear =
-        builtin_current_message(&mut eval, vec![]).expect("current-message should clear");
+        builtin_current_message(&mut eval, &vec![]).expect("current-message should clear");
     assert!(current_after_clear.is_nil());
 }
 
@@ -14050,7 +14050,7 @@ fn message_logs_to_visible_messages_buffer_name_like_gnu() {
         Value::list(vec![Value::T, Value::string("*Messages*")])
     );
 
-    builtin_message(&mut eval, vec![Value::string("hello echo")])
+    builtin_message(&mut eval, &vec![Value::string("hello echo")])
         .expect("message eval should log to *Messages*");
 
     let messages_id = eval
@@ -14084,7 +14084,7 @@ fn native_add_to_log_coalesces_without_changing_the_echo_area() {
         "Invalid face reference: missing-face [2 times]\n"
     );
     assert!(
-        builtin_current_message(&mut eval, vec![])
+        builtin_current_message(&mut eval, &vec![])
             .expect("current-message should remain readable")
             .is_nil(),
         "GNU add_to_log records a diagnostic without displaying it in the echo area"
@@ -14096,9 +14096,9 @@ fn message_progress_completion_replaces_previous_log_entry_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
 
-    builtin_message(&mut eval, vec![Value::string("Indexing project...")])
+    builtin_message(&mut eval, &vec![Value::string("Indexing project...")])
         .expect("initial progress message should be logged");
-    builtin_message(&mut eval, vec![Value::string("Indexing project...done")])
+    builtin_message(&mut eval, &vec![Value::string("Indexing project...done")])
         .expect("completed progress message should be logged");
 
     let messages_id = eval
@@ -14115,9 +14115,9 @@ fn message_progress_update_scans_from_previous_line_start_like_gnu() {
     let mut eval = crate::emacs_core::eval::Context::new();
     let long_progress = format!("Indexing project...{}", "working".repeat(32));
 
-    builtin_message(&mut eval, vec![Value::string(long_progress)])
+    builtin_message(&mut eval, &vec![Value::string(long_progress)])
         .expect("long progress message should be logged");
-    builtin_message(&mut eval, vec![Value::string("Indexing project...done")])
+    builtin_message(&mut eval, &vec![Value::string("Indexing project...done")])
         .expect("progress update should be logged");
 
     let messages_id = eval
@@ -14146,7 +14146,7 @@ fn message_log_appends_after_full_messages_buffer_when_narrowed() {
         messages.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(2));
     }
 
-    builtin_message(&mut eval, vec![Value::string("hello")])
+    builtin_message(&mut eval, &vec![Value::string("hello")])
         .expect("message should append to *Messages*");
 
     let messages = eval.buffers.get(messages_id).expect("*Messages* buffer");
@@ -14187,7 +14187,7 @@ fn interactive_message_materializes_echo_area_buffers_after_messages_like_gnu() 
     let mut eval = crate::emacs_core::eval::Context::new();
     eval.set_variable("noninteractive", Value::NIL);
 
-    builtin_message(&mut eval, vec![Value::string("hello echo")])
+    builtin_message(&mut eval, &vec![Value::string("hello echo")])
         .expect("interactive message should install echo area buffers");
 
     let names: Vec<String> = eval
@@ -14237,7 +14237,7 @@ fn echo_area_follows_its_buffer_across_a_rename_like_gnu() {
     let mut eval = crate::emacs_core::eval::Context::new();
     eval.set_variable("noninteractive", Value::NIL);
 
-    builtin_message(&mut eval, vec![Value::string("first")]).expect("message");
+    builtin_message(&mut eval, &vec![Value::string("first")]).expect("message");
     let echo0 = eval
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
@@ -14246,7 +14246,7 @@ fn echo_area_follows_its_buffer_across_a_rename_like_gnu() {
         .rename_buffer(echo0, Value::string(" *Echo Area RENAMED*"))
         .expect("rename echo area buffer");
 
-    builtin_message(&mut eval, vec![Value::string("second")]).expect("message");
+    builtin_message(&mut eval, &vec![Value::string("second")]).expect("message");
     assert_eq!(
         eval.buffers
             .get(echo0)
@@ -14264,7 +14264,7 @@ fn echo_area_follows_its_buffer_across_a_rename_like_gnu() {
     eval.buffers
         .replace_buffer_contents(user, "PRECIOUS USER CONTENT")
         .expect("seed user buffer");
-    builtin_message(&mut eval, vec![Value::string("third")]).expect("message");
+    builtin_message(&mut eval, &vec![Value::string("third")]).expect("message");
     assert_eq!(
         eval.buffers.get(user).expect("user buffer").buffer_string(),
         "PRECIOUS USER CONTENT",
@@ -14289,7 +14289,7 @@ fn echo_area_buffer_is_re_created_only_after_it_dies_like_gnu() {
     let mut eval = crate::emacs_core::eval::Context::new();
     eval.set_variable("noninteractive", Value::NIL);
 
-    builtin_message(&mut eval, vec![Value::string("first")]).expect("message");
+    builtin_message(&mut eval, &vec![Value::string("first")]).expect("message");
     let echo0 = eval
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
@@ -14297,7 +14297,7 @@ fn echo_area_buffer_is_re_created_only_after_it_dies_like_gnu() {
     eval.buffers.kill_buffer(echo0);
     assert!(eval.buffers.get(echo0).is_none(), "echo buffer killed");
 
-    builtin_message(&mut eval, vec![Value::string("second")]).expect("message");
+    builtin_message(&mut eval, &vec![Value::string("second")]).expect("message");
     let replacement = eval
         .buffers
         .find_buffer_by_name(" *Echo Area 0*")
@@ -14354,12 +14354,12 @@ fn current_message_promotes_a_raw_unibyte_payload_like_gnu() {
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
 
     let displayed =
-        builtin_message(&mut eval, vec![raw]).expect("message should preserve raw unibyte echo");
+        builtin_message(&mut eval, &vec![raw]).expect("message should preserve raw unibyte echo");
     let displayed = displayed.as_lisp_string().expect("message result string");
     assert!(!displayed.is_multibyte());
     assert_eq!(displayed.as_bytes(), &[0xFF]);
 
-    let current = builtin_current_message(&mut eval, vec![])
+    let current = builtin_current_message(&mut eval, &vec![])
         .expect("current-message should answer after an interactive message");
     let current = current.as_lisp_string().expect("current-message string");
     assert!(
@@ -14473,7 +14473,7 @@ fn inhibited_message_preserves_the_current_echo_area_like_gnu() {
     // in batch mode, xdisp.c `message3_frame_nolog`).
     eval.set_variable("noninteractive", Value::NIL);
 
-    builtin_message(&mut eval, vec![Value::string("visible")]).expect("seed visible message");
+    builtin_message(&mut eval, &vec![Value::string("visible")]).expect("seed visible message");
     assert_eq!(eval.current_message_text(), Some("visible".to_string()));
 
     eval.eval_str("(let ((inhibit-message t)) (message \"hidden\"))")
@@ -14507,7 +14507,7 @@ fn message_uses_set_message_function_string_and_suppression_results() {
         "set-message-function",
         Value::symbol("neomacs-test-message-prefix"),
     );
-    builtin_message(&mut eval, vec![Value::string("hello")])
+    builtin_message(&mut eval, &vec![Value::string("hello")])
         .expect("message should use string rewriting set-message-function");
     assert_eq!(
         eval.current_message_text(),
@@ -14518,7 +14518,7 @@ fn message_uses_set_message_function_string_and_suppression_results() {
         "set-message-function",
         Value::symbol("neomacs-test-message-suppress"),
     );
-    builtin_message(&mut eval, vec![Value::string("suppressed")])
+    builtin_message(&mut eval, &vec![Value::string("suppressed")])
         .expect("message should allow set-message-function to suppress echo");
     assert_eq!(eval.current_message_text(), None);
 }
@@ -14556,7 +14556,7 @@ fn message_nil_runs_clear_message_function_after_suppressed_minibuffer_message()
     )
     .expect("install message hooks");
 
-    builtin_message(&mut eval, vec![Value::string("Making completion list...")])
+    builtin_message(&mut eval, &vec![Value::string("Making completion list...")])
         .expect("set-message-function should handle message");
     assert_eq!(eval.current_message_text(), None);
     assert!(
@@ -14566,7 +14566,7 @@ fn message_nil_runs_clear_message_function_after_suppressed_minibuffer_message()
             .is_nil()
     );
 
-    builtin_message(&mut eval, vec![Value::NIL]).expect("message nil should clear");
+    builtin_message(&mut eval, &vec![Value::NIL]).expect("message nil should clear");
 
     assert_eq!(
         eval.eval_str("neomacs-clear-message-count")
@@ -14589,7 +14589,7 @@ fn message_ignores_non_function_set_message_function_like_gnu() {
     eval.set_variable("noninteractive", Value::NIL);
 
     eval.assign("set-message-function", Value::T);
-    builtin_message(&mut eval, vec![Value::string("plain")])
+    builtin_message(&mut eval, &vec![Value::string("plain")])
         .expect("GNU ignores non-function set-message-function");
 
     assert_eq!(eval.current_message_text(), Some("plain".to_string()));
@@ -14612,7 +14612,7 @@ fn message_demotes_set_message_function_errors_like_gnu_dsafe_call() {
         Value::symbol("neomacs-test-message-error"),
     );
 
-    builtin_message(&mut eval, vec![Value::string("still visible")])
+    builtin_message(&mut eval, &vec![Value::string("still visible")])
         .expect("GNU dsafe_call1 demotes set-message-function errors");
 
     assert_eq!(
@@ -14652,10 +14652,10 @@ fn message_eval_stores_echo_text_without_immediate_redisplay() {
         redisplay_count_capture.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }));
 
-    builtin_message(&mut eval, vec![Value::string("hello echo")])
+    builtin_message(&mut eval, &vec![Value::string("hello echo")])
         .expect("message eval should store echo text");
     assert_eq!(eval.current_message_text(), Some("hello echo".to_string()));
-    builtin_message(&mut eval, vec![Value::NIL]).expect("message eval should clear");
+    builtin_message(&mut eval, &vec![Value::NIL]).expect("message eval should clear");
     assert_eq!(eval.current_message_text(), None);
 
     // GNU semantic: message() must NOT invoke redisplay.
@@ -15385,7 +15385,7 @@ fn delete_char_handles_nonunicode_storage_units() {
     builtin_insert_char(&mut eval, vec![Value::fixnum(0x20_0000), Value::fixnum(1)]).unwrap();
     builtin_insert(&mut eval, vec![Value::string("A")]).unwrap();
     builtin_goto_char(&mut eval, vec![Value::fixnum(1)]).unwrap();
-    crate::emacs_core::editfns::builtin_delete_char(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    crate::emacs_core::editfns::builtin_delete_char(&mut eval, &vec![Value::fixnum(1)]).unwrap();
 
     let result = builtin_buffer_string(&mut eval, vec![]).unwrap();
     assert_eq!(decode_value_char_codes(&result), vec![b'A' as u32]);
@@ -15406,7 +15406,7 @@ fn delete_char_handles_unibyte_high_bytes() {
     builtin_insert_byte(&mut eval, vec![Value::fixnum(200), Value::fixnum(1)]).unwrap();
     builtin_insert_byte(&mut eval, vec![Value::fixnum(65), Value::fixnum(1)]).unwrap();
     builtin_goto_char(&mut eval, vec![Value::fixnum(1)]).unwrap();
-    crate::emacs_core::editfns::builtin_delete_char(&mut eval, vec![Value::fixnum(1)]).unwrap();
+    crate::emacs_core::editfns::builtin_delete_char(&mut eval, &vec![Value::fixnum(1)]).unwrap();
 
     let result = builtin_buffer_string(&mut eval, vec![]).unwrap();
     let ls = result.as_lisp_string().expect("buffer-string result");

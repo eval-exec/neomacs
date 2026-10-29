@@ -308,7 +308,7 @@ fn force_window_update_live_window_returns_t() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let selected =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     let result =
         crate::emacs_core::window_cmds::builtin_force_window_update(&mut eval, vec![selected])
             .unwrap();
@@ -328,7 +328,7 @@ struct ForceWindowUpdateFixture {
 }
 
 fn force_window_update_fixture(eval: &mut crate::emacs_core::Context) -> ForceWindowUpdateFixture {
-    let window_a = crate::emacs_core::window_cmds::builtin_selected_window(eval, vec![]).unwrap();
+    let window_a = crate::emacs_core::window_cmds::builtin_selected_window(eval, &vec![]).unwrap();
     let window_a_id = crate::window::WindowId(window_a.as_window_id().expect("window value"));
     let buffer_a = eval
         .frames
@@ -406,7 +406,7 @@ fn force_window_update_displayed_buffer_marks_all_its_windows() {
     let fx = force_window_update_fixture(&mut eval);
     // Show the SAME buffer in the second frame as well.
     let buffer_a_value =
-        crate::emacs_core::window_cmds::builtin_window_buffer(&mut eval, vec![fx.window_a])
+        crate::emacs_core::window_cmds::builtin_window_buffer(&mut eval, &vec![fx.window_a])
             .unwrap();
     crate::emacs_core::window_cmds::builtin_set_window_buffer(
         &mut eval,
@@ -443,7 +443,7 @@ fn force_window_update_buffer_name_reports_shown_and_unknown_names_stay_nil() {
     )
     .unwrap();
     let w1_value =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     crate::emacs_core::window_cmds::builtin_set_window_buffer(&mut eval, vec![w1_value, shown])
         .unwrap();
     let result = crate::emacs_core::window_cmds::builtin_force_window_update(
@@ -620,7 +620,7 @@ fn force_window_update_requests_mode_lines_for_each_successful_scope() {
             0 => Value::NIL,
             1 => fx.window_a,
             _ => {
-                crate::emacs_core::window_cmds::builtin_window_buffer(&mut eval, vec![fx.window_a])
+                crate::emacs_core::window_cmds::builtin_window_buffer(&mut eval, &vec![fx.window_a])
                     .unwrap()
             }
         };
@@ -638,7 +638,7 @@ fn eval_internal_show_cursor_per_window_state() {
     let mut eval = crate::emacs_core::Context::new();
     let _ = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
     let selected =
-        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, vec![]).unwrap();
+        crate::emacs_core::window_cmds::builtin_selected_window(&mut eval, &vec![]).unwrap();
     // GNU's `split-window` stages the old window's new size before calling
     // the primitive, which rejects an unstaged split.
     eval.eval_str("(set-window-new-pixel nil (- (window-pixel-height) 12))")

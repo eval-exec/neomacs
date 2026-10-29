@@ -19,7 +19,7 @@ pub(crate) fn builtin_run_hooks(eval: &mut super::eval::Context, args: Vec<Value
 
 pub(crate) fn builtin_run_hook_with_args(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("run-hook-with-args", &args, 1)?;
     hook_runtime::run_named_hook_with_args(eval, &args)
@@ -27,7 +27,7 @@ pub(crate) fn builtin_run_hook_with_args(
 
 pub(crate) fn builtin_run_hook_with_args_until_success(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("run-hook-with-args-until-success", &args, 1)?;
     hook_runtime::run_named_hook_with_args_until_success(eval, &args)
@@ -43,7 +43,7 @@ pub(crate) fn builtin_run_hook_with_args_until_failure(
 
 pub(crate) fn builtin_run_hook_wrapped(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("run-hook-wrapped", &args, 2)?;
     hook_runtime::run_named_hook_wrapped(eval, &args)
@@ -2040,7 +2040,7 @@ pub(crate) fn builtin_run_window_scroll_functions(
     }
 
     let window_arg = match args.first().copied().unwrap_or(Value::NIL).kind() {
-        ValueKind::Nil => super::window_cmds::builtin_selected_window(eval, vec![])?,
+        ValueKind::Nil => super::window_cmds::builtin_selected_window(eval, &[])?,
         _value => args.first().copied().unwrap_or(Value::NIL),
     };
     let Some(wid) = window_arg.as_window_id() else {
@@ -2056,7 +2056,7 @@ pub(crate) fn builtin_run_window_scroll_functions(
             vec![Value::symbol("window-live-p"), window_arg],
         )
     })?;
-    let window_start = super::window_cmds::builtin_window_start(eval, vec![window_arg])?;
+    let window_start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
     let hook_sym = hook_runtime::hook_symbol_by_name(eval, "window-scroll-functions");
     let saved_buffer_id = eval.buffers.current_buffer_id();
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {

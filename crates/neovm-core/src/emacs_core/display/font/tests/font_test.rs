@@ -45,7 +45,7 @@ fn cached_font_name_spelling_preserves_bytes_and_drops_intervals() {
 fn call_face_font(args: impl FnOnce() -> Vec<Value>) -> EvalResult {
     let mut eval = Context::new();
     let args = args();
-    builtin_face_font(&mut eval, args)
+    builtin_face_font(&mut eval, &args)
 }
 
 macro_rules! call_font_builtin {

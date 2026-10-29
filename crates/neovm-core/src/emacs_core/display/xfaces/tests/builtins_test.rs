@@ -1506,7 +1506,7 @@ fn internal_set_lisp_face_attribute_eval_realizes_string_font_requests_for_live_
 
     let face_font_name = builtin_face_font(
         &mut eval,
-        vec![Value::symbol("default"), Value::make_frame(frame_id.0)],
+        &vec![Value::symbol("default"), Value::make_frame(frame_id.0)],
     )
     .expect("default face font name");
     assert_eq!(
@@ -1739,7 +1739,7 @@ fn face_font_eval_returns_font_name_on_live_gui_frame() {
     // A GUI frame alone cannot supply a realized font. Its host opens a
     // distinct 14px face here, so fabricated 16px frame metrics cannot pass.
     install_font_at_display_host(&mut eval, "Test Mono");
-    let result = builtin_face_font(&mut eval, vec![Value::symbol("default")]).unwrap();
+    let result = builtin_face_font(&mut eval, &vec![Value::symbol("default")]).unwrap();
     assert!(result.is_string());
     assert!(result.as_utf8_str().is_some_and(|name| !name.is_empty()));
     let spec = font_spec(vec![Value::keyword("name"), result]).unwrap();
@@ -1763,7 +1763,7 @@ fn face_font_returns_nil_when_the_host_cannot_realize_the_face() {
     ensure_selected_gui_frame(&mut eval);
     eval.set_display_host(Box::new(LiveFrameFontDisplayHost { realized: None }));
     assert!(
-        builtin_face_font(&mut eval, vec![Value::symbol("default")])
+        builtin_face_font(&mut eval, &vec![Value::symbol("default")])
             .unwrap()
             .is_nil()
     );

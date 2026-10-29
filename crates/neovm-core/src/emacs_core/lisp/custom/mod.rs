@@ -160,7 +160,7 @@ fn make_projected_variable_buffer_local(
 /// `setq` in any buffer).
 pub(crate) fn builtin_make_local_variable(
     ctx: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_args("make-local-variable", &args, 1)?;
     let symbol = match args[0].kind() {
@@ -285,7 +285,7 @@ pub(crate) fn builtin_make_local_variable(
 fn make_projected_variable_local(
     ctx: &mut super::eval::Context,
     resolved: SymId,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let had_local = ctx.projected_local_in_current_buffer(resolved);
     let result =
@@ -566,7 +566,7 @@ pub(crate) fn builtin_set_buffer_local_toplevel_value(
     }
 
     let result = (|| {
-        builtin_make_local_variable(ctx, vec![args[0]])?;
+        builtin_make_local_variable(ctx, &[args[0]])?;
         super::eval::set_runtime_binding_in_state(ctx, resolved, args[1])?;
         Ok(Value::NIL)
     })();

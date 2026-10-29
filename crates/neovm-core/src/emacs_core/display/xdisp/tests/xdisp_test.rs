@@ -281,7 +281,7 @@ fn test_format_mode_line_eval_optional_designators() {
 
     let ok = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%b"),
             Value::NIL,
             Value::fixnum(window_id),
@@ -299,7 +299,7 @@ fn test_format_mode_line_eval_optional_designators() {
 
     let err = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::string("%b"), Value::NIL, Value::string("x")],
+        &vec![Value::string("%b"), Value::NIL, Value::string("x")],
     )
     .unwrap_err();
     match err.into_kind() {
@@ -309,7 +309,7 @@ fn test_format_mode_line_eval_optional_designators() {
 
     let err = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%b"),
             Value::NIL,
             Value::NIL,
@@ -328,12 +328,12 @@ fn test_format_mode_line_noninteractive_returns_empty_after_validation() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
 
-    let rendered = builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%b")]).unwrap();
+    let rendered = builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%b")]).unwrap();
     assert_eq!(rendered, Value::string(""));
 
     let err = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::string("%b"), Value::NIL, Value::string("x")],
+        &vec![Value::string("%b"), Value::NIL, Value::string("x")],
     )
     .unwrap_err();
     match err.into_kind() {
@@ -383,7 +383,7 @@ fn test_format_mode_line_eval_uses_explicit_buffer_instead_of_current_buffer() {
 
     let ok = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%b"),
             Value::NIL,
             Value::NIL,
@@ -420,7 +420,7 @@ fn test_format_mode_line_eval_uses_window_buffer_instead_of_current_buffer() {
 
     let ok = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%b"),
             Value::NIL,
             Value::make_window(window_id as u64),
@@ -497,7 +497,7 @@ fn test_format_mode_line_eval_keeps_shared_buffer_context_around_eval_forms() {
 
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::list(vec![
                 Value::string("%b "),
                 Value::list(vec![Value::symbol(":eval"), Value::symbol("mode-name")]),
@@ -558,7 +558,7 @@ fn test_format_mode_line_preserves_raw_unibyte_literal_segments() {
     let mut eval = interactive_context();
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
 
-    let rendered = builtin_format_mode_line_ctx(&mut eval, vec![Value::list(vec![raw])])
+    let rendered = builtin_format_mode_line_ctx(&mut eval, &vec![Value::list(vec![raw])])
         .expect("format-mode-line raw literal");
     let text = rendered
         .as_lisp_string()
@@ -575,7 +575,7 @@ fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
 
     let then_rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::list(vec![
+        &vec![Value::list(vec![
             Value::symbol("mode-line-flag"),
             Value::string("then"),
             Value::list(vec![
@@ -589,7 +589,7 @@ fn test_format_mode_line_symbol_conditional_uses_only_selected_branch() {
     eval.obarray.set_symbol_value("mode-line-flag", Value::NIL);
     let else_rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::list(vec![
+        &vec![Value::list(vec![
             Value::symbol("mode-line-flag"),
             Value::list(vec![
                 Value::symbol(":eval"),
@@ -706,10 +706,11 @@ fn test_format_mode_line_respects_risky_local_variable_for_eval_forms() {
         .unwrap();
 
     let suppressed =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::symbol("unsafe-mode-line")])
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::symbol("unsafe-mode-line")])
             .expect("unsafe mode-line variable should be suppressed");
-    let allowed = builtin_format_mode_line_ctx(&mut eval, vec![Value::symbol("trusted-mode-line")])
-        .expect("trusted mode-line variable should evaluate");
+    let allowed =
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::symbol("trusted-mode-line")])
+            .expect("trusted mode-line variable should evaluate");
 
     assert_eq!(suppressed, Value::string(""));
     assert_eq!(allowed, Value::string("ok"));
@@ -721,7 +722,7 @@ fn test_format_mode_line_propertize_preserves_text_properties() {
     let mut eval = interactive_context();
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::list(vec![
+        &vec![Value::list(vec![
             Value::symbol(":propertize"),
             Value::string("abc"),
             Value::symbol("face"),
@@ -770,7 +771,7 @@ fn test_format_mode_line_percent_specs_preserve_source_string_text_properties() 
     );
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![format]).expect("format-mode-line props");
+        builtin_format_mode_line_ctx(&mut eval, &vec![format]).expect("format-mode-line props");
 
     assert_eq!(rendered.as_utf8_str(), Some("fmt-prop-buffer!"));
     if !rendered.is_string() {
@@ -846,7 +847,7 @@ fn mode_line_percent_field_padding_inherits_the_format_string_face() {
     );
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![format]).expect("format padded %b field");
+        builtin_format_mode_line_ctx(&mut eval, &vec![format]).expect("format padded %b field");
     assert_eq!(rendered.as_utf8_str(), Some("xy          "));
     let props =
         get_string_text_properties_table_for_value(rendered).expect("mode-line text properties");
@@ -871,7 +872,7 @@ fn test_format_mode_line_status_specs_match_gnu_buffer_state() {
     }
 
     let status =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%*|%+|%&")]).expect("status");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%*|%+|%&")]).expect("status");
     assert_eq!(status, Value::string("%|*|*"));
 
     {
@@ -882,7 +883,7 @@ fn test_format_mode_line_status_specs_match_gnu_buffer_state() {
     }
 
     let narrowed =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%n")]).expect("narrow");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%n")]).expect("narrow");
     assert_eq!(narrowed, Value::string(" Narrow"));
 }
 
@@ -892,7 +893,7 @@ fn test_format_mode_line_face_argument_adds_default_face_and_merges_explicit_fac
     let mut eval = interactive_context();
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::list(vec![
                 Value::list(vec![
                     Value::symbol(":propertize"),
@@ -930,7 +931,7 @@ fn test_format_mode_line_integer_face_argument_discards_text_properties() {
     let mut eval = interactive_context();
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::list(vec![
                 Value::symbol(":propertize"),
                 Value::string("abc"),
@@ -958,7 +959,7 @@ fn test_format_mode_line_fixnum_padding_does_not_inherit_inner_properties() {
     let mut eval = interactive_context();
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::list(vec![
+        &vec![Value::list(vec![
             Value::fixnum(5),
             Value::list(vec![
                 Value::symbol(":propertize"),
@@ -991,12 +992,12 @@ fn test_format_mode_line_recursive_depth_specs_match_gnu() {
 
     eval.command_loop.recursive_depth = 4;
     let shallow =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%[|%]")]).expect("depth 3");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%[|%]")]).expect("depth 3");
     assert_eq!(shallow, Value::string("[[[|]]]"));
 
     eval.command_loop.recursive_depth = 7;
     let deep =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%[|%]")]).expect("depth 6");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%[|%]")]).expect("depth 6");
     assert_eq!(deep, Value::string("[[[... | ...]]]"));
 }
 
@@ -1012,7 +1013,7 @@ fn test_format_mode_line_size_and_process_specs_match_gnu() {
     }
 
     let no_process =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%i|%I|%s")]).expect("specs");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%i|%I|%s")]).expect("specs");
     assert_eq!(no_process, Value::string("1536|1.5k|no process"));
 
     eval.processes.create_process(
@@ -1023,7 +1024,7 @@ fn test_format_mode_line_size_and_process_specs_match_gnu() {
         crate::emacs_core::process::ProcessCodingSystems::gnu_make_process_initial(),
     );
     let with_process =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%i|%I|%s")]).expect("specs");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%i|%I|%s")]).expect("specs");
     assert_eq!(with_process, Value::string("1536|1.5k|run"));
 }
 
@@ -1043,7 +1044,7 @@ fn test_format_mode_line_size_specs_count_characters_not_bytes() {
     }
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%i|%I")]).expect("specs");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%i|%I")]).expect("specs");
     assert_eq!(rendered, Value::string("1536|1.5k"));
 }
 
@@ -1060,7 +1061,7 @@ fn test_format_mode_line_column_c_and_big_c_specs_match_gnu() {
     }
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%c|%C")]).expect("col specs");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%c|%C")]).expect("col specs");
     // %c = 0-indexed column (3), %C = 1-indexed column (4)
     assert_eq!(rendered, Value::string("3|4"));
 }
@@ -1082,7 +1083,7 @@ fn test_format_mode_line_line_and_column_at_deep_position() {
         buffer.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new("l1\nl2\nl3\nabc".len()));
     }
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%l|%c")]).expect("specs");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%l|%c")]).expect("specs");
     assert_eq!(rendered, Value::string("4|3"));
 }
 
@@ -1103,7 +1104,7 @@ fn format_mode_line_line_number_starts_at_accessible_buffer_beginning() {
     .expect("create narrowed mode-line fixture");
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%l|%c|%i")]).expect("specs");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%l|%c|%i")]).expect("specs");
 
     assert_eq!(rendered, Value::string("3|0|14"));
 }
@@ -1154,7 +1155,7 @@ fn format_mode_line_line_uses_the_target_windows_point_not_the_buffer_point() {
     // selected window's line (1).
     let other_l = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![Value::string("%l"), Value::NIL, Value::make_window(other.0)],
+        &vec![Value::string("%l"), Value::NIL, Value::make_window(other.0)],
     )
     .expect("other window %l");
     assert_eq!(other_l, Value::string("3"));
@@ -1171,7 +1172,7 @@ fn format_mode_line_position_backend_trace(kind: BufferTextBackendKind) -> Strin
         assert_eq!(buffer.text_backend_kind(), kind);
     }
 
-    let rendered = builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%l|%c|%C|%i")])
+    let rendered = builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%l|%c|%C|%i")])
         .expect("format-mode-line position specs");
     rendered
         .as_utf8_str()
@@ -1208,14 +1209,14 @@ fn test_format_mode_line_major_mode_name_spec_matches_gnu() {
         .expect("set mode-name");
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%m")]).expect("mode spec");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%m")]).expect("mode spec");
     assert_eq!(rendered, Value::string("Emacs-Lisp"));
 
     // Default mode-name is "Fundamental"
     let other_id = eval.buffers.create_buffer("default-mode");
     eval.buffers.set_current(other_id);
     let default =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%m")]).expect("default mode");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%m")]).expect("default mode");
     assert_eq!(default, Value::string("Fundamental"));
 }
 
@@ -1233,7 +1234,7 @@ fn test_format_mode_line_major_mode_name_preserves_raw_unibyte_value() {
         .expect("set raw mode-name");
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%m")]).expect("mode spec");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%m")]).expect("mode spec");
     let text = rendered
         .as_lisp_string()
         .expect("format-mode-line should return a LispString");
@@ -1258,7 +1259,7 @@ fn test_format_mode_line_frame_name_f_spec_prefers_title_and_preserves_raw_uniby
     }
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%F")]).expect("frame title");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%F")]).expect("frame title");
     let text = rendered
         .as_lisp_string()
         .expect("format-mode-line should return a LispString");
@@ -1271,7 +1272,7 @@ fn test_format_mode_line_frame_name_f_spec_defaults_to_emacs_without_frame() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%F")]).expect("frame name");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%F")]).expect("frame name");
     assert_eq!(rendered, Value::string("Emacs"));
 }
 
@@ -1289,7 +1290,7 @@ fn test_format_mode_line_frame_name_f_spec_uses_emacs_for_gui_frame_without_expl
     }
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%F")]).expect("frame name");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%F")]).expect("frame name");
     assert_eq!(rendered, Value::string("Emacs"));
 }
 
@@ -1305,7 +1306,7 @@ fn test_format_mode_line_remote_at_spec_matches_gnu() {
         .set_buffer_local_property(buffer_id, "default-directory", Value::string("/home/user"))
         .expect("set local default-directory");
     let local =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%@")]).expect("local @");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%@")]).expect("local @");
     assert_eq!(local, Value::string("-"));
 
     // Remote (Tramp-style) directory → "@"
@@ -1317,7 +1318,7 @@ fn test_format_mode_line_remote_at_spec_matches_gnu() {
         )
         .expect("set remote default-directory");
     let remote =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%@")]).expect("remote @");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%@")]).expect("remote @");
     assert_eq!(remote, Value::string("@"));
 }
 
@@ -1338,7 +1339,7 @@ fn test_format_mode_line_remote_at_spec_accepts_raw_unibyte_default_directory() 
         .expect("set raw remote default-directory");
 
     let remote =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%@")]).expect("remote @");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%@")]).expect("remote @");
     assert_eq!(remote, Value::string("@"));
 }
 
@@ -1358,7 +1359,7 @@ fn test_format_mode_line_coding_system_z_and_big_z_specs_match_gnu() {
         )
         .expect("set coding");
     let z =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z|%Z")]).expect("coding z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z|%Z")]).expect("coding z");
     assert_eq!(z, Value::string("U|U:"));
 
     // undecided-dos → mnemonic '-', EOL '\'
@@ -1370,7 +1371,7 @@ fn test_format_mode_line_coding_system_z_and_big_z_specs_match_gnu() {
         )
         .expect("set coding dos");
     let dos =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z|%Z")]).expect("coding dos");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z|%Z")]).expect("coding dos");
     assert_eq!(dos, Value::string("-|-\\"));
 }
 
@@ -1391,14 +1392,14 @@ fn test_format_mode_line_blanks_coding_mnemonics_for_unibyte_buffer() {
         )
         .expect("set coding");
 
-    let window_system = builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z|%Z")])
+    let window_system = builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z|%Z")])
         .expect("window-system coding");
     assert_eq!(window_system, Value::string(" | :"));
 
     eval.frames
         .create_frame("unibyte-tty-coding-frame", 80, 24, buffer_id);
     let tty =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z|%Z")]).expect("TTY coding");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z|%Z")]).expect("TTY coding");
     assert_eq!(
         tty,
         Value::string("   |   :"),
@@ -1426,7 +1427,7 @@ fn test_format_mode_line_big_z_preserves_raw_unibyte_eol_indicator() {
     );
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%Z")]).expect("coding Z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%Z")]).expect("coding Z");
     let text = rendered
         .as_lisp_string()
         .expect("format-mode-line should return a LispString");
@@ -1457,7 +1458,7 @@ fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z")]).expect("tty coding z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z")]).expect("tty coding z");
     assert_eq!(rendered, Value::string("UUU"));
 }
 
@@ -1480,7 +1481,7 @@ fn test_format_mode_line_tty_z_uses_prefer_utf8_declared_mnemonic() {
         .expect("set coding");
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z")]).expect("tty coding z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z")]).expect("tty coding z");
     assert_eq!(rendered, Value::string("UU-"));
 }
 
@@ -1514,7 +1515,7 @@ fn test_format_mode_line_tty_z_orders_keyboard_before_terminal() {
         .expect("set buffer coding");
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z")]).expect("tty coding z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z")]).expect("tty coding z");
     assert_eq!(rendered, Value::string("U=U"));
 }
 
@@ -1545,7 +1546,7 @@ fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_lo
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%z")]).expect("tty coding z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%z")]).expect("tty coding z");
     assert_eq!(rendered, Value::string("UUU"));
 }
 
@@ -1572,7 +1573,7 @@ fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indica
         .set_symbol_value("keyboard-coding-system", Value::NIL);
 
     let rendered =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%Z")]).expect("tty coding Z");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%Z")]).expect("tty coding Z");
     assert_eq!(rendered, Value::string("UUU:"));
 }
 
@@ -1594,7 +1595,7 @@ fn test_format_mode_line_string_keeps_min_width_property_without_display_padding
     eval.set_variable("cont30-min-width-format", format);
     // GNU31.1 CONT30 final-r1: STRING preserves this display property;
     // only the display iterator realizes its width. NOPROP drops it.
-    let rendered = builtin_format_mode_line_ctx(&mut eval, vec![format]).expect("mode-line");
+    let rendered = builtin_format_mode_line_ctx(&mut eval, &vec![format]).expect("mode-line");
     eval.set_variable("cont30-min-width-string", rendered);
     assert!(
         eval.eval_str(
@@ -1604,7 +1605,7 @@ fn test_format_mode_line_string_keeps_min_width_property_without_display_padding
         .unwrap()
         .is_t()
     );
-    let plain = builtin_format_mode_line_ctx(&mut eval, vec![format, Value::fixnum(0)])
+    let plain = builtin_format_mode_line_ctx(&mut eval, &vec![format, Value::fixnum(0)])
         .expect("NOPROP mode-line");
     eval.set_variable("cont30-min-width-string", plain);
     assert!(
@@ -1702,7 +1703,7 @@ fn test_format_mode_line_position_o_and_q_specs() {
 
     // Empty buffer → "All" for %o, "All   " (with trailing spaces) for %q (GNU compat)
     let empty =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%o|%q")]).expect("empty");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%o|%q")]).expect("empty");
     assert_eq!(empty, Value::string("All|All   "));
 
     // With content and no window set, fallback covers full buffer → "All"
@@ -1711,7 +1712,7 @@ fn test_format_mode_line_position_o_and_q_specs() {
         buffer.insert(&"x".repeat(100));
     }
     let all_visible =
-        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%o|%p")]).expect("all");
+        builtin_format_mode_line_ctx(&mut eval, &vec![Value::string("%o|%p")]).expect("all");
     assert_eq!(all_visible, Value::string("All|All"));
 
     // Set up frame/window to test partial visibility.
@@ -1733,7 +1734,7 @@ fn test_format_mode_line_position_o_and_q_specs() {
 
     let mid = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%o|%p|%P"),
             Value::NIL,
             Value::make_window(selected_window.0),
@@ -1760,7 +1761,7 @@ fn test_format_mode_line_position_o_and_q_specs() {
     }
     let at_top = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%o|%p"),
             Value::NIL,
             Value::make_window(selected_window.0),
@@ -1813,7 +1814,7 @@ fn test_format_mode_line_percent_specs_use_window_buffer_and_completed_window_en
 
     let rendered = builtin_format_mode_line_ctx(
         &mut eval,
-        vec![
+        &vec![
             Value::string("%o|%p|%P"),
             Value::NIL,
             Value::make_window(selected_window.0),
@@ -1855,7 +1856,7 @@ fn test_invisible_p() {
 #[test]
 fn test_line_pixel_height() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_line_pixel_height(vec![]).unwrap();
+    let result = builtin_line_pixel_height(&vec![]).unwrap();
     assert_eq!(result, Value::fixnum(1));
 }
 
@@ -4751,17 +4752,17 @@ fn test_window_line_height_eval_returns_live_gui_row_metrics() {
 
     let first = builtin_window_line_height(
         &mut eval,
-        vec![Value::fixnum(0), Value::make_window(selected_window.0)],
+        &vec![Value::fixnum(0), Value::make_window(selected_window.0)],
     )
     .unwrap();
     let third = builtin_window_line_height(
         &mut eval,
-        vec![Value::fixnum(2), Value::make_window(selected_window.0)],
+        &vec![Value::fixnum(2), Value::make_window(selected_window.0)],
     )
     .unwrap();
     let last = builtin_window_line_height(
         &mut eval,
-        vec![Value::fixnum(-1), Value::make_window(selected_window.0)],
+        &vec![Value::fixnum(-1), Value::make_window(selected_window.0)],
     )
     .unwrap();
     assert_eq!(super::super::print::print_value(&first), "(16 0 0 0)");
@@ -4859,7 +4860,7 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
 
     let tab = builtin_window_line_height(
         &mut eval,
-        vec![
+        &vec![
             Value::symbol("tab-line"),
             Value::make_window(selected_window.0),
         ],
@@ -4867,7 +4868,7 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
     .unwrap();
     let header = builtin_window_line_height(
         &mut eval,
-        vec![
+        &vec![
             Value::symbol("header-line"),
             Value::make_window(selected_window.0),
         ],
@@ -4875,7 +4876,7 @@ fn test_window_line_height_eval_uses_exact_chrome_rows() {
     .unwrap();
     let mode = builtin_window_line_height(
         &mut eval,
-        vec![
+        &vec![
             Value::symbol("mode-line"),
             Value::make_window(selected_window.0),
         ],
@@ -4971,12 +4972,12 @@ fn test_window_line_height_eval_reports_text_rows_relative_to_text_area() {
 
     let first = builtin_window_line_height(
         &mut eval,
-        vec![Value::fixnum(0), Value::make_window(selected_window.0)],
+        &vec![Value::fixnum(0), Value::make_window(selected_window.0)],
     )
     .unwrap();
     let last = builtin_window_line_height(
         &mut eval,
-        vec![Value::fixnum(-1), Value::make_window(selected_window.0)],
+        &vec![Value::fixnum(-1), Value::make_window(selected_window.0)],
     )
     .unwrap();
 
@@ -7193,7 +7194,7 @@ fn test_line_number_display_width() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
 
-    let result = crate::emacs_core::indent::line_number_display_width(&mut eval, vec![]).unwrap();
+    let result = crate::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
     assert_eq!(result, Value::fixnum(0));
 
     let frame_id = super::super::window_cmds::ensure_selected_frame_id(&mut eval);
@@ -7209,16 +7210,16 @@ fn test_line_number_display_width() {
         }
     }
 
-    let result = crate::emacs_core::indent::line_number_display_width(&mut eval, vec![]).unwrap();
+    let result = crate::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
     assert_eq!(result, Value::fixnum(3));
 
     let result =
-        crate::emacs_core::indent::line_number_display_width(&mut eval, vec![Value::T]).unwrap();
+        crate::emacs_core::indent::line_number_display_width(&mut eval, &vec![Value::T]).unwrap();
     assert_eq!(result, Value::fixnum(40));
 
     let result = crate::emacs_core::indent::line_number_display_width(
         &mut eval,
-        vec![Value::symbol("columns")],
+        &vec![Value::symbol("columns")],
     )
     .unwrap();
     match result.kind() {
@@ -7246,7 +7247,7 @@ fn line_number_display_width_uses_byte_newline_count_not_char_pos_scan() {
     }
 
     crate::buffer::buffer_text::reset_char_pos_to_emacs_byte_pos_call_count();
-    let result = crate::emacs_core::indent::line_number_display_width(&mut eval, vec![]).unwrap();
+    let result = crate::emacs_core::indent::line_number_display_width(&mut eval, &vec![]).unwrap();
 
     assert_eq!(result, Value::fixnum(4));
     assert_eq!(
@@ -7267,7 +7268,7 @@ fn test_long_line_optimizations_p() {
 #[test]
 fn test_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    assert!(builtin_line_pixel_height(vec![Value::fixnum(1)]).is_err());
+    assert!(builtin_line_pixel_height(&vec![Value::fixnum(1)]).is_err());
     {
         let mut ev = crate::emacs_core::Context::new();
         assert!(builtin_invisible_p(&mut ev, vec![]).is_err());
@@ -7784,7 +7785,7 @@ fn window_line_height_refuses_every_line_form_without_a_current_matrix_like_gnu(
     ] {
         let got = builtin_window_line_height(
             &mut eval,
-            vec![line, Value::make_window(selected_window.0)],
+            &vec![line, Value::make_window(selected_window.0)],
         )
         .unwrap();
         assert_eq!(

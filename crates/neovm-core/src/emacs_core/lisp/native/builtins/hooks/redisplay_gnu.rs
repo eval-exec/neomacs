@@ -303,7 +303,7 @@ pub(super) fn run_eager_scroll(eval: &mut super::eval::Context, window: WindowId
         )
     })?;
     let argument = Value::make_window(window.0);
-    let start = super::super::window_cmds::builtin_window_start(eval, vec![argument])?;
+    let start = super::super::window_cmds::builtin_window_start(eval, &[argument])?;
     let saved = eval.buffers.current_buffer_id();
     let mut scope = BufferContext { eval, saved };
     if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
@@ -566,7 +566,7 @@ pub(super) fn run_committed_scroll(
         )
     })?;
     let window_arg = Value::make_window(window.0);
-    let start = super::super::window_cmds::builtin_window_start(eval, vec![window_arg])?;
+    let start = super::super::window_cmds::builtin_window_start(eval, &[window_arg])?;
     let saved = eval.buffers.current_buffer_id();
     let mut scope = BufferContext { eval, saved };
     if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {

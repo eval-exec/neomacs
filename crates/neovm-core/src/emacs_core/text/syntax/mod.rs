@@ -6454,7 +6454,7 @@ fn scan_backward_comment_fence(
 /// `(backward-prefix-chars)` — move point backward over prefix-syntax chars.
 pub(crate) fn builtin_backward_prefix_chars(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     let honor = parse_sexp_lookup_properties_enabled(eval);
     let props = SyntaxProperties::for_scan_with_symbols(
@@ -6468,7 +6468,7 @@ pub(crate) fn builtin_backward_prefix_chars(
 
 pub(crate) fn builtin_backward_prefix_chars_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
     props: SyntaxProperties<'_>,
 ) -> EvalResult {
     if !args.is_empty() {

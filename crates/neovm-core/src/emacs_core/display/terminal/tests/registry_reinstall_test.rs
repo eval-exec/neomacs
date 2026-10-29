@@ -27,7 +27,7 @@ fn rebuild_native_terminal_manager() {
 fn assert_deleted_terminal(ctx: &mut Context, deleted: Value) {
     assert_eq!(terminal_list_ids(), vec![TERMINAL_ID]);
     assert!(
-        builtin_terminal_live_p(ctx, vec![deleted])
+        builtin_terminal_live_p(ctx, &vec![deleted])
             .expect("terminal-live-p accepts a deleted handle")
             .is_nil()
     );
@@ -108,7 +108,7 @@ fn deleted_initial_terminal_stays_dead_after_native_manager_reset() {
     ctx.setup_thread_locals();
     assert!(terminal_list_ids().is_empty());
     assert!(
-        builtin_terminal_live_p(&mut ctx, vec![deleted])
+        builtin_terminal_live_p(&mut ctx, &vec![deleted])
             .expect("deleted terminal-live-p")
             .is_nil()
     );
@@ -185,7 +185,7 @@ fn owner_reactivation_reconciles_peer_registry_changes() {
             vec![2, 3, TERMINAL_ID]
         );
         assert!(
-            builtin_terminal_live_p(&mut ctx, vec![deleted])
+            builtin_terminal_live_p(&mut ctx, &vec![deleted])
                 .expect("deleted terminal-live-p")
                 .is_nil()
         );
@@ -196,7 +196,7 @@ fn owner_reactivation_reconciles_peer_registry_changes() {
         assert_eq!(terminal_list_ids(), owner_ids);
         assert_eq!(live_terminal_ids_in_keyboard_poll_order(), owner_poll_order);
         assert!(
-            builtin_terminal_live_p(&mut ctx, vec![deleted])
+            builtin_terminal_live_p(&mut ctx, &vec![deleted])
                 .expect("deleted terminal-live-p after ordinary activation")
                 .is_nil()
         );

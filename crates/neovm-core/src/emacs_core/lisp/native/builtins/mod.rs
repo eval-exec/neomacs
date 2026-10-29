@@ -775,7 +775,7 @@ fn load_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult 
     result
 }
 
-fn message_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+fn message_traced(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     if !tracing::enabled!(tracing::Level::DEBUG) {
         return builtin_message(eval, args);
     }
@@ -810,7 +810,7 @@ fn coding_system_base(eval: &mut super::eval::Context, args: Vec<Value>) -> Eval
     let mode = eval.symbol_mode();
     super::coding::builtin_coding_system_base(&eval.coding_systems, args, mode)
 }
-fn coding_system_eol_type(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+fn coding_system_eol_type(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let mode = eval.symbol_mode();
     super::coding::builtin_coding_system_eol_type(&eval.coding_systems, args, mode)
 }

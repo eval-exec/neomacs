@@ -1348,7 +1348,7 @@ pub(crate) fn builtin_frame_terminal(
 /// by framep-on-display to determine the window system type.
 pub(crate) fn builtin_terminal_live_p(
     eval: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_args_range("terminal-live-p", &args, 1, 1)?;
     let Some(terminal_id) = decode_terminal_id_eval(eval, &args[0]) else {

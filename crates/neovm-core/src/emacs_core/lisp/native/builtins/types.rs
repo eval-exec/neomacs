@@ -355,7 +355,7 @@ pub(crate) fn builtin_sequencep(args: Vec<Value>) -> EvalResult {
     Ok(Value::bool_val(is_seq))
 }
 
-pub(crate) fn builtin_arrayp(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_arrayp(args: &[Value]) -> EvalResult {
     expect_args("arrayp", &args, 1)?;
     // GNU: arrays are vectors, strings, char-tables, bool-vectors.
     // Records are NOT arrays.

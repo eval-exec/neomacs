@@ -129,7 +129,7 @@ fn mode_line_incremental_top_format_and_face_survive_replacement_during_gc() {
     let before = save_scratch_gc_roots();
     let gc = eval.gc_count;
     let output =
-        builtin_format_mode_line_ctx(&mut eval, vec![format, face]).expect("format-mode-line");
+        builtin_format_mode_line_ctx(&mut eval, &vec![format, face]).expect("format-mode-line");
     assert_eq!(eval.gc_count, gc + 1);
     assert_eq!(save_scratch_gc_roots(), before);
     assert_live_interval_plists(&eval, output);
@@ -162,7 +162,7 @@ fn mode_line_incremental_resolved_symbol_survives_replacement_during_gc() {
         .expect("resolved format setup");
     let before = save_scratch_gc_roots();
     let gc = eval.gc_count;
-    let value = builtin_format_mode_line_ctx(&mut eval, vec![format]).expect("resolved formatter");
+    let value = builtin_format_mode_line_ctx(&mut eval, &vec![format]).expect("resolved formatter");
     assert_eq!(value.as_utf8_str(), Some("XY"));
     assert_eq!(eval.gc_count, gc + 1);
     assert_eq!(

@@ -420,7 +420,7 @@ pub(crate) fn builtin_proper_list_p(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(subrp OBJ)` -> t if OBJ is a built-in function.
-pub(crate) fn builtin_subrp(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_subrp(args: &[Value]) -> EvalResult {
     expect_args("subrp", &args, 1)?;
     Ok(Value::bool_val(args[0].as_subr_id().is_some()))
 }

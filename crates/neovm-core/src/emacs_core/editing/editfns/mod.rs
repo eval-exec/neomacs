@@ -1672,7 +1672,7 @@ pub(crate) fn builtin_insert_before_markers(
 /// `(delete-char N &optional KILLFLAG)` — delete N characters forward.
 pub(crate) fn builtin_delete_char(
     ctx: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     expect_min_args("delete-char", &args, 1)?;
     expect_max_args("delete-char", &args, 2)?;

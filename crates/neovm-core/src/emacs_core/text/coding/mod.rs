@@ -2714,7 +2714,7 @@ fn builtin_coding_system_base_uncached(
 /// if the EOL type is undecided.
 pub(crate) fn builtin_coding_system_eol_type(
     mgr: &CodingSystemManager,
-    args: Vec<Value>,
+    args: &[Value],
     mode: SymbolMode,
 ) -> EvalResult {
     // Memoized per coding-system symbol (see `CodingLookupCache`); an
@@ -2725,7 +2725,7 @@ pub(crate) fn builtin_coding_system_eol_type(
     {
         return Ok(*value);
     }
-    let value = builtin_coding_system_eol_type_uncached(mgr, args, mode)?;
+    let value = builtin_coding_system_eol_type_uncached(mgr, &args, mode)?;
     if let Some(key) = key
         && value.is_fixnum()
     {
@@ -2736,7 +2736,7 @@ pub(crate) fn builtin_coding_system_eol_type(
 
 fn builtin_coding_system_eol_type_uncached(
     mgr: &CodingSystemManager,
-    args: Vec<Value>,
+    args: &[Value],
     mode: SymbolMode,
 ) -> EvalResult {
     expect_args("coding-system-eol-type", &args, 1)?;
@@ -3054,7 +3054,7 @@ pub(crate) fn builtin_coding_system_change_eol_conversion(
 
     let request = EolConversionRequest::from_lisp_value(args[1], mode);
     let base = builtin_coding_system_base(mgr, vec![args[0]], mode)?;
-    let orig_eol_type = builtin_coding_system_eol_type(mgr, vec![args[0]], mode)?;
+    let orig_eol_type = builtin_coding_system_eol_type(mgr, &[args[0]], mode)?;
 
     if matches!(
         orig_eol_type.kind(),
@@ -3077,7 +3077,7 @@ pub(crate) fn builtin_coding_system_change_eol_conversion(
         return Ok(args[0]);
     }
 
-    let base_eol_type = builtin_coding_system_eol_type(mgr, vec![base], mode)?;
+    let base_eol_type = builtin_coding_system_eol_type(mgr, &[base], mode)?;
     if matches!(
         base_eol_type.kind(),
         ValueKind::Veclike(VecLikeType::Vector)

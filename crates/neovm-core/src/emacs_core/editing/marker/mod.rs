@@ -402,10 +402,7 @@ pub(crate) fn builtin_marker_position_in_buffers(
 
 /// Context-aware marker-buffer that returns nil for killed buffers.
 /// GNU returns nil when the marker's buffer has been killed.
-pub(crate) fn builtin_marker_buffer(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_marker_buffer(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_args("marker-buffer", &args, 1)?;
     expect_marker("marker-buffer", &args[0])?;
     if let Some(buffer_id) = marker_buffer_id(&args[0])
@@ -475,19 +472,19 @@ pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
 }
 
 /// (make-marker) -> new empty marker (no buffer, no position)
-pub(crate) fn builtin_make_marker(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_make_marker(args: &[Value]) -> EvalResult {
     expect_args("make-marker", &args, 0)?;
     Ok(make_marker_value(None, None, false))
 }
 
 /// Eval-dependent copy-marker that registers the new marker in the buffer.
-pub(crate) fn builtin_copy_marker(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_copy_marker(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     builtin_copy_marker_in_buffers(&mut eval.buffers, args)
 }
 
 pub(crate) fn builtin_copy_marker_in_buffers(
     buffers: &mut BufferManager,
-    args: Vec<Value>,
+    args: &[Value],
 ) -> EvalResult {
     // GNU `Fcopy_marker` (marker.c:753) is `(0, 2)`: with no arguments, it
     // returns a fresh marker that points nowhere; passing nil for MARKER

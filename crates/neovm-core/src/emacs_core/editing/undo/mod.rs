@@ -204,10 +204,7 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
 ///
 /// Context-dependent variant used during normal execution: inserts an
 /// undo boundary into the current buffer's undo list.
-pub(crate) fn builtin_undo_boundary(
-    ctx: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
+pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_args("undo-boundary", &args, 0)?;
     let Some(current_id) = ctx.buffers.current_buffer_id() else {
         return Err(signal("error", vec![Value::string("No current buffer")]));

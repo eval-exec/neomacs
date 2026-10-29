@@ -1528,7 +1528,7 @@ impl RecursiveEditBuffer {
         let Some(current) = eval.buffers.current_buffer_id() else {
             return Self::SelectedWindows;
         };
-        let window_buffer = super::window_cmds::builtin_window_buffer(eval, Vec::new())
+        let window_buffer = super::window_cmds::builtin_window_buffer(eval, &[])
             .ok()
             .and_then(|value| value.as_buffer_id());
         if window_buffer == Some(current) {
