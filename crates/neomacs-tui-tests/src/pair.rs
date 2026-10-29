@@ -150,6 +150,10 @@ pub fn resize_both(gnu: &mut TuiSession, neo: &mut TuiSession, rows: u16, cols: 
 /// Wait until `predicate` is satisfied on both sessions or `timeout`
 /// elapses. Polls both PTYs concurrently in short interleaved slices,
 /// same strategy as `boot_pair` phase 1.
+///
+/// On timeout this returns normally (the loop breaks) and does not panic:
+/// callers that depend on the postcondition must assert it themselves, as
+/// [`eval_expression`] does for the minibuffer exit barrier.
 pub fn wait_for_both<F>(gnu: &mut TuiSession, neo: &mut TuiSession, timeout: Duration, predicate: F)
 where
     F: Fn(&[String]) -> bool + Copy,
@@ -311,15 +315,20 @@ pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &
     type_expression(gnu, neo, expression);
     let exited = |grid: &[String]| minibuffer_exited(grid, expression);
     wait_for_both(gnu, neo, Duration::from_secs(8), exited);
-    for (label, session) in [("GNU", &*gnu), ("Neomacs", &*neo)] {
-        let grid = session.text_grid();
-        assert!(
-            minibuffer_exited(&grid, expression),
-            "{label} still shows a minibuffer after evaluating {:?}; use \
+    // wait_for_both returns on timeout; a barrier that times out must fail
+    // loudly with both grids instead of letting the caller race the editor.
+    let gnu_grid = gnu.text_grid();
+    let neo_grid = neo.text_grid();
+    if !minibuffer_exited(&gnu_grid, expression) || !minibuffer_exited(&neo_grid, expression) {
+        panic!(
+            "eval_expression timed out waiting for the minibuffer to exit \
+             (wait_for_both returns on timeout). Use \
              eval_expression_enters_minibuffer for a form that keeps a \
-             minibuffer open:\n{}",
+             minibuffer open. expression={:?}\nGNU grid:\n{}\n\
+             Neomacs grid:\n{}",
             expression.lines().next().unwrap_or(expression),
-            grid.join("\n"),
+            gnu_grid.join("\n"),
+            neo_grid.join("\n"),
         );
     }
 }
@@ -328,10 +337,13 @@ pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
     type_expression_one(session, expression);
     let exited = |grid: &[String]| minibuffer_exited(grid, expression);
     session.read_until(Duration::from_secs(8), exited);
+    // read_until is silent on timeout; fail loudly here, as in
+    // `eval_expression`.
     let grid = session.text_grid();
     assert!(
         minibuffer_exited(&grid, expression),
-        "still shows a minibuffer after evaluating {:?}:\n{}",
+        "eval_expression_one timed out waiting for the minibuffer to exit; \
+         expression={:?}:\n{}",
         expression.lines().next().unwrap_or(expression),
         grid.join("\n"),
     );
