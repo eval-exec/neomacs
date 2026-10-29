@@ -25,10 +25,7 @@ fn terminal_image_property_preserves_multiline_text_banner() {
     // unsubmitted paste embeds the same characters inside a longer source
     // line, so a `contains` predicate is also satisfied while the editor is
     // still displaying `Eval: (progn ...)` and has not run the switch.
-    let banner_visible = |grid: &[String]| {
-        grid.iter()
-            .any(|row| row.trim_end() == "⣿  Emacs  ⣿")
-    };
+    let banner_visible = |grid: &[String]| grid.iter().any(|row| row.trim_end() == "⣿  Emacs  ⣿");
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(5), banner_visible);
     for (label, session) in [("GNU", &gnu), ("Neomacs", &neo)] {
         let grid = session.text_grid();
