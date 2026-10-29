@@ -2965,12 +2965,25 @@ impl Context {
                 push_scratch_gc_root(func_value);
                 let nil = Value::NIL.bits() as i64;
                 let fixed = nargs.min(nonrest);
-                let mut bits: smallvec::SmallVec<[i64; 8]> = self.bc_buf
-                    [args_start..args_start + fixed]
-                    .iter()
-                    .map(|v| v.bits() as i64)
-                    .chain(std::iter::repeat_n(nil, nonrest - fixed))
-                    .collect();
+                // Fill the leaf ABI slots directly: the common arities need
+                // no growable vector, and the fallback keeps larger formal
+                // lists working.
+                let slot_count = nonrest + usize::from(has_rest);
+                let mut stack_bits = [0i64; 9];
+                let mut heap_bits: smallvec::SmallVec<[i64; 8]>;
+                let bits: &mut [i64] = if slot_count <= stack_bits.len() {
+                    &mut stack_bits[..slot_count]
+                } else {
+                    heap_bits = std::iter::repeat_n(0i64, slot_count).collect();
+                    &mut heap_bits[..]
+                };
+                for (slot, value) in bits[..fixed]
+                    .iter_mut()
+                    .zip(&self.bc_buf[args_start..args_start + fixed])
+                {
+                    *slot = value.bits() as i64;
+                }
+                bits[fixed..nonrest].fill(nil);
                 if has_rest {
                     // Consed after the fixed slots are read; nothing allocates
                     // between here and the leaf's prologue, which roots it (the
@@ -2981,7 +2994,7 @@ impl Context {
                     } else {
                         Value::NIL
                     };
-                    bits.push(rest.bits() as i64);
+                    bits[nonrest] = rest.bits() as i64;
                 }
                 let native =
                     cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr());
