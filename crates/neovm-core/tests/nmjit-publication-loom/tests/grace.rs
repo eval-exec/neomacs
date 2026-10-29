@@ -442,26 +442,33 @@ enum DefinitionLife {
     Live,
     Swept,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DefinitionId(usize);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RootCount(usize);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FunctionEpoch(usize);
+
 struct Definitions {
-    current: usize,
+    current: DefinitionId,
     life: [DefinitionLife; 2],
-    roots: [usize; 2],
-    function_epoch: usize,
+    roots: [RootCount; 2],
+    function_epoch: FunctionEpoch,
 }
 
 fn selected_definition(transfer: RootTransfer) {
     let state = Arc::new(Mutex::new(Definitions {
-        current: 0,
+        current: DefinitionId(0),
         life: [DefinitionLife::Live; 2],
-        roots: [0; 2],
-        function_epoch: 1,
+        roots: [RootCount(0); 2],
+        function_epoch: FunctionEpoch(1),
     }));
     // Cell selection and root installation share the existing authority leaf.
     let selected = {
         let mut state = state.lock().unwrap();
         let selected = state.current;
         match transfer {
-            RootTransfer::RootBeforeRelease => state.roots[selected] += 1,
+            RootTransfer::RootBeforeRelease => state.roots[selected.0].0 += 1,
             RootTransfer::OmitRoot => {}
         }
         selected
@@ -470,9 +477,9 @@ fn selected_definition(transfer: RootTransfer) {
         let state = state.clone();
         thread::spawn(move || {
             let mut state = state.lock().unwrap();
-            state.current = 1;
-            state.function_epoch += 1; // fset's commit boundary
-            if state.roots[0] == 0 {
+            state.current = DefinitionId(1);
+            state.function_epoch.0 += 1; // fset's commit boundary
+            if state.roots[0] == RootCount(0) {
                 state.life[0] = DefinitionLife::Swept; // stopped sweep lacks old root
             }
         })
@@ -480,11 +487,11 @@ fn selected_definition(transfer: RootTransfer) {
     support::join(writer);
     let state = state.lock().unwrap();
     assert!(
-        matches!(state.life[selected], DefinitionLife::Live),
+        matches!(state.life[selected.0], DefinitionLife::Live),
         "UNROOTED_SELECTED_DEFINITION"
     );
-    assert_eq!(state.current, 1); // next selection observes the new definition
-    assert_eq!(state.function_epoch, 2); // cached epoch 1 must revalidate
+    assert_eq!(state.current, DefinitionId(1)); // next selection observes the new definition
+    assert_eq!(state.function_epoch, FunctionEpoch(2)); // cached epoch 1 must revalidate
 }
 
 #[test]
