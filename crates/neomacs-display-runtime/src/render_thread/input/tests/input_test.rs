@@ -2563,6 +2563,30 @@ fn resize_edge_small_window() {
 // ===================================================================
 
 #[test]
+fn undecorated_frame_titlebar_requires_explicit_height() {
+    use crate::thread_comm::{ConfigCommand, WindowCommand};
+
+    let mut app = make_test_app(800, 600, 1.0);
+    app.handle_window(WindowCommand::SetWindowDecorations { decorated: false });
+
+    // With `undecorated=t`, both of the first two 20-pixel text rows must
+    // remain editor input, including where titlebar buttons used to appear.
+    for x in [100.0, 680.0, 720.0, 780.0] {
+        for y in [10.0, 25.0] {
+            assert_eq!(app.titlebar_hit_test(x, y), 0, "text at ({x}, {y})");
+        }
+    }
+
+    // An explicit custom-titlebar request still enables its drag/buttons.
+    app.handle_config(ConfigCommand::SetTitlebarHeight { height: 30.0 });
+    assert_eq!(app.titlebar_hit_test(100.0, 10.0), 1);
+    assert_eq!(app.titlebar_hit_test(780.0, 10.0), 2);
+    app.handle_config(ConfigCommand::SetTitlebarHeight { height: 0.0 });
+    assert_eq!(app.titlebar_hit_test(100.0, 10.0), 0);
+    assert_eq!(app.titlebar_hit_test(780.0, 10.0), 0);
+}
+
+#[test]
 fn titlebar_returns_zero_when_decorations_enabled() {
     let app = make_test_app(800, 600, 1.0);
     assert!(
