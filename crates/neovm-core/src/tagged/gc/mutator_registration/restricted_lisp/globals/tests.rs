@@ -1,5 +1,6 @@
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 #[test]
 fn p3sym_c5_global_executor_cannot_admit_intern_even_if_unreachable() {
@@ -315,7 +316,7 @@ fn p3sym_c3_executor_rejects_transitive_mutable_global_before_activation() {
         .unwrap();
     let id = crate::emacs_core::intern::intern("p3sym-c3-bad-import");
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             let source = source(vec![Op::Global(GlobalOp::Value { symbol: 0, dst: 0 })], 1);
             assert!(matches!(
                 GlobalSession::admit(projection.era(), &[id], &[source]),

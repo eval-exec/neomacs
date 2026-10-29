@@ -3,6 +3,7 @@
 use super::fresh::{Cycle, Placement, Preparation, dispatch_role, with_allocation};
 use super::minor_adapter::{Age, age};
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::{OwnerRootSlot, TaggedHeap};
 
 enum Extension {

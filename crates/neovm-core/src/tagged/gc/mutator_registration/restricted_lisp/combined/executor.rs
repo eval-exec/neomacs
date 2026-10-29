@@ -1,5 +1,6 @@
 //! Owner-local straight-line execution through the sealed kernels only.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mutator_registration::symbol_authority::{
     check_owner_home_for_test,
     combined_inputs::{

@@ -1,6 +1,7 @@
 //! C4 closed executor: all function operands stay in checked owner homes.
 use super::*;
 use crate::emacs_core::intern::SymId;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, SymbolHandle,
 };

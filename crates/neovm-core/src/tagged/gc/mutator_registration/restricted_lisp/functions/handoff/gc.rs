@@ -1,5 +1,6 @@
 //! Actual stopped root families, not substitutes for the collector census.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
 
 #[derive(Default)]
@@ -23,14 +24,19 @@ impl Ledger {
 pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
     let mut result = Ledger::default();
     let mut roots = Vec::new();
-    era.keeper
+    era.core
+        .keeper
         .as_ref()
         .unwrap()
         .collect_parallel_world_roots(stopped, &mut roots)
         .unwrap();
     result.world = roots.into_iter().map(TaggedValue::bits).collect();
     let mut roots = Vec::new();
-    era.legacy_roots.as_ref().unwrap().append_words(&mut roots);
+    era.core
+        .legacy_roots
+        .as_ref()
+        .unwrap()
+        .append_words(&mut roots);
     era.with_stopped_heap_for_test(stopped, |heap| {
         crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut roots);
     })

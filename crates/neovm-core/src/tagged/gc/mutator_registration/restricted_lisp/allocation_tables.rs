@@ -1,5 +1,6 @@
 //! B7: made/copied shells, their payload roots, and refreshed birth parity.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 fn every_stop(_: usize, _: usize) -> Option<Go> {
     Some(Go::Forced)
@@ -155,7 +156,7 @@ fn a6_ht_b7_make_copy_collect_resume_and_reclaim() {
     let abort = AtomicBool::new(false);
     let overlap = Overlap::new(N, true);
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage().unwrap();

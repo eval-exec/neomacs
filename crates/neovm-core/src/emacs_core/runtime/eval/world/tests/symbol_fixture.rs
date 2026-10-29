@@ -3,7 +3,7 @@ use super::*;
 
 impl Context {
     pub(crate) fn with_test_symbol_era<R>(
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, SymId) -> R,
     ) -> R {
         Self::with_test_symbol_backing_era(crate::tagged::gc::PlainSymbolBacking::Unprojected, body)
     }
@@ -12,7 +12,7 @@ impl Context {
     /// era exists. No production cell accessor changes and no setup collection.
     pub(crate) fn with_test_symbol_backing_era<R>(
         kind: crate::tagged::gc::PlainSymbolBacking,
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, SymId) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, SymId) -> R,
     ) -> R {
         Self::with_test_symbol_backings_era(&[kind], |era, ids| body(era, ids[0]))
     }
@@ -21,7 +21,7 @@ impl Context {
     /// the era exists. Running tests can only access these existing symbols.
     pub(crate) fn with_test_symbol_backings_era<R>(
         kinds: &[crate::tagged::gc::PlainSymbolBacking],
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
         Self::with_test_symbol_backings_init_era(kinds, |_, _| {}, body)
     }
@@ -31,7 +31,7 @@ impl Context {
     /// rooted input operands through the already-qualified C3 read API.
     pub(crate) fn with_test_symbol_functions_era<R>(
         kind: crate::tagged::gc::PlainSymbolBacking,
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
         Self::with_test_symbol_functions_init_era(kind, |_, _| {}, body)
     }
@@ -41,7 +41,7 @@ impl Context {
     pub(crate) fn with_test_symbol_functions_init_era<R>(
         kind: crate::tagged::gc::PlainSymbolBacking,
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
         Self::with_test_symbol_backings_init_era(
             &[kind, kind],
@@ -66,7 +66,7 @@ impl Context {
     pub(crate) fn with_test_symbol_name_inputs_era<R>(
         kind: crate::tagged::gc::PlainSymbolBacking,
         spelling: &str,
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
         Self::with_test_symbol_name_inputs_init_era(kind, spelling, |_, _| {}, body)
     }
@@ -75,7 +75,7 @@ impl Context {
         kind: crate::tagged::gc::PlainSymbolBacking,
         spelling: &str,
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
         use crate::tagged::gc::PlainSymbolBacking;
         Self::with_test_symbol_backings_init_era(
@@ -99,7 +99,7 @@ impl Context {
     pub(crate) fn with_test_symbol_intern_race_era<R>(
         kind: crate::tagged::gc::PlainSymbolBacking,
         spellings: &[String],
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
         let mut kinds =
             vec![crate::tagged::gc::PlainSymbolBacking::Unprojected; spellings.len() + 1];
@@ -123,9 +123,9 @@ impl Context {
     fn with_test_symbol_backings_init_era<R>(
         kinds: &[crate::tagged::gc::PlainSymbolBacking],
         init: impl FnOnce(&mut Obarray, &[SymId]),
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, Vec<SymId>) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
-        use crate::tagged::gc::{AliasableBox, ParallelHeapEra, TaggedHeap};
+        use crate::tagged::gc::{AliasableBox, ProofEra as ParallelHeapEra, TaggedHeap};
 
         let heap = AliasableBox::new(TaggedHeap::new());
         // Manager construction can allocate; install only the owning root.

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue;
 use std::sync::mpsc::{self, Receiver};
@@ -761,7 +762,7 @@ fn a6_ht_b9_table_scope_gate_contention_retries_before_job() {
             let result = stopped.trace(|guard, _proof| {
                 return_tx.send(()).unwrap();
                 receive(&held_rx);
-                let mut collector = era.collector.try_borrow_mut().unwrap();
+                let mut collector = era.core.collector.try_borrow_mut().unwrap();
                 let heap = collector.as_mut().unwrap().registration_heap_mut();
                 collector_tables::with_stopped_tables_for_trace_observing_busy(
                     heap,
@@ -824,7 +825,7 @@ fn a6_ht_b9_table_scope_body_error_stays_terminal_after_image_mutation() {
         let mut body_calls = 0;
         let mut busy_observed = 0;
         let result = stopped.trace::<()>(|guard, _proof| {
-            let mut collector = era.collector.try_borrow_mut().unwrap();
+            let mut collector = era.core.collector.try_borrow_mut().unwrap();
             let heap = collector.as_mut().unwrap().registration_heap_mut();
             collector_tables::with_stopped_tables_for_trace_observing_busy(
                 heap,
@@ -871,7 +872,7 @@ fn a6_ht_b9_table_scope_keeper_gate_reentry_refuses_without_retry() {
         stopped
             .trace(|guard, _proof| {
                 let _gate = era.registry().lock().unwrap();
-                let mut collector = era.collector.try_borrow_mut().unwrap();
+                let mut collector = era.core.collector.try_borrow_mut().unwrap();
                 let heap = collector.as_mut().unwrap().registration_heap_mut();
                 assert_eq!(
                     collector_tables::with_stopped_tables_for_trace_observing_busy(

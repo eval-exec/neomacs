@@ -369,7 +369,7 @@ fn forgotten_run_access_blocks_finish_and_ack_then_owner_drop_poisons() {
         // The compiler forbids moving an era while a live owner is borrowed.
         // Forget the owner as well to exercise the retained runtime obligation.
         std::mem::forget(owner);
-        let registry = Arc::clone(era.registry.as_ref().unwrap());
+        let registry = Arc::clone(era.core.registry.as_ref().unwrap());
         let failure = era.finish().unwrap_err();
         assert_eq!(failure.reason, RegistrationError::OutstandingLoan);
         drop(failure);

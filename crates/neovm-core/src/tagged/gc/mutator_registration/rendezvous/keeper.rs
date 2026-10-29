@@ -10,9 +10,7 @@ use std::sync::atomic::Ordering;
 #[cfg(test)]
 use super::super::a8_probes;
 use super::super::image::PublishedGcImage;
-use super::super::{
-    MutatorEntry, MutatorKey, ParallelHeapEra, RegistrationError, Registry, RegistryState,
-};
+use super::super::{EraCore, MutatorEntry, MutatorKey, RegistrationError, Registry, RegistryState};
 use super::control::Phase;
 use super::{
     RendezvousError, StoppedRootAdmission, entry_state, finish_debt, membership, request,
@@ -87,7 +85,7 @@ impl fmt::Debug for AllStoppedFailure<'_> {
     }
 }
 
-impl ParallelHeapEra<'_> {
+impl EraCore<'_> {
     pub fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
         let registry = self.registry();
         keeper(registry)?;

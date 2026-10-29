@@ -3,6 +3,7 @@
 //! nil; all later values come from checked canonical graphs or closed ops.
 use super::*;
 use crate::emacs_core::intern::SymId;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::{GlobalError, SymbolHandle};
 
 pub(super) fn check_tape(ops: &[Op], nslots: usize, globals: Option<usize>) -> Result<(), Reject> {

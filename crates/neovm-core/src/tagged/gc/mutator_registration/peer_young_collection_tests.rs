@@ -40,7 +40,7 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response() {
             let peer_id = peer.young;
             let bases = {
                 stopped.check_world_roots(era.heap_identity()).unwrap();
-                let mut slot = era.collector.try_borrow_mut().unwrap();
+                let mut slot = era.core.collector.try_borrow_mut().unwrap();
                 let heap = slot.as_mut().unwrap().registration_heap_mut();
                 if heap.generational_enabled() {
                     // No control gate survives into the allocator lock. All
@@ -100,7 +100,7 @@ fn full_collection_resolves_nonempty_peer_young_and_promotes_before_response() {
             })
             .unwrap();
             if let Some(bases) = bases {
-                let mut slot = era.collector.try_borrow_mut().unwrap();
+                let mut slot = era.core.collector.try_borrow_mut().unwrap();
                 let heap = slot.as_mut().unwrap().registration_heap_mut();
                 // SAFETY: same stopped epoch; mark/promotion/sweep finished and
                 // no owner has received a resume image yet.

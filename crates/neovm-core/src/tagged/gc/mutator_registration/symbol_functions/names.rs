@@ -1,7 +1,7 @@
 //! C6.3a native name-return boundary; no combined tape or minor-GC claim yet.
 use super::super::symbol_authority::PreparedNameFunction;
 use super::super::{
-    Mutator, ParallelHeapEra, PlainSymbolBacking, RegistrationError, RendezvousError,
+    Mutator, PlainSymbolBacking, ProofEra as ParallelHeapEra, RegistrationError, RendezvousError,
 };
 use super::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;

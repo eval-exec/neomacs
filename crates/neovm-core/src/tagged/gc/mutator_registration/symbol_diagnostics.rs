@@ -10,6 +10,7 @@ mod types;
 use super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::value::TaggedValue;
 use std::ops::ControlFlow;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};

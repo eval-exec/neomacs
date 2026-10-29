@@ -2,6 +2,7 @@
 use super::tests::{case_many, drive, words};
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 #[derive(Default)]
 pub(super) struct Ledger {
@@ -14,7 +15,7 @@ pub(super) struct Ledger {
 
 pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
     let mut result = Ledger::default();
-    let keeper = era.keeper.as_ref().unwrap();
+    let keeper = era.core.keeper.as_ref().unwrap();
     let mut world = Vec::new();
     keeper
         .collect_parallel_world_roots(stopped, &mut world)
@@ -22,7 +23,8 @@ pub(super) fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) ->
     result.world = world.into_iter().map(TaggedValue::bits).collect();
     (result.symbols, result.projections) = keeper.symbol_root_ledger_for_test(stopped).unwrap();
     let mut external = Vec::new();
-    era.legacy_roots
+    era.core
+        .legacy_roots
         .as_ref()
         .unwrap()
         .append_words(&mut external);

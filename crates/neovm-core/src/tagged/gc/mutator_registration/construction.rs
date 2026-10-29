@@ -63,6 +63,17 @@ impl<'heap> CheckedCollector<'heap> {
             }),
         }
     }
+    pub(super) fn parts_mut(&mut self) -> (&mut QuiescentCollector<'heap>, &Baton) {
+        (&mut self.collector, &self.keeper)
+    }
+    pub(super) fn refuse(self, reason: RegistrationError) -> EraAdmissionFailure<'heap> {
+        let (collector, keeper) = self.into_parts();
+        EraAdmissionFailure {
+            reason,
+            collector,
+            keeper,
+        }
+    }
     pub(super) fn into_parts(self) -> (QuiescentCollector<'heap>, Baton) {
         (self.collector, self.keeper)
     }

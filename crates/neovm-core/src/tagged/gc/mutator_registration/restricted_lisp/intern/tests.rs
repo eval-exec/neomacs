@@ -1,5 +1,6 @@
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 mod gc;
 mod histories;

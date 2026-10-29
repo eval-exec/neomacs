@@ -1,6 +1,7 @@
 //! B8: shared weak entries are resolved only by the stopped keeper.
 use super::super::KeeperTableMut;
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 const NSLOTS: usize = 64;
 const KEY: u16 = 50;

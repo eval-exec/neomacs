@@ -2,6 +2,7 @@
 //! No reader/run loan crosses a wait. These are minimal-World diagnostics,
 //! not continuous VM-reader drain or representative editor-heap timings.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Round {

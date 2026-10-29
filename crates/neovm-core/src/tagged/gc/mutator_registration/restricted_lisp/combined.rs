@@ -182,7 +182,7 @@ enum StoppedRequest {
     KeeperCensus,
 }
 /// Retained no-op/census fixture checks. Real mixed execution and collection
-/// now use Session and ParallelHeapEra, with no missing-operation fallback.
+/// now use Session and ProofEra, with no missing-operation fallback.
 struct PreparationChecks;
 impl PreparationChecks {
     fn running<'owner, 'era>(

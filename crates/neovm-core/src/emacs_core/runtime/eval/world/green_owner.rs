@@ -37,6 +37,8 @@ use super::*;
 
 #[path = "parallel_roots.rs"]
 mod parallel_roots;
+#[cfg(test)]
+pub(crate) use parallel_roots::OwnedProofProjection;
 pub(crate) use parallel_roots::{FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection};
 
 impl World {
@@ -185,7 +187,7 @@ impl Context {
     /// The higher-ranked closure cannot return an era or collector heap loan.
     #[cfg(test)]
     pub(crate) fn with_test_mutator_era<R>(
-        f: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>) -> R,
+        f: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>) -> R,
     ) -> R {
         let mut context = Self::new();
         let keeper = context
@@ -206,7 +208,7 @@ impl Context {
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
         crate::tagged::gc::clear_tagged_heap_root_if_installed(context.tagged_heap.heap_root());
-        let era = crate::tagged::gc::ParallelHeapEra::admit(collector, keeper)
+        let era = crate::tagged::gc::ProofEra::admit(collector, keeper)
             .unwrap_or_else(|_| panic!("fresh fixture World admits its mutator era"));
         f(era)
     }
@@ -216,7 +218,7 @@ impl Context {
     #[cfg(test)]
     pub(crate) fn with_test_rooted_mutator_era<R>(
         f: impl for<'heap> FnOnce(
-            crate::tagged::gc::ParallelHeapEra<'heap>,
+            crate::tagged::gc::ProofEra<'heap>,
             Vec<crate::tagged::transport::SharedRoot>,
         ) -> R,
     ) -> R {
@@ -246,7 +248,7 @@ impl Context {
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
         crate::tagged::gc::clear_tagged_heap_root_if_installed(context.tagged_heap.heap_root());
-        let era = crate::tagged::gc::ParallelHeapEra::admit(collector, keeper)
+        let era = crate::tagged::gc::ProofEra::admit(collector, keeper)
             .unwrap_or_else(|_| panic!("rooted fixture era"));
         f(era, roots)
     }

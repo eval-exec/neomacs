@@ -39,7 +39,7 @@ impl PreparedNameFunction {
     }
 }
 
-impl ParallelHeapEra<'_> {
+impl EraCore<'_> {
     pub(in crate::tagged::gc::mutator_registration) fn prepare_name_function_symbol(
         &self,
         key: &SymbolHandle,

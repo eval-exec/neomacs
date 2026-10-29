@@ -26,18 +26,27 @@ fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
                 (failure.collector, failure.keeper)
             }
             (ActualMode::Gen1, Ok(admission)) => {
-                let (checked, _witness) = admission.into_checked();
+                let era = super::super::ParallelHeapEra::admit(admission)
+                    .expect("production era consumes actual GEN1 admission");
+                assert_eq!(era.heap_identity(), heap);
+                let permit = era
+                    .register(1, 4)
+                    .expect("real production registration requires retained GEN1 evidence");
+                drop(permit);
+                let inputs = era
+                    .finish()
+                    .expect("cancelled permit returns production inputs");
                 eprintln!("NMJIT_N2_GEN1_ACTUAL_COLLECTOR_CAPABILITY");
-                checked.into_parts()
+                inputs
             }
             (mode, result) => panic!("actual heap mode mismatch: {mode:?}: {result:?}"),
         };
         assert_eq!(collector.heap_identity(), heap);
         assert_eq!(keeper.parallel_heap_identity(), heap);
         assert!(keeper.held_here());
-        // Inputs remain usable, not merely pointer-identical. This legacy
-        // fixture route will become the explicit ProofEra route in N2.b.
-        let era = super::super::ParallelHeapEra::admit(collector, keeper)
+        // Inputs remain usable, not merely pointer-identical. Re-admission
+        // uses the nominal proof-only route, including under GEN0.
+        let era = crate::tagged::gc::ProofEra::admit(collector, keeper)
             .expect("complete ownership permits fixture re-admission");
         let (collector, keeper) = era.finish().expect("re-admitted fixture ends");
         drop(collector);

@@ -1,5 +1,6 @@
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 #[test]
 fn p3sym_c5_function_executor_cannot_admit_intern_even_if_unreachable() {

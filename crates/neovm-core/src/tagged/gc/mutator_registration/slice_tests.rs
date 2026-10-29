@@ -2,6 +2,7 @@
 #![cfg(not(feature = "gc-memory-telemetry"))]
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue as Value;
 use std::sync::atomic::Ordering;

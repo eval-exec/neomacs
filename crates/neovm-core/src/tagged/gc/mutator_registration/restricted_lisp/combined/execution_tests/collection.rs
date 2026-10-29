@@ -6,6 +6,7 @@ mod name_minor;
 mod relog;
 
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
 use std::sync::mpsc;
 
@@ -142,7 +143,8 @@ impl Ledger {
 fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
     let mut result = Ledger::default();
     let mut words = Vec::new();
-    era.keeper
+    era.core
+        .keeper
         .as_ref()
         .unwrap()
         .collect_parallel_world_roots(stopped, &mut words)
@@ -169,7 +171,11 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
         .drain(..)
         .map(|value| WordIdentity(value.bits()))
         .collect();
-    era.legacy_roots.as_ref().unwrap().append_words(&mut words);
+    era.core
+        .legacy_roots
+        .as_ref()
+        .unwrap()
+        .append_words(&mut words);
     era.with_stopped_heap_for_test(stopped, |heap| {
         crate::tagged::transport::collect_shared_root_gc_roots(heap, &mut words);
     })

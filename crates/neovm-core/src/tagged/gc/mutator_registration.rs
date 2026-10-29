@@ -16,7 +16,12 @@ mod collection;
 mod cons_allocation;
 mod cons_catalog;
 mod construction;
+mod wrappers;
 pub use construction::{Gen1Admission, Gen1AdmissionError};
+pub(crate) use wrappers::EraFinishFailure;
+pub use wrappers::ParallelHeapEra;
+#[cfg(test)]
+pub(crate) use wrappers::{ProofEra, ProofEraFinishFailure};
 mod gate;
 mod image;
 mod native_extent;
@@ -299,7 +304,7 @@ impl Registry {
 /// Keeper-confined RAII admission, with both heap and World retained.
 /// There is deliberately no Deref, heap accessor, or constructor from IDs.
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
-pub struct ParallelHeapEra<'heap> {
+struct EraCore<'heap> {
     collector: RefCell<Option<QuiescentCollector<'heap>>>,
     suspended_cons: RefCell<Option<super::facade_mark::SuspendedConsCollector<'heap>>>,
     legacy_roots: Option<FrozenLegacyRoots>,
@@ -323,50 +328,36 @@ impl std::fmt::Debug for EraAdmissionFailure<'_> {
             .finish()
     }
 }
-impl std::fmt::Debug for ParallelHeapEra<'_> {
+impl std::fmt::Debug for EraCore<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ParallelHeapEra")
+        f.debug_struct("EraCore")
             .field("heap", &self.registry.as_ref().map(|r| r.heap))
             .finish_non_exhaustive()
     }
 }
 
-/// Busy/error recovery returns the entire admission; it never restores serial
-/// authority merely because one owner is delayed.
-pub(crate) struct EraFinishFailure<'heap> {
-    pub(crate) reason: RegistrationError,
-    pub(crate) era: ParallelHeapEra<'heap>,
-}
-impl std::fmt::Debug for EraFinishFailure<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("EraFinishFailure")
-            .field(&self.reason)
-            .finish()
-    }
+/// A refused finish returns its private semantic core to the nominal wrapper.
+struct CoreFinishFailure<'heap> {
+    reason: RegistrationError,
+    core: EraCore<'heap>,
 }
 
-impl<'heap> ParallelHeapEra<'heap> {
+impl<'heap> EraCore<'heap> {
     #[cold]
     #[inline(never)]
-    pub(crate) fn admit(
-        mut collector: QuiescentCollector<'heap>,
-        keeper: Baton,
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
+    fn admit<A: construction::CoreAdmission<'heap>>(
+        admission: A,
+    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
+        let (checked, witness) = admission.into_checked();
+        Self::admit_checked(checked, witness)
+    }
+
+    fn admit_checked<W: construction::ConstructionEvidence>(
+        checked: construction::CheckedCollector<'heap>,
+        witness: W,
+    ) -> Result<(Self, W), EraAdmissionFailure<'heap>> {
+        let (mut collector, keeper) = checked.into_parts();
         let heap = collector.heap_identity();
-        let reason = if heap != keeper.parallel_heap_identity() {
-            Some(RegistrationError::WrongHeap)
-        } else if !keeper.held_here() {
-            Some(RegistrationError::WrongThread)
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            return Err(EraAdmissionFailure {
-                reason,
-                collector,
-                keeper,
-            });
-        }
         let generation = match issue_generation(&NEXT_REGISTRATION_GENERATION) {
             Ok(generation) => generation,
             Err(reason) => {
@@ -428,42 +419,45 @@ impl<'heap> ParallelHeapEra<'heap> {
         young_index.insert(young, 0);
         let symbols =
             symbol_authority::SymbolSidecar::new(keeper.parallel_symbol_backing(), generation);
-        Ok(Self {
-            collector: RefCell::new(Some(collector)),
-            suspended_cons: RefCell::new(None),
-            legacy_roots: None,
-            #[cfg(test)]
-            weak_sweep: None,
-            keeper: Some(keeper),
-            registry: Some(Arc::new(Registry {
-                heap,
-                world: heap,
-                gate: GateLine {
-                    state: Mutex::new(RegistryState {
-                        entries: vec![entry],
-                        young_index,
-                        next_registration: 2,
-                        generation_limit: u64::MAX,
-                        catalog_transition: false,
-                        rendezvous: rendezvous::control::State::new(),
-                    }),
-                    gate_owner: AtomicU64::new(0),
-                },
-                park: ParkLine {
-                    parked: AtomicUsize::new(0),
-                    poisoned: AtomicBool::new(false),
-                    wake: std::sync::Condvar::new(),
-                },
-                phase: PhaseLine::new(),
-                request_epoch: AtomicU64::new(0),
-                completed_epoch: AtomicU64::new(0),
-                keeper_thread: std::thread::current().id(),
-                root_epoch,
-                cons_catalog: super::cons_storage::ConsCatalog::new(heap),
-                symbols,
-            })),
-            _thread: PhantomData,
-        })
+        Ok((
+            Self {
+                collector: RefCell::new(Some(collector)),
+                suspended_cons: RefCell::new(None),
+                legacy_roots: None,
+                #[cfg(test)]
+                weak_sweep: None,
+                keeper: Some(keeper),
+                registry: Some(Arc::new(Registry {
+                    heap,
+                    world: heap,
+                    gate: GateLine {
+                        state: Mutex::new(RegistryState {
+                            entries: vec![entry],
+                            young_index,
+                            next_registration: 2,
+                            generation_limit: u64::MAX,
+                            catalog_transition: false,
+                            rendezvous: rendezvous::control::State::new(),
+                        }),
+                        gate_owner: AtomicU64::new(0),
+                    },
+                    park: ParkLine {
+                        parked: AtomicUsize::new(0),
+                        poisoned: AtomicBool::new(false),
+                        wake: std::sync::Condvar::new(),
+                    },
+                    phase: PhaseLine::new(),
+                    request_epoch: AtomicU64::new(0),
+                    completed_epoch: AtomicU64::new(0),
+                    keeper_thread: std::thread::current().id(),
+                    root_epoch,
+                    cons_catalog: super::cons_storage::ConsCatalog::new(heap),
+                    symbols,
+                })),
+                _thread: PhantomData,
+            },
+            witness,
+        ))
     }
 
     fn registry(&self) -> &Registry {
@@ -476,8 +470,9 @@ impl<'heap> ParallelHeapEra<'heap> {
 
     #[cold]
     #[inline(never)]
-    pub fn register(
+    fn register<W: construction::ConstructionEvidence>(
         &self,
+        _witness: &W,
         owner: u64,
         root_capacity: usize,
     ) -> Result<MutatorPermit<'_>, RegistrationError> {
@@ -559,9 +554,9 @@ impl<'heap> ParallelHeapEra<'heap> {
     /// roots before this terminal transfer can restore serial ownership.
     pub(crate) fn finish(
         mut self,
-    ) -> Result<(QuiescentCollector<'heap>, Baton), EraFinishFailure<'heap>> {
+    ) -> Result<(QuiescentCollector<'heap>, Baton), CoreFinishFailure<'heap>> {
         if let Err(reason) = self.prepare_finish() {
-            return Err(EraFinishFailure { reason, era: self });
+            return Err(CoreFinishFailure { reason, core: self });
         }
         let collector = self.collector.get_mut().take().expect("live era");
         let keeper = self.keeper.take().expect("live era");
@@ -795,7 +790,7 @@ impl<'heap> ParallelHeapEra<'heap> {
     }
 }
 
-impl Drop for ParallelHeapEra<'_> {
+impl Drop for EraCore<'_> {
     fn drop(&mut self) {
         let Some(registry) = self.registry.take() else {
             return;

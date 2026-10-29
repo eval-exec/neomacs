@@ -2,6 +2,7 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned};
 use crate::emacs_core::symbol::ObarraySymbolCellSkipGuard;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use std::cell::RefCell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,7 +173,7 @@ fn root_families(backing: PlainSymbolBacking) {
                 // Adversarial existing serial policy: the keeper must ignore it.
                 // The guard restores the original policy even on an assertion.
                 let skip = ObarraySymbolCellSkipGuard::new();
-                let keeper = era.keeper.as_ref().unwrap();
+                let keeper = era.core.keeper.as_ref().unwrap();
                 let mut cells = Vec::new();
                 let mut projections = Vec::new();
                 {
@@ -302,7 +303,7 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
         let mut observations = Vec::new();
         {
             let symbols = stopped.symbols().unwrap();
-            let keeper = era.keeper.as_ref().unwrap();
+            let keeper = era.core.keeper.as_ref().unwrap();
             for occupancy in [AuthorityOccupancy::Reader, AuthorityOccupancy::Writer] {
                 let guard = OccupiedWord::new(&era.registry().symbols.word, occupancy);
                 let mut out = vec![TaggedValue::T];

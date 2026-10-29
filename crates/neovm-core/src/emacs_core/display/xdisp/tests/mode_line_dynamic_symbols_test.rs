@@ -154,7 +154,7 @@ fn p3sym_c5_mode_line_held_identity_survives_fresh_intern_growth_child() {
         // No VariableView, RefCell borrow, string Value or Context view enters
         // this closure. Held identity/pass/output are accessed only on return.
         let receipt = ctx
-            .admit_owned_parallel(|projection| {
+            .admit_owned_proof_parallel(|projection| {
                 let receipt = projection.era().c5_intern_growth_for_test(holders);
                 let (collector, keeper) = projection.finish().expect("C5 pass clean era finish");
                 (collector, keeper, receipt)

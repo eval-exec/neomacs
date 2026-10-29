@@ -2787,6 +2787,9 @@ pub use mutator_registration::{
     TableMut, TableRef, YoungWorkerLoan,
 };
 
+#[cfg(test)]
+pub(crate) use mutator_registration::ProofEra;
+
 pub(crate) use mutator_registration::{
     OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
 };

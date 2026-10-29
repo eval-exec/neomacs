@@ -1,6 +1,7 @@
 //! Ordered real-owner calls, concurrent writers, and stopped definition lifetime.
 use super::*;
 use crate::tagged::gc::PlainSymbolBacking;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use std::num::NonZeroU32;
 mod gc;
 mod worker;

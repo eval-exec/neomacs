@@ -15,7 +15,7 @@ impl Context {
         observe: impl FnMut(FunctionBoundaryPoint),
     ) -> FunctionEraReceipt {
         let result = self
-            .admit_owned_parallel(|projection| {
+            .admit_owned_proof_parallel(|projection| {
                 let result = crate::tagged::gc::function_boundary_testkit::exercise_function_era(
                     projection.era(),
                     ids,

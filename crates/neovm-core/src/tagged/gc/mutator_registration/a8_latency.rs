@@ -672,7 +672,7 @@ fn drive_scenario(
     let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };
     let mut epochs = Vec::new();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             let era = projection.era();
             era.start_cons_storage()
                 .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));

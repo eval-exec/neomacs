@@ -37,7 +37,7 @@ impl Context {
 
     pub(crate) fn c5_intern_growth_era_for_test(&mut self, holders: [SymId; 2]) {
         let receipt = self
-            .admit_owned_parallel(|projection| {
+            .admit_owned_proof_parallel(|projection| {
                 // No Context, bytecode borrow, compiled frame or World view enters.
                 let result = projection.era().c5_intern_relocating_for_test(holders);
                 let (collector, keeper) = projection

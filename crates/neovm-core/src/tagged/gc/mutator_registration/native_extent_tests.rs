@@ -7,7 +7,7 @@
 use super::rendezvous::entry_state;
 use super::{
     AllStopped, HeapIdentity, Mode, Mutator, MutatorEntry, MutatorKey, MutatorPermit, NativeRoots,
-    ParallelHeapEra, RegistrationError, RendezvousError, Request,
+    ProofEra as ParallelHeapEra, RegistrationError, RendezvousError, Request,
 };
 use crate::emacs_core::eval::Context;
 use crate::tagged::transport::SharedRoot;
@@ -153,7 +153,7 @@ fn admitted(body: impl FnOnce(&ParallelHeapEra, &SharedRoot, &SharedRoot)) {
     let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
     let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()

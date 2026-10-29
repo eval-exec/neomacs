@@ -9,6 +9,8 @@ use crate::tagged::value::TaggedValue;
 
 #[path = "parallel_admission.rs"]
 mod parallel_admission;
+#[cfg(test)]
+pub(crate) use parallel_admission::OwnedProofProjection;
 pub(crate) use parallel_admission::{OwnedParallelError, OwnedParallelProjection};
 
 /// An immutable census of the original Context, whose execution is suspended
@@ -261,7 +263,7 @@ impl Context {
     #[cfg(test)]
     pub(crate) fn with_test_collection_era<S, R>(
         setup: impl FnOnce(&mut Context) -> S,
-        body: impl for<'heap> FnOnce(crate::tagged::gc::ParallelHeapEra<'heap>, S) -> R,
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, S) -> R,
     ) -> R {
         let mut context = collection_fixture_context();
         let input = setup(&mut context);
@@ -284,7 +286,7 @@ impl Context {
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
         crate::tagged::gc::clear_tagged_heap_root_if_installed(context.tagged_heap.heap_root());
-        let era = crate::tagged::gc::ParallelHeapEra::admit_rooted(collector, keeper, frozen)
+        let era = crate::tagged::gc::ProofEra::admit_rooted(collector, keeper, frozen)
             .unwrap_or_else(|failure| panic!("collection fixture admission: {:?}", failure.reason));
         body(era, input)
     }
@@ -296,7 +298,7 @@ impl Context {
     pub(crate) fn with_test_collection_era_then<S, R>(
         setup: impl FnOnce(&mut Context) -> S,
         body: impl for<'heap> FnOnce(
-            crate::tagged::gc::ParallelHeapEra<'heap>,
+            crate::tagged::gc::ProofEra<'heap>,
             S,
         )
             -> (crate::tagged::gc::QuiescentCollector<'heap>, Baton, R),
@@ -323,7 +325,7 @@ impl Context {
         // Compare only the root address while the exclusive collector loan
         // is retained. Synthetic participants cannot use the serial TLS view.
         crate::tagged::gc::clear_tagged_heap_root_if_installed(context.tagged_heap.heap_root());
-        let era = crate::tagged::gc::ParallelHeapEra::admit_rooted(collector, keeper, frozen)
+        let era = crate::tagged::gc::ProofEra::admit_rooted(collector, keeper, frozen)
             .unwrap_or_else(|failure| panic!("collection fixture admission: {:?}", failure.reason));
         let (collector, keeper, output) = body(era, input);
         assert_eq!(collector.heap_identity(), expected_heap);

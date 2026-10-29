@@ -2,6 +2,7 @@
 //! Every tested definition is allocated after a completed collection response.
 use super::minor_adapter::{Age, age};
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::TaggedHeap;
 use crate::tagged::transport::SharedRoot;
 use std::sync::Arc;

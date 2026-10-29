@@ -89,7 +89,7 @@ fn audit(scenario: Scenario) {
         "actual initial count before era"
     );
     let receipt = ctx
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             // Only scalar holder identities/scenario enter this closure. There is
             // no Context/evaluator/Obarray view until both capabilities return.
             let result = exercise(projection.era(), &holders, scenario);

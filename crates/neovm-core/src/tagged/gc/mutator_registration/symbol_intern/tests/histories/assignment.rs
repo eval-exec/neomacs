@@ -2,6 +2,7 @@
 //! Every handle below is admitted from the actual rooted intern result.
 use super::*;
 use crate::emacs_core::intern::parallel::identity_census_for_test;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 fn with_inputs<R>(body: impl for<'heap> FnOnce(ParallelHeapEra<'heap>, Vec<SymId>) -> R) -> R {
     static NEXT: AtomicU64 = AtomicU64::new(1);

@@ -2,7 +2,7 @@
 //! The suspended shell/input holders must not mask a missing stopped census.
 use super::*;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
-use crate::tagged::gc::{AllStopped, ParallelHeapEra};
+use crate::tagged::gc::{AllStopped, ProofEra as ParallelHeapEra};
 
 #[derive(Default, Debug)]
 struct Ledger {
@@ -33,14 +33,16 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
         .unwrap();
     result.names = names.into_iter().map(Value::bits).collect();
     let mut world = Vec::new();
-    era.keeper
+    era.core
+        .keeper
         .as_ref()
         .unwrap()
         .collect_parallel_world_roots(stopped, &mut world)
         .unwrap();
     result.world = world.into_iter().map(Value::bits).collect();
     let mut external = Vec::new();
-    era.legacy_roots
+    era.core
+        .legacy_roots
         .as_ref()
         .unwrap()
         .append_words(&mut external);

@@ -4,6 +4,9 @@
 //! retired here, before `supported` runs; that fence stays strict.
 
 use super::Context;
+
+#[path = "parallel_admission/factory.rs"]
+mod factory;
 use crate::emacs_core::eval::green::GreenStartError;
 use crate::emacs_core::value::{HashTableTest, HashTableWeakness, LispHashTable};
 use crate::tagged::gc::{
@@ -11,6 +14,9 @@ use crate::tagged::gc::{
     clear_tagged_heap_root_if_installed,
 };
 use crate::tagged::value::TaggedValue;
+use factory::{AdmissionPlan, ProductionPlan};
+#[cfg(test)]
+use factory::{ProofPlan, WeakProofPlan};
 
 /// Why owned admission refused before any owner ran.
 #[derive(Debug, PartialEq, Eq)]
@@ -21,16 +27,43 @@ pub(crate) enum OwnedParallelError {
     Identity,
     Poisoned,
     Start,
+    GenerationalRequired,
 }
 
 /// The frozen shell plus the era. Finish is the only way back to the Context.
 #[allow(dead_code)]
+#[must_use]
 pub(crate) struct OwnedParallelProjection<'heap> {
     era: ParallelHeapEra<'heap>,
 }
 
 impl<'heap> OwnedParallelProjection<'heap> {
     pub(crate) fn era(&self) -> &ParallelHeapEra<'heap> {
+        &self.era
+    }
+
+    pub(crate) fn finish(
+        self,
+    ) -> Result<(QuiescentCollector<'heap>, super::Baton), OwnedParallelError> {
+        self.era.finish().map_err(|failure| {
+            let reason = map_registration(failure.reason);
+            drop(failure);
+            reason
+        })
+    }
+}
+
+/// Closed proof-only projection; deliberately has no Deref or conversion to
+/// the production wrapper. Finish remains the sole serial ownership return.
+#[cfg(test)]
+#[must_use]
+pub(crate) struct OwnedProofProjection<'heap> {
+    era: crate::tagged::gc::ProofEra<'heap>,
+}
+
+#[cfg(test)]
+impl<'heap> OwnedProofProjection<'heap> {
+    pub(crate) fn era(&self) -> &crate::tagged::gc::ProofEra<'heap> {
         &self.era
     }
 
@@ -57,78 +90,51 @@ impl Context {
         body(self, &keeper)
     }
 
-    /// Explicit closed-fixture weak sweep admission. The caller supplies only
-    /// serially constructed weak table shells, never roots for their entries.
-    /// The production owned admission below retains its strict default fence.
+    /// Explicit closed-fixture weak sweep admission. Production keeps its
+    /// strict weak-table fence and GEN1-only capability boundary.
     #[cfg(test)]
     pub(crate) fn admit_owned_parallel_with_weak_tables_for_test<R>(
         &mut self,
         tables: &[TaggedValue],
         body: impl for<'heap> FnOnce(
-            OwnedParallelProjection<'heap>,
+            OwnedProofProjection<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        let retired = self.retire_empty_dead_windows_table();
-        let keeper = match self.issue_green_baton() {
-            Ok(keeper) => keeper,
-            Err(error) => {
-                self.recover_serial_context(retired);
-                return Err(map_start(error));
-            }
-        };
-        let frozen = match self.capture_parallel_legacy_roots(&keeper) {
-            Ok(frozen) => frozen,
-            Err(error) => {
-                drop(keeper);
-                self.recover_serial_context(retired);
-                return Err(map_rendezvous(error));
-            }
-        };
-        let heap = self.tagged_heap.heap_root().as_ptr();
-        // SAFETY: the same suspended serial Context, keeper exclusion and
-        // capture-before-exclusive-loan proof as ordinary owned admission.
-        let drained = unsafe {
-            (*heap).drain_to_quiescent(|heap| {
-                self.seed_registered_mutator_roots_world_stopped(heap);
-            })
-        };
-        let collector = match drained {
-            Ok(collector) => collector,
-            Err(_) => {
-                drop(frozen);
-                drop(keeper);
-                self.recover_serial_context(retired);
-                return Err(OwnedParallelError::Start);
-            }
-        };
-        clear_tagged_heap_root_if_installed(self.tagged_heap.heap_root());
-        let era = match ParallelHeapEra::admit_rooted_with_weak_tables_for_test(
-            collector, keeper, frozen, tables,
-        ) {
-            Ok(era) => era,
-            Err(failure) => {
-                let reason = map_registration(failure.reason);
-                drop(failure.collector);
-                drop(failure.keeper);
-                self.recover_serial_context(retired);
-                return Err(reason);
-            }
-        };
-        let (collector, keeper, output) = body(OwnedParallelProjection { era });
-        drop(collector);
-        drop(keeper);
-        self.recover_serial_context(retired);
-        Ok(output)
+        self.admit_owned_with(WeakProofPlan { tables }, body)
     }
 
-    /// Admit this suspended Context for owned overlap. `body` runs with the
-    /// legacy heap TLS uninstalled and must return both finish capabilities.
-    /// An admission refusal restores serial ownership before returning.
+    /// Retained closed proof kernels may exercise either collector mode.
+    /// This nominal route cannot produce a production era or JIT admission.
+    #[cfg(test)]
+    pub(crate) fn admit_owned_proof_parallel<R>(
+        &mut self,
+        body: impl for<'heap> FnOnce(
+            OwnedProofProjection<'heap>,
+        ) -> (QuiescentCollector<'heap>, super::Baton, R),
+    ) -> Result<R, OwnedParallelError> {
+        self.admit_owned_with(ProofPlan, body)
+    }
+
+    /// Admit this suspended Context for production owned overlap. GEN0 is
+    /// refused by the actual collector capability before any owner can run.
     #[allow(dead_code)]
     pub(crate) fn admit_owned_parallel<R>(
         &mut self,
         body: impl for<'heap> FnOnce(
             OwnedParallelProjection<'heap>,
+        ) -> (QuiescentCollector<'heap>, super::Baton, R),
+    ) -> Result<R, OwnedParallelError> {
+        self.admit_owned_with(ProductionPlan, body)
+    }
+
+    /// One preparation/recovery transaction for sealed static factories. The
+    /// plan chooses a nominal construction boundary at compile time; no mode
+    /// flag or heap-mode branch is carried into execution.
+    fn admit_owned_with<P: AdmissionPlan, R>(
+        &mut self,
+        plan: P,
+        body: impl for<'heap> FnOnce(
+            P::Projection<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
         let retired = self.retire_empty_dead_windows_table();
@@ -168,17 +174,17 @@ impl Context {
             }
         };
         clear_tagged_heap_root_if_installed(self.tagged_heap.heap_root());
-        let era = match ParallelHeapEra::admit_rooted(collector, keeper, frozen) {
-            Ok(era) => era,
+        let projection = match plan.admit(collector, keeper, frozen) {
+            Ok(projection) => projection,
             Err(failure) => {
-                let reason = map_registration(failure.reason);
+                let reason = failure.reason;
                 drop(failure.collector);
                 drop(failure.keeper);
                 self.recover_serial_context(retired);
                 return Err(reason);
             }
         };
-        let (collector, keeper, output) = body(OwnedParallelProjection { era });
+        let (collector, keeper, output) = body(projection);
         drop(collector);
         drop(keeper);
         self.recover_serial_context(retired);
@@ -252,7 +258,18 @@ fn map_registration(error: RegistrationError) -> OwnedParallelError {
         RegistrationError::Busy => OwnedParallelError::Busy,
         RegistrationError::WrongHeap => OwnedParallelError::Identity,
         RegistrationError::Poisoned => OwnedParallelError::Poisoned,
-        _ => OwnedParallelError::Publication,
+        RegistrationError::WrongOwner
+        | RegistrationError::StaleRegistration
+        | RegistrationError::DuplicateOwner
+        | RegistrationError::WrongThread
+        | RegistrationError::Exhausted
+        | RegistrationError::Capacity
+        | RegistrationError::OutstandingLoan
+        | RegistrationError::OpenRegion
+        | RegistrationError::ResidualSatb
+        | RegistrationError::Publication
+        | RegistrationError::PendingRoots
+        | RegistrationError::PendingYoung => OwnedParallelError::Publication,
     }
 }
 
@@ -262,7 +279,12 @@ fn map_rendezvous(error: RendezvousError) -> OwnedParallelError {
         RendezvousError::Identity => OwnedParallelError::Identity,
         RendezvousError::Poisoned => OwnedParallelError::Poisoned,
         RendezvousError::Registration(error) => map_registration(error),
-        _ => OwnedParallelError::Publication,
+        RendezvousError::Loan
+        | RendezvousError::Publication
+        | RendezvousError::Generation
+        | RendezvousError::Readers
+        | RendezvousError::Capacity
+        | RendezvousError::Root => OwnedParallelError::Publication,
     }
 }
 
@@ -270,7 +292,9 @@ fn map_start(error: GreenStartError) -> OwnedParallelError {
     match error {
         GreenStartError::Collector(_) | GreenStartError::Admission(_) => OwnedParallelError::Start,
         GreenStartError::MarkExclusion(_) => OwnedParallelError::Busy,
-        _ => OwnedParallelError::Start,
+        GreenStartError::NotGreen
+        | GreenStartError::ThreadAffineHost
+        | GreenStartError::GcInhibited => OwnedParallelError::Start,
     }
 }
 

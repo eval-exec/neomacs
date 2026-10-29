@@ -22,7 +22,7 @@ impl Drop for CatalogTransition<'_> {
     }
 }
 
-impl ParallelHeapEra<'_> {
+impl EraCore<'_> {
     /// Detach only before any owner has activated. No execution or Context
     /// reference is granted: existing permits acquire the catalog after this
     /// cold transaction commits.

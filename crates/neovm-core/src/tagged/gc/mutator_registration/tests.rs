@@ -1,6 +1,8 @@
 use super::image::PublishedGcWork;
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
+use crate::tagged::gc::ProofEraFinishFailure as EraFinishFailure;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue;
 
@@ -353,7 +355,7 @@ fn panic_abandonment_poison_retains_owner_state_and_world_authority() {
         );
         let failed = era.finish().unwrap_err();
         assert_eq!(failed.reason, RegistrationError::Poisoned);
-        assert!(failed.era.keeper.is_some());
+        assert!(failed.era.core.keeper.is_some());
         drop(failed); // Conservative fallback retains the World and entry set.
     });
 }

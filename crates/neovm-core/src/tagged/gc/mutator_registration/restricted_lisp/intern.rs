@@ -2,6 +2,7 @@
 //! globals; every name operand and symbol answer stays in an owner home.
 use super::*;
 use crate::emacs_core::intern::SymId;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::{GlobalError, InitialInternError, SymbolHandle};
 
 use crate::tagged::gc::mutator_registration::symbol_functions::retry::{

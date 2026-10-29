@@ -186,7 +186,7 @@ fn fixture(
         let mut stopped = era.stop().unwrap();
         let answer = {
             let symbols = stopped.symbols().unwrap();
-            PreparationChecks::stopped(stopped_request, &symbols, era.keeper.as_ref().unwrap())
+            PreparationChecks::stopped(stopped_request, &symbols, era.core.keeper.as_ref().unwrap())
         };
         assert_eq!(
             answer,

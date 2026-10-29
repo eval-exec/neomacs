@@ -3,7 +3,7 @@
 use super::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::intern::SymId;
-use crate::tagged::gc::{HeapIdentity, Mutator, MutatorPermit, ParallelHeapEra};
+use crate::tagged::gc::{HeapIdentity, Mutator, MutatorPermit, ProofEra as ParallelHeapEra};
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::value::TaggedValue;
 use std::ops::ControlFlow;

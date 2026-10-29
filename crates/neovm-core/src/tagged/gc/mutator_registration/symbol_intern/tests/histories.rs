@@ -5,8 +5,8 @@ use super::*;
 use crate::emacs_core::intern::{SymId, parallel::name_publication_for_test};
 use crate::emacs_core::symbol::parallel::InitialInternFacts;
 use crate::tagged::gc::{
-    FunctionError, GlobalError, HeapIdentity, InitialInternError, MutatorPermit, ParallelHeapEra,
-    RegistrationError, SymbolHandle,
+    FunctionError, GlobalError, HeapIdentity, InitialInternError, MutatorPermit,
+    ProofEra as ParallelHeapEra, RegistrationError, SymbolHandle,
 };
 use std::collections::BTreeSet;
 use std::sync::Barrier;

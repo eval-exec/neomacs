@@ -1,5 +1,6 @@
 //! A scalar test bridge; reuse the qualified owner/root/retirement histories.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 pub(crate) struct InternGrowthReceipt {
     pub(crate) before: InitialInternFacts,

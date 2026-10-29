@@ -1,5 +1,6 @@
 //! B6: only shared tables retain the owner-created graphs at a rendezvous.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 fn every_stop(_: usize, _: usize) -> Option<Go> {
     Some(Go::Forced)
@@ -122,7 +123,7 @@ fn shared_table_gc(old_table: bool) {
     let abort = AtomicBool::new(false);
     let overlap = Overlap::new(N, true);
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage().unwrap();

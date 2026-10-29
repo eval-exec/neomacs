@@ -156,18 +156,19 @@ fn supported_with_weak(
     Ok(())
 }
 
-impl<'heap> ParallelHeapEra<'heap> {
+impl<'heap> EraCore<'heap> {
     #[cfg(test)]
-    pub(crate) fn admit_rooted_with_weak_tables_for_test(
-        mut collector: QuiescentCollector<'heap>,
-        keeper: Baton,
+    fn admit_rooted_with_weak_tables_for_test<A: construction::CoreAdmission<'heap>>(
+        admission: A,
         roots: FrozenLegacyRoots,
         tables: &[TaggedValue],
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
+    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
+        let (mut checked, witness) = admission.into_checked();
+        let (collector, keeper) = checked.parts_mut();
         let permission = if roots.heap_identity() != collector.heap_identity() {
             Err(RegistrationError::WrongHeap)
         } else {
-            WeakSweepPermit::mint(collector.registration_heap_mut(), &keeper, tables).and_then(
+            WeakSweepPermit::mint(collector.registration_heap_mut(), keeper, tables).and_then(
                 |permit| {
                     supported_with_weak(collector.registration_heap_mut(), Some(&permit))
                         .map(|()| permit)
@@ -177,18 +178,12 @@ impl<'heap> ParallelHeapEra<'heap> {
         };
         let permit = match permission {
             Ok(permit) => permit,
-            Err(reason) => {
-                return Err(EraAdmissionFailure {
-                    reason,
-                    collector,
-                    keeper,
-                });
-            }
+            Err(reason) => return Err(checked.refuse(reason)),
         };
-        let mut era = Self::admit(collector, keeper)?;
+        let (mut era, witness) = Self::admit_checked(checked, witness)?;
         era.weak_sweep = Some(permit.bind(era.registry.as_ref().expect("new era registry")));
         era.legacy_roots = Some(roots);
-        Ok(era)
+        Ok((era, witness))
     }
 
     fn weak_sweep_permit(&self) -> Option<&WeakSweepPermit> {
@@ -203,28 +198,23 @@ impl<'heap> ParallelHeapEra<'heap> {
     }
 
     #[cold]
-    pub(crate) fn admit_rooted(
-        mut collector: QuiescentCollector<'heap>,
-        keeper: Baton,
+    fn admit_rooted<A: construction::CoreAdmission<'heap>>(
+        admission: A,
         roots: FrozenLegacyRoots,
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        let error = if roots.heap_identity() != collector.heap_identity() {
-            Some(RegistrationError::WrongHeap)
-        } else if supported(collector.registration_heap_mut()).is_err() {
-            Some(RegistrationError::Publication)
+    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
+        let (mut checked, witness) = admission.into_checked();
+        let (collector, _) = checked.parts_mut();
+        let validation = if roots.heap_identity() != collector.heap_identity() {
+            Err(RegistrationError::WrongHeap)
         } else {
-            None
+            supported(collector.registration_heap_mut()).map_err(|_| RegistrationError::Publication)
         };
-        if let Some(reason) = error {
-            return Err(EraAdmissionFailure {
-                reason,
-                collector,
-                keeper,
-            });
+        if let Err(reason) = validation {
+            return Err(checked.refuse(reason));
         }
-        let mut era = Self::admit(collector, keeper)?;
+        let (mut era, witness) = Self::admit_checked(checked, witness)?;
         era.legacy_roots = Some(roots);
-        Ok(era)
+        Ok((era, witness))
     }
 
     fn check_collection(&self, stopped: &AllStopped<'_>) -> Result<(), CollectionError> {
@@ -812,7 +802,7 @@ mod keeper_table_scope_tests {
             |era, table_bits| {
                 let mut stopped = era.stop().unwrap();
                 {
-                    let mut slot = era.collector.try_borrow_mut().unwrap();
+                    let mut slot = era.core.collector.try_borrow_mut().unwrap();
                     let heap = slot.as_mut().unwrap().registration_heap_mut();
                     assert!(heap._satb_layout_reserve.collector_tables().is_null());
                     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

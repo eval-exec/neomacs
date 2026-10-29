@@ -2,6 +2,7 @@
 use super::*;
 use crate::emacs_core::symbol::parallel::InitialInternFacts;
 use crate::tagged::gc::HeapIdentity;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use std::collections::BTreeSet;
 use std::sync::Barrier;
 

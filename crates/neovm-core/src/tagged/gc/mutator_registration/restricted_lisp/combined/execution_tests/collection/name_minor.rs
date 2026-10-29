@@ -5,6 +5,7 @@ use super::fresh::{Cycle, dispatch_role};
 use super::minor_adapter::{Age, age};
 use super::*;
 use crate::emacs_core::intern::SymId;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 #[derive(Clone, Copy)]
 pub(super) enum Layout {

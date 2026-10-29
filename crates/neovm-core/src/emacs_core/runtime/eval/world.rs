@@ -25,6 +25,8 @@ use std::sync::Arc;
 mod green_owner;
 mod slot;
 mod sole_owner;
+#[cfg(test)]
+pub(crate) use green_owner::OwnedProofProjection;
 #[allow(unused_imports)]
 pub(crate) use green_owner::{
     Baton, FrozenLegacyRoots, OwnedParallelError, OwnedParallelProjection,

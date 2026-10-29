@@ -2,7 +2,7 @@
 //! actual stop/owner authority is exercised by rendezvous's integration tests.
 use super::*;
 use crate::emacs_core::eval::Context;
-use crate::tagged::gc::ParallelHeapEra;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::transport::SharedRoot;
 use crate::tagged::transport::root_table::with_root_table_lock_for_test;
 

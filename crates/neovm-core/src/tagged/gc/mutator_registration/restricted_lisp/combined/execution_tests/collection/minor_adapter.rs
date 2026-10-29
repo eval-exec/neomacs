@@ -1,6 +1,7 @@
 //! Adapter protocol only: the second job repeats the census of old survivors.
 //! Fresh replacements and sole-young-family mixed tapes are the next item.
 use super::*;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::{MinorCollectionError, TaggedHeap};
 use crate::tagged::header::GcHeader;
 use std::sync::Arc;
@@ -75,7 +76,7 @@ fn rebind(era: &ParallelHeapEra<'_>, stopped: &AllStopped<'_>) -> YoungCredit {
         )
     };
     stopped.check_world_roots(era.heap_identity()).unwrap();
-    let mut slot = era.collector.try_borrow_mut().unwrap();
+    let mut slot = era.core.collector.try_borrow_mut().unwrap();
     let heap = slot.as_mut().unwrap().registration_heap_mut();
     if !heap.generational_enabled() {
         return YoungCredit::Unchanged;
@@ -156,7 +157,7 @@ pub(super) fn exercise(
                 bases,
                 registration,
             } => {
-                let mut slot = era.collector.try_borrow_mut().unwrap();
+                let mut slot = era.core.collector.try_borrow_mut().unwrap();
                 let heap = slot.as_mut().unwrap().registration_heap_mut();
                 // SAFETY: mark/promotion/sweep finished in this matching stop;
                 // no response or mutable heap borrow escaped the keeper.

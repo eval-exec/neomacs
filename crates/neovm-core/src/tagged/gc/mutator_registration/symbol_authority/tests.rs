@@ -2,6 +2,7 @@ use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 
 fn finish(era: ParallelHeapEra<'_>) {
     let (collector, keeper) = era.finish().unwrap();

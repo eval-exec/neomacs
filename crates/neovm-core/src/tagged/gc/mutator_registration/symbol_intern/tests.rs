@@ -79,7 +79,7 @@ fn fixture_owner(
     kind: PlainSymbolBacking,
     query: Query,
     body: impl for<'heap, 'era> FnOnce(
-        &crate::tagged::gc::ParallelHeapEra<'heap>,
+        &crate::tagged::gc::ProofEra<'heap>,
         &mut Mutator<'era>,
         &mut Homes<'era>,
     ),

@@ -40,7 +40,7 @@ fn stopped_collection(ctx: &mut Context, old_word: usize) -> (CollectionReport, 
     // No running owner or legacy entry is needed for these lifetime checks;
     // the preceding edit uses the real two-owner bridge.
     let result = ctx
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             let result = (|| {
                 let era = projection.era();
                 let mut stopped = era.stop().map_err(|e| format!("GC stop: {e:?}"))?;

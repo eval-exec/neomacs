@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use super::super::mark_word::MarkWord;
-use super::{EntryPhase, EraFinishFailure, RegistrationError};
+use super::{EntryPhase, ProofEraFinishFailure as EraFinishFailure, RegistrationError};
 use crate::emacs_core::eval::Context;
 use crate::tagged::value::TaggedValue;
 use std::num::NonZeroU64;
@@ -13,9 +13,9 @@ fn epoch() -> NonZeroU64 {
 
 fn retain_failed_era(failure: EraFinishFailure<'_>, expected: RegistrationError) {
     assert_eq!(failure.reason, expected);
-    assert!(failure.era.keeper.is_some());
-    assert!(failure.era.collector.borrow().is_some());
-    assert!(failure.era.registry.is_some());
+    assert!(failure.era.core.keeper.is_some());
+    assert!(failure.era.core.collector.borrow().is_some());
+    assert!(failure.era.core.registry.is_some());
     // The fallback must retain authority/backing. No test repairs a forgotten
     // resource or pretends that its missing destructor discharged an obligation.
     drop(failure);

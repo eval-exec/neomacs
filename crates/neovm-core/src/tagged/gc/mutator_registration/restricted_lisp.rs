@@ -14,7 +14,7 @@ use super::symbol_functions::retry::{self as contention, Deadline, Retry, SPIN_W
 use super::symbol_globals::GlobalOp;
 use super::symbol_intern::InternOp;
 use super::{
-    AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, ParallelHeapEra,
+    AllStopped, HeapIdentity, Mutator, MutatorPermit, OwnerRootSlot, ProofEra as ParallelHeapEra,
     RegistrationError, Registry, RendezvousError, RunAccess, RunSlice, SealedTableAccess,
     SliceRoot, TableMut, TableRef,
 };
@@ -2646,7 +2646,7 @@ fn with_admitted(body: impl FnOnce(&ParallelHeapEra, bool, &SharedRoot, &SharedR
     let nil = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::NIL) };
     let one = unsafe { SharedRoot::new(&context.tagged_heap, TaggedValue::fixnum(1)) };
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -3648,7 +3648,7 @@ fn run_ht_session(
     let abort = AtomicBool::new(false);
     let mut lines: Vec<String> = Vec::new();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -3922,7 +3922,7 @@ fn a6_ht_user_test_refuses_mutation_inside_the_test() {
     let abort = AtomicBool::new(false);
     let (report_tx, report_rx) = channel();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -4095,7 +4095,7 @@ fn a6_ht_lease_mints_from_a_live_run_access() {
     let root = unsafe { SharedRoot::new(&context.tagged_heap, table) };
     let (report_tx, report_rx) = channel();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -4758,7 +4758,7 @@ fn run_ht_overlap_session(
     let abort = AtomicBool::new(false);
     let mut lines: Vec<Vec<String>> = Vec::new();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -5345,7 +5345,7 @@ fn a6_ht_user_test_revalidates_under_another_owner() {
     let abort = AtomicBool::new(false);
     let mut lines: Vec<String> = Vec::new();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             {
                 let era = projection.era();
                 era.start_cons_storage()
@@ -5594,7 +5594,7 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
     // Era #1 — the sealed `put`s that build the jump table.
     let abort = AtomicBool::new(false);
     let planted_fill: Vec<Option<SharedRoot>> = vec![Some(table_root.clone())];
-    ev.admit_owned_parallel(|projection| {
+    ev.admit_owned_proof_parallel(|projection| {
         let era = projection.era();
         era.start_cons_storage()
             .unwrap_or_else(|error| panic!("cons catalog: {error:?}"));
@@ -5717,7 +5717,7 @@ fn a6_ht_sealed_edit_triggers_jit_switch_stale_shim() {
     // to a byte offset the compile never saw.
     let (report_tx, report_rx) = channel();
     let planted: Vec<Option<SharedRoot>> = vec![Some(table_root.clone())];
-    ev.admit_owned_parallel(|projection| {
+    ev.admit_owned_proof_parallel(|projection| {
         {
             let era = projection.era();
             era.start_cons_storage()

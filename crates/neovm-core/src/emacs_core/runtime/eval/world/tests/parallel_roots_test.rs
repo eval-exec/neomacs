@@ -7,7 +7,7 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{HashTableTest, HashTableWeakness, LispHashTable};
-use crate::tagged::gc::{ParallelHeapEra, RegistrationError};
+use crate::tagged::gc::{ProofEra as ParallelHeapEra, RegistrationError};
 
 struct ScratchScope(usize);
 
@@ -257,7 +257,7 @@ fn a6_owned_admission_pins_shell_census_and_restores_empty_weak_table() {
     context.lexenv = shell;
     let shell_bits = shell.bits();
     context
-        .admit_owned_parallel(|projection| {
+        .admit_owned_proof_parallel(|projection| {
             assert!(
                 crate::tagged::gc::current_tagged_heap_identity().is_none(),
                 "overlap must not install the legacy heap TLS facade"
@@ -307,7 +307,7 @@ fn a6_owned_admission_refuses_nonempty_weak_table_without_clearing_it() {
         .eval_str("(puthash 1 2 window-dead-windows-table)")
         .unwrap();
     let started = std::sync::atomic::AtomicBool::new(false);
-    let refused: Result<(), OwnedParallelError> = context.admit_owned_parallel(|_| {
+    let refused: Result<(), OwnedParallelError> = context.admit_owned_proof_parallel(|_| {
         started.store(true, std::sync::atomic::Ordering::Relaxed);
         unreachable!("non-empty weak table must refuse before the body");
     });

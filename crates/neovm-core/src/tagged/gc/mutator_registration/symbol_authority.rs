@@ -98,7 +98,7 @@ impl std::fmt::Debug for SymbolHandle {
     }
 }
 
-impl ParallelHeapEra<'_> {
+impl EraCore<'_> {
     /// Serial keeper admission only, before ANY participant is registered.
     /// Unsupported/absent cells refuse without creating or redirecting them.
     pub fn admit_plain_symbol(&self, symbol: SymId) -> Result<SymbolHandle, RegistrationError> {

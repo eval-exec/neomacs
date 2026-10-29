@@ -1,6 +1,7 @@
 //! A real closed tape leaves the registry index as the sole winning-name root.
 use super::*;
 use crate::tagged::gc::AllStopped;
+use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mutator_registration::image::PublishedGcWork;
 
 #[derive(Default, Debug)]
@@ -32,14 +33,16 @@ fn ledger(era: &ParallelHeapEra<'_>, stopped: &mut AllStopped<'_>) -> Ledger {
         .unwrap();
     result.names = names.into_iter().map(TaggedValue::bits).collect();
     let mut world = Vec::new();
-    era.keeper
+    era.core
+        .keeper
         .as_ref()
         .unwrap()
         .collect_parallel_world_roots(stopped, &mut world)
         .unwrap();
     result.world = world.into_iter().map(TaggedValue::bits).collect();
     let mut external = Vec::new();
-    era.legacy_roots
+    era.core
+        .legacy_roots
         .as_ref()
         .unwrap()
         .append_words(&mut external);
