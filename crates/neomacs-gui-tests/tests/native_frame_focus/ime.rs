@@ -133,6 +133,27 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             let window =
                 wait_for_window(&env, &ready["pid"].to_string(), None, &|| run.is_finished())?;
             focus_window(&env, &window)?;
+            // The editor creates its XIM input context asynchronously after
+            // the window exists.  `-s` addresses the CURRENT input context,
+            // so switching before it exists is a no-op and the context is
+            // born with the keyboard layout.  Wait for the daemon to see a
+            // context (state 0 = closed) before switching.
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                let state = Command::new("fcitx5-remote")
+                    .envs(env.iter().map(|(k, v)| (k, v)))
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if String::from_utf8_lossy(&state.stdout).trim() != "0" {
+                    break;
+                }
+                if run.is_finished() || Instant::now() >= deadline {
+                    return Err(format!(
+                        "fcitx5 never saw the editor's input context: {state:?}"
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
             for args in [["-s", "pinyin"].as_slice(), ["-o"].as_slice()] {
                 let output = Command::new("fcitx5-remote")
                     .args(args)
@@ -144,13 +165,26 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
                 }
             }
             // Confirm the active IM instead of treating absent IME as a pass.
-            let active = Command::new("fcitx5-remote")
-                .arg("-n")
-                .envs(env.iter().map(|(k, v)| (k, v)))
-                .output()
-                .map_err(|e| e.to_string())?;
-            if String::from_utf8_lossy(&active.stdout).trim() != "pinyin" {
-                return Err(format!("Pinyin not active: {active:?}"));
+            // fcitx5 creates the input context for a freshly focused client
+            // and loads the input-method addon asynchronously; `-n` reports
+            // the current context's IM and is empty until that handshake
+            // settles.  Sample it to a deadline: the assertion is that the
+            // editor is talking to the IM, not that the daemon answered
+            // within the first milliseconds after the switch.
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                let active = Command::new("fcitx5-remote")
+                    .arg("-n")
+                    .envs(env.iter().map(|(k, v)| (k, v)))
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if String::from_utf8_lossy(&active.stdout).trim() == "pinyin" {
+                    break;
+                }
+                if run.is_finished() || Instant::now() >= deadline {
+                    return Err(format!("Pinyin not active: {active:?}"));
+                }
+                thread::sleep(Duration::from_millis(20));
             }
             // ASCII comma is transformed by fcitx5 into an actual U+FF0C commit.
             xdotool(&env, &["key", "comma"])?;
@@ -189,6 +223,29 @@ fn fcitx5_fullwidth_punctuation_is_text_and_f13_stays_a_key() {
             if !inactive.status.success() {
                 return Err(format!("fcitx5 deactivate: {inactive:?}"));
             }
+            // `-c` closes the input context asynchronously.  A key sent while
+            // fcitx still owns the context can be filtered by the IM instead
+            // of reaching the editor, which is exactly the distinction this
+            // stage measures, so wait for the closed state first.  The
+            // session has no window manager, so restore the app's X focus
+            // explicitly before typing.
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                let state = Command::new("fcitx5-remote")
+                    .envs(env.iter().map(|(k, v)| (k, v)))
+                    .output()
+                    .map_err(|e| e.to_string())?;
+                if String::from_utf8_lossy(&state.stdout).trim() != "2" {
+                    break;
+                }
+                if run.is_finished() || Instant::now() >= deadline {
+                    return Err(format!(
+                        "fcitx5 did not deactivate the input context: {state:?}"
+                    ));
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            focus_window(&env, &window)?;
             xdotool(&env, &["key", "F13"])?;
             expect_buffers(
                 &artifacts,
