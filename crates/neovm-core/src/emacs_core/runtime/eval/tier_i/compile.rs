@@ -148,6 +148,8 @@ pub(super) enum Op {
     SaveCurrentBuffer(Seq),
 }
 
+crate::emacs_core::subr::world_registry!(Op);
+
 impl Op {
     /// The special form this op mirrors, `None` for a call.
     pub(super) fn handler(&self) -> Option<SpecialFormHandler> {

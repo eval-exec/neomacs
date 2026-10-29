@@ -40,6 +40,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
 use std::cell::RefCell;
+crate::emacs_core::subr::world_registry!(LeafId);
 
 /// Independent effects, rather than a strongest-effect ordering. Allocating
 /// does not imply collecting, and signaling does not subsume state mutation.

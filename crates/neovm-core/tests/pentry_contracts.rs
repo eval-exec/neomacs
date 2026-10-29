@@ -1,8 +1,9 @@
 //! Compile-time production-entry contracts and bound-removal controls.
 //!
-//! Mutation controls include an isolated copy of the real capability source
-//! with exactly one bound changed. An accidental unrelated compiler error
-//! therefore cannot bless a negative.
+//! Capability mutation controls include an isolated copy of the real source
+//! with exactly one bound changed. Catalog controls correct exactly one entry
+//! against the unchanged validator shared with the build generator. Accidental
+//! unrelated compiler errors therefore cannot bless either kind of negative.
 
 #[test]
 #[cfg(feature = "contract-fixtures")]
@@ -103,6 +104,46 @@ fn pentry_compile_contracts() {
             .replace("support/thread_bounds.rs", "thread_bounds.rs");
         let path = directory.join(format!("{name}_mutation.rs"));
         fs::write(&path, fixture).expect("unchanged negative body with isolated module paths");
+        cases.pass(path);
+    }
+
+    // Exercise the exact const validator used to enforce the build generator's
+    // schema. These controls classify/rename one declaration, leaving every
+    // validator check unchanged. A duplicate remains a duplicate even when the
+    // two registrations request different authorities.
+    let schema_path = manifest.join("src/emacs_core/lisp/native/subr/effect_schema.rs");
+    let schema = fs::read_to_string(&schema_path).expect("real inventory schema validator");
+    let schema_mutations = [
+        (
+            "catalog_missing_classification",
+            "const CLASSIFICATION: Classification = Classification::Unclassified;",
+            "const CLASSIFICATION: Classification = Classification::Classified(Authority::World);",
+        ),
+        (
+            "catalog_duplicate_registration",
+            "SchemaEntry::classified(CatalogKind::Primitive, \"duplicate\", Authority::Sealed)",
+            "SchemaEntry::classified(CatalogKind::Primitive, \"distinct\", Authority::Sealed)",
+        ),
+    ];
+    for (name, before, after) in schema_mutations {
+        let directory = output.join(name);
+        fs::create_dir_all(&directory).expect("isolated schema control directory");
+        fs::write(directory.join("effect_schema.rs"), &schema)
+            .expect("unchanged real inventory schema source");
+        let fixture = fs::read_to_string(manifest.join(format!("tests/pentry_ui/{name}.rs")))
+            .expect("inventory negative fixture body");
+        assert_eq!(
+            fixture.matches(before).count(),
+            1,
+            "one declaration for {name}"
+        );
+        assert!(!before.contains('\n') && !after.contains('\n'));
+        let fixture = fixture.replacen(before, after, 1).replace(
+            "../../src/emacs_core/lisp/native/subr/effect_schema.rs",
+            "effect_schema.rs",
+        );
+        let path = directory.join(format!("{name}_mutation.rs"));
+        fs::write(&path, fixture).expect("one-line corrected declaration with real schema");
         cases.pass(path);
     }
 }

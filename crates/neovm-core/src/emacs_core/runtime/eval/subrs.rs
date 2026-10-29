@@ -55,14 +55,24 @@ struct EvaluatorSubr {
 impl EvaluatorSubr {
     const fn special(name: &'static str, arity: SubrArity, handler: SpecialFormHandler) -> Self {
         Self {
-            spec: SubrSpec::evaluator(name, arity, SubrDispatchKind::SpecialForm),
+            spec: crate::emacs_core::subr::WorldSubr::new(SubrSpec::evaluator(
+                name,
+                arity,
+                SubrDispatchKind::SpecialForm,
+            ))
+            .serial(),
             handler: EvaluatorHandler::SpecialForm(handler),
         }
     }
 
     const fn callable(name: &'static str, arity: SubrArity, handler: CallableHandler) -> Self {
         Self {
-            spec: SubrSpec::evaluator(name, arity, SubrDispatchKind::ContextCallable),
+            spec: crate::emacs_core::subr::WorldSubr::new(SubrSpec::evaluator(
+                name,
+                arity,
+                SubrDispatchKind::ContextCallable,
+            ))
+            .serial(),
             handler: EvaluatorHandler::Callable(handler),
         }
     }
@@ -131,16 +141,16 @@ const EVALUATOR_SUBRS: &[EvaluatorSubr] = &[
 ];
 
 crate::emacs_core::subr::define_subrs! {
-    SubrSpec::new(
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "default-toplevel-value",
         NativeFn::ContextVec(default_toplevel_value),
         SubrArity::new(1, Some(1)),
-    ),
-    SubrSpec::new(
+    )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "set-default-toplevel-value",
         NativeFn::ContextVec(set_default_toplevel_value),
         SubrArity::new(2, Some(2)),
-    ),
+    )),
 }
 
 fn evaluator_subr(name: &str) -> Option<EvaluatorSubr> {

@@ -10,6 +10,9 @@ mod common;
 #[path = "pentry_contracts.rs"]
 mod pentry_contracts;
 
+#[path = "pentry_inventory_generator.rs"]
+mod pentry_inventory_generator;
+
 #[path = "dump_environment.rs"]
 mod dump_environment;
 

@@ -1,0 +1,14 @@
+error[E0080]: evaluation panicked: primitive inventory: missing authority classification
+ --> tests/pentry_ui/catalog_missing_classification.rs:7:15
+  |
+7 |   const _: () = assert_valid(&[
+  |  _______________^
+8 | |     SchemaEntry::primitive("deliberately-unclassified", CLASSIFICATION),
+9 | | ]);
+  | |__^ evaluation of `_` failed inside this call
+  |
+note: inside `assert_valid`
+ --> tests/pentry_ui/../../src/emacs_core/lisp/native/subr/effect_schema.rs
+  |
+  |             panic!("primitive inventory: missing authority classification")
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here

@@ -5,6 +5,7 @@
 //! pass can serialize to a compact byte stream.
 
 use serde::{Deserialize, Serialize};
+crate::emacs_core::subr::world_registry!(Op);
 
 // Branch classification serves only JIT compilation and its tests.
 #[cfg(any(test, feature = "jit"))]

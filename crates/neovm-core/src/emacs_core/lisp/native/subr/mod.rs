@@ -14,7 +14,65 @@ use crate::tagged::header::{
 };
 use std::sync::{Mutex, OnceLock};
 
+pub(crate) mod effect_catalog;
+pub(crate) mod effect_schema;
 pub(crate) mod leaf;
+
+/// Explicit serial-only declaration. The projection changes neither SubrSpec
+/// nor its executable registration; the build inventory consumes this marker.
+pub(crate) struct WorldSubr(SubrSpec);
+
+impl WorldSubr {
+    pub(crate) const fn new(spec: SubrSpec) -> Self {
+        Self(spec)
+    }
+
+    pub(crate) const fn serial(self) -> SubrSpec {
+        self.0
+    }
+
+    pub(crate) const fn declaration(self) -> effect_schema::SchemaEntry<'static> {
+        effect_schema::SchemaEntry::classified(
+            effect_schema::CatalogKind::Primitive,
+            self.0.name,
+            effect_schema::Authority::World,
+        )
+    }
+
+    pub(crate) const fn batch_declarations<const N: usize>(
+        specs: &[SubrSpec; N],
+    ) -> [effect_schema::SchemaEntry<'static>; N] {
+        use effect_schema::{Authority, CatalogKind, SchemaEntry};
+        let mut rows = [SchemaEntry::classified(CatalogKind::Primitive, "", Authority::World); N];
+        let mut index = 0;
+        while index < N {
+            rows[index] = Self::new(specs[index]).declaration();
+            index += 1;
+        }
+        rows
+    }
+}
+
+/// An explicit typed World declaration, const-erased to the original serial
+/// spec. No effect metadata enters SubrEntry, TLS, or a dispatch call site.
+macro_rules! world_subr {
+    ($spec:expr) => {
+        const { $crate::emacs_core::subr::WorldSubr::new($spec).serial() }
+    };
+}
+pub(crate) use world_subr;
+
+/// Classify a complete legacy registry as World-only without changing the enum
+/// representation or emitting runtime dispatch. The generator requires this
+/// explicit declaration before it emits that registry's exhaustive sidecar.
+macro_rules! world_registry {
+    ($registry:ty) => {
+        const _: () = {
+            let _ = std::mem::size_of::<$registry>();
+        };
+    };
+}
+pub(crate) use world_registry;
 
 #[cfg(test)]
 thread_local! {
@@ -482,6 +540,11 @@ macro_rules! define_subrs {
                 module_path!(),
                 &[$($spec),+],
             );
+
+        // Apply cfg attributes to array elements before deriving declarations.
+        const _: () = $crate::emacs_core::subr::effect_schema::assert_valid(
+            &$crate::emacs_core::subr::WorldSubr::batch_declarations(&[$($spec),+]),
+        );
 
         pub(crate) fn register_subrs(
             ctx: &mut $crate::emacs_core::eval::Context,

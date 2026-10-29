@@ -1,0 +1,15 @@
+error[E0080]: evaluation panicked: primitive inventory: duplicate registration
+ --> tests/pentry_ui/catalog_duplicate_registration.rs:6:15
+  |
+6 |   const _: () = assert_valid(&[
+  |  _______________^
+7 | |     SchemaEntry::classified(CatalogKind::Primitive, "duplicate", Authority::World),
+8 | |     SchemaEntry::classified(CatalogKind::Primitive, "duplicate", Authority::Sealed),
+9 | | ]);
+  | |__^ evaluation of `_` failed inside this call
+  |
+note: inside `assert_valid`
+ --> tests/pentry_ui/../../src/emacs_core/lisp/native/subr/effect_schema.rs
+  |
+  |             panic!("primitive inventory: duplicate registration")
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here

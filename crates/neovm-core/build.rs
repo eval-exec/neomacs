@@ -22,6 +22,9 @@ fn compile_float_format(manifest: &Path) {
 #[path = "build_support/generated_lisp.rs"]
 mod generated_lisp;
 
+#[path = "build_support/pentry_inventory.rs"]
+mod pentry_inventory;
+
 // Single source of truth (R2-C2): the `neovm_jit_*` shim names, shared with
 // runtime/jit/aot.rs (MIR_SHIM_NAMES) + crates/neomacs/build.rs via `include!` so the
 // emit/salt set and both export sets can never drift.
@@ -33,6 +36,9 @@ fn main() {
         std::env::var_os("CARGO_WORKSPACE_DIR")
             .expect("workspace .cargo/config.toml must set CARGO_WORKSPACE_DIR"),
     );
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    pentry_inventory::generate(&manifest_dir, &project_root, &out)
+        .unwrap_or_else(|error| panic!("production-entry inventory: {error}"));
 
     // GNU's `${configuration}` -- the autoconf host triple that names the
     // architecture-dependent install directory
