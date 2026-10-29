@@ -20,13 +20,20 @@ fn terminal_image_property_preserves_multiline_text_banner() {
           (insert "Welcome to Emacs!")
           (goto-char (point-min)))"##,
     );
-    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(5), |grid| {
-        grid.iter().any(|row| row.contains("Welcome to Emacs!"))
-    });
+    // A grid row whose visible text is exactly the banner's middle line can
+    // only come from the *banner* buffer: the eval minibuffer's echo of the
+    // unsubmitted paste embeds the same characters inside a longer source
+    // line, so a `contains` predicate is also satisfied while the editor is
+    // still displaying `Eval: (progn ...)` and has not run the switch.
+    let banner_visible = |grid: &[String]| {
+        grid.iter()
+            .any(|row| row.trim_end() == "⣿  Emacs  ⣿")
+    };
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(5), banner_visible);
     for (label, session) in [("GNU", &gnu), ("Neomacs", &neo)] {
         let grid = session.text_grid();
         assert!(
-            grid.iter().any(|row| row.contains("⣿  Emacs  ⣿")),
+            grid.iter().any(|row| row.trim_end() == "⣿  Emacs  ⣿"),
             "{label} must show the underlying banner, not an image placeholder:\n{}",
             grid.join("\n")
         );
@@ -61,8 +68,11 @@ fn terminal_image_specs_leave_text_and_later_display_alternatives_available() {
             (insert "BANNER-END"))
           (goto-char (point-min)) nil)"##,
     );
+    // `BANNER-END` is the buffer's final line, so an exact row match proves
+    // the display property did not hide it; the eval echo only contains it
+    // embedded in `(insert "BANNER-END")`.
     wait_for_both(&mut gnu, &mut neo, Duration::from_secs(5), |grid| {
-        grid.iter().any(|row| row.contains("BANNER-END"))
+        grid.iter().any(|row| row.trim_end() == "BANNER-END")
     });
     for (label, session) in [("GNU", &gnu), ("Neomacs", &neo)] {
         let grid = session.text_grid();

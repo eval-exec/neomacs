@@ -225,6 +225,16 @@ pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &
     gnu.paste(expression);
     neo.paste(expression);
     send_both(gnu, neo, "RET");
+    // The pasted expression is echoed in the minibuffer while it is still
+    // unsubmitted, and that echo contains the expression's own string
+    // literals.  A caller that waits for displayed buffer text can therefore
+    // match the echo before RET has been processed, and its next exact-display
+    // observation then runs against a half-transitioned frame (observed on the
+    // TUI shard as GNU still in `Eval:` while Neomacs had already switched
+    // buffers).  Return only once the eval minibuffer has closed on both
+    // sides, so every later observation is of a submitted command.
+    let submitted = |grid: &[String]| !grid.iter().any(|row| row.contains("Eval:"));
+    wait_for_both(gnu, neo, Duration::from_secs(8), submitted);
 }
 
 pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
@@ -234,6 +244,10 @@ pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
     session.read(Duration::from_millis(300));
     session.paste(expression);
     session.send_key("RET");
+    // See `eval_expression`: do not return while the unsubmitted echo is still
+    // the only place the expression's text is visible.
+    let submitted = |grid: &[String]| !grid.iter().any(|row| row.contains("Eval:"));
+    session.read_until(Duration::from_secs(8), submitted);
 }
 
 /// Remove repository-specific state from paired source-tree fixtures by
