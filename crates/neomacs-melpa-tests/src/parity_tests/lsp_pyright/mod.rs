@@ -7,6 +7,10 @@ use super::batch_support::assert_oracle_batch_cases;
 
 mod workflows;
 
+#[cfg(test)]
+#[path = "tests/wire_log_reader_test.rs"]
+mod wire_log_reader_test;
+
 const LSP_PYRIGHT_TEST_TIMEOUT: Duration = Duration::from_secs(240);
 
 const LSP_PYRIGHT_TEST_PRELUDE: &str = r####"
@@ -87,9 +91,12 @@ def append_json(path, value):
     payload = (json.dumps(value, ensure_ascii=False, sort_keys=True) + '\\n').encode('utf-8')
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        written = os.write(descriptor, payload)
-        if written != len(payload):
-            raise RuntimeError('short fixture-log write')
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise RuntimeError('fixture-log write made no progress')
+            offset += written
     finally:
         os.close(descriptor)
 
@@ -478,21 +485,37 @@ else:
       (error "Timed out waiting for %s" description))))
 
 (defun neomacs-lsp-pyright-test-read-json-lines (path)
-  "Read the complete JSON values recorded at PATH."
+  "Read the complete JSON values recorded at PATH.
+
+The fixture server appends one record per `write', but a reader can
+observe that write while the kernel is still publishing it: a record is
+larger than a page, the file size advances page by page, and this
+function is called from polling predicates while the server runs.  A
+record is complete only once its terminating newline is present, so
+ignore a trailing fragment; the next poll sees the finished record.
+Parsing the fragment signals `json-end-of-file', which is how the full
+MELPA batch failed under load even though every completed record parsed."
   (when (file-readable-p path)
     (with-temp-buffer
       (insert-file-contents path)
       (goto-char (point-min))
       (let (values)
         (while (not (eobp))
-          (push (json-parse-string
-                 (buffer-substring-no-properties
-                  (line-beginning-position) (line-end-position))
-                 :object-type 'alist
-                 :array-type 'list
-                 :null-object nil
-                 :false-object :json-false)
-                values)
+          ;; `line-end-position' points at the newline when the record is
+          ;; complete, and at `point-max' for a final line still being
+          ;; written.  Sync through the terminating newline only.
+          (let* ((line-end (line-end-position))
+                 (line (buffer-substring-no-properties
+                        (line-beginning-position) line-end)))
+            (when (and (< line-end (point-max))
+                       (not (string-empty-p line)))
+              (push (json-parse-string
+                     line
+                     :object-type 'alist
+                     :array-type 'list
+                     :null-object nil
+                     :false-object :json-false)
+                    values)))
           (forward-line 1))
         (nreverse values)))))
 
