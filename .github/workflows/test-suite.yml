@@ -176,7 +176,12 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          # Same workspace, dev profile, and native x86_64 target as the build
+          # gate's windows-msvc-x86_64 check job.  Sharing its dependency
+          # cache keeps one copy of that graph in the shared 10 GiB store
+          # instead of two.
           cache-key: ci-windows-direct-adapter-x86_64
+          cache-shared-key: windows-msvc-x86_64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
@@ -232,7 +237,20 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: ci-neovm-core-tests-macos
-          cache-shared-key: macos-aarch64-release
+          # The `-ws` generation marks the workspace-crate cache.  rust-cache's
+          # key does NOT include `cache-workspace-crates` (only the shared key,
+          # platform, toolchain and lock hash), and it skips saving when the
+          # key is already up to date.  Without a new key, a pre-existing
+          # `macos-aarch64-release` entry (saved without workspace crates)
+          # would be restored and the improved save silently skipped.
+          cache-shared-key: macos-aarch64-release-ws
+          # fresh-build and the test targets recompile the workspace's own
+          # crates on every commit, which is ~33 min of the job on a 3-core
+          # runner.  The release-profile inputs are stable enough to cache
+          # them; the Doom job restores/saves the same shared entry and
+          # enables this too, so the two jobs never race different contents
+          # under one key.
+          cache-workspace-crates: "true"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
           target: aarch64-apple-darwin
@@ -273,7 +291,12 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
+          # Same workspace, dev profile, and x86_64 target as the build gate's
+          # check job: its dependency graph IS `linux-x86_64-dev`.  A private
+          # key made a second ~1.6 GiB copy of it in the shared 10 GiB store
+          # for a job that runs on every main push.
           cache-key: ci-compile-contracts-linux-x86_64
+          cache-shared-key: linux-x86_64-dev
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # trybuild always invokes `cargo --offline` on a scratch project that
@@ -923,14 +946,19 @@ jobs:
       - *prepare_workspace_tmp
       - uses: ./.github/actions/install-build-deps
 
-      # Share the macOS release cache with the file-notify ERT job, which
-      # builds the same fresh release runtime. Save only on main so PRs do not
-      # write a ~1 GB PR-scoped copy.
+      # Share the macOS release cache with the neovm-core macOS job: same
+      # workspace, release profile and target, both running fresh-build.  Save
+      # only on main so PRs do not write a multi-GB PR-scoped copy.
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
           cache-key: doom-install-macos
-          cache-shared-key: macos-aarch64-release
+          # Must match the neovm-core macOS job: both restore and save the ONE
+          # `macos-aarch64-release-ws` entry, and whatever rust-cache saves
+          # under this key must include the workspace crates in both jobs or
+          # the first saver would pin the shared entry to the slower shape.
+          cache-shared-key: macos-aarch64-release-ws
+          cache-workspace-crates: "true"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           target: aarch64-apple-darwin
 

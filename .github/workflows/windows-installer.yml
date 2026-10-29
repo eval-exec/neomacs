@@ -72,11 +72,16 @@ jobs:
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
-          # fresh-build uses the default release profile; share the
-          # Windows release cache and save only from main.
+          # This path-filtered contract is the only main-branch consumer of
+          # `windows-msvc-<arch>-release` (the manual-only native-contract
+          # workflow has its own, never saved on pushes), and its ~1.6 GiB
+          # arm64 entry was one of the largest in the shared 10 GiB store the
+          # macOS release caches must also live in.  The tag-time release
+          # workflow already takes the same trade (`cache: "false"`); an
+          # installer-contract push pays a cold Windows build instead of
+          # costing every other workflow its cache.
+          cache: "false"
           cache-key: windows-msvc-${{ matrix.arch }}
-          cache-shared-key: windows-msvc-${{ matrix.arch }}-release
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: true
 
       - name: Install NSIS

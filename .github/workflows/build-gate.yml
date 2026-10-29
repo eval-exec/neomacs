@@ -56,6 +56,14 @@ jobs:
         with:
           cache-key: ci-check-${{ matrix.label }}
           cache-shared-key: ${{ matrix.label }}-dev
+          # These two legs exist only to keep a RELEASE target compiling (the
+          # macOS Intel image so a tag never discovers x86_64 breakage, and
+          # Windows-on-ARM likewise).  Nothing else restores their caches, and
+          # each was ~1.1-1.3 GB in the shared 10 GiB store that the macOS
+          # release caches must also live in.  They still run and gate the
+          # workspace; they compile cold.  Every platform that ships or runs
+          # the suite keeps its cache.
+          cache: ${{ matrix.label != 'macos-x86_64' && matrix.label != 'windows-msvc-aarch64' }}
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
           install-nextest: ${{ matrix.label == 'linux-x86_64' || matrix.label == 'windows-msvc-x86_64' || runner.os == 'macOS' }}
 
