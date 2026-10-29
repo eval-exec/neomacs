@@ -175,9 +175,7 @@ fn check_receipt_timestamp(result: &GuiRunResult) {
     let wire = fs::read_to_string(&result.artifacts.stderr).unwrap();
     let wire: Vec<String> = wire
         .lines()
-        .map(|line| {
-            neomacs_gui_tests::interaction::strip_ansi(line).into_owned()
-        })
+        .map(|line| neomacs_gui_tests::interaction::strip_ansi(line).into_owned())
         .collect();
     assert!(
         wire.iter()

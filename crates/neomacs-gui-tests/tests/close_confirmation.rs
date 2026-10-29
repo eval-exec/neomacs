@@ -144,9 +144,7 @@ impl CloseFixture {
         fs::read_to_string(self.artifacts.join("wayland.log"))
             .unwrap_or_default()
             .lines()
-            .map(|line| {
-                neomacs_gui_tests::interaction::strip_ansi(line).into_owned()
-            })
+            .map(|line| neomacs_gui_tests::interaction::strip_ansi(line).into_owned())
             .filter(|line| line.contains("xdg_popup") && line.contains(".configure("))
             .count()
     }
