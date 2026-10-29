@@ -331,12 +331,18 @@ fn div_cx28_process_output_coding_system_after_set() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
-  (let ((p (make-process :name "neo-cx28-oc" :command '("printf" "caf\\303\\251")
+  (let ((p (make-process :name "neo-cx28-oc"
+                         :command '("sh" "-c" "read line; printf 'caf\\303\\251'")
                          :buffer (current-buffer))))
     ;; The default sentinel is a process-status timing artifact; this case is
-    ;; about decoding after `set-process-coding-system`.
+    ;; about decoding after `set-process-coding-system'.  The child waits for
+    ;; stdin, so it cannot produce its output before the coding system is
+    ;; installed: a child that exits first makes the last read a scheduling
+    ;; race, and GNU's `accept-process-output' can report the exit before the
+    ;; bytes are drained (observed once on macOS under the full live suite).
     (set-process-sentinel p #'ignore)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+    (process-send-string p "go\n")
     (neovm--oracle-settle-process p 600))
   (list (buffer-string) (length (buffer-string)) (string-bytes (buffer-string))))
 "##,

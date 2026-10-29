@@ -42,12 +42,17 @@ fn div_cx6_set_process_coding_system_output() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
-  (let ((p (make-process :name "neo-cx6-pc" :command '("echo" "hello")
+  (let ((p (make-process :name "neo-cx6-pc"
+                         :command '("sh" "-c" "read line; echo hello")
                          :buffer (current-buffer))))
     ;; The default sentinel can be delivered in the same wait on GNU.  This
-    ;; case only asserts explicit process-output decoding.
+    ;; case only asserts explicit process-output decoding.  The child waits
+    ;; for stdin so its output cannot race the coding-system installation: an
+    ;; `echo' that exits first can lose its final read, and which editor does
+    ;; is a scheduling accident on a loaded host.
     (set-process-sentinel p #'ignore)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+    (process-send-string p "go\n")
     (neovm--oracle-settle-process p 600))
   (buffer-string))
 "##,

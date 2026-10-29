@@ -260,11 +260,24 @@ fn div_cx9_accept_process_output_timeout_variants() {
     let expect = expect_test::expect![[r#""OK t""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((p (make-process :name "neo-cx9-to" :command '("echo" "data")))
-      (got nil))
+(let ((p (make-process :name "neo-cx9-to"
+                       :command '("sh" "-c" "read line; echo data")))
+      (got nil)
+      (i 0))
   (set-process-filter p (lambda (proc msg) (setq got msg)))
+  ;; The child waits for stdin: an `echo' that exits before the first
+  ;; `accept-process-output' can lose its final read to the scheduler (the
+  ;; same race as `div_cx28_process_output_coding_system_after_set'), and
+  ;; this probe is about the timeout variants, not about that race.  The
+  ;; bounded drain keeps the assertion ("the filter saw the output") while
+  ;; the two timeout calls above it still exercise the 0/MILLISEC/JUST-THIS-ONE
+  ;; and 1-second paths.
+  (process-send-string p "go\n")
   (accept-process-output p 0 nil t)
   (accept-process-output p 1)
+  (while (and (null got) (< i 20))
+    (setq i (1+ i))
+    (accept-process-output p 0.05))
   (if got t nil))
 "##,
         expect,

@@ -46,6 +46,26 @@ fn oracle_cus_start_platform_names_gnu_binds_here_carry_gnus_declaration() {
     let expect = expect_test::expect![[
         r#""OK ((window-combination-limit t window-size t t nil) (void-text-area-pointer t arrow t t nil) (x-bitmap-file-path t (\"/usr/include/X11/bitmaps\") t t nil) (x-gtk-use-system-tooltips t t t t nil) (x-scroll-event-delta-factor t 1.0 t t nil) (x-auto-preserve-selections t (CLIPBOARD PRIMARY) t t nil) (vertical-centering-font-regexp t \"gb2312\\\\|gbk\\\\|gb18030\\\\|jisx0208\\\\|jisx0212\\\\|ksc5601\\\\|cns11643\\\\|big5\" t t nil))""#
     ]];
+    // `x-bitmap-file-path` is configure-time `bitmapdir`, not a probe of the
+    // running system (src/epaths.in:67, configure.ac:2754-2769), so its value
+    // is a host input of the reference build.  The build manifest records the
+    // oracle's own value; assert the resolved GNU still answers it, so the
+    // parity comparison below is against a reference that matches its recipe
+    // rather than one that has drifted from it.
+    if crate::common::oracle_mode_runs_live_gnu()
+        && let Some(recorded) = crate::common::reference_manifest_value("x_bitmap_file_path")
+        && recorded != "unbound"
+    {
+        let live = crate::common::run_oracle_eval("x-bitmap-file-path")
+            .expect("the resolved GNU answers x-bitmap-file-path");
+        assert_eq!(
+            live.trim(),
+            format!("OK {recorded}"),
+            "the reference manifest records x-bitmap-file-path {recorded}, \
+             but the resolved GNU reports {}",
+            live.trim()
+        );
+    }
     crate::common::assert_oracle_parity_expect(form, expect);
 }
 

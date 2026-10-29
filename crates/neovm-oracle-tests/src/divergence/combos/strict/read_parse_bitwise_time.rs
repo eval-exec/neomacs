@@ -151,17 +151,37 @@ fn div_e5_min_max_abs_mixed() {
 #[test]
 fn div_e5_sxhash_determinism() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (8059383 8059383 0 0 363 15723 t t)""#]];
+    let expect =
+        expect_test::expect![[r#""OK (8059383 8059383 363 15723 t (t t) (t t t) (t t nil))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(list (sxhash "abc")
-      (sxhash "abc")
-      (sxhash-eq 'sym)
-      (sxhash-eq 'sym)
-      (sxhash '(1 2 3))
-      (sxhash [1 2 3])
-      (integerp (sxhash 42))
-      (integerp (sxhash-eq 42)))
+(list
+ ;; GNU's equal-based hash is content based and deterministic: these raw
+ ;; values are the reference's own on every host and in every process.
+ (sxhash "abc")
+ (sxhash "abc")
+ (sxhash '(1 2 3))
+ (sxhash [1 2 3])
+ (integerp (sxhash 42))
+ ;; `sxhash-eq' hashes object identity for heap objects, so GNU's value
+ ;; moves with ASLR between two processes (12091050191792, 8649782266544,
+ ;; 12617462876592 in three runs of the same binary).  Comparing one run's
+ ;; address would test an accident, like the overlay tiebreaker.  Assert
+ ;; GNU's contract instead: same object, same hash; the answer is a fixnum.
+ (let ((s (list 1 2)))
+   (list (equal (sxhash-eq s) (sxhash-eq s))
+         (fixnump (sxhash-eq s))))
+ (let ((sym 'sxhash-contract-probe))
+   (list (equal (sxhash-eq sym) (sxhash-eq sym))
+         (equal (sxhash-eq sym)
+                (sxhash-eq (intern "sxhash-contract-probe")))
+         (fixnump (sxhash-eq sym))))
+ ;; `sxhash-eql' is value based, but its encoding is host defined (the
+ ;; flonum bits differ between the Linux and macOS reference builds), so
+ ;; only the contract is portable here.
+ (list (equal (sxhash-eql 1.5) (sxhash-eql 1.5))
+       (fixnump (sxhash-eql 1.5))
+       (= (sxhash-eql 1) (sxhash-eql 1.0))))
 "##,
         expect,
     );

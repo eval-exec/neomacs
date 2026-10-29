@@ -117,6 +117,15 @@ fn oracle_prop_progress_reporter_message_and_alias_semantics() {
 fn oracle_prop_progress_reporter_loop_macros_return_values() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
+    // The reporters are built with MIN-TIME 0 so every update clears the
+    // throttle unconditionally (`progress-reporter-do-update` gates on the
+    // wall clock when the reporter carries a start time; subr.el:7186-7187,
+    // 7266-7269).  With the default 0.2 s the observed states depend on how
+    // long the loop's first iteration happens to take: a fast host reports
+    // only the creation update, and a loaded one (observed on macOS under the
+    // full live suite) also reports the first in-loop percentage.  The macros'
+    // observable contract -- the update states, the texts, the return values
+    // -- is the same either way once the clock is out of the picture.
     let form = r#"
 (let (events)
   (let ((progress-reporter-update-functions
@@ -124,16 +133,18 @@ fn oracle_prop_progress_reporter_loop_macros_return_values() {
                  (push (list state (progress-reporter-text reporter))
                        events)))))
     (list
-     (dotimes-with-progress-reporter (i 3 'dotimes-result) "Loop"
+     (dotimes-with-progress-reporter (i 3 'dotimes-result)
+         (make-progress-reporter "Loop" 0 3 nil 1 0)
        i)
      (let ((sum 0))
-       (dolist-with-progress-reporter (x '(1 2 3) sum) "List loop"
+       (dolist-with-progress-reporter (x '(1 2 3) sum)
+           (make-progress-reporter "List loop" 0 3 nil 1 0)
          (setq sum (+ sum x))))
      (nreverse events))))
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK (dotimes-result 6 ((0.0 \"Loop...\") (done \"Loop...\") (0.0 \"List loop...\") (done \"List loop...\")))""#
+        r#""OK (dotimes-result 6 ((0.0 \"Loop...\") (0.33 \"Loop...\") (0.66 \"Loop...\") (1.0 \"Loop...\") (done \"Loop...\") (0.0 \"List loop...\") (0.33 \"List loop...\") (0.66 \"List loop...\") (1.0 \"List loop...\") (done \"List loop...\")))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

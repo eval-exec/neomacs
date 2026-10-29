@@ -206,15 +206,25 @@ fn div_cx25_overlay_priority_invisible_char_property_chain() {
 #[test]
 fn div_cx25_process_kill_buffer_with_query_off() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (nil (run open listen connect stop) run)""#]];
+    let expect = expect_test::expect![[r#""OK (nil nil signal)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((buf (get-buffer-create " *neo-cx25-qo*")))
+(let ((buf (get-buffer-create " *neo-cx25-qo*"))
+      (i 0))
   (let ((p (make-process :name "neo-cx25-qo" :command '("sleep" "10")
                          :buffer buf)))
     (accept-process-output p 0.1)
     (set-process-query-on-exit-flag p nil)
     (kill-buffer buf)
+    ;; GNU's `kill_buffer_processes' sends SIGHUP to the subprocess
+    ;; (src/process.c:8455-8471); the process status only becomes `signal'
+    ;; once SIGCHLD is reaped.  Reading the status immediately after
+    ;; `kill-buffer' races that reap in both editors (a loaded host can
+    ;; answer `run' after GNU already reaped, or vice versa), so wait for
+    ;; the death this probe is about.
+    (while (and (process-live-p p) (< i 100))
+      (setq i (1+ i))
+      (accept-process-output p 0.05))
     (list (buffer-live-p buf) (process-live-p p) (process-status p))))
 "##,
         expect,

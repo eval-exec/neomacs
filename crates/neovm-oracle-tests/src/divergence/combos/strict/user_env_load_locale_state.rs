@@ -109,11 +109,30 @@ fn div_g0_emacs_state_safe() {
 fn div_g0_system_configuration_triple() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK \"x86_64-pc-linux-gnu\"""#]];
-    // Divergence surfaced 2026-06-27:
-    // GNU Emacs: OK "x86_64-pc-linux-gnu"
-    // Neomacs:   OK "x86_64-unknown-linux-gnu"
-    // system-configuration reports the build triple; Neomacs uses the
-    // Rust-style "unknown-linux-gnu" triplet vs GNU's "pc-linux-gnu".
+    // GNU records the configure-time `config.guess` triple.  On GNU/Linux
+    // that is the canonical system triple; on Darwin config.guess appends
+    // the build host's kernel release
+    // (`aarch64-apple-darwin$UNAME_RELEASE`, build-aux/config.guess:1457),
+    // so the raw string is a host input, not a Neo constant.  Pin it at the
+    // reference seam: the build manifest records the value the oracle was
+    // configured with, and a live run must still see that exact value.  The
+    // parity assertion below then compares Neo against a GNU whose host
+    // input is proven, not against one that has drifted from its recipe.
+    if crate::common::oracle_mode_runs_live_gnu()
+        && let Some(recorded) = crate::common::reference_manifest_value("system_configuration")
+    {
+        let live = crate::common::run_oracle_eval("system-configuration")
+            .expect("the resolved GNU answers system-configuration");
+        // `run_oracle_eval` returns the legacy snapshot transcript: stdout
+        // followed by the encoded outcome, i.e. `OK "<printed value>"`.
+        assert_eq!(
+            live.trim(),
+            format!("OK \"{recorded}\""),
+            "the reference manifest records system-configuration {recorded:?}, \
+             but the resolved GNU reports {}",
+            live.trim()
+        );
+    }
     crate::common::assert_oracle_parity_expect(
         r##"
 system-configuration

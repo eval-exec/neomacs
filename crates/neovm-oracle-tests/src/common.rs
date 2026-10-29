@@ -158,6 +158,39 @@ pub(crate) fn oracle_emacs_path() -> PathBuf {
     neomacs_test_oracle::gnu::gnu_oracle().executable_path()
 }
 
+/// Whether this mode runs the live GNU oracle (everything but snapshot).
+///
+/// A test that needs a host input baked into the reference build must call
+/// this first: snapshot mode is deliberately able to run with no GNU and no
+/// manifest at all, and its recorded expectation is the pin for that input.
+pub(crate) fn oracle_mode_runs_live_gnu() -> bool {
+    OracleMode::from_env() != OracleMode::Snapshot
+}
+
+/// A value recorded by the reference build manifest beside the resolved
+/// oracle.
+///
+/// The manifest (`<prefix>/share/gnu-emacs-oracle/build-manifest`, written by
+/// scripts/ci/build-gnu-oracle.sh) is the recipe's own record.  Host inputs
+/// the oracle baked in at configure time -- `system-configuration` is the one
+/// the tests observe -- are pinned here instead of trusting whatever the
+/// running kernel says now.  Only call this in a live mode; snapshot mode may
+/// have no oracle installed and therefore no manifest.
+pub(crate) fn reference_manifest_value(key: &str) -> Option<String> {
+    let executable = oracle_emacs_path();
+    let prefix = executable.parent()?.parent()?;
+    let manifest = prefix
+        .join("share")
+        .join("gnu-emacs-oracle")
+        .join("build-manifest");
+    let text = std::fs::read_to_string(manifest).ok()?;
+    let key_prefix = format!("{key}=");
+    text.lines().find_map(|line| {
+        line.strip_prefix(&key_prefix)
+            .map(std::borrow::ToOwned::to_owned)
+    })
+}
+
 /// Whether a GNU oracle may be run.
 ///
 /// Resolution either returns an attested oracle or fails loudly; there is no
