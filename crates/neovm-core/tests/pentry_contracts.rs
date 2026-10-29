@@ -2,7 +2,7 @@
 //!
 //! Capability mutation controls include an isolated copy of the real source
 //! with exactly one bound changed. Catalog controls correct exactly one entry
-//! against the unchanged validator shared with the build generator. Accidental
+//! against the unchanged validator shared with the source scanner. Accidental
 //! unrelated compiler errors therefore cannot bless either kind of negative.
 
 #[test]
@@ -107,7 +107,7 @@ fn pentry_compile_contracts() {
         cases.pass(path);
     }
 
-    // Exercise the exact const validator used to enforce the build generator's
+    // Exercise the exact const validator used to enforce the source scanner's
     // schema. These controls classify/rename one declaration, leaving every
     // validator check unchanged. A duplicate remains a duplicate even when the
     // two registrations request different authorities.

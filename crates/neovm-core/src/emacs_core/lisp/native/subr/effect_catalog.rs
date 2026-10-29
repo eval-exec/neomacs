@@ -42,7 +42,8 @@ pub(crate) struct InventoryEntry {
     pub(crate) target: Option<&'static str>,
 }
 
-include!(concat!(env!("OUT_DIR"), "/pentry_inventory.rs"));
+// Regenerated explicitly by xtask; the architecture gate checks source freshness.
+include!("effect_inventory.inc");
 
 /// The current terminal function cell, rather than an alias name frozen at
 /// build time. Resolving cells and retaining their owner belongs to E4/E5.

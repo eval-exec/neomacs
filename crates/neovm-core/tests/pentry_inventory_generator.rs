@@ -1,4 +1,4 @@
-//! Negative tests of the exact source scanner and validator invoked by build.rs.
+//! Architecture gate and negative fixtures for the explicit source scanner.
 //!
 //! Inputs are syntax fixtures, not alternative native implementations. The
 //! resulting mock source/output trees stay under this worktree's tmp/pentry.
@@ -87,7 +87,7 @@ fn pentry_inventory_generator_rejects_missing_authority_and_one_line_marker_repa
     let fixture = Fixture::new(input);
     let error = fixture
         .generate()
-        .expect_err("unclassified primitive must fail the build generator");
+        .expect_err("unclassified primitive must fail the source scanner");
     assert_eq!(
         error,
         "primitive inventory: missing authority classification: pentry-missing (src/fixture.rs)"
@@ -111,7 +111,7 @@ fn pentry_inventory_generator_rejects_duplicate_registration_and_one_line_remova
     let fixture = Fixture::new(input);
     let error = fixture
         .generate()
-        .expect_err("duplicate primitive must fail the build generator");
+        .expect_err("duplicate primitive must fail the source scanner");
     assert_eq!(
         error,
         "primitive inventory: duplicate registration: pentry-duplicate (src/fixture.rs)"
@@ -202,4 +202,35 @@ fn pentry_inventory_generator_accepts_unrelated_cfg_select_expression() {
     fixture
         .generate()
         .expect("nonregistration cfg_select expressions are outside the inventory grammar");
+}
+
+#[test]
+fn architecture_pentry_inventory_source_matches_cold_sidecar() {
+    let manifest = neomacs_infra::crate_root!();
+    let project = manifest.join("../..");
+    // Build.rs deliberately retains its narrow original inputs: this scan is
+    // explicit test/tool work, never an input to every incremental core build.
+    let build_script = fs::read_to_string(manifest.join("build.rs")).expect("core build script");
+    assert!(
+        !build_script.contains("build_support/pentry_inventory.rs"),
+        "the full-source inventory scanner belongs in the architecture gate, not build.rs"
+    );
+    let evidence = project.join("tmp/pentry/architecture-inventory");
+    fs::create_dir_all(&evidence).expect("architecture artifact root");
+    let output = tempfile::Builder::new()
+        .prefix("catalog-")
+        .tempdir_in(evidence)
+        .expect("independent architecture artifact directory")
+        .keep();
+    generator::generate(&manifest, &project, &output)
+        .unwrap_or_else(|error| panic!("primitive inventory architecture gate: {error}"));
+    let generated = fs::read(output.join("pentry_inventory.rs")).expect("fresh source inventory");
+    let sidecar = fs::read(manifest.join("src/emacs_core/lisp/native/subr/effect_inventory.inc"))
+        .expect("checked-in cold inventory");
+    assert!(
+        generated == sidecar,
+        "stale cold inventory: run cargo xtask pentry-inventory <OUTPUT-DIR>, then copy pentry_inventory.rs to crates/neovm-core/src/emacs_core/lisp/native/subr/effect_inventory.inc; fresh artifacts: {}",
+        output.display()
+    );
+    eprintln!("pentry architecture artifacts: {}", output.display());
 }

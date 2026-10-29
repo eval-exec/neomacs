@@ -1,7 +1,7 @@
-//! Build-time inventory of explicitly classified parallel-entry declarations.
+//! Explicit architecture-gate/xtask inventory of parallel-entry declarations.
 //!
 //! This does not generate or modify serial dispatch code. Unknown registration
-//! syntax is a build error; the installed-catalog test independently checks the
+//! syntax fails the architecture gate; installed-catalog tests also check the
 //! active configuration against this all-configuration source inventory.
 
 use std::fs;
@@ -560,7 +560,6 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
     files.sort();
     let mut records = Vec::new();
     for path in files {
-        println!("cargo:rerun-if-changed={}", path.display());
         let source =
             fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         let file =
@@ -631,7 +630,6 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
         });
     }
     let aliases_path = project_root.join("lisp/subr.el");
-    println!("cargo:rerun-if-changed={}", aliases_path.display());
     let aliases_source = fs::read_to_string(&aliases_path)
         .map_err(|error| format!("{}: {error}", aliases_path.display()))?;
     alias_records(&aliases_source, &mut records)?;

@@ -1,6 +1,6 @@
 //! Source-shared validation for the cold parallel-entry inventory.
 //!
-//! The build generator and compile-contract fixtures include this exact file.
+//! The source scanner and compile-contract fixtures include this exact file.
 //! No runtime dispatch table stores these declarations.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,7 +22,7 @@ pub enum CatalogKind {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Classification {
-    #[allow(dead_code)] // Build/negative-fixture input; never admitted to dispatch.
+    #[allow(dead_code)] // Scanner/negative-fixture input; never admitted to dispatch.
     Unclassified,
     Classified(Authority),
 }
@@ -44,7 +44,7 @@ impl<'name> SchemaEntry<'name> {
         }
     }
 
-    #[allow(dead_code)] // Used by runtime const catalogs; build uses parsed records.
+    #[allow(dead_code)] // Used by runtime const catalogs; scanner uses parsed records.
     pub const fn classified(kind: CatalogKind, name: &'name str, authority: Authority) -> Self {
         Self {
             kind,
@@ -116,7 +116,7 @@ pub const fn validate(entries: &[SchemaEntry<'_>]) -> Result<(), SchemaError> {
 }
 
 /// Const failure messages are also the compile-contract fixture diagnostics.
-#[allow(dead_code)] // Runtime const catalogs/fixtures; build uses validate directly.
+#[allow(dead_code)] // Runtime const catalogs/fixtures; scanner uses validate directly.
 pub const fn assert_valid(entries: &[SchemaEntry<'_>]) {
     match validate(entries) {
         Ok(()) => {}

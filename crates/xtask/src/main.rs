@@ -1,6 +1,7 @@
 mod compile_wave;
 mod dependency_coherence;
 mod gc_stress;
+mod pentry_inventory_command;
 mod pgo;
 mod production_capabilities;
 mod window_icon;
@@ -438,6 +439,13 @@ fn try_main() -> Result<()> {
 
 fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let mut args = args.into_iter().peekable();
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("pentry-inventory")
+    ) {
+        args.next();
+        return pentry_inventory_command::run(&repo_root, args);
+    }
     if matches!(
         args.peek().and_then(|arg| arg.to_str()),
         Some("check-dependency-coherence")

@@ -9359,12 +9359,14 @@ name = "xtask"
 version = "0.0.20"
 dependencies = [
  "flate2",
+ "proc-macro2",
  "rayon",
  "resvg",
  "serde",
  "serde_json",
  "sha2",
  "strum",
+ "syn 3.0.4",
  "tempfile",
  "toml",
 ]

@@ -19,7 +19,7 @@ pub(crate) mod effect_schema;
 pub(crate) mod leaf;
 
 /// Explicit serial-only declaration. The projection changes neither SubrSpec
-/// nor its executable registration; the build inventory consumes this marker.
+/// nor its executable registration; the architecture inventory consumes this marker.
 pub(crate) struct WorldSubr(SubrSpec);
 
 impl WorldSubr {
