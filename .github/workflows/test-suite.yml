@@ -489,7 +489,12 @@ jobs:
       suite: tui
 
   neomacs-melpa-tests:
-    name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64, shard ${{ matrix.partition }})
+    # The batch entry expands to four identically named jobs, one per hash
+    # partition (see the matrix comment); the matrix's `partition` value is
+    # what identifies a shard in the UI.  Do not suffix this name: CI
+    # watchers key per-job baselines on it (tmp/v10x/ci/ci-watch.sh), and a
+    # renamed job would lose its baseline.
+    name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64)
     if: ${{ github.event_name != 'schedule' }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
