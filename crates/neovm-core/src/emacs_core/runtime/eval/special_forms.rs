@@ -401,7 +401,11 @@ impl Context {
         // Install the new lexenv atomically.
         context.lexenv = new_lexenv;
 
-        for (_, value) in lexical_bindings.iter().chain(dynamic_sym_ids.iter()) {
+        // Lexical values are rooted by the lexenv installed above. A dynamic
+        // value is not reachable until `try_specbind` has bound it, and a
+        // specbind watcher may run Lisp before that, so only dynamic values
+        // need a sequence root here.
+        for (_, value) in &dynamic_sym_ids {
             context.push_eval_temp_root(*value);
         }
         for (sym_id, value) in &dynamic_sym_ids {
