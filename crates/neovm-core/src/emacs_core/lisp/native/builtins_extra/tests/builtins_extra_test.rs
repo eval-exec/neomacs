@@ -554,6 +554,17 @@ fn user_info() {
         system_configuration.as_utf8_str(),
         Some("x86_64-pc-linux-gnu")
     );
+    // Darwin's config.guess appends the build host's kernel release
+    // (build-aux/config.guess:1457); the port must reproduce the reference
+    // GNU's spelling on the same host.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let release = sysinfo::System::kernel_version().expect("Darwin kernel release");
+        assert_eq!(
+            system_configuration.as_utf8_str(),
+            Some(format!("aarch64-apple-darwin{release}").as_str())
+        );
+    }
     assert!(system_configuration_options_value().is_string());
     assert!(system_configuration_features_value().is_string());
     assert!(

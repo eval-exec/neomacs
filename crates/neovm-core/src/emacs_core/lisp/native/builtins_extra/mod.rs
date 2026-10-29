@@ -754,23 +754,7 @@ pub(crate) fn system_configuration_features_value() -> Value {
 }
 
 fn gnu_system_configuration() -> String {
-    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        return "x86_64-pc-linux-gnu".to_string();
-    }
-    option_env!("TARGET")
-        .map(str::to_owned)
-        .unwrap_or_else(fallback_system_configuration)
-}
-
-fn fallback_system_configuration() -> String {
-    let arch = std::env::consts::ARCH;
-    let os = match std::env::consts::OS {
-        "linux" => "unknown-linux-gnu",
-        "macos" => "apple-darwin",
-        "windows" => "pc-windows-msvc",
-        other => other,
-    };
-    format!("{arch}-{os}")
+    crate::emacs_core::platform_facts::system_configuration()
 }
 
 /// `(emacs-version)` -> string.

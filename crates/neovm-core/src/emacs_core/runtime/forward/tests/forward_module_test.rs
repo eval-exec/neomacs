@@ -745,6 +745,12 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
 /// x-auto-preserve-selections     ;; => (CLIPBOARD PRIMARY)
 /// ```
 ///
+/// `x-bitmap-file-path` comes from the configure `bitmapdir` substitution, so
+/// its value follows the platform's reference build: `/usr/include/X11/bitmaps`
+/// where GNU uses the system X11, `(".")` on a macOS reference built against
+/// Homebrew's X tree, whose include directories carry no bitmap directory.
+/// The expectation is taken from the same platform fact the initializer uses.
+///
 /// `vertical-centering-font-regexp` and `x-gtk-use-system-tooltips` get their
 /// values from preloaded Lisp (`international/fontset.el:1266` and the
 /// `defvaralias` in `term/neo-preload.el`), so a bare [`Context`] sees the C
@@ -753,8 +759,14 @@ fn every_cus_start_platform_row_matches_its_declaration_claim() {
 fn the_x_platform_variables_hold_gnus_defaults_and_bind_dynamically() {
     let mut eval = ev();
 
+    let bitmap_path = crate::emacs_core::platform_facts::X_BITMAP_FILE_PATH;
+    let bitmap_printed = if bitmap_path.is_empty() {
+        r#"(".")"#.to_string()
+    } else {
+        format!("(\"{bitmap_path}\")")
+    };
     for (name, value) in [
-        ("x-bitmap-file-path", r#"("/usr/include/X11/bitmaps")"#),
+        ("x-bitmap-file-path", bitmap_printed.as_str()),
         ("x-scroll-event-delta-factor", "1.0"),
         ("x-auto-preserve-selections", "(CLIPBOARD PRIMARY)"),
     ] {

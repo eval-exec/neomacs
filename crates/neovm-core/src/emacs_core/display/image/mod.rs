@@ -332,13 +332,6 @@ impl ImageArea {
     }
 }
 
-/// GNU's `PATH_BITMAPS`, the `--bitmapdir` configure value that
-/// `src/epaths.in:67` defaults to and `src/epaths.h:67` carries into the build.
-///
-/// It is a compiled-in path, not a probe of the running system: GNU installs
-/// the same list on a machine that has no `/usr/include/X11/bitmaps` at all.
-const PATH_BITMAPS: &str = "/usr/include/X11/bitmaps";
-
 /// GNU's `decode_env_path (NULL, defalt, false)` (`src/emacs.c:3262-3300`),
 /// restricted to the no-environment-variable case `syms_of_image` uses.
 ///
@@ -366,8 +359,14 @@ fn decode_env_path_default(defalt: &str) -> Value {
 /// `declared_special` bit in one statement, so a bound-but-not-special
 /// placeholder is a state GNU cannot be in.
 pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
-    // image.c:13265, `Vx_bitmap_file_path = decode_env_path (0, PATH_BITMAPS, 0)'.
-    obarray.define_special_variable("x-bitmap-file-path", decode_env_path_default(PATH_BITMAPS));
+    // image.c:13265, `Vx_bitmap_file_path = decode_env_path (0, PATH_BITMAPS, 0)`.
+    // PATH_BITMAPS is the configure `bitmapdir` substitution -- a compiled-in
+    // path, not a probe of the running system -- so the value for this
+    // platform's reference build lives with the other platform facts.
+    obarray.define_special_variable(
+        "x-bitmap-file-path",
+        decode_env_path_default(crate::emacs_core::platform_facts::X_BITMAP_FILE_PATH),
+    );
     // image.c:13034 DEFVAR_LISP, make_float (MAX_IMAGE_SIZE) = 10.0.
     obarray.define_special_variable("max-image-size", Value::make_float(10.0));
     // image.c:13269 DEFVAR_LISP, make_fixnum (300).
