@@ -5551,6 +5551,20 @@ const PRELUDE: &str = r####"
     (push process tide368-test-owned-processes)
     (setq tide368-test-make-process-result process)))
 
+(defun tide368-test-await-terminal-record (session-index)
+  "Wait for SESSION-INDEX's terminal record to be completely appended.
+The replay adapter writes the READY record with one append; a client that
+checks the ledger at the same moment can observe a trailing partial line
+or none of it.  Wait for the complete record instead of racing the
+writer; the bounded deadline keeps a genuinely missing record fatal."
+  (let ((deadline (+ (float-time) 5.0))
+        record)
+    (while (and (not (setq record
+                           (tide368-test-terminal-record session-index)))
+                (< (float-time) deadline))
+      (accept-process-output nil 0.01))
+    record))
+
 (defun tide368-test-delete-process (original process)
   (let ((owned (and (processp process)
                     (memq process tide368-test-owned-processes))))
@@ -5561,7 +5575,7 @@ const PRELUDE: &str = r####"
         (error "Tide rejected an unscoped public delete: %S"
                (list :process process :owned owned
                      :route tide368-test-public-delete-route)))
-      (unless (tide368-test-terminal-record
+      (unless (tide368-test-await-terminal-record
                (process-get process 'tide368-session-index))
         (error "Tide public delete preceded its READY ledger: %S" process))
       (process-put process 'tide368-public-delete t)
@@ -5667,19 +5681,34 @@ const PRELUDE: &str = r####"
     (when (or survivors errors)
       (error "Tide observer cleanup failed: %S" (list survivors errors)))))
 
-(defun tide368-test-read-json-lines (path)
+(defun tide368-test-read-json-lines (path &optional allow-partial)
+  "Read PATH's JSONL records.
+The replay adapter appends each record with one write and the client can
+run between that write and its completion, so a poller may observe a
+trailing record without its final newline.  With ALLOW-PARTIAL that
+trailing fragment is ignored (it is retried on the next poll); the final
+validation calls this without ALLOW-PARTIAL and still rejects a truncated
+ledger."
   (let ((bytes (if (file-exists-p path)
                    (let ((coding-system-for-read 'utf-8-unix))
                      (with-temp-buffer
                        (insert-file-contents path)
                        (buffer-string)))
                  "")))
-    (unless (or (string-empty-p bytes) (string-suffix-p "\n" bytes))
+    (when (and (not allow-partial)
+               (not (or (string-empty-p bytes) (string-suffix-p "\n" bytes))))
       (error "Tide JSON ledger lacks final newline: %S" path))
-    (mapcar (lambda (line)
-              (json-parse-string line :object-type 'alist :array-type 'list
-                                 :null-object nil :false-object :json-false))
-            (split-string bytes "\n" t))))
+    (delq nil
+          (mapcar (lambda (line)
+                    (unless (string-empty-p line)
+                      (json-parse-string
+                       line :object-type 'alist :array-type 'list
+                       :null-object nil :false-object :json-false)))
+                  ;; `split-string' leaves the partial trailing fragment as
+                  ;; its last element when the file does not end in a newline
+                  ;; (and "" when it does); `butlast' drops exactly that
+                  ;; fragment.
+                  (butlast (split-string bytes "\n" nil))))))
 
 (defun tide368-test-json-hash-value (key object)
   (gethash key object))
@@ -5962,8 +5991,10 @@ const PRELUDE: &str = r####"
     (_ (error "Tide unknown terminal kind: %S" kind))))
 
 (defun tide368-test-terminal-record (session-index)
+  ;; Polling predicate: a record the adapter is still appending is simply
+  ;; not there yet, so tolerate a partial trailing line.
   (let* ((records (tide368-test-read-json-lines
-                   (plist-get tide368-test-world :trace)))
+                   (plist-get tide368-test-world :trace) t))
          (session (nth (1- session-index)
                        (tide368-test-json-value
                         "sessions" (plist-get tide368-test-world :config-data))))
