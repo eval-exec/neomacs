@@ -31,21 +31,33 @@
                        (< (plist-get receipt :nanoseconds) 1000000000))
             (error "Confirmed presentation must carry its compositor-clock timestamp: %S" receipt)))
         (when (> (float-time) native-presented-deadline)
-          (error "No compositor-confirmed presentation in stage %S; last receipt %S"
-                 native-presented-stage receipt))
+          ;; Name the width this stage is waiting for: a receipt that was
+          ;; delivered at a different width is a metric/predicate mismatch,
+          ;; not a missing presentation.
+          (error "No compositor-confirmed presentation in stage %S (expected width %S); last receipt %S"
+                 native-presented-stage
+                 (pcase native-presented-stage
+                   ('startup 832)
+                   ('resized 942)
+                   ('fullscreen 3840)
+                   ('restored 942))
+                 receipt))
         (when (and receipt
                    (> (plist-get receipt :submission) native-presented-submission)
                    (= (plist-get receipt :scale) 2))
           (let ((width (plist-get receipt :width)))
             (pcase native-presented-stage
               ('startup
-               (when (= width 752)
+               ;; 80 columns of the pinned fonts-ubuntu 0.869 Ubuntu Mono 13
+               ;; cell (10 px), two 8-pixel fringes and GNU's 16-pixel toolkit
+               ;; scroll bar (src/xfns.c:2393-2438); the pre-0.869 9-pixel
+               ;; cell gave 752.
+               (when (= width 832)
                  (native-presented-enter-stage 'resized receipt)
                  (set-frame-width nil 91)))
               ('resized
-               ;; 91 columns of Ubuntu Mono's 9-pixel cell plus the fringes
-               ;; and GNU's 16-pixel toolkit scroll bar (src/xfns.c:2393-2438).
-               (when (= width 851)
+               ;; 91 columns of the same 10-pixel cell plus the same chrome.
+               (when (= width 942)
                  (native-presented-enter-stage 'fullscreen receipt)
                  (set-frame-parameter nil 'fullscreen 'fullboth)))
               ('fullscreen
@@ -53,7 +65,7 @@
                  (native-presented-enter-stage 'restored receipt)
                  (set-frame-parameter nil 'fullscreen nil)))
               ('restored
-               (when (= width 851)
+               (when (= width 942)
                  (unless (= (frame-width) 91)
                    (error "Restored presented frame must have 91 columns"))
                  (message "Confirmed scale-2 presentation across startup, resize, fullscreen and restoration: %S" receipt)
