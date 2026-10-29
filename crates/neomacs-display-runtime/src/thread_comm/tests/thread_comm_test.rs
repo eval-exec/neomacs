@@ -1039,9 +1039,14 @@ fn render_command_set_window_visibility() {
 
 #[test]
 fn render_command_set_window_position() {
-    let cmd = RenderCommand::Window(WindowCommand::SetWindowPosition { x: 100, y: 200 });
+    let cmd = RenderCommand::Window(WindowCommand::SetWindowPosition {
+        frame: FrameRef::Frame(7),
+        x: 100,
+        y: 200,
+    });
     match cmd {
-        RenderCommand::Window(WindowCommand::SetWindowPosition { x, y }) => {
+        RenderCommand::Window(WindowCommand::SetWindowPosition { frame, x, y }) => {
+            assert_eq!(frame, FrameRef::Frame(7));
             assert_eq!(x, 100);
             assert_eq!(y, 200);
         }

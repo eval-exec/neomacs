@@ -162,13 +162,15 @@ impl RenderApp {
                     );
                 }
             }
-            WindowCommand::SetWindowPosition { x, y } => {
-                if let Some(window) = self
-                    .frame_windows
-                    .primary_window()
-                    .and_then(|ws| ws.window())
-                {
-                    window.set_outer_position(PhysicalPosition::new(x, y).into());
+            WindowCommand::SetWindowPosition { frame, x, y } => {
+                let emacs_frame_id = frame.raw_id();
+                if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
+                    window_state.set_outer_position(x, y);
+                } else {
+                    tracing::warn!(
+                        "SetWindowPosition requested for unknown frame_id=0x{:x}",
+                        emacs_frame_id
+                    );
                 }
             }
             WindowCommand::SetWindowSize { width, height } => {

@@ -2206,6 +2206,19 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_gui_frame_position(
+        &mut self,
+        frame_id: neovm_core::window::FrameId,
+        x: i32,
+        y: i32,
+    ) -> Result<(), String> {
+        let frame = self.frame_ref_for_gui_frame(frame_id);
+        self.send_render_command(
+            RenderCommand::Window(WindowCommand::SetWindowPosition { frame, x, y }),
+            "failed to move GUI frame",
+        )
+    }
+
     fn set_gui_frame_undecorated(
         &mut self,
         frame_id: neovm_core::window::FrameId,

@@ -32,6 +32,36 @@ mod frame_resize_test;
 mod initial_gui_lifecycle_test;
 
 #[test]
+fn gui_frame_position_requests_move_the_native_window() {
+    let mut ev = Context::new();
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    let root = ev.frames.create_frame("Root", 800, 600, buf);
+    ev.frames
+        .get_mut(root)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    let host = RecordingDisplayHost::new();
+    let positions = host.positions.clone();
+    ev.set_display_host(Box::new(host));
+    let results = ev.eval_str_each(
+        "(set-frame-position nil 0 0) \
+         (set-frame-size-and-position-pixelwise nil 400 300 120 80) \
+         (modify-frame-parameters nil '((left . 10) (top . 20))) \
+         (modify-frame-parameters nil '((left . 30))) \
+         (set-frame-position nil -10 40) \
+         (frame-position)",
+    );
+    assert!(results.iter().all(Result::is_ok), "{results:?}");
+    // A lone edge or a far-edge offset needs the window's actual position or
+    // the workarea, so only fully absolute requests reach the host.
+    assert_eq!(
+        *positions.borrow(),
+        vec![(root, 0, 0), (root, 120, 80), (root, 10, 20)]
+    );
+}
+
+#[test]
 fn alpha_lower_limit_variable_projects_without_replaying_alpha_policy() {
     let mut ev = Context::new();
     let host = RecordingDisplayHost::new();
@@ -347,6 +377,7 @@ struct RecordingDisplayHost {
     resolved_frame_font: Option<ResolvedFrameFont>,
     initial_gui_defaults: Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>,
     finished: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
+    positions: Rc<RefCell<Vec<(crate::window::FrameId, i32, i32)>>>,
 }
 
 impl RecordingDisplayHost {
@@ -452,6 +483,16 @@ impl DisplayHost for RecordingDisplayHost {
 
     fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.resized.borrow_mut().push(request);
+        Ok(())
+    }
+
+    fn set_gui_frame_position(
+        &mut self,
+        frame_id: crate::window::FrameId,
+        x: i32,
+        y: i32,
+    ) -> Result<(), String> {
+        self.positions.borrow_mut().push((frame_id, x, y));
         Ok(())
     }
 

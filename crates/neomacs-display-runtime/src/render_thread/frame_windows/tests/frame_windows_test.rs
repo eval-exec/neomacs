@@ -474,6 +474,7 @@ fn zero_size_observation_stays_suspended_after_scale_refresh() {
             last_ime_cursor_area: None,
             chrome: Default::default(),
             geometry_hints: None,
+            pending_position: None,
         },
         render: GuiFrameRenderState::new_without_device(
             42,
@@ -1328,6 +1329,7 @@ fn primary_visibility_survives_pending_identity_adoption_and_detachment() {
             last_ime_cursor_area: None,
             chrome: Default::default(),
             geometry_hints: None,
+            pending_position: None,
         },
         render: GuiFrameRenderState::new_without_device(
             42,

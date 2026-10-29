@@ -97,6 +97,20 @@ impl FramePositionSpec {
     }
 }
 
+/// The absolute display position a top-level window should move to, or
+/// `None` when either edge is missing or relative to the display's far edge
+/// or extent.  Those need the window's actual position or the workarea,
+/// which the evaluator does not have.
+pub(crate) fn absolute_window_position(
+    left: Option<FramePositionSpec>,
+    top: Option<FramePositionSpec>,
+) -> Option<(i32, i32)> {
+    match (left?.0, top?.0) {
+        (PositionKind::Absolute(x), PositionKind::Absolute(y)) => Some((x, y)),
+        _ => None,
+    }
+}
+
 /// Resolve only after size/font changes, then publish numeric parent-local
 /// coordinates. Renderers never have to interpret Lisp position expressions.
 ///

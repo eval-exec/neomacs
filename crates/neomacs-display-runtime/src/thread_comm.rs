@@ -389,8 +389,9 @@ pub enum WindowCommand {
         frame: FrameRef,
         visibility: WindowVisibility,
     },
-    /// Set window position
-    SetWindowPosition { x: i32, y: i32 },
+    /// Move a GUI frame's outer window to Emacs pixel coordinates.
+    /// `frame.raw_id() == 0` also targets the adopted primary window.
+    SetWindowPosition { frame: FrameRef, x: i32, y: i32 },
     /// Request window inner size change
     SetWindowSize { width: u32, height: u32 },
     /// Request resizing a specific GUI frame window.

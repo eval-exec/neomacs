@@ -16,7 +16,9 @@ mod cycling_test;
 #[cfg(test)]
 #[path = "tests/selection_test.rs"]
 mod selection_test;
-use position::{FrameCoordinateOrigin, FramePositionSpec, apply_frame_position};
+use position::{
+    FrameCoordinateOrigin, FramePositionSpec, absolute_window_position, apply_frame_position,
+};
 
 use super::error::Flow;
 use super::error::{EvalResult, LispCondition, signal};
@@ -1092,7 +1094,32 @@ pub(crate) fn builtin_set_frame_position(
     if moved {
         mark_frame_geometry_changed(eval, fid);
     }
+    if positioned {
+        move_gui_frame_window(eval, fid, Some(x), Some(y))?;
+    }
     Ok(Value::T)
+}
+
+/// GNU's `x_set_offset` moves the native window as well as recording
+/// `left`/`top`; without this, Lisp saw the new position while the window
+/// stayed where it was.
+fn move_gui_frame_window(
+    eval: &mut super::eval::Context,
+    fid: FrameId,
+    left: Option<FramePositionSpec>,
+    top: Option<FramePositionSpec>,
+) -> Result<(), Flow> {
+    let Some((x, y)) = absolute_window_position(left, top) else {
+        return Ok(());
+    };
+    let is_top_level_gui = eval.frames.get(fid).is_some_and(|frame| {
+        frame.effective_window_system().is_some() && frame.parent_frame.as_frame_id().is_none()
+    });
+    if is_top_level_gui && let Some(host) = eval.display_host.as_mut() {
+        host.set_gui_frame_position(fid, x, y)
+            .map_err(|message| signal("error", vec![Value::string(message)]))?;
+    }
+    Ok(())
 }
 
 /// `(set-frame-size-and-position-pixelwise FRAME WIDTH HEIGHT LEFT TOP &optional GRAVITY)` -> nil.
@@ -1140,6 +1167,7 @@ pub(crate) fn builtin_set_frame_size_and_position_pixelwise(
         if apply_frame_position(&mut eval.frames, fid, Some(left), Some(top)) {
             mark_frame_geometry_changed(eval, fid);
         }
+        move_gui_frame_window(eval, fid, Some(left), Some(top))?;
     } else {
         let frame = eval
             .frames
@@ -2082,6 +2110,7 @@ pub(crate) fn builtin_modify_frame_parameters(
     if apply_frame_position(&mut eval.frames, fid, requested_left, requested_top) {
         mark_frame_geometry_changed(eval, fid);
     }
+    move_gui_frame_window(eval, fid, requested_left, requested_top)?;
 
     Ok(Value::NIL)
 }
