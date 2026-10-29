@@ -40,9 +40,5 @@ pub fn default_subpixel_order() -> FontconfigSubpixelOrder {
 }
 
 #[cfg(all(test, target_os = "macos"))]
-mod tests {
-    #[test]
-    fn default_rasterization_does_not_assume_an_rgb_lcd() {
-        assert!(!super::default_subpixel_order().allows_horizontal_subpixel());
-    }
-}
+#[path = "tests/subpixel_test.rs"]
+mod subpixel_test;
