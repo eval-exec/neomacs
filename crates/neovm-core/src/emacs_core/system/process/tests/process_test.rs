@@ -3536,6 +3536,55 @@ fn pty_process_output_does_not_translate_lf_to_crlf_like_gnu() {
     assert_eq!(output.as_slice(), b"x\n");
 }
 
+/// GNU `process_send_signal` types the pty's VQUIT character into the
+/// master when CURRENT-GROUP is non-nil (src/process.c:7100-7138), instead
+/// of calling `kill`.  With `stty -isig` the line discipline hands the byte
+/// to the child as data, so `quit-process` must not kill it: the child reads
+/// 0x1c and exits normally.  Before the SIGNALS_VIA_CHARACTERS port this
+/// always did `kill (- p->pid, SIGQUIT)`, and the child died before reading
+/// a byte.
+#[cfg(target_os = "linux")]
+#[test]
+fn quit_process_with_current_group_types_vquit_into_the_pty() {
+    crate::test_utils::init_test_tracing();
+    let sh = find_bin("sh");
+    // The runtime-startup evaluator, like the sibling make-process tests:
+    // this exercises the builtins through the same Lisp environment.
+    let result = eval_one(&format!(
+        r#"(let* ((buffer (get-buffer-create " *signal-char-pty*"))
+                      (process (make-process
+                                :name "signal-char-pty"
+                                :buffer buffer
+                                :connection-type 'pty
+                                :command (list "{sh}" "-c"
+                                               "stty -echo -icanon -isig min 1 time 0; printf 'READY'; dd bs=1 count=1 2>/dev/null | od -An -tu1"))))
+                 (unwind-protect
+                     (progn
+                       (set-process-query-on-exit-flag process nil)
+                       (let ((attempts 0))
+                         (while (and (null (progn (set-buffer buffer)
+                                                  (string-match "READY"
+                                                                (buffer-string))))
+                                     (< attempts 100))
+                           (accept-process-output process 0.1)
+                           (setq attempts (1+ attempts))))
+                       (quit-process process t)
+                       (let ((attempts 0))
+                         (while (and (memq process (process-list))
+                                     (< attempts 100))
+                           (accept-process-output process 0.1)
+                           (setq attempts (1+ attempts))))
+                       (list (process-status process)
+                             (process-exit-status process)
+                             (progn (set-buffer buffer)
+                                    (and (string-match "28" (buffer-string)) t))))
+                   (if (memq process (process-list))
+                       (delete-process process))
+                   (kill-buffer buffer)))"#
+    ));
+    assert_eq!(result, "OK (exit 0 t)");
+}
+
 #[cfg(target_os = "linux")]
 fn open_ptmx_descriptor_count() -> usize {
     std::fs::read_dir("/proc/self/fd")

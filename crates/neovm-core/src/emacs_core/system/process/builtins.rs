@@ -6,6 +6,18 @@
 use super::*;
 use crate::tagged::value::SymbolMode;
 
+/// GNU's `CURRENT-GROUP` argument for `interrupt-process`, `quit-process`
+/// and `stop-process` (`src/process.c:7100-7138`).  Non-nil asks for the
+/// terminal's current foreground group, which GNU reaches by typing the
+/// control character down the pty; nil keeps `kill (- p->pid, signo)`.
+fn process_signal_recipient(args: &[Value]) -> ProcessSignalRecipient {
+    if args.get(1).is_some_and(|value| !value.is_nil()) {
+        ProcessSignalRecipient::CurrentTerminalGroup
+    } else {
+        ProcessSignalRecipient::ProcessGroup
+    }
+}
+
 /// (internal-default-interrupt-process &optional PROCESS CURRENT-GROUP) -> process-or-nil
 pub(crate) fn builtin_internal_default_interrupt_process(
     eval: &mut super::super::eval::Context,
@@ -31,13 +43,10 @@ pub(crate) fn builtin_internal_default_interrupt_process_impl(
     let (id, ret) =
         resolve_optional_process_with_explicit_return_in_state(processes, buffers, args.first())?;
     check_process_is_real_subprocess(processes, id)?;
+    let recipient = process_signal_recipient(&args);
     if let Some(proc) = processes.get_mut(id) {
         #[cfg(unix)]
-        let _ = signal_process_or_unbacked_success(
-            proc,
-            libc::SIGINT,
-            ProcessSignalRecipient::ProcessGroup,
-        );
+        let _ = signal_process_or_unbacked_success(proc, libc::SIGINT, recipient);
     }
     Ok(ret)
 }
@@ -3780,6 +3789,7 @@ pub(crate) fn builtin_stop_process_impl(
     // before it resolves anything (src/process.c:7267-7278): it sets
     // `p->command' to t and returns the process, with no liveness test at all.
     let is_live = processes.get(id).is_some();
+    let recipient = process_signal_recipient(&args);
     if let Some(proc) = processes.get_any_mut(id) {
         if matches!(
             proc.kind,
@@ -3788,8 +3798,7 @@ pub(crate) fn builtin_stop_process_impl(
             proc.command = Value::T;
         } else if is_live {
             #[cfg(unix)]
-            let _ =
-                deliver_process_signal(proc, libc::SIGTSTP, ProcessSignalRecipient::ProcessGroup);
+            let _ = deliver_process_signal(proc, libc::SIGTSTP, recipient);
         }
     }
     Ok(ret)
@@ -3820,10 +3829,12 @@ pub(crate) fn builtin_quit_process_impl(
     let (id, ret) =
         resolve_optional_process_with_explicit_return_in_state(processes, buffers, args.first())?;
     check_process_is_real_subprocess(processes, id)?;
+    let recipient = process_signal_recipient(&args);
     if let Some(proc) = processes.get_mut(id) {
-        // Send SIGQUIT to the child process.
+        // GNU's `quit-process' (src/process.c:7245-7265) reaches
+        // `process_send_signal (process, SIGQUIT, current_group, 0)'.
         #[cfg(unix)]
-        let _ = deliver_process_signal(proc, libc::SIGQUIT, ProcessSignalRecipient::ProcessGroup);
+        let _ = deliver_process_signal(proc, libc::SIGQUIT, recipient);
     }
     Ok(ret)
 }
