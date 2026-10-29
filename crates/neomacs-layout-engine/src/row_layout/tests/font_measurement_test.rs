@@ -222,6 +222,7 @@ fn native_font_authority_spends_only_its_owner_reservation() {
         inherited_line_spacing: 0.0,
         character_wrap: false,
         word_wrap: false,
+        word_wrap_policy: Default::default(),
         fringe: None,
         width: 200.0,
         text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::row_local(),

@@ -77,3 +77,49 @@ fn category_word_wrap_tracks_live_options_and_buffer_category_tables() {
         "mutating the category set itself must invalidate retained rows"
     );
 }
+
+#[test]
+fn category_word_wrap_position_queries_observe_live_category_changes() {
+    use neovm_core::{buffer::LispCharPos1, window::WindowLayoutQueryScope};
+
+    let text = format!("supertag v0.4 {}", "提".repeat(60));
+    let (mut eval, frame, _buffer, window) = incr_editing_frame(&text, 200, 240);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neomacs")));
+    eval.eval_str("(progn (setq mode-line-format nil header-line-format nil tab-line-format nil word-wrap t truncate-lines nil word-wrap-by-category nil) (define-category ?| \"line breakable\") (modify-category-entry ?提 ?|))")
+        .unwrap();
+    let target = LispCharPos1::new(16);
+    let scope = WindowLayoutQueryScope::Position { target };
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    let mut observe = |eval: &mut Context| {
+        let actual = query
+            .query_window_layout(eval, frame, window, scope)
+            .unwrap();
+        let fresh = WindowLayoutQueryEngine::new_without_font_metrics()
+            .query_window_layout(eval, frame, window, scope)
+            .unwrap();
+        assert_eq!(actual.geometry(), fresh.geometry());
+        actual
+            .geometry()
+            .unwrap()
+            .point_for_buffer_pos(target)
+            .unwrap()
+    };
+    let whitespace = observe(&mut eval);
+    assert_eq!(observe(&mut eval), whitespace, "warm position query");
+    eval.eval_str("(setq word-wrap-by-category t)").unwrap();
+    let category = observe(&mut eval);
+    assert_ne!(category, whitespace, "the target moves onto the first row");
+    assert_eq!(observe(&mut eval), category, "warm category query");
+    eval.eval_str("(aset (char-category-set ?提) ?| nil)")
+        .unwrap();
+    assert_eq!(observe(&mut eval), whitespace, "category-set mutation");
+    eval.eval_str("(aset (char-category-set ?提) ?| t)")
+        .unwrap();
+    assert_eq!(observe(&mut eval), category);
+    eval.eval_str("(set-category-table (make-category-table))")
+        .unwrap();
+    assert_eq!(observe(&mut eval), whitespace, "table replacement");
+}
