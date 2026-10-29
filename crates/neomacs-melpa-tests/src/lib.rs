@@ -4468,6 +4468,11 @@ pub struct PhaseReport {
     pub phase: ScenarioPhase,
     pub duration: Duration,
     pub status_code: Option<i32>,
+    /// The full wait status (`exit status: N`, or `signal: N (SIG...)`).
+    /// `status_code` is None for a signal death, which is otherwise
+    /// indistinguishable from any other abnormal end in a CI log; this names
+    /// the signal so an externally killed editor is attributable.
+    pub status_text: String,
     pub stdout: String,
     pub stderr: String,
 }
@@ -5884,8 +5889,8 @@ pub fn run_ert_scenario(
     let phase = phase_report(ScenarioPhase::Ert, started.elapsed(), output);
     if phase.status_code != Some(0) {
         return Err(format!(
-            "{} ERT scenario `{}` failed (exit {:?})\nstdout:\n{}\nstderr:\n{}",
-            runtime.name, scenario.name, phase.status_code, phase.stdout, phase.stderr
+            "{} ERT scenario `{}` failed ({})\nstdout:\n{}\nstderr:\n{}",
+            runtime.name, scenario.name, phase.status_text, phase.stdout, phase.stderr
         ));
     }
     let summary = extract_ert_summary(&phase.stdout, &phase.stderr).ok_or_else(|| {
@@ -6577,8 +6582,8 @@ fn run_phase_with_validation(
     let report = phase_report(phase, started.elapsed(), output);
     if report.status_code != Some(0) {
         return Err(format!(
-            "{} scenario `{scenario_name}` failed during {phase:?} (exit {:?})\nstdout:\n{}\nstderr:\n{}",
-            runtime.name, report.status_code, report.stdout, report.stderr
+            "{} scenario `{scenario_name}` failed during {phase:?} ({})\nstdout:\n{}\nstderr:\n{}",
+            runtime.name, report.status_text, report.stdout, report.stderr
         ));
     }
     if check_editor_error_output {
@@ -6639,6 +6644,7 @@ fn phase_report(phase: ScenarioPhase, duration: Duration, output: Output) -> Pha
         phase,
         duration,
         status_code: output.status.code(),
+        status_text: output.status.to_string(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
