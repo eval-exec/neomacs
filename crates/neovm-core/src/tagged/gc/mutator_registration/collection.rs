@@ -158,7 +158,7 @@ fn supported_with_weak(
 
 impl<'heap> EraCore<'heap> {
     #[cfg(test)]
-    fn admit_rooted_with_weak_tables_for_test<A: construction::CoreAdmission<'heap>>(
+    pub(super) fn admit_rooted_with_weak_tables_for_test<A: construction::CoreAdmission<'heap>>(
         admission: A,
         roots: FrozenLegacyRoots,
         tables: &[TaggedValue],
@@ -198,7 +198,7 @@ impl<'heap> EraCore<'heap> {
     }
 
     #[cold]
-    fn admit_rooted<A: construction::CoreAdmission<'heap>>(
+    pub(super) fn admit_rooted<A: construction::CoreAdmission<'heap>>(
         admission: A,
         roots: FrozenLegacyRoots,
     ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {

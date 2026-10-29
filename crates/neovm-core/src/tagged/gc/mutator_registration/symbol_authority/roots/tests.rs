@@ -336,8 +336,8 @@ fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
         let observations = Context::with_test_symbol_era(|inner, _| {
             let mut inner_stop = inner.stop().unwrap();
             let inner_symbols = inner_stop.symbols().unwrap();
-            let outer_keeper = outer.keeper.as_ref().unwrap();
-            let inner_keeper = inner.keeper.as_ref().unwrap();
+            let outer_keeper = outer.core.keeper.as_ref().unwrap();
+            let inner_keeper = inner.core.keeper.as_ref().unwrap();
             let mut out = vec![TaggedValue::T];
             let cells = outer_symbols.append_current_symbol_roots(inner_keeper, &mut out);
             let projections = inner_symbols.append_current_projection_roots(outer_keeper, &mut out);

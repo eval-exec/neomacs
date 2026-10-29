@@ -78,6 +78,11 @@ impl<'heap> OwnedProofProjection<'heap> {
     }
 }
 
+// The explicit lifetime input makes the HRTB's collector return expressible
+// even though a GAT projection may erase its lifetime. This private ZST grants
+// no authority; the nominal projection retains the actual exclusive heap loan.
+struct AdmissionScope<'heap>(std::marker::PhantomData<&'heap mut ()>);
+
 impl Context {
     /// Keep private keeper minting within the Context module. Fence negatives
     /// borrow the real serial keeper for one scope; no Baton can escape it.
@@ -100,7 +105,9 @@ impl Context {
             OwnedProofProjection<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        self.admit_owned_with(WeakProofPlan { tables }, body)
+        self.admit_owned_with(WeakProofPlan { tables }, |projection, _scope| {
+            body(projection)
+        })
     }
 
     /// Retained closed proof kernels may exercise either collector mode.
@@ -112,7 +119,7 @@ impl Context {
             OwnedProofProjection<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        self.admit_owned_with(ProofPlan, body)
+        self.admit_owned_with(ProofPlan, |projection, _scope| body(projection))
     }
 
     /// Admit this suspended Context for production owned overlap. GEN0 is
@@ -124,7 +131,7 @@ impl Context {
             OwnedParallelProjection<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
-        self.admit_owned_with(ProductionPlan, body)
+        self.admit_owned_with(ProductionPlan, |projection, _scope| body(projection))
     }
 
     /// One preparation/recovery transaction for sealed static factories. The
@@ -135,6 +142,7 @@ impl Context {
         plan: P,
         body: impl for<'heap> FnOnce(
             P::Projection<'heap>,
+            AdmissionScope<'heap>,
         ) -> (QuiescentCollector<'heap>, super::Baton, R),
     ) -> Result<R, OwnedParallelError> {
         let retired = self.retire_empty_dead_windows_table();
@@ -184,7 +192,8 @@ impl Context {
                 return Err(reason);
             }
         };
-        let (collector, keeper, output) = body(projection);
+        let (collector, keeper, output) =
+            body(projection, AdmissionScope(std::marker::PhantomData));
         drop(collector);
         drop(keeper);
         self.recover_serial_context(retired);
