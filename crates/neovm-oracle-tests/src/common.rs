@@ -113,27 +113,44 @@ impl OracleMode {
     }
 }
 
+/// The skip diagnostic for
+/// [`return_if_neovm_enable_oracle_proptest_not_set!`], carried by one
+/// function instead of one `tracing::info!` per call site.
+///
+/// The guard is expanded in ~39k tests.  `tracing::info!` is not a cheap
+/// macro: each expansion lowers to a callsite static, a metadata block and a
+/// registration call (about 2.3 KiB of expanded source, measured on tracing
+/// 0.1.44), so repeating it per test site made the `oracle` test target's
+/// expansion ~85 MB of AST on top of the crate's own 54 MB of forms -- the
+/// single largest contributor to that rustc's 13 GB check peak.  `#[cold]`
+/// and non-generic: nothing is inlined into, or instantiated per, a test.
+///
+/// The guard's false branch is unreachable today (`oracle_prop_enabled` is
+/// always true: live modes resolve-or-panic), but its behaviour is kept
+/// exactly: the same module/line and the same message text.
+#[cold]
+#[inline(never)]
+pub(crate) fn report_unavailable_oracle_proptest(module_path: &'static str, line: u32) {
+    tracing::info!(
+        "skipping {}:{}: set NEOVM_FORCE_ORACLE_PATH=/path/to/emacs",
+        module_path,
+        line
+    );
+}
+
 // Historical call-site marker.  `oracle_prop_enabled` is always true now:
 // snapshot mode needs no GNU, and every live mode resolves the attested oracle
 // or panics.  The guard cannot skip a test.
 macro_rules! return_if_neovm_enable_oracle_proptest_not_set {
     () => {
         if !$crate::common::oracle_prop_enabled() {
-            tracing::info!(
-                "skipping {}:{}: set NEOVM_FORCE_ORACLE_PATH=/path/to/emacs",
-                module_path!(),
-                line!()
-            );
+            $crate::common::report_unavailable_oracle_proptest(module_path!(), line!());
             return;
         }
     };
     ($ret:expr) => {
         if !$crate::common::oracle_prop_enabled() {
-            tracing::info!(
-                "skipping {}:{}: set NEOVM_FORCE_ORACLE_PATH=/path/to/emacs",
-                module_path!(),
-                line!()
-            );
+            $crate::common::report_unavailable_oracle_proptest(module_path!(), line!());
             return $ret;
         }
     };
