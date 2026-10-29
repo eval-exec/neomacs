@@ -23,7 +23,7 @@ fn refusal(error: Gen1AdmissionError) {
     }
 }
 
-fn main() {
+pub fn main() {
     let _ = preserve;
     let _ = borrow;
     let _ = register;
