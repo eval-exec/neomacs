@@ -733,13 +733,15 @@ pub(super) fn socket_addr_to_lisp_value(addr: SocketAddr) -> Value {
     }
 }
 
+/// GNU's `conv_sockaddr_to_lisp` result for one end of a Unix-domain socket,
+/// as the unibyte string `make_unibyte_string` (src/process.c:2643) builds.
 #[cfg(unix)]
-pub(super) fn unix_socket_addr_to_runtime_string(addr: Option<UnixSocketAddr>) -> String {
-    addr.and_then(|addr| {
-        addr.as_pathname()
-            .map(|path| path.as_os_str().to_string_lossy().into_owned())
-    })
-    .unwrap_or_default()
+pub(super) fn unix_socket_endpoint_value(
+    fd: std::os::fd::RawFd,
+    end: sys::net::SocketEnd,
+) -> Option<Value> {
+    let name = sys::net::unix_socket_name(fd, end)?;
+    Some(Value::heap_string(LispString::from_unibyte(name)))
 }
 
 #[cfg(unix)]

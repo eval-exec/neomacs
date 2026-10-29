@@ -1011,6 +1011,18 @@ pub(super) fn all_processors_count() -> u64 {
     }
 }
 
+/// GNU adds a client's `:local` contact key only when `getsockname` succeeds
+/// (src/process.c:3682-3689) and stores `conv_sockaddr_to_lisp`'s answer.
+/// A failed query leaves the key absent, which `process-contact` reports as
+/// nil -- the Darwin answer for a socket the kernel cannot name.
+#[cfg(unix)]
+fn client_local_contact(contact: Value, fd: std::os::fd::RawFd) -> EvalResult {
+    match unix_socket_endpoint_value(fd, sys::net::SocketEnd::Local) {
+        Some(local) => process_contact_plist_put(contact, ProcessKeyword::Local.value(), local),
+        None => Ok(contact),
+    }
+}
+
 /// (make-network-process &rest ARGS) -> process-or-nil
 /// `make-network-process` with an explicit `:local` / `:remote` address
 /// spec: binds or connects exactly the given inet or unix-domain address,
@@ -1473,11 +1485,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                 let socket = unbound_unix_datagram_socket(&socket_options)?;
                 contact =
                     process_contact_plist_put(contact, ProcessKeyword::Remote.value(), path_value)?;
-                contact = process_contact_plist_put(
-                    contact,
-                    ProcessKeyword::Local.value(),
-                    Value::string(""),
-                )?;
+                contact = client_local_contact(contact, socket.as_raw_fd())?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
                 eval.processes.sync_process_mark(&mut eval.buffers, id)?;
@@ -1585,11 +1593,7 @@ pub(super) fn connect_network_process_at_explicit_address(
                     ProcessKeyword::Remote.value(),
                     Value::heap_string(crate::emacs_core::fileio::path_to_lisp_file_name(&path)),
                 )?;
-                contact = process_contact_plist_put(
-                    contact,
-                    ProcessKeyword::Local.value(),
-                    Value::string(""),
-                )?;
+                contact = client_local_contact(contact, socket.as_raw_fd())?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
                 eval.processes.sync_process_mark(&mut eval.buffers, id)?;
@@ -1696,14 +1700,12 @@ pub(super) fn connect_network_process_at_explicit_address(
                 ProcessKeyword::Remote.value(),
                 Value::heap_string(crate::emacs_core::fileio::path_to_lisp_file_name(&path)),
             )?;
-            contact = process_contact_plist_put(
-                contact,
-                ProcessKeyword::Local.value(),
-                Value::string(""),
-            )?;
 
             if nowait {
                 let start = start_nonblocking_unix_stream_socket(&path, &socket_options)?;
+                if let Ok(stream) = &start {
+                    contact = client_local_contact(contact, stream.as_raw_fd())?;
+                }
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
                 eval.processes.sync_process_mark(&mut eval.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
@@ -1750,6 +1752,7 @@ pub(super) fn connect_network_process_at_explicit_address(
             }
 
             let stream = connect_unix_stream_socket(&path, &socket_options)?;
+            contact = client_local_contact(contact, stream.as_raw_fd())?;
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
             eval.processes.sync_process_mark(&mut eval.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
@@ -2147,11 +2150,7 @@ pub(super) fn connect_local_socket_process(
                 ProcessKeyword::Remote.value(),
                 service_path_value,
             )?;
-            contact = process_contact_plist_put(
-                contact,
-                ProcessKeyword::Local.value(),
-                Value::string(""),
-            )?;
+            contact = client_local_contact(contact, socket.as_raw_fd())?;
 
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
             eval.processes.sync_process_mark(&mut eval.buffers, id)?;
@@ -2261,11 +2260,7 @@ pub(super) fn connect_local_socket_process(
                     &service_path,
                 )),
             )?;
-            contact = process_contact_plist_put(
-                contact,
-                ProcessKeyword::Local.value(),
-                Value::string(""),
-            )?;
+            contact = client_local_contact(contact, socket.as_raw_fd())?;
 
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
             eval.processes.sync_process_mark(&mut eval.buffers, id)?;
@@ -2388,11 +2383,12 @@ pub(super) fn connect_local_socket_process(
                 &service_path,
             )),
         )?;
-        contact =
-            process_contact_plist_put(contact, ProcessKeyword::Local.value(), Value::string(""))?;
 
         if nowait {
             let start = start_nonblocking_unix_stream_socket(&service_path, &socket_options)?;
+            if let Ok(stream) = &start {
+                contact = client_local_contact(contact, stream.as_raw_fd())?;
+            }
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
             eval.processes.sync_process_mark(&mut eval.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
@@ -2445,6 +2441,7 @@ pub(super) fn connect_local_socket_process(
         }
 
         let stream = connect_unix_stream_socket(&service_path, &socket_options)?;
+        contact = client_local_contact(contact, stream.as_raw_fd())?;
         let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
         eval.processes.sync_process_mark(&mut eval.buffers, id)?;
         if let Some(proc) = eval.processes.get_mut(id) {

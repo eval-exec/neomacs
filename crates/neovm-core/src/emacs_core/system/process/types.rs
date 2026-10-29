@@ -7946,8 +7946,12 @@ impl ProcessManager {
             #[cfg(unix)]
             Unix {
                 stream: UnixStream,
-                remote_name: String,
-                local_name: String,
+                /// `conv_sockaddr_to_lisp` of the peer (GNU uses accept's
+                /// address; getpeername reads the same kernel value).
+                remote: Option<Value>,
+                /// The same for the local end, present only when
+                /// `getsockname` succeeded (src/process.c:5112-5116).
+                local: Option<Value>,
             },
         }
 
@@ -7980,15 +7984,20 @@ impl ProcessManager {
                     },
                     #[cfg(unix)]
                     Some(NetworkSocket::UnixListener(listener)) => match listener.accept() {
-                        Ok((stream, _)) => Ok(Some(AcceptedSocket::Unix {
-                            remote_name: unix_socket_addr_to_runtime_string(
-                                stream.peer_addr().ok(),
-                            ),
-                            local_name: unix_socket_addr_to_runtime_string(
-                                stream.local_addr().ok(),
-                            ),
-                            stream,
-                        })),
+                        Ok((stream, _)) => {
+                            let fd = stream.as_raw_fd();
+                            Ok(Some(AcceptedSocket::Unix {
+                                remote: super::bootstrap_vars::unix_socket_endpoint_value(
+                                    fd,
+                                    super::sys::net::SocketEnd::Peer,
+                                ),
+                                local: super::bootstrap_vars::unix_socket_endpoint_value(
+                                    fd,
+                                    super::sys::net::SocketEnd::Local,
+                                ),
+                                stream,
+                            }))
+                        }
                         Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
                         Err(_) => Ok(None),
                     },
@@ -8172,8 +8181,8 @@ impl ProcessManager {
                 #[cfg(unix)]
                 AcceptedSocket::Unix {
                     stream,
-                    remote_name,
-                    local_name,
+                    remote,
+                    local,
                 } => {
                     let _ = stream.set_nonblocking(true);
                     contact = process_contact_plist_put(
@@ -8182,18 +8191,22 @@ impl ProcessManager {
                         Value::NIL,
                     )
                     .unwrap_or(contact);
-                    contact = process_contact_plist_put(
-                        contact,
-                        ProcessKeyword::Remote.value(),
-                        Value::string(&remote_name),
-                    )
-                    .unwrap_or(contact);
-                    contact = process_contact_plist_put(
-                        contact,
-                        ProcessKeyword::Local.value(),
-                        Value::string(&local_name),
-                    )
-                    .unwrap_or(contact);
+                    if let Some(remote) = remote {
+                        contact = process_contact_plist_put(
+                            contact,
+                            ProcessKeyword::Remote.value(),
+                            remote,
+                        )
+                        .unwrap_or(contact);
+                    }
+                    if let Some(local) = local {
+                        contact = process_contact_plist_put(
+                            contact,
+                            ProcessKeyword::Local.value(),
+                            local,
+                        )
+                        .unwrap_or(contact);
+                    }
 
                     let prefix = format!("{} <", server_name);
                     let sequence = self
@@ -8202,15 +8215,13 @@ impl ProcessManager {
                         .filter(|process| process_name_runtime(process.name).starts_with(&prefix))
                         .count()
                         + 1;
-                    let host_for_message = if remote_name.is_empty() {
-                        "-".to_string()
-                    } else {
-                        remote_name
-                    };
+                    // GNU's `host` for an AF_LOCAL accept is the contact's
+                    // QChost, which is nil, so the message is always
+                    // "accept from -" (src/process.c:5170-5176).
                     (
                         format!("{} <{}>", server_name, sequence),
                         NetworkSocket::UnixStream(stream),
-                        host_for_message,
+                        "-".to_string(),
                     )
                 }
             };

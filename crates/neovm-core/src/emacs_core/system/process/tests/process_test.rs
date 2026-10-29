@@ -8990,7 +8990,7 @@ fn process_send_string_waits_for_nowait_local_stream_connect_like_gnu() {
                    (let ((initial (list (process-status cli)
                                         (process-live-p cli)
                                         (stringp (process-contact cli :remote))
-                                        (equal (process-contact cli :local) ""))))
+                                        (let ((local (process-contact cli :local))) (and (stringp local) (equal local (make-string (length local) 0)))))))
                      (process-send-string cli "ping-local-nowait")
                      (dotimes (_ 20)
                        (accept-process-output nil 0.05))
@@ -9000,7 +9000,7 @@ fn process_send_string_waits_for_nowait_local_stream_connect_like_gnu() {
                            recv
                            events
                            (stringp (process-contact cli :remote))
-                           (equal (process-contact cli :local) ""))))
+                           (let ((local (process-contact cli :local))) (and (stringp local) (equal local (make-string (length local) 0)))))))
                (when cli (delete-process cli))
                (when srv (delete-process srv))
                (ignore-errors (delete-file path))))"#,
@@ -9503,7 +9503,7 @@ fn make_network_process_local_datagram_loopback_like_gnu() {
                    (list recv
                          (process-status srv)
                          (process-status cli)
-                         (equal (process-contact cli :local) "")
+                         (let ((local (process-contact cli :local))) (and (stringp local) (equal local (make-string (length local) 0))))
                          (equal (process-contact cli :remote) path)
                          (equal (process-datagram-address cli) path)
                          (consp (process-datagram-address srv))
@@ -9584,7 +9584,7 @@ fn make_network_process_local_seqpacket_loopback_like_gnu() {
                          (process-status srv)
                          (process-status cli)
                          (length events)
-                         (equal (process-contact cli :local) "")
+                         (let ((local (process-contact cli :local))) (and (stringp local) (equal local (make-string (length local) 0))))
                          (equal (process-contact cli :remote) path)
                          (null (process-datagram-address srv))
                          (null (process-datagram-address cli))))
@@ -9668,6 +9668,11 @@ fn make_network_process_explicit_inet_address_skips_host_service_family_like_gnu
     assert_eq!(results[0], "OK (listen t t t 42 bogus open t t 42 nil)");
 }
 
+/// GNU fills an unbound Unix socket's name from `getsockname`, so the answer
+/// is the kernel's: an empty string where the kernel returns a two-byte
+/// address (Linux), fourteen NUL bytes where it returns a zero-filled path
+/// (Darwin).  Both are "a name of NUL bytes"; asserting that shape is what
+/// stays GNU-true on every host.
 #[cfg(unix)]
 #[test]
 fn make_network_process_local_stream_server_accepts_client_like_gnu() {
@@ -9697,13 +9702,13 @@ fn make_network_process_local_stream_server_accepts_client_like_gnu() {
                                  (equal (process-contact srv :service) path)
                                  (process-status cli)
                                  (equal (process-contact cli :remote) path)
-                                 (equal (process-contact cli :local) "")
+                                 (let ((local (process-contact cli :local))) (and (stringp local) (equal local (make-string (length local) 0))))
                                  (length events)
                                  (and events
                                       (not (null (string-match-p "^srv <[0-9]+>$"
                                                                  (caar events)))))
                                  (and events (equal (cadar events) "accept from -\n"))
-                                 (and events (equal (nth 2 (car events)) ""))
+                                 (and events (let ((remote (nth 2 (car events)))) (and (stringp remote) (equal remote (make-string (length remote) 0)))))
                                  (and events (equal (nth 3 (car events)) path))
                                  (and events (nth 4 (car events))))
                          (delete-process cli)
@@ -9969,7 +9974,7 @@ fn make_network_process_explicit_local_address_skips_family_like_gnu() {
                              (process-contact srv :service)
                              (process-status cli)
                              (equal (process-contact cli :remote) path)
-                             (equal (process-contact cli :local) "")
+                             (let ((local (process-contact cli :local))) (and (stringp local) (equal local (make-string (length local) 0))))
                              (process-contact cli :host)
                              (process-contact cli :service)))
                    (error err))

@@ -145,6 +145,63 @@ pub fn sockaddr_un_payload_len() -> usize {
     std::mem::size_of::<libc::sockaddr_un>() - std::mem::size_of::<libc::sa_family_t>()
 }
 
+/// Which end of a socket pair a `getsockname`/`getpeername` query reports.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SocketEnd {
+    Local,
+    Peer,
+}
+
+/// GNU `conv_sockaddr_to_lisp`'s name extraction for a Unix-domain socket
+/// (src/process.c:2589-2650): the raw `sun_path` bytes the kernel returned.
+///
+/// GNU's BSD workaround (:2595-2599) answers an empty unibyte string when the
+/// kernel returns less than a family field.  Otherwise the name is the returned
+/// buffer past `sun_path`, cut at the first NUL only when the first byte is not
+/// NUL -- a leading NUL is an abstract name, whose embedded NULs are
+/// significant and whose length is the whole returned buffer.  Darwin returns a
+/// 16-byte sockaddr with a zero-filled 14-byte path for an unbound Unix socket,
+/// so the answer there is fourteen NUL bytes, not "".
+///
+/// `None` means the kernel call itself failed; GNU then leaves the address out
+/// of the contact plist (src/process.c:3684-3689, :5112-5116).
+#[cfg(unix)]
+pub fn unix_socket_name(fd: std::os::fd::RawFd, end: SocketEnd) -> Option<Vec<u8>> {
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+    // SAFETY: `address` is a zeroed `sockaddr_un` the kernel fills; `len` is
+    // its size and is updated by the call.
+    let status = unsafe {
+        let raw = &mut address as *mut libc::sockaddr_un as *mut libc::sockaddr;
+        match end {
+            SocketEnd::Local => libc::getsockname(fd, raw, &mut len),
+            SocketEnd::Peer => libc::getpeername(fd, raw, &mut len),
+        }
+    };
+    if status != 0 || i32::from(address.sun_family) != libc::AF_UNIX {
+        return None;
+    }
+    let len = (len as usize).min(std::mem::size_of::<libc::sockaddr_un>());
+    if len
+        < std::mem::offset_of!(libc::sockaddr, sa_family) + std::mem::size_of::<libc::sa_family_t>()
+    {
+        return Some(Vec::new());
+    }
+    let name_length = len - std::mem::offset_of!(libc::sockaddr_un, sun_path);
+    // SAFETY: the kernel reported `len` bytes; the clamp above bounds the
+    // `sun_path` slice by the array's size.
+    let mut name =
+        unsafe { std::slice::from_raw_parts(address.sun_path.as_ptr() as *const u8, name_length) }
+            .to_vec();
+    if name.first().is_some_and(|first| *first != 0) {
+        if let Some(nul) = name.iter().position(|byte| *byte == 0) {
+            name.truncate(nul);
+        }
+    }
+    Some(name)
+}
+
 /// Resolve a service name (e.g. "http") for a protocol ("tcp"/"udp") to its
 /// port via `getservbyname`. `None` off Unix (std/socket2 have no equivalent).
 #[cfg(unix)]
