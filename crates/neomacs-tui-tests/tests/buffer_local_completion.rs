@@ -6,7 +6,7 @@ use std::time::Duration;
 #[test]
 fn tab_completion_observes_a_buffer_local_case_policy() {
     let (mut gnu, mut neo) = boot_pair("");
-    eval_expression(
+    eval_expression_enters_minibuffer(
         &mut gnu,
         &mut neo,
         r#"(minibuffer-with-setup-hook (lambda () (setq-local completion-ignore-case t)) (completing-read "Case: " '("*Messages*") nil t))"#,

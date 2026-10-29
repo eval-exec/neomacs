@@ -93,6 +93,8 @@ mod issue_470;
 mod mark_region_fill;
 #[path = "menu_bar.rs"]
 mod menu_bar;
+#[path = "minibuffer_barrier.rs"]
+mod minibuffer_barrier;
 #[path = "minibuffer_line.rs"]
 mod minibuffer_line;
 #[path = "minor_mode_order_repro.rs"]

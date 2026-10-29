@@ -11,8 +11,8 @@ use neomacs_tui_tests::TuiSession;
 use std::fs;
 use std::time::{Duration, Instant};
 use support::{
-    assert_pair_exact_display, boot_pair, eval_expression, read_both, send_both, wait_for_both,
-    write_home_file,
+    assert_pair_exact_display, boot_pair, eval_expression, eval_expression_enters_minibuffer,
+    read_both, send_both, wait_for_both, write_home_file,
 };
 
 const ORACLE_FILE: &str = "window-end-oracle.el";
@@ -276,7 +276,7 @@ fn window_end_update_matches_gnu_across_display_boundaries() {
     write_home_file(&gnu, ORACLE_FILE, ORACLE_ELISP);
     write_home_file(&neo, ORACLE_FILE, ORACLE_ELISP);
 
-    eval_expression(
+    eval_expression_enters_minibuffer(
         &mut gnu,
         &mut neo,
         r#"(load "~/window-end-oracle.el" nil t)"#,

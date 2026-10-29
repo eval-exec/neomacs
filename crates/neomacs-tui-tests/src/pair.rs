@@ -217,7 +217,62 @@ pub fn wait_for_both_mx_suggestion(
     }
 }
 
-pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &str) {
+/// The TTY menu bar's stable prefix.  The trailing items depend on the
+/// selected window's local map; see [`MINIBUF_MENU_ITEM`].
+const TTY_MENU_BAR_PREFIX: &str = "File Edit Options Buffers";
+/// The menu-bar item that only a minibuffer's local map contributes (GNU
+/// `lisp/menu-bar.el` defines `[menu-bar minibuf]` on `minibuffer-local-map`
+/// and `minibuffer-local-completion-map`).  The TTY menu bar shows it while
+/// any minibuffer is active and drops it once the minibuffer exits; Neomacs
+/// renders the same item.  Observed on the pair harness: both editors show
+/// `File Edit Options Buffers Tools Minibuf Help` only inside `M-:` and
+/// `... Lisp-Interaction Help` at rest and after RET.
+const MINIBUF_MENU_ITEM: &str = "Minibuf";
+
+/// Whether the screen shows that the eval minibuffer has exited.
+///
+/// No single observable is enough:
+/// - a long form scrolls the `Eval:` prompt row out of view while the
+///   minibuffer is still open, so the prompt's absence alone is a false
+///   "exited" signal;
+/// - the menu bar keeps its `Minibuf` item until the minibuffer exits, and
+///   it scrolls independently of the minibuffer contents;
+/// - for a multi-line form the last visible row keeps showing the form's
+///   tail (or the wrapped tail of its last line) until the minibuffer exits,
+///   so the echo of the unsubmitted form cannot pass for a submitted one.
+fn minibuffer_exited(grid: &[String], expression: &str) -> bool {
+    if grid.iter().any(|row| row.contains("Eval:")) {
+        return false;
+    }
+    if grid
+        .iter()
+        .any(|row| row.contains(TTY_MENU_BAR_PREFIX) && row.contains(MINIBUF_MENU_ITEM))
+    {
+        return false;
+    }
+    if !expression.contains('\n') {
+        return true;
+    }
+    let last_line = expression
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("");
+    let last_row = grid
+        .iter()
+        .rev()
+        .find(|row| !row.trim().is_empty())
+        .map(|row| row.trim())
+        .unwrap_or("");
+    !(!last_line.is_empty() && !last_row.is_empty() && last_line.ends_with(last_row))
+}
+
+/// Type EXPRESSION at the `M-:` prompt and submit it.
+///
+/// Returns as soon as RET is written; the callers decide whether the
+/// minibuffer must exit before they return.
+fn type_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &str) {
     send_both(gnu, neo, "M-:");
     let prompt_ready = |grid: &[String]| grid.last().is_some_and(|row| row.contains("Eval:"));
     wait_for_both(gnu, neo, Duration::from_secs(8), prompt_ready);
@@ -225,29 +280,77 @@ pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &
     gnu.paste(expression);
     neo.paste(expression);
     send_both(gnu, neo, "RET");
-    // The pasted expression is echoed in the minibuffer while it is still
-    // unsubmitted, and that echo contains the expression's own string
-    // literals.  A caller that waits for displayed buffer text can therefore
-    // match the echo before RET has been processed, and its next exact-display
-    // observation then runs against a half-transitioned frame (observed on the
-    // TUI shard as GNU still in `Eval:` while Neomacs had already switched
-    // buffers).  Return only once the eval minibuffer has closed on both
-    // sides, so every later observation is of a submitted command.
-    let submitted = |grid: &[String]| !grid.iter().any(|row| row.contains("Eval:"));
-    wait_for_both(gnu, neo, Duration::from_secs(8), submitted);
 }
 
-pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
+fn type_expression_one(session: &mut TuiSession, expression: &str) {
     session.send_key("M-:");
     let prompt_ready = |grid: &[String]| grid.last().is_some_and(|row| row.contains("Eval:"));
     session.read_until(Duration::from_secs(8), prompt_ready);
     session.read(Duration::from_millis(300));
     session.paste(expression);
     session.send_key("RET");
-    // See `eval_expression`: do not return while the unsubmitted echo is still
-    // the only place the expression's text is visible.
-    let submitted = |grid: &[String]| !grid.iter().any(|row| row.contains("Eval:"));
-    session.read_until(Duration::from_secs(8), submitted);
+}
+
+/// Evaluate EXPRESSION at the keyboard and return only after the eval
+/// minibuffer has exited in both editors.
+///
+/// The pasted expression is echoed in the minibuffer while it is still
+/// unsubmitted, and that echo contains the expression's own string literals.
+/// A caller that waits for displayed buffer text can therefore match the echo
+/// before RET has been processed, and its next exact-display observation then
+/// runs against a half-transitioned frame (observed on the TUI shard as GNU
+/// still in `Eval:` while Neomacs had already switched buffers).  Waiting for
+/// [`minibuffer_exited`] makes every later observation one of a submitted
+/// command, so the callers' own display predicates cannot be satisfied by
+/// their source text.
+///
+/// A form that intentionally enters a minibuffer of its own must use
+/// [`eval_expression_enters_minibuffer`] instead: this function asserts that
+/// the minibuffer is gone when it returns.
+pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &str) {
+    type_expression(gnu, neo, expression);
+    let exited = |grid: &[String]| minibuffer_exited(grid, expression);
+    wait_for_both(gnu, neo, Duration::from_secs(8), exited);
+    for (label, session) in [("GNU", &*gnu), ("Neomacs", &*neo)] {
+        let grid = session.text_grid();
+        assert!(
+            minibuffer_exited(&grid, expression),
+            "{label} still shows a minibuffer after evaluating {:?}; use \
+             eval_expression_enters_minibuffer for a form that keeps a \
+             minibuffer open:\n{}",
+            expression.lines().next().unwrap_or(expression),
+            grid.join("\n"),
+        );
+    }
+}
+
+pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
+    type_expression_one(session, expression);
+    let exited = |grid: &[String]| minibuffer_exited(grid, expression);
+    session.read_until(Duration::from_secs(8), exited);
+    let grid = session.text_grid();
+    assert!(
+        minibuffer_exited(&grid, expression),
+        "still shows a minibuffer after evaluating {:?}:\n{}",
+        expression.lines().next().unwrap_or(expression),
+        grid.join("\n"),
+    );
+}
+
+/// Evaluate EXPRESSION whose evaluation enters a minibuffer of its own
+/// (`read-string`, `completing-read`, `y-or-n-p`, a recursive edit, ...).
+///
+/// Unlike [`eval_expression`] this returns as soon as RET is written: the
+/// caller owns the new minibuffer and must drive it (type the answer, send
+/// RET or C-g, ...) before its next display observation.  The separate,
+/// explicitly named entry point keeps that intent typed: a prompt-leaving
+/// form must never be passed to `eval_expression` silently.
+pub fn eval_expression_enters_minibuffer(
+    gnu: &mut TuiSession,
+    neo: &mut TuiSession,
+    expression: &str,
+) {
+    type_expression(gnu, neo, expression);
 }
 
 /// Remove repository-specific state from paired source-tree fixtures by
