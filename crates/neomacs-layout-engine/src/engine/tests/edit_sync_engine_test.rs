@@ -105,7 +105,7 @@ impl SyncFrame {
         }
         eval.eval_str(&format!("(goto-char {})", point_char + 1))
             .expect("goto");
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame_id);
         Self {
             eval,
@@ -154,7 +154,7 @@ impl SyncFrame {
             .expect("incremental state");
         let incremental_cursor = incremental_state.phys_cursor.clone();
         let incremental_cursor_effects = incremental_state.cursor_effects_by_window.clone();
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut self.eval, self.frame_id);
         let reference = selected_window_layout_trace(&self.eval, &fresh, self.frame_id);
         assert!(
@@ -580,7 +580,7 @@ fn source_budget_step(frame: &mut SyncFrame, form: &str) {
     let incremental_indices = enabled_row_indices(&frame.eval, &frame.engine, frame.frame_id);
     let incremental_end = source_budget_window_end(frame);
     assert!(incremental_end.is_current(), "{form}: window end is stale");
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut frame.eval, frame.frame_id);
     assert_eq!(
         incremental,
@@ -669,7 +669,7 @@ fn source_budget_retry_does_not_repeat_unmarking_fontification_callbacks() {
             .eval
             .eval_str("(setq fontification-functions nil)")
             .unwrap();
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut frame.eval, frame.frame_id);
         assert_eq!(
             incremental,
@@ -759,7 +759,7 @@ fn source_budget_retry_restores_remapped_background_frame_artifacts() {
     let incremental_end = source_budget_window_end(&frame);
     let incremental_trace =
         selected_window_layout_trace(&frame.eval, &frame.engine, frame.frame_id);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut frame.eval, frame.frame_id);
     let full = fresh
         .last_frame_display_state

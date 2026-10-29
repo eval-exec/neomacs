@@ -1,6 +1,5 @@
 use super::*;
 use crate::display_row::face_state::DisplayRowGlyphMeasurer;
-use crate::font::metrics::FontMetricsService;
 use crate::glyph_advance::GlyphAdvanceQuantization;
 use crate::neovm_bridge::ResolvedFace;
 
@@ -247,7 +246,7 @@ fn complete_row_program_uses_exact_captured_fonts_on_worker() {
     require_send::<RowProgram>();
     require_send::<ComputedRow>();
     let faces = faces();
-    let mut fonts = FontMetricsService::new();
+    let mut fonts = crate::font::metrics::test_catalog::metrics_service();
     let mut measurer = DisplayRowGlyphMeasurer::with_mode(
         &faces,
         Some(&mut fonts),

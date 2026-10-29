@@ -44,12 +44,12 @@ use ttf_parser::Face as TtfFace;
 #[cfg(test)]
 pub(crate) mod test_catalog;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(not(test), target_os = "linux"))]
 fn platform_foundry_for_file(file: &str) -> Option<String> {
     crate::font::fontconfig::foundry_for_file(file)
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(test), not(target_os = "linux")))]
 fn platform_foundry_for_file(_file: &str) -> Option<String> {
     None
 }
@@ -1060,7 +1060,14 @@ impl FontMetricsService {
                 current = current.get(),
                 "rebuilding layout font state for native catalog change"
             );
-            self.font_system = FontSystem::new();
+            #[cfg(not(test))]
+            {
+                self.font_system = FontSystem::new();
+            }
+            #[cfg(test)]
+            {
+                self.font_system = self.test_catalog().font_system();
+            }
             self.font_file_cache = FontFileCache::new();
             self.clear_caches();
             // Records carry metrics read from the files; a replaced file must
@@ -1430,20 +1437,51 @@ impl FontMetricsService {
         identity: &ResolvedFontIdentity,
         font_size: f32,
     ) -> Option<std::sync::Arc<crate::font::probe::DeviceAsciiAdvances>> {
-        let file = identity.file_path.as_deref()?;
-        let explicit_weight = identity
-            .variation_coords
-            .iter()
-            .find(|coord| coord.tag() == u32::from_be_bytes(*b"wght"))
-            .map(|coord| coord.value());
-        let device_pixel_size = self.selection_size(font_size).rounded_device_px();
-        crate::font::probe::probe_device_ascii_advances(
-            file,
-            identity.freetype_selector()?,
-            device_pixel_size,
-            explicit_weight,
+        let request = crate::font::probe::ExactDeviceFontRequest::for_ascii(
+            identity,
+            self.selection_size(font_size),
         )
-        .map(std::sync::Arc::new)
+        .ok()?;
+        crate::font::probe::probe_device_ascii_advances_for_request(&request)
+            .ok()
+            .map(std::sync::Arc::new)
+    }
+
+    /// GNU ftcrfont_glyph_extents uses the opened device-size metric for
+    /// ordinary non-ASCII glyphs too. The existing character/cluster caches
+    /// own the final answer; no native handle or second cache is retained.
+    #[cfg(target_os = "linux")]
+    #[cold]
+    #[inline(never)]
+    fn device_glyph_advance(&self, materialized: &LayoutFontHandle, ch: char) -> Option<f32> {
+        use crate::font::probe::{DeviceGlyphProbe, ExactDeviceFontRequest};
+        match materialized.font.glyph_advance {
+            ResolvedFontAdvance::PerGlyph => {}
+            ResolvedFontAdvance::FixedCell(_) | ResolvedFontAdvance::MonospaceCells(_) => {
+                return None;
+            }
+        }
+        let measured = ExactDeviceFontRequest::new(
+            &materialized.font.identity,
+            self.selection_size(materialized.font.pixel_size),
+        )
+        .and_then(|request| crate::font::probe::probe_device_glyph_advance(&request, ch));
+        match measured {
+            Ok(DeviceGlyphProbe::Present(advance)) => {
+                Some(advance.logical_advance(self.device_scale))
+            }
+            Ok(DeviceGlyphProbe::MissingGlyph) => None,
+            Err(error) => {
+                tracing::debug!(
+                    target: "font_boundary",
+                    identity = %materialized.font.identity.stable_key,
+                    character = %ch.escape_unicode(),
+                    %error,
+                    "exact device glyph probe refused; retaining the existing outline path"
+                );
+                None
+            }
+        }
     }
 
     fn materialized_font_has_char(&mut self, materialized: &LayoutFontHandle, ch: char) -> bool {
@@ -2060,11 +2098,12 @@ impl FontMetricsService {
             }
         };
         Some(SelectedFontInfo {
-            foundry: resolved
-                .identity
-                .file_path
-                .as_deref()
-                .and_then(platform_foundry_for_file),
+            foundry: resolved.identity.file_path.as_deref().and_then(
+                #[cfg(test)]
+                |file| self.font_resolver.test_foundry_for_file(file),
+                #[cfg(not(test))]
+                platform_foundry_for_file,
+            ),
             resolved,
             slant: materialized.selector_slant,
             metrics,
@@ -2798,6 +2837,10 @@ impl FontMetricsService {
                     .glyph_metrics(&[])
                     .scale(materialized.font.pixel_size)
                     .advance_width(glyph_id);
+                #[cfg(target_os = "linux")]
+                let advance = self
+                    .device_glyph_advance(materialized, ch)
+                    .unwrap_or(advance);
                 (glyph_id.into(), advance)
             }
         };
@@ -3098,9 +3141,18 @@ impl FontMetricsService {
             materialized.resolution == FontResolutionSource::FacePrimary
                 || materialized.font.glyph_advance.cell_advance_px().is_some()
         });
-        let w = direct_glyph
-            .and_then(|materialized| self.simple_copy_glyph_for_char(materialized, ch))
-            .map(|(_, advance_px)| advance_px)
+        #[cfg(target_os = "linux")]
+        let device_advance = materialized
+            .as_ref()
+            .and_then(|font| self.device_glyph_advance(font, ch));
+        #[cfg(not(target_os = "linux"))]
+        let device_advance: Option<f32> = None;
+        let w = device_advance
+            .or_else(|| {
+                direct_glyph
+                    .and_then(|materialized| self.simple_copy_glyph_for_char(materialized, ch))
+                    .map(|(_, advance_px)| advance_px)
+            })
             .unwrap_or_else(|| {
                 let resolved = self.font_request_for_char(ch, selection);
                 self.measure_resolved_char(ch, &resolved, selection.font_size)
@@ -3762,3 +3814,7 @@ fn font_slant_to_cosmic_style(slant: FontSlant) -> Option<Style> {
 #[cfg(test)]
 #[path = "metrics/tests/metrics_test.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "metrics/tests/device_glyph_advance_test.rs"]
+mod device_glyph_advance_tests;

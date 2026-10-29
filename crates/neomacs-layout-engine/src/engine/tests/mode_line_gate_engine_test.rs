@@ -73,7 +73,7 @@ fn settled_frame(
         buf.set_buffer_local("bidi-paragraph-direction", Value::symbol("left-to-right"));
         buf.goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(point_byte));
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     activate_last_engine_presentation(&mut eval, &engine, frame_id);
     (eval, frame_id, buf_id, window, engine)
@@ -192,7 +192,7 @@ fn an_edit_to_a_buffer_shown_twice_evaluates() {
             neovm_core::window::SplitPlacement::AfterTarget,
         )
         .expect("split window onto the same buffer");
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     redisplay(&mut eval, &mut engine, frame_id);
     eval.eval_str("(insert \"x\")").expect("insert");
     // `bset_redisplay`: a change to a buffer two windows show sets
@@ -223,7 +223,7 @@ fn a_kept_mode_line_is_the_one_a_fresh_layout_draws() {
         eval.eval_str(&format!("(insert {step:?})"))
             .expect("insert");
         assert_eq!(redisplay(&mut eval, &mut engine, frame_id), 0, "{step}");
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame_id);
         assert_eq!(
             rendered_mode_line_text(&engine),

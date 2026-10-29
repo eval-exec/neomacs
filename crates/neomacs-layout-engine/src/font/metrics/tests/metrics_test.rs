@@ -1,9 +1,9 @@
 use super::*;
 use tracing::debug;
 
-// Helper: create a service (expensive — ~50ms for font scan)
+// Every independent service borrows the same immutable fixture catalog owner.
 fn make_svc() -> FontMetricsService {
-    FontMetricsService::new()
+    crate::font::metrics::test_catalog::metrics_service()
 }
 
 fn test_font_path(path: std::path::PathBuf) -> String {
@@ -248,13 +248,13 @@ fn covered_char_publishes_the_same_record_as_the_realized_face() {
     let face = svc
         .resolved_font_for_face("Monospace", 400, false, 14.0)
         .expect("realized primary font");
-    let Some(ch) = ['é', 'ü', 'ñ', 'ö'].into_iter().find(|ch| {
-        svc.resolved_font_for_char(*ch, "Monospace", 400, false, 14.0)
-            .is_some_and(|font| font.id == face.id)
-    }) else {
-        debug!("skipping: platform monospace font covers none of the probe characters");
-        return;
-    };
+    let ch = ['é', 'ü', 'ñ', 'ö']
+        .into_iter()
+        .find(|ch| {
+            svc.resolved_font_for_char(*ch, "Monospace", 400, false, 14.0)
+                .is_some_and(|font| font.id == face.id)
+        })
+        .expect("pinned primary covers accented Latin on its own face");
 
     let via_char = svc
         .resolved_font_for_char(ch, "Monospace", 400, false, 14.0)
@@ -278,10 +278,10 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
     let primary = svc
         .materialized_font_for_face("Monospace", 400, false, 14.0)
         .expect("realized primary font");
-    if !svc.materialized_font_has_char(&primary, '▶') {
-        debug!("skipping: platform monospace font does not cover U+25B6");
-        return;
-    }
+    assert!(
+        svc.materialized_font_has_char(&primary, '▶'),
+        "pinned primary covers U+25B6"
+    );
 
     let symbol = svc
         .materialized_font_for_realized_face_char('▶', selection)
@@ -498,7 +498,7 @@ fn degraded_cell_width_uses_the_effective_opened_size() {
 
 #[test]
 fn unrealized_gui_font_size_never_publishes_placeholder_cell_metrics() {
-    let mut service = FontMetricsService::new();
+    let mut service = crate::font::metrics::test_catalog::metrics_service();
 
     // Issue #282: an early GUI redisplay can observe the default face before
     // its requested pixel size has been realized.  This test deliberately
@@ -529,7 +529,7 @@ fn unrealized_gui_font_size_never_publishes_placeholder_cell_metrics() {
 
 #[test]
 fn frame_cell_geometry_keeps_graphic_and_terminal_domains_distinct() {
-    let mut service = FontMetricsService::new();
+    let mut service = crate::font::metrics::test_catalog::metrics_service();
 
     assert!(matches!(
         service.frame_cell_geometry(
@@ -545,7 +545,7 @@ fn frame_cell_geometry_keeps_graphic_and_terminal_domains_distinct() {
 
 #[test]
 fn frame_cell_geometry_reuses_the_effective_size_from_its_metric_observation() {
-    let mut service = FontMetricsService::new();
+    let mut service = crate::font::metrics::test_catalog::metrics_service();
     let requested_size = 12.6;
     let key = MetricsCacheKey::new(
         "monospace",
@@ -582,7 +582,7 @@ fn frame_cell_geometry_reuses_the_effective_size_from_its_metric_observation() {
 #[cfg(target_os = "linux")]
 #[test]
 fn selected_font_probe_observes_vertical_and_advance_metrics_at_one_size() {
-    let mut service = FontMetricsService::new();
+    let mut service = crate::font::metrics::test_catalog::metrics_service();
     let family = "monospace";
     let requested_size = 12.6;
     let key = MetricsCacheKey::new(
@@ -769,17 +769,55 @@ fn font_metrics_match_selected_font_face_table_metrics() {
 #[cfg(target_os = "macos")]
 #[test]
 fn font_metrics_match_the_selected_core_text_face() {
-    let mut svc = make_svc();
-    let family = "monospace";
+    use crate::font::resolver::FontEntityQuery;
+    use crate::font_backend::{CoreTextBackend, ProcessFontRegistration};
+    let path = neomacs_test_fonts::hack_italic_3_003();
+    let bytes = std::fs::read(path).expect("pinned Hack Italic bytes");
+    let face = ttf_parser::Face::parse(&bytes, 0).expect("pinned Hack Italic face");
+    let postscript = face
+        .names()
+        .into_iter()
+        .find(|name| name.name_id == ttf_parser::name_id::POST_SCRIPT_NAME && name.is_unicode())
+        .and_then(|name| name.to_string())
+        .expect("pinned fixture PostScript name");
+    let _registration = ProcessFontRegistration::new(path);
+    let resolver = crate::font::resolver::FontResolver::new(Box::new(CoreTextBackend::default()));
+    let discovered = resolver
+        .resolve_entity(&FontEntityQuery::new(None).with_postscript_name(&postscript))
+        .expect("registered fixture appears in CoreText");
+    assert_eq!(
+        std::path::Path::new(
+            discovered
+                .matched
+                .file_path()
+                .expect("registered fixture URL")
+        )
+        .canonicalize()
+        .unwrap(),
+        path.canonicalize().unwrap()
+    );
+    let family = discovered.matched.family().to_owned();
     let weight = 400;
-    let italic = false;
+    let italic = true;
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[path])
+        .expect("isolated pinned font database");
+    let mut svc =
+        FontMetricsService::from_font_system_and_resolver(catalog.font_system(), resolver);
     let font_size = 14.0;
-    let expected = svc
-        .platform_primary_match(family, weight, italic, font_size)
-        .and_then(|matched| matched.pixel_metrics(font_size))
+    let matched = svc
+        .platform_primary_match(&family, weight, italic, font_size)
+        .expect("registered CoreText primary");
+    assert_eq!(
+        std::path::Path::new(matched.file_path().expect("registered primary URL"))
+            .canonicalize()
+            .unwrap(),
+        path.canonicalize().unwrap()
+    );
+    let expected = matched
+        .pixel_metrics(font_size)
         .expect("CoreText selected-face metrics");
 
-    let actual = svc.font_metrics(family, weight, italic, font_size);
+    let actual = svc.font_metrics(&family, weight, italic, font_size);
 
     assert_eq!(actual.ascent, expected.ascent as f32);
     assert_eq!(actual.descent, expected.descent as f32);
@@ -860,6 +898,10 @@ struct NativeMetricsPrimaryBackend {
 }
 
 impl crate::font_backend::FontBackend for NativeMetricsPrimaryBackend {
+    fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
+        None
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::CoreText
     }
@@ -908,6 +950,7 @@ impl crate::font_backend::FontBackend for NativeMetricsPrimaryBackend {
 }
 
 struct ChangingCatalogBackend {
+    catalog: crate::font::metrics::test_catalog::TestFontCatalog,
     pending: std::sync::Arc<std::sync::atomic::AtomicBool>,
     advances: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -939,6 +982,10 @@ impl crate::text_shaper::TextShaper for RecordingFamilyShaper {
 }
 
 impl crate::font_backend::FontBackend for NoCandidateFontBackend {
+    fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
+        None
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::Fontconfig
     }
@@ -970,6 +1017,14 @@ impl crate::font_backend::FontBackend for NoCandidateFontBackend {
 }
 
 impl crate::font_backend::FontBackend for ChangingCatalogBackend {
+    fn test_catalog(&self) -> crate::font::metrics::test_catalog::TestFontCatalogSource {
+        crate::font::metrics::test_catalog::TestFontCatalogSource::Fixture(self.catalog.clone())
+    }
+
+    fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
+        None
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::Fontconfig
     }
@@ -1017,6 +1072,7 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
     let mut svc = make_svc();
     svc.font_resolver
         .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: std::sync::Arc::clone(&pending),
             advances: std::sync::Arc::clone(&advances),
         }));
@@ -1024,8 +1080,10 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
 
     assert!(!svc.synchronize_font_catalog().changed());
     pending.store(true, std::sync::atomic::Ordering::Release);
+    let before_source = svc.test_catalog();
     let update = svc.synchronize_font_catalog();
     assert!(update.changed());
+    assert_eq!(svc.test_catalog(), before_source);
     assert_eq!(update.generation(), initial.next());
     assert_eq!(advances.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert!(!svc.synchronize_font_catalog().changed());
@@ -1034,6 +1092,10 @@ fn font_metrics_consumes_native_catalog_changes_once_at_a_safe_point() {
 
 #[cfg(unix)]
 impl crate::font_backend::FontBackend for FixedCharFontBackend {
+    fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
+        None
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::Fontconfig
     }
@@ -1068,6 +1130,10 @@ impl crate::font_backend::FontBackend for FixedCharFontBackend {
 
 #[cfg(unix)]
 impl crate::font_backend::FontBackend for FixedPrimaryFontBackend {
+    fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
+        None
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::Fontconfig
     }
@@ -1124,6 +1190,10 @@ impl crate::font_backend::FontBackend for FixedPrimaryFontBackend {
 
 #[cfg(unix)]
 impl crate::font_backend::FontBackend for FixedNativeMemoryFontBackend {
+    fn test_foundry_for_file(&self, _file: &str) -> Option<String> {
+        None
+    }
+
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::CoreText
     }
@@ -1546,6 +1616,7 @@ fn catalog_advance_republishes_records_under_stable_ids() {
     let mut svc = make_svc();
     svc.font_resolver
         .replace_backend(Box::new(ChangingCatalogBackend {
+            catalog: crate::font::metrics::test_catalog::standard_catalog().clone(),
             pending: std::sync::Arc::clone(&pending),
             advances: std::sync::Arc::clone(&advances),
         }));
@@ -1587,17 +1658,17 @@ fn char_first_realization_publishes_the_face_record() {
     // The per-character builder realizes the file before any face does (a
     // fallback-only frame); the pinned record must be the face path's.
     let mut reference = make_svc();
-    let Some(face) = reference.resolved_font_for_face("Monospace", 400, false, 14.0) else {
-        return;
-    };
-    let Some(ch) = ['é', 'ü', 'ñ', 'ö'].into_iter().find(|ch| {
-        reference
-            .resolved_font_for_char(*ch, "Monospace", 400, false, 14.0)
-            .is_some_and(|font| font.id == face.id)
-    }) else {
-        debug!("skipping: platform monospace font covers none of the probe characters");
-        return;
-    };
+    let face = reference
+        .resolved_font_for_face("Monospace", 400, false, 14.0)
+        .expect("pinned primary outline face");
+    let ch = ['é', 'ü', 'ñ', 'ö']
+        .into_iter()
+        .find(|ch| {
+            reference
+                .resolved_font_for_char(*ch, "Monospace", 400, false, 14.0)
+                .is_some_and(|font| font.id == face.id)
+        })
+        .expect("pinned primary covers accented Latin on its own face");
 
     let mut svc = make_svc();
     let via_char = svc
@@ -1832,21 +1903,20 @@ fn shaping_selected_face_reuses_the_realized_face_record() {
     // When shaping lands on the face's own fontdb face, it must publish the
     // already interned record even if its diagnostic family metadata differs.
     let mut svc = make_svc();
-    let Some(primary) = svc.materialized_font_for_face("Monospace", 400, false, 14.0) else {
-        return;
-    };
-    let Some(fontdb_id) = primary.source.fontdb_id() else {
-        debug!("skipping: primary face is a bitmap font");
-        return;
-    };
-    let Some(from_shaping) = svc.resolved_font_from_fontdb_id(fontdb_id, 14.0) else {
-        debug!("skipping: fontdb face has no replayable file");
-        return;
-    };
-    if from_shaping.id != primary.font.id {
-        debug!("skipping: fontdb identity differs from the platform identity");
-        return;
-    }
+    let primary = svc
+        .materialized_font_for_face("Monospace", 400, false, 14.0)
+        .expect("pinned primary outline face");
+    let fontdb_id = primary
+        .source
+        .fontdb_id()
+        .expect("pinned primary is an outline");
+    let from_shaping = svc
+        .resolved_font_from_fontdb_id(fontdb_id, 14.0)
+        .expect("pinned primary has an exact replayable file");
+    assert_eq!(
+        from_shaping.id, primary.font.id,
+        "pinned file identity agrees across materialization paths"
+    );
     assert_eq!(from_shaping, primary.font);
 }
 
@@ -1867,9 +1937,7 @@ fn ascii_character_resolution_keeps_primary_face_that_lacks_the_glyph() {
             .unwrap_or(false);
         lacks_ascii_space.then_some((file, face.index))
     });
-    let Some((file, face_index)) = primary else {
-        return;
-    };
+    let (file, face_index) = primary.expect("pinned Symbols Nerd face lacks ASCII space");
     let requested_family = "neomacs-primary-without-ascii-space-fixture";
     svc.font_resolver
         .replace_backend(Box::new(FixedPrimaryFontBackend {
@@ -1915,14 +1983,12 @@ fn ascii_character_resolution_keeps_primary_face_that_lacks_the_glyph() {
 #[test]
 fn font_at_preserves_reverse_slant_from_platform_selection() {
     let mut svc = make_svc();
-    let Some((file, face_index)) = svc
+    let (file, face_index) = svc
         .font_system
         .db()
         .faces()
         .find_map(|face| fontdb_face_file(face).map(|file| (file, face.index)))
-    else {
-        return;
-    };
+        .expect("pinned catalog contains an exact outline file");
     svc.font_resolver
         .replace_backend(Box::new(FixedPrimaryFontBackend {
             file,
@@ -1948,26 +2014,26 @@ fn font_at_preserves_reverse_slant_from_platform_selection() {
 #[test]
 fn installed_symbols_only_primary_font_uses_fontconfig_metrics_without_ascii_fallback() {
     let family = "Symbols Nerd Font Mono";
-    let Some(platform) = crate::font::fontconfig::find_font_for_spec(
-        Some(family),
-        None,
-        None,
-        Some(FontWeight::Normal),
-        Some(FontSlant::Normal),
-        None,
-    ) else {
-        return;
-    };
-    if !platform.family.eq_ignore_ascii_case(family) {
-        return;
-    }
-    let Some(expected_file) = platform.file else {
-        return;
-    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
+    let platform = catalog
+        .native_fontconfig()
+        .find_font_for_spec(
+            Some(family),
+            None,
+            None,
+            Some(FontWeight::Normal),
+            Some(FontSlant::Normal),
+            None,
+        )
+        .expect("the pinned native Symbols Nerd Font Mono face");
+    assert_eq!(platform.family, family);
+    let expected_file = platform
+        .file
+        .expect("the pinned symbols face has a file identity");
 
     let expected = crate::font::probe::probe_font_px_metrics(&expected_file, 0, 10, None)
         .expect("fontconfig primary font should be measurable");
-    let mut svc = make_svc();
+    let mut svc = catalog.metrics_service();
     let actual = svc.font_metrics(family, 400, false, 10.0);
 
     assert_eq!(actual.ascent, expected.ascent as f32);
@@ -1994,37 +2060,42 @@ fn char_width_bold_vs_normal() {
 #[cfg(target_os = "linux")]
 #[test]
 fn installed_iosevka_digit_advance_is_fixed_across_weights() {
-    let resolver = crate::font::resolver::FontResolver::new(Box::new(
-        crate::font_backend::FontconfigBackend::default(),
-    ));
-    let Some(normal) = resolver.resolve_primary(
-        "Iosevka",
-        400,
-        FontSlant::Normal,
-        FontWidth::Normal,
-        crate::font_backend::FontSelectionSize::new(
-            13.0,
-            neomacs_display_protocol::geometry::DeviceScale::new(1.0).expect("unit scale"),
-        ),
-    ) else {
-        return;
-    };
-    let Some(bold) = resolver.resolve_primary(
-        "Iosevka",
-        700,
-        FontSlant::Normal,
-        FontWidth::Normal,
-        crate::font_backend::FontSelectionSize::new(
-            13.0,
-            neomacs_display_protocol::geometry::DeviceScale::new(1.0).expect("unit scale"),
-        ),
-    ) else {
-        return;
-    };
+    let fonts = neomacs_test_fonts::iosevka_33_2_9();
+    let catalog = crate::font::metrics::test_catalog::TestFontCatalog::from_files(&[
+        fonts.regular(),
+        fonts.bold(),
+    ])
+    .expect("pinned Iosevka regular and bold")
+    .to_native_fontconfig();
+    let mut svc = catalog.metrics_service();
+    let resolver = &svc.font_resolver;
+    let normal = resolver
+        .resolve_primary(
+            "Iosevka",
+            400,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            crate::font_backend::FontSelectionSize::new(
+                13.0,
+                neomacs_display_protocol::geometry::DeviceScale::new(1.0).expect("unit scale"),
+            ),
+        )
+        .expect("pinned Iosevka face resolves through the native backend");
+    let bold = resolver
+        .resolve_primary(
+            "Iosevka",
+            700,
+            FontSlant::Normal,
+            FontWidth::Normal,
+            crate::font_backend::FontSelectionSize::new(
+                13.0,
+                neomacs_display_protocol::geometry::DeviceScale::new(1.0).expect("unit scale"),
+            ),
+        )
+        .expect("pinned Iosevka face resolves through the native backend");
     assert_eq!(normal.family(), "Iosevka");
     assert_eq!(bold.family(), "Iosevka");
 
-    let mut svc = make_svc();
     let normal_width = svc.char_width('2', "Iosevka", 400, false, 10.0);
     let bold_width = svc.char_width('2', "Iosevka", 700, false, 10.0);
     let normal_realized = svc.select_font_for_char('2', "Iosevka", 400, false, 10.0);
@@ -2646,7 +2717,7 @@ fn two_fontsystems_identical_at_multiple_sizes() {
 
 #[test]
 fn buffer_size_does_not_affect_width() {
-    let mut fs = FontSystem::new();
+    let mut fs = crate::font::metrics::test_catalog::font_system();
     let font_size = 14.0;
     let line_height = font_size * 1.3;
     let metrics = safe_metrics(font_size, line_height);
@@ -3124,38 +3195,36 @@ fn portable_metric_fallback_stays_on_the_selected_face() {
 fn resolved_font_for_face_preserves_platform_named_instance() {
     use neovm_core::face::{FontSlant, FontWeight};
 
-    let Some(platform) = crate::font::fontconfig::find_font_for_spec(
-        Some("Noto Sans"),
-        None,
-        None,
-        Some(FontWeight::Bold),
-        Some(FontSlant::Normal),
-        None,
-    ) else {
-        tracing::info!("skipping: Noto Sans is not installed");
-        return;
-    };
-    let Some(platform_file) = platform.file.as_deref() else {
-        tracing::info!("skipping: platform did not expose the matched font file");
-        return;
-    };
+    // Only the variable Noto Sans assets are in this family. The native query
+    // must therefore return its named Bold selector rather than a static sibling.
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
+    let platform = catalog
+        .native_fontconfig()
+        .find_font_for_spec(
+            Some("Noto Sans"),
+            None,
+            None,
+            Some(FontWeight::Bold),
+            Some(FontSlant::Normal),
+            None,
+        )
+        .expect("pinned Noto Sans named Bold instance");
+    let platform_file = platform
+        .file
+        .as_deref()
+        .expect("pinned named-instance file");
     let platform_postscript = platform
         .postscript_name
-        .expect("an installed Fontconfig match must preserve its PostScript name");
-    if !platform_postscript.to_ascii_lowercase().contains("bold") {
-        tracing::info!("skipping: Noto Sans has no distinct bold instance");
-        return;
-    }
-    if platform.face_index >> 16 == 0 {
-        // The property under test is FreeType named-instance SELECTOR
-        // decoding. When a static Bold face is installed (common alongside
-        // the variable family), fontconfig legitimately prefers it and the
-        // match carries no instance selector — there is nothing to decode.
-        tracing::info!("skipping: platform Bold match is a static face, not a named instance");
-        return;
-    }
-
-    let mut svc = make_svc();
+        .as_deref()
+        .expect("pinned named-instance PostScript name")
+        .to_owned();
+    assert!(platform_postscript.to_ascii_lowercase().contains("bold"));
+    assert_ne!(
+        platform.face_index >> 16,
+        0,
+        "the fixed fixture must exercise a named instance"
+    );
+    let mut svc = catalog.metrics_service();
     // Frame face realization currently primes the platform file before the
     // finished-frame font table is materialized.  The exact realization
     // contract must survive that ordinary pipeline ordering.
@@ -3242,20 +3311,24 @@ fn scaled_noto_cjk_bold_ascii_advances_match_gnu_device_glyph_metrics() {
     // publish those same device advances back in logical pixels.
     let scale = neomacs_display_protocol::geometry::DeviceScale::new(1.75)
         .expect("1.75 is a valid display scale");
-    let mut svc = make_svc();
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
+    let mut svc = catalog.metrics_service();
     svc.set_device_scale(scale);
     let family = "Noto Sans CJK SC";
     let selected = svc
         .materialized_font_for_face(family, 700, false, 13.0)
         .expect("the journal's proportional bold font is installed");
-    let Some(file) = selected.font.identity.file_path.as_deref() else {
-        eprintln!("skipping: selected Noto CJK face has no file identity");
-        return;
-    };
-    if !file.contains("NotoSansCJK-VF.otf.ttc") {
-        eprintln!("skipping: GNU capture used NotoSansCJK-VF.otf.ttc, got {file}");
-        return;
-    }
+    let file = selected
+        .font
+        .identity
+        .file_path
+        .as_deref()
+        .expect("pinned CJK face has an exact file identity");
+    assert_eq!(
+        std::path::Path::new(file),
+        neomacs_test_fonts::noto_sans_cjk_variable(),
+        "the exact pinned CJK collection must be selected"
+    );
 
     let widths = svc.fill_ascii_widths(family, 700, false, 13.0);
     for (character, device_advance) in [
@@ -3361,22 +3434,22 @@ fn realize_frame_fonts_resolves_an_installed_symbols_only_primary_face() {
     use neomacs_display_protocol::glyph_matrix::FrameDisplayState;
 
     let family = "Symbols Nerd Font Mono";
-    let Some(platform) = crate::font::fontconfig::find_font_for_spec(
-        Some(family),
-        None,
-        None,
-        Some(FontWeight::Normal),
-        Some(FontSlant::Normal),
-        None,
-    ) else {
-        return;
-    };
-    if !platform.family.eq_ignore_ascii_case(family) {
-        return;
-    }
-    let Some(expected_file) = platform.file else {
-        return;
-    };
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
+    let platform = catalog
+        .native_fontconfig()
+        .find_font_for_spec(
+            Some(family),
+            None,
+            None,
+            Some(FontWeight::Normal),
+            Some(FontSlant::Normal),
+            None,
+        )
+        .expect("the pinned native Symbols Nerd Font Mono face");
+    assert_eq!(platform.family, family);
+    let expected_file = platform
+        .file
+        .expect("the pinned symbols face has a file identity");
 
     let face_id = FaceId::new(226);
     let mut state = FrameDisplayState::new(80, 24, 8.0, 16.0);
@@ -3385,7 +3458,7 @@ fn realize_frame_fonts_resolves_an_installed_symbols_only_primary_face() {
     face.font_size = 10.0;
     state.faces.insert(face_id, face);
 
-    let mut service = Some(make_svc());
+    let mut service = Some(catalog.metrics_service());
     realize_frame_fonts(&mut state, &mut service);
 
     let resolved_id = state.faces[&face_id]
@@ -3526,19 +3599,31 @@ fn realize_frame_char_fonts_stamps_cjk_fallback() {
 #[test]
 #[tracing_test::traced_test]
 fn resolved_font_for_char_preserves_platform_collection_face() {
-    let platform =
-        crate::font::fontconfig::match_font_for_char("Monospace", '好', true, 400, false)
-            .expect("installed CJK fallback");
-    let Some(platform_file) = platform.file.as_deref() else {
-        tracing::info!("skipping: fontconfig CJK fallback has no file identity");
-        return;
-    };
-    if platform.face_index == 0 {
-        tracing::info!("skipping: installed CJK fallback is not a collection face");
-        return;
-    }
-
-    let mut svc = make_svc();
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
+    let platform = catalog
+        .native_fontconfig()
+        .find_font_for_spec(
+            Some("Noto Sans CJK SC"),
+            None,
+            None,
+            Some(FontWeight::Normal),
+            Some(FontSlant::Normal),
+            None,
+        )
+        .expect("pinned native CJK SC collection face");
+    let platform_file = platform
+        .file
+        .as_deref()
+        .expect("pinned CJK collection file");
+    assert_ne!(
+        platform.face_index, 0,
+        "the fixed fixture must exercise a collection selector"
+    );
+    // Make the fallback tier explicit rather than relying on the host's CJK
+    // preference order. Selection still passes through the real native owner.
+    let mut eval = neovm_core::Context::new();
+    eval.eval_str("(let ((font-encoding-alist '((\".*\" unicode)))) (set-fontset-font t ?好 '(\"Noto Sans CJK SC\" . \"iso10646-1\")))").expect("explicit pinned CJK fontset tier");
+    let mut svc = catalog.metrics_service();
     let resolved = svc
         .resolved_font_for_char('好', "Monospace", 400, false, 14.0)
         .expect("resolved CJK fallback");
@@ -3554,9 +3639,18 @@ fn resolved_font_for_char_preserves_platform_collection_face() {
 #[cfg(target_os = "linux")]
 #[test]
 fn resolved_font_for_char_treats_platform_identity_as_authoritative() {
-    let platform =
-        crate::font::fontconfig::match_font_for_char("Monospace", '好', true, 400, false)
-            .expect("installed CJK fallback");
+    let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
+    let platform = catalog
+        .native_fontconfig()
+        .find_font_for_spec(
+            Some("Noto Sans CJK SC"),
+            None,
+            None,
+            Some(FontWeight::Normal),
+            Some(FontSlant::Normal),
+            None,
+        )
+        .expect("pinned native CJK SC identity");
     let platform_file = platform.file.expect("fontconfig file identity");
     let identity = ResolvedFontIdentity::from_file_with_variations(
         &platform_file,
@@ -3683,11 +3777,9 @@ fn realize_frame_fonts_publishes_shaped_clusters_for_composites() {
 
 #[test]
 fn pin_file_as_family_forces_cosmic_to_that_exact_file() {
-    let variable = "/nix/store/7lrhms8rphrd8ywphjbvjyll57pkim64-noto-fonts-2025.11.01/share/fonts/noto/NotoSans[wdth,wght].ttf";
-    if !std::path::Path::new(variable).exists() {
-        eprintln!("skipping: {variable} not present");
-        return;
-    }
+    let variable = neomacs_test_fonts::noto_sans_variable()
+        .to_str()
+        .expect("UTF-8 pinned Noto Sans variable path");
     let mut svc = make_svc();
 
     // Baseline: a plain bold "Noto Sans" request. With a static
@@ -3777,14 +3869,14 @@ fn glyph_vertical_metrics_match_canonical_font_selection_across_cache_changes() 
 
 #[test]
 fn ascii_worker_policy_keeps_unicode_font_caches_warm() {
-    let source = FontMetricsService::new();
+    let source = crate::font::metrics::test_catalog::metrics_service();
     let mut unicode = source
         .capture_worker_font_policy(&[("monospace", '中', 400, false, 13.0)], 4096)
         .unwrap();
     unicode.symbols.key.use_primary_font = true;
     unicode.symbols.symbol_ranges = vec![(0x4e2d, 0x4e2d)];
     let ascii = source.capture_worker_font_policy(&[], 4096).unwrap();
-    let mut worker = FontMetricsService::new();
+    let mut worker = crate::font::metrics::test_catalog::metrics_service();
     worker.install_worker_font_policy(&unicode);
     worker.font_metrics("monospace", 400, false, 13.0);
     let cached = worker.metrics_cache.len();

@@ -210,7 +210,7 @@ fn truncated_target_prefix_does_not_include_later_tall_face_or_reuse_its_coverag
         (put-text-property 3 4 'face 'query-tall-test))",
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let early_scope = WindowLayoutQueryScope::Position {
         target: LispCharPos1::new(1),
     };

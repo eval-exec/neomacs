@@ -35,7 +35,7 @@ fn two_windows() -> TwoWindows {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     // Initialize the real per-frame scheduler and first source fragment before
     // submitting any worker job. One fragment cannot trigger the four-row

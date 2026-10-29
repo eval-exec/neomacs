@@ -6,6 +6,10 @@
 
 mod catalog;
 mod core_text_calls;
+#[cfg(test)]
+mod test_registration;
+#[cfg(test)]
+pub(crate) use test_registration::ProcessFontRegistration;
 
 use super::native_asset_cache::NativeFontAssetCache;
 use super::{

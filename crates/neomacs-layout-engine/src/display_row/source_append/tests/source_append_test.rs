@@ -10490,7 +10490,7 @@ fn display_replacement_string_append_item_measures_source_text_from_active_face(
         8.0,
     )
     .expect("display property string item");
-    let mut font_metrics = Some(crate::font::metrics::FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
     let source_item = crate::display_item::DisplayItem::new(
         crate::display_item::SourceSpan::synthetic(11, 0, 3),
         RenderFaceRef::FaceId(FaceId::new(7)),

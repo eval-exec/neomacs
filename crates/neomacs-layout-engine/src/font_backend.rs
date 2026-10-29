@@ -27,6 +27,8 @@ mod windows;
 pub use linux::FontconfigBackend;
 #[cfg(target_os = "macos")]
 pub use macos::CoreTextBackend;
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) use macos::ProcessFontRegistration;
 #[cfg(windows)]
 pub use windows::DirectWriteBackend;
 
@@ -526,6 +528,24 @@ pub trait FontBackend: Send {
     #[cfg(test)]
     fn test_catalog(&self) -> crate::font::metrics::test_catalog::TestFontCatalogSource {
         crate::font::metrics::test_catalog::TestFontCatalogSource::System
+    }
+
+    #[cfg(test)]
+    fn test_foundry_for_file(&self, file: &str) -> Option<String> {
+        match self.test_catalog() {
+            crate::font::metrics::test_catalog::TestFontCatalogSource::System => {
+                #[cfg(target_os = "linux")]
+                return crate::font::fontconfig::foundry_for_file(file);
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = file;
+                    None
+                }
+            }
+            crate::font::metrics::test_catalog::TestFontCatalogSource::Fixture(catalog) => {
+                catalog.foundry_for_file(file)
+            }
+        }
     }
 
     fn match_font_spec(&self, query: &FontCandidateQuery) -> FontDriverMatch {

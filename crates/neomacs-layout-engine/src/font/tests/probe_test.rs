@@ -2,13 +2,9 @@ use super::*;
 
 /// Ground truth captured from the GNU Emacs 31.0.50 cairo build on this
 /// machine (Xvfb, `(font-info (find-font (font-spec :family ...)))`); see
-/// the render-boundary design notes. Each test skips when the nix-store
-/// font file is absent so the suite stays green on other machines.
+/// the render-boundary design notes. Immutable release assets make every
+/// expectation execute on hosts without a Nix-store font installation.
 fn assert_gnu_probe(file: &str, size: u32, expect: FontPxMetrics) {
-    if !std::path::Path::new(file).exists() {
-        eprintln!("skipping: {file} not present");
-        return;
-    }
     let got = probe_font_px_metrics(file, 0, size, None).expect("probe succeeds");
     assert_eq!(got, expect, "probe of {file} at px={size}");
 }
@@ -18,7 +14,9 @@ fn gnu_parity_noto_sans_px1() {
     // GNU font-info: "... 1 3 0 0 0 1 2 1 0 1" => size 1 height 3
     // max-width 1 ascent 2 descent 1 space-width 0 average-width 1.
     assert_gnu_probe(
-        "/nix/store/7lrhms8rphrd8ywphjbvjyll57pkim64-noto-fonts-2025.11.01/share/fonts/noto/NotoSans[wdth,wght].ttf",
+        neomacs_test_fonts::noto_sans_variable()
+            .to_str()
+            .expect("UTF-8 pinned Noto path"),
         1,
         FontPxMetrics {
             pixel_size: 1,
@@ -36,7 +34,9 @@ fn gnu_parity_noto_sans_px1() {
 fn gnu_parity_hack_px1() {
     // GNU font-info: "... 1 2 0 0 0 1 1 1 1 1".
     assert_gnu_probe(
-        "/nix/store/b7ybgcl00ak8q66bc0w15vfnyly4g13k-hack-font-3.003/share/fonts/truetype/Hack-Italic.ttf",
+        neomacs_test_fonts::hack_italic_3_003()
+            .to_str()
+            .expect("UTF-8 pinned Hack path"),
         1,
         FontPxMetrics {
             pixel_size: 1,
@@ -54,7 +54,10 @@ fn gnu_parity_hack_px1() {
 fn gnu_parity_dejavu_sans_mono_px1() {
     // GNU font-info: "... 1 2 0 0 0 1 1 1 1 1".
     assert_gnu_probe(
-        "/nix/store/b5gf37jp4y3965bp6x9wanzqchkkvbvs-dejavu-fonts-2.37/share/fonts/truetype/DejaVuSansMono-BoldOblique.ttf",
+        neomacs_test_fonts::dejavu_2_37()
+            .mono_bold_oblique()
+            .to_str()
+            .expect("UTF-8 pinned DejaVu path"),
         1,
         FontPxMetrics {
             pixel_size: 1,
@@ -70,11 +73,9 @@ fn gnu_parity_dejavu_sans_mono_px1() {
 
 #[test]
 fn noto_sans_named_instances_cover_thin_to_black() {
-    let file = "/nix/store/7lrhms8rphrd8ywphjbvjyll57pkim64-noto-fonts-2025.11.01/share/fonts/noto/NotoSans[wdth,wght].ttf";
-    if !std::path::Path::new(file).exists() {
-        eprintln!("skipping: {file} not present");
-        return;
-    }
+    let file = neomacs_test_fonts::noto_sans_variable()
+        .to_str()
+        .expect("UTF-8 pinned Noto path");
     let weights = named_instance_wght_values(file, 0);
     // GNU/fontconfig snap requests to these; the fvar table must expose the
     // standard weight ladder (no synthesized 350/950).

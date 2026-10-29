@@ -120,7 +120,7 @@ fn rows_lifetime_automatic_tty_and_cold_face_scopes_refuse() {
 #[test]
 fn rows_lifetime_font_metrics_service_refuses_before_capture() {
     let (context, frame, window, _) = fixture(true);
-    let engine = LayoutEngine::new();
+    let engine = crate::font::metrics::test_catalog::layout_engine();
     assert!(matches!(
         Producer::begin(&engine, &context, frame, window, rows()),
         Err(Refusal::FontServices)

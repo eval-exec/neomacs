@@ -12,14 +12,14 @@ fn assert_each_frame_matches_a_full_layout(text: &str, point_char: usize, forms:
     let (mut eval, frame_id, _buf, _window) = incr_editing_frame(text, 800, 600);
     eval.eval_str(&format!("(goto-char {})", point_char + 1))
         .expect("goto");
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     for form in forms {
         eval.eval_str(form)
             .unwrap_or_else(|error| panic!("{form}: {error:?}"));
         engine.layout_frame_rust(&mut eval, frame_id);
         let incremental = selected_window_layout_trace(&eval, &engine, frame_id);
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame_id);
         let reference = selected_window_layout_trace(&eval, &fresh, frame_id);
         assert_eq!(incremental, reference, "{form}");

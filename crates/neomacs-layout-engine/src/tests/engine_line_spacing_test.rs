@@ -5,8 +5,8 @@ use super::*;
 fn text_cursor_keeps_its_metrics_when_line_spacing_enlarges_the_row() {
     let (mut eval, frame, buffer, _window) = incr_editing_frame("alpha\nbeta\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);
-    let mut engine = LayoutEngine::new();
-    engine.enable_cosmic_metrics();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     let FrameLayoutAttempt::Prepared(unspaced) = engine.redisplay_frame_attempt(&mut eval, frame)
     else {
         panic!("unspaced frame should prepare");
@@ -41,8 +41,8 @@ fn text_cursor_keeps_its_metrics_when_line_spacing_enlarges_the_row() {
 fn newline_spacing_is_preserved_when_point_enters_an_empty_line() {
     let (mut eval, frame, _buffer, window) = incr_editing_frame("alpha\n\nbeta\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);
-    let mut engine = LayoutEngine::new();
-    engine.enable_cosmic_metrics();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     let rows = |engine: &mut LayoutEngine, eval: &mut Context| {
         let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(eval, frame)
         else {
@@ -69,8 +69,8 @@ fn newline_spacing_is_preserved_when_point_enters_an_empty_line() {
     eval.eval_str("(set-window-point (selected-window) 7)")
         .unwrap();
     let after = rows(&mut engine, &mut eval);
-    let mut fresh = LayoutEngine::new();
-    fresh.enable_cosmic_metrics();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut fresh);
     assert_eq!(
         after,
         rows(&mut fresh, &mut eval),
@@ -95,8 +95,8 @@ fn newline_spacing_is_preserved_when_point_enters_an_empty_line() {
 fn relative_default_line_spacing_uses_whole_pixels_without_moving_the_baseline() {
     let (mut eval, frame, _, window) = incr_editing_frame("alpha\n\nbeta\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);
-    let mut engine = LayoutEngine::new();
-    engine.enable_cosmic_metrics();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     let FrameLayoutAttempt::Prepared(unspaced) = engine.redisplay_frame_attempt(&mut eval, frame)
     else {
         panic!("unspaced frame should prepare");
@@ -115,8 +115,8 @@ fn relative_default_line_spacing_uses_whole_pixels_without_moving_the_baseline()
         "(setq default-text-properties '(line-spacing {factor}))"
     ))
     .unwrap();
-    let mut engine = LayoutEngine::new();
-    engine.enable_cosmic_metrics();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     let FrameLayoutAttempt::Prepared(output) = engine.redisplay_frame_attempt(&mut eval, frame)
     else {
         panic!("frame should prepare");
@@ -151,7 +151,7 @@ fn routed_row_keeps_tall_glyph_metrics_when_newline_returns_to_default_face() {
         .get_mut(buffer)
         .unwrap()
         .goto_emacs_byte_pos(neovm_core::buffer::EmacsBytePos::new(5 * line.len()));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let window = eval.frame_manager().get(frame).unwrap().selected_window;
     let retained = &engine.retained_window_matrices

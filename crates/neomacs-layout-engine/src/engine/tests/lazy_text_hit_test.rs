@@ -38,7 +38,7 @@ fn lazy_text_positions_are_the_eager_ones_and_resolve_alike() {
     // Short, long and empty lines: exact positions and row fallbacks both.
     let text = "short\n\nx\n(defun a-longer-line (arg) (list arg arg arg))\n\tindented\n".repeat(8);
     let (mut eval, frame_id, _buf, _window) = incr_editing_frame(&text, 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let eager = hit_index_with(
         PresentedTextPositionsMode::Eager,
         &mut eval,

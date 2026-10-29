@@ -53,7 +53,7 @@ fn fresh_rows(
     eval: &mut Context,
     frame_id: neovm_core::window::FrameId,
 ) -> Vec<(i64, Vec<String>)> {
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(eval, frame_id);
     frame_rows_text(&fresh)
 }
@@ -67,7 +67,7 @@ fn the_mini_window_stands_still_until_what_it_shows_changes() {
     let _still = StillGuard::on();
     let (mut eval, frame_id, _buf, _window) =
         incr_editing_frame(&"(some text)\n".repeat(20), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     assert_eq!(
         engine.last_layout_stats().mini_window_still,
@@ -150,7 +150,7 @@ fn text_written_into_the_idle_minibuffer_is_shown() {
         .buffers
         .find_buffer_by_name(" *Minibuf-0*")
         .expect("minibuffer buffer");
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     engine.layout_frame_rust(&mut eval, frame_id);
     assert_eq!(engine.last_layout_stats().mini_window_still, 1);
@@ -183,7 +183,7 @@ fn text_written_into_the_idle_minibuffer_is_shown() {
 fn the_mini_window_is_relaid_every_frame_with_the_knob_off() {
     set_mini_window_still_for_test(Some(false));
     let (mut eval, frame_id, _buf, _window) = incr_editing_frame("body\n", 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for _ in 0..3 {
         engine.layout_frame_rust(&mut eval, frame_id);
         assert_eq!(engine.last_layout_stats().mini_window_still, 0);

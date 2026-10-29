@@ -67,7 +67,7 @@ fn position_query_remeasures_point_dependent_header_height() {
     )
     .expect("header format");
 
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let before = engine
         .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
         .expect("viewport query converges")
@@ -165,7 +165,7 @@ fn position_query_remeasures_point_dependent_mode_line_height() {
     )
     .expect("mode-line format");
 
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let before = engine
         .query_window_layout(&mut eval, frame, window, WindowLayoutQueryScope::Viewport)
         .expect("viewport query converges")
@@ -219,7 +219,7 @@ fn position_query_remeasures_chrome_when_retained_height_leaves_no_body() {
     )
     .unwrap();
     move_point(&mut eval, frame, buffer, window, 1);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let tall = query(&mut eval, &mut engine, frame, window, 1);
     let retained = crate::window_layout::WindowChromeMetrics::from_snapshot(&tall);
     // Reproduce the accepted partition carried by a presentation, then resize
@@ -272,7 +272,7 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
         )
         .unwrap();
         move_point(&mut eval, frame, buffer, window, 1);
-        let mut engine = WindowLayoutQueryEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::query_engine();
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let observed = calls.clone();
         eval.install_window_layout_query(move |eval, frame, window, scope| {
@@ -375,7 +375,7 @@ fn position_query_propagates_deferred_chrome_exit_to_lisp() {
            (goto-char 1))",
     )
     .unwrap();
-    let mut engine = WindowLayoutQueryEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::query_engine();
     eval.install_window_layout_query(move |eval, frame, window, scope| {
         match engine.query_window_layout(eval, frame, window, scope) {
             Ok(query) => WindowLayoutQueryOutcome::Ready(query),

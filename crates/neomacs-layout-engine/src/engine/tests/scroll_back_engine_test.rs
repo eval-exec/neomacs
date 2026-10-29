@@ -45,7 +45,7 @@ fn scroll_and_compare(
     engine.layout_frame_rust(eval, frame_id);
     let stats = engine.last_layout_stats().clone();
     let incremental = selected_window_layout_trace(eval, engine, frame_id);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(eval, frame_id);
     let reference = selected_window_layout_trace(eval, &fresh, frame_id);
     assert_eq!(
@@ -59,7 +59,7 @@ fn scroll_and_compare(
 fn scrolling_back_one_line_walks_one_row_and_shifts_the_rest() {
     let _back = ScrollBackGuard::on();
     let (mut eval, frame_id, buf_id, window) = incr_editing_frame(&LINE.repeat(80), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 10, 20);
     let stats = scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 9, 20);
     assert_eq!(stats.scroll_windows, 1, "{stats:?}");
@@ -82,7 +82,7 @@ fn scrolling_back_one_line_walks_one_row_and_shifts_the_rest() {
 fn scrolling_back_several_lines_and_back_and_forth_stays_exact() {
     let _back = ScrollBackGuard::on();
     let (mut eval, frame_id, buf_id, window) = incr_editing_frame(&LINE.repeat(80), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 30, 40);
     for (start, point) in [(25, 40), (28, 40), (20, 30), (21, 30), (0, 10), (3, 10)] {
         scroll_and_compare(
@@ -101,7 +101,7 @@ fn scrolling_back_several_lines_and_back_and_forth_stays_exact() {
 fn scrolling_back_by_more_than_the_window_lays_out_in_full() {
     let _back = ScrollBackGuard::on();
     let (mut eval, frame_id, buf_id, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 150, 160);
     let stats = scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 50, 60);
     assert_eq!(stats.scroll_windows, 0, "{stats:?}");
@@ -112,7 +112,7 @@ fn explicitly_disabled_backward_scroll_lays_out_in_full() {
     set_scroll_back_for_test(Some(false));
     let _reset = ScrollBackGuard;
     let (mut eval, frame_id, buf_id, window) = incr_editing_frame(&LINE.repeat(80), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 10, 20);
     let stats = scroll_and_compare(&mut eval, &mut engine, frame_id, window, buf_id, 9, 20);
     assert_eq!(stats.scroll_windows, 0, "{stats:?}");
@@ -121,7 +121,7 @@ fn explicitly_disabled_backward_scroll_lays_out_in_full() {
 #[test]
 fn small_backward_scroll_reuses_rows_by_default() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 60, 68);
     let stats = scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 59, 67);
     assert_eq!(stats.scroll_windows, 1);
@@ -131,7 +131,7 @@ fn small_backward_scroll_reuses_rows_by_default() {
 #[test]
 fn page_sized_backward_scroll_avoids_speculative_reuse() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 60, 68);
     let stats = scroll_and_compare(&mut eval, &mut engine, frame, window, buffer, 30, 38);
     assert_eq!(stats.scroll_windows, 0);

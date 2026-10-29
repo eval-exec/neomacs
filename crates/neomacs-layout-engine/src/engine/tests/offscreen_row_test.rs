@@ -10,18 +10,7 @@ use crate::glyph_advance::GlyphAdvanceQuantization;
 use crate::row_layout::program::{RowProgram, RowProgramGeometry, RowProgramLimits};
 
 fn pinned_unicode_catalog() -> crate::font::metrics::test_catalog::TestFontCatalog {
-    crate::font::metrics::test_catalog::TestFontCatalog::from_files_with_serif(
-        &[
-            neomacs_test_fonts::noto_sans_mono_variable(),
-            neomacs_test_fonts::mplus_1_code_thin(),
-            neomacs_test_fonts::noto_sans_arabic_variable(),
-            neomacs_test_fonts::noto_sans_hebrew_variable(),
-            neomacs_test_fonts::noto_color_emoji_2_051(),
-            neomacs_test_fonts::noto_serif_variable(),
-        ],
-        "Noto Serif",
-    )
-    .expect("verified Unicode font catalog")
+    crate::font::metrics::test_catalog::standard_catalog().clone()
 }
 
 fn engine_with_pinned_catalog(
@@ -40,7 +29,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let display_window = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
     let retained = engine.retained_window_matrices[&display_window].clone();
@@ -203,7 +192,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
     {
         *force_start = true;
     }
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     let expected = fresh.retained_window_matrices[&display_window]
         .matrix
@@ -426,7 +415,7 @@ fn worker_capture_rejects_overlay_replacements_and_excessive_overlap() {
             .unwrap()
             .window_system = Some(Value::symbol("neomacs"));
         eval.eval_str(setup).unwrap();
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             engine.request_scroll_coverage(&eval, frame, window, CharPos0::new(2760)),
@@ -601,7 +590,7 @@ fn raised_buffer_rows_preserve_glyph_extents_with_and_without_wrapping() {
             (put-text-property 1 361 'display '(raise 0.25))",
         )
         .unwrap();
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let owner = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
         let rows = &engine.retained_window_matrices[&owner].matrix.rows;
@@ -642,7 +631,7 @@ fn unchanged_raised_cursor_reuses_its_authoritative_presentation() {
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(put-text-property 1 20 'display '(raise 0.25))")
         .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let expected = selected_window_layout_trace(&eval, &engine, frame);
     engine.layout_frame_rust(&mut eval, frame);
@@ -714,7 +703,7 @@ fn idle_capture_yields_between_rows_and_cancels_after_a_revision_change() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .begin_scroll_coverage(&eval, frame, window, CharPos0::new(120 * 14))
@@ -754,7 +743,7 @@ fn offscreen_capture_budget_ignores_unused_retained_matrix_capacity() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let window_id = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
     let retained = engine.retained_window_matrices.get_mut(&window_id).unwrap();
@@ -789,7 +778,7 @@ fn unchanged_redisplays_keep_retained_matrix_capacity_bounded() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let window_id = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
     let rows = engine.retained_window_matrices[&window_id]
@@ -928,7 +917,7 @@ fn idle_first_visit_projected_text(
             *force_start = true;
         }
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let before = selected_window_layout_trace(&eval, &engine, frame);
     let display_window = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
@@ -993,7 +982,7 @@ fn idle_first_visit_projected_text(
         engine.layout_frame_rust(&mut eval, frame);
         assert_eq!(engine.last_layout_stats().prepared_windows, 1);
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame);
         assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
         let fringes = |engine: &LayoutEngine| {
@@ -1095,7 +1084,7 @@ fn repeated_fractional_scroll_across_prepared_pages_matches_fresh_layout() {
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
     eval.frame_manager_mut().get_mut(frame).unwrap().char_height = 17.0;
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for pixels in (0..=96)
         .map(|step| step * 4)
         .chain((0..96).rev().map(|step| step * 4))
@@ -1125,7 +1114,7 @@ fn repeated_fractional_scroll_across_prepared_pages_matches_fresh_layout() {
         }
         engine.layout_frame_rust(&mut eval, frame);
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             actual,
@@ -1148,7 +1137,7 @@ fn idle_capture_finishes_while_the_viewport_keeps_moving() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let display_window = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
     let mut completed = false;
@@ -1178,7 +1167,7 @@ fn idle_capture_finishes_while_the_viewport_keeps_moving() {
     }
     assert!(completed, "viewport motion starved the offscreen worker");
     let actual = selected_window_layout_trace(&eval, &engine, frame);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
 }
@@ -1226,7 +1215,7 @@ fn idle_preparation_covers_unselected_windows_even_when_selected_rows_are_unsupp
             eval.eval_str("(put-text-property 1 (point-max) 'display \"replacement\")")
                 .unwrap();
         }
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let before = selected_window_layout_trace(&eval, &engine, frame);
         let owner = neomacs_display_protocol::types::DisplayWindowId::new(other.0 as i64);
@@ -1282,7 +1271,7 @@ fn moving_selected_window_does_not_starve_other_window_preparation() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let selected_owner = DisplayWindowId::new(selected.0 as i64);
     let other_owner = DisplayWindowId::new(other.0 as i64);
@@ -1400,7 +1389,7 @@ fn deleting_capture_owner_allows_remaining_window_preparation() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     assert!(engine.maintain_scroll_coverage(&eval).is_some());
     assert!(eval.frame_manager_mut().delete_window(frame, selected));
@@ -1443,7 +1432,7 @@ fn worker_capture_rejects_mutation_between_idle_steps() {
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(progn (setq worker-raise-spec (list 'raise 0.25)) (put-text-property 2761 3500 'display worker-raise-spec))").unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .begin_scroll_coverage(&eval, frame, window, CharPos0::new(2880))
@@ -1466,7 +1455,7 @@ fn worker_admission_rejects_mutation_after_capture() {
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(progn (setq worker-raise-spec (list 'raise 0.25)) (put-text-property 2761 3500 'display worker-raise-spec))").unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(2880))
@@ -1500,7 +1489,7 @@ fn idle_mutation_withdraws_published_worker_coverage() {
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(progn (setq worker-raise-spec (list 'raise 0.25)) (put-text-property 2761 3500 'display worker-raise-spec))").unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     // Establish idle ownership before manually requesting the distant page.
     engine.maintain_scroll_coverage(&eval);
@@ -1549,7 +1538,7 @@ fn buffer_newline_numeric_height_uses_default_font_for_factors() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let owner = DisplayWindowId::new(window.0 as i64);
     let first_row = |engine: &LayoutEngine| {
@@ -1633,7 +1622,7 @@ fn worker_keeps_complete_prefix_before_unsupported_rows() {
             ))
             .unwrap();
         }
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         engine
             .request_scroll_coverage(&eval, frame, window, CharPos0::new(start))
@@ -1699,7 +1688,7 @@ fn worker_keeps_complete_prefix_before_unsupported_rows() {
             "{boundary}"
         );
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             actual,
@@ -1753,7 +1742,7 @@ fn worker_admission_rejects_fontset_change_after_capture() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(2880))
@@ -1791,7 +1780,7 @@ fn worker_capture_rejects_fontset_change_between_idle_steps() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .begin_scroll_coverage(&eval, frame, window, CharPos0::new(2880))
@@ -1813,7 +1802,7 @@ fn idle_fontset_change_withdraws_published_worker_coverage() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     engine
@@ -1857,7 +1846,7 @@ fn ascii_worker_capture_does_not_measure_glyphs_on_evaluator() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     use crate::display_row::face_state::GLYPH_MEASURE_CALLS;
     GLYPH_MEASURE_CALLS.with(|calls| calls.set(0));
@@ -1888,7 +1877,7 @@ fn worker_admission_rejects_font_family_alternatives_after_capture() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(2880))
@@ -1921,7 +1910,7 @@ fn worker_admission_rejects_font_registry_alternatives_after_capture() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(2880))
@@ -1956,7 +1945,7 @@ fn unicode_worker_capture_does_not_measure_glyphs_on_evaluator() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     use crate::display_row::face_state::GLYPH_MEASURE_CALLS;
     GLYPH_MEASURE_CALLS.with(|calls| calls.set(0));
@@ -2071,7 +2060,7 @@ fn canonical_word_wrap_rewinds_source_end_and_output_pen_with_glyphs() {
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(setq word-wrap t)").unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let trace = selected_window_layout_trace(&eval, &engine, frame);
     let row = &trace.matrix_rows[0];
@@ -2460,7 +2449,7 @@ fn idle_capture_aligns_forward_wrapped_rows_to_physical_source_start() {
             .get_mut(frame)
             .unwrap()
             .window_system = Some(Value::symbol("neomacs"));
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let display_window = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
         let rows: Vec<_> = engine.retained_window_matrices[&display_window]
@@ -2768,7 +2757,7 @@ fn hidden_box_neighbour_face_does_not_enlarge_visible_rows() {
              (put-text-property 6 10 'invisible 'worker-hidden))"
         ))
         .unwrap();
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let owner = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
         engine.retained_window_matrices[&owner]
@@ -2795,7 +2784,7 @@ fn idle_worker_publishes_a_closed_prefix_before_full_page_capture() {
         (put-text-property 1 (point-max) 'display worker-raise-spec))",
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let before = selected_window_layout_trace(&eval, &engine, frame);
     for _ in 0..4 {
@@ -2865,7 +2854,7 @@ fn rich_visible_rows_do_not_clone_the_active_face_per_glyph() {
         (put-text-property 1 (point-max) 'display '(raise 0.2)))",
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     crate::display_row::face_state::take_active_face_clone_count();
     engine.layout_frame_rust(&mut eval, frame);
     let clones = crate::display_row::face_state::take_active_face_clone_count();
@@ -2892,7 +2881,7 @@ fn idle_precomputation_prioritizes_the_current_scroll_direction() {
             (120 * line.len() + 1) as i64,
             125 * line.len(),
         );
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while engine.maintain_scroll_coverage(&eval).is_some() {
@@ -2943,7 +2932,7 @@ fn idle_precomputation_prioritizes_the_current_scroll_direction() {
             );
         }
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame);
         assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
     }
@@ -3015,7 +3004,7 @@ fn check_active_capture_reversal(rich: bool, fractional: bool, prepared: bool, p
         }
     };
     place(&mut eval, origin, 8);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     assert!(engine.maintain_scroll_coverage(&eval).is_some());
     let owner = DisplayWindowId::new(window.0 as i64);
@@ -3162,7 +3151,7 @@ fn check_active_capture_reversal(rich: bool, fractional: bool, prepared: bool, p
         visible == selected_window_layout_trace(&eval, &engine, frame),
         "idle preparation must preserve the visible layout"
     );
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert!(
         visible == selected_window_layout_trace(&eval, &fresh, frame),
@@ -3231,7 +3220,7 @@ fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
         }
     };
     hide(&mut eval, 8);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     let mut prepared_start = origin - line.len();
@@ -3361,7 +3350,7 @@ fn check_fractional_reversal_prepared_edge(idle: bool, extend_again: bool) {
         );
     }
     assert_eq!(visible, selected_window_layout_trace(&eval, &engine, frame));
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(visible, selected_window_layout_trace(&eval, &fresh, frame));
 }
@@ -3407,7 +3396,7 @@ fn check_short_urgent_backward_bridge(rich: bool) {
         }
     };
     set_hidden(&mut eval, 8);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     set_hidden(&mut eval, 4);
@@ -3478,7 +3467,7 @@ fn check_short_urgent_backward_bridge(rich: bool) {
         visible == selected_window_layout_trace(&eval, &engine, frame),
         "bridge publication must preserve visible geometry"
     );
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert!(
         visible == selected_window_layout_trace(&eval, &fresh, frame),
@@ -3574,7 +3563,7 @@ fn check_paused_capture_resume(rich: bool, backward: bool, mutation: PausedCaptu
         }
     };
     set_hidden(&mut eval, 8);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     engine
@@ -3715,7 +3704,7 @@ fn check_paused_capture_resume(rich: bool, backward: bool, mutation: PausedCaptu
         visible == selected_window_layout_trace(&eval, &engine, frame),
         "paused work must preserve visible geometry"
     );
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert!(
         visible == selected_window_layout_trace(&eval, &fresh, frame),
@@ -3731,7 +3720,7 @@ fn repeated_idle_preview_preserves_a_complete_prepared_page() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine.maintain_scroll_coverage(&eval);
     let start = engine
@@ -3790,7 +3779,7 @@ fn backward_precomputation_connects_fragmented_lines_to_the_viewport() {
         (120 * line.len() + 1) as i64,
         121 * line.len(),
     );
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let before = selected_window_layout_trace(&eval, &engine, frame);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -3822,7 +3811,7 @@ fn repeated_idle_preview_preserves_a_longer_partial_prepared_page() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while engine.maintain_scroll_coverage(&eval).is_some() {
@@ -3952,7 +3941,7 @@ fn shared_rich_fixture_worker_prepares_the_overlay_line() {
     {
         *force_start = true;
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(start as usize + 1760))
@@ -4032,7 +4021,7 @@ fn captured_rich_worker_positions_preserve_connected_coverage() {
             *force_start = true;
             *vscroll = 0;
         }
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let end = engine.retained_window_matrices[&owner]
             .matrix
@@ -4118,7 +4107,7 @@ fn captured_rich_worker_positions_preserve_connected_coverage() {
                 "worker {source} reduced scroll headroom at {origin}: {original_headroom:?} -> {current_headroom:?}"
             );
         }
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame);
         assert_eq!(visible, selected_window_layout_trace(&eval, &fresh, frame));
     }
@@ -4132,7 +4121,7 @@ fn leaving_a_prepared_viewport_preserves_its_compositor_coverage() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(0))
@@ -4188,7 +4177,7 @@ fn scroll_history_does_not_evict_prepared_compositor_coverage() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(0))
@@ -4263,7 +4252,7 @@ fn connected_prepared_pages_export_a_bounded_surface_around_the_viewport() {
         {
             *force_start = true;
         }
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         for page in 0..8 {
             engine
@@ -4319,7 +4308,7 @@ fn full_height_worker_preview_finishes_acquisition() {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let owner = neomacs_display_protocol::types::DisplayWindowId::new(window.0 as i64);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -4368,7 +4357,7 @@ fn backward_bridge_connects(line: &str, width: u32, height: u32) {
         (120 * line.len() + 1) as i64,
         120 * line.len() + 5,
     );
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while engine.maintain_scroll_coverage(&eval).is_some() {
@@ -4439,7 +4428,7 @@ fn backward_bridge_connects(line: &str, width: u32, height: u32) {
         "the backward bridge must connect to existing coverage, not publish a disconnected prefix: {extended} >= {frontier}"
     );
     let actual = selected_window_layout_trace(&eval, &engine, frame);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
 }
@@ -4455,7 +4444,7 @@ fn distant_worker_bridges_do_not_evict_the_connected_viewport_seam() {
             .window_system = Some(Value::symbol("neomacs"));
         let anchor = 120 * line.len();
         scroll_window_to(&mut eval, frame, window, buffer, anchor as i64 + 1, anchor);
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let owner = DisplayWindowId::new(window.0 as i64);
         let visible_end = engine.retained_window_matrices[&owner]
@@ -4563,7 +4552,7 @@ fn distant_worker_bridges_do_not_evict_the_connected_viewport_seam() {
             "new full page must remain reusable after admission under bridge pressure"
         );
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame);
         assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
     }
@@ -4635,7 +4624,7 @@ fn check_backward_bridge_admission_under_overlapping_page_pressure(rich: bool) {
         *force_start = true;
         *vscroll = -4;
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.set_font_sizing(crate::font::sizing::FontSizing::wayland());
     engine.layout_frame_rust(&mut eval, frame);
     // Every cached page overlaps the visible source range, so its eviction
@@ -4719,7 +4708,7 @@ fn check_discarded_bridge_publication(pending: bool) {
         .window_system = Some(Value::symbol("neomacs"));
     let anchor = 120 * line.len();
     scroll_window_to(&mut eval, frame, window, buffer, anchor as i64 + 1, anchor);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let owner = DisplayWindowId::new(window.0 as i64);
     // Unique four-line pages exhaust the bounded cache. A farther page

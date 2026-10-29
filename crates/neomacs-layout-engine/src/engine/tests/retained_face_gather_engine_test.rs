@@ -153,7 +153,7 @@ fn observed_sync(
     let text = source();
     let (mut eval, frame_id, _buffer, _window) = incr_editing_frame(&text, 800, 600);
     prepare_faces(&mut eval, &text);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     activate_last_engine_presentation(&mut eval, &engine, frame_id);
     eval.eval_str("(setq prove-first-mode-count 0 prove-first-font-count 0)")
@@ -196,7 +196,7 @@ fn observed_sync(
         .unwrap();
     // A fresh engine re-walks the same Context and source; it cannot borrow the
     // measured engine's matrices or frame-face arena. No fontifiers are installed.
-    let mut full = LayoutEngine::new();
+    let mut full = crate::font::metrics::test_catalog::layout_engine();
     full.layout_frame_rust(&mut eval, frame_id);
     let canonical = frame_observation(&eval, &full, frame_id);
     // A fresh renderer also publishes an unused default-face definition. It
@@ -269,7 +269,7 @@ fn warmed_plan() -> (
     let text = source();
     let (mut eval, frame_id, _buffer, window) = incr_editing_frame(&text, 800, 600);
     prepare_faces(&mut eval, &text);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     activate_last_engine_presentation(&mut eval, &engine, frame_id);
     let retained = engine

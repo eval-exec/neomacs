@@ -128,7 +128,7 @@ fn assert_layout_mutation_with_host(
     eval.eval_str(&format!(r#"(progn (goto-char 1) {setup})"#))
         .unwrap();
     let mut engine = if graphical {
-        LayoutEngine::new()
+        crate::font::metrics::test_catalog::layout_engine()
     } else {
         LayoutEngine::new_without_font_metrics()
     };
@@ -155,7 +155,7 @@ fn assert_layout_mutation_with_host(
         .fresh_window_display_snapshot(frame, window, buffer)
         .is_some();
     let mut query_engine = if graphical {
-        WindowLayoutQueryEngine::new()
+        crate::font::metrics::test_catalog::query_engine()
     } else {
         WindowLayoutQueryEngine::new_without_font_metrics()
     };
@@ -179,7 +179,7 @@ fn assert_layout_mutation_with_host(
         .iter_points()
         .collect::<Vec<_>>();
     let mut full = if graphical {
-        LayoutEngine::new()
+        crate::font::metrics::test_catalog::layout_engine()
     } else {
         LayoutEngine::new_without_font_metrics()
     };
@@ -252,13 +252,16 @@ fn assert_decoration_mutation_invalidates_presentation(setup: &str, mutation: &s
             face.stipple.clone(),
         )
     };
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let before = render(&mut engine, &mut eval);
     assert_eq!(before, render(&mut engine, &mut eval));
     assert!(engine.last_layout_stats().reused_rows > 0);
     eval.eval_str(mutation).unwrap();
     let incremental = render(&mut engine, &mut eval);
-    let reference = render(&mut LayoutEngine::new(), &mut eval);
+    let reference = render(
+        &mut crate::font::metrics::test_catalog::layout_engine(),
+        &mut eval,
+    );
     assert_ne!(
         before, reference,
         "mutation must change the rendered decoration"
@@ -296,7 +299,7 @@ fn tall_stretch_prefix_reserves_vertical_space_before_next_line() {
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(setq line-prefix '(space :width 1 :height (60) :ascent 80))")
         .unwrap();
-    LayoutEngine::new().layout_frame_rust(&mut eval, frame);
+    crate::font::metrics::test_catalog::layout_engine().layout_frame_rust(&mut eval, frame);
     let snapshot = eval
         .fresh_window_display_snapshot(frame, window, buffer)
         .unwrap();
@@ -472,7 +475,8 @@ fn published_prefix_image_reserves_both_vertical_margins() {
         )
         .unwrap();
         let FrameLayoutAttempt::Prepared(state) =
-            LayoutEngine::new().redisplay_frame_attempt(&mut eval, frame)
+            crate::font::metrics::test_catalog::layout_engine()
+                .redisplay_frame_attempt(&mut eval, frame)
         else {
             panic!("image prefix must produce a presentation");
         };

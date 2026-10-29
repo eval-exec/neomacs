@@ -34,7 +34,7 @@ fn numbered_frame(mode: &str, loaded: bool) -> SyncFrame {
         SyncFrame {
             eval,
             frame_id,
-            engine: LayoutEngine::new(),
+            engine: crate::font::metrics::test_catalog::layout_engine(),
         }
     } else {
         SyncFrame::new(&text, at)

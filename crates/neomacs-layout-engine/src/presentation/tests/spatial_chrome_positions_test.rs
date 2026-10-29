@@ -2,7 +2,6 @@
 //! positions the whole-frame walk finds.
 
 use super::{ChromePositionSource, set_chrome_position_source_for_test};
-use crate::LayoutEngine;
 use neovm_core::emacs_core::{Context, Value};
 
 fn positions_both_ways(
@@ -88,7 +87,7 @@ fn laid_out_frame(
             )
             .expect("stacked windows");
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     engine
         .last_frame_display_state
@@ -127,7 +126,7 @@ fn row_walk_of_a_frame_without_chrome_strings_is_empty() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("no-chrome", 80, 24, buffer_id);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let state = engine
         .last_frame_display_state

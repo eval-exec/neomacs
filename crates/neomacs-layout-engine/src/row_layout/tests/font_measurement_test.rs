@@ -8,7 +8,7 @@ fn face() -> DisplayRowFace {
 
 #[test]
 fn cancellation_does_not_initialize_native_fonts() {
-    let mut source = FontMetricsService::new();
+    let mut source = crate::font::metrics::test_catalog::metrics_service();
     let faces = [face()];
     let snapshot = FontMeasurementSnapshot::capture(&faces, &mut source, &[]).unwrap();
     let mut worker = WorkerFontMeasurements::default();
@@ -63,7 +63,7 @@ fn worker_retains_the_pinned_catalog_and_rebuilds_for_another_owner() {
 
 #[test]
 fn changed_font_metrics_reject_worker_measurement() {
-    let mut source = FontMetricsService::new();
+    let mut source = crate::font::metrics::test_catalog::metrics_service();
     let faces = [face()];
     let mut snapshot = FontMeasurementSnapshot::capture(&faces, &mut source, &[]).unwrap();
     snapshot.receipts[0].ascent += 1.0;
@@ -76,7 +76,7 @@ fn changed_font_metrics_reject_worker_measurement() {
 
 #[test]
 fn font_receipts_are_bounded_before_submission() {
-    let mut source = FontMetricsService::new();
+    let mut source = crate::font::metrics::test_catalog::metrics_service();
     let faces = vec![face(); MAX_CACHED_FACES];
     assert!(matches!(
         FontMeasurementSnapshot::capture(&faces, &mut source, &[]),
@@ -86,7 +86,7 @@ fn font_receipts_are_bounded_before_submission() {
 
 #[test]
 fn worker_matches_captured_fonts_after_scale_change() {
-    let mut source = FontMetricsService::new();
+    let mut source = crate::font::metrics::test_catalog::metrics_service();
     let faces = [face()];
     let mut worker = WorkerFontMeasurements::default();
     for scale in [1.0, 1.5, 2.0, 1.0] {
@@ -99,7 +99,7 @@ fn worker_matches_captured_fonts_after_scale_change() {
 #[test]
 fn repeated_worker_unicode_queries_keep_native_font_caches_warm() {
     use crate::display_item::*;
-    let mut source = FontMetricsService::new();
+    let mut source = crate::font::metrics::test_catalog::metrics_service();
     let faces = [face()];
     let items = [DisplayItem::new(
         SourceSpan::synthetic(1, 0, 1),
@@ -132,7 +132,7 @@ fn repeated_worker_unicode_queries_keep_native_font_caches_warm() {
 
 #[test]
 fn worker_font_face_budget_counts_distinct_selections() {
-    let mut source = FontMetricsService::new();
+    let mut source = crate::font::metrics::test_catalog::metrics_service();
     let mut worker = WorkerFontMeasurements::default();
     for index in 0..MAX_CACHED_FACES {
         let mut current = face();

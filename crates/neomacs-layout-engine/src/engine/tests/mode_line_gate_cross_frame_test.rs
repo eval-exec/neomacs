@@ -23,7 +23,7 @@ fn an_edit_to_shared_text_shown_on_another_frame_evaluates_the_selected_mode_lin
         "GNU bset_redisplay refuses optimization 1 when the text is displayed twice across frames"
     );
     let incremental = rendered_mode_line_text(&engine);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(incremental, rendered_mode_line_text(&fresh));
 }

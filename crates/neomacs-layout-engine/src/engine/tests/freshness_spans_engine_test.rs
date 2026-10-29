@@ -77,7 +77,7 @@ fn assert_final_source_matches_full_producer(
          mode-line-format '(\"BOUNDARY\"))",
     )
     .expect("quiesce observers without changing their final body inputs");
-    let mut reference = LayoutEngine::new();
+    let mut reference = crate::font::metrics::test_catalog::layout_engine();
     reference.layout_frame_rust(eval, frame);
     activate_last_engine_presentation(eval, &reference, frame);
     assert_eq!(
@@ -100,7 +100,7 @@ fn freshness_spans_keep_unmarking_and_signaling_fontifier_refusals() {
                   {callback_result}))))"#,
         ))
         .expect("install unmarking fontifier");
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let events = boundary_events(&mut eval);
         assert_before(&events, "font", "chrome");
@@ -172,7 +172,7 @@ fn sparse_unmarking_fontifier_refreshes_earlier_faces_and_display_after_error() 
             .load(std::sync::atomic::Ordering::Relaxed);
         let refusal = force_rewind
             .then(|| crate::buffer_source::row_route::RoutedRowRefusalInjection::arm(1));
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         drop(refusal);
         if force_rewind {
@@ -215,7 +215,7 @@ fn sparse_unmarking_fontifier_refreshes_earlier_faces_and_display_after_error() 
         // observers which would repeat callbacks in the independent producer.
         eval.eval_str("(setq fontification-functions nil mode-line-format '(\"FONTADM\"))")
             .unwrap();
-        let mut reference = LayoutEngine::new();
+        let mut reference = crate::font::metrics::test_catalog::layout_engine();
         reference.layout_frame_rust(&mut eval, frame);
         activate_last_engine_presentation(&mut eval, &reference, frame);
         assert_eq!(
@@ -239,7 +239,7 @@ fn freshness_spans_keep_false_and_throwing_display_form_refusals() {
                        {form_result}) . "REPLACEMENT"))"#,
         ))
         .expect("install a false or throwing conditional display source");
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         assert_before(&boundary_events(&mut eval), "display", "chrome");
         assert_final_source_matches_full_producer(&mut eval, &engine, frame);
@@ -258,7 +258,7 @@ fn freshness_spans_keep_chrome_input_mutation_refusal() {
                      "BOUNDARY"))))"#,
     )
     .expect("install an input-changing late chrome formatter");
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     assert!(boundary_events(&mut eval).contains(&Value::symbol("chrome")));
     assert_final_source_matches_full_producer(&mut eval, &engine, frame);
@@ -277,7 +277,7 @@ fn freshness_spans_keep_scroll_hook_mutation_before_leaf_callbacks() {
           (setq mode-line-format '("BOUNDARY")))"#,
     )
     .expect("initial wrapped source");
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     activate_last_engine_presentation(&mut eval, &engine, frame);
     eval.eval_str(

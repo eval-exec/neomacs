@@ -63,7 +63,7 @@ impl MemoFrame {
             point_line * SOURCE_LINE.len() + 1
         ))
         .expect("goto");
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame_id);
         Self {
             eval,
@@ -127,7 +127,7 @@ impl MemoFrame {
         let stats = self.engine.last_layout_stats().clone();
         let incremental = selected_window_layout_trace(&self.eval, &self.engine, self.frame_id);
         let incremental_strings = self.chrome_strings();
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut self.eval, self.frame_id);
         let reference = selected_window_layout_trace(&self.eval, &fresh, self.frame_id);
         assert_eq!(

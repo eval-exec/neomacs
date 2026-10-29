@@ -1,50 +1,10 @@
 use super::CoreTextBackend;
 use crate::font::resolver::{FontEntityQuery, FontResolver};
 use crate::font_backend::FontFamilyName;
+use crate::font_backend::ProcessFontRegistration;
 use neovm_core::emacs_core::eval::FontSpecSelection;
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
-use objc2_core_foundation::{CFRetained, CFURL};
-use objc2_core_text::{
-    CTFontManagerRegisterFontsForURL, CTFontManagerScope, CTFontManagerUnregisterFontsForURL,
-};
 use std::path::Path;
-use std::ptr;
-
-/// Only unregister a registration successfully owned by this test. Retaining
-/// its URL and leaving the pinned file in place satisfies CoreText's lifetime
-/// contract; process scope cannot change another application's font catalog.
-struct ProcessFontRegistration(CFRetained<CFURL>);
-
-impl ProcessFontRegistration {
-    fn new(path: &Path) -> Self {
-        let url = CFURL::from_file_path(path).expect("pinned fixture file URL");
-        // SAFETY: the URL is retained throughout registration, the fixture is
-        // not moved, and the optional CFError output pointer is documented null.
-        assert!(
-            unsafe {
-                CTFontManagerRegisterFontsForURL(&url, CTFontManagerScope::Process, ptr::null_mut())
-            },
-            "CoreText must register the pinned Thin fixture for this process"
-        );
-        Self(url)
-    }
-}
-
-impl Drop for ProcessFontRegistration {
-    fn drop(&mut self) {
-        // SAFETY: this URL registered successfully with the same process scope;
-        // the retained URL is live and a null error-output pointer is permitted.
-        // Avoid a second panic during unwinding; process scope also bounds the
-        // registration lifetime if the OS reports an unregistration failure.
-        let _ = unsafe {
-            CTFontManagerUnregisterFontsForURL(
-                &self.0,
-                CTFontManagerScope::Process,
-                ptr::null_mut(),
-            )
-        };
-    }
-}
 
 fn fixture_name(face: &ttf_parser::Face<'_>, name_id: u16) -> Option<String> {
     face.names()

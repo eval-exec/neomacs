@@ -4,8 +4,8 @@ use super::*;
 fn x11_scroll_factor_is_published_with_each_accepted_viewport() {
     let (mut eval, frame, _, _) = incr_editing_frame("alpha\nbeta\n", 800, 240);
     realize_test_gui_frame(&mut eval, frame);
-    let mut engine = LayoutEngine::new();
-    engine.enable_cosmic_metrics();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     for (value, expected) in [("0.25", 0.25), ("2", 2.0), ("nil", 1.0)] {
         eval.eval_str(&format!("(setq x-scroll-event-delta-factor {value})"))
             .unwrap();

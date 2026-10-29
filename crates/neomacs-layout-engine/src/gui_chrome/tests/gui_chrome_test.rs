@@ -620,7 +620,7 @@ fn cjk_heading_bounds_and_popup_anchor_follow_real_font_advances() {
     use neomacs_display_protocol::frame_chrome::{
         ChromeBandRequest, FrameChrome, FrameChromeContent, FrameChromeKind, FramePoint, FrameSize,
     };
-    let mut fonts = crate::font::metrics::FontMetricsService::new();
+    let mut fonts = crate::font::metrics::test_catalog::metrics_service();
     let mut face = crate::neovm_bridge::ResolvedFace::default();
     face.font_size = 16.0;
     face.font_family = "monospace".into();

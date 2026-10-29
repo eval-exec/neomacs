@@ -145,7 +145,7 @@ fn run_with_policy(
         point + 1
     ))
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.allow_below_reuse = allow_below_reuse;
     engine.layout_frame_rust(&mut eval, frame_id);
     activate_last_engine_presentation(&mut eval, &engine, frame_id);
@@ -179,7 +179,7 @@ fn run_with_policy(
         // The reference render must not add callback effects to the measured
         // attempt; temporarily remove fontification callbacks for this check.
         eval.eval_str("(setq prove-first-saved-fontifiers fontification-functions fontification-functions nil)").unwrap();
-        let mut fresh = LayoutEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::layout_engine();
         fresh.layout_frame_rust(&mut eval, frame_id);
         let full = fresh.last_frame_display_state.as_ref().unwrap();
         assert_eq!(

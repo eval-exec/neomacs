@@ -78,7 +78,7 @@ fn bounded_live_source_keeps_the_cursor_only_replay() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("cursor-only-replay", 640, 160, buf_id);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
 
     // Nothing changes: the next pass classifies this window cursor-only.

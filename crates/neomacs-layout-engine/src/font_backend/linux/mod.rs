@@ -90,11 +90,52 @@ impl PlatformFontCandidate {
 #[derive(Debug, Default)]
 pub struct FontconfigBackend {
     catalog: catalog::FontconfigCatalogMonitor,
+    #[cfg(test)]
+    source: TestFontconfigSource,
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+enum TestFontconfigSource {
+    #[default]
+    System,
+    Fixture(crate::font::metrics::test_catalog::NativeCatalogAuthority),
+}
+
+#[cfg(test)]
+impl FontconfigBackend {
+    pub(crate) fn for_test_catalog(
+        authority: crate::font::metrics::test_catalog::NativeCatalogAuthority,
+    ) -> Self {
+        Self {
+            catalog: Default::default(),
+            source: TestFontconfigSource::Fixture(authority),
+        }
+    }
 }
 
 impl FontBackend for FontconfigBackend {
+    #[cfg(test)]
+    fn test_catalog(&self) -> crate::font::metrics::test_catalog::TestFontCatalogSource {
+        use crate::font::metrics::test_catalog::TestFontCatalogSource;
+        match &self.source {
+            TestFontconfigSource::System => TestFontCatalogSource::System,
+            TestFontconfigSource::Fixture(authority) => {
+                TestFontCatalogSource::Fixture(authority.catalog().clone())
+            }
+        }
+    }
     fn match_font_spec(&self, query: &FontCandidateQuery) -> super::FontDriverMatch {
         let matched = crate::font::fontconfig::fc_match_candidate(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
             query.scope.queried_family(),
             &query.charset_ranges,
             &query.languages,
@@ -117,15 +158,47 @@ impl FontBackend for FontconfigBackend {
     }
 
     fn list_families(&self) -> Vec<FontFamilyName> {
-        crate::font::fontconfig::list_families()
+        crate::font::fontconfig::list_families(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
+        )
     }
 
     fn resolve_family(&self, family: &str) -> String {
-        crate::font::fontconfig::resolve_family(family)
+        crate::font::fontconfig::resolve_family(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
+            family,
+        )
     }
 
     fn family_prefers_monospace(&self, family: &str) -> bool {
-        crate::font::fontconfig::family_prefers_monospace(family)
+        crate::font::fontconfig::family_prefers_monospace(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
+            family,
+        )
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
@@ -143,6 +216,15 @@ impl FontBackend for FontconfigBackend {
             );
         }
         crate::font::fontconfig::fc_list_candidates(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
             family,
             &charset_ranges,
             query.required.single_char().map(u32::from),
@@ -167,10 +249,27 @@ impl FontBackend for FontconfigBackend {
     }
 
     fn advance_catalog_generation(&mut self) {
-        crate::font::fontconfig::invalidate_catalog_caches();
+        crate::font::fontconfig::invalidate_catalog_caches(
+            #[cfg(test)]
+            match &self.source {
+                TestFontconfigSource::System => {
+                    crate::font::fontconfig::test_config::QueryOwner::System
+                }
+                TestFontconfigSource::Fixture(authority) => {
+                    crate::font::fontconfig::test_config::QueryOwner::Fixture(authority.config())
+                }
+            },
+        );
     }
 
     fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        #[cfg(test)]
+        match &self.source {
+            TestFontconfigSource::System => {}
+            TestFontconfigSource::Fixture(_) => {
+                return crate::font::catalog::FontCatalogChange::Unchanged;
+            }
+        }
         self.catalog.poll()
     }
 }

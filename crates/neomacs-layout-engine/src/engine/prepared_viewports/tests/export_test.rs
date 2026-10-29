@@ -21,7 +21,7 @@ fn conflicting_worker_paragraph_does_not_revoke_other_prepared_rows() {
     eval.eval_str("(goto-char 1) (set-window-start nil 1 t)")
         .unwrap();
     let owner = DisplayWindowId::new(window.0 as i64);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let current = engine.retained_window_matrices[&owner].clone();
     let body: Vec<_> = current

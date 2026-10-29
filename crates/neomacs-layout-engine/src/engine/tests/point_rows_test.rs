@@ -55,7 +55,7 @@ fn point_rows_mode_enabled(test: &str) -> bool {
 
 fn check_fresh(eval: &mut Context, engine: &LayoutEngine, frame: neovm_core::window::FrameId) {
     let actual = selected_window_layout_trace(eval, engine, frame);
-    let mut reference = LayoutEngine::new();
+    let mut reference = crate::font::metrics::test_catalog::layout_engine();
     reference.layout_frame_rust(eval, frame);
     assert_eq!(
         actual,
@@ -70,7 +70,7 @@ fn cursor_replay_shares_every_point_row() {
     }
     assert!(display_point_rows_mode().enabled());
     let (mut eval, frame, _, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let before = snapshot(&eval, frame, window);
     assert!(
@@ -102,7 +102,7 @@ fn edited_row_is_new_and_unchanged_rows_share_cells() {
     let (mut eval, frame, _, window) = incr_editing_frame(&LINE.repeat(200), 800, 600);
     eval.eval_str(&format!("(goto-char {})", 8 * LINE.len() + 4))
         .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let before = snapshot(&eval, frame, window);
     eval.eval_str("(insert \"x\")").unwrap();
@@ -124,7 +124,7 @@ fn scroll_and_prepared_page_replay_preserve_point_geometry() {
     }
     assert!(display_point_rows_mode().enabled());
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     scroll_window_to(&mut eval, frame, window, buffer, 1, 8 * LINE.len());
     engine.layout_frame_rust(&mut eval, frame);
     let first = snapshot(&eval, frame, window);

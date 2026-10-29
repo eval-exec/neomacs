@@ -23,7 +23,11 @@ fn circle_fixture() -> (Context, neovm_core::window::FrameId, LayoutEngine) {
           (put-text-property 1 10 'face '(:weight bold)))"#,
     )
     .expect("Org Superstar's composed heading and buffer-face-mode remapping");
-    (eval, frame_id, LayoutEngine::new())
+    (
+        eval,
+        frame_id,
+        crate::font::metrics::test_catalog::layout_engine(),
+    )
 }
 
 fn assert_circle_fonts(

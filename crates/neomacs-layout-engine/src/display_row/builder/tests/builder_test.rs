@@ -2495,14 +2495,13 @@ fn resolved_text_concrete_font_output_matches_on_an_evaluator_free_worker() {
     use crate::display_row::face_state::{
         DisplayRowFace, DisplayRowGlyphMeasurer, DisplayRowMeasurementMode,
     };
-    use crate::font::metrics::FontMetricsService;
     use crate::glyph_advance::GlyphAdvanceQuantization;
     use crate::neovm_bridge::ResolvedFace;
 
     fn produce(input: crate::row_layout::ResolvedTextInput) -> (GlyphRow, DisplayRowPosition) {
         // Each thread owns its font service. No live evaluator/font cache is
         // transferred, and the row writer sees only the captured text input.
-        let mut fonts = FontMetricsService::new();
+        let mut fonts = crate::font::metrics::test_catalog::metrics_service();
         let faces = [DisplayRowFace::from_resolved(
             FaceId::new(2),
             &ResolvedFace::default(),

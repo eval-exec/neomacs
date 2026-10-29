@@ -43,7 +43,7 @@ fn typing_after_the_layout_scrolled_to_point_reuses_the_window() {
         buf.set_buffer_local("mode-line-format", Value::string("ML"));
         buf.set_buffer_local("bidi-paragraph-direction", Value::symbol("left-to-right"));
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     redisplay(&mut eval, &mut engine, frame_id);
     let start_before = window_start_of(&eval, frame_id, window);
 
@@ -87,7 +87,7 @@ fn window_start_of(
 #[test]
 fn historical_start_resolution_does_not_replace_an_exact_scroll_replay() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     // Keep a historical page near the point-driven recenter target. The last
     // move still overlaps page zero, so the ordinary partial scroll consumes
     // the requested start exactly rather than recentering from stale end data.
@@ -108,7 +108,7 @@ fn historical_start_resolution_does_not_replace_an_exact_scroll_replay() {
         "an available partial scroll keeps its exact start"
     );
     let actual = selected_window_layout_trace(&eval, &engine, frame);
-    let mut reference = LayoutEngine::new();
+    let mut reference = crate::font::metrics::test_catalog::layout_engine();
     reference.layout_frame_rust(&mut eval, frame);
     assert_eq!(
         actual,

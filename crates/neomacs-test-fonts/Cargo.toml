@@ -17,5 +17,8 @@ tar.workspace = true
 thiserror.workspace = true
 zip.workspace = true
 
+[dev-dependencies]
+ttf-parser.workspace = true
+
 [lints]
 workspace = true

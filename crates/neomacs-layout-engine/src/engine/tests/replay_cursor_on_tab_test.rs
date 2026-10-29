@@ -33,13 +33,13 @@ fn a_cursor_put_back_on_a_reused_tab_is_one_column_wide() {
         .expect("bidi");
     eval.eval_str(&format!("(goto-char {})", line17 + 1))
         .expect("goto");
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     eval.eval_str("(put-text-property 80 84 'face 'bold)")
         .expect("face");
     engine.layout_frame_rust(&mut eval, frame_id);
     let incremental = selected_window_layout_trace(&eval, &engine, frame_id);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame_id);
     let reference = selected_window_layout_trace(&eval, &fresh, frame_id);
     crate::incremental_layout::edit_sync::set_edit_sync_mode_for_test(None);

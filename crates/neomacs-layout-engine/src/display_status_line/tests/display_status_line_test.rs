@@ -90,7 +90,7 @@ fn negative_box_line_width_draws_inside_without_increasing_chrome_row_height() {
 
 #[test]
 fn display_row_metrics_for_smaller_gui_face_do_not_inherit_default_descent() {
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
     let mut face = ResolvedFace::default();
     face.font_family = std::sync::Arc::from("default");
     face.font_size = 11.5;
@@ -256,7 +256,7 @@ fn proportional_chrome_test_face(
 }
 
 fn assert_matches_proportional_dot_width(actual: f32, label: &str) {
-    let mut metrics = FontMetricsService::new();
+    let mut metrics = crate::font::metrics::test_catalog::metrics_service();
     let expected = metrics.char_width('.', "Noto Sans", 400, false, 9.12871);
     assert!(
         expected > 0.0 && expected < 7.2,
@@ -290,7 +290,7 @@ fn window_chrome_gui_tab_and_mode_lines_use_font_backed_glyph_advances() {
         ),
     ] {
         let base_face = proportional_chrome_test_face(&face_resolver, &origin);
-        let mut font_metrics = Some(FontMetricsService::new());
+        let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
         let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
         let mut render_services =
             ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);
@@ -331,7 +331,7 @@ fn frame_tab_bar_gui_uses_font_backed_glyph_advances() {
     let face_resolver =
         FaceResolver::new(&table, 0x00ffffff, 0x000000, 14.0, Some("neo".to_string()));
     let base_face = proportional_chrome_test_face(&face_resolver, &DisplayOrigin::TabBar);
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
     let mut face_ids = FrameFaceAttempt::for_test_with_next_id(1);
     let mut render_services =
         ChromeRowRenderServices::new(&mut font_metrics, &face_resolver, &mut face_ids);

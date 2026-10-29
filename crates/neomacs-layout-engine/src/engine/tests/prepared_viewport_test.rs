@@ -5,7 +5,7 @@ const LINE: &str = "(defun f (a b) (+ a b))\n";
 #[test]
 fn returning_to_a_prepared_page_reuses_body_and_matches_fresh_layout() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for (step, start) in [0, 60, 0, 60, 0].into_iter().enumerate() {
         scroll_window_to(
             &mut eval,
@@ -43,7 +43,7 @@ fn returning_to_a_prepared_page_reuses_body_and_matches_fresh_layout() {
             );
         }
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut reference = LayoutEngine::new();
+        let mut reference = crate::font::metrics::test_catalog::layout_engine();
         reference.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             actual,
@@ -61,7 +61,7 @@ fn prepared_pages_are_invalidated_by_text_properties_and_layout_inputs() {
         "(setq tab-width 3)",
     ] {
         let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         for start in [0, 60] {
             scroll_window_to(
                 &mut eval,
@@ -78,7 +78,7 @@ fn prepared_pages_are_invalidated_by_text_properties_and_layout_inputs() {
         engine.layout_frame_rust(&mut eval, frame);
         assert_eq!(engine.last_layout_stats().prepared_windows, 0, "{change}");
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut reference = LayoutEngine::new();
+        let mut reference = crate::font::metrics::test_catalog::layout_engine();
         reference.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             actual,
@@ -91,7 +91,7 @@ fn prepared_pages_are_invalidated_by_text_properties_and_layout_inputs() {
 #[test]
 fn prepared_page_storage_evicts_old_pages_and_keeps_recent_pages() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(1200), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for start in (0..10).map(|page| page * 60).chain([0, 480]) {
         scroll_window_to(
             &mut eval,
@@ -116,7 +116,7 @@ fn prepared_page_storage_evicts_old_pages_and_keeps_recent_pages() {
 #[test]
 fn prepared_page_reconstructs_a_different_cursor_position() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for (start, point) in [(0, 8), (60, 68), (0, 12)] {
         scroll_window_to(
             &mut eval,
@@ -130,7 +130,7 @@ fn prepared_page_reconstructs_a_different_cursor_position() {
     }
     assert_eq!(engine.last_layout_stats().prepared_windows, 1);
     let actual = selected_window_layout_trace(&eval, &engine, frame);
-    let mut reference = LayoutEngine::new();
+    let mut reference = crate::font::metrics::test_catalog::layout_engine();
     reference.layout_frame_rust(&mut eval, frame);
     assert_eq!(
         actual,
@@ -141,7 +141,7 @@ fn prepared_page_reconstructs_a_different_cursor_position() {
 #[test]
 fn backward_scroll_into_prepared_coverage_reuses_rows_at_a_new_start() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for (step, start) in [0, 40, 5, 3, 7].into_iter().enumerate() {
         scroll_window_to(
             &mut eval,
@@ -161,7 +161,7 @@ fn backward_scroll_into_prepared_coverage_reuses_rows_at_a_new_start() {
             );
         }
         let actual = selected_window_layout_trace(&eval, &engine, frame);
-        let mut reference = LayoutEngine::new();
+        let mut reference = crate::font::metrics::test_catalog::layout_engine();
         reference.layout_frame_rust(&mut eval, frame);
         assert_eq!(
             actual,
@@ -174,7 +174,7 @@ fn backward_scroll_into_prepared_coverage_reuses_rows_at_a_new_start() {
 #[test]
 fn prepared_coverage_does_not_suppress_point_driven_recentering() {
     let (mut eval, frame, buffer, window) = incr_editing_frame(&LINE.repeat(500), 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     for start in [0, 10] {
         scroll_window_to(
             &mut eval,
@@ -191,7 +191,7 @@ fn prepared_coverage_does_not_suppress_point_driven_recentering() {
     engine.layout_frame_rust(&mut eval, frame);
     assert_eq!(engine.last_layout_stats().prepared_windows, 0);
     let actual = selected_window_layout_trace(&eval, &engine, frame);
-    let mut reference = LayoutEngine::new();
+    let mut reference = crate::font::metrics::test_catalog::layout_engine();
     reference.layout_frame_rust(&mut eval, frame);
     assert_eq!(
         actual,

@@ -29,7 +29,7 @@ fn basis<'a>(canonical: &'a ResolvedFace) -> DisplayHeightFaceBasis<'a> {
 fn height_adjusted_face_measures_the_scaled_font_when_a_service_is_available() {
     let _eval = neovm_core::emacs_core::Context::new();
     let canonical = face("Monospace", 13.0);
-    let mut service = FontMetricsService::new();
+    let mut service = crate::font::metrics::test_catalog::metrics_service();
 
     let measured = height_adjusted_face(
         &canonical,

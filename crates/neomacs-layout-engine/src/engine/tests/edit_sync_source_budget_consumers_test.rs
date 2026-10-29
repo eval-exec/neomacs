@@ -130,7 +130,7 @@ fn budget_consumer_step(frame: &mut SyncFrame, form: &str, expected_retries: Opt
             })
             .collect::<Vec<_>>()
     };
-    let mut full = LayoutEngine::new();
+    let mut full = crate::font::metrics::test_catalog::layout_engine();
     full.layout_frame_rust(&mut frame.eval, frame.frame_id);
     let reference = full.last_frame_display_state.as_ref().expect("full frame");
     assert_eq!(

@@ -25,7 +25,7 @@ fn type_and_layout(mode: TextSnapshotMode, keys: usize) -> (Vec<usize>, Vec<usiz
     let _mode = ModeGuard::force(mode);
     let text = "(defun f (a b) (+ a b))\n".repeat(60);
     let (mut eval, frame_id, buf_id, _window) = incr_editing_frame(&text, 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let edit_at = 10 * 24 + 5;
     eval.buffer_manager_mut()
@@ -67,7 +67,7 @@ fn a_snapshot_held_across_a_keystroke_is_counted_in_the_next_frame() {
     let _mode = ModeGuard::force(TextSnapshotMode::Share);
     let text = "(defun f (a b) (+ a b))\n".repeat(20);
     let (mut eval, frame_id, buf_id, _window) = incr_editing_frame(&text, 800, 600);
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let held = eval
         .buffer_manager()
@@ -95,7 +95,7 @@ fn shared_and_copied_snapshots_lay_out_identical_frames() {
         let _mode = ModeGuard::force(mode);
         let text = "(defun f (a b) (+ a b))\n\t\u{4e2d}\u{6587} tab\n".repeat(30);
         let (mut eval, frame_id, buf_id, _window) = incr_editing_frame(&text, 800, 600);
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame_id);
         // Descending byte positions, each on a character boundary of the
         // original text, so no insert moves a later one.

@@ -26,7 +26,7 @@
 //! The GSUB/GPOS `otf_capability` reader uses ttf-parser and is fully
 //! cross-platform (all three).
 
-use neomacs_display_protocol::font::FontVariationCoord;
+use neomacs_display_protocol::font::{FontBackendKind, FontVariationCoord, ResolvedFontIdentity};
 
 /// Metrics of one font file probed at an exact pixel size, shaped like the
 /// `font-info` elements GNU fills in `ftcrfont_open` + `font_open_entity`.
@@ -76,6 +76,153 @@ impl DeviceAsciiAdvances {
     }
 }
 
+/// Physical realization size, never a logical layout size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DeviceFontPixelSize(std::num::NonZeroU32);
+
+impl DeviceFontPixelSize {
+    fn new(device_pixels: u32) -> Result<Self, DeviceFontProbeError> {
+        std::num::NonZeroU32::new(device_pixels)
+            .map(Self)
+            .ok_or(DeviceFontProbeError::InvalidSize)
+    }
+
+    const fn get(self) -> u32 {
+        self.0.get()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FreeTypeFaceSelector(u32);
+
+#[derive(Clone, Copy, Debug)]
+enum DeviceFontWeight {
+    Default,
+    Explicit(f32),
+    LegacyBestEffort(f32),
+}
+
+/// Exact selected face and physical size for a native glyph measurement.
+/// Construction refuses native backends and coordinates this probe cannot replay.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ExactDeviceFontRequest<'a> {
+    file: &'a str,
+    selector: FreeTypeFaceSelector,
+    size: DeviceFontPixelSize,
+    weight: DeviceFontWeight,
+}
+
+#[derive(Clone, Copy)]
+enum DeviceVariationPolicy {
+    ExactGlyph,
+    ExistingAsciiBestEffort,
+}
+
+impl<'a> ExactDeviceFontRequest<'a> {
+    pub(crate) fn new(
+        identity: &'a ResolvedFontIdentity,
+        size: crate::font_backend::FontSelectionSize,
+    ) -> Result<Self, DeviceFontProbeError> {
+        Self::from_identity(identity, size, DeviceVariationPolicy::ExactGlyph)
+    }
+
+    /// Preserve the existing ASCII probe's weight-only, best-effort replay.
+    pub(crate) fn for_ascii(
+        identity: &'a ResolvedFontIdentity,
+        size: crate::font_backend::FontSelectionSize,
+    ) -> Result<Self, DeviceFontProbeError> {
+        Self::from_identity(
+            identity,
+            size,
+            DeviceVariationPolicy::ExistingAsciiBestEffort,
+        )
+    }
+
+    fn from_identity(
+        identity: &'a ResolvedFontIdentity,
+        size: crate::font_backend::FontSelectionSize,
+        policy: DeviceVariationPolicy,
+    ) -> Result<Self, DeviceFontProbeError> {
+        let selector = identity
+            .freetype_selector()
+            .ok_or(DeviceFontProbeError::UnsupportedBackend(identity.backend))?;
+        let file = identity
+            .file_path
+            .as_deref()
+            .ok_or(DeviceFontProbeError::MissingFile)?;
+        let mut weight = DeviceFontWeight::Default;
+        for coordinate in identity.variation_coords.iter().copied() {
+            if coordinate.tag() != u32::from_be_bytes(*b"wght") {
+                match policy {
+                    DeviceVariationPolicy::ExactGlyph => {
+                        return Err(DeviceFontProbeError::UnsupportedVariation(coordinate));
+                    }
+                    DeviceVariationPolicy::ExistingAsciiBestEffort => continue,
+                }
+            }
+            weight = match policy {
+                DeviceVariationPolicy::ExactGlyph => DeviceFontWeight::Explicit(coordinate.value()),
+                DeviceVariationPolicy::ExistingAsciiBestEffort => {
+                    DeviceFontWeight::LegacyBestEffort(coordinate.value())
+                }
+            };
+        }
+        Ok(Self {
+            file,
+            selector: FreeTypeFaceSelector(selector),
+            size: DeviceFontPixelSize::new(size.rounded_device_px())?,
+            weight,
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DeviceFontProbeError {
+    #[error("device glyph probe does not support backend {0:?}")]
+    UnsupportedBackend(FontBackendKind),
+    #[error("device glyph probe cannot replay coordinate {0:?}")]
+    UnsupportedVariation(FontVariationCoord),
+    #[error("selected font has no local file")]
+    MissingFile,
+    #[error("native glyph advance is outside the supported nonnegative pixel range")]
+    InvalidAdvance,
+    #[error("device font pixel size must be positive")]
+    InvalidSize,
+    #[error("selected FreeType face selector cannot be represented on this target")]
+    InvalidSelector,
+    #[error("selected font has no usable weight variation axis")]
+    UnavailableWeightAxis,
+    #[cfg(not(target_os = "linux"))]
+    #[error("this target has no Fontconfig device glyph probe")]
+    UnsupportedPlatform,
+    #[cfg(target_os = "linux")]
+    #[error(transparent)]
+    FreeType(#[from] freetype::Error),
+}
+
+/// One selected glyph's native advance, in the physical domain of its opened font.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DeviceGlyphAdvance {
+    device_pixel_size: DeviceFontPixelSize,
+    advance_px: i32,
+}
+
+impl DeviceGlyphAdvance {
+    /// Zero is meaningful for combining marks and must not become a missing glyph.
+    pub(crate) fn logical_advance(
+        self,
+        scale: neomacs_display_protocol::geometry::DeviceScale,
+    ) -> f32 {
+        self.advance_px as f32 / scale.get()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeviceGlyphProbe {
+    Present(DeviceGlyphAdvance),
+    MissingGlyph,
+}
+
 // Real FreeType implementations accompany the Fontconfig adapter. In
 // particular, macOS must not reopen CoreText selections through FreeType.
 std::cfg_select! {
@@ -122,29 +269,83 @@ std::cfg_select! {
             device_pixel_size: u32,
             wght: Option<f32>,
         ) -> Option<DeviceAsciiAdvances> {
-            let library = Library::init().ok()?;
-            let mut face = library.new_face(file, face_selector as isize).ok()?;
-            if let Some(wght) = wght {
-                apply_wght_axis(&library, &mut face, wght);
-            }
-            let device_pixel_size = device_pixel_size.max(1);
-            face.set_pixel_sizes(device_pixel_size, device_pixel_size).ok()?;
+            let request = ExactDeviceFontRequest {
+                file,
+                selector: FreeTypeFaceSelector(face_selector),
+                size: DeviceFontPixelSize::new(device_pixel_size.max(1)).ok()?,
+                weight: match wght {
+                    Some(weight) => DeviceFontWeight::LegacyBestEffort(weight),
+                    None => DeviceFontWeight::Default,
+                },
+            };
+            probe_device_ascii_advances_for_request(&request).ok()
+        }
 
-            let mut widths = [0; 128];
-            let load_flags = LoadFlag::TARGET_LIGHT;
-            for byte in 32u8..127 {
-                if face.load_char(usize::from(byte), load_flags).is_err()
-                    && face.load_glyph(0, load_flags).is_err()
-                {
-                    continue;
+        pub(crate) fn probe_device_ascii_advances_for_request(
+            request: &ExactDeviceFontRequest<'_>,
+        ) -> Result<DeviceAsciiAdvances, DeviceFontProbeError> {
+            with_device_sized_face(request, |face| {
+                let mut widths = [0; 128];
+                for byte in 32u8..127 {
+                    let glyph = face.get_char_index(usize::from(byte)).unwrap_or(0);
+                    // GNU ftcrfont_open deliberately probes glyph 0 for missing ASCII.
+                    if let Ok(advance) = hinted_device_advance(face, glyph, request.size)
+                        .or_else(|_| hinted_device_advance(face, 0, request.size))
+                    {
+                        widths[usize::from(byte)] = advance.advance_px;
+                    }
                 }
-                let advance = face.glyph().advance().x;
-                widths[usize::from(byte)] = ((advance + 32) >> 6) as i32;
-            }
-            Some(DeviceAsciiAdvances {
-                device_pixel_size,
-                widths,
+                Ok(DeviceAsciiAdvances {
+                    device_pixel_size: request.size.get(),
+                    widths,
+                })
             })
+        }
+
+        /// Measure an ordinary selected character using GNU's native device grid.
+        /// A missing Unicode character is distinct from the ASCII glyph-0 fallback.
+        pub(crate) fn probe_device_glyph_advance(
+            request: &ExactDeviceFontRequest<'_>,
+            ch: char,
+        ) -> Result<DeviceGlyphProbe, DeviceFontProbeError> {
+            with_device_sized_face(request, |face| {
+                let Some(glyph) = face.get_char_index(ch as usize) else {
+                    return Ok(DeviceGlyphProbe::MissingGlyph);
+                };
+                hinted_device_advance(face, glyph, request.size).map(DeviceGlyphProbe::Present)
+            })
+        }
+
+        fn with_device_sized_face<T>(
+            request: &ExactDeviceFontRequest<'_>,
+            measure: impl FnOnce(&freetype::Face) -> Result<T, DeviceFontProbeError>,
+        ) -> Result<T, DeviceFontProbeError> {
+            let library = Library::init()?;
+            let selector = isize::try_from(request.selector.0)
+                .map_err(|_| DeviceFontProbeError::InvalidSelector)?;
+            let mut face = library.new_face(request.file, selector)?;
+            match request.weight {
+                DeviceFontWeight::Default => {}
+                DeviceFontWeight::Explicit(weight) => apply_wght_axis_checked(&library, &mut face, weight)?,
+                DeviceFontWeight::LegacyBestEffort(weight) => apply_wght_axis(&library, &mut face, weight),
+            }
+            face.set_pixel_sizes(request.size.get(), request.size.get())?;
+            measure(&face)
+        }
+
+        fn hinted_device_advance(
+            face: &freetype::Face,
+            glyph: u32,
+            size: DeviceFontPixelSize,
+        ) -> Result<DeviceGlyphAdvance, DeviceFontProbeError> {
+            face.load_glyph(glyph, LoadFlag::TARGET_LIGHT)?;
+            // GNU ftcrfont_glyph_extents uses lround of the hinted advance.
+            let rounded = face.glyph().advance().x.checked_add(32)
+                .ok_or(DeviceFontProbeError::InvalidAdvance)? >> 6;
+            let advance_px = i32::try_from(rounded)
+                .ok().filter(|advance| *advance >= 0)
+                .ok_or(DeviceFontProbeError::InvalidAdvance)?;
+            Ok(DeviceGlyphAdvance { device_pixel_size: size, advance_px })
         }
 
         /// The `wght` design-axis values of a variable font's fvar NAMED
@@ -252,28 +453,103 @@ std::cfg_select! {
                 .postscript_name()
         }
 
-        /// Set the `wght` design axis (OT axis units == CSS weight), leaving
-        /// all other axes at their defaults. No-op for non-variable fonts.
+        /// Legacy aggregate probes preserve their previous no-op-on-refusal behavior.
         fn apply_wght_axis(library: &Library, face: &mut freetype::Face, wght: f32) {
-            use freetype::freetype_sys as ft;
-            unsafe {
-                let raw = face.raw_mut() as *mut ft::FT_FaceRec;
-                let mut mm: *mut ft::FT_MM_Var = std::ptr::null_mut();
-                if ft::FT_Get_MM_Var(raw, &mut mm) != 0 || mm.is_null() {
-                    return;
-                }
-                let axis_count = (*mm).num_axis as usize;
-                let axes = std::slice::from_raw_parts((*mm).axis, axis_count);
-                let mut coords: Vec<ft::FT_Fixed> = axes.iter().map(|axis| axis.def).collect();
-                let wght_tag = u32::from_be_bytes(*b"wght") as ft::FT_ULong;
-                for (i, axis) in axes.iter().enumerate() {
-                    if axis.tag == wght_tag {
-                        coords[i] = (f64::from(wght) * 65536.0) as ft::FT_Fixed;
-                    }
-                }
-                let _ = ft::FT_Set_Var_Design_Coordinates(raw, axis_count as u32, coords.as_mut_ptr());
-                ft::FT_Done_MM_Var(library.raw(), mm);
+            let _ = replay_wght_axis(library, face, wght, WeightAxisRequirement::LegacyOptional);
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum WeightAxisRequirement {
+            Exact,
+            LegacyOptional,
+        }
+
+        #[must_use]
+        struct VariationDescriptor<'a> {
+            library: &'a Library,
+            descriptor: std::ptr::NonNull<freetype::freetype_sys::FT_MM_Var>,
+        }
+
+        static_assertions::assert_not_impl_any!(VariationDescriptor<'static>: Send, Sync);
+
+        impl std::fmt::Debug for VariationDescriptor<'_> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.debug_struct("VariationDescriptor")
+                    .field("descriptor", &self.descriptor)
+                    .finish_non_exhaustive()
             }
+        }
+
+        impl Drop for VariationDescriptor<'_> {
+            fn drop(&mut self) {
+                // SAFETY: FT_Get_MM_Var allocated this descriptor for this live library;
+                // this unique guard releases it exactly once after the last axis read.
+                unsafe {
+                    freetype::freetype_sys::FT_Done_MM_Var(
+                        self.library.raw(), self.descriptor.as_ptr(),
+                    );
+                }
+            }
+        }
+
+        /// The one weight replay implementation shared by aggregate/device probes.
+        /// Other coordinates are explicitly refused by ExactDeviceFontRequest.
+        fn apply_wght_axis_checked(
+            library: &Library,
+            face: &mut freetype::Face,
+            wght: f32,
+        ) -> Result<(), DeviceFontProbeError> {
+            replay_wght_axis(library, face, wght, WeightAxisRequirement::Exact)
+        }
+
+        fn replay_wght_axis(
+            library: &Library,
+            face: &mut freetype::Face,
+            wght: f32,
+            requirement: WeightAxisRequirement,
+        ) -> Result<(), DeviceFontProbeError> {
+            use freetype::freetype_sys as ft;
+            let raw = face.raw_mut() as *mut ft::FT_FaceRec;
+            let mut descriptor = std::ptr::null_mut();
+            // SAFETY: raw points to the live uniquely borrowed face; descriptor is
+            // a valid out pointer and is adopted immediately on success below.
+            let status = unsafe { ft::FT_Get_MM_Var(raw, &mut descriptor) };
+            if status != 0 {
+                return Err(freetype::Error::from(status).into());
+            }
+            let descriptor = std::ptr::NonNull::new(descriptor)
+                .ok_or(DeviceFontProbeError::UnavailableWeightAxis)?;
+            let owner = VariationDescriptor { library, descriptor };
+            // SAFETY: the owned FreeType descriptor remains live through this call.
+            let descriptor = unsafe { owner.descriptor.as_ref() };
+            let axes = if descriptor.num_axis == 0 {
+                &[][..]
+            } else {
+                if descriptor.axis.is_null() {
+                    return Err(DeviceFontProbeError::UnavailableWeightAxis);
+                }
+                // SAFETY: FreeType supplies num_axis initialized axis records owned
+                // by the descriptor guard, which outlives this borrowed slice.
+                unsafe { std::slice::from_raw_parts(descriptor.axis, descriptor.num_axis as usize) }
+            };
+            let mut coords: Vec<ft::FT_Fixed> = axes.iter().map(|axis| axis.def).collect();
+            let wght_tag = u32::from_be_bytes(*b"wght") as ft::FT_ULong;
+            match axes.iter().position(|axis| axis.tag == wght_tag) {
+                Some(index) => coords[index] = (f64::from(wght) * 65536.0) as ft::FT_Fixed,
+                None => match requirement {
+                    WeightAxisRequirement::Exact => return Err(DeviceFontProbeError::UnavailableWeightAxis),
+                    WeightAxisRequirement::LegacyOptional => {}
+                },
+            }
+            // SAFETY: raw is still the live face and coords contains exactly the
+            // descriptor's num_axis coordinates for the duration of the call.
+            let status = unsafe {
+                ft::FT_Set_Var_Design_Coordinates(raw, descriptor.num_axis, coords.as_mut_ptr())
+            };
+            if status != 0 {
+                return Err(freetype::Error::from(status).into());
+            }
+            Ok(())
         }
 
         fn probe_at_exact_px(face: &freetype::Face, pixel_size: u32) -> Option<FontPxMetrics> {
@@ -362,6 +638,19 @@ std::cfg_select! {
             _wght: Option<f32>,
         ) -> Option<DeviceAsciiAdvances> {
             None
+        }
+
+        pub(crate) fn probe_device_ascii_advances_for_request(
+            _request: &ExactDeviceFontRequest<'_>,
+        ) -> Result<DeviceAsciiAdvances, DeviceFontProbeError> {
+            Err(DeviceFontProbeError::UnsupportedPlatform)
+        }
+
+        pub(crate) fn probe_device_glyph_advance(
+            _request: &ExactDeviceFontRequest<'_>,
+            _ch: char,
+        ) -> Result<DeviceGlyphProbe, DeviceFontProbeError> {
+            Err(DeviceFontProbeError::UnsupportedPlatform)
         }
 
         /// Target without the FreeType probe: no named-instance enumeration.
@@ -560,3 +849,7 @@ fn otf_table_scripts(table: ttf_parser::opentype_layout::LayoutTable) -> Vec<Otf
 fn tag_string(tag: ttf_parser::Tag) -> String {
     String::from_utf8_lossy(&tag.to_bytes()).into_owned()
 }
+
+#[cfg(test)]
+#[path = "tests/device_glyph_probe_test.rs"]
+mod device_glyph_probe_tests;

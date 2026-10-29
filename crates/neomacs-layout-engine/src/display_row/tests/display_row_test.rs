@@ -2674,7 +2674,7 @@ fn render_display_item_source_row_uses_spec_tab_policy() {
 #[test]
 fn render_lisp_string_row_uses_explicit_tab_policy() {
     let _eval = Context::new();
-    let mut engine = crate::engine::LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let mut renderer = DisplayRowRenderer::new(
         &mut engine.font_metrics,
         DisplayRowMeasurementMode::LogicalCells,
@@ -2830,7 +2830,7 @@ fn display_row_gui_measurement_preserves_narrow_proportional_glyph_advance() {
     base.set_measured_char_width_px(7.2);
     let gui_face = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::ConcreteFont)
         .measurement_face(FaceId::new(8), &base, None, 7.2);
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
 
     let width = gui_face.advance_for_char(&mut font_metrics, '.', 7.2);
 
@@ -2849,7 +2849,7 @@ fn display_row_gui_renderer_preserves_narrow_proportional_glyph_advance() {
     base.font_weight = 400;
     base.set_measured_char_width_px(7.2);
     base.font_ascent = 10.0;
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::ConcreteFont);
     let table = FaceTable::new();
@@ -2896,7 +2896,7 @@ fn display_row_gui_measurement_preserves_narrow_proportional_text_run_advances()
     base.set_measured_char_width_px(7.2);
     let gui_face = DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::ConcreteFont)
         .measurement_face(FaceId::new(8), &base, None, 7.2);
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
 
     let measurement = gui_face.text_run_measurement(&mut font_metrics, ".agent-sh");
 
@@ -3060,7 +3060,7 @@ fn display_row_glyph_measurement_face_shapes_text_runs_as_measurement_plans() {
     let measurement_face =
         DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::ConcreteFont)
             .measurement_face(FaceId::new(8), &base, None, 8.0);
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
 
     let measurement = measurement_face.text_run_measurement(&mut font_metrics, "سلام");
 
@@ -3128,7 +3128,7 @@ fn display_row_glyph_measurer_builds_measured_complex_text_run_plan() {
     base.font_size = 14.0;
     base.set_measured_char_width_px(8.0);
     let faces = vec![DisplayRowFace::from_resolved(FaceId::new(8), &base)];
-    let mut font_metrics = FontMetricsService::new();
+    let mut font_metrics = crate::font::metrics::test_catalog::metrics_service();
     let mut measurer = DisplayRowGlyphMeasurer::new(&faces, Some(&mut font_metrics), 8.0);
 
     let measurement = measurer.text_run_advances_px("سلام", FaceId::new(8), 8.0);
@@ -3179,7 +3179,7 @@ fn display_row_glyph_measurer_measures_every_plain_latin_character_independently
     base.font_size = 14.0;
     base.set_measured_char_width_px(8.0);
     let faces = vec![DisplayRowFace::from_resolved(FaceId::new(8), &base)];
-    let mut font_metrics = FontMetricsService::new();
+    let mut font_metrics = crate::font::metrics::test_catalog::metrics_service();
     let mut measurer = DisplayRowGlyphMeasurer::new(&faces, Some(&mut font_metrics), 8.0);
 
     let measurement = measurer.text_run_advances_px("flake.nix", FaceId::new(8), 8.0);
@@ -3207,7 +3207,7 @@ fn display_row_glyph_measurement_face_builds_text_run_measurement_plan() {
     let measurement_face =
         DisplayRowMeasurementPolicy::for_mode(DisplayRowMeasurementMode::ConcreteFont)
             .measurement_face(FaceId::new(8), &base, None, 8.0);
-    let mut font_metrics = Some(FontMetricsService::new());
+    let mut font_metrics = Some(crate::font::metrics::test_catalog::metrics_service());
 
     let measurement = measurement_face.text_run_measurement(&mut font_metrics, "abc");
 
@@ -3854,7 +3854,7 @@ fn display_row_baseline_header_line_align_to_after_multibyte_prefix_uses_charact
 #[test]
 fn render_lisp_string_row_uses_face_specific_glyph_widths() {
     let _eval = Context::new();
-    let mut engine = crate::engine::LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     let mut renderer = DisplayRowRenderer::new(
         &mut engine.font_metrics,
         DisplayRowMeasurementMode::LogicalCells,

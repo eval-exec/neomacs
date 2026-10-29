@@ -27,7 +27,7 @@ fn scaled_buffer_synthetic_glyphs_have_their_own_realized_default_face() {
     };
     *hscroll = 3;
 
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let state = engine
         .last_frame_display_state
@@ -93,8 +93,8 @@ fn hscroll_faces_remain_distinct_across_scaled_and_unscaled_windows() {
         };
         *hscroll = 3;
     }
-    let mut engine = LayoutEngine::new();
-    engine.enable_cosmic_metrics();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    crate::font::metrics::test_catalog::enable_metrics(&mut engine);
     for _ in 0..2 {
         engine.layout_frame_rust(&mut eval, frame_id);
         let state = engine.last_frame_display_state.as_ref().unwrap();

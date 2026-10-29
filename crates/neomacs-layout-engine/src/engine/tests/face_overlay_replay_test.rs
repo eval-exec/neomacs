@@ -45,7 +45,7 @@ fn exercise(setup: &str, forms: &[(&str, usize)]) {
     )
     .unwrap();
     eval.eval_str(setup).unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     for (form, minimum_reused_rows) in forms {
         eval.eval_str("(setq face-overlay-evals 0)").unwrap();
@@ -82,7 +82,7 @@ fn assert_matches_full_layout(
 ) {
     let incremental = engine.last_frame_display_state.as_ref().unwrap().clone();
     let trace = selected_window_layout_trace(eval, engine, frame);
-    let mut full = LayoutEngine::new();
+    let mut full = crate::font::metrics::test_catalog::layout_engine();
     full.layout_frame_rust(eval, frame);
     let reference = full.last_frame_display_state.as_ref().unwrap();
     let actual_paint = paint(&incremental);
@@ -236,7 +236,7 @@ fn face_overlay_replay_works_with_a_fontification_hook() {
                   (put-text-property pos (min (point-max) (+ pos 40)) 'fontified t)))))"##,
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     assert!(
         eval.eval_str("fontify-calls").unwrap().as_fixnum().unwrap() > 0,
@@ -291,7 +291,7 @@ fn face_overlay_replay_retries_when_fontification_installs_a_face() {
           (put-text-property fontify-target (1+ fontify-target) 'fontified nil)))"##,
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let calls_after_first = eval.eval_str("fontify-calls").unwrap().as_fixnum().unwrap();
 
@@ -389,7 +389,7 @@ fn exercise_face_overlay_scroll(setup: &str, changes: &[(usize, &str, bool)]) {
     )
     .unwrap();
     eval.eval_str(setup).unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     for (start_line, change, should_reuse) in changes {
         eval.eval_str(change).unwrap();
@@ -554,7 +554,7 @@ fn face_overlay_scroll_revalidates_fontification_outside_overlay_damage() {
               (put-text-property pos (1+ pos) 'face '(:foreground "#ff0000"))))))))"##,
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     eval.eval_str(
         "(progn (setq scroll-fontify-arm t) (forward-line 1)
@@ -611,7 +611,7 @@ fn exercise_automatic_face_overlay_scroll(text: &str, setup: &str, check_measure
     )
     .unwrap();
     eval.eval_str(setup).unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let mut reused_scrolls = 0;
     for direction in [1, -1] {
@@ -692,7 +692,7 @@ fn long_session_list_navigation_converges_without_extra_scrolls() {
         (overlay-put moving-highlight 'face '(:background "#123456" :extend t)))"##,
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
 
     let mut stats = Vec::new();
@@ -774,7 +774,7 @@ fn point_only_automatic_scroll_reuses_retained_rows() {
         (goto-char (point-min)))"##,
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let mut scrolls = 0;
     for step in 0..60 {
@@ -845,7 +845,7 @@ fn mode_line_face_change_matches_full_layout(frame_kind: FaceChangeFrame) {
         FaceChangeFrame::Gui => realize_test_gui_frame(&mut eval, frame),
         FaceChangeFrame::Tty => install_window_fill_test_tty_palette(&mut eval),
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     for (label, form) in [
         (

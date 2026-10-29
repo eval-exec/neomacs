@@ -191,6 +191,11 @@ impl FontResolver {
         self.backend.test_catalog()
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_foundry_for_file(&self, file: &str) -> Option<String> {
+        self.backend.test_foundry_for_file(file)
+    }
+
     pub fn backend_kind(&self) -> FontBackendKind {
         self.backend.kind()
     }

@@ -284,7 +284,7 @@ fn folded_observation(on: bool) -> (FrameObservation, String, coverage::Counts) 
         panic!("leaf");
     };
     *force_start = true;
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let rows = trace_text_rows(&selected_window_layout_trace(&eval, &engine, frame_id));
     assert!(rows.iter().any(|row| row.contains("TAIL")));

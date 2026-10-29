@@ -1,9 +1,9 @@
 use super::{
     FONT_SPACING_MONO, FONT_SPACING_PROPORTIONAL, FcCharSetGuard, FcFontSetGuard, FcLangSetGuard,
     FcPatternGuard, GnuEntityProjection, ListedFont, SpacingClass, build_candidate_object_set,
-    candidate_score, family_affinity_score, family_search_order, fc_list_candidates,
-    fontconfig_handle, listed_font_from_raw_pattern, normalize_spacing, parse_fontconfig_weight,
-    select_find_font_candidate, spacing_score, style_weight,
+    candidate_score, family_affinity_score, family_search_order, listed_font_from_raw_pattern,
+    normalize_spacing, parse_fontconfig_weight, select_find_font_candidate, spacing_score,
+    style_weight,
 };
 use crate::font::policy::{
     combined_query_langs, query_charset_ranges, registry_hint, registry_query_chars,
@@ -16,25 +16,94 @@ use neovm_core::emacs_core::intern::{intern, resolve_sym};
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 #[cfg(unix)]
 use std::ffi::CString;
+
 #[cfg(unix)]
-use std::ptr;
+fn native_fixture() -> super::test_config::TestFontconfig {
+    crate::font::metrics::test_catalog::standard_catalog()
+        .native_fontconfig()
+        .fresh_cache_view()
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum ReferenceSelection {
+    FirstEightMetadata,
+    Covering(char),
+}
+
+#[cfg(unix)]
+fn native_reference_candidates(
+    config: &super::test_config::TestFontconfig,
+    pattern: &FcPatternGuard,
+    selection: ReferenceSelection,
+) -> Vec<ListedFont> {
+    config.with_reference_config(|borrow| {
+        let projection = match selection {
+            ReferenceSelection::FirstEightMetadata => GnuEntityProjection::Metadata,
+            ReferenceSelection::Covering(_) => GnuEntityProjection::MetadataAndCharset,
+        };
+        let objects = build_candidate_object_set(projection).expect("native reference object set");
+        // SAFETY: the borrowed owner holds its native mutex for this entire
+        // query; pattern and object-set guards remain live until its font set
+        // has been converted to owned Rust metadata.
+        let fonts = FcFontSetGuard(unsafe {
+            fontconfig_sys::FcFontList(
+                borrow.native_ptr().expect("validated native fixture"),
+                pattern.0,
+                objects.0,
+            )
+        });
+        assert!(!fonts.0.is_null());
+        // SAFETY: the font-set guard owns a live FcFontSet returned by the
+        // successful query. Reading its scalar count does not dereference its
+        // optional array pointer, which Fontconfig may leave NULL when empty.
+        let count = unsafe { (*fonts.0).nfont };
+        assert!(count >= 0, "Fontconfig returned a negative font-set count");
+        if count == 0 {
+            return Vec::new();
+        }
+        // SAFETY: the live set owns this field; the count is positive here.
+        let pointer = unsafe { (*fonts.0).fonts };
+        assert!(
+            !pointer.is_null(),
+            "a nonempty Fontconfig set requires its array"
+        );
+        let count = usize::try_from(count).expect("positive native font-set count");
+        // SAFETY: FcFontList owns this non-null, aligned count-element array
+        // until fonts drops. The native count has been checked before making
+        // any slice, including the empty/NULL case.
+        let patterns = unsafe { std::slice::from_raw_parts(pointer, count) };
+        match selection {
+            ReferenceSelection::FirstEightMetadata => patterns
+                .iter()
+                .copied()
+                .take(8)
+                .filter_map(listed_font_from_raw_pattern)
+                .collect(),
+            ReferenceSelection::Covering(ch) => patterns
+                .iter()
+                .copied()
+                .filter(|pattern| super::raw_pattern_supports_any_char(*pattern, &[ch as u32]))
+                .filter_map(listed_font_from_raw_pattern)
+                .collect(),
+        }
+    })
+}
 
 #[cfg(unix)]
 #[test]
 fn identical_native_candidate_queries_are_reused_until_catalog_changes() {
-    if fontconfig_handle().is_none() {
-        return;
-    }
-    super::invalidate_catalog_caches();
+    let config = native_fixture();
+    config.clear_caches();
     super::NATIVE_CANDIDATE_QUERIES.with(|count| count.set(0));
-    let first = fc_list_candidates(Some("DejaVu Sans Mono"), &[], None, &[]);
-    let second = fc_list_candidates(Some("DejaVu Sans Mono"), &[], None, &[]);
+    let first = config.list_candidates(Some("DejaVu Sans Mono"), &[], None, &[]);
+    let second = config.list_candidates(Some("DejaVu Sans Mono"), &[], None, &[]);
     assert_eq!(first, second);
     assert_eq!(super::NATIVE_CANDIDATE_QUERIES.with(|count| count.get()), 1);
-    super::invalidate_catalog_caches();
+    config.clear_caches();
     assert_eq!(
         first,
-        fc_list_candidates(Some("DejaVu Sans Mono"), &[], None, &[])
+        config.list_candidates(Some("DejaVu Sans Mono"), &[], None, &[])
     );
     assert_eq!(super::NATIVE_CANDIDATE_QUERIES.with(|count| count.get()), 2);
 }
@@ -151,7 +220,6 @@ fn gb2312_registry_pattern() -> (
         spec.lang.map(resolve_sym),
     );
 
-    let _ = fontconfig_handle().expect("fontconfig");
     let pattern = unsafe { fontconfig_sys::FcPatternCreate() };
     assert!(!pattern.is_null());
     let pattern = FcPatternGuard(pattern);
@@ -193,25 +261,19 @@ fn gb2312_registry_pattern() -> (
 #[test]
 fn registry_charset_queries_keep_gnu_fontconfig_candidate_order() {
     let (pattern, _charset, _langset, langs, ranges) = gb2312_registry_pattern();
-    let object_set =
-        build_candidate_object_set(GnuEntityProjection::Metadata).expect("gnu object set");
-    let fontset = unsafe { fontconfig_sys::FcFontList(ptr::null_mut(), pattern.0, object_set.0) };
-    assert!(!fontset.is_null());
-    let fontset = FcFontSetGuard(fontset);
-    let fonts =
-        unsafe { std::slice::from_raw_parts((*fontset.0).fonts, (*fontset.0).nfont as usize) };
-    let expected: Vec<(String, String)> = fonts
-        .iter()
-        .take(8)
-        .filter_map(|pattern| listed_font_from_raw_pattern(*pattern))
-        .map(|candidate| (candidate.matched.family, candidate.style))
-        .collect();
+    let config = native_fixture();
+    let expected: Vec<(String, String)> =
+        native_reference_candidates(&config, &pattern, ReferenceSelection::FirstEightMetadata)
+            .into_iter()
+            .map(|candidate| (candidate.matched.family, candidate.style))
+            .collect();
     assert!(
         !expected.is_empty(),
         "raw GNU-shaped fontconfig query should yield candidates"
     );
 
-    let actual: Vec<(String, String)> = fc_list_candidates(None, &ranges, None, &langs)
+    let actual: Vec<(String, String)> = config
+        .list_candidates(None, &ranges, None, &langs)
         .into_iter()
         .take(expected.len())
         .map(|candidate| (candidate.matched.family, candidate.style))
@@ -233,26 +295,16 @@ fn spacing_score_is_neutral_without_requested_spacing() {
 #[test]
 fn registry_candidates_preserve_coverage_for_required_character_filtering() {
     let (pattern, _charset, _langset, langs, ranges) = gb2312_registry_pattern();
-    let objects = build_candidate_object_set(GnuEntityProjection::MetadataAndCharset).unwrap();
-    let fonts = FcFontSetGuard(unsafe {
-        fontconfig_sys::FcFontList(ptr::null_mut(), pattern.0, objects.0)
-    });
-    assert!(!fonts.0.is_null());
-    let patterns =
-        unsafe { std::slice::from_raw_parts((*fonts.0).fonts, (*fonts.0).nfont as usize) };
+    let config = native_fixture();
     for ch in ['好', '\u{10ffff}'] {
-        let expected: Vec<_> = patterns
-            .iter()
-            .copied()
-            .filter(|pattern| super::raw_pattern_supports_any_char(*pattern, &[ch as u32]))
-            .filter_map(listed_font_from_raw_pattern)
-            .collect();
+        let expected =
+            native_reference_candidates(&config, &pattern, ReferenceSelection::Covering(ch));
         if ch == '好' {
             assert!(!expected.is_empty(), "installed CJK fallback required");
         } else {
             assert!(expected.is_empty());
         }
-        let actual = super::fc_query_candidates_uncached(
+        let actual = config.query_uncached(
             None,
             &ranges,
             Some(ch as u32),
@@ -293,7 +345,12 @@ fn registry_only_fontset_specs_try_requested_family_before_unspecified_fallback(
         width: None,
         definition: None,
     };
-    let order = family_search_order("monospace", &spec);
+    let config = native_fixture();
+    let order = family_search_order(
+        super::test_config::QueryOwner::Fixture(&config),
+        "monospace",
+        &spec,
+    );
     assert!(matches!(order.first(), Some(Some(_))));
     assert!(matches!(order.last(), Some(None)));
 }
@@ -309,7 +366,12 @@ fn constrained_fontset_specs_without_family_try_requested_family_first() {
         width: None,
         definition: None,
     };
-    let order = family_search_order("monospace", &spec);
+    let config = native_fixture();
+    let order = family_search_order(
+        super::test_config::QueryOwner::Fixture(&config),
+        "monospace",
+        &spec,
+    );
     assert!(matches!(order.first(), Some(Some(_))));
     assert!(matches!(order.last(), Some(None)));
 }
@@ -654,7 +716,8 @@ fn best_candidate_for_pass_preserves_each_equal_score_entity_ordinal() {
 #[cfg(unix)]
 #[test]
 fn fc_list_candidates_tolerates_empty_fontsets() {
-    let _ = fc_list_candidates(
+    let config = native_fixture();
+    let _ = config.list_candidates(
         Some("definitely-missing-neomacs-font-family"),
         &[(0x10FFFF, 0x10FFFF)],
         Some(0x10FFFF),
@@ -671,7 +734,10 @@ fn fontconfig_handle_initializes() {
 #[cfg(unix)]
 #[test]
 fn invalid_fontconfig_family_is_not_classified_as_monospace() {
-    assert!(!super::family_prefers_monospace("invalid\0family"));
+    assert!(!super::family_prefers_monospace(
+        super::test_config::QueryOwner::Fixture(&native_fixture()),
+        "invalid\0family"
+    ));
 }
 
 #[test]
@@ -690,14 +756,10 @@ fn default_subpixel_order_resolves_to_known_variant() {
 #[cfg(unix)]
 #[test]
 fn required_character_filters_native_enumeration_before_returning_patterns() {
+    let config = native_fixture();
     super::NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.set(0));
-    let candidates = super::fc_query_candidates_uncached(
-        None,
-        &[],
-        Some('好' as u32),
-        &[],
-        super::FcQueryKind::List,
-    );
+    let candidates =
+        config.query_uncached(None, &[], Some('好' as u32), &[], super::FcQueryKind::List);
     assert!(!candidates.is_empty(), "installed CJK fallback required");
     assert_eq!(
         super::NATIVE_UNSUPPORTED_PATTERNS.with(|count| count.get()),
@@ -709,6 +771,7 @@ fn required_character_filters_native_enumeration_before_returning_patterns() {
 #[cfg(unix)]
 #[test]
 fn required_character_discovery_preserves_postfiltered_candidate_order() {
+    let config = native_fixture();
     for family in [None, Some("DejaVu Sans Mono"), Some("DejaVu Serif")] {
         let pattern = FcPatternGuard(unsafe { fontconfig_sys::FcPatternCreate() });
         assert!(!pattern.0.is_null());
@@ -725,27 +788,11 @@ fn required_character_discovery_preserves_postfiltered_candidate_order() {
                 0
             );
         }
-        let objects = build_candidate_object_set(GnuEntityProjection::MetadataAndCharset).unwrap();
-        let fonts = FcFontSetGuard(unsafe {
-            fontconfig_sys::FcFontList(ptr::null_mut(), pattern.0, objects.0)
-        });
-        assert!(!fonts.0.is_null());
-        let patterns =
-            unsafe { std::slice::from_raw_parts((*fonts.0).fonts, (*fonts.0).nfont as usize) };
         for ch in ['a', 'é', '\u{301}', '好', 'ש', 'س', '👩', '\u{10ffff}'] {
-            let expected: Vec<_> = patterns
-                .iter()
-                .copied()
-                .filter(|pattern| super::raw_pattern_supports_any_char(*pattern, &[ch as u32]))
-                .filter_map(listed_font_from_raw_pattern)
-                .collect();
-            let actual = super::fc_query_candidates_uncached(
-                family,
-                &[],
-                Some(ch as u32),
-                &[],
-                super::FcQueryKind::List,
-            );
+            let expected =
+                native_reference_candidates(&config, &pattern, ReferenceSelection::Covering(ch));
+            let actual =
+                config.query_uncached(family, &[], Some(ch as u32), &[], super::FcQueryKind::List);
             assert_eq!(
                 actual.len(),
                 expected.len(),
@@ -756,4 +803,99 @@ fn required_character_discovery_preserves_postfiltered_candidate_order() {
             }
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn isolated_native_defaults_preserve_explicit_language_and_dpi() {
+    let config = native_fixture();
+    config.with_reference_config(|owner| {
+        // SAFETY: the returned pattern is owned immediately by its guard.
+        let pattern = FcPatternGuard(unsafe { fontconfig_sys::FcPatternCreate() });
+        assert!(!pattern.0.is_null());
+        // SAFETY: live exclusive pattern; Fontconfig copies these input values.
+        assert_ne!(
+            unsafe {
+                fontconfig_sys::FcPatternAddString(
+                    pattern.0,
+                    fontconfig::FC_LANG.as_ptr(),
+                    c"zh-cn".as_ptr().cast(),
+                )
+            },
+            0
+        );
+        // SAFETY: live exclusive pattern and the scalar is copied.
+        assert_ne!(
+            unsafe {
+                fontconfig_sys::FcPatternAddDouble(
+                    pattern.0,
+                    fontconfig_sys::constants::FC_DPI.as_ptr(),
+                    168.0,
+                )
+            },
+            0
+        );
+        owner.apply_defaults(&pattern).expect("fixture defaults");
+        assert_eq!(
+            super::raw_pattern_string(pattern.0, fontconfig::FC_LANG).as_deref(),
+            Some("zh-cn")
+        );
+        assert_eq!(
+            super::raw_pattern_double(pattern.0, fontconfig_sys::constants::FC_DPI),
+            Some(168.0)
+        );
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn isolated_native_catalogues_keep_query_and_foundry_caches_with_their_owner() {
+    let first = native_fixture();
+    let second = native_fixture();
+    let query = || {
+        (
+            Some("DejaVu Sans Mono"),
+            Vec::<(u32, u32)>::new(),
+            Vec::<String>::new(),
+        )
+    };
+    first.clear_caches();
+    second.clear_caches();
+    super::NATIVE_CANDIDATE_QUERIES.with(|n| n.set(0));
+    let (family, ranges, langs) = query();
+    let expected = first.list_candidates(family, &ranges, None, &langs);
+    assert!(
+        !expected.is_empty(),
+        "pinned native candidates are mandatory"
+    );
+    assert_eq!(super::NATIVE_CANDIDATE_QUERIES.with(|n| n.get()), 1);
+    assert_eq!(
+        second.list_candidates(family, &ranges, None, &langs),
+        expected
+    );
+    assert_eq!(
+        super::NATIVE_CANDIDATE_QUERIES.with(|n| n.get()),
+        2,
+        "an independent owner has an independent cache"
+    );
+    let file = expected[0]
+        .matched
+        .file
+        .as_deref()
+        .expect("file-backed native candidate");
+    assert!(
+        first.foundry_for_file(file).is_some(),
+        "pinned DejaVu exposes its real foundry"
+    );
+    assert_eq!(first.foundry_for_file(file), second.foundry_for_file(file));
+    first.clear_caches();
+    assert_eq!(
+        second.list_candidates(family, &ranges, None, &langs),
+        expected
+    );
+    assert_eq!(
+        super::NATIVE_CANDIDATE_QUERIES.with(|n| n.get()),
+        2,
+        "clearing one owner cannot invalidate another"
+    );
 }

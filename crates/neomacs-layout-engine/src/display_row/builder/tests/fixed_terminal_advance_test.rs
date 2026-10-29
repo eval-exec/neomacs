@@ -3,7 +3,6 @@ use super::*;
 use crate::display_row::face_state::{
     DisplayRowFace, DisplayRowGlyphMeasurer, DisplayRowMeasurementMode,
 };
-use crate::font::metrics::FontMetricsService;
 use crate::glyph_advance::GlyphAdvanceQuantization;
 use crate::neovm_bridge::ResolvedFace;
 use std::cell::Cell;
@@ -53,7 +52,7 @@ fn fixed_terminal_capability_requires_no_font_logical_mode_and_valid_face() {
             .fixed_terminal_cell_advances(FaceId::new(2), 8.0)
             .is_none()
     );
-    let mut fonts = FontMetricsService::new();
+    let mut fonts = crate::font::metrics::test_catalog::metrics_service();
     let logical_with_fonts = DisplayRowGlyphMeasurer::with_mode(
         &faces,
         Some(&mut fonts),

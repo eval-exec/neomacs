@@ -29,7 +29,7 @@ fn joining(remapped: bool, budget: bool) -> (LayoutStats, u64, usize) {
             );
         // Establish the retained prefix under the remap, rather than asking
         // this join test to prove an unrelated remap-change invalidation.
-        frame.engine = LayoutEngine::new();
+        frame.engine = crate::font::metrics::test_catalog::layout_engine();
         frame
             .engine
             .layout_frame_rust(&mut frame.eval, frame.frame_id);
@@ -113,7 +113,7 @@ fn source_budget_display_table_join_keeps_unknown_retry_and_fresh_output() {
         .current_buffer_mut()
         .unwrap()
         .set_buffer_local("buffer-display-table", table);
-    frame.engine = LayoutEngine::new();
+    frame.engine = crate::font::metrics::test_catalog::layout_engine();
     frame
         .engine
         .layout_frame_rust(&mut frame.eval, frame.frame_id);
@@ -150,7 +150,7 @@ fn source_budget_string_owned_row_end_keeps_unknown_retry_and_fresh_output() {
                (overlay-put overlay 'before-string \"PRE \"))",
         )
         .unwrap();
-    frame.engine = LayoutEngine::new();
+    frame.engine = crate::font::metrics::test_catalog::layout_engine();
     frame
         .engine
         .layout_frame_rust(&mut frame.eval, frame.frame_id);

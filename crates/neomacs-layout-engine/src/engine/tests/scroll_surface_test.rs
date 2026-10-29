@@ -51,7 +51,7 @@ fn check_overlapping_worker_wraps(rich: bool) {
     {
         *force_start = true;
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let owner = DisplayWindowId::new(window.0 as i64);
     let end = engine.retained_window_matrices[&owner]
@@ -103,7 +103,7 @@ fn check_overlapping_worker_wraps(rich: bool) {
             .len(),
         1
     );
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = crate::font::metrics::test_catalog::layout_engine();
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(visible, selected_window_layout_trace(&eval, &fresh, frame));
 }
@@ -116,7 +116,7 @@ fn exported_scroll_surface_moves_paint_and_source_hits_without_changing_viewport
         .get_mut(frame_id)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let window_id = DisplayWindowId::new(window.0 as i64);
     let old = engine.retained_window_matrices[&window_id].clone();
@@ -205,7 +205,7 @@ fn exported_scroll_surface_moves_paint_and_source_hits_without_changing_viewport
         line.len() as i64 + 1,
         line.len(),
     );
-    let mut canonical = LayoutEngine::new();
+    let mut canonical = crate::font::metrics::test_catalog::layout_engine();
     canonical.layout_frame_rust(&mut eval, frame_id);
     let expected = canonical
         .last_frame_display_state
@@ -245,7 +245,7 @@ fn exported_scroll_surface_rejects_non_contiguous_or_foreign_hit_geometry() {
         .get_mut(frame_id)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let window_id = DisplayWindowId::new(window.0 as i64);
     let rows: Vec<_> = engine.retained_window_matrices[&window_id]
@@ -305,7 +305,7 @@ fn exported_backward_coverage_keeps_nonnegative_storage_and_visible_row_hit_coor
         40 * line.len() as i64 + 1,
         40 * line.len(),
     );
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     engine
         .request_scroll_coverage(&eval, frame_id, window, CharPos0::new(30 * line.len()))
@@ -385,7 +385,7 @@ fn resolved_scroll_preview_for_window(other_window: bool) {
         .get_mut(frame)
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame);
     let owner = DisplayWindowId::new(window.0 as i64);
     let rows: Vec<_> = engine.retained_window_matrices[&owner]
@@ -469,7 +469,7 @@ fn wrapped_scroll_surface_exports_contiguous_visual_rows() {
         .unwrap()
         .window_system = Some(Value::symbol("neomacs"));
     eval.eval_str("(setq word-wrap t)").unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let owner = DisplayWindowId::new(window.0 as i64);
     let original = engine.retained_window_matrices[&owner].clone();
@@ -596,7 +596,7 @@ fn assert_scroll_surface_hover_projection(insertions: bool) {
         )
         .unwrap();
     }
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     engine.layout_frame_rust(&mut eval, frame_id);
     let owner = DisplayWindowId::new(window.0 as i64);
     let original = engine.retained_window_matrices[&owner].clone();
@@ -681,7 +681,7 @@ fn certified_worker_rows_answer_motion_without_a_new_walk() {
             .unwrap()
             .window_system = Some(Value::symbol("neomacs"));
         eval.eval_str(decoration).unwrap();
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let target = line.len() * 40;
         engine
@@ -701,7 +701,7 @@ fn certified_worker_rows_answer_motion_without_a_new_walk() {
             0,
             "certified rows should avoid synchronous interpretation"
         );
-        let mut fresh = WindowLayoutQueryEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::query_engine();
         let expected = fresh
             .query_window_layout(&mut eval, frame, window, scope)
             .unwrap();
@@ -755,7 +755,7 @@ fn certified_worker_pixels_answer_motion_without_a_new_walk() {
             .unwrap()
             .window_system = Some(Value::symbol("neomacs"));
         eval.eval_str(decoration).unwrap();
-        let mut engine = LayoutEngine::new();
+        let mut engine = crate::font::metrics::test_catalog::layout_engine();
         engine.layout_frame_rust(&mut eval, frame);
         let target = line.len() * 40;
         engine
@@ -775,7 +775,7 @@ fn certified_worker_pixels_answer_motion_without_a_new_walk() {
             0,
             "certified rows should avoid synchronous interpretation"
         );
-        let mut fresh = WindowLayoutQueryEngine::new();
+        let mut fresh = crate::font::metrics::test_catalog::query_engine();
         let expected = fresh
             .query_window_layout(&mut eval, frame, window, scope)
             .unwrap();

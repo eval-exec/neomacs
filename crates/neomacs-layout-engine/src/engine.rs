@@ -301,6 +301,13 @@ impl WindowLayoutQueryEngine {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test_catalog() -> Self {
+        Self {
+            inner: crate::font::metrics::test_catalog::layout_engine(),
+        }
+    }
+
     pub fn enable_cosmic_metrics(&mut self) {
         self.inner.enable_cosmic_metrics();
     }

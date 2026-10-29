@@ -25,7 +25,7 @@ fn completed_observation(
            (put-text-property start (point-max) 'fontified t)))))",
     )
     .unwrap();
-    let mut engine = LayoutEngine::new();
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
     match path {
         CompletedPath::Full => {}
         CompletedPath::Cursor | CompletedPath::Scroll => {
