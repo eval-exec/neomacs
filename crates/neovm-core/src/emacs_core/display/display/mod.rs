@@ -185,33 +185,14 @@ fn display_does_not_exist_error(display: &str) -> Flow {
 }
 
 fn format_get_device_terminal_arg_eval(eval: &super::eval::Context, value: &Value) -> String {
-    let window_id = match value.kind() {
-        ValueKind::Veclike(VecLikeType::Window) => Some(WindowId(value.as_window_id().unwrap())),
-        _ => None,
-    };
-
-    if let Some(window_id) = window_id
-        && let Some(frame_id) = eval.frames.find_window_frame_id(window_id)
-        && let Some(frame) = eval.frames.get(frame_id)
-        && let Some(window) = frame.find_window(window_id)
-    {
-        if let Some(buffer_id) = window.buffer_id()
-            && let Some(buffer) = eval.buffers.get(buffer_id)
-        {
-            return format!(
-                "#<window {} on {}>",
-                window_id.0,
-                buffer.name_runtime_string_owned()
-            );
-        }
-        return format!(
-            "#<window {} on {}>",
-            window_id.0,
-            frame.name_runtime_string_owned()
-        );
+    match value.as_window_id() {
+        Some(window) => super::error::format_window_handle_in_state(
+            &eval.buffers,
+            &eval.frames,
+            WindowId(window),
+        ),
+        None => super::print::print_value(value),
     }
-
-    super::print::print_value(value)
 }
 
 fn invalid_get_device_terminal_error_eval(eval: &super::eval::Context, value: &Value) -> Flow {

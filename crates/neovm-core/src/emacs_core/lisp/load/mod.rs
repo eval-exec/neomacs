@@ -6441,6 +6441,24 @@ pub fn create_bootstrap_evaluator_for_loadup(
         eval.set_lexical_binding(true);
         eval.clear_top_level_eval_state();
         let _ = eval.frames.delete_frame(bootstrap_frame_id);
+        match invocation {
+            LoadupInvocation::PreloadOnly => {
+                eval.frames
+                    .retire_source_preload_window_sequences()
+                    .map_err(|refusal| match refusal {
+                        crate::window::SourcePreloadWindowRetirementRefusal::LiveFramesRemain => {
+                            EvalError::signal(
+                                intern("error"),
+                                vec![Value::string(
+                                    "Source preload left live frames at runtime activation",
+                                )],
+                                None,
+                            )
+                        }
+                    })?;
+            }
+            LoadupInvocation::Dump(_) => {}
+        }
         clear_runtime_loader_state(&mut eval);
 
         Ok(eval)

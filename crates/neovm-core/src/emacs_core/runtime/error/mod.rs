@@ -1265,7 +1265,7 @@ pub(crate) fn format_opaque_handle_in_state(
         return Some("#<overlay in no buffer>".to_string());
     }
     if let Some(id) = value.as_window_id() {
-        return Some(format_window_handle_in_state(buffers, frames, id));
+        return Some(format_window_handle_in_state(buffers, frames, WindowId(id)));
     }
     if let Some(id) = threads.thread_id_from_handle(value) {
         return Some(format!("#<thread {id}>"));
@@ -1287,12 +1287,12 @@ pub(crate) fn format_opaque_handle_in_state(
     None
 }
 
-fn format_window_handle_in_state(
+pub(crate) fn format_window_handle_in_state(
     buffers: &crate::buffer::BufferManager,
     frames: &crate::window::FrameManager,
-    id: u64,
+    window_id: WindowId,
 ) -> String {
-    let window_id = WindowId(id);
+    let sequence = frames.window_sequence_number(window_id);
     if let Some(frame_id) = frames.find_window_frame_id(window_id)
         && let Some(frame) = frames.get(frame_id)
         && let Some(window) = frame.find_window(window_id)
@@ -1300,11 +1300,17 @@ fn format_window_handle_in_state(
         if let Some(buffer_id) = window.buffer_id()
             && let Some(buffer) = buffers.get(buffer_id)
         {
-            return format!("#<window {id} on {}>", buffer.name_runtime_string_owned());
+            return format!(
+                "#<window {sequence} on {}>",
+                buffer.name_runtime_string_owned()
+            );
         }
-        return format!("#<window {id} on {}>", frame.name_runtime_string_owned());
+        return format!(
+            "#<window {sequence} on {}>",
+            frame.name_runtime_string_owned()
+        );
     }
-    format!("#<window {id}>")
+    format!("#<window {sequence}>")
 }
 
 /// Build print options the way GNU's printer reads them.

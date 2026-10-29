@@ -3233,6 +3233,95 @@ fn bootstrap_runtime_cached_gui_surface_restores_window_system_surface() {
         eval.frames.frame_list().is_empty(),
         "display queries should not synthesize a fallback frame before host bootstrap"
     );
+    assert_gnu_runtime_window_sequence_after_preload(&mut eval);
+}
+
+fn assert_gnu_runtime_window_sequence_after_preload(eval: &mut Context) -> crate::window::WindowId {
+    use crate::window::{SplitDirection, SplitPlacement};
+    let frame_id = crate::emacs_core::window_cmds::seed_batch_startup_frame_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+    );
+    let frame = eval.frames.get(frame_id).expect("initial runtime frame");
+    let root = frame.selected_window;
+    let mini = frame.minibuffer_window.expect("runtime minibuffer");
+    assert_eq!(eval.frames.window_sequence_number(root).to_string(), "1");
+    assert_eq!(eval.frames.window_sequence_number(mini).to_string(), "2");
+    let scratch = eval
+        .buffers
+        .find_buffer_by_name("*scratch*")
+        .expect("scratch");
+    let additional = eval.frames.create_frame("F2", 80, 25, scratch);
+    let second = eval.frames.get(additional).expect("additional frame");
+    assert_eq!(
+        eval.frames
+            .window_sequence_number(second.selected_window)
+            .to_string(),
+        "3"
+    );
+    assert_eq!(
+        eval.frames
+            .window_sequence_number(second.minibuffer_window.expect("additional minibuffer"))
+            .to_string(),
+        "4"
+    );
+    let split = eval
+        .frames
+        .split_window(
+            frame_id,
+            root,
+            SplitDirection::Vertical,
+            scratch,
+            None,
+            SplitPlacement::AfterTarget,
+        )
+        .expect("split runtime root");
+    assert_eq!(eval.frames.window_sequence_number(split).to_string(), "6");
+    root
+}
+
+#[test]
+fn bootstrap_runtime_source_preload_retires_window_sequences_without_reusing_identity() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = create_bootstrap_evaluator_with_features(&["x", "neomacs"])
+        .expect("uncached source bootstrap");
+    activate_runtime_evaluator(&mut eval, RuntimeImageRole::Final)
+        .expect("activate source runtime");
+    assert!(
+        eval.frames.frame_list().is_empty(),
+        "source preload must leave host frame creation to startup"
+    );
+    // The source preloader's root was #1. Its escaped native handle remains
+    // dead after the runtime root is created, as GNU's nilled dump object does.
+    let retired = Value::make_window(1);
+    eval.set_variable("source-preload-retired-window", retired);
+    assert!(!eval.frames.is_live_window_id(crate::window::WindowId(1)));
+    let root = assert_gnu_runtime_window_sequence_after_preload(&mut eval);
+    assert_ne!(
+        retired.as_window_id(),
+        Some(root.0),
+        "preload identity must not alias the runtime root"
+    );
+    assert!(!eval.frames.is_live_window_id(crate::window::WindowId(1)));
+    assert_eq!(
+        eval_rendered(
+            &mut eval,
+            "(list (window-live-p source-preload-retired-window) (eq source-preload-retired-window (selected-window)))"
+        ),
+        "OK (nil nil)"
+    );
+    assert_eq!(
+        crate::emacs_core::error::print_value_with_eval(&eval, &retired),
+        "#<window 0>"
+    );
+    assert_eq!(
+        crate::emacs_core::error::print_value_with_eval(&eval, &Value::make_window(root.0)),
+        "#<window 1 on *scratch*>"
+    );
+    assert_eq!(
+        crate::emacs_core::error::print_value_bytes_with_eval(&eval, &retired),
+        b"#<window 0>"
+    );
 }
 
 #[test]

@@ -95,6 +95,58 @@ pub use scroll_bar::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WindowId(pub u64);
 
+const FIRST_WINDOW_ID: WindowId = WindowId(1);
+
+/// GNU's observable `window.sequence_number`, separate from native identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowSequenceNumber {
+    RetiredPreload,
+    Runtime(std::num::NonZeroU64),
+    /// Contextual diagnostics can be asked to print an unminted test handle.
+    /// It has no owner-issued sequence; preserve its native diagnostic ID.
+    Unminted(WindowId),
+}
+
+impl std::fmt::Display for WindowSequenceNumber {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RetiredPreload => 0_u64.fmt(formatter),
+            Self::Runtime(sequence) => sequence.fmt(formatter),
+            Self::Unminted(window) => window.0.fmt(formatter),
+        }
+    }
+}
+
+/// Native IDs stay monotone across source preload; only this printable origin
+/// advances at the closed, no-live-frames construction boundary.
+#[derive(Clone, Copy, Debug)]
+struct WindowSequenceOrigin(WindowId);
+
+impl WindowSequenceOrigin {
+    fn sequence_number(self, window: WindowId, next: WindowId) -> WindowSequenceNumber {
+        if window.0 < FIRST_WINDOW_ID.0 || window.0 >= next.0 {
+            return WindowSequenceNumber::Unminted(window);
+        }
+        match window.0.checked_sub(self.0.0) {
+            None => WindowSequenceNumber::RetiredPreload,
+            Some(offset) => offset
+                .checked_add(1)
+                .and_then(std::num::NonZeroU64::new)
+                .map_or(
+                    WindowSequenceNumber::Unminted(window),
+                    WindowSequenceNumber::Runtime,
+                ),
+        }
+    }
+}
+
+static_assertions::assert_eq_size!(WindowSequenceOrigin, WindowId);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourcePreloadWindowRetirementRefusal {
+    LiveFramesRemain,
+}
+
 /// Opaque frame identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FrameId(pub u64);
@@ -6695,6 +6747,7 @@ pub struct FrameManager {
     next_frame_id: u64,
     last_tty_frame_name: Option<TtyFrameNameOrdinal>,
     next_window_id: u64,
+    window_sequence_origin: WindowSequenceOrigin,
     old_selected_window: Option<WindowId>,
     /// Windows that were live and have been deleted, with the buffer each was
     /// showing when it went.
@@ -6759,7 +6812,8 @@ impl FrameManager {
             terminal_top_frames: HashMap::default(),
             next_frame_id: FRAME_ID_BASE,
             last_tty_frame_name: None,
-            next_window_id: 1,
+            next_window_id: FIRST_WINDOW_ID.0,
+            window_sequence_origin: WindowSequenceOrigin(FIRST_WINDOW_ID),
             old_selected_window: None,
             deleted_windows: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
@@ -6951,6 +7005,28 @@ impl FrameManager {
         };
         frame.set_generated_name_value(generated);
         true
+    }
+
+    /// Retire source-preload sequence numbers after its last frame is gone.
+    ///
+    /// GNU dumps old windows as distinct dead objects with zero sequence numbers
+    /// (`pdumper.c:2996-3002`) and recreates the initial root at sequence one
+    /// (`window.c:9143-9178`). Keep native IDs and deleted-window records intact:
+    /// an escaped preload handle must never alias the runtime's new root.
+    pub(crate) fn retire_source_preload_window_sequences(
+        &mut self,
+    ) -> Result<(), SourcePreloadWindowRetirementRefusal> {
+        if !self.frames.is_empty() {
+            return Err(SourcePreloadWindowRetirementRefusal::LiveFramesRemain);
+        }
+        self.window_sequence_origin = WindowSequenceOrigin(WindowId(self.next_window_id));
+        Ok(())
+    }
+
+    /// The only conversion from native identity to GNU's printable sequence.
+    pub(crate) fn window_sequence_number(&self, window: WindowId) -> WindowSequenceNumber {
+        self.window_sequence_origin
+            .sequence_number(window, WindowId(self.next_window_id))
     }
 
     /// Allocate a new window ID.

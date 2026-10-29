@@ -1360,6 +1360,22 @@ fn window_cursor_kind_codes_match_gnu_text_cursor_kinds() {
 }
 
 #[test]
+fn source_preload_window_sequence_retirement_refuses_live_frames() {
+    let mut frames = FrameManager::new();
+    let frame = frames.create_frame("preload", 80, 25, BufferId(1));
+    let root = frames.get(frame).expect("preload frame").selected_window;
+    assert_eq!(
+        frames.retire_source_preload_window_sequences(),
+        Err(SourcePreloadWindowRetirementRefusal::LiveFramesRemain),
+    );
+    assert_eq!(frames.window_sequence_number(root).to_string(), "1");
+    assert_eq!(
+        frames.window_sequence_number(WindowId(u64::MAX)),
+        WindowSequenceNumber::Unminted(WindowId(u64::MAX))
+    );
+}
+
+#[test]
 fn create_frame_and_window() {
     crate::test_utils::init_test_tracing();
     let mut mgr = FrameManager::new();
