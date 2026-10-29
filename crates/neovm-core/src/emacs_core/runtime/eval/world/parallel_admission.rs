@@ -328,5 +328,5 @@ mod heapborrow_tests {
 }
 
 #[cfg(test)]
-#[path = "parallel_admission/tests.rs"]
+#[path = "tests/parallel_admission_test.rs"]
 mod tests;
