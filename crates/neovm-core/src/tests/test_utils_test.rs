@@ -27,6 +27,37 @@ pub fn init_test_tracing() {
     crate::logging::init_for_tests();
 }
 
+/// The abbreviation the platform's own `gmtime_r` reports for UTC.
+///
+/// GNU's UTC zone has no `timezone_t`: `tzlookup` returns the NULL `utc_tz`
+/// and `emacs_localtime_rz` therefore calls `gmtime_r`
+/// (src/timefns.c:198-199, :249-254, :206-218).  The abbreviation is the C
+/// library's: glibc answers "GMT", Darwin answers "UTC".  Tests that observe
+/// the UTC zone must expect the host's answer rather than one platform's.
+pub fn host_utc_zone_abbreviation() -> String {
+    #[cfg(unix)]
+    {
+        let value: libc::time_t = 0;
+        let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+        // SAFETY: `tm` is a valid out-parameter for the call.
+        let converted = unsafe { libc::gmtime_r(&value, &mut tm) };
+        if !converted.is_null() && !tm.tm_zone.is_null() {
+            // SAFETY: `tm_zone` points at a NUL-terminated string owned by libc.
+            let name = unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) }
+                .to_string_lossy()
+                .into_owned();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+        "+00".to_string()
+    }
+    #[cfg(not(unix))]
+    {
+        "GMT".to_string()
+    }
+}
+
 /// The symbol name and byte-string data of a signal.
 ///
 /// Raw-byte file-name tests must compare GNU's `file-error` data byte for

@@ -23,6 +23,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod calendar;
 use calendar::{CalendarFieldOverflow, CalendarTime};
+#[cfg(unix)]
+mod mktime;
 mod time_zone_spec;
 use time_zone_spec::TimeZoneSpec;
 mod unix_timestamp;
@@ -1408,6 +1410,30 @@ fn effective_zone_rule(zone: Option<&Value>) -> Result<ZoneRule, Flow> {
     }
 }
 
+/// GNU's UTC zone has no `timezone_t`: `tzlookup` returns `utc_tz`, which is
+/// NULL, so `emacs_localtime_rz` falls through to `gmtime_r`
+/// (`src/timefns.c:198-199`, :249-254, :206-218).  The abbreviation is
+/// therefore the C library's own: glibc says "GMT", Darwin says "UTC".
+#[cfg(unix)]
+fn utc_zone_abbreviation(epoch_secs: i64) -> String {
+    let value: libc::time_t = epoch_secs as libc::time_t;
+    let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    // SAFETY: `tm` is a valid out-parameter for the call.
+    let converted = unsafe { libc::gmtime_r(&value, &mut tm) };
+    if converted.is_null() || tm.tm_zone.is_null() {
+        return numeric_zone_abbrev(0);
+    }
+    // SAFETY: `tm_zone` points at a NUL-terminated string owned by libc.
+    let name = unsafe { CStr::from_ptr(tm.tm_zone) }
+        .to_string_lossy()
+        .into_owned();
+    if name.is_empty() {
+        numeric_zone_abbrev(0)
+    } else {
+        name
+    }
+}
+
 #[cfg(unix)]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
@@ -1415,7 +1441,7 @@ fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
             let _guard = LocalTzReadGuard::new();
             local_offset_name_at_epoch(epoch_secs)
         }
-        ZoneRule::Utc => (0, "GMT".to_string()),
+        ZoneRule::Utc => (0, utc_zone_abbreviation(epoch_secs)),
         // GNU `tzlookup` builds a POSIX TZ string and hands it to libc
         // `tzalloc`; the resulting offset is therefore clamped to +/-24h and a
         // too-short/invalid abbreviation falls back to UTC.
@@ -1649,12 +1675,15 @@ fn mktime_with_isdst(calendar: CalendarTime, isdst: TmIsDst) -> Result<i64, Flow
     let mut tm = calendar.into_tm();
     tm.tm_isdst = isdst.to_c();
     tm.tm_wday = -1;
-    // SAFETY: tm points to an initialized, exclusively borrowed struct tm.
-    let value = unsafe { libc::mktime(&mut tm) };
-    if value == -1 && tm.tm_wday < 0 {
-        return Err(time_error_overflow());
+    // GNU's `Fencode_time` calls `mktime_z`, which on Apple resolves to
+    // gnulib's replacement and on glibc to the same algorithm in libc.  The
+    // port keeps the answer GNU's on both (Darwin's own `mktime` rejects every
+    // time before 1900; libc/mktime.c is the reference).
+    match mktime::mktime_local(&mut tm) {
+        Ok(seconds) => Ok(seconds),
+        Err(mktime::MktimeError::Overflow) => Err(time_error_overflow()),
+        Err(mktime::MktimeError::Invalid) => Err(time_spec_invalid()),
     }
-    Ok(value as i64)
 }
 
 #[cfg(not(unix))]

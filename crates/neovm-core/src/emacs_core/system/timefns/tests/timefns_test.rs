@@ -1001,7 +1001,10 @@ fn builtin_set_time_zone_rule_t() {
     let tz = builtin_current_time_zone(vec![]).unwrap();
     assert_eq!(
         tz,
-        Value::list(vec![Value::fixnum(0), Value::string("GMT")])
+        Value::list(vec![
+            Value::fixnum(0),
+            Value::string(crate::test_utils::host_utc_zone_abbreviation()),
+        ])
     );
     reset_tz_rule();
 }
@@ -1246,7 +1249,10 @@ fn builtin_current_time_zone_with_zone_arg() {
     let gmt = builtin_current_time_zone(vec![Value::NIL, Value::T]).unwrap();
     assert_eq!(
         gmt,
-        Value::list(vec![Value::fixnum(0), Value::string("GMT")])
+        Value::list(vec![
+            Value::fixnum(0),
+            Value::string(crate::test_utils::host_utc_zone_abbreviation()),
+        ])
     );
 
     let plus = builtin_current_time_zone(vec![Value::NIL, Value::fixnum(3600)]).unwrap();
@@ -1928,6 +1934,10 @@ mod time_zone_spec;
 #[cfg(test)]
 #[path = "unix_timestamp.rs"]
 mod unix_timestamp;
+
+#[cfg(unix)]
+#[path = "mktime.rs"]
+mod mktime;
 
 #[cfg(unix)]
 #[path = "cpu_soft_limit.rs"]

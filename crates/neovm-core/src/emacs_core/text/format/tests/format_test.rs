@@ -118,7 +118,10 @@ fn format_time_string_epoch_seconds_specifier_matches_gnu() {
 fn format_time_string_timezone() {
     crate::test_utils::init_test_tracing();
     let result = builtin_format_time_string(vec![Value::string("%Z"), Value::fixnum(0), Value::T]);
-    assert_eq!(result.unwrap().as_utf8_str().unwrap(), "GMT");
+    assert_eq!(
+        result.unwrap().as_utf8_str().unwrap(),
+        crate::test_utils::host_utc_zone_abbreviation()
+    );
 }
 
 #[test]
@@ -532,7 +535,12 @@ fn format_time_string_hash_case_flag_matches_gnu() {
     assert_eq!(fts("%#b"), "JUL");
     assert_eq!(fts("%#B"), "JULY");
     assert_eq!(fts("%#p"), "pm");
-    assert_eq!(fts("%#Z"), "gmt");
+    // `%#Z` lowercases the zone abbreviation; the UTC zone's abbreviation is
+    // the platform gmtime's ("GMT" on glibc, "UTC" on Darwin).
+    assert_eq!(
+        fts("%#Z"),
+        crate::test_utils::host_utc_zone_abbreviation().to_lowercase()
+    );
     // `^` uppercases.
     assert_eq!(fts("%^a"), "SUN");
     assert_eq!(fts("%^p"), "PM");

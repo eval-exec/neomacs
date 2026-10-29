@@ -6596,7 +6596,7 @@ fn vm_time_builtins_use_direct_timefns_dispatch() {
                  (time-equal-p 'not-a-time 'not-a-time)
                  (equal (current-time-string '(0 0 0 0) t)
                         "Thu Jan  1 00:00:00 1970")
-                 (equal (current-time-zone nil t) '(0 "GMT"))
+                 (and (member (car (cdr (current-time-zone nil t))) '("GMT" "UTC")) t)
                  (equal (encode-time '(0 0 0 1 1 1970 nil nil 0))
                         '(0 0))
                  (equal (decode-time '(0 0 0 0) t)
