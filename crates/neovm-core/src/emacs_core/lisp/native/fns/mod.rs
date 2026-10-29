@@ -17,6 +17,7 @@ use crate::emacs_core::builtins::{FromValue, StringDesignator};
 use crate::emacs_core::emacs_char;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
+use crate::emacs_core::platform_facts::{STRING_COLLATION, StringCollation};
 // bytes_to_unibyte_storage_string and encode_nonunicode_char_for_storage
 // imports removed — using emacs_char + LispString directly
 use super::value::*;
@@ -2078,6 +2079,14 @@ fn string_collate_compare(
 /// (string-collate-lessp S1 S2 &optional LOCALE IGNORE-CASE)
 pub(crate) fn builtin_string_collate_lessp(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("string-collate-lessp", &args, 2, 4)?;
+    if STRING_COLLATION == StringCollation::ByteComparison {
+        // GNU's macOS build compiles `return Fstring_lessp (s1, s2)'
+        // (src/fns.c:643-645): symbols are accepted, and LOCALE and
+        // IGNORE-CASE are neither read nor type-checked.
+        return crate::emacs_core::builtins::strings::builtin_string_lessp_2(
+            eval, args[0], args[1],
+        );
+    }
     let s1 = string_designator_text(eval, args[0])?;
     let s2 = string_designator_text(eval, args[1])?;
     let locale = require_optional_locale(args.get(2))?;
@@ -2091,6 +2100,13 @@ pub(crate) fn builtin_string_collate_lessp(eval: &mut Context, args: Vec<Value>)
 /// (string-collate-equalp S1 S2 &optional LOCALE IGNORE-CASE)
 pub(crate) fn builtin_string_collate_equalp(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("string-collate-equalp", &args, 2, 4)?;
+    if STRING_COLLATION == StringCollation::ByteComparison {
+        // GNU's macOS build compiles `return Fstring_equal (s1, s2)'
+        // (src/fns.c:692-694).
+        return crate::emacs_core::builtins::strings::builtin_string_equal_2(
+            eval, args[0], args[1],
+        );
+    }
     let s1 = string_designator_text(eval, args[0])?;
     let s2 = string_designator_text(eval, args[1])?;
     let locale = require_optional_locale(args.get(2))?;

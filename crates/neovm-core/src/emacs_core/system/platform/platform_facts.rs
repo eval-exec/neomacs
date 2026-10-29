@@ -106,6 +106,32 @@ pub(crate) enum PosixTzSemantics {
     Darwin,
 }
 
+/// Which `string-collate-lessp`/`string-collate-equalp` path GNU compiled.
+///
+/// GNU wraps the locale-aware path in
+/// `#if defined __STDC_ISO_10646__ || defined WINDOWSNT`
+/// (src/fns.c:628-645 for lessp, :679-694 for equalp).  glibc defines
+/// `__STDC_ISO_10646__`, so GNU/Linux parses LOCALE with `newlocale` and
+/// compares with `strcoll_l`; Darwin's libc does not define it, so macOS GNU
+/// compiles the `else` arm and returns `Fstring_lessp`/`Fstring_equal`
+/// directly -- LOCALE is not read, not even type-checked, and IGNORE-CASE is
+/// ignored.  The platform decides this at configure time; the answer is
+/// recorded once here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StringCollation {
+    /// The C library advertises ISO 10646 collation: LOCALE-aware path.
+    LocaleAware,
+    /// GNU compiles the byte-comparison fallback: LOCALE is ignored.
+    ByteComparison,
+}
+
+/// The collation path this binary's GNU reference was built with.
+pub(crate) const STRING_COLLATION: StringCollation = if cfg!(target_vendor = "apple") {
+    StringCollation::ByteComparison
+} else {
+    StringCollation::LocaleAware
+};
+
 /// The POSIX TZ rules of the C library this binary is linked against.
 pub(crate) const POSIX_TZ_SEMANTICS: PosixTzSemantics = if cfg!(target_os = "macos") {
     PosixTzSemantics::Darwin
