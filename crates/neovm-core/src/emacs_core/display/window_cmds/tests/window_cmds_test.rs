@@ -5421,6 +5421,47 @@ fn window_tree_navigation_and_normal_size_match_gnu_runtime() {
     );
 }
 
+/// A split that splices into an existing combination commits only the staged
+/// `new_normal`s: the untouched siblings keep their normal sizes, and the
+/// following `delete-window` under `window-combination-resize` distributes the
+/// freed columns by them.  Values are GNU 31.1 `--batch` on its 80-column frame
+/// (window-oracle-nightly 2026-10-29: neomacs restated the siblings from pixels,
+/// 27/80 as an f32 quotient, and deleted to 39/20/21 instead of 38/21/21).
+#[test]
+fn splice_split_keeps_sibling_normal_sizes_for_combination_resize_delete_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let out = bootstrap_eval_with_frame(
+        "(let ((nth-window
+                (lambda (n)
+                  (let ((ws (window-list nil 'no-minibuf nil)))
+                    (nth (mod n (length ws)) ws))))
+               (state
+                (lambda ()
+                  (mapcar (lambda (w)
+                            (list (window-left-column w)
+                                  (window-total-width w)
+                                  (window-normal-size w t)))
+                          (window-list nil 'no-minibuf (frame-first-window))))))
+           (list (frame-width)
+                 (progn
+                   (let ((window-combination-limit nil) (window-combination-resize nil))
+                     (split-window (funcall nth-window 0) nil 'left))
+                   (let ((window-combination-limit nil) (window-combination-resize t))
+                     (split-window (funcall nth-window 0) nil 'left))
+                   (let ((window-combination-limit nil) (window-combination-resize nil))
+                     (split-window (funcall nth-window 2) nil 'left))
+                   (funcall state))
+                 (progn
+                   (let ((window-combination-resize t))
+                     (delete-window (funcall nth-window 4)))
+                   (funcall state))))",
+    );
+    assert_eq!(
+        out[0],
+        "OK (80 ((0 27 0.33333333333333337) (27 13 0.16666666666666666) (40 13 0.16666666666666666) (53 27 0.33333333333333337)) ((0 38 0.5000000000000001) (38 21 0.25) (59 21 0.25)))"
+    );
+}
+
 #[test]
 fn vertical_motion_truncates_partial_width_split_windows_like_gnu() {
     crate::test_utils::init_test_tracing();

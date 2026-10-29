@@ -7900,12 +7900,13 @@ impl FrameManager {
             if let Some(size) = new_size {
                 window.set_new_pixel(Some(size));
             }
-            // GNU `wset_new_normal (n, normal_size)`.  The *other* children's
-            // fractions were staged by `window.el`, so they are not touched
-            // here -- `window_resize_apply` commits them all together.
-            if !new_normal.is_nil() {
-                window.set_new_normal(new_normal);
-            }
+            // GNU `wset_new_normal (n, normal_size)`, unconditionally: a nil
+            // NORMAL-SIZE leaves the new window at `make_window`'s 1.0 rather
+            // than committing a value cloned from the split target.  The
+            // *other* children's fractions were staged by `window.el`, so they
+            // are not touched here -- `window_resize_apply` commits them all
+            // together.
+            window.set_new_normal(new_normal);
         }
         let parent_id = frame.tree().parent_of(new_window_id)?;
         let horflag = matches!(direction, SplitDirection::Horizontal);
@@ -8564,22 +8565,19 @@ fn split_window_in_tree(
         }
     }
 
-    /// Record `window`'s share of a `parent_size`-wide combination, mirroring
-    /// GNU `Fsplit_window_internal` (`src/window.c:5517-5644`): the fraction in
-    /// the split direction is the window's extent over the parent's, and the
-    /// orthogonal fraction is always 1.0 because every child fills the parent
-    /// across the combination.
-    fn set_normal_fraction(window: &mut Window, direction: SplitDirection, fraction: f64) {
-        match direction {
-            SplitDirection::Horizontal => {
-                window.set_normal_cols(Value::make_float(fraction));
-                window.set_normal_lines(Value::make_float(1.0));
-            }
-            SplitDirection::Vertical => {
-                window.set_normal_lines(Value::make_float(fraction));
-                window.set_normal_cols(Value::make_float(1.0));
-            }
-        }
+    /// Give `window` the normal sizes GNU leaves on a window that a split
+    /// creates or interposes a parent above: 1.0 on both axes.
+    ///
+    /// `make_window` initializes a fresh window that way, and `replace_window`
+    /// (with SETFLAG) moves the old window's normal sizes to the new parent
+    /// and resets the old window's to 1.0 (`src/window.c:4597-4612`).  Neither
+    /// derives a share from pixel extents: the split-direction share is the
+    /// `new_normal` that `split-window` staged in Lisp, which
+    /// `window_resize_apply` commits afterwards
+    /// ([`FrameManager::apply_staged_split_sizes`]).
+    fn reset_to_unit_normals(window: &mut Window) {
+        window.set_normal_cols(Value::make_float(1.0));
+        window.set_normal_lines(Value::make_float(1.0));
     }
 
     let old = tree.find(target)?;
@@ -8620,26 +8618,22 @@ fn split_window_in_tree(
     let mut new_leaf =
         make_split_sibling(tree.find(target)?, new_id, new_buffer_id, new_leaf_bounds);
 
+    // GNU `make_window`: the new window starts at normal size 1.0 on both
+    // axes until its staged `new_normal` is committed.
+    reset_to_unit_normals(&mut new_leaf);
+
     if attachment.reuses_parent() {
         // The target's own parent combination absorbs the new window as a
         // plain sibling (GNU `p = XWINDOW (o->parent)` -- no
-        // `make_parent_window`), so every child's share of it is restated.
+        // `make_parent_window`).  The siblings' normal sizes are NOT restated
+        // from their pixel extents: `Fsplit_window_internal` never writes them,
+        // and `window_resize_apply` copies only the numeric `new_normal`s that
+        // `split-window` staged (the old window's, or every sibling's under
+        // `window-combination-resize`).  A sibling `window--resize-reset` left
+        // at nil keeps its normal size, which later `delete-window` and
+        // `balance-windows` arithmetic reads (window-oracle-nightly
+        // 2026-10-29: restating from pixels gave 27/80 instead of GNU's 1/3).
         let parent = tree.parent_of(target)?;
-        let parent_size = extent(*tree.find(parent)?.bounds(), direction);
-        if parent_size > 0.0 {
-            for child in tree.child_ids(parent).to_vec() {
-                let Some(child_bounds) = tree.find(child).map(|node| *node.bounds()) else {
-                    continue;
-                };
-                let fraction = (extent(child_bounds, direction) / parent_size) as f64;
-                if let Some(node) = tree.find_mut(child) {
-                    set_normal_fraction(node, direction, fraction);
-                }
-            }
-            let fraction = (extent(new_leaf_bounds, direction) / parent_size) as f64;
-            set_normal_fraction(&mut new_leaf, direction, fraction);
-        }
-
         tree.insert(new_leaf);
         let mut siblings = tree.child_ids(parent).to_vec();
         let idx = siblings.iter().position(|child| *child == target)?;
@@ -8649,18 +8643,12 @@ fn split_window_in_tree(
     }
 
     // A fresh internal node takes the target's slot and holds both windows.
-    let parent_size = extent(old_bounds, direction);
-    let (old_fraction, new_fraction) = if parent_size > 0.0 {
-        (
-            (extent(old_slot_bounds, direction) / parent_size) as f64,
-            (extent(new_leaf_bounds, direction) / parent_size) as f64,
-        )
-    } else {
-        (0.5, 0.5)
-    };
-    set_normal_fraction(&mut new_leaf, direction, new_fraction);
+    // GNU `replace_window (old, parent, true)` hands the old window's normal
+    // sizes to the parent (`inherited_normal_*` below) and resets the old
+    // window's own to 1.0; its split-direction share is the staged
+    // `new_normal`.
     if let Some(node) = tree.find_mut(target) {
-        set_normal_fraction(node, direction, old_fraction);
+        reset_to_unit_normals(node);
     }
 
     // Asked before the new parent is inserted, which would itself name the
@@ -8922,10 +8910,13 @@ fn recombine_child_into_parent(
             && let Some(node) = tree.find_mut(child)
         {
             let child_bounds = *node.bounds();
-            let fraction = match parent_direction {
-                SplitDirection::Horizontal => child_bounds.width / parent_size,
-                SplitDirection::Vertical => child_bounds.height / parent_size,
-            } as f64;
+            // GNU divides in double precision; an f32 quotient widened
+            // afterwards stores 0.33750000596... for 27/80, not 0.3375.
+            let child_size = match parent_direction {
+                SplitDirection::Horizontal => child_bounds.width,
+                SplitDirection::Vertical => child_bounds.height,
+            };
+            let fraction = f64::from(child_size) / f64::from(parent_size);
             match parent_direction {
                 SplitDirection::Horizontal => {
                     node.set_normal_cols(Value::make_float(fraction));
