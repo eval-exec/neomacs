@@ -136,18 +136,23 @@ pub(super) fn plan(
     let shift = |p: LispCharPos1| {
         LispCharPos1::from_one_based_usize((p.to_one_based_usize() as i64 + delta) as usize)
     };
-    let row_snapshots = prev
-        .display_snapshot
-        .rows
-        .iter()
-        .filter(|row| indices.contains(row.row))
-        .map(|row| {
-            let mut row = row.clone();
-            row.start_buffer_pos = row.start_buffer_pos.map(shift);
-            row.end_buffer_pos = row.end_buffer_pos.map(shift);
-            row
-        })
-        .collect();
+    // A dense suffix is contiguous and `finish_snapshot` sorts snapshot rows
+    // by row index, so the retained span is one slice: copy it with a single
+    // memcpy and re-key the two positions in place. Cloning these ~128-byte
+    // POD snapshots per row lowers to inline `rep movsq`, which on this
+    // microarchitecture runs the legacy microcoded string path (~25-30 MS
+    // uops per qword; the ERMS/FSRM fast strings cover only `rep movsb`),
+    // while one libc memmove of the span takes its AVX path. GNU's
+    // `try_window_id` likewise re-keys its retained rows in place.
+    let snapshot_rows = &prev.display_snapshot.rows;
+    debug_assert!(snapshot_rows.is_sorted_by_key(|row| row.row));
+    let first = snapshot_rows.partition_point(|row| row.row < indices.first);
+    let last = first + snapshot_rows[first..].partition_point(|row| row.row < indices.end);
+    let mut row_snapshots = snapshot_rows[first..last].to_vec();
+    for row in &mut row_snapshots {
+        row.start_buffer_pos = row.start_buffer_pos.map(shift);
+        row.end_buffer_pos = row.end_buffer_pos.map(shift);
+    }
     let points = prev
         .display_snapshot
         .points
