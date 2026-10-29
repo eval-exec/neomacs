@@ -16,6 +16,7 @@ mod mini_source_stop;
 mod posn_object_extent;
 mod prepared_viewports;
 
+mod position_chrome;
 mod query_cache;
 mod retained_face_gather;
 #[cfg(test)]
@@ -618,6 +619,17 @@ fn live_window_frame_metadata(
     }
 }
 
+struct FrameFontInputs {
+    bootstrap: FrameParams,
+    window_system: Option<String>,
+}
+
+struct PreparedFrameFonts {
+    resolver: super::neovm_bridge::FaceResolver,
+    default_metrics: Option<crate::font::metrics::FontMetrics>,
+    face_epoch: crate::frame_face_arena::FaceEpoch,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn collect_live_window_layout_inputs(
     evaluator: &mut neovm_core::emacs_core::Context,
@@ -794,7 +806,7 @@ pub struct LayoutEngine {
     mini_preparation_height: Option<f32>,
     /// Granted only by the canonical walk's semantic reuse barrier. Geometry
     /// queries with evaluated Lisp conditions must never skip that walk.
-    query_body_reuse_allowed: bool,
+    query_body_cache_state: QueryBodyCacheState,
     query_cache: query_cache::QueryCache,
     /// Cosmic-text font metrics service.
     ///
@@ -908,6 +920,20 @@ pub struct LayoutEngine {
     /// Instrumentation from the most recent `layout_frame_rust` pass: the
     /// relaid-row-count gate metric (spec §7). Reset per frame.
     layout_stats: LayoutStats,
+}
+
+/// Ownership of the numeric body observation's read journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryBodyCacheState {
+    Disabled,
+    Produced,
+    Reused,
+}
+
+fn log_invalid_face_references(evaluator: &mut neovm_core::emacs_core::Context, names: &[String]) {
+    for name in names {
+        evaluator.add_to_log(&format!("Invalid face reference: {name}"));
+    }
 }
 
 /// One window's incremental-layout decision, gathered before the frame admits
@@ -1567,7 +1593,7 @@ impl LayoutEngine {
             query_row_coverage: QueryRowCoverage::Complete,
             query_target_prefix_policy: false,
             mini_preparation_height: None,
-            query_body_reuse_allowed: false,
+            query_body_cache_state: QueryBodyCacheState::Disabled,
             query_cache: Default::default(),
             font_metrics: Some(FontMetricsService::new()),
             font_sizing: FontSizing::native_gui(),
@@ -1611,7 +1637,7 @@ impl LayoutEngine {
             query_row_coverage: QueryRowCoverage::Complete,
             query_target_prefix_policy: false,
             mini_preparation_height: None,
-            query_body_reuse_allowed: false,
+            query_body_cache_state: QueryBodyCacheState::Disabled,
             query_cache: Default::default(),
             font_metrics: None,
             font_sizing: FontSizing::native_gui(),
@@ -1764,92 +1790,12 @@ impl LayoutEngine {
         evaluator.log_pending_image_diagnostics();
     }
 
-    fn layout_frame_rust_for_purpose_inner(
+    fn prepare_frame_font_inputs(
         &mut self,
         evaluator: &mut neovm_core::emacs_core::Context,
         frame_id: neovm_core::window::FrameId,
-        purpose: LayoutPurpose,
-        rows_lifetime: Option<&mut rows_lifetime::Producer>,
-        #[cfg(test)] rows_fontification_sink: Option<
-            &mut dyn FnMut(neovm_core::emacs_core::xdisp::RedisplayFontificationWitness),
-        >,
-    ) -> Option<neovm_core::window::WindowLayoutQuery> {
-        self.layout_frame_rust_with_face_services(
-            evaluator,
-            frame_id,
-            purpose,
-            rows_lifetime,
-            #[cfg(test)]
-            rows_fontification_sink,
-            &rows_face_services::NoopFaceServiceFactory,
-        )
-    }
-
-    fn layout_frame_rust_with_face_services<F: FaceServiceFactory>(
-        &mut self,
-        evaluator: &mut neovm_core::emacs_core::Context,
-        frame_id: neovm_core::window::FrameId,
-        purpose: LayoutPurpose,
-        mut rows_lifetime: Option<&mut rows_lifetime::Producer>,
-        #[cfg(test)] mut rows_fontification_sink: Option<
-            &mut dyn FnMut(neovm_core::emacs_core::xdisp::RedisplayFontificationWitness),
-        >,
-        face_services: &F,
-    ) -> Option<neovm_core::window::WindowLayoutQuery> {
-        // Anything recorded since the last pass that no pass has reported yet.
-        // The drain below covers what this pass observes; this one covers
-        // whatever a path outside layout observed -- a `:channel0` image spec
-        // resolved from Lisp, say -- so a failure cannot sit unlogged just
-        // because it happened between frames.
-        self.report_image_failures(evaluator);
-        let query_window = purpose.query_window();
-        // Layout Lisp can enter a nested command reader. Capture completion
-        // before gathering pixels, never from commands that finish mid-layout.
-        let input_checkpoint = evaluator.input_progress.checkpoint();
-        self.load_retained_frame(frame_id);
-        if !scroll_coverage::inactive_overlay_arrows(evaluator) {
-            self.scroll_coverage.cancel();
-            self.prepared_viewports = PreparedViewports::default();
-        } else if query_window.is_none() {
-            let _ = self.scroll_coverage.drain(&mut self.prepared_viewports);
-        }
-        // Incremental-layout instrumentation (Phase 0a): start each frame from
-        // a clean slate; populated as the accepted frame is committed below.
-        if query_window.is_none() {
-            self.layout_stats = LayoutStats::default();
-        }
-        // The font service can exist on the engine even while laying out a
-        // terminal frame in tests. Match GNU's redisplay split: window-system
-        // frames use realized font pixels, terminal frames stay on cell
-        // metrics.
-
-        // Reset the per-redisplay mode-line eval counter. Each chrome row is
-        // laid out (and thus its `*-format` evaluated) exactly once per window
-        // per frame; the single-eval invariant test asserts this stays at 1.
-        if query_window.is_none() {
-            crate::display_status_line::reset_mode_line_eval_count();
-            crate::display_status_line::reset_chrome_generation_record();
-        }
-
-        // GNU `prepare_menu_bars` runs menu, tab, then tool-bar Lisp before
-        // `redisplay_windows` starts filling display lines. Evaluate all three
-        // once at the logical redisplay boundary, before taking any
-        // face/window/topology snapshot. Physical chrome/minibuffer retries
-        // reuse the typed result below. Keep its Lisp values rooted until the
-        // accepted presentation has consumed them.
-        let gui_chrome_gc_roots = ScratchGcRootScope::new();
-        let prepared_gui_chrome = query_window
-            .is_none()
-            .then(|| PreparedGuiChromeSemantics::collect(evaluator, frame_id, &gui_chrome_gc_roots))
-            .flatten();
-
-        // Queries normalize faces inside their dependency observation before
-        // entering the row producer; redisplay normalizes after chrome Lisp.
-        if query_window.is_none() {
-            evaluator.sync_runtime_faces_for_frame(frame_id);
-        }
-
-        let (bootstrap_bg, bootstrap_font_size, window_system, device_scale) = {
+    ) -> Option<FrameFontInputs> {
+        let (bootstrap, window_system, device_scale) = {
             let Some(frame) = evaluator.frame_manager().get(frame_id) else {
                 tracing::error!("layout_frame_rust: frame {:?} not found", frame_id);
                 return None;
@@ -1863,16 +1809,12 @@ impl LayoutEngine {
                 .effective_window_system()
                 .and_then(|v| v.as_bare_symbol_name().map(|s| s.to_string()));
             (
-                bootstrap.background,
-                frame.font_pixel_size,
+                bootstrap,
                 ws,
                 neomacs_display_protocol::geometry::DeviceScale::new(
                     frame.device_scale_factor as f32,
                 )
-                .unwrap_or_else(|_| {
-                    neomacs_display_protocol::geometry::DeviceScale::new(1.0)
-                        .expect("one is a valid device scale")
-                }),
+                .unwrap_or(neomacs_display_protocol::geometry::DeviceScale::ONE),
             )
         };
         let font_selection_changed = if let Some(font_metrics) = self.font_metrics.as_mut() {
@@ -1892,39 +1834,36 @@ impl LayoutEngine {
         if font_selection_changed {
             self.invalidate_for_font_selection_change();
         }
-        let presentation_id = evaluator.begin_interaction_presentation();
-        let previous_visual_history = self.frame_visual_histories.snapshot(frame_id);
-        let pending_frame_navigation = query_window
-            .is_none()
-            .then(|| {
-                evaluator
-                    .frame_manager()
-                    .pending_frame_navigation_intent(frame_id)
-            })
-            .flatten();
+        Some(FrameFontInputs {
+            bootstrap,
+            window_system,
+        })
+    }
 
+    fn realize_frame_fonts(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        frame_id: neovm_core::window::FrameId,
+        inputs: &FrameFontInputs,
+    ) -> PreparedFrameFonts {
         // Realize the default face before collecting window params so frame and
         // window geometry use the same default metrics GNU Emacs redisplay does.
         let mut face_resolver = super::neovm_bridge::FaceResolver::new_with_font_sizing(
             evaluator.face_table(),
             0x00FFFFFF,
-            bootstrap_bg,
-            bootstrap_font_size,
-            window_system.clone(),
+            inputs.bootstrap.background,
+            inputs.bootstrap.font_pixel_size,
+            inputs.window_system.clone(),
             self.font_sizing,
         );
         self.bind_face_composed_sources(&mut face_resolver);
         self.prepare_face_resolver_tty(&mut face_resolver, frame_id, evaluator);
-        let mut resolver_face_change_count = evaluator.face_change_count();
-        enum FaceResolverRefresh {
-            Current,
-            Required,
-        }
-        let mut resolver_refresh = FaceResolverRefresh::Current;
         let default_resolved = face_resolver.default_face();
-        let frame_font_domain =
-            FrameFontDomain::for_frame(window_system.is_some(), bootstrap_font_size);
-        let default_geometry = if window_system.is_some() {
+        let frame_font_domain = FrameFontDomain::for_frame(
+            inputs.window_system.is_some(),
+            inputs.bootstrap.font_pixel_size,
+        );
+        let default_geometry = if inputs.window_system.is_some() {
             self.font_metrics.as_mut().map(|svc| {
                 svc.frame_cell_geometry(
                     &default_resolved.font_family,
@@ -1982,6 +1921,125 @@ impl LayoutEngine {
             None => {}
         }
 
+        PreparedFrameFonts {
+            resolver: face_resolver,
+            default_metrics,
+            face_epoch: crate::frame_face_arena::FaceEpoch::new(evaluator.face_change_count()),
+        }
+    }
+
+    fn layout_frame_rust_for_purpose_inner(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        frame_id: neovm_core::window::FrameId,
+        purpose: LayoutPurpose,
+        rows_lifetime: Option<&mut rows_lifetime::Producer>,
+        #[cfg(test)] rows_fontification_sink: Option<
+            &mut dyn FnMut(neovm_core::emacs_core::xdisp::RedisplayFontificationWitness),
+        >,
+    ) -> Option<neovm_core::window::WindowLayoutQuery> {
+        self.layout_frame_rust_with_face_services(
+            evaluator,
+            frame_id,
+            purpose,
+            rows_lifetime,
+            #[cfg(test)]
+            rows_fontification_sink,
+            &rows_face_services::NoopFaceServiceFactory,
+            None,
+        )
+    }
+
+    fn layout_frame_rust_with_face_services<F: FaceServiceFactory>(
+        &mut self,
+        evaluator: &mut neovm_core::emacs_core::Context,
+        frame_id: neovm_core::window::FrameId,
+        purpose: LayoutPurpose,
+        mut rows_lifetime: Option<&mut rows_lifetime::Producer>,
+        #[cfg(test)] mut rows_fontification_sink: Option<
+            &mut dyn FnMut(neovm_core::emacs_core::xdisp::RedisplayFontificationWitness),
+        >,
+        face_services: &F,
+        position_chrome: Option<&position_chrome::MeasuredPositionChrome>,
+    ) -> Option<neovm_core::window::WindowLayoutQuery> {
+        // Anything recorded since the last pass that no pass has reported yet.
+        // The drain below covers what this pass observes; this one covers
+        // whatever a path outside layout observed -- a `:channel0` image spec
+        // resolved from Lisp, say -- so a failure cannot sit unlogged just
+        // because it happened between frames.
+        self.report_image_failures(evaluator);
+        let query_window = purpose.query_window();
+        // Layout Lisp can enter a nested command reader. Capture completion
+        // before gathering pixels, never from commands that finish mid-layout.
+        let input_checkpoint = evaluator.input_progress.checkpoint();
+        self.load_retained_frame(frame_id);
+        if !scroll_coverage::inactive_overlay_arrows(evaluator) {
+            self.scroll_coverage.cancel();
+            self.prepared_viewports = PreparedViewports::default();
+        } else if query_window.is_none() {
+            let _ = self.scroll_coverage.drain(&mut self.prepared_viewports);
+        }
+        // Incremental-layout instrumentation (Phase 0a): start each frame from
+        // a clean slate; populated as the accepted frame is committed below.
+        if query_window.is_none() {
+            self.layout_stats = LayoutStats::default();
+        }
+        // The font service can exist on the engine even while laying out a
+        // terminal frame in tests. Match GNU's redisplay split: window-system
+        // frames use realized font pixels, terminal frames stay on cell
+        // metrics.
+
+        // Reset the per-redisplay mode-line eval counter. Each chrome row is
+        // laid out (and thus its `*-format` evaluated) exactly once per window
+        // per frame; the single-eval invariant test asserts this stays at 1.
+        if query_window.is_none() {
+            crate::display_status_line::reset_mode_line_eval_count();
+            crate::display_status_line::reset_chrome_generation_record();
+        }
+
+        // GNU `prepare_menu_bars` runs menu, tab, then tool-bar Lisp before
+        // `redisplay_windows` starts filling display lines. Evaluate all three
+        // once at the logical redisplay boundary, before taking any
+        // face/window/topology snapshot. Physical chrome/minibuffer retries
+        // reuse the typed result below. Keep its Lisp values rooted until the
+        // accepted presentation has consumed them.
+        let gui_chrome_gc_roots = ScratchGcRootScope::new();
+        let prepared_gui_chrome = query_window
+            .is_none()
+            .then(|| PreparedGuiChromeSemantics::collect(evaluator, frame_id, &gui_chrome_gc_roots))
+            .flatten();
+
+        // Queries normalize faces inside their dependency observation before
+        // entering the row producer; redisplay normalizes after chrome Lisp.
+        if query_window.is_none() {
+            evaluator.sync_runtime_faces_for_frame(frame_id);
+        }
+
+        let font_inputs = self.prepare_frame_font_inputs(evaluator, frame_id)?;
+        let window_system = &font_inputs.window_system;
+        let presentation_id = evaluator.begin_interaction_presentation();
+        let previous_visual_history = self.frame_visual_histories.snapshot(frame_id);
+        let pending_frame_navigation = query_window
+            .is_none()
+            .then(|| {
+                evaluator
+                    .frame_manager()
+                    .pending_frame_navigation_intent(frame_id)
+            })
+            .flatten();
+
+        let PreparedFrameFonts {
+            resolver: mut face_resolver,
+            default_metrics,
+            face_epoch,
+        } = self.realize_frame_fonts(evaluator, frame_id, &font_inputs);
+        let mut resolver_face_change_count = face_epoch.get();
+        enum FaceResolverRefresh {
+            Current,
+            Required,
+        }
+        let mut resolver_refresh = FaceResolverRefresh::Current;
+
         // --- Frame layout convergence loop (GNU xdisp.c redisplay retries) ---
         //
         // After laying out all windows we check whether the minibuffer
@@ -2005,6 +2063,9 @@ impl LayoutEngine {
             ..RedisplayLispLedger::default()
         };
         let mut window_chrome_metrics = self.retained_window_chrome_metrics.clone();
+        if let Some(measured) = position_chrome {
+            window_chrome_metrics.insert(measured.display_window(), measured.metrics());
+        }
         // GNU retires every realized face when `face_change` is set
         // (`free_realized_faces`, src/xfaces.c:4889-4954, driven by
         // `face_change_count`, src/xfaces.c:3098-3105). Do the same at the
@@ -2049,9 +2110,8 @@ impl LayoutEngine {
             && !(evaluator.gnu_redisplay_hooks_policy_enabled()
                 && evaluator.gnu_redisplay_transaction_active());
 
-        // A Position query measures chrome on its first physical attempt; the
-        // WindowChrome relayout immediately below must reuse those measured
-        // metrics instead of evaluating the formats a second time.
+        // Position normalization measured once before body observation. Every
+        // physical retry consumes the same numeric partition without Lisp.
         let mut chrome_remeasured_next_round: std::collections::HashSet<DisplayWindowId> =
             std::collections::HashSet::new();
         let (
@@ -2775,6 +2835,15 @@ impl LayoutEngine {
                         window_geometry,
                     ),
                 );
+                if let Some(measured) = position_chrome
+                    && measured
+                        .validate_owner(frame_id, &live_inputs.window)
+                        .is_err()
+                {
+                    evaluator.retire_interaction_presentation(presentation_id);
+                    self.reset_frame_attempt_state();
+                    return None;
+                }
                 let live_key =
                     RetainedWindowKey::from_params(&live_inputs.window, layout_box, evaluator);
                 if retained_keys[window_index].1 != live_key {
@@ -2862,8 +2931,9 @@ impl LayoutEngine {
                         scroll_replay.take(),
                         is_edit,
                         position_publication,
-                        !chrome_remeasured
-                            .contains(&DisplayWindowId::new(live_inputs.window.window_id)),
+                        position_chrome.is_none()
+                            && !chrome_remeasured
+                                .contains(&DisplayWindowId::new(live_inputs.window.window_id)),
                         &mut lisp_ledger,
                         attempt_topology_generation,
                         &face_attempt,
@@ -3219,9 +3289,7 @@ impl LayoutEngine {
                 }
                 let invalid_face_references = face_resolver.take_invalid_face_references();
                 face_services.note_invalid_face_references(&invalid_face_references);
-                for face_name in invalid_face_references {
-                    evaluator.add_to_log(&format!("Invalid face reference: {face_name}"));
-                }
+                log_invalid_face_references(evaluator, &invalid_face_references);
                 frame_window_end_attempts.reject_all(evaluator);
                 evaluator.retire_interaction_presentation(presentation_id);
                 let mut query_restart_rows = std::mem::take(&mut self.query_restart_rows);
@@ -4201,9 +4269,7 @@ impl LayoutEngine {
             );
         }
         frame_window_end_attempts.accept_all();
-        for face_name in face_resolver.take_invalid_face_references() {
-            evaluator.add_to_log(&format!("Invalid face reference: {face_name}"));
-        }
+        log_invalid_face_references(evaluator, &face_resolver.take_invalid_face_references());
         None
     }
 
@@ -4264,7 +4330,7 @@ impl LayoutEngine {
             .unwrap_or_else(|| Value::make_float(0.25));
         let max_lines = max_mini_window_lines_from_value(raw_maximum, frame_rows);
         self.mini_preparation_height = None;
-        self.query_body_reuse_allowed = false;
+        self.query_body_cache_state = QueryBodyCacheState::Disabled;
         evaluator.sync_runtime_faces_for_frame(request.frame);
         let query = self.layout_frame_rust_for_purpose_inner(
             evaluator,
@@ -4463,9 +4529,8 @@ impl LayoutEngine {
             scope,
             neovm_core::window::WindowLayoutQueryScope::TextExtent { .. }
         );
-        // Position queries never read the cache (they remeasure chrome and
-        // line-number metric inputs). Do not let their observations consume
-        // bounded cache capacity or evict reusable rows either.
+        // Position lookup occurs only after canonical chrome measurement in
+        // the frame coordinator. Other scopes retain their accepted partition.
         let position_query = matches!(
             scope,
             neovm_core::window::WindowLayoutQueryScope::Position { .. }
@@ -4491,25 +4556,24 @@ impl LayoutEngine {
             // An unproved selected Rows request must run the canonical walk;
             // neither a legacy observation nor a prepared viewport can answer.
         } else {
-            // Position queries answer through GNU `pos_visible_p`: chrome is
-            // re-evaluated and measured, and line-number row faces may depend
-            // on point. A cached observation carries the text-area partition
-            // from its own point, so re-placing its rows would reproduce stale
-            // chrome bounds. Run the canonical walk instead.
+            // Position queries first measure their current chrome in the
+            // normalized route below. Only its validated partition may admit
+            // body reuse; other scopes keep their accepted partition.
             if !text_extent
                 && !position_query
                 && let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope)
             {
                 return Ok(query);
             }
-            if let Some(query) = self
-                .prepared_viewports
-                .measure_rows(evaluator, frame_id, window_id, scope)
+            if !position_query
+                && let Some(query) = self
+                    .prepared_viewports
+                    .measure_rows(evaluator, frame_id, window_id, scope)
             {
                 return Ok(query);
             }
         }
-        self.query_body_reuse_allowed = true;
+        self.query_body_cache_state = QueryBodyCacheState::Produced;
         self.query_restart_rows.clear();
         self.query_row_coverage = QueryRowCoverage::Complete;
         self.query_target_prefix_policy = false;
@@ -4544,55 +4608,65 @@ impl LayoutEngine {
                 }
             })
         });
-        let (query, mut collections) = if matches!(
-            scope,
-            neovm_core::window::WindowLayoutQueryScope::Rows { .. }
-        ) {
-            let face_services = rows_face_services::RowsFaceServiceFactory::new();
-            let captured = neovm_core::tagged::collection_reads::capture_normalized(
-                evaluator,
-                |evaluator| {
-                    evaluator.sync_runtime_faces_for_frame(frame_id);
-                },
-                |evaluator| {
-                    self.layout_frame_rust_with_face_services(
-                        evaluator,
-                        frame_id,
-                        LayoutPurpose::SynchronousQuery { window_id, scope },
-                        lifetime.as_mut().and_then(|pending| pending.as_mut().ok()),
-                        #[cfg(test)]
-                        None,
-                        &face_services,
-                    )
-                },
-            );
-            if let Some(producer) = lifetime.as_mut().and_then(|pending| pending.as_mut().ok()) {
-                producer.note_face_entry(Some(face_services.cold_entry()));
-                producer.note_diagnostic_effects(face_services.diagnostic_effects());
-            }
-            captured
-        } else {
-            neovm_core::tagged::collection_reads::capture_normalized(
-                evaluator,
-                |evaluator| {
-                    evaluator.sync_runtime_faces_for_frame(frame_id);
-                },
-                |evaluator| {
-                    self.layout_frame_rust_for_purpose_inner(
-                        evaluator,
-                        frame_id,
-                        LayoutPurpose::SynchronousQuery { window_id, scope },
-                        lifetime.as_mut().and_then(|pending| pending.as_mut().ok()),
-                        #[cfg(test)]
-                        None,
-                    )
-                },
-            )
-        };
+        let (query, mut collections) =
+            if let neovm_core::window::WindowLayoutQueryScope::Position { target } = scope {
+                let request = position_chrome::Request::new(frame_id, window_id, target);
+                let mut run = position_chrome::QueryRun::new(self, evaluator, request);
+                neovm_core::tagged::collection_reads::capture_normalized(
+                    &mut run,
+                    |run| run.normalize(),
+                    |run| run.read(),
+                )
+            } else if matches!(
+                scope,
+                neovm_core::window::WindowLayoutQueryScope::Rows { .. }
+            ) {
+                let face_services = rows_face_services::RowsFaceServiceFactory::new();
+                let captured = neovm_core::tagged::collection_reads::capture_normalized(
+                    evaluator,
+                    |evaluator| {
+                        evaluator.sync_runtime_faces_for_frame(frame_id);
+                    },
+                    |evaluator| {
+                        self.layout_frame_rust_with_face_services(
+                            evaluator,
+                            frame_id,
+                            LayoutPurpose::SynchronousQuery { window_id, scope },
+                            lifetime.as_mut().and_then(|pending| pending.as_mut().ok()),
+                            #[cfg(test)]
+                            None,
+                            &face_services,
+                            None,
+                        )
+                    },
+                );
+                if let Some(producer) = lifetime.as_mut().and_then(|pending| pending.as_mut().ok())
+                {
+                    producer.note_face_entry(Some(face_services.cold_entry()));
+                    producer.note_diagnostic_effects(face_services.diagnostic_effects());
+                }
+                captured
+            } else {
+                neovm_core::tagged::collection_reads::capture_normalized(
+                    evaluator,
+                    |evaluator| {
+                        evaluator.sync_runtime_faces_for_frame(frame_id);
+                    },
+                    |evaluator| {
+                        self.layout_frame_rust_for_purpose_inner(
+                            evaluator,
+                            frame_id,
+                            LayoutPurpose::SynchronousQuery { window_id, scope },
+                            lifetime.as_mut().and_then(|pending| pending.as_mut().ok()),
+                            #[cfg(test)]
+                            None,
+                        )
+                    },
+                )
+            };
         self.report_image_failures(evaluator);
         let mut query =
             query.ok_or(neovm_core::window::WindowLayoutQueryFailure::DidNotConverge)?;
-        let collections_captured = collections.is_some();
         let mut candidate = None;
         if let Some(pending) = lifetime {
             let report = if certified_rows {
@@ -4624,9 +4698,6 @@ impl LayoutEngine {
             let _ = report;
         }
         let query_restart_rows = std::mem::take(&mut self.query_restart_rows);
-        tracing::trace!(target: "neomacs_layout_engine::query_cache",
-            body_reuse_allowed = self.query_body_reuse_allowed,
-            collections_captured, "query completed");
         if certified_rows {
             if let Some(candidate) = candidate {
                 // All arbitrary trace/sink boundaries precede this original
@@ -4634,8 +4705,7 @@ impl LayoutEngine {
                 self.query_cache.remember_certified(evaluator, candidate);
             }
         } else if !text_extent
-            && !position_query
-            && self.query_body_reuse_allowed
+            && self.query_body_cache_state == QueryBodyCacheState::Produced
             && let Some(collections) = collections
         {
             self.query_cache.remember(
@@ -5525,7 +5595,9 @@ impl LayoutEngine {
         // dependencies. A newly evaluated condition can change glyphs without
         // moving any of those ticks. This applies to cursor, scroll, and edit
         // replay alike; static windows keep their existing fast paths.
-        self.query_body_reuse_allowed &= display_when.allows_body_reuse();
+        if !display_when.allows_body_reuse() {
+            self.query_body_cache_state = QueryBodyCacheState::Disabled;
+        }
         // Rows whose `when` answers stayed unverified (the replay bound's
         // fallback, an unevaluable site, a failed evaluation) are never
         // reused, even when this attempt's scan finds nothing to evaluate:

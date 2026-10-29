@@ -48,7 +48,7 @@ fn canonical(
     let mut engine = LayoutEngine::new_without_font_metrics();
     // Match the actual public query's canonical-miss setup. Skip its cache
     // lookup deliberately: these tests target the producer, never admission.
-    engine.query_body_reuse_allowed = true;
+    engine.query_body_cache_state = crate::engine::QueryBodyCacheState::Produced;
     engine.query_restart_rows.clear();
     engine.query_row_coverage = crate::buffer_source::render_attempt::QueryRowCoverage::Complete;
     engine.query_target_prefix_policy = false;
@@ -77,7 +77,7 @@ fn canonical(
     (
         query.expect("canonical query converges"),
         observations,
-        engine.query_body_reuse_allowed,
+        engine.query_body_cache_state == crate::engine::QueryBodyCacheState::Produced,
     )
 }
 

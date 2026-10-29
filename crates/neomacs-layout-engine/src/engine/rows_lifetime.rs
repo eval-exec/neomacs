@@ -289,7 +289,7 @@ impl Producer {
         }
         // These retain the deliberately narrow producer scope. Lifetime no
         // longer depends on inferring that native callbacks did not execute.
-        if !engine.query_body_reuse_allowed
+        if engine.query_body_cache_state != super::QueryBodyCacheState::Produced
             || engine.query_row_coverage != QueryRowCoverage::Complete
         {
             return Err(Refusal::DynamicOrRetry);

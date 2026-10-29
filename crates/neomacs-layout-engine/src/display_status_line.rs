@@ -621,6 +621,43 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
         self,
         state: &mut WindowChromeRowsRenderState<'_, '_, 'face>,
     ) -> WindowChromeRowsRenderOutcome {
+        let row_order = if state.render_services.face_resolver.has_tty_realization() {
+            [
+                WindowChromeKind::ModeLine,
+                WindowChromeKind::TabLine,
+                WindowChromeKind::HeaderLine,
+            ]
+        } else {
+            [
+                WindowChromeKind::TabLine,
+                WindowChromeKind::HeaderLine,
+                WindowChromeKind::ModeLine,
+            ]
+        };
+        self.render_in_order(state, &row_order)
+    }
+
+    /// GNU pos_visible_p measures mode, tab, header before start_display,
+    /// including on graphic frames (xdisp.c:1732-1770).
+    pub(crate) fn measure_position(
+        self,
+        state: &mut WindowChromeRowsRenderState<'_, '_, 'face>,
+    ) -> WindowChromeRowsRenderOutcome {
+        self.render_in_order(
+            state,
+            &[
+                WindowChromeKind::ModeLine,
+                WindowChromeKind::TabLine,
+                WindowChromeKind::HeaderLine,
+            ],
+        )
+    }
+
+    fn render_in_order(
+        self,
+        state: &mut WindowChromeRowsRenderState<'_, '_, 'face>,
+        row_order: &[WindowChromeKind],
+    ) -> WindowChromeRowsRenderOutcome {
         let params = self.params;
         let source = WindowChromeSourceIdentity::new(params.window_id, params.buffer_id);
         let regions = self.layout_box.regions();
@@ -660,19 +697,6 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
         // GNU display_mode_lines realizes used row faces in mode, tab, header
         // order (xdisp.c:28085-28122). Rendering at those actual row boundaries
         // preserves advice order without demanding any speculative faces.
-        let row_order = if state.render_services.face_resolver.has_tty_realization() {
-            [
-                WindowChromeKind::ModeLine,
-                WindowChromeKind::TabLine,
-                WindowChromeKind::HeaderLine,
-            ]
-        } else {
-            [
-                WindowChromeKind::TabLine,
-                WindowChromeKind::HeaderLine,
-                WindowChromeKind::ModeLine,
-            ]
-        };
         // Preserve the ownership transfer to the last visible row. Earlier
         // rows need copies; the final row consumes the shared inputs directly.
         let final_row = row_order.iter().rev().copied().find(|kind| match kind {
@@ -691,7 +715,7 @@ impl<'face, 'params> WindowChromeRowsRenderRequest<'face, 'params> {
                     .clone()
             }
         };
-        for kind in row_order {
+        for &kind in row_order {
             if kind == WindowChromeKind::TabLine && params.tab_line_height > 0.0 {
                 let (chrome_tab_policy, status_line_symbol_values) = inputs_for_row(kind);
                 let tab_line_y = regions.tab_line.map_or(regions.outer.y, |bounds| bounds.y);

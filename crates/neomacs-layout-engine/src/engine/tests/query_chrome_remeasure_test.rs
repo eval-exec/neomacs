@@ -320,7 +320,7 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
 }
 
 #[test]
-fn position_query_results_are_not_retained_in_the_query_cache() {
+fn position_query_cache_requires_fresh_chrome_measurement() {
     let (mut eval, frame, _buffer, window) = incr_editing_frame("line\nline\n", 800, 600);
     eval.eval_str("(setq mode-line-format nil header-line-format nil tab-line-format nil)")
         .unwrap();
@@ -336,7 +336,16 @@ fn position_query_results_are_not_retained_in_the_query_cache() {
             .query_cache
             .get(&eval, frame, window, position)
             .is_none(),
-        "Position observations bypass cache reads and must not consume cache capacity"
+        "a Position cache lookup without a measured partition must be refused"
+    );
+    crate::engine::viewport_retry_depth_probe::reset();
+    engine
+        .query_window_layout(&mut eval, frame, window, position)
+        .unwrap();
+    assert_eq!(
+        crate::engine::viewport_retry_depth_probe::max_depth(),
+        0,
+        "the production Position route measures chrome, then reuses the body"
     );
 
     // The cache still works for the scope that is allowed to read it.
@@ -374,6 +383,13 @@ fn position_query_propagates_deferred_chrome_exit_to_lisp() {
         }
     });
 
+    // Warm a reusable body first. The next query must still execute chrome
+    // and propagate its throw rather than returning that observation.
+    eval.eval_str("(setq header-line-format \"warm\")").unwrap();
+    assert!(!eval.eval_str("(posn-at-point 1)").unwrap().is_nil());
+    eval.eval_str("(setq header-line-format '(:eval (throw 'chrome-exit 42)))")
+        .unwrap();
+
     assert_eq!(
         eval.eval_str("(catch 'chrome-exit (posn-at-point 1))")
             .unwrap(),
@@ -383,5 +399,104 @@ fn position_query_propagates_deferred_chrome_exit_to_lisp() {
     assert!(
         !eval.has_mode_line_display_flow(),
         "the deferred flow must be consumed at the position-query boundary"
+    );
+}
+
+#[test]
+fn position_query_reuses_body_only_after_measuring_the_current_partition() {
+    use crate::engine::viewport_retry_depth_probe as probe;
+    let (mut eval, frame, _buffer, window) = incr_editing_frame(&"line\n".repeat(80), 800, 600);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    eval.eval_str(
+        r#"(setq mode-line-format nil tab-line-format nil
+        position-chrome-height 1.0 position-chrome-calls 0
+        header-line-format '(:eval (progn
+          (setq position-chrome-calls (1+ position-chrome-calls))
+          (propertize "header" 'face (list :height position-chrome-height)))))"#,
+    )
+    .unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    probe::reset();
+    let first = query(&mut eval, &mut engine, frame, window, 5);
+    assert!(probe::max_depth() > 0);
+    probe::reset();
+    let repeated = query(&mut eval, &mut engine, frame, window, 5);
+    assert_eq!(
+        probe::max_depth(),
+        0,
+        "unchanged measured partition rewalked the body"
+    );
+    assert_eq!(first, repeated);
+    assert_eq!(
+        eval.variable_value_by_name("position-chrome-calls"),
+        Some(Value::fixnum(2)),
+        "GNU pos_visible_p evaluates chrome once on every call, including body hits"
+    );
+    eval.eval_str("(setq position-chrome-height 4.0)").unwrap();
+    probe::reset();
+    let taller = query(&mut eval, &mut engine, frame, window, 5);
+    assert!(
+        probe::max_depth() > 0,
+        "a changed measured partition reused the old body"
+    );
+    assert!(taller.header_line_height > first.header_line_height);
+    assert!(taller.regions.text_body.height < first.regions.text_body.height);
+    assert_eq!(
+        eval.variable_value_by_name("position-chrome-calls"),
+        Some(Value::fixnum(3)),
+        "height convergence must not evaluate chrome twice"
+    );
+    probe::reset();
+    let repeated_tall = query(&mut eval, &mut engine, frame, window, 5);
+    assert_eq!(probe::max_depth(), 0);
+    assert_eq!(taller, repeated_tall);
+    assert_eq!(
+        eval.variable_value_by_name("position-chrome-calls"),
+        Some(Value::fixnum(4))
+    );
+    // Each partition owns its own bounded entry; returning to an unchanged
+    // short partition must not replace or reuse the tall partition's rows.
+    eval.eval_str("(setq position-chrome-height 1.0)").unwrap();
+    probe::reset();
+    let short_again = query(&mut eval, &mut engine, frame, window, 5);
+    assert_eq!(probe::max_depth(), 0);
+    assert_eq!(short_again, first);
+}
+
+#[test]
+fn position_query_chrome_edits_the_body_before_its_only_walk() {
+    let (mut eval, frame, buffer, window) = incr_editing_frame("line\nline\n", 800, 600);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    eval.eval_str(
+        r#"(setq mode-line-format nil tab-line-format nil
+        position-edit-calls 0 header-line-format
+        '(:eval (progn (setq position-edit-calls (1+ position-edit-calls))
+          (save-excursion (goto-char 1) (insert "x")) "header")))"#,
+    )
+    .unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    let observed = query(&mut eval, &mut engine, frame, window, 5);
+    assert_eq!(
+        eval.variable_value_by_name("position-edit-calls"),
+        Some(Value::fixnum(1)),
+        "GNU measures chrome once, then walks the resulting source"
+    );
+    assert_eq!(
+        eval.eval_str("(buffer-string)")
+            .unwrap()
+            .as_runtime_string_owned()
+            .as_deref(),
+        Some("xline\nline\n")
+    );
+    assert_eq!(
+        observed.layout_freshness,
+        eval.window_display_snapshot_freshness(frame, window, buffer),
+        "body geometry must carry the post-chrome source owner"
     );
 }

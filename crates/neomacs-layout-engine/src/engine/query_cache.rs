@@ -1,5 +1,6 @@
 //! Exact, bounded geometry reuse for synchronous queries. These entries are
 //! observations, never presentations or a source of retained window markers.
+use super::position_chrome::{PositionBodyPartition, PositionQueryPartition};
 use super::rows_lifetime::{CertifiedRowsHit, PublicationCandidate, StoredRows};
 use crate::buffer_source::render_attempt::QueryRowCoverage;
 use neovm_core::{
@@ -21,6 +22,12 @@ const MAX_TOTAL_ROWS: usize = 512;
 const MAX_TOTAL_POINTS: usize = 65_536;
 const MAX_ROWS: usize = 256;
 const MAX_POINTS: usize = 16_384;
+
+#[derive(Clone, Copy)]
+enum PartitionRequest {
+    Accepted,
+    Measured(PositionBodyPartition),
+}
 
 struct Entry {
     frame: FrameId,
@@ -136,6 +143,36 @@ impl QueryCache {
         window: WindowId,
         scope: WindowLayoutQueryScope,
     ) -> Option<WindowLayoutQuery> {
+        // Position callers must supply a freshly measured partition.
+        if matches!(scope, WindowLayoutQueryScope::Position { .. }) {
+            return None;
+        }
+        self.get_with_partition(evaluator, frame, window, scope, PartitionRequest::Accepted)
+    }
+
+    pub(super) fn get_position(
+        &self,
+        measured: PositionQueryPartition<'_>,
+        target: neovm_core::buffer::LispCharPos1,
+    ) -> Option<WindowLayoutQuery> {
+        let (evaluator, frame, window, partition) = measured.into_parts();
+        self.get_with_partition(
+            evaluator,
+            frame,
+            window,
+            WindowLayoutQueryScope::Position { target },
+            PartitionRequest::Measured(partition),
+        )
+    }
+
+    fn get_with_partition(
+        &self,
+        evaluator: &Context,
+        frame: FrameId,
+        window: WindowId,
+        scope: WindowLayoutQueryScope,
+        partition: PartitionRequest,
+    ) -> Option<WindowLayoutQuery> {
         let buffer = evaluator
             .frame_manager()
             .get(frame)?
@@ -167,6 +204,14 @@ impl QueryCache {
                 Payload::Legacy { query, collections } => (query, collections),
                 Payload::Certified(_) => return None,
             };
+            match partition {
+                PartitionRequest::Accepted => {}
+                PartitionRequest::Measured(measured) => {
+                    if PositionBodyPartition::observed(query.geometry()?) != measured {
+                        return None;
+                    }
+                }
+            }
             // Target-prefix metrics can differ from a completed row's metrics
             // when a later display element increases its height. Until the
             // cache carries a metric certificate for each stop, another scope
@@ -403,6 +448,8 @@ impl QueryCache {
                     .geometry()
                     .and_then(|g| g.layout_freshness.as_ref())
                     != snapshot.layout_freshness.as_ref()
+                || previous.geometry().map(PositionBodyPartition::observed)
+                    != Some(PositionBodyPartition::observed(snapshot))
         });
     }
 

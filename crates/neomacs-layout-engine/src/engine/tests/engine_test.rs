@@ -105,6 +105,8 @@ mod lazy_text_hit_test;
 mod mini_window_still_test;
 #[path = "mode_line_gate_engine_test.rs"]
 mod mode_line_gate_engine_test;
+#[path = "position_query_repeat_test.rs"]
+mod position_query_repeat_test;
 #[cfg(test)]
 #[path = "posn_current_matrix_clear_engine_test.rs"]
 mod posn_current_matrix_clear_engine_test;
