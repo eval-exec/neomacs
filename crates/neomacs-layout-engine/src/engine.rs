@@ -4463,6 +4463,13 @@ impl LayoutEngine {
             scope,
             neovm_core::window::WindowLayoutQueryScope::TextExtent { .. }
         );
+        // Position queries never read the cache (they remeasure chrome and
+        // line-number metric inputs). Do not let their observations consume
+        // bounded cache capacity or evict reusable rows either.
+        let position_query = matches!(
+            scope,
+            neovm_core::window::WindowLayoutQueryScope::Position { .. }
+        );
         let certified_rows = matches!(
             (policy.environment(), policy.admission(), scope),
             (
@@ -4489,10 +4496,6 @@ impl LayoutEngine {
             // on point. A cached observation carries the text-area partition
             // from its own point, so re-placing its rows would reproduce stale
             // chrome bounds. Run the canonical walk instead.
-            let position_query = matches!(
-                scope,
-                neovm_core::window::WindowLayoutQueryScope::Position { .. }
-            );
             if !text_extent
                 && !position_query
                 && let Some(query) = self.query_cache.get(evaluator, frame_id, window_id, scope)
@@ -4631,6 +4634,7 @@ impl LayoutEngine {
                 self.query_cache.remember_certified(evaluator, candidate);
             }
         } else if !text_extent
+            && !position_query
             && self.query_body_reuse_allowed
             && let Some(collections) = collections
         {

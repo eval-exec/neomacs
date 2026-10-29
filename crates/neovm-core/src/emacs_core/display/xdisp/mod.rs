@@ -8119,6 +8119,27 @@ impl PositionVisibility {
     }
 }
 
+/// Take a deferred chrome exit before a Position query is mapped to a layout
+/// error. GNU's redisplay handler propagates throws and non-error signals to
+/// the enclosing Lisp `catch`; leaving the exit pending would turn it into
+/// `DidNotConverge` and leak it into the next redisplay.
+fn take_position_query_flow(
+    eval: &mut super::eval::Context,
+    scope: crate::window::WindowLayoutQueryScope,
+    query_failed: bool,
+) -> Result<(), Flow> {
+    if query_failed
+        && matches!(
+            scope,
+            crate::window::WindowLayoutQueryScope::Position { .. }
+        )
+        && let Some(flow) = eval.take_mode_line_display_flow()
+    {
+        return Err(flow);
+    }
+    Ok(())
+}
+
 fn live_position_visibility(
     eval: &mut super::eval::Context,
     window: Option<&Value>,
@@ -8221,7 +8242,13 @@ fn live_position_visibility(
     let scope = pos.map_or(crate::window::WindowLayoutQueryScope::Viewport, |target| {
         crate::window::WindowLayoutQueryScope::Position { target }
     });
-    match eval.query_window_layout_scope(fid, wid, scope) {
+    let outcome = eval.query_window_layout_scope(fid, wid, scope);
+    take_position_query_flow(
+        eval,
+        scope,
+        matches!(&outcome, crate::window::WindowLayoutQueryOutcome::Failed(_)),
+    )?;
+    match outcome {
         crate::window::WindowLayoutQueryOutcome::Ready(query) => {
             Ok(query.into_geometry().as_ref().map(measure))
         }
@@ -9489,7 +9516,13 @@ fn compute_live_window_geometry_scope(
     {
         return Ok(None);
     }
-    match eval.query_window_layout_scope(fid, wid, scope) {
+    let outcome = eval.query_window_layout_scope(fid, wid, scope);
+    take_position_query_flow(
+        eval,
+        scope,
+        matches!(&outcome, crate::window::WindowLayoutQueryOutcome::Failed(_)),
+    )?;
+    match outcome {
         crate::window::WindowLayoutQueryOutcome::Ready(query) => Ok(query.into_geometry()),
         crate::window::WindowLayoutQueryOutcome::Unavailable => Ok(None),
         crate::window::WindowLayoutQueryOutcome::LayoutBusy => Err(signal(

@@ -318,3 +318,70 @@ fn chrome_position_queries_do_not_reenter_chrome_or_signal_layout_busy() {
         ));
     }
 }
+
+#[test]
+fn position_query_results_are_not_retained_in_the_query_cache() {
+    let (mut eval, frame, _buffer, window) = incr_editing_frame("line\nline\n", 800, 600);
+    eval.eval_str("(setq mode-line-format nil header-line-format nil tab-line-format nil)")
+        .unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    let position = WindowLayoutQueryScope::Position {
+        target: LispCharPos1::ONE,
+    };
+    engine
+        .query_window_layout(&mut eval, frame, window, position)
+        .unwrap();
+    assert!(
+        engine
+            .query_cache
+            .get(&eval, frame, window, position)
+            .is_none(),
+        "Position observations bypass cache reads and must not consume cache capacity"
+    );
+
+    // The cache still works for the scope that is allowed to read it.
+    let viewport = WindowLayoutQueryScope::Viewport;
+    engine
+        .query_window_layout(&mut eval, frame, window, viewport)
+        .unwrap();
+    assert!(
+        engine
+            .query_cache
+            .get(&eval, frame, window, viewport)
+            .is_some(),
+        "window-end observations must still be cached"
+    );
+}
+
+#[test]
+fn position_query_propagates_deferred_chrome_exit_to_lisp() {
+    use neovm_core::window::WindowLayoutQueryOutcome;
+
+    let (mut eval, frame, _buffer, _window) = incr_editing_frame("line\nline\n", 800, 600);
+    eval.frame_manager_mut().get_mut(frame).unwrap().initial = false;
+    eval.eval_str(
+        "(progn
+           (setq mode-line-format nil tab-line-format nil
+                 header-line-format '(:eval (throw 'chrome-exit 42)))
+           (goto-char 1))",
+    )
+    .unwrap();
+    let mut engine = WindowLayoutQueryEngine::new();
+    eval.install_window_layout_query(move |eval, frame, window, scope| {
+        match engine.query_window_layout(eval, frame, window, scope) {
+            Ok(query) => WindowLayoutQueryOutcome::Ready(query),
+            Err(error) => WindowLayoutQueryOutcome::Failed(error),
+        }
+    });
+
+    assert_eq!(
+        eval.eval_str("(catch 'chrome-exit (posn-at-point 1))")
+            .unwrap(),
+        Value::fixnum(42),
+        "the chrome throw must reach the enclosing Lisp catch"
+    );
+    assert!(
+        !eval.has_mode_line_display_flow(),
+        "the deferred flow must be consumed at the position-query boundary"
+    );
+}
