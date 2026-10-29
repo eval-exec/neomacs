@@ -1856,8 +1856,24 @@ fn test_invisible_p() {
 #[test]
 fn test_line_pixel_height() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_line_pixel_height(&vec![]).unwrap();
+    let mut ev = crate::emacs_core::Context::new();
+    let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
     assert_eq!(result, Value::fixnum(1));
+}
+
+#[test]
+fn line_pixel_height_on_a_gui_frame_is_the_line_height_not_one() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::emacs_core::Context::new();
+    let buf = ev.buffers.create_buffer("*lph*");
+    ev.buffers.set_current(buf);
+    let fid = ev.frames.create_frame("GUI", 800, 600, buf);
+    let frame = ev.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_height = 14.0;
+    assert!(ev.frames.select_frame(fid));
+    let result = builtin_line_pixel_height(&mut ev, &[]).unwrap();
+    assert_eq!(result, Value::fixnum(14));
 }
 
 #[test]
@@ -7268,7 +7284,10 @@ fn test_long_line_optimizations_p() {
 #[test]
 fn test_wrong_arity() {
     crate::test_utils::init_test_tracing();
-    assert!(builtin_line_pixel_height(&vec![Value::fixnum(1)]).is_err());
+    {
+        let mut ev = crate::emacs_core::Context::new();
+        assert!(builtin_line_pixel_height(&mut ev, &[Value::fixnum(1)]).is_err());
+    }
     {
         let mut ev = crate::emacs_core::Context::new();
         assert!(builtin_invisible_p(&mut ev, vec![]).is_err());

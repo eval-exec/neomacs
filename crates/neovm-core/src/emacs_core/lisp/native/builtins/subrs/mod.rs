@@ -8394,9 +8394,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "line-pixel-height",
-        NativeFn::ContextSlice(|_ctx, args| {
-            crate::emacs_core::xdisp::builtin_line_pixel_height(args)
-        }),
+        NativeFn::ContextSlice(crate::emacs_core::xdisp::builtin_line_pixel_height),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

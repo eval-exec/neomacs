@@ -5685,10 +5685,77 @@ pub(crate) fn builtin_invisible_p(eval: &mut super::eval::Context, args: Vec<Val
 
 /// (line-pixel-height) -> integer
 ///
-/// Batch-compatible behavior returns 1.
-pub(crate) fn builtin_line_pixel_height(args: &[Value]) -> EvalResult {
+/// GNU `Fline_pixel_height` (xdisp.c) lays out the screen line at point in
+/// the selected window and returns its height.  Terminal and batch rows are
+/// one line tall, so those frames answer 1.  Packages divide pixel extents by
+/// this value to count lines (dashboard's vertical centering does), so a
+/// constant 1 on a GUI frame inflated those counts by the font height.
+pub(crate) fn builtin_line_pixel_height(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+) -> EvalResult {
     expect_args("line-pixel-height", &args, 0)?;
-    Ok(Value::fixnum(1))
+    Ok(Value::fixnum(
+        selected_line_pixel_height(eval)?.unwrap_or(1),
+    ))
+}
+
+fn selected_line_pixel_height(eval: &mut super::eval::Context) -> Result<Option<i64>, Flow> {
+    let Some((fid, wid)) = resolve_live_window_identity(&eval.frames, None)? else {
+        return Ok(None);
+    };
+    let frame = eval.frames.get(fid).expect("resolved live frame");
+    if frame.effective_window_system().is_none() {
+        return Ok(None);
+    }
+    let line_height = (frame.char_height.round() as i64).max(1);
+    let Some(Window::Leaf { buffer_id, .. }) = frame.find_window(wid) else {
+        return Ok(Some(line_height));
+    };
+    let buffer_id = *buffer_id;
+    let pos = eval
+        .buffers
+        .get(buffer_id)
+        .expect("live window buffer")
+        .point_lisp_char_pos();
+    let row_height = |snapshot: &WindowDisplaySnapshot| {
+        let point = snapshot.point_for_buffer_pos(pos)?;
+        Some(
+            snapshot
+                .row_metrics(point.row)
+                .map_or(point.height, |row| row.height),
+        )
+    };
+    if let Some(snapshot) = eval.fresh_window_display_snapshot(fid, wid, buffer_id)
+        && let Some(height) = row_height(snapshot)
+    {
+        return Ok(Some(height));
+    }
+    let scope = crate::window::WindowLayoutQueryScope::Position { target: pos };
+    let measured = match eval.query_window_layout_scope(fid, wid, scope) {
+        crate::window::WindowLayoutQueryOutcome::Ready(query) => {
+            query.into_geometry().as_ref().and_then(row_height)
+        }
+        crate::window::WindowLayoutQueryOutcome::Unavailable => None,
+        crate::window::WindowLayoutQueryOutcome::LayoutBusy => {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(
+                    "Window layout query reentered an active layout callback",
+                )],
+            ));
+        }
+        crate::window::WindowLayoutQueryOutcome::Failed(failure) => {
+            return Err(signal(
+                LispCondition::Error,
+                vec![Value::string(failure.message())],
+            ));
+        }
+    };
+    // ponytail: a point the layout cannot place (before window-start, or no
+    // layout yet) falls back to the frame's default line height; GNU would
+    // lay out from point itself and also see taller faces on that line.
+    Ok(Some(measured.unwrap_or(line_height)))
 }
 
 /// (window-text-pixel-size &optional WINDOW FROM TO X-LIMIT Y-LIMIT MODE) -> (WIDTH . HEIGHT)
