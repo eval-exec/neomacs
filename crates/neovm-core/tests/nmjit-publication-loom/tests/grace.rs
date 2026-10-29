@@ -93,9 +93,9 @@ fn runtime() -> Arc<Runtime> {
 }
 
 impl Runtime {
-    fn enter(self: &Arc<Self>, owner: OwnerSlot) -> Result<View, Refusal> {
+    fn enter(runtime: &Arc<Self>, owner: OwnerSlot) -> Result<View, Refusal> {
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = runtime.state.lock().unwrap();
             match state.admission {
                 Admission::Running => {}
                 Admission::Closing | Admission::Stopped => return Err(Refusal::Closed),
@@ -110,8 +110,8 @@ impl Runtime {
         // Active is recorded BEFORE this load; stop cannot clear the ledger
         // during the acquisition window.
         Ok(View {
-            runtime: self.clone(),
-            table: TableId(self.current.load(Ordering::Acquire)),
+            runtime: runtime.clone(),
+            table: TableId(runtime.current.load(Ordering::Acquire)),
             owner,
         })
     }
@@ -130,8 +130,8 @@ impl Runtime {
         }
     }
 
-    fn stop(self: &Arc<Self>) -> Result<JitGracePeriod, Refusal> {
-        let mut state = self.state.lock().unwrap();
+    fn stop(runtime: &Arc<Self>) -> Result<JitGracePeriod, Refusal> {
+        let mut state = runtime.state.lock().unwrap();
         match state.admission {
             Admission::Running => state.admission = Admission::Closing,
             Admission::Closing => {}
@@ -147,7 +147,7 @@ impl Runtime {
         state.admission = Admission::Stopped;
         state.generation.0 += 1;
         Ok(JitGracePeriod {
-            runtime: self.clone(),
+            runtime: runtime.clone(),
             generation: state.generation,
         })
     }
@@ -172,7 +172,7 @@ fn replacement_waits_for_reader_and_stop_blocks_new_entries() {
         let runtime = runtime();
         let reader = {
             let runtime = runtime.clone();
-            thread::spawn(move || match runtime.enter(OwnerSlot(0)) {
+            thread::spawn(move || match Runtime::enter(&runtime, OwnerSlot(0)) {
                 Ok(view) => {
                     view.read();
                     thread::yield_now();
@@ -190,7 +190,7 @@ fn replacement_waits_for_reader_and_stop_blocks_new_entries() {
         };
         let keeper = {
             let runtime = runtime.clone();
-            thread::spawn(move || match runtime.stop() {
+            thread::spawn(move || match Runtime::stop(&runtime) {
                 Ok(grace) => runtime.reclaim(grace),
                 Err(Refusal::LiveActivation) => {}
                 Err(other) => panic!("unexpected first stop refusal: {other:?}"),
@@ -204,7 +204,7 @@ fn replacement_waits_for_reader_and_stop_blocks_new_entries() {
         let phase = runtime.state.lock().unwrap().admission;
         match phase {
             Admission::Closing => {
-                let grace = match runtime.stop() {
+                let grace = match Runtime::stop(&runtime) {
                     Ok(grace) => grace,
                     Err(other) => panic!("joined owners did not quiesce: {other:?}"),
                 };
@@ -213,7 +213,10 @@ fn replacement_waits_for_reader_and_stop_blocks_new_entries() {
             Admission::Stopped => {}
             Admission::Running | Admission::Poisoned => panic!("stop did not close admissions"),
         }
-        assert!(matches!(runtime.enter(OwnerSlot(1)), Err(Refusal::Closed)));
+        assert!(matches!(
+            Runtime::enter(&runtime, OwnerSlot(1)),
+            Err(Refusal::Closed)
+        ));
     });
 }
 
@@ -221,7 +224,7 @@ fn replacement_waits_for_reader_and_stop_blocks_new_entries() {
 fn negative_reclaim_while_old_view_lives() {
     support::negative(3, "OLD_TABLE_RECLAIMED_BEFORE_GRACE", || {
         let runtime = runtime();
-        let view = match runtime.enter(OwnerSlot(0)) {
+        let view = match Runtime::enter(&runtime, OwnerSlot(0)) {
             Ok(view) => view,
             Err(other) => panic!("fresh runtime refused: {other:?}"),
         };
@@ -243,7 +246,7 @@ fn negative_reclaim_while_old_view_lives() {
 fn negative_ack_with_live_activation() {
     support::negative(3, "ACK_WITH_LIVE_JIT_VIEW", || {
         let runtime = runtime();
-        let view = match runtime.enter(OwnerSlot(0)) {
+        let view = match Runtime::enter(&runtime, OwnerSlot(0)) {
             Ok(view) => view,
             Err(other) => panic!("fresh runtime refused: {other:?}"),
         };
@@ -266,14 +269,14 @@ fn negative_ack_with_live_activation() {
 fn negative_resume_uses_saved_pre_grace_pointer() {
     support::negative(2, "RESUME_USES_PRE_GRACE_POINTER", || {
         let runtime = runtime();
-        let view = match runtime.enter(OwnerSlot(0)) {
+        let view = match Runtime::enter(&runtime, OwnerSlot(0)) {
             Ok(view) => view,
             Err(other) => panic!("fresh runtime refused: {other:?}"),
         };
         let saved = view.table;
         drop(view); // broken compiler contract: saved address will be reused
         assert_eq!(runtime.replace(), Ok(()));
-        let grace = match runtime.stop() {
+        let grace = match Runtime::stop(&runtime) {
             Ok(grace) => grace,
             Err(other) => panic!("quiescent runtime refused: {other:?}"),
         };
@@ -289,20 +292,20 @@ fn negative_resume_uses_saved_pre_grace_pointer() {
 fn resume_reloads_descriptor_after_grace() {
     support::exhaustive(2, || {
         let runtime = runtime();
-        let old = match runtime.enter(OwnerSlot(0)) {
+        let old = match Runtime::enter(&runtime, OwnerSlot(0)) {
             Ok(view) => view,
             Err(other) => panic!("fresh runtime refused: {other:?}"),
         };
         old.read();
         drop(old);
         assert_eq!(runtime.replace(), Ok(()));
-        let grace = match runtime.stop() {
+        let grace = match Runtime::stop(&runtime) {
             Ok(grace) => grace,
             Err(other) => panic!("quiescent runtime refused: {other:?}"),
         };
         runtime.reclaim(grace);
         runtime.state.lock().unwrap().admission = Admission::Running;
-        let resumed = match runtime.enter(OwnerSlot(0)) {
+        let resumed = match Runtime::enter(&runtime, OwnerSlot(0)) {
             Ok(view) => view,
             Err(other) => panic!("resumed runtime refused: {other:?}"),
         };
@@ -327,7 +330,7 @@ fn starting_cancelled_native_and_retired_membership() {
                 };
             })
         };
-        match runtime.stop() {
+        match Runtime::stop(&runtime) {
             Ok(grace) => runtime.reclaim(grace),
             Err(Refusal::LiveActivation) => {}
             Err(other) => panic!("unexpected stop refusal: {other:?}"),
@@ -335,7 +338,7 @@ fn starting_cancelled_native_and_retired_membership() {
         support::join(owner);
         let phase = runtime.state.lock().unwrap().admission;
         if phase == Admission::Closing {
-            match runtime.stop() {
+            match Runtime::stop(&runtime) {
                 Ok(grace) => runtime.reclaim(grace),
                 Err(other) => panic!("cancelled starter blocked stop: {other:?}"),
             }
@@ -349,7 +352,7 @@ fn busy_entry_is_legal_and_never_unwrapped() {
         let runtime = runtime();
         let first = {
             let runtime = runtime.clone();
-            thread::spawn(move || match runtime.enter(OwnerSlot(0)) {
+            thread::spawn(move || match Runtime::enter(&runtime, OwnerSlot(0)) {
                 Ok(view) => view.read(),
                 Err(Refusal::Busy) => {}
                 Err(Refusal::Closed | Refusal::LiveActivation | Refusal::Poisoned) => {
@@ -357,7 +360,7 @@ fn busy_entry_is_legal_and_never_unwrapped() {
                 }
             })
         };
-        match runtime.enter(OwnerSlot(0)) {
+        match Runtime::enter(&runtime, OwnerSlot(0)) {
             Ok(view) => view.read(),
             Err(Refusal::Busy) => {}
             Err(Refusal::Closed | Refusal::LiveActivation | Refusal::Poisoned) => {
@@ -375,7 +378,7 @@ fn native_handoff_and_terminal_shutdown_follow_activation_exit() {
         let runtime = runtime();
         let worker = {
             let runtime = runtime.clone();
-            thread::spawn(move || match runtime.enter(OwnerSlot(0)) {
+            thread::spawn(move || match Runtime::enter(&runtime, OwnerSlot(0)) {
                 Ok(view) => {
                     view.read();
                     drop(view);
@@ -389,7 +392,7 @@ fn native_handoff_and_terminal_shutdown_follow_activation_exit() {
         };
         support::join(worker);
         runtime.state.lock().unwrap().owners[0] = Owner::Retired;
-        let grace = match runtime.stop() {
+        let grace = match Runtime::stop(&runtime) {
             Ok(grace) => grace,
             Err(other) => panic!("terminal handoff failed to quiesce: {other:?}"),
         };
@@ -413,14 +416,14 @@ fn poison_retains_published_and_retired_allocations() {
         let reader = {
             let runtime = runtime.clone();
             thread::spawn(move || {
-                if let Ok(view) = runtime.enter(OwnerSlot(0)) {
+                if let Ok(view) = Runtime::enter(&runtime, OwnerSlot(0)) {
                     view.read();
                 }
             })
         };
         support::join(poisoner);
         support::join(reader);
-        assert!(matches!(runtime.stop(), Err(Refusal::Poisoned)));
+        assert!(matches!(Runtime::stop(&runtime), Err(Refusal::Poisoned)));
         assert_eq!(
             runtime.state.lock().unwrap().tables,
             [TableState::Retired, TableState::Owned]
