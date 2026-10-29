@@ -1,5 +1,6 @@
 use super::*;
 use cosmic_text::{FontSystem, SubpixelBin};
+use objc2_core_foundation::CFData;
 
 fn monaco() -> (std::sync::Arc<Font>, String) {
     let mut system = FontSystem::new();
@@ -61,13 +62,119 @@ fn macos_native_masks_preserve_baseline_scale_and_grayscale() {
     assert!((large.top - 2 * small.top).abs() <= 3);
     native.clear();
     assert!(native.fonts.is_empty());
+    assert!(native.sources.is_empty());
+    assert!(native.backing.is_empty());
+}
+
+/// The ink centroid in pen-relative pixels, with y increasing upwards from the
+/// baseline (the same frame `RasterGlyphImage::left/top` describe).
+fn ink_centroid(mask: &RasterGlyphImage) -> (f32, f32) {
+    let width = mask.width as usize;
+    let mut total = 0u64;
+    let mut sum_x = 0u64;
+    let mut sum_y = 0u64;
+    for (row, pixels) in mask.data.chunks_exact(width).enumerate() {
+        for (col, &coverage) in pixels.iter().enumerate() {
+            let coverage = u64::from(coverage);
+            total += coverage;
+            sum_x += coverage * col as u64;
+            sum_y += coverage * row as u64;
+        }
+    }
+    assert!(total > 0, "centroid of an empty mask");
+    let x = mask.left as f32 + sum_x as f32 / total as f32 + 0.5;
+    let y = mask.top as f32 - (sum_y as f32 / total as f32 + 0.5);
+    (x, y)
+}
+
+/// A y subpixel bin must move native ink in the same direction, and by the
+/// same distance, as the Swash placement path it replaces. The two rasterizers
+/// otherwise disagree by 2*y_bin; production currently snaps bins to Zero, so
+/// only a direct comparison catches a regression here.
+#[test]
+fn macos_native_subpixel_placement_matches_swash() {
+    let (font, name) = monaco();
+    let mut native = NativeRasterizer::default();
+    let mut scale_context = swash::scale::ScaleContext::new();
+    let mut zero_native = None;
+    let mut zero_swash = None;
+    for bin in [
+        SubpixelBin::Zero,
+        SubpixelBin::One,
+        SubpixelBin::Two,
+        SubpixelBin::Three,
+    ] {
+        let mut request = key(&font, 'H', 32.0);
+        request.y_bin = bin;
+        let native_image = native.rasterize(&font, &name, request).unwrap();
+        let mut scaler = scale_context
+            .builder(font.as_swash())
+            .size(32.0)
+            .hint(true)
+            .build();
+        let swash_image = swash::scale::Render::new(&[swash::scale::Source::Outline])
+            .format(swash::zeno::Format::Alpha)
+            .offset(swash::zeno::Vector::new(0.0, bin.as_float()))
+            .render(&mut scaler, request.glyph_id)
+            .map(RasterGlyphImage::from_swash)
+            .expect("Monaco H has an outline");
+        let (_, native_y) = ink_centroid(&native_image);
+        let (_, swash_y) = ink_centroid(&swash_image);
+        if bin == SubpixelBin::Zero {
+            zero_native = Some(native_y);
+            zero_swash = Some(swash_y);
+            continue;
+        }
+        let native_shift = native_y - zero_native.expect("zero bin runs first");
+        let swash_shift = swash_y - zero_swash.expect("zero bin runs first");
+        assert!(
+            native_shift.abs() > 0.05,
+            "{bin:?}: native ink did not move"
+        );
+        assert!(
+            (native_shift - swash_shift).abs() < 0.35,
+            "{bin:?}: native shift {native_shift} vs Swash shift {swash_shift}"
+        );
+    }
+    let (zero_native, zero_swash) = (zero_native.unwrap(), zero_swash.unwrap());
+    assert!(
+        (zero_native - zero_swash).abs() < 1.0,
+        "zero-bin baseline differs: native {zero_native} vs Swash {zero_swash}"
+    );
+}
+
+/// One backing-file copy serves every raster size, and the atlas keeps one
+/// exact face per font id.
+#[test]
+fn macos_native_shares_one_backing_copy_across_sizes() {
+    let (font, name) = monaco();
+    let file = backing_hash(font.data());
+    let mut native = NativeRasterizer::default();
+    let small = native
+        .rasterize(&font, &name, key(&font, 'H', 16.0))
+        .unwrap();
+    assert!(!small.data.is_empty());
+    let first = &*native.backing[&file][0] as *const CFData;
+    let large = native
+        .rasterize(&font, &name, key(&font, 'H', 32.0))
+        .unwrap();
+    assert!(!large.data.is_empty());
+    assert_eq!(native.sources.len(), 1, "one exact face per font id");
+    assert_eq!(native.fonts.len(), 2, "one physical-size font per size");
+    assert_eq!(native.backing.len(), 1, "one copy of the backing file");
+    assert_eq!(native.backing[&file].len(), 1);
+    assert_eq!(
+        &*native.backing[&file][0] as *const CFData, first,
+        "the same CFData is reused across sizes"
+    );
 }
 
 #[test]
 fn macos_native_replay_never_substitutes_a_different_font() {
     let (font, name) = monaco();
-    assert!(open_exact_font(font.data(), "Not-The-Selected-Font", 16.0).is_none());
-    let opened = open_exact_font(font.data(), &name, 16.0).unwrap();
+    let data = CFData::from_bytes(font.data());
+    assert!(open_exact_font(&data, "Not-The-Selected-Font", 16.0).is_none());
+    let opened = open_exact_font(&data, &name, 16.0).unwrap();
     assert_eq!(unsafe { opened.post_script_name() }.to_string(), name);
     let mut native = NativeRasterizer::default();
     let space = native
@@ -80,11 +187,54 @@ fn macos_native_replay_never_substitutes_a_different_font() {
 }
 
 #[test]
-fn macos_default_rasterization_does_not_assume_an_rgb_lcd() {
-    assert!(
-        !neomacs_layout_engine::font::subpixel::default_subpixel_order()
-            .allows_horizontal_subpixel()
+fn macos_native_shares_backing_across_separately_pinned_collection_faces() {
+    let mut system = FontSystem::new();
+    let mut files = neomacs_font_materializer::FontFileCache::new();
+    let mut native = NativeRasterizer::default();
+    let mut fonts = Vec::new();
+    // Load the first face before registering the second, as redisplay does
+    // when another style from the same collection is first encountered.
+    for index in [0, 1] {
+        let pin = files
+            .pin_exact_face(&mut system, "/System/Library/Fonts/Menlo.ttc", index)
+            .unwrap();
+        let id = pin.fontdb_id();
+        let name = system.db().face(id).unwrap().post_script_name.clone();
+        let font = system.get_font(id, fontdb::Weight::NORMAL).unwrap();
+        let mask = native
+            .rasterize(&font, &name, key(&font, 'H', 16.0))
+            .unwrap();
+        assert!(mask.data.iter().any(|&p| p > 0));
+        assert_eq!(
+            unsafe { native.sources[&id].as_ref().unwrap().post_script_name() }.to_string(),
+            name,
+            "backing reuse must preserve the selected collection member"
+        );
+        fonts.push(font);
+    }
+    assert_ne!(fonts[0].data().as_ptr(), fonts[1].data().as_ptr());
+    assert_eq!(fonts[0].data(), fonts[1].data());
+    assert_eq!(native.sources.len(), 2);
+    assert_eq!(
+        native.backing.len(),
+        1,
+        "one copy across independent mappings"
     );
+    assert_eq!(native.backing.values().next().unwrap().len(), 1);
+}
+
+#[test]
+fn macos_native_backing_compares_bytes_on_hash_collision() {
+    let mut backing = FxHashMap::default();
+    // Force a collision with different, equally sized contents. A hash is
+    // only an accelerator, never the authority for selecting font bytes.
+    backing.insert(backing_hash(b"new"), vec![CFData::from_bytes(b"old")]);
+    let data = intern_backing(&mut backing, b"new");
+    assert_eq!(data.to_vec(), b"new");
+    assert_eq!(backing[&backing_hash(b"new")].len(), 2);
+    let again = intern_backing(&mut backing, &b"new".to_vec());
+    assert!(std::ptr::eq(&*data, &*again));
+    assert_eq!(backing[&backing_hash(b"new")].len(), 2);
 }
 
 /// Inspect the same exact Monaco glyphs with Swash (upper row) and Core

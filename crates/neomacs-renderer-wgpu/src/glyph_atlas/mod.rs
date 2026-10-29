@@ -1400,8 +1400,12 @@ impl WgpuGlyphAtlas {
             .font_system
             .get_font(cache_key.font_id, cache_key.font_weight)?;
 
+        // The native macOS adapter publishes a grayscale coverage mask. Keep
+        // it on the Alpha path; a future subpixel mode must stay on Swash (or
+        // grow a subpixel mask of its own).
         #[cfg(target_os = "macos")]
-        if let Some(info) = self.font_system.db().face(cache_key.font_id)
+        if render_mode == GlyphRenderMode::Alpha
+            && let Some(info) = self.font_system.db().face(cache_key.font_id)
             && let Some(image) =
                 self.native_rasterizer
                     .rasterize(&font, &info.post_script_name, cache_key)
