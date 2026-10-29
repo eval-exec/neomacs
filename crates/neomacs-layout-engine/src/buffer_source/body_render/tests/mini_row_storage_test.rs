@@ -40,6 +40,7 @@ fn window_params() -> WindowParams {
         vscroll: 0,
         wrap_mode: LineWrapMode::Wrap,
         word_wrap: false,
+        word_wrap_policy: Default::default(),
         tab_width: 8,
         scroll_conservatively: 0,
         scroll_step: 0,

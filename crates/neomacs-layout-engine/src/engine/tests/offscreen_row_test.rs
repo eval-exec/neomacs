@@ -122,6 +122,7 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
             inherited_line_spacing: 0.0,
             character_wrap: false,
             word_wrap: false,
+            word_wrap_policy: Default::default(),
             fringe: None,
             width: key.partition.text_body().width,
             text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::at_frame_x(

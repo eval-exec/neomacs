@@ -2919,3 +2919,29 @@ fn universal_argument_move_down_via_cu_5_cn() {
     }
     assert_pair_exact_display("universal_argument_move_down_via_cu_5_cn", &gnu, &neo);
 }
+
+#[test]
+fn category_word_wrap_moves_to_the_same_cjk_row_as_gnu() {
+    let (mut gnu, mut neo) = boot_pair("");
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        r#"(progn (delete-other-windows) (select-window (split-window nil -24 'right)) (message "catwrap:%S" (mapcar (lambda (enabled) (switch-to-buffer (get-buffer-create (if enabled "*catwrap-on*" "*catwrap-off*"))) (insert "supertag v0.4 " (make-string 60 ?提)) (setq-local word-wrap t truncate-lines nil truncate-partial-width-windows nil word-wrap-by-category enabled) (goto-char 1) (redisplay t) (vertical-motion 1) (point)) '(nil t))))"#,
+    );
+    let ready = |grid: &[String]| grid.iter().any(|row| row.contains("catwrap:(15 19)"));
+    gnu.read_until(Duration::from_secs(8), ready);
+    neo.read_until(Duration::from_secs(8), ready);
+    read_both(&mut gnu, &mut neo, Duration::from_millis(500));
+    for (name, session) in [("GNU", &gnu), ("Neomacs", &neo)] {
+        assert!(
+            ready(&session.text_grid()),
+            "{name}: {}",
+            session.text_grid().join("\n")
+        );
+    }
+    assert_pair_exact_display(
+        "category_word_wrap_moves_to_the_same_cjk_row_as_gnu",
+        &gnu,
+        &neo,
+    );
+}

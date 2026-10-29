@@ -4043,7 +4043,7 @@ fn buffer_text_overflow_render_request_handles_character_wrap_transition() {
             80.0,
             crate::display_row::append_context::RightEdgeMarkerColumn::NotReserved,
             LineWrapMode::Wrap,
-            word_wrap,
+            word_wrap.checkpoint(),
             DisplayRowVisibilityLimit {
                 allow_partial: false,
                 max_rows: 4,
@@ -6938,7 +6938,7 @@ fn buffer_text_source_append_context_appends_source_char() {
             'a',
             80.0,
             LineWrapMode::Wrap,
-            WordWrapRenderState::new(false)
+            WordWrapRenderState::new(false).checkpoint()
         ),
         DisplayRowTextOverflowDecision::Fits
     );
@@ -6947,7 +6947,7 @@ fn buffer_text_source_append_context_appends_source_char() {
             'a',
             80.0,
             LineWrapMode::Wrap,
-            WordWrapRenderState::new(false)
+            WordWrapRenderState::new(false).checkpoint()
         ),
         DisplaySourceTextCharOverflowAction::Fits
     ));
@@ -6956,7 +6956,7 @@ fn buffer_text_source_append_context_appends_source_char() {
             'a',
             4.0,
             LineWrapMode::Truncate,
-            WordWrapRenderState::new(false)
+            WordWrapRenderState::new(false).checkpoint()
         ),
         DisplaySourceTextCharOverflowAction::Truncate { .. }
     ));
@@ -6965,7 +6965,7 @@ fn buffer_text_source_append_context_appends_source_char() {
             'a',
             4.0,
             LineWrapMode::Wrap,
-            WordWrapRenderState::new(false)
+            WordWrapRenderState::new(false).checkpoint()
         ),
         DisplaySourceTextCharOverflowAction::CharacterWrap { .. }
     ));
@@ -6980,7 +6980,7 @@ fn buffer_text_source_append_context_appends_source_char() {
         DisplayRowGlyphCheckpoint::default(),
     );
     assert!(matches!(
-        prepared_append.overflow_action('a', 4.0, LineWrapMode::Wrap, word_wrap),
+        prepared_append.overflow_action('a', 4.0, LineWrapMode::Wrap, word_wrap.checkpoint()),
         DisplaySourceTextCharOverflowAction::WordWrap { break_candidate, .. }
             if break_candidate.byte_idx() == 0
                 && break_candidate.charpos() == 0
@@ -7746,7 +7746,7 @@ fn buffer_text_source_append_context_prepares_current_text_row_source_char() {
             'a',
             80.0,
             LineWrapMode::Wrap,
-            WordWrapRenderState::new(false)
+            WordWrapRenderState::new(false).checkpoint()
         ),
         DisplayRowTextOverflowDecision::Fits
     );
@@ -11297,6 +11297,7 @@ fn test_display_space_window_params() -> WindowParams {
         vscroll: 0,
         wrap_mode: LineWrapMode::Wrap,
         word_wrap: false,
+        word_wrap_policy: Default::default(),
         tab_width: 8,
         scroll_conservatively: 0,
         scroll_step: 0,

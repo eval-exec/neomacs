@@ -12826,3 +12826,26 @@ fn minibuffer_selected_window_requires_an_active_selected_minibuffer() {
     );
     assert_eq!(result, "OK (nil (t t t) (t nil nil) t (0 nil))");
 }
+
+#[test]
+fn category_word_wrap_respects_custom_ascii_categories_and_kinsoku() {
+    let result = bootstrap_eval_one_with_frame(
+        r#"(progn
+      (delete-other-windows)
+      (select-window (split-window nil -24 'right))
+      (mapcar
+       (lambda (kind)
+         (switch-to-buffer (get-buffer-create (format " *category-wrap-%s*" kind)))
+         (set-category-table (copy-category-table))
+         (setq-local word-wrap t truncate-lines nil truncate-partial-width-windows nil word-wrap-by-category t)
+         (modify-category-entry ?x ?|)
+         (cond ((eq kind 'plain) (insert "supertag v0.4 " (make-string 60 ?x)))
+               ((eq kind 'closing) (insert (make-string 23 ?x) "!" (make-string 20 ?x)) (modify-category-entry ?! ?|) (modify-category-entry ?! ?>))
+               ((eq kind 'opening) (insert (make-string 22 ?x) "?" (make-string 20 ?x)) (modify-category-entry ?? ?|) (modify-category-entry ?? ?<)))
+         (goto-char 1)
+         (let ((noninteractive nil)) (vertical-motion 1))
+         (point))
+       '(plain closing opening)))"#,
+    );
+    assert_eq!(result, "OK (24 23 23)");
+}

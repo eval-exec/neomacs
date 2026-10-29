@@ -33,9 +33,10 @@ pub(crate) struct WordWrapBreakCandidate {
     available: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct WordWrapRenderState {
     enabled: bool,
+    policy: neovm_core::window::WordWrapPolicy,
     may_wrap: bool,
     candidate: WordWrapBreakCandidate,
 }
@@ -594,7 +595,7 @@ impl DisplayRowTextOverflowDecision {
         advance_px: f32,
         right_edge_px: f32,
         wrap_mode: LineWrapMode,
-        word_wrap: WordWrapRenderState,
+        word_wrap: Option<WordWrapBreakCandidate>,
     ) -> Self {
         if ch == '\t' || x_px + advance_px <= right_edge_px {
             Self::Fits
@@ -608,10 +609,8 @@ impl DisplayRowTextOverflowDecision {
             // xdisp.c:26611-26641) without touching the walk/append
             // lifecycle.
             Self::Truncate
-        } else if word_wrap.has_candidate() {
-            Self::WordWrap {
-                break_candidate: word_wrap.candidate(),
-            }
+        } else if let Some(break_candidate) = word_wrap {
+            Self::WordWrap { break_candidate }
         } else {
             Self::CharacterWrap
         }
@@ -763,17 +762,29 @@ impl WordWrapRenderState {
     pub(crate) fn new(enabled: bool) -> Self {
         Self {
             enabled,
+            policy: Default::default(),
             may_wrap: false,
             candidate: WordWrapBreakCandidate::default(),
         }
     }
 
-    pub(crate) fn is_enabled(self) -> bool {
+    pub(crate) fn with_policy(mut self, policy: neovm_core::window::WordWrapPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }
 
-    pub(crate) fn can_record_candidate(self, ch: char) -> bool {
-        self.enabled && self.may_wrap && char_can_wrap_before_basic(ch)
+    pub(crate) fn can_record_candidate(&self, ch: char) -> bool {
+        self.enabled
+            && self.may_wrap
+            && !matches!(ch, '\n' | '\r')
+            && self
+                .policy
+                .opportunity(ch as u32, neovm_core::window::WordWrapDirection::Forward)
+                .before()
     }
 
     #[cfg(test)]
@@ -821,7 +832,10 @@ impl WordWrapRenderState {
     }
 
     pub(crate) fn allow_after_current_char(&mut self, ch: char) {
-        self.may_wrap = char_can_wrap_after_basic(ch);
+        self.may_wrap = self
+            .policy
+            .opportunity(ch as u32, neovm_core::window::WordWrapDirection::Forward)
+            .after();
     }
 
     pub(crate) fn disallow_after_current_char(&mut self) {
@@ -833,11 +847,15 @@ impl WordWrapRenderState {
         self.candidate.clear();
     }
 
-    pub(crate) fn has_candidate(self) -> bool {
+    pub(crate) fn has_candidate(&self) -> bool {
         self.enabled && self.candidate.is_available()
     }
 
-    pub(crate) fn candidate(self) -> WordWrapBreakCandidate {
+    pub(crate) fn checkpoint(&self) -> Option<WordWrapBreakCandidate> {
+        self.has_candidate().then_some(self.candidate)
+    }
+
+    pub(crate) fn candidate(&self) -> WordWrapBreakCandidate {
         self.candidate
     }
 }
@@ -1442,19 +1460,4 @@ pub(crate) fn next_window_start_for_point_line_continuation<B: LayoutBufferView>
         .skip(1)
         .find_map(row_next_window_start_charpos)
         .filter(|&pos| pos > current_start)
-}
-
-#[inline]
-fn is_word_wrap_whitespace(ch: char) -> bool {
-    matches!(ch, ' ' | '\t')
-}
-
-#[inline]
-fn char_can_wrap_before_basic(ch: char) -> bool {
-    !matches!(ch, ' ' | '\t' | '\n' | '\r')
-}
-
-#[inline]
-fn char_can_wrap_after_basic(ch: char) -> bool {
-    is_word_wrap_whitespace(ch)
 }

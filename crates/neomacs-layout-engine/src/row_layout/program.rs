@@ -45,6 +45,7 @@ pub(crate) struct RowProgramGeometry {
     pub inherited_line_spacing: f32,
     pub character_wrap: bool,
     pub word_wrap: bool,
+    pub word_wrap_policy: neovm_core::window::WordWrapPolicy,
     pub fringe: Option<crate::buffer_source::fringe_arrows::TruncationContinuationFringeRequest>,
     pub width: f32,
     pub text_origin: DisplayRowTextAreaOrigin,
@@ -809,7 +810,8 @@ impl RowProgram {
         let mut scalar_operations = rustc_hash::FxHashSet::default();
         let mut word_wrap = crate::display_row::walk_state::WordWrapRenderState::new(
             can_wrap && self.geometry.word_wrap,
-        );
+        )
+        .with_policy(self.geometry.word_wrap_policy.clone());
         while let Some((original, original_plan)) = operations.get(operation_index) {
             let item = if operation_offset == 0 {
                 original.clone()

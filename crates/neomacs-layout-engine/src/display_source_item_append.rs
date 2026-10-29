@@ -235,7 +235,7 @@ impl DisplaySourceTextCharPreparedAppend {
         ch: char,
         right_edge_px: f32,
         wrap_mode: LineWrapMode,
-        word_wrap: WordWrapRenderState,
+        word_wrap: Option<crate::display_row::walk_state::WordWrapBreakCandidate>,
     ) -> DisplayRowTextOverflowDecision {
         DisplayRowTextOverflowDecision::for_char(
             ch,
@@ -252,7 +252,7 @@ impl DisplaySourceTextCharPreparedAppend {
         ch: char,
         right_edge_px: f32,
         wrap_mode: LineWrapMode,
-        word_wrap: WordWrapRenderState,
+        word_wrap: Option<crate::display_row::walk_state::WordWrapBreakCandidate>,
     ) -> DisplaySourceTextCharOverflowAction {
         DisplaySourceTextCharOverflowAction::for_decision(self.overflow_decision(
             ch,

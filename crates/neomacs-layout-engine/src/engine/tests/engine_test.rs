@@ -1,3 +1,6 @@
+#[path = "category_word_wrap_test.rs"]
+mod category_word_wrap_test;
+
 /// A surface point in a presentation composed with nothing in motion.
 ///
 /// The production path builds the same value by mapping through the projection
@@ -529,7 +532,7 @@ fn buffer_text_row_overflow_decision_names_main_text_wrap_policy() {
             6.0,
             10.0,
             LineWrapMode::Truncate,
-            empty_wrap
+            empty_wrap.checkpoint()
         ),
         DisplayRowTextOverflowDecision::Fits
     );
@@ -540,7 +543,7 @@ fn buffer_text_row_overflow_decision_names_main_text_wrap_policy() {
             16.0,
             10.0,
             LineWrapMode::Truncate,
-            empty_wrap
+            empty_wrap.checkpoint()
         ),
         DisplayRowTextOverflowDecision::Fits
     );
@@ -551,7 +554,7 @@ fn buffer_text_row_overflow_decision_names_main_text_wrap_policy() {
             6.0,
             10.0,
             LineWrapMode::Truncate,
-            empty_wrap
+            empty_wrap.checkpoint()
         ),
         DisplayRowTextOverflowDecision::Truncate
     );
@@ -562,7 +565,7 @@ fn buffer_text_row_overflow_decision_names_main_text_wrap_policy() {
             6.0,
             10.0,
             LineWrapMode::Wrap,
-            empty_wrap
+            empty_wrap.checkpoint()
         ),
         DisplayRowTextOverflowDecision::CharacterWrap
     );
@@ -585,7 +588,7 @@ fn buffer_text_row_overflow_decision_names_main_text_wrap_policy() {
             6.0,
             10.0,
             LineWrapMode::Wrap,
-            word_wrap
+            word_wrap.checkpoint()
         ),
         DisplayRowTextOverflowDecision::WordWrap {
             break_candidate: word_wrap.candidate(),
@@ -1786,6 +1789,7 @@ fn test_window_params() -> WindowParams {
         vscroll: 0,
         wrap_mode: LineWrapMode::Wrap,
         word_wrap: false,
+        word_wrap_policy: Default::default(),
         tab_width: 8,
         scroll_conservatively: 0,
         scroll_step: 0,

@@ -8,6 +8,7 @@ fn geometry(width: f32) -> RowProgramGeometry {
         inherited_line_spacing: 0.0,
         character_wrap: false,
         word_wrap: false,
+        word_wrap_policy: Default::default(),
         fringe: None,
         width,
         text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::row_local(),
@@ -606,4 +607,65 @@ fn contextual_gui_resume_requires_its_native_font_authority() {
     let captured =
         RowProgram::capture(geometry, inputs, faces.clone(), &mut terminal, limits()).unwrap();
     assert!(captured.compute_visual_rows(16, || false).unwrap().len() > 1);
+}
+
+#[test]
+fn category_word_wrap_worker_uses_frozen_rules_after_lisp_table_changes() {
+    use neovm_core::buffer::{BufferId, CharPos0, EmacsBytePos};
+    use neovm_core::window::{WordWrapMode, WordWrapPolicy};
+    let mut eval = neovm_core::emacs_core::Context::new();
+    eval.eval_str("(progn (define-category ?| \"line breakable\") (modify-category-entry ?x ?|))")
+        .unwrap();
+    let policy = WordWrapPolicy::for_buffer(
+        eval.buffer_manager().current_buffer().unwrap(),
+        WordWrapMode::Category,
+    );
+    let text = "a xxxxxxxxx";
+    let face = FaceId::new(1);
+    let faces = vec![DisplayRowFace::from_resolved(
+        face,
+        &ResolvedFace::default(),
+    )];
+    let mut measurer = DisplayRowGlyphMeasurer::new(&faces, None, 8.0);
+    let mut geometry = geometry(40.0);
+    geometry.character_wrap = true;
+    geometry.word_wrap = true;
+    geometry.word_wrap_policy = policy;
+    let pos =
+        |n| DisplaySourcePosition::buffer(BufferId(1), CharPos0::new(n), EmacsBytePos::new(n));
+    let program = RowProgram::capture(
+        geometry,
+        [
+            DisplayItem::new(
+                SourceSpan::new(pos(0), pos(text.len())),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::TextRun(DisplayTextRun::independent(text)),
+            ),
+            DisplayItem::new(
+                SourceSpan::new(pos(text.len()), pos(text.len() + 1)),
+                RenderFaceRef::FaceId(face),
+                DisplayItemKind::RowBreak(DisplayRowBreak {
+                    line_height: DisplayLineHeightPolicy::Default,
+                    line_spacing: DisplayLineSpacingPolicy::Inherit,
+                }),
+            ),
+        ],
+        faces.clone(),
+        &mut measurer,
+        limits(),
+    )
+    .unwrap();
+    eval.eval_str("(aset (char-category-set ?x) ?| nil)")
+        .unwrap();
+    let first_row_chars = std::thread::spawn(move || {
+        program.compute_visual_rows(16, || false).unwrap()[0]
+            .slots
+            .len()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(
+        first_row_chars, 5,
+        "the worker must fill the row using the captured category rules"
+    );
 }

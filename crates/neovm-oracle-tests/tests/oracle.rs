@@ -141,3 +141,6 @@ mod treesit_grammar_loading;
 
 #[path = "oracle_startup_frame_lifecycle.rs"]
 mod oracle_startup_frame_lifecycle;
+
+#[path = "oracle_category_word_wrap.rs"]
+mod oracle_category_word_wrap;

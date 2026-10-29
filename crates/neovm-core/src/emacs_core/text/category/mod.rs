@@ -191,6 +191,23 @@ fn category_set_bits(category_set: &Value) -> Option<u128> {
     }
 }
 
+pub(crate) fn category_bit_runs(buffer: &crate::buffer::Buffer) -> Option<Vec<(u32, u32, u128)>> {
+    let table = active_category_table_for_buffer(Some(buffer)).ok()?;
+    Some(
+        super::chartable::char_table_atomic_runs_in_range(&table, 0, i64::MAX)
+            .ok()?
+            .into_iter()
+            .map(|(set, start, end)| {
+                (
+                    start as u32,
+                    end as u32,
+                    category_set_bits(&set).unwrap_or(0),
+                )
+            })
+            .collect(),
+    )
+}
+
 /// Read one native category projection without retaining a category-set value.
 pub(crate) fn character_category_bits(buffer: &crate::buffer::Buffer, code: u32) -> Option<u128> {
     let table = active_category_table_for_buffer(Some(buffer)).ok()?;

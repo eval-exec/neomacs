@@ -310,6 +310,7 @@ pub struct WindowParams {
     pub wrap_mode: LineWrapMode,
     /// Whether to wrap at word boundaries
     pub word_wrap: bool,
+    pub word_wrap_policy: neovm_core::window::WordWrapPolicy,
     /// Tab width in columns
     pub tab_width: i32,
     /// Custom tab stop positions (column numbers), from tab-stop-list buffer-local.
