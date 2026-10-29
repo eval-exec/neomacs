@@ -106,3 +106,16 @@ field exists. Busy is legal; real fixture retries use the landed Deadline
 helper. No count-capped contention loop, new ignore or unconditional read of a
 debug-only item is permitted. Tests run with debug assertions on, and release
 all-target checks remain required.
+
+## Isolated compiler driver
+
+The core `nmjit_n1_sketch_compile_contracts` entry remains opt-in behind
+`contract-fixtures` and invokes the standalone `nmjit-type-contracts` workspace.
+The same positive client and all seven negative clients above remain unchanged.
+The independent sketches must have no neovm-core/Cranelift dependency: otherwise
+trybuild inherits the entire editor graph and recompiles it for its two sets of
+diagnostic flags inside the test watchdog. The old generated project had 83
+dependencies including neovm-core. The standalone driver has only pinned
+trybuild 1.0.121, and its generated client project must contain no engine crate.
+The original 600-second watchdog and every assertion remain in effect. This is
+a compiler-harness boundary repair, not a skipped, quarantined or deleted case.

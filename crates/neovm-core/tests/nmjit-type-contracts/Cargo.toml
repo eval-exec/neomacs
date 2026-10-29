@@ -1,0 +1,17 @@
+[package]
+name = "nmjit-type-contracts"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Independent N1 API sketches must not inherit the engine's dependency graph.
+[workspace]
+
+[dev-dependencies]
+trybuild = "=1.0.121"
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"

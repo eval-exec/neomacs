@@ -29,7 +29,25 @@ fn nmjit_n1_sketch_types_are_confined() {
 #[cfg(feature = "contract-fixtures")]
 #[test]
 fn nmjit_n1_sketch_compile_contracts() {
-    let cases = trybuild::TestCases::new();
-    cases.pass("tests/nmjit_n1/ui/pass_checked.rs");
-    cases.compile_fail("tests/nmjit_n1/ui/fail_*.rs");
+    // The sketches have no engine dependency. A trybuild driver in this crate
+    // inherits all core dependencies and rebuilds them for its diagnostic flags,
+    // so use an isolated specification workspace without changing any client.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/nmjit-type-contracts/Cargo.toml");
+    let status = std::process::Command::new(env!("CARGO"))
+        .args(["test", "--locked", "--manifest-path"])
+        .arg(manifest)
+        .args([
+            "--test",
+            "contracts",
+            "--",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .status()
+        .expect("launch isolated N1 sketch contracts");
+    assert!(
+        status.success(),
+        "N1 sketch compiler contract failed: {status}"
+    );
 }
