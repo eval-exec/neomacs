@@ -20,6 +20,8 @@ use crate::emacs_core::SymId;
 use crate::window::{FrameManager, WindowId};
 use strum::IntoStaticStr;
 
+mod raw_plist_lookup;
+
 /// Lisp variables that control native text-property resolution.
 ///
 /// GNU keeps these in predeclared `V...`/`Q...` globals.  A closed Rust enum
@@ -318,21 +320,7 @@ fn current_textprop_variable_value(
 }
 
 fn plist_get_value(plist: Value, prop: Value) -> Option<Value> {
-    let mut tail = plist;
-    loop {
-        if !tail.is_cons() {
-            return None;
-        };
-        let pair_car = tail.cons_car();
-        let pair_cdr = tail.cons_cdr();
-        if !pair_cdr.is_cons() {
-            return None;
-        };
-        if eq_value(&pair_car, &prop) {
-            return Some(pair_cdr.cons_car());
-        }
-        tail = pair_cdr.cons_cdr();
-    }
+    raw_plist_lookup::get(plist, prop)
 }
 
 fn plist_slice_get_value(plist: &[(Value, Value)], prop: Value) -> Option<Value> {
@@ -4204,3 +4192,7 @@ mod text_property_any_interval_tests;
 #[cfg(test)]
 #[path = "tests/fontification_scan_test.rs"]
 mod fontification_scan_tests;
+
+#[cfg(test)]
+#[path = "tests/raw_plist_lookup_test.rs"]
+mod raw_plist_lookup_tests;
