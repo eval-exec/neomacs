@@ -94,15 +94,44 @@ impl Context {
 
         self.enter_interpreted_eval_depth()?;
 
-        let result = self.maybe_grow_eval_stack(|ctx| {
-            ctx.maybe_quit_before_gc()?;
-            if ctx.gc_safe_point_exact_should_collect() {
-                ctx.collect_at_eval_safe_point(form);
-            }
-            ctx.eval_sub_cons(form)
-        });
+        // The depth-sampled stack probe is the rare arm; the common entry
+        // runs GNU's quit/GC guards and the cons dispatch directly instead of
+        // through a grow callback, so one cons form is one call from here.
+        let depth = self.depth;
+        let result = if depth < STACK_GROWTH_PROBE_START_DEPTH
+            || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
+        {
+            self.eval_sub_cons_fast(form)
+        } else {
+            self.eval_sub_cons_probing(form)
+        };
         self.depth -= 1;
         result
+    }
+
+    /// The non-probing half of [`Self::eval_sub`]'s cons path: GNU's
+    /// `maybe_quit`/`maybe_gc` and the cons dispatch, kept out of the
+    /// depth-sampled growth callback.
+    #[inline(always)]
+    fn eval_sub_cons_fast(&mut self, form: Value) -> EvalResult {
+        self.maybe_quit_before_gc()?;
+        if self.gc_safe_point_exact_should_collect() {
+            self.collect_at_eval_safe_point(form);
+        }
+        self.eval_sub_cons(form)
+    }
+
+    /// [`Self::eval_sub_cons_fast`] at a depth that probes the native stack,
+    /// where it may grow.
+    #[inline(never)]
+    fn eval_sub_cons_probing(&mut self, form: Value) -> EvalResult {
+        super::native_stack::maybe_grow_tracking_jit_limit(
+            self,
+            Context::jit_stack_limit_mut,
+            EVAL_STACK_RED_ZONE,
+            EVAL_STACK_SEGMENT,
+            |ctx| ctx.eval_sub_cons_fast(form),
+        )
     }
 
     /// GNU `maybe_gc` inside `eval_sub`, with FORM rooted for the collection
