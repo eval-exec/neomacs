@@ -23,7 +23,7 @@ use crate::display_row::transition::{
 };
 use crate::display_row::walk_state::{
     DisplayRowSourceStart, FaceScanCheckpoint, LineNumberRenderState, WordWrapBreakCandidate,
-    WordWrapRenderState, sync_position_after_row_transition,
+    sync_position_after_row_transition,
 };
 use crate::display_source::{DisplaySourceStepChar, DisplaySourceTextPosition};
 use crate::display_source_item_append::{
@@ -52,7 +52,7 @@ pub(crate) struct BufferSourceOverflowRenderContext {
     right_edge_px: f32,
     right_edge_marker_column: RightEdgeMarkerColumn,
     wrap_mode: LineWrapMode,
-    word_wrap: WordWrapRenderState,
+    word_wrap: Option<crate::display_row::walk_state::WordWrapBreakCandidate>,
     row_visibility_limit: DisplayRowVisibilityLimit,
     content_x: f32,
     has_prefix: bool,
@@ -71,7 +71,7 @@ impl BufferSourceOverflowRenderContext {
         right_edge_px: f32,
         right_edge_marker_column: RightEdgeMarkerColumn,
         wrap_mode: LineWrapMode,
-        word_wrap: WordWrapRenderState,
+        word_wrap: Option<crate::display_row::walk_state::WordWrapBreakCandidate>,
         row_visibility_limit: DisplayRowVisibilityLimit,
         content_x: f32,
         has_prefix: bool,

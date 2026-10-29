@@ -217,7 +217,7 @@ fn oracle_emacs_available() -> bool {
     true
 }
 
-fn neomacs_binary_path() -> String {
+pub(crate) fn neomacs_binary_path() -> String {
     std::env::var("NEOVM_BINARY_PATH").unwrap_or_else(|_| {
         oracle_sandbox::project_root()
             .join("target/release/neomacs")

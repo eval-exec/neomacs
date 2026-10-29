@@ -1289,6 +1289,7 @@ impl LayoutEngine {
             inherited_line_spacing: key.extra_line_spacing,
             character_wrap: key.wrap_mode == crate::types::LineWrapMode::Wrap,
             word_wrap: key.word_wrap,
+            word_wrap_policy: key.word_wrap_policy.clone(),
             fringe: capture.fringe.clone(),
             width: key.partition.text_body().width,
             text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::at_frame_x(

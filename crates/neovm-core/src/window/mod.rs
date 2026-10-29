@@ -61,7 +61,9 @@ pub(crate) use size::{
 pub mod split;
 mod string_property_input;
 mod word_wrap;
-pub use word_wrap::{WordWrapCategories, WordWrapDirection, WordWrapMode, WordWrapOpportunity};
+pub use word_wrap::{
+    WordWrapCategories, WordWrapDirection, WordWrapMode, WordWrapOpportunity, WordWrapPolicy,
+};
 pub mod window_markers;
 
 pub use part::{
@@ -724,6 +726,7 @@ pub struct BufferLayoutInputState<Fontification = ()> {
     pub(crate) prefixes: LayoutPrefixInputs,
     pub(crate) invisibility: LayoutInvisibilityInput,
     pub(crate) display_table: LayoutDisplayTableInput,
+    pub(crate) word_wrap_policy: WordWrapPolicy,
 }
 
 /// Effective callback identity, captured on this Context's mutator. The

@@ -956,7 +956,24 @@ impl crate::emacs_core::eval::Context {
             prefixes: self.layout_prefix_inputs(buffer_id)?,
             invisibility: self.layout_invisibility_input(buffer_id)?,
             display_table: self.layout_display_table_input(buffer_id)?,
+            word_wrap_policy: self.layout_word_wrap_policy(buffer_id)?,
         })
+    }
+
+    pub fn layout_word_wrap_policy(&self, buffer_id: BufferId) -> Option<super::WordWrapPolicy> {
+        let buffer = self.buffers.get(buffer_id)?;
+        let enabled = |variable: super::WindowLayoutVariable| {
+            self.variable_value_in_buffer(Some(buffer), variable.sym_id())
+                .is_some_and(|value| value.is_truthy())
+        };
+        let mode = if enabled(super::WindowLayoutVariable::WordWrap)
+            && enabled(super::WindowLayoutVariable::WordWrapByCategory)
+        {
+            super::WordWrapMode::Category
+        } else {
+            super::WordWrapMode::Whitespace
+        };
+        Some(super::WordWrapPolicy::for_buffer(buffer, mode))
     }
 
     /// Capture glyph-vector inputs for the effective buffer/standard table.

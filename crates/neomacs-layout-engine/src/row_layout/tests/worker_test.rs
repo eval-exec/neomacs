@@ -23,6 +23,7 @@ fn row_with_wrap(text: &str, width: f32, character_wrap: bool) -> RowProgram {
             inherited_line_spacing: 0.0,
             character_wrap,
             word_wrap: false,
+            word_wrap_policy: Default::default(),
             fringe: None,
             width,
             text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::row_local(),

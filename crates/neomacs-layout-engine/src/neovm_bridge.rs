@@ -394,6 +394,7 @@ fn layout_var_info(var: LayoutVar) -> &'static LayoutVarInfo {
                             | LayoutVar::StandardDisplayTable
                             | LayoutVar::TabStopList
                             | LayoutVar::WrapPrefix
+                            | LayoutVar::WordWrapByCategory
                     ),
                 }
             })
@@ -1685,6 +1686,14 @@ pub fn window_params_from_neovm_with_font_sizing(
     // Read buffer-local variables.
     let wrap_mode = effective_wrap_mode(window, buffer, frame, vars, hscroll);
     let word_wrap = effective_buffer_bool(buffer, vars, LayoutVar::WordWrap);
+    let word_wrap_policy = neovm_core::window::WordWrapPolicy::for_buffer(
+        buffer,
+        if word_wrap && effective_buffer_bool(buffer, vars, LayoutVar::WordWrapByCategory) {
+            neovm_core::window::WordWrapMode::Category
+        } else {
+            neovm_core::window::WordWrapMode::Whitespace
+        },
+    );
     let tab_width = effective_buffer_int(buffer, vars, LayoutVar::TabWidth, 8) as i32;
     let display_line_numbers = DisplayLineNumbersMode::from_lisp_value(effective_buffer_value(
         buffer,
@@ -1863,6 +1872,7 @@ pub fn window_params_from_neovm_with_font_sizing(
         vscroll,
         wrap_mode,
         word_wrap,
+        word_wrap_policy,
         tab_width,
         scroll_conservatively,
         scroll_step,

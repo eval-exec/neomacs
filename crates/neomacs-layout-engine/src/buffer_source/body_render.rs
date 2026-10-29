@@ -78,6 +78,7 @@ pub(crate) struct BufferSourceWalkSetupRequest<'a> {
     wrap_mode: LineWrapMode,
     hscroll: i32,
     word_wrap: bool,
+    word_wrap_policy: neovm_core::window::WordWrapPolicy,
     has_prefix: bool,
     has_line_default_prefix: bool,
     reserve_right_border_col: bool,
@@ -189,6 +190,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
             wrap_mode,
             hscroll,
             word_wrap,
+            word_wrap_policy: Default::default(),
             has_prefix,
             has_line_default_prefix,
             reserve_right_border_col,
@@ -271,6 +273,7 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
         )
         .with_image_scale_environment(params.image_scale_environment);
         request.source_extent = params.source_extent;
+        request.word_wrap_policy = params.word_wrap_policy.clone();
         request
     }
 
@@ -308,7 +311,8 @@ impl<'a> BufferSourceWalkSetupRequest<'a> {
                     HorizontalScrollTruncationTarget::FirstVisibleSourceGlyph
                 },
             ),
-            word_wrap: WordWrapRenderState::new(self.word_wrap),
+            word_wrap: WordWrapRenderState::new(self.word_wrap)
+                .with_policy(self.word_wrap_policy.clone()),
             physical_line_tabs: DisplayPhysicalLineTabState::default(),
             row_text_start_x: Px(self.content_x),
             prefix_request: DisplayRowPrefixRequest::initial(

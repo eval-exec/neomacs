@@ -458,6 +458,7 @@ fn fixture_key(window_start: i64, point: i64) -> RetainedWindowKey {
         vscroll: 0,
         wrap_mode: LineWrapMode::Truncate,
         word_wrap: false,
+        word_wrap_policy: Default::default(),
         tab_width: 8,
         char_width: 8.0,
         char_height: 16.0,
