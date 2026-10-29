@@ -12849,3 +12849,108 @@ fn category_word_wrap_respects_custom_ascii_categories_and_kinsoku() {
     );
     assert_eq!(result, "OK (24 23 23)");
 }
+
+/// Word wrapping may add policy reads at display stops, not one obarray walk
+/// per ordinary character. Count real symbol reads around the public command
+/// instead of using a timing threshold that depends on the test machine.
+#[test]
+#[cfg(not(feature = "display-stop-validate"))]
+fn category_word_wrap_symbol_reads_are_bounded_by_display_stops() {
+    let mut ev = runtime_startup_context();
+    ev.eval_str(
+        r#"(progn
+        (delete-other-windows)
+        (set-frame-size nil 1200 24)
+        (switch-to-buffer (get-buffer-create " *wrap-policy-reads*"))
+        (insert (make-string 1500 ?x))
+        (set-category-table (copy-category-table))
+        (modify-category-entry ?x ?|)
+        (setq-local truncate-lines nil truncate-partial-width-windows nil)
+        (setq noninteractive nil))"#,
+    )
+    .expect("prepare a long terminal row");
+
+    for category in ["nil", "t"] {
+        let mut reads = Vec::new();
+        for wrap in ["nil", "t"] {
+            ev.eval_str(&format!(
+                "(progn (setq-local word-wrap {wrap} word-wrap-by-category {category}) (goto-char 1))"
+            ))
+            .expect("select wrap mode");
+            ev.obarray().reset_symbol_slot_read_count();
+            ev.eval_str("(vertical-motion 1)").expect("advance one row");
+            reads.push(ev.obarray().symbol_slot_read_count());
+            assert!(ev.buffers.current_buffer().unwrap().point_char_pos().get() > 1000);
+        }
+        assert!(
+            reads[1] <= reads[0] + 128,
+            "category={category}: word wrapping added {} symbol reads to one ordinary row (character wrap={}, word wrap={})",
+            reads[1].saturating_sub(reads[0]),
+            reads[0],
+            reads[1]
+        );
+    }
+}
+
+#[test]
+fn category_word_wrap_projection_tracks_inherited_sets_and_nested_observations() {
+    use crate::tagged::collection_reads::capture;
+    use crate::window::WordWrapDirection;
+
+    let mut ev = runtime_startup_context();
+    ev.eval_str(
+        r#"(progn
+        (setq-local word-wrap t word-wrap-by-category t)
+        (setq wrap623-parent (make-category-table)
+              wrap623-child (make-category-table))
+        (set-char-table-range wrap623-parent t nil)
+        (set-char-table-range wrap623-parent nil (make-category-set "|"))
+        (set-char-table-range wrap623-child t nil)
+        (set-char-table-range wrap623-child nil nil)
+        (set-char-table-parent wrap623-child wrap623-parent)
+        (set-category-table wrap623-child))"#,
+    )
+    .unwrap();
+    let buffer = ev.buffers.current_buffer_id().unwrap();
+    let permits_x = |ev: &Context| {
+        ev.layout_word_wrap_policy(buffer)
+            .unwrap()
+            .opportunity(u32::from('x'), WordWrapDirection::Forward)
+            .after()
+    };
+    assert!(permits_x(&ev));
+
+    // A warm native result must still contribute its mutable Lisp
+    // dependencies to an enclosing observation used by a layout query.
+    let (permitted, dependencies) = capture(|| permits_x(&ev));
+    assert!(permitted);
+    let dependencies = dependencies.expect("coherent native projection");
+    let unrelated = Value::cons(Value::NIL, Value::NIL);
+    unrelated.set_car(Value::T);
+    assert!(dependencies.unchanged());
+
+    ev.eval_str("(aset (char-table-range wrap623-parent nil) ?| nil)")
+        .unwrap();
+    assert!(
+        !dependencies.unchanged(),
+        "inherited bool-vector dependency"
+    );
+    assert!(!permits_x(&ev));
+
+    ev.eval_str("(set-char-table-range wrap623-parent nil (make-category-set \"|\"))")
+        .unwrap();
+    assert!(permits_x(&ev), "parent default replacement");
+    ev.eval_str("(set-char-table-range wrap623-child nil (make-category-set \"\"))")
+        .unwrap();
+    assert!(!permits_x(&ev), "local default shadows the parent");
+    ev.eval_str("(set-char-table-range wrap623-child nil nil)")
+        .unwrap();
+    assert!(permits_x(&ev));
+    ev.eval_str("(garbage-collect)").unwrap();
+    assert!(permits_x(&ev), "live source survives collection");
+    ev.eval_str(
+        "(progn (set-category-table (make-category-table)) (setq wrap623-parent nil wrap623-child nil) (garbage-collect))",
+    )
+    .unwrap();
+    assert!(!permits_x(&ev), "replace and reclaim the old source");
+}

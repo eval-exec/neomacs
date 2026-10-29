@@ -80,3 +80,43 @@ The broader layout selection passes 381 of 382 tests. The remaining
 failure reproduces unchanged on #620 at `fff421a99e`: it expects a position-cache
 hit although that PR disables position-cache reads. This fix leaves that
 unrelated expectation untouched.
+
+## Review follow-up
+
+Copilot identified per-character variable/category-table resolution in the
+motion fallback. A resource regression around public `vertical-motion` measured
+2,400 additional symbol reads for a 1,200-column word-wrapped row (177 reads
+with character wrapping, 2,577 with word wrapping). The scanner now refreshes
+an owned native policy after display-stop probes and uses it between stops.
+The probe predicate is shared with the ordinary-character fast path; the
+`display-stop-validate` feature refreshes after its extra probes as well.
+
+Freezing the full category projection again at every stop would introduce a
+different cost: 500 repeated captures took 503 ms in the optimized test build.
+The buffer now caches the native policy using the existing `CollectionReads`
+certificate. This observes table/subtable, parent/default, and category-set
+bool-vector dependencies. Cache hits replay those dependencies into enclosing
+captures. Source-table identity and the collector's reclamation epoch prevent
+address reuse from admitting a stale entry; certificates additionally reject
+another World or lost mutation history. Failed captures are never cached.
+This metadata stays mutator-local and contains no rooted Lisp values; worker
+policies remain immutable native `Send + Sync` snapshots. Dumps start empty.
+In the same optimized test setup, 500 captures with reuse took 6.7 ms, about
+75 times faster. This measures projection capture, not whole-editor latency;
+the temporary timing harness is not retained as a timing-sensitive test.
+
+The inherited-set regression exposed a missing write edge in the existing
+observation infrastructure: packed bool-vector reads were observed, but
+`Value::with_bool_vector_mut` changed their bits without journaling a mutation.
+That method now delegates to the centralized tagged mutation helper, which
+publishes the revision before exposing mutable bits and preserves the existing
+no-Lisp/no-GC mutation guard. No pointer barrier is needed because bool-vectors
+contain no Lisp references. This covers `aset`, fills and other operations that
+share the helper, rather than adding category-specific invalidation hooks.
+
+CodeRabbit also identified the GUI test's permissive assertions. The fixture
+now selects one CJK font in both editors and reports body, character and pixel
+widths. The test requires those metrics to match, then directly compares the
+CJK, ASCII and kinsoku row positions. Pinning the font matters: the original
+fallbacks measured `提` as 14 pixels in GNU and 13 in Neomacs despite equal
+column counts. With `Noto Sans Mono CJK SC`, the stricter comparison passes.

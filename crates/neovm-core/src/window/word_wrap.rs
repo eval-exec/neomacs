@@ -1,6 +1,7 @@
 //! GNU's character-category word-wrap rules, independent of row production.
 
 use crate::buffer::Buffer;
+use crate::tagged::{collection_reads::CollectionReads, gc};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -30,12 +31,6 @@ impl WordWrapCategories {
                 | (u8::from(bits & (1 << b'<') != 0) << 2),
         )
     }
-
-    pub fn for_buffer(buffer: &Buffer, code: u32) -> Self {
-        Self::from_bits(
-            crate::emacs_core::category::character_category_bits(buffer, code).unwrap_or(0),
-        )
-    }
 }
 
 /// Owned, immutable wrapping semantics; range ordering stays private.
@@ -56,6 +51,24 @@ struct WordWrapCategoryRange {
     categories: WordWrapCategories,
 }
 
+/// Mutator-local dependency metadata, kept outside the worker-safe policy.
+/// Identities are never dereferenced. Reclamation invalidates them before
+/// address reuse, and the certificate checks both mutation and World ownership.
+#[derive(Debug)]
+pub(crate) struct CachedWordWrapPolicy {
+    source: CategoryProjectionSource,
+    dependencies: CollectionReads,
+    policy: WordWrapPolicy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CategoryProjectionSource {
+    table: usize,
+    reclamation: u64,
+}
+
+static_assertions::assert_not_impl_any!(CachedWordWrapPolicy: Send, Sync);
+
 impl WordWrapPolicy {
     /// Freeze only native category data. No category-table or bool-vector
     /// Lisp object may be retained by an independent row worker.
@@ -63,10 +76,25 @@ impl WordWrapPolicy {
         if mode == WordWrapMode::Whitespace {
             return Self(WordWrapPolicyKind::Whitespace);
         }
-        let mut ranges: Vec<WordWrapCategoryRange> = Vec::new();
-        for (start, end, bits) in
-            crate::emacs_core::category::category_bit_runs(buffer).unwrap_or_default()
+        let Ok(table) = crate::emacs_core::category::active_category_table_for_buffer(Some(buffer))
+        else {
+            return Self(WordWrapPolicyKind::Category(Arc::default()));
+        };
+        let source = CategoryProjectionSource {
+            table: table.bits(),
+            reclamation: gc::collection_observation_epoch(),
+        };
+        if let Some(cached) = buffer.word_wrap_policy_cache.borrow().as_ref()
+            && cached.source == source
+            && cached.dependencies.unchanged_and_observe()
         {
+            return cached.policy.clone();
+        }
+        let (runs, dependencies) = crate::tagged::collection_reads::capture(|| {
+            crate::emacs_core::category::category_bit_runs_in_table(table).unwrap_or_default()
+        });
+        let mut ranges: Vec<WordWrapCategoryRange> = Vec::new();
+        for (start, end, bits) in runs {
             let categories = WordWrapCategories::from_bits(bits);
             if categories == WordWrapCategories::default() {
                 continue;
@@ -84,7 +112,15 @@ impl WordWrapPolicy {
                 });
             }
         }
-        Self(WordWrapPolicyKind::Category(ranges.into()))
+        let policy = Self(WordWrapPolicyKind::Category(ranges.into()));
+        *buffer.word_wrap_policy_cache.borrow_mut() = dependencies.map(|dependencies| {
+            std::rc::Rc::new(CachedWordWrapPolicy {
+                source,
+                dependencies,
+                policy: policy.clone(),
+            })
+        });
+        policy
     }
 
     pub fn opportunity(&self, code: u32, direction: WordWrapDirection) -> WordWrapOpportunity {

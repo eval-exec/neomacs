@@ -554,12 +554,20 @@ mod screen_line_scan_seal {
 }
 
 /// Compile-time row-ending behavior for one forward scan. A policy carries no
-/// Context, buffer view or callback-spanning loan. Its only mutable state is the
-/// activation's optional word-break point.
+/// Context, buffer view or callback-spanning loan. Its state owns only native
+/// data, refreshed after any display stop that can enter Lisp.
 trait ScreenLineScanPolicy: screen_line_scan_seal::Sealed {
-    type State: Copy;
+    type State;
 
     fn initial() -> Self::State;
+
+    #[inline(always)]
+    fn after_display_stop(
+        _state: &mut Self::State,
+        _eval: &super::eval::Context,
+        _buffer_id: BufferId,
+    ) {
+    }
 
     #[inline(always)]
     fn observe(
@@ -679,16 +687,42 @@ impl ScreenLineScanPolicy for WindowWrapScan {
 }
 
 impl ScreenLineScanPolicy for WordWrapScan {
-    type State = WordWrapPoint;
+    type State = WordWrapScanState;
 
     #[inline(always)]
-    fn initial() -> WordWrapPoint {
-        WordWrapPoint::new()
+    fn initial() -> WordWrapScanState {
+        WordWrapScanState {
+            point: WordWrapPoint::new(),
+            policy: crate::window::WordWrapPolicy::default(),
+        }
+    }
+
+    fn after_display_stop(
+        state: &mut WordWrapScanState,
+        eval: &super::eval::Context,
+        buffer_id: BufferId,
+    ) {
+        use crate::window::{WindowLayoutVariable, WordWrapMode, WordWrapPolicy};
+        let Some(buffer) = eval.buffers.get(buffer_id) else {
+            return;
+        };
+        let mode = if eval
+            .variable_value_in_buffer(
+                Some(buffer),
+                WindowLayoutVariable::WordWrapByCategory.sym_id(),
+            )
+            .is_some_and(|value| value.is_truthy())
+        {
+            WordWrapMode::Category
+        } else {
+            WordWrapMode::Whitespace
+        };
+        state.policy = WordWrapPolicy::for_buffer(buffer, mode);
     }
 
     #[inline(always)]
     fn observe(
-        state: &mut WordWrapPoint,
+        state: &mut WordWrapScanState,
         eval: &super::eval::Context,
         buffer_id: BufferId,
         scan: EmacsBytePos,
@@ -700,43 +734,34 @@ impl ScreenLineScanPolicy for WordWrapScan {
             .get(buffer_id)
             .and_then(|buf| buf.char_code_after_emacs_byte_pos(scan))
         {
-            use crate::window::{WordWrapCategories, WordWrapDirection, WordWrapMode};
-            let buffer = eval.buffers.get(buffer_id).expect("observed buffer");
-            let mode = if eval
-                .variable_value_in_buffer(
-                    Some(buffer),
-                    crate::window::WindowLayoutVariable::WordWrapByCategory.sym_id(),
-                )
-                .is_some_and(|value| value.is_truthy())
-            {
-                WordWrapMode::Category
-            } else {
-                WordWrapMode::Whitespace
-            };
-            let categories = if mode == WordWrapMode::Category {
-                WordWrapCategories::for_buffer(buffer, code)
-            } else {
-                WordWrapCategories::default()
-            };
-            state.observe(
+            state.point.observe(
                 scan,
                 start,
-                mode.opportunity(code, categories, WordWrapDirection::Forward),
+                state
+                    .policy
+                    .opportunity(code, crate::window::WordWrapDirection::Forward),
             );
         }
     }
 
     #[inline(always)]
-    fn break_step(state: WordWrapPoint, overflow_at: EmacsBytePos) -> ScreenLineStep {
+    fn break_step(state: WordWrapScanState, overflow_at: EmacsBytePos) -> ScreenLineStep {
         ScreenLineStep {
-            next: state.break_at(overflow_at),
-            end: if state.has_candidate() {
+            next: state.point.break_at(overflow_at),
+            end: if state.point.has_candidate() {
                 ScreenLineEnd::WordWrapPoint
             } else {
                 ScreenLineEnd::Edge
             },
         }
     }
+}
+
+/// The policy can survive a callback because it owns no live Lisp values.
+/// Display stops refresh it before the next character is observed.
+struct WordWrapScanState {
+    point: WordWrapPoint,
+    policy: crate::window::WordWrapPolicy,
 }
 
 /// Choose the mode once, retaining the original post-callback buffer reads.
@@ -786,6 +811,7 @@ fn next_screen_line_scan<P: ScreenLineScanPolicy>(
     while scan < point_max {
         #[cfg(test)]
         SCREEN_LINE_SCAN_STEPS.with(|steps| steps.set(steps.get().saturating_add(1)));
+        let probes_can_run = stop_cache.probes_at(scan.get());
         let Some(advance) = display_advance_at(eval, buffer_id, scan.get(), column, &stop_cache)?
         else {
             return Ok(None);
@@ -799,6 +825,9 @@ fn next_screen_line_scan<P: ScreenLineScanPolicy>(
                 next,
                 end: ScreenLineEnd::Newline,
             }));
+        }
+        if probes_can_run {
+            P::after_display_stop(&mut word_wrap, eval, buffer_id);
         }
         P::observe(&mut word_wrap, eval, buffer_id, scan, start);
         if let Some(step) = P::truncate_overflow(
@@ -1688,6 +1717,12 @@ impl DisplayStopCache {
             recompute_at: std::cell::Cell::new(0),
         }
     }
+
+    /// The validation feature probes even below a cached stop. Consumers that
+    /// freeze native inputs must refresh after that path too.
+    fn probes_at(&self, byte: usize) -> bool {
+        cfg!(feature = "display-stop-validate") || byte >= self.recompute_at.get()
+    }
 }
 
 #[cfg(test)]
@@ -1957,7 +1992,7 @@ pub(crate) fn display_advance_at(
     // complete World read phase together instead of reacquiring the buffer.
     // The validation feature retains the existing probe decision and order.
     #[cfg(not(feature = "display-stop-validate"))]
-    if byte < stop.recompute_at.get() {
+    if !stop.probes_at(byte) {
         return Ok(DisplayCharacterPhase::from_context(ctx, buffer_id)
             .and_then(|phase| phase.advance(EmacsBytePos::new(byte), DisplayColumn::new(column))));
     }

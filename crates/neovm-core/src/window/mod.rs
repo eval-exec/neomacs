@@ -61,6 +61,7 @@ pub(crate) use size::{
 pub mod split;
 mod string_property_input;
 mod word_wrap;
+pub(crate) use word_wrap::CachedWordWrapPolicy;
 pub use word_wrap::{
     WordWrapCategories, WordWrapDirection, WordWrapMode, WordWrapOpportunity, WordWrapPolicy,
 };

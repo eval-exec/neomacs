@@ -91,4 +91,18 @@ fn category_word_wrap_and_kinsoku_match_live_gnu() {
         serde_json::from_slice(&fs::read(&result.artifacts.gui_state).unwrap()).unwrap();
     assert_eq!(native["native-engine"], true);
     assert_geometry(&native);
+    // Equal column counts alone do not guarantee equal CJK glyph geometry.
+    // Check the comparison's preconditions before comparing absolute positions.
+    for metric in ["width", "character-widths", "pixel-widths"] {
+        assert_eq!(
+            native[metric], gnu[metric],
+            "{metric}: GNU={gnu}, Neomacs={native}"
+        );
+    }
+    for result in ["cjk", "ascii", "not-at-bol", "not-at-eol"] {
+        assert_eq!(
+            native[result], gnu[result],
+            "{result}: GNU={gnu}, Neomacs={native}"
+        );
+    }
 }
