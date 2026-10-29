@@ -489,7 +489,7 @@ jobs:
       suite: tui
 
   neomacs-melpa-tests:
-    name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64)
+    name: MELPA ${{ matrix.suite }} compatibility and GNU parity (linux x86_64, shard ${{ matrix.partition }})
     if: ${{ github.event_name != 'schedule' }}
     needs: [neomacs-test-runtime, neomacs-workspace-test-archive, gnu-emacs-oracle]
     runs-on: ubuntu-24.04
@@ -503,9 +503,33 @@ jobs:
           # interactive package-TUI corpus moved to neomacs-tui-tests in
           # commit c9a3c0ed81 and runs in the tui shards, so there is no
           # melpa_tui target here.
+          #
+          # The batch corpus is ~951 tests, and each one drives a real GNU
+          # and a real Neomacs process; on a 4-vCPU runner it needs 18-28
+          # minutes of wall time by itself, so job setup (5.6-8.5 minutes,
+          # including the oracle restore/build) left no margin inside the
+          # 30-minute timeout -- three consecutive runs were cancelled at
+          # the timeout (run 40740145396 reached only 816/951 before being
+          # killed at 30.5 minutes).  Partition the corpus across four
+          # runners: nextest's hash partition is disjoint, exhaustive and
+          # deterministic (a test always lands in the same shard), so every
+          # shard finishes well inside the timeout and a failure is still
+          # attributable to one shard.  The GUI corpus is a single short
+          # job and runs whole.
           - suite: batch
+            partition: "hash:1/4"
+            filter: package(neomacs-melpa-test-support) or (package(neomacs-melpa-tests) and not test(~gui_parity_tests::))
+          - suite: batch
+            partition: "hash:2/4"
+            filter: package(neomacs-melpa-test-support) or (package(neomacs-melpa-tests) and not test(~gui_parity_tests::))
+          - suite: batch
+            partition: "hash:3/4"
+            filter: package(neomacs-melpa-test-support) or (package(neomacs-melpa-tests) and not test(~gui_parity_tests::))
+          - suite: batch
+            partition: "hash:4/4"
             filter: package(neomacs-melpa-test-support) or (package(neomacs-melpa-tests) and not test(~gui_parity_tests::))
           - suite: gui
+            partition: "hash:1/1"
             filter: package(neomacs-melpa-tests) and test(~gui_parity_tests::)
     env:
       CARGO_TERM_COLOR: always
@@ -573,6 +597,7 @@ jobs:
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
             -E "$NEXTEST_FILTER" \
+            --partition "${{ matrix.partition }}" \
             --workspace-remap "$GITHUB_WORKSPACE" \
             --success-output immediate \
             --no-fail-fast
