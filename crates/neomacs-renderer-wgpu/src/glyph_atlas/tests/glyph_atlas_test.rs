@@ -429,6 +429,56 @@ fn try_test_atlas() -> Option<WgpuGlyphAtlas> {
     })
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_atlas_uses_native_monaco_masks() {
+    let Some(mut atlas) = try_test_atlas() else {
+        eprintln!("SKIP: no Metal device available for native atlas routing test");
+        return;
+    };
+    assert!(!atlas.subpixel_enabled());
+    let id = atlas
+        .font_system
+        .db()
+        .query(&fontdb::Query {
+            families: &[fontdb::Family::Name("Monaco")],
+            ..Default::default()
+        })
+        .expect("macOS supplies Monaco");
+    let name = atlas
+        .font_system
+        .db()
+        .face(id)
+        .unwrap()
+        .post_script_name
+        .clone();
+    let font = atlas
+        .font_system
+        .get_font(id, fontdb::Weight::NORMAL)
+        .unwrap();
+    let mut reference = super::macos::NativeRasterizer::default();
+    for size in [16.0f32, 32.0] {
+        let key = cosmic_text::CacheKey {
+            font_id: id,
+            glyph_id: font.as_swash().charmap().map('t'),
+            font_size_bits: size.to_bits(),
+            x_bin: SubpixelBin::Zero,
+            y_bin: SubpixelBin::Zero,
+            font_weight: fontdb::Weight::NORMAL,
+            flags: cosmic_text::CacheKeyFlags::empty(),
+        };
+        let expected = reference.rasterize(&font, &name, key).unwrap();
+        let actual = atlas.render_cache_key_image(key, false).unwrap();
+        assert_eq!(actual.content, super::RasterContent::Mask);
+        assert_eq!((actual.left, actual.top), (expected.left, expected.top));
+        assert_eq!(
+            (actual.width, actual.height),
+            (expected.width, expected.height)
+        );
+        assert_eq!(actual.data, expected.data);
+    }
+}
+
 #[test]
 fn frame_font_installation_invalidates_atlas_on_catalog_generation_change() {
     let Some((_, _, mut atlas)) = try_test_device_and_atlas() else {

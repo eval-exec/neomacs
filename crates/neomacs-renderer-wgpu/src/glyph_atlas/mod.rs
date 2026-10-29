@@ -4,6 +4,8 @@
 
 pub mod allocator;
 mod bitmap_fonts;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod pages;
 pub mod types;
 
@@ -567,6 +569,8 @@ pub struct WgpuGlyphAtlas {
     atlas_config: GlyphAtlasConfig,
     font_system: FontSystem,
     scale_context: ScaleContext,
+    #[cfg(target_os = "macos")]
+    native_rasterizer: macos::NativeRasterizer,
     bind_group_layout: wgpu::BindGroupLayout,
     linear_sampler: wgpu::Sampler,
     nearest_sampler: wgpu::Sampler,
@@ -712,6 +716,8 @@ impl WgpuGlyphAtlas {
                 fontdb::Database::new(),
             ),
             scale_context: ScaleContext::new(),
+            #[cfg(target_os = "macos")]
+            native_rasterizer: macos::NativeRasterizer::default(),
             bind_group_layout,
             linear_sampler,
             nearest_sampler,
@@ -1394,6 +1400,15 @@ impl WgpuGlyphAtlas {
             .font_system
             .get_font(cache_key.font_id, cache_key.font_weight)?;
 
+        #[cfg(target_os = "macos")]
+        if let Some(info) = self.font_system.db().face(cache_key.font_id)
+            && let Some(image) =
+                self.native_rasterizer
+                    .rasterize(&font, &info.post_script_name, cache_key)
+        {
+            return Some(image);
+        }
+
         let variable_width = font
             .as_swash()
             .variations()
@@ -2033,6 +2048,8 @@ impl WgpuGlyphAtlas {
         self.resolved_fonts_by_fontdb.clear();
         self.color_font_assets.clear();
         self.color_glyph_rasterizer.clear();
+        #[cfg(target_os = "macos")]
+        self.native_rasterizer.clear();
         self.color_font_ids.clear();
         // A missing/replaced platform font can become available after the
         // render-side generation reset. Keep successful fontdb registrations,
