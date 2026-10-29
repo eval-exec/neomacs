@@ -1,0 +1,9 @@
+error[E0499]: cannot borrow `*owner` as mutable more than once at a time
+  --> tests/pentry_ui/run_plus_serial.rs:11:18
+   |
+10 |     let run = owner.parallel();
+   |               ----- first mutable borrow occurs here
+11 |     let serial = owner.serial(witness);
+   |                  ^^^^^ second mutable borrow occurs here
+12 |     drop((run, serial));
+   |           --- first borrow later used here

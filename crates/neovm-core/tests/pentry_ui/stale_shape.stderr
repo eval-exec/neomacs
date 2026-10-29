@@ -1,0 +1,43 @@
+error: lifetime may not live long enough
+  --> tests/pentry_ui/stale_shape.rs:10:5
+   |
+ 6 | fn wrong<'heap, 'owner, 'before, 'after>(
+   |                         -------  ------ lifetime `'after` defined here
+   |                         |
+   |                         lifetime `'before` defined here
+...
+10 |     run.require_shape(stale);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ argument requires that `'before` must outlive `'after`
+   |
+   = help: consider adding the following bound: `'before: 'after`
+   = note: requirement occurs because of the type `capability::ParallelExecution<'_, '_, '_, '_>`, which makes the generic argument `'_` invariant
+   = note: the struct `capability::ParallelExecution<'loan, 'heap, 'owner, 'shape>` is invariant over the parameter `'heap`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider reusing a named lifetime parameter
+   |
+ 7 -     run: ParallelExecution<'_, 'heap, 'owner, 'after>,
+ 7 +     run: ParallelExecution<'heap, 'heap, 'owner, 'after>,
+   |
+
+error: lifetime may not live long enough
+  --> tests/pentry_ui/stale_shape.rs:10:5
+   |
+ 6 | fn wrong<'heap, 'owner, 'before, 'after>(
+   |                         -------  ------ lifetime `'after` defined here
+   |                         |
+   |                         lifetime `'before` defined here
+...
+10 |     run.require_shape(stale);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^ argument requires that `'after` must outlive `'before`
+   |
+   = help: consider adding the following bound: `'after: 'before`
+   = note: requirement occurs because of the type `capability::BindingShape<'_>`, which makes the generic argument `'_` invariant
+   = note: the struct `capability::BindingShape<'shape>` is invariant over the parameter `'shape`
+   = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider reusing a named lifetime parameter
+   |
+ 7 -     run: ParallelExecution<'_, 'heap, 'owner, 'after>,
+ 7 +     run: ParallelExecution<'heap, 'heap, 'owner, 'after>,
+   |
+
+help: `'before` and `'after` must be the same: replace one with the other

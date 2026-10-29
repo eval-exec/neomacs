@@ -66,6 +66,7 @@ mod lexenv_cache;
 mod lexical_symbols;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
+pub(crate) mod parallel_entry;
 mod subrs;
 #[cfg(test)]
 pub(crate) use subrs::SUBRS;

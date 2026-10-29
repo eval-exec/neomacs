@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+ --> tests/pentry_ui/witness_escape.rs:9:34
+  |
+9 |     guard.with_witness(|witness| witness)
+  |                         -------- ^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                         |      |
+  |                         |      return type of closure is capability::BatonWitness<'2, '_, '_>
+  |                         has type `capability::BatonWitness<'1, '_, '_>`
+  |
+  = note: requirement occurs because of the type `capability::BatonWitness<'_, '_, '_>`, which makes the generic argument `'_` invariant
+  = note: the struct `capability::BatonWitness<'guard, 'heap, 'owner>` is invariant over the parameter `'guard`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

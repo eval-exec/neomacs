@@ -7,6 +7,9 @@
 
 mod common;
 
+#[path = "pentry_contracts.rs"]
+mod pentry_contracts;
+
 #[path = "dump_environment.rs"]
 mod dump_environment;
 
