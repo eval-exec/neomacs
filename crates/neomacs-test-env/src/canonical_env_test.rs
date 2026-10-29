@@ -428,6 +428,21 @@ fn in_process_form_matches_the_spawned_environment() {
     assert!(form.contains("(set-language-environment \"UTF-8\")"));
 }
 
+/// A symlinked base is resolved before any case directory is created, so a
+/// truename and the case root share one spelling (Darwin `/tmp` ->
+/// `/private/tmp`).  Linux's `/tmp` is canonical and is unchanged.
+#[cfg(unix)]
+#[test]
+fn bounded_temp_base_resolves_a_symlinked_root() {
+    let target = tempfile::tempdir_in("/tmp").expect("short canonical target");
+    let link_parent = tempfile::tempdir_in("/tmp").expect("short link parent");
+    let link = link_parent.path().join("link");
+    std::os::unix::fs::symlink(target.path(), &link).expect("create base symlink");
+    let base = bounded_temp_base_for(&link);
+    let canonical = std::fs::canonicalize(target.path()).expect("canonical target");
+    assert_eq!(base, canonical);
+}
+
 /// The bounded temp root never relies on a deep ambient TMPDIR.
 #[test]
 fn bounded_temp_root_is_short() {

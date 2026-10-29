@@ -890,17 +890,36 @@ pub fn bounded_temp_dir(prefix: &str) -> std::io::Result<tempfile::TempDir> {
 /// when that leaves room for a per-case directory and a socket name, else
 /// `/tmp` (short on every Unix the suite runs on).
 pub fn bounded_temp_base() -> PathBuf {
-    let ambient = std::env::temp_dir();
-    // The bound exists for unix-domain sockets; Windows has no `/tmp` and
-    // allows longer socket names, so its own temp directory is the right
-    // root.
+    bounded_temp_base_for(&std::env::temp_dir())
+}
+
+/// The bounded base for `ambient`, canonicalized when that keeps it short.
+///
+/// Darwin's `/tmp` is a symlink to `/private/tmp`.  A path under the
+/// symlinked spelling and the same path under the real one are different
+/// strings to `file-relative-name`: GNU's `file-truename` resolves the
+/// symlink (lisp/files.el:1546), so a case root created under `/tmp` and a
+/// truename under `/private/tmp` cannot be related, and the random
+/// case-directory name leaks into the result.  Resolve the base here, once,
+/// before any case directory is created, and only when the canonical path
+/// still respects the same socket budget.  On GNU/Linux `/tmp` is already
+/// canonical, so nothing changes.
+///
+/// The bound exists for unix-domain sockets; Windows has no `/tmp` and
+/// allows longer socket names, so its own temp directory is the right root.
+pub(crate) fn bounded_temp_base_for(ambient: &Path) -> PathBuf {
     if !cfg!(unix) {
-        return ambient;
+        return ambient.to_path_buf();
     }
-    if ambient.is_absolute() && ambient.as_os_str().len() <= 32 {
-        return ambient;
+    let candidate = if ambient.is_absolute() && ambient.as_os_str().len() <= 32 {
+        ambient.to_path_buf()
+    } else {
+        PathBuf::from("/tmp")
+    };
+    match std::fs::canonicalize(&candidate) {
+        Ok(real) if real.is_absolute() && real.as_os_str().len() <= 32 => real,
+        _ => candidate,
     }
-    PathBuf::from("/tmp")
 }
 
 fn lisp_string_quote(value: &str) -> String {
