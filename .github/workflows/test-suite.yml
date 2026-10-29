@@ -296,7 +296,9 @@ jobs:
         run: |
           set -o pipefail
           {
-            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures \
+            # --no-fail-fast: one failing runner must not hide the others' goldens
+            # (2026-10-29: a red p1rv runner hid 4 stale thread_safety goldens).
+            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
               --test p0s3_contracts --test p1rv_contracts \
               --test thread_safety_contracts --test chartable_write_contracts
             env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures \
