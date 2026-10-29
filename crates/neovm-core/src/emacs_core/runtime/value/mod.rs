@@ -4039,18 +4039,11 @@ impl TaggedValue {
         }
     }
 
-    /// Mutate a packed bool-vector's bits in place. No write barrier: a
-    /// bool-vector holds no Lisp values, and the GC thread never reads its
-    /// words.
+    /// Mutate packed bits through the centralized collection journal.
+    /// Bool-vectors contain no Lisp references and need no GC pointer barrier.
     #[inline]
     pub fn with_bool_vector_mut<R>(self, f: impl FnOnce(&mut BoolVectorObj) -> R) -> Option<R> {
-        if !self.is_bool_vector_obj() {
-            return None;
-        }
-        let ptr = self.as_veclike_ptr().unwrap() as *mut BoolVectorObj;
-        #[cfg(debug_assertions)]
-        let _guard = mutate::HeapMutClosureGuard::enter();
-        Some(f(unsafe { &mut *ptr }))
+        mutate::with_bool_vector_mut(self, f)
     }
 
     /// Borrow a GNU-shaped char-table object.

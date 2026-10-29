@@ -1,5 +1,6 @@
 ;;; Category wrapping through real redisplay. -*- lexical-binding: t; -*-
 (require 'json)
+(set-frame-font (font-spec :family "Noto Sans Mono CJK SC" :size 16) nil t)
 (defvar wrap623-counter 0)
 (defun wrap623-row (text enabled &optional setup character-wrap)
   (switch-to-buffer (get-buffer-create (format "*wrap623-%d*" (setq wrap623-counter (1+ wrap623-counter)))))
@@ -26,6 +27,8 @@
           (list
            (cons "native-engine" (if (fboundp 'neomacs--write-frame-snapshot) t :json-false))
            (cons "width" (window-body-width))
+           (cons "character-widths" (vector (char-width ?x) (char-width ?提)))
+           (cons "pixel-widths" (vector (string-pixel-width "x") (string-pixel-width "提")))
            (cons "cjk" (vector (wrap623-row cjk nil) (wrap623-row cjk t)
                                (wrap623-row cjk t (lambda () (modify-category-entry ?提 ?| nil t)))))
            (cons "ascii" (vector (wrap623-row ascii t) (wrap623-row ascii t letters)))

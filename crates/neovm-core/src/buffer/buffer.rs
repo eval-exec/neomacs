@@ -2554,6 +2554,10 @@ pub struct Buffer {
     /// Not part of the buffer's identity: it is derived state, so clones and
     /// dumps may leave it empty and it recomputes on demand.
     pub(crate) overlay_digest_cache: std::cell::Cell<Option<(i64, u64)>>,
+    /// Derived native wrap rules with mutator-local collection dependencies.
+    /// No Lisp objects are retained; dumps start with an empty cache.
+    pub(crate) word_wrap_policy_cache:
+        std::cell::RefCell<Option<std::rc::Rc<crate::window::CachedWordWrapPolicy>>>,
     /// Memo for [`Self::automatic_composition_spans`], keyed on everything
     /// the scan reads. Derived state: clones and dumps may leave it empty and
     /// it recomputes on demand.
@@ -2789,6 +2793,7 @@ impl Buffer {
             overlays: OverlayList::new(),
             overlay_modified_tick: 1,
             overlay_digest_cache: std::cell::Cell::new(None),
+            word_wrap_policy_cache: std::cell::RefCell::new(None),
             automatic_composition_cache: std::cell::RefCell::new(None),
             automatic_composition_visible_cache: std::cell::RefCell::new(None),
             undo_state: SharedUndoState::new(),
@@ -2823,6 +2828,7 @@ impl Buffer {
             overlays: parts.overlays,
             overlay_modified_tick: parts.overlay_modified_tick,
             overlay_digest_cache: std::cell::Cell::new(None),
+            word_wrap_policy_cache: std::cell::RefCell::new(None),
             automatic_composition_cache: std::cell::RefCell::new(None),
             automatic_composition_visible_cache: std::cell::RefCell::new(None),
             undo_state: parts.undo_state,

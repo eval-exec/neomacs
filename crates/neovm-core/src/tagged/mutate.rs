@@ -15,8 +15,8 @@ use super::gc::{
     with_store_state,
 };
 use super::header::{
-    ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj, MarkerObj,
-    OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
+    BoolVectorObj, ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj,
+    MarkerObj, OverlayObj, RecordObj, StringObj, VecLikeHeader, VecLikeType, VectorObj, XwidgetObj,
     XwidgetViewObj,
 };
 use super::value::{TAG_MASK, TaggedValue};
@@ -108,6 +108,26 @@ pub(crate) fn debug_assert_no_heap_mut_closure() {
             "GC safe point inside a with_*_mut heap mutation closure (GEN-5)"
         );
     });
+}
+
+/// Mutate packed bits through the same collection journal as other mutable
+/// values. Bool-vectors have no Lisp children, so they need no pointer write
+/// barrier, but layout observations can depend on their contents.
+#[inline]
+pub fn with_bool_vector_mut<R>(
+    value: TaggedValue,
+    f: impl FnOnce(&mut super::header::BoolVectorObj) -> R,
+) -> Option<R> {
+    if value.veclike_type()? != VecLikeType::BoolVector {
+        return None;
+    }
+    LispCollectionRevision::changed(value);
+    let ptr = value.as_veclike_ptr()? as *mut BoolVectorObj;
+    #[cfg(debug_assertions)]
+    let _guard = HeapMutClosureGuard::enter();
+    // SAFETY: the type was validated above. The mutation closure cannot run
+    // Lisp or collect, as enforced by the ordinary heap mutation contract.
+    Some(f(unsafe { &mut *ptr }))
 }
 
 // Keep the recorder and barrier rejects in the caller as the generation-only
