@@ -1,0 +1,25 @@
+[package]
+name = "nmjit-publication-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# N1 specification only: no engine dependency or product feature.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+static_assertions = "=1.1.0"
+
+[profile.test]
+opt-level = 1
+
+[[test]]
+name = "publication"
+path = "tests/publication.rs"
+
+[[test]]
+name = "grace"
+path = "tests/grace.rs"
