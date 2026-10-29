@@ -14,6 +14,21 @@ fn eval_one(src: &str) -> String {
     format_eval_result(&ev.eval_str(src))
 }
 
+/// The string GNU prints for an invalid division on this host: the x86
+/// default NaN is negative (`-0.0e+NaN`), arm64's is positive
+/// (`0.0e+NaN`).  `max`/`min` return that NaN unchanged.
+fn host_invalid_nan_result() -> &'static str {
+    // `black_box` keeps Rust from constant-folding the division: the folded
+    // value is the compiler's canonical NaN, while the runtime instruction
+    // produces the target's default NaN (negative x86, positive arm64).
+    let zero = std::hint::black_box(0.0f64);
+    if (zero / zero).is_sign_negative() {
+        "OK -0.0e+NaN"
+    } else {
+        "OK 0.0e+NaN"
+    }
+}
+
 // -----------------------------------------------------------------------
 // Bug A: max/min must propagate a NaN argument (not silently drop it),
 // and once the NaN wins it is returned (so the result is a float NaN).
@@ -21,34 +36,37 @@ fn eval_one(src: &str) -> String {
 
 #[test]
 fn max_propagates_nan_in_middle() {
-    // GNU: (max 1.0 (/ 0.0 0.0)) => -0.0e+NaN
-    assert_eq!(eval_one("(max 1.0 (/ 0.0 0.0))"), "OK -0.0e+NaN");
+    // GNU: (max 1.0 (/ 0.0 0.0)) => the host's default NaN
+    assert_eq!(eval_one("(max 1.0 (/ 0.0 0.0))"), host_invalid_nan_result());
 }
 
 #[test]
 fn min_propagates_nan_in_middle() {
-    // GNU: (min 1.0 2.0 (/ 0.0 0.0) 3.0) => -0.0e+NaN
-    assert_eq!(eval_one("(min 1.0 2.0 (/ 0.0 0.0) 3.0)"), "OK -0.0e+NaN");
+    // GNU: (min 1.0 2.0 (/ 0.0 0.0) 3.0) => the host's default NaN
+    assert_eq!(
+        eval_one("(min 1.0 2.0 (/ 0.0 0.0) 3.0)"),
+        host_invalid_nan_result()
+    );
 }
 
 #[test]
 fn max_with_integer_accumulator_and_nan_returns_float_nan() {
-    // GNU: (max 5 (/ 0.0 0.0)) => -0.0e+NaN  (result is a float, not 5)
-    assert_eq!(eval_one("(max 5 (/ 0.0 0.0))"), "OK -0.0e+NaN");
+    // GNU: (max 5 (/ 0.0 0.0)) => the host's default NaN (a float, not 5)
+    assert_eq!(eval_one("(max 5 (/ 0.0 0.0))"), host_invalid_nan_result());
     // The returned value must be a float.
     assert_eq!(eval_one("(type-of (max 5 (/ 0.0 0.0)))"), "OK float");
 }
 
 #[test]
 fn max_nan_first_still_propagates() {
-    // GNU: (max (/ 0.0 0.0) 1.0) => -0.0e+NaN
-    assert_eq!(eval_one("(max (/ 0.0 0.0) 1.0)"), "OK -0.0e+NaN");
+    // GNU: (max (/ 0.0 0.0) 1.0) => the host's default NaN
+    assert_eq!(eval_one("(max (/ 0.0 0.0) 1.0)"), host_invalid_nan_result());
 }
 
 #[test]
 fn min_nan_first_still_propagates() {
-    // GNU: (min (/ 0.0 0.0) 1.0) => -0.0e+NaN
-    assert_eq!(eval_one("(min (/ 0.0 0.0) 1.0)"), "OK -0.0e+NaN");
+    // GNU: (min (/ 0.0 0.0) 1.0) => the host's default NaN
+    assert_eq!(eval_one("(min (/ 0.0 0.0) 1.0)"), host_invalid_nan_result());
 }
 
 #[test]

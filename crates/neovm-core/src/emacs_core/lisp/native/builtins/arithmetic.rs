@@ -1235,17 +1235,14 @@ pub(crate) fn builtin_div(args: &[Value]) -> EvalResult {
         let mut acc = expect_number_or_marker_f64(&args[0])?;
         for a in &args[1..] {
             let d = expect_number_or_marker_f64(a)?;
-            let inputs_ordered = !acc.is_nan() && !d.is_nan();
+            // GNU divides in C and prints the sign bit of the NaN the
+            // hardware produced.  An invalid operation (`0.0/0.0`,
+            // `inf/inf`) therefore gives the target's default NaN: negative
+            // on x86 (`-0.0e+NaN`, what glibc/x86 GNU prints) and positive
+            // on arm64 (`0.0e+NaN`, what Darwin GNU prints).  Do not pin a
+            // sign here: that is exactly the host property GNU propagates
+            // (src/data.c Fquo, src/floatfns.c float_to_string).
             acc /= d;
-            if acc.is_nan() && inputs_ordered {
-                // An INVALID operation (`0.0/0.0`, `inf/inf`) yields the
-                // hardware default NaN, which is NEGATIVE on x86 and is what
-                // GNU prints (`-0.0e+NaN`) — pin it against const-folding.
-                // A NaN INPUT propagates with its own sign: GNU's
-                // `(/ 0.0e+NaN 1)` is `0.0e+NaN`. Forcing every NaN negative
-                // diverged there (found by the mixed-operand oracle).
-                acc = f64::from_bits(f64::NAN.to_bits() | (1_u64 << 63));
-            }
         }
         return Ok(Value::make_float(acc));
     }

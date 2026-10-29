@@ -5633,6 +5633,12 @@ fn process_attributes_pipe_child_args_ttname_and_running_child_match_oracle() {
                 r#"(equal args "/bin/sh -c sleep 300")"#,
             )
             .replace(r#"(equal ttname "")"#, "(null ttname)")
+            // Darwin's TIOCGPGRP on the pipe read fd succeeds and answers
+            // process group 0; GNU reports that fixnum (src/process.c:7003).
+            .replace(
+                "(eq (process-running-child-p proc) t)",
+                "(eq (process-running-child-p proc) 0)",
+            )
     } else {
         source.to_owned()
     };

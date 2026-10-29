@@ -430,10 +430,12 @@ pub(crate) fn fixnum_tag_test(fb: &mut FunctionBuilder, v: ClifValue) -> ClifVal
         .icmp_imm_u(IntCC::Equal, tag, FIXNUM_CHECK_VALUE as i64)
 }
 
-/// The f64 `+ - * /` for a Float site. `/` gets the negative default NaN
-/// only for an INVALID op (`0.0/0.0`, `inf/inf`) — a NaN INPUT propagates
-/// with its own sign, as GNU's `(/ 0.0e+NaN 1)` = `0.0e+NaN` shows
-/// (`builtin_div` applies the same rule).
+/// The f64 `+ - * /` for a Float site.  `/` returns Cranelift's `fdiv`
+/// result unchanged, like GNU's C division: an INVALID op (`0.0/0.0`,
+/// `inf/inf`) yields the target's default NaN (negative on x86, positive on
+/// arm64) and a NaN INPUT propagates with its own sign, as GNU's
+/// `(/ 0.0e+NaN 1)` = `0.0e+NaN` shows.  `builtin_div` follows the same
+/// rule.
 pub(crate) fn emit_float_arith(
     fb: &mut FunctionBuilder,
     op: &Op,
@@ -444,30 +446,11 @@ pub(crate) fn emit_float_arith(
         Op::Add => fb.ins().fadd(fa_val, fb_val),
         Op::Sub => fb.ins().fsub(fa_val, fb_val),
         Op::Mul => fb.ins().fmul(fa_val, fb_val),
-        _ => {
-            let q = fb.ins().fdiv(fa_val, fb_val);
-            let q_nan = fb
-                .ins()
-                .fcmp(cranelift_codegen::ir::condcodes::FloatCC::NotEqual, q, q);
-            let a_ord = fb.ins().fcmp(
-                cranelift_codegen::ir::condcodes::FloatCC::Equal,
-                fa_val,
-                fa_val,
-            );
-            let b_ord = fb.ins().fcmp(
-                cranelift_codegen::ir::condcodes::FloatCC::Equal,
-                fb_val,
-                fb_val,
-            );
-            let ordered = fb.ins().band(a_ord, b_ord);
-            let invalid = fb.ins().band(q_nan, ordered);
-            let neg_nan = fb
-                .ins()
-                .f64const(cranelift_codegen::ir::immediates::Ieee64::with_bits(
-                    f64::NAN.to_bits() | (1_u64 << 63),
-                ));
-            fb.ins().select(invalid, neg_nan, q)
-        }
+        // GNU divides in C; an invalid operation gives the target's default
+        // NaN (negative on x86, positive on arm64) and a NaN input keeps its
+        // sign.  Cranelift's fdiv has the same target-defined answers, so the
+        // result is used untouched (src/data.c Fquo).
+        _ => fb.ins().fdiv(fa_val, fb_val),
     }
 }
 

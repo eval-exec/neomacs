@@ -310,6 +310,7 @@ mod pcase_comprehensive_patterns;
 mod pcase_switch_jump_table_semantics;
 #[cfg(test)]
 mod per_symbol_redefinition_semantics;
+mod platform_host_semantics;
 mod plist;
 mod point;
 mod pos_bol_eol_semantics;

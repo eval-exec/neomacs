@@ -454,21 +454,35 @@ fn pure_dispatch_typed_div_float_zero_uses_ieee_results() {
         other => panic!("expected float, got {other:?}"),
     }
 
-    let neg_nan = dispatch_builtin_pure("/", vec![Value::make_float(0.0), Value::make_float(0.0)])
-        .expect("builtin / should resolve")
-        .expect("float division should evaluate");
-    match neg_nan.kind() {
+    let invalid_nan =
+        dispatch_builtin_pure("/", vec![Value::make_float(0.0), Value::make_float(0.0)])
+            .expect("builtin / should resolve")
+            .expect("float division should evaluate");
+    match invalid_nan.kind() {
         ValueKind::Float => {
-            let f = neg_nan.as_float().unwrap();
-            assert!(f.is_nan() && f.is_sign_negative());
+            let f = invalid_nan.as_float().unwrap();
+            assert!(f.is_nan());
+            // GNU divides in C and prints the NaN the hardware produced: the
+            // x86 default NaN is negative, arm64's is positive.  The engine
+            // must propagate the target's answer, not a build-host constant.
+            // `black_box` keeps Rust from constant-folding the division:
+            // a folded `0.0 / 0.0` is the compiler's canonical NaN, while
+            // the runtime instruction produces the target's default NaN.
+            let zero = std::hint::black_box(0.0f64);
+            assert_eq!(
+                f.is_sign_negative(),
+                (zero / zero).is_sign_negative(),
+                "0.0/0.0 must keep the host hardware's default NaN sign"
+            );
         }
         other => panic!("expected float, got {other:?}"),
     }
 }
 
-/// GNU keeps an INPUT NaN's sign — x86 `divsd` propagates it — and only an
-/// invalid op (`0.0/0.0`) yields the negative default NaN. `(/ 0.0e+NaN 1)`
-/// prints `0.0e+NaN` in GNU; forcing every NaN negative diverged there.
+/// GNU keeps an INPUT NaN's sign — `divsd`/`fdiv` propagate it — and an
+/// invalid op (`0.0/0.0`) yields the hardware default NaN (negative on x86,
+/// positive on arm64). `(/ 0.0e+NaN 1)` prints `0.0e+NaN` in GNU; forcing
+/// every NaN negative diverged there.
 #[test]
 fn float_division_propagates_an_input_nan_with_its_sign() {
     for args in [

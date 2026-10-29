@@ -5615,16 +5615,27 @@ pub(crate) fn builtin_process_running_child_p(
 
 #[cfg(unix)]
 pub(super) fn process_tty_foreground_group(proc: &Process) -> Option<i32> {
-    if let Some(gid) = proc
-        .live_io
-        .pty_master
-        .as_ref()
-        .and_then(|master| master.as_raw_fd())
-        .and_then(sys::fd_foreground_pgrp)
+    // GNU's emacs_get_tty_pgrp probes `p->infd` (src/process.c:7003-7025):
+    // the pty master for a pty connection, the shared output pipe for a pipe
+    // connection.  The platform answers for a pipe differ and GNU propagates
+    // them: Linux's TIOCGPGRP fails with ENOTTY and process-running-child-p
+    // returns t, while Darwin's succeeds with process group 0 and GNU returns
+    // the fixnum 0.  Probing only a pty master made Neo answer t on both.
     {
-        return Some(gid);
+        use std::os::fd::AsRawFd;
+        let input_fd = proc
+            .live_io
+            .pty_master
+            .as_ref()
+            .and_then(|master| master.as_raw_fd())
+            .or_else(|| proc.live_io.child_stdout.as_ref().map(AsRawFd::as_raw_fd));
+        if let Some(gid) = input_fd.and_then(sys::fd_foreground_pgrp) {
+            return Some(gid);
+        }
     }
 
+    // GNU retries through the controlling tty's path when the fd probe fails
+    // and the process recorded a tty name.
     let tty_name = proc.tty_name.as_lisp_string()?;
     if tty_name.as_bytes().is_empty() {
         return None;
