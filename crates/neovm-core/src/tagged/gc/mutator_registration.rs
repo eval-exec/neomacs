@@ -843,3 +843,6 @@ mod a8_probes;
 mod native_extent_tests;
 #[cfg(test)]
 mod restricted_lisp;
+
+// Shared dormant production-entry contention vocabulary.
+pub(crate) mod retry;
