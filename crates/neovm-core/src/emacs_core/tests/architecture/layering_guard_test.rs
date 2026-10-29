@@ -122,6 +122,12 @@ fn explicit_module_path(module: &ItemMod) -> Option<PathBuf> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum LowerRoot {
+    /// The emacs_core direct submodules that move into the bottom
+    /// `neovm-value` crate together with `tagged`, `heap_types` and
+    /// `gc_trace` (DESIGN.md §4), measured as one lower root. This names a
+    /// group of emacs_core submodules, not a top-level module, so only the
+    /// ceilings file spells it.
+    G0,
     Buffer,
     CodeConversionWorkspace,
     DisplayEvaluation,
@@ -143,6 +149,7 @@ enum LowerRoot {
 impl LowerRoot {
     fn parse(name: &str) -> Self {
         match name {
+            "g0" => Self::G0,
             "buffer" => Self::Buffer,
             "code_conversion_workspace" => Self::CodeConversionWorkspace,
             "display_evaluation" => Self::DisplayEvaluation,
@@ -167,6 +174,7 @@ impl LowerRoot {
 
     fn name(self) -> &'static str {
         match self {
+            Self::G0 => "g0",
             Self::Buffer => "buffer",
             Self::CodeConversionWorkspace => "code_conversion_workspace",
             Self::DisplayEvaluation => "display_evaluation",
@@ -185,6 +193,36 @@ impl LowerRoot {
             Self::Window => "window",
         }
     }
+}
+
+/// The emacs_core direct submodules that join `tagged`, `heap_types` and
+/// `gc_trace` in the bottom `neovm-value` crate (DESIGN.md §4). A reference
+/// from one of them to anything outside this set and the bottom peers is
+/// upward.
+const G0_MEMBERS: [&str; 10] = [
+    "value",
+    "symbol",
+    "intern",
+    "error",
+    "errors",
+    "forward",
+    "emacs_char",
+    "boolvec",
+    "alloc",
+    "hashtab",
+];
+
+fn is_g0_member(name: &str) -> bool {
+    G0_MEMBERS.contains(&name)
+}
+
+/// Top-level modules that move into `neovm-value` with G0, so a G0 reference
+/// to one of them stays inside the bottom crate.
+fn is_bottom_peer(root: LowerRoot) -> bool {
+    matches!(
+        root,
+        LowerRoot::Tagged | LowerRoot::HeapTypes | LowerRoot::GcTrace
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -208,10 +246,33 @@ impl EcSub {
     }
 }
 
+/// The upper end of a measured pair.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Upper {
+    /// An emacs_core direct submodule (or a facade name that resolves to
+    /// one).
+    Ec(EcSub),
+    /// A top-level module. G0 is the first measured lower root that can sit
+    /// under a top-level module, so both kinds are now nameable.
+    Top(LowerRoot),
+}
+
+impl Upper {
+    /// The ceilings-file spelling: an emacs_core submodule by name, a
+    /// top-level module as `top:<name>`. `:` cannot occur in an identifier,
+    /// so the two namespaces cannot collide.
+    fn text(&self) -> String {
+        match self {
+            Self::Ec(sub) => sub.0.clone(),
+            Self::Top(root) => format!("top:{}", root.name()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Pair {
     lower: LowerRoot,
-    upper: EcSub,
+    upper: Upper,
 }
 
 #[derive(Debug)]
@@ -238,6 +299,9 @@ type Ceilings = BTreeMap<Pair, usize>;
 #[derive(Default)]
 struct ModuleIndex {
     ec_modules: BTreeSet<String>,
+    /// Top-level production modules declared in `lib.rs`. G0 can name one
+    /// directly (`crate::buffer::...`) without going through `emacs_core`.
+    crate_modules: BTreeSet<String>,
     /// Items defined directly in `emacs_core/mod.rs` (`eval_source`,
     /// `MenuBarPopupAnchor`, ...), which a `crate::emacs_core::Name` path can
     /// reach without naming a submodule.
@@ -332,6 +396,7 @@ impl ProductionWalker {
             ScanPhase::Discover => match self.logical_path.as_slice() {
                 [name] if name != "emacs_core" => {
                     LowerRoot::parse(name);
+                    self.index.crate_modules.insert(name.clone());
                 }
                 [root, name] if root == "emacs_core" => {
                     self.index.ec_modules.insert(name.clone());
@@ -347,7 +412,7 @@ impl ProductionWalker {
             return Classification::NotUpward;
         };
         if lower == "emacs_core" {
-            return Classification::NotUpward;
+            return self.classify_from_emacs_core(segments, span);
         }
         let Some(first) = segments.first() else {
             return Classification::NotUpward;
@@ -396,7 +461,103 @@ impl ProductionWalker {
         };
         Classification::Upward(Pair {
             lower: LowerRoot::parse(lower),
-            upper,
+            upper: Upper::Ec(upper),
+        })
+    }
+
+    /// Resolve a written path to crate-root-relative segments. `crate::`
+    /// restarts at the root, `super::` pops one module per keyword, and
+    /// `self::` stays in the containing module. Names that do not start at
+    /// the crate root (locals, associated items, imported names) are counted
+    /// at their `use` item instead, exactly as for the top-level sources.
+    fn absolute_segments(&self, segments: &[String]) -> Option<Vec<String>> {
+        let first = segments.first()?;
+        match first.as_str() {
+            "crate" => Some(segments[1..].to_vec()),
+            "super" => {
+                let pops = segments.iter().take_while(|part| *part == "super").count();
+                if pops > self.logical_path.len() {
+                    return None;
+                }
+                let mut absolute = self.logical_path[..self.logical_path.len() - pops].to_vec();
+                absolute.extend_from_slice(&segments[pops..]);
+                Some(absolute)
+            }
+            "self" => {
+                let mut absolute = self.logical_path.clone();
+                absolute.extend_from_slice(&segments[1..]);
+                Some(absolute)
+            }
+            _ => None,
+        }
+    }
+
+    /// A reference written inside an emacs_core module is upward only when
+    /// the source is a G0 member and the target leaves the bottom group: an
+    /// emacs_core submodule outside G0, or a top-level module outside the
+    /// bottom peers. References between G0 members, to tagged/heap_types/
+    /// gc_trace, and every reference from the upper modules stay outside the
+    /// ratchet, exactly as before.
+    fn classify_from_emacs_core(&self, segments: &[String], span: Span) -> Classification {
+        let Some(member) = self.logical_path.get(1) else {
+            return Classification::NotUpward;
+        };
+        if !is_g0_member(member) {
+            return Classification::NotUpward;
+        }
+        let Some(absolute) = self.absolute_segments(segments) else {
+            return Classification::NotUpward;
+        };
+        let Some(first) = absolute.first() else {
+            return Classification::NotUpward;
+        };
+        if first == "emacs_core" {
+            let Some(name) = absolute.get(1) else {
+                return Classification::NotUpward;
+            };
+            let upper = if self.index.ec_modules.contains(name) {
+                EcSub::validated(name, &self.index.ec_modules)
+            } else if let Some(origin) = self.index.ec_exports.get(name) {
+                origin.clone()
+            } else if self.index.ec_root_items.contains(name) {
+                EcSub::root()
+            } else {
+                panic!(
+                    "{}:{}: unknown emacs_core submodule or re-export {name}",
+                    self.source.display(),
+                    span.start().line
+                )
+            };
+            if is_g0_member(&upper.0) {
+                return Classification::NotUpward;
+            }
+            return Classification::Upward(Pair {
+                lower: LowerRoot::G0,
+                upper: Upper::Ec(upper),
+            });
+        }
+        if let Some(origin) = self.index.crate_exports.get(first) {
+            if is_g0_member(&origin.0) {
+                return Classification::NotUpward;
+            }
+            return Classification::Upward(Pair {
+                lower: LowerRoot::G0,
+                upper: Upper::Ec(origin.clone()),
+            });
+        }
+        assert!(
+            self.index.crate_modules.contains(first),
+            "{}:{}: unknown top-level module or crate re-export {first}",
+            self.source.display(),
+            span.start().line
+        );
+        let root = LowerRoot::parse(first);
+        if is_bottom_peer(root) {
+            return Classification::NotUpward;
+        }
+        Classification::Upward(Pair {
+            lower: LowerRoot::G0,
+            upper: Upper::Top(root),
         })
     }
 
@@ -728,11 +889,21 @@ fn parse_ceilings(text: &str, index: &ModuleIndex) -> Ceilings {
         assert_eq!(
             columns.len(),
             3,
-            "expected <lower_root> <ec_sub> <count>: {line}"
+            "expected <lower_root> <upper> <count>: {line}"
         );
+        let upper = if let Some(top) = columns[1].strip_prefix("top:") {
+            let root = LowerRoot::parse(top);
+            assert!(
+                !matches!(root, LowerRoot::G0),
+                "g0 is a lower-root group, not a top-level module: {line}"
+            );
+            Upper::Top(root)
+        } else {
+            Upper::Ec(EcSub::validated(columns[1], &index.ec_modules))
+        };
         let pair = Pair {
             lower: LowerRoot::parse(columns[0]),
-            upper: EcSub::validated(columns[1], &index.ec_modules),
+            upper,
         };
         let count = columns[2].parse::<usize>().expect("integer ceiling");
         assert!(count > 0, "list nonzero pairs only");
@@ -747,7 +918,14 @@ fn parse_ceilings(text: &str, index: &ModuleIndex) -> Ceilings {
 fn current_table(sites: &Sites) -> String {
     sites
         .iter()
-        .map(|(pair, sites)| format!("{} {} {}\n", pair.lower.name(), pair.upper.0, sites.len()))
+        .map(|(pair, sites)| {
+            format!(
+                "{} {} {}\n",
+                pair.lower.name(),
+                pair.upper.text(),
+                sites.len()
+            )
+        })
         .collect()
 }
 
@@ -772,9 +950,9 @@ fn assert_production_ceilings(root: &Path, sites: &Sites, ceilings: &Ceilings) {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            failures.push(format!("{} {}: {current} production upward references exceed the ceiling {ceiling}. Remove upward dependencies; this ceiling may only decrease.\n{locations}", pair.lower.name(), pair.upper.0));
+            failures.push(format!("{} {}: {current} production upward references exceed the ceiling {ceiling}. Remove upward dependencies; this ceiling may only decrease.\n{locations}", pair.lower.name(), pair.upper.text()));
         } else if current < ceiling {
-            failures.push(format!("{} {}: current {current} below ceiling {ceiling}; this ceiling may only decrease. Paste the FULL current table into layering_ceilings.list.", pair.lower.name(), pair.upper.0));
+            failures.push(format!("{} {}: current {current} below ceiling {ceiling}; this ceiling may only decrease. Paste the FULL current table into layering_ceilings.list.", pair.lower.name(), pair.upper.text()));
         }
     }
     assert!(
@@ -1026,4 +1204,82 @@ fn layering_guard_skips_file_level_test_modules() {
     let (index, sites) = production_sites(directory.path());
     assert!(index.ec_modules.is_empty());
     assert!(sites.is_empty());
+}
+
+#[test]
+fn layering_guard_counts_g0_emacs_core_edges() {
+    let directory = fixture(
+        r#"
+        mod emacs_core {
+            pub mod value {
+                use crate::emacs_core::print::Glyph;
+                use crate::buffer::BufferManager;
+            }
+            pub mod error {
+                use crate::emacs_core::value::Value;
+                use crate::tagged::SymbolMode;
+            }
+            pub mod print { pub struct Glyph; }
+        }
+        mod buffer {}
+        mod tagged {}
+    "#,
+    );
+    let root = directory.path();
+    let (index, sites) = production_sites(root);
+    assert_eq!(current_table(&sites), "g0 print 1\ng0 top:buffer 1\n");
+    assert_production_ceilings(
+        root,
+        &sites,
+        &parse_ceilings(&current_table(&sites), &index),
+    );
+}
+
+#[test]
+fn layering_guard_g0_planted_upward_reference_fails() {
+    let directory = fixture(
+        "mod emacs_core { pub mod value { use crate::emacs_core::print::Glyph; } pub mod print {} }",
+    );
+    let root = directory.path();
+    let (index, sites) = production_sites(root);
+    let message =
+        panic_message(|| assert_production_ceilings(root, &sites, &parse_ceilings("", &index)));
+    assert!(message.contains("lib.rs:1"), "{message}");
+    assert!(
+        message.contains("g0 print: 1 production upward references exceed the ceiling 0"),
+        "{message}"
+    );
+}
+
+#[test]
+fn layering_guard_g0_requires_pasting_lowered_ceilings() {
+    let directory = fixture(
+        "mod emacs_core { pub mod value { use crate::buffer::BufferManager; } } mod buffer {}",
+    );
+    let root = directory.path();
+    let (index, sites) = production_sites(root);
+    let ceilings = parse_ceilings("g0 top:buffer 2", &index);
+    let message = panic_message(|| assert_production_ceilings(root, &sites, &ceilings));
+    assert!(
+        message.contains("g0 top:buffer: current 1 below ceiling 2"),
+        "{message}"
+    );
+    assert!(
+        message.contains("FULL CURRENT TABLE\ng0 top:buffer 1\nEND CURRENT TABLE"),
+        "{message}"
+    );
+}
+
+#[test]
+#[should_panic(expected = "unknown emacs_core submodule or re-export Missing")]
+fn layering_guard_rejects_unknown_g0_emacs_core_target() {
+    let directory = fixture("mod emacs_core { pub mod value { use crate::emacs_core::Missing; } }");
+    production_sites(directory.path());
+}
+
+#[test]
+#[should_panic(expected = "unknown top-level module or crate re-export surprise")]
+fn layering_guard_rejects_unknown_g0_top_level_target() {
+    let directory = fixture("mod emacs_core { pub mod value { use crate::surprise::Glyph; } }");
+    production_sites(directory.path());
 }
