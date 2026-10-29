@@ -614,11 +614,27 @@ fn get_char_property_prefers_highest_priority_overlay() {
 }
 
 #[test]
-fn get_char_property_same_range_overlays_use_a_stable_consistent_tiebreaker() {
+fn get_char_property_same_range_overlays_use_the_creation_serial_tiebreaker() {
     crate::test_utils::init_test_tracing();
     let mut eval = eval_with_text("abcd");
     let first = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(5)]).unwrap();
     let second = builtin_make_overlay(&mut eval, vec![Value::fixnum(1), Value::fixnum(5)]).unwrap();
+
+    // GNU's final precedence tiebreaker (buffer.c:3277-3281) compares the raw
+    // overlay address, an order GNU documents as arbitrary: "The result can
+    // still change between invocations of Emacs, but it won't change in the
+    // middle of `find_field'".  Neo keeps the same comparison's *shape* but
+    // compares the world-owned creation order (`OverlaySerial`, minted before
+    // the allocation), so the arbitrary order is deterministic on every
+    // platform instead of an allocator accident.  Assert that contract here:
+    // the later-created overlay wins, in the exact returned order, across
+    // repeated calls and across a collection.
+    let first_serial = first.as_overlay_data().expect("live overlay").serial;
+    let second_serial = second.as_overlay_data().expect("live overlay").serial;
+    assert!(
+        first_serial < second_serial,
+        "allocation must mint creation-ordered serials"
+    );
 
     builtin_overlay_put(
         &mut eval,
@@ -652,32 +668,46 @@ fn get_char_property_same_range_overlays_use_a_stable_consistent_tiebreaker() {
     );
     let raw = builtin_overlays_at(&mut eval, vec![Value::fixnum(2)]).unwrap();
     assert_eq!(list_to_vec(&raw).unwrap(), vec![second, first]);
+    // Sorted output is descending precedence (GNU sorts ascending and
+    // reverses, buffer.c:3917), so the later creation -- the greater serial --
+    // is first and is the winner.  The order is exact, not just stable.
     let sorted = builtin_overlays_at(&mut eval, vec![Value::fixnum(2), Value::T]).unwrap();
     let sorted_ids = list_to_vec(&sorted).unwrap();
-    // GNU's identity tiebreaker (buffer.c:3277-3281) is explicitly arbitrary:
-    // "The result can still change between invocations of Emacs, but it won't
-    // change in the middle of `find_field'".  Assert that contract instead of
-    // the allocator accident: both overlays survive the sort, the order is
-    // stable within the run, and the property resolution follows the order
-    // the sort chose.  (On arm64 macOS a same-size allocation can land below
-    // the previous one, so asserting the raw tagged-word order claimed a
-    // platform accident as a contract.)
-    assert_eq!(sorted_ids.len(), 2);
-    assert!(sorted_ids.contains(&first));
-    assert!(sorted_ids.contains(&second));
+    assert_eq!(sorted_ids, vec![second, first]);
+    assert_eq!(
+        sorted_ids[0].as_overlay_data().unwrap().serial,
+        second_serial
+    );
+    assert_eq!(
+        sorted_ids[1].as_overlay_data().unwrap().serial,
+        first_serial
+    );
     let repeated = builtin_overlays_at(&mut eval, vec![Value::fixnum(2), Value::T]).unwrap();
     assert_eq!(list_to_vec(&repeated).unwrap(), sorted_ids);
-    // GNU sorts ascending and reverses (buffer.c:3917), so the returned list
-    // is descending precedence and its FIRST element is the winner.
-    let winner = sorted_ids[0];
 
     let result =
         builtin_get_char_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
             .unwrap();
+    assert_eq!(result.as_bare_symbol_name(), Some("second"));
+
+    // A full collection must not change either the serials (they live in the
+    // overlay objects, not in their addresses) or the order they induce.
+    eval.gc_collect_exact();
+    let after_gc = builtin_overlays_at(&mut eval, vec![Value::fixnum(2), Value::T]).unwrap();
+    let after_gc_ids = list_to_vec(&after_gc).unwrap();
+    assert_eq!(after_gc_ids, vec![second, first]);
     assert_eq!(
-        result.as_bare_symbol_name(),
-        Some(if winner == first { "first" } else { "second" })
+        after_gc_ids[0].as_overlay_data().unwrap().serial,
+        second_serial
     );
+    assert_eq!(
+        after_gc_ids[1].as_overlay_data().unwrap().serial,
+        first_serial
+    );
+    let after_gc_prop =
+        builtin_get_char_property(&mut eval, vec![Value::fixnum(2), Value::symbol("face")])
+            .unwrap();
+    assert_eq!(after_gc_prop.as_bare_symbol_name(), Some("second"));
 }
 
 #[test]
