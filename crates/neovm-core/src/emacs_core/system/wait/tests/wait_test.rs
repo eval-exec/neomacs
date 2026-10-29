@@ -4,6 +4,10 @@ use super::*;
 #[path = "numeric_boundaries.rs"]
 mod numeric_boundaries;
 
+#[cfg(test)]
+#[path = "requeued_command_input.rs"]
+mod requeued_command_input;
+
 #[test]
 fn target_process_activity_implies_any_process_activity() {
     let mut process = ProcessOutputServiceOutcome::default();
@@ -49,7 +53,7 @@ fn special_input_outcome_merges_activity_and_redisplay() {
 fn command_input_pending_is_recorded_explicitly() {
     let mut outcome = WaitServiceOutcome::default();
 
-    outcome.record_command_input_pending();
+    outcome.record_command_input_pending(WaitCommandInput::Staged);
 
     assert!(outcome.has_command_input_pending());
 }
@@ -428,7 +432,7 @@ fn command_wait_returns_after_callbacks_to_restart_display_maintenance() {
         request.completion_for(callback),
         Some(WaitCompletion::DisplayActivity)
     );
-    callback.record_command_input_pending();
+    callback.record_command_input_pending(WaitCommandInput::Staged);
     assert_eq!(
         request.completion_for(callback),
         Some(WaitCompletion::CommandInputPending)

@@ -1,5 +1,5 @@
 #![cfg(unix)]
-//! Event-loop / wait-machinery regression tests (Neomacs-only).
+//! Event-loop / wait-machinery regressions, including an interactive GNU oracle.
 //!
 //! These guard the GNU-faithful unified-wait redesign (issue #132). Each
 //! test exercises one of the three things the editor blocks on through the
@@ -430,4 +430,89 @@ fn single_keyboard_quit_echoes_quit_once_and_stays_responsive() {
     // Responsiveness probe: an eval round-trips, proving the command loop
     // was not wedged or left in a recurring-quit state by the single C-g.
     assert_eval_echoes(&mut neo, "(+ 40 2)", "42");
+}
+
+/// GNU's keyboard wait returns to its reader when a timer queues an unread
+/// command event (process.c:5501-5504,5918-5921; keyboard.c:4073-4077,4166-4172).
+/// This command runs from actual PTY input, without a subsequent physical key
+/// or a batch-mode `sit-for` that could process the timer before the read.
+const TIMER_INPUT_COMMAND: &str = r#"
+(progn
+  (defun tui-test-timer-input-read ()
+    (interactive)
+    (let ((active nil) (fired nil) (during-read nil) (timer nil) (event nil))
+      (unwind-protect
+          (progn
+            (setq timer
+                  (run-with-timer
+                   0.05 nil
+                   (lambda ()
+                     (setq fired t
+                           during-read active
+                           unread-command-events
+                           (cons ?x unread-command-events)))))
+            (setq active t)
+            (setq event (read-event nil nil 2))
+            (setq active nil)
+            (erase-buffer)
+            (insert (format "TIMER-INPUT-RESULT %S\n"
+                            (list event fired during-read
+                                  (and (not noninteractive)
+                                       (not window-system))
+                                  unread-command-events))))
+        (when timer (cancel-timer timer)))))
+  (global-set-key (kbd "C-c t") #'tui-test-timer-input-read)
+  (setq initial-scratch-message "TIMER-INPUT-READY\n"))
+"#;
+
+#[derive(Clone, Copy, Debug)]
+enum TimerInputEditor {
+    Gnu,
+    Neomacs,
+}
+
+fn assert_timer_queued_input_wakes_read(editor: TimerInputEditor) {
+    let (program, name) = match editor {
+        TimerInputEditor::Gnu => (std::path::PathBuf::from("emacs"), "GNU"),
+        TimerInputEditor::Neomacs => (neomacs_binary(), "NEO"),
+    };
+    let launch = TuiLaunch::new(program.as_os_str())
+        .args(["-nw", "-Q", QUIET_NATIVE_COMP_EVAL])
+        .arg("--eval")
+        .arg(TIMER_INPUT_COMMAND);
+    let mut session = TuiSession::spawn_launch(launch, name);
+    let ready = |grid: &[String]| grid.iter().any(|row| row.contains("TIMER-INPUT-READY"));
+    session.read_until(Duration::from_secs(20), ready);
+    assert!(
+        ready(&session.text_grid()),
+        "{name}: timer-input command was not installed:\n{}",
+        session.text_grid().join("\n")
+    );
+
+    session.send_keys("C-c t");
+    // There is deliberately no input after the command starts. `nil` from
+    // read-event is the deadline result; x must come from the callback while
+    // the read's dynamic active binding is true, then leave no unread tail.
+    let completed = |grid: &[String]| grid.iter().any(|row| row.contains("TIMER-INPUT-RESULT"));
+    session.read_until(Duration::from_secs(8), completed);
+    let grid = session.text_grid();
+    session
+        .finish()
+        .expect("reap timer-input PTY and its owner");
+    assert!(
+        grid.iter()
+            .any(|row| row.contains("TIMER-INPUT-RESULT (120 t t t nil)")),
+        "{name}: timer-queued input must return from read-event before its timeout:\n{}",
+        grid.join("\n")
+    );
+}
+
+#[test]
+fn timer_queued_unread_event_wakes_interactive_read_event_gnu() {
+    assert_timer_queued_input_wakes_read(TimerInputEditor::Gnu);
+}
+
+#[test]
+fn timer_queued_unread_event_wakes_interactive_read_event_neomacs() {
+    assert_timer_queued_input_wakes_read(TimerInputEditor::Neomacs);
 }

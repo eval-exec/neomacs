@@ -3034,7 +3034,8 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
                      (if (< neo-retirement-timer-count 3)
                          (progn
                            (aset neo-retirement-timer 0 nil)
-                           (setq timer-list (list neo-retirement-timer))))))
+                           (setq timer-list (list neo-retirement-timer)))
+                       (setq unread-command-events '(?x)))))
              (fset 'timer-event-handler
                    (lambda (timer)
                      (setq timer-list (delq timer timer-list))
@@ -3045,20 +3046,25 @@ fn presentation_retirement_does_not_preempt_timer_batches() {
     let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::PresentationRetired { presentation: 77 })
         .expect("queue renderer acknowledgement");
-
+    // Callback three, rather than elapsed wall time, completes the wait. The
+    // long deadline only bounds a broken wait; an acknowledgement is not input.
     let outcome = ev
-        .wait_for_command_input(Some(std::time::Instant::now() + Duration::from_millis(50)))
-        .expect("wait should reach its deadline");
+        .wait_for_command_input(Some(std::time::Instant::now() + Duration::from_secs(10)))
+        .expect("the third timer batch should queue command input");
 
-    assert_eq!(
-        outcome,
-        crate::emacs_core::wait::CommandInputWaitOutcome::DeadlineElapsed
-    );
     assert_eq!(
         ev.eval_symbol("neo-retirement-timer-count")
             .expect("timer count"),
         Value::fixnum(3),
         "the internal acknowledgement must not end the wait between timer batches"
+    );
+    assert_eq!(
+        outcome,
+        crate::emacs_core::wait::CommandInputWaitOutcome::InputPending
+    );
+    assert_eq!(
+        ev.peek_unread_command_event(),
+        Some(Value::fixnum('x' as i64))
     );
 }
 
