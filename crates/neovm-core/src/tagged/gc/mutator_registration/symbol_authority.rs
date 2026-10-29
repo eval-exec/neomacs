@@ -98,6 +98,20 @@ impl std::fmt::Debug for SymbolHandle {
     }
 }
 
+// Keep the existing symbol-vocabulary boundary in this module. Nominal era
+// wrappers do not add their own dependency on the upper interner module.
+impl ParallelHeapEra<'_> {
+    pub fn admit_plain_symbol(&self, symbol: SymId) -> Result<SymbolHandle, RegistrationError> {
+        self.core.admit_plain_symbol(symbol)
+    }
+}
+#[cfg(test)]
+impl ProofEra<'_> {
+    pub fn admit_plain_symbol(&self, symbol: SymId) -> Result<SymbolHandle, RegistrationError> {
+        self.core.admit_plain_symbol(symbol)
+    }
+}
+
 impl EraCore<'_> {
     /// Serial keeper admission only, before ANY participant is registered.
     /// Unsupported/absent cells refuse without creating or redirecting them.

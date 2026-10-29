@@ -6,7 +6,6 @@ use super::construction::{Gen1Admission, Gen1Construction};
 #[cfg(test)]
 use super::construction::{ProofAdmission, ProofConstruction};
 use super::*;
-use crate::emacs_core::intern::SymId;
 
 /// Production multi-mutator authority, minted only from checked GEN1 inputs.
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
@@ -183,13 +182,6 @@ macro_rules! era_operations {
                 stopped: &mut AllStopped<'_>,
             ) -> Result<CollectionReport, MinorCollectionError> {
                 self.core.collect_stopped_minor(stopped)
-            }
-
-            pub fn admit_plain_symbol(
-                &self,
-                symbol: SymId,
-            ) -> Result<SymbolHandle, RegistrationError> {
-                self.core.admit_plain_symbol(symbol)
             }
 
             pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
