@@ -460,7 +460,9 @@ impl Default for WindowChrome {
             resize_edge: None,
             cursor_intent: PointerCursorIntent::Default,
             title: String::from("neomacs"),
-            titlebar_height: 30.0,
+            // `undecorated` removes titlebars; custom chrome needs an
+            // explicit positive height rather than covering buffer text.
+            titlebar_height: 0.0,
             titlebar_hover: 0,
             last_titlebar_click: None,
             is_fullscreen: false,
