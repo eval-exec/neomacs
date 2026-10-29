@@ -2368,9 +2368,18 @@ fn resize_edge_sides_require_custom_titlebar() {
     assert_eq!(app.detect_resize_edge(795.0, 300.0), None);
     assert_eq!(app.detect_resize_edge(799.0, 300.0), None);
 
-    // The bottom edge remains available for mouse resizing.
+    // The bottom edge remains available for mouse resizing, including at
+    // the corners where the side edges no longer apply.
     assert_eq!(
         app.detect_resize_edge(400.0, 599.0),
+        Some(ResizeDirection::South)
+    );
+    assert_eq!(
+        app.detect_resize_edge(0.0, 599.0),
+        Some(ResizeDirection::South)
+    );
+    assert_eq!(
+        app.detect_resize_edge(799.0, 599.0),
         Some(ResizeDirection::South)
     );
 
