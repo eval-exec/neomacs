@@ -9,6 +9,29 @@ use crate::display_row::metrics::DisplayRowFallbackMetrics;
 use crate::glyph_advance::GlyphAdvanceQuantization;
 use crate::row_layout::program::{RowProgram, RowProgramGeometry, RowProgramLimits};
 
+fn pinned_unicode_catalog() -> crate::font::metrics::test_catalog::TestFontCatalog {
+    crate::font::metrics::test_catalog::TestFontCatalog::from_files_with_serif(
+        &[
+            neomacs_test_fonts::noto_sans_mono_variable(),
+            neomacs_test_fonts::mplus_1_code_thin(),
+            neomacs_test_fonts::noto_sans_arabic_variable(),
+            neomacs_test_fonts::noto_sans_hebrew_variable(),
+            neomacs_test_fonts::noto_color_emoji_2_051(),
+            neomacs_test_fonts::noto_serif_variable(),
+        ],
+        "Noto Serif",
+    )
+    .expect("verified Unicode font catalog")
+}
+
+fn engine_with_pinned_catalog(
+    catalog: &crate::font::metrics::test_catalog::TestFontCatalog,
+) -> LayoutEngine {
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.font_metrics = Some(catalog.metrics_service());
+    engine
+}
+
 #[test]
 fn unseen_row_worker_glyphs_match_canonical_window_body() {
     let line = "ordinary offscreen text\n";
@@ -112,9 +135,13 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
             word_wrap: false,
             fringe: None,
             width: key.partition.text_body().width,
+            text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::at_frame_x(
+                key.partition.text_body().x,
+            )
+            .unwrap(),
             metrics,
             tabs: crate::display_row::builder::DisplayTabPolicy::from_tab_width_and_stops(
-                0.0,
+                key.partition.text_body().x,
                 key.tab_width,
                 &key.tab_stop_list,
             ),
@@ -448,7 +475,11 @@ fn first_visit_with_setup_and_gc(
     if let Some(setup) = setup {
         eval.eval_str(setup).unwrap();
     }
-    let mut engine = LayoutEngine::new();
+    // Source, detached worker and fresh reference all own this exact pinned
+    // catalog. Installed fontconfig fallbacks must not decide Arabic joining
+    // advances or which Unicode fixture a page renders through.
+    let fonts = pinned_unicode_catalog();
+    let mut engine = engine_with_pinned_catalog(&fonts);
     engine.layout_frame_rust(&mut eval, frame);
     engine
         .request_scroll_coverage(&eval, frame, window, CharPos0::new(start))
@@ -550,7 +581,7 @@ fn first_visit_with_setup_and_gc(
         );
     }
     let actual = selected_window_layout_trace(&eval, &engine, frame);
-    let mut fresh = LayoutEngine::new();
+    let mut fresh = engine_with_pinned_catalog(&fonts);
     fresh.layout_frame_rust(&mut eval, frame);
     assert_eq!(actual, selected_window_layout_trace(&eval, &fresh, frame));
 }
@@ -1020,7 +1051,7 @@ fn worker_page_is_rejected_after_horizontal_scroll() {
 #[test]
 fn worker_page_with_font_family_weight_and_slant_matches_fresh_layout() {
     first_visit(
-        Some("(:family \"DejaVu Serif\" :weight bold :slant italic :height 125)"),
+        Some("(:family \"Noto Serif\" :weight bold :slant italic :height 125)"),
         "ordinary offscreen text\n",
         None,
     );
@@ -1049,7 +1080,7 @@ fn worker_page_with_combined_decorations_matches_fresh_layout() {
 #[test]
 fn worker_page_with_smaller_font_and_tabs_matches_fresh_layout() {
     first_visit(
-        Some("(:family \"DejaVu Serif\" :height 125)"),
+        Some("(:family \"Noto Serif\" :height 125)"),
         "font\ttext\n",
         None,
     );
@@ -2121,7 +2152,7 @@ fn worker_prepares_wrapped_box_and_extended_faces() {
     for face in [
         "(:background \"red\" :extend t)",
         "(:box (:line-width 2 :color \"blue\") :background \"red\" :extend t)",
-        "(:family \"DejaVu Serif\" :weight bold :slant italic :height 125)",
+        "(:family \"Noto Serif\" :weight bold :slant italic :height 125)",
     ] {
         first_visit_with_setup(
             Some(face),
@@ -2656,7 +2687,7 @@ fn worker_invisible_spans_preserve_wrapping_faces_and_boundary_strings() {
                     r#"(progn (setq word-wrap {wrap} buffer-invisibility-spec '((worker-hidden . t)))
                     (let ((p {start})) (while (< p {})
                         (put-text-property (+ p 12) (+ p 38) 'face
-                            '(:family "DejaVu Serif" :height 130 :box (:line-width 2)))
+                            '(:family "Noto Serif" :height 130 :box (:line-width 2)))
                         (put-text-property (+ p 5) (+ p 8) 'display '(raise 0.2))
                         (let ((o (make-overlay (+ p 20) (+ p 20))))
                             (overlay-put o 'before-string (propertize "[before]" 'face '(:height 150)))
@@ -2710,7 +2741,7 @@ fn worker_invisible_ellipsis_uses_preceding_buffer_face_not_hidden_face() {
         Some(&format!(
             r#"(progn (setq buffer-invisibility-spec '((worker-hidden . t)))
             (let ((p {start})) (while (< p {})
-                (put-text-property p (+ p 5) 'face '(:family "DejaVu Serif" :height 150 :box (:line-width 2)))
+                (put-text-property p (+ p 5) 'face '(:family "Noto Serif" :height 150 :box (:line-width 2)))
                 (put-text-property (+ p 5) (+ p 9) 'face '(:height 240))
                 (put-text-property (+ p 5) (+ p 9) 'invisible 'worker-hidden)
                 (setq p (+ p {})))))"#,

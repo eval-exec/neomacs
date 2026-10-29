@@ -41,6 +41,9 @@ fn swash_file_replay(identity: &ResolvedFontIdentity) -> Option<FontReplay> {
 }
 use ttf_parser::Face as TtfFace;
 
+#[cfg(test)]
+pub(crate) mod test_catalog;
+
 #[cfg(target_os = "linux")]
 fn platform_foundry_for_file(file: &str) -> Option<String> {
     crate::font::fontconfig::foundry_for_file(file)
@@ -642,6 +645,42 @@ pub(crate) struct DetachedFontPolicy {
 }
 
 impl DetachedFontPolicy {
+    pub(crate) fn merged(
+        &self,
+        other: &Self,
+        query_limit: usize,
+    ) -> Result<Self, crate::font::resolver::FontPolicyMergeError> {
+        use crate::font::resolver::FontPolicyMergeError;
+        // An ASCII-only capture intentionally carries no live symbol-policy
+        // authority. Its default placeholder must not override Unicode inputs.
+        let symbols = if self.query_count() == 0 {
+            &other.symbols
+        } else if other.query_count() == 0 || self.symbols == other.symbols {
+            &self.symbols
+        } else {
+            return Err(FontPolicyMergeError::Changed);
+        };
+        let characters =
+            std::sync::Arc::new(self.characters.merged(&other.characters, query_limit)?);
+        let bytes = Self::symbol_bytes(symbols)
+            .and_then(|bytes| bytes.checked_add(characters.bytes()))
+            .ok_or(FontPolicyMergeError::Budget)?;
+        Ok(Self {
+            characters,
+            symbols: symbols.clone(),
+            bytes,
+        })
+    }
+
+    fn symbol_bytes(symbols: &SymbolFontPolicy) -> Option<usize> {
+        std::mem::size_of::<Self>().checked_add(
+            symbols
+                .symbol_ranges
+                .len()
+                .checked_mul(std::mem::size_of::<(u32, u32)>())?,
+        )
+    }
+
     pub(crate) fn bytes(&self) -> usize {
         self.bytes
     }
@@ -896,6 +935,14 @@ impl FontMetricsService {
         tracing::info!("FontMetricsService: initializing cosmic-text FontSystem");
         let font_system = FontSystem::new();
         tracing::info!("FontMetricsService: FontSystem ready");
+        Self::from_font_system_and_resolver(font_system, font_resolver)
+    }
+
+    #[inline]
+    fn from_font_system_and_resolver(
+        font_system: FontSystem,
+        font_resolver: crate::font::resolver::FontResolver,
+    ) -> Self {
         Self {
             font_catalog: crate::font::catalog::FontCatalog::default(),
             font_system,
@@ -927,9 +974,10 @@ impl FontMetricsService {
         &self,
         requests: &[(&str, char, u16, bool, f32)],
         max_bytes: usize,
-    ) -> Option<DetachedFontPolicy> {
+    ) -> Result<DetachedFontPolicy, crate::font::resolver::FontPolicyCaptureError> {
+        use crate::font::resolver::FontPolicyCaptureError;
         if requests.len() > 128 {
-            return None;
+            return Err(FontPolicyCaptureError::Budget);
         }
         let ascii_symbols = SymbolFontPolicy::default();
         let symbols = if requests.is_empty() {
@@ -937,9 +985,11 @@ impl FontMetricsService {
         } else {
             &self.symbol_font_policy
         };
-        let symbol_bytes = std::mem::size_of::<DetachedFontPolicy>()
-            .checked_add(symbols.symbol_ranges.len().checked_mul(8)?)?;
-        let remaining = max_bytes.checked_sub(symbol_bytes)?;
+        let symbol_bytes =
+            DetachedFontPolicy::symbol_bytes(symbols).ok_or(FontPolicyCaptureError::Budget)?;
+        let remaining = max_bytes
+            .checked_sub(symbol_bytes)
+            .ok_or(FontPolicyCaptureError::Budget)?;
         let requests: Vec<_> = requests
             .iter()
             .map(|&(family, ch, weight, italic, size)| {
@@ -948,8 +998,10 @@ impl FontMetricsService {
             .collect();
         let characters =
             crate::font::resolver::FrozenCharacterPolicies::capture(&requests, remaining)?;
-        let bytes = symbol_bytes.checked_add(characters.bytes())?;
-        Some(DetachedFontPolicy {
+        let bytes = symbol_bytes
+            .checked_add(characters.bytes())
+            .ok_or(FontPolicyCaptureError::Budget)?;
+        Ok(DetachedFontPolicy {
             characters: std::sync::Arc::new(characters),
             symbols: symbols.clone(),
             bytes,

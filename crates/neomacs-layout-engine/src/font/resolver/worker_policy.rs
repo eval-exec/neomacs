@@ -16,11 +16,66 @@ pub(super) struct WorkerPolicy {
     pub(super) admitted_queries: HashSet<CharCacheKey>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FontPolicyCaptureError {
+    Unsupported,
+    Budget,
+    Changed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FontPolicyMergeError {
+    Changed,
+    Budget,
+}
+
 impl FrozenCharacterPolicies {
+    /// Join only policies captured under the same authority. Duplicate queries
+    /// must carry identical alternatives; the worker never consults live Lisp.
+    pub(crate) fn merged(
+        &self,
+        other: &Self,
+        query_limit: usize,
+    ) -> Result<Self, FontPolicyMergeError> {
+        if self.generation != other.generation {
+            return Err(FontPolicyMergeError::Changed);
+        }
+        let mut queries = self.queries.clone();
+        for (key, alternatives) in &other.queries {
+            match queries.entry(key.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    if entry.get() != alternatives {
+                        return Err(FontPolicyMergeError::Changed);
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(alternatives.clone());
+                }
+            }
+            if queries.len() > query_limit {
+                return Err(FontPolicyMergeError::Budget);
+            }
+        }
+        if queries.len() > query_limit {
+            return Err(FontPolicyMergeError::Budget);
+        }
+        let bytes = queries
+            .iter()
+            .try_fold(std::mem::size_of::<Self>(), |bytes, (key, alternatives)| {
+                bytes.checked_add(Self::query_bytes(key, alternatives)?)
+            })
+            .ok_or(FontPolicyMergeError::Budget)?;
+        Ok(Self {
+            generation: self.generation,
+            queries,
+            bytes,
+        })
+    }
+
     pub(crate) fn capture(
         requests: &[(&str, char, u16, bool, FontSelectionSize)],
         max_bytes: usize,
-    ) -> Option<Self> {
+    ) -> Result<Self, FontPolicyCaptureError> {
         let generation = fontset_generation();
         let mut snapshot = Self {
             generation,
@@ -31,8 +86,11 @@ impl FrozenCharacterPolicies {
             if ch.is_ascii() {
                 continue;
             }
-            if family.len() > 512 || snapshot.queries.len() >= 128 {
-                return None;
+            if family.len() > 512 {
+                return Err(FontPolicyCaptureError::Unsupported);
+            }
+            if snapshot.queries.len() >= 128 {
+                return Err(FontPolicyCaptureError::Budget);
             }
             let slant = if italic {
                 FontSlant::Italic
@@ -52,9 +110,10 @@ impl FrozenCharacterPolicies {
                 continue;
             }
             let (revision, entries) =
-                neovm_core::emacs_core::fontset::bounded_entries_for_char(ch, 32)?;
+                neovm_core::emacs_core::fontset::bounded_entries_for_char(ch, 32)
+                    .ok_or(FontPolicyCaptureError::Unsupported)?;
             if revision != generation {
-                return None;
+                return Err(FontPolicyCaptureError::Changed);
             }
             let mut alternatives = Vec::new();
             let mut fallback = true;
@@ -64,43 +123,60 @@ impl FrozenCharacterPolicies {
                         fallback = false;
                         break;
                     }
-                    FontSpecEntry::Font(spec) => {
-                        alternatives.push(CapturedCharacterPolicy::capture_bounded(
+                    FontSpecEntry::Font(spec) => alternatives.push(
+                        CapturedCharacterPolicy::capture_bounded(
                             family, ch, weight, slant, size, &spec,
-                        )?)
-                    }
+                        )
+                        .ok_or(FontPolicyCaptureError::Unsupported)?,
+                    ),
                 }
             }
             if fallback {
-                alternatives.push(CapturedCharacterPolicy::capture_bounded(
-                    family,
-                    ch,
-                    weight,
-                    slant,
-                    size,
-                    &StoredFontSpec {
-                        family: None,
-                        registry: None,
-                        lang: None,
-                        weight: None,
-                        slant: None,
-                        width: None,
-                        definition: None,
-                    },
-                )?);
+                alternatives.push(
+                    CapturedCharacterPolicy::capture_bounded(
+                        family,
+                        ch,
+                        weight,
+                        slant,
+                        size,
+                        &StoredFontSpec {
+                            family: None,
+                            registry: None,
+                            lang: None,
+                            weight: None,
+                            slant: None,
+                            width: None,
+                            definition: None,
+                        },
+                    )
+                    .ok_or(FontPolicyCaptureError::Unsupported)?,
+                );
             }
             snapshot.bytes = snapshot
                 .bytes
-                .checked_add(std::mem::size_of::<CharCacheKey>() + family.len())?;
-            for alternative in &alternatives {
-                snapshot.bytes = snapshot.bytes.checked_add(alternative.owned_bytes())?;
-            }
+                .checked_add(
+                    Self::query_bytes(&key, &alternatives).ok_or(FontPolicyCaptureError::Budget)?,
+                )
+                .ok_or(FontPolicyCaptureError::Budget)?;
             if snapshot.bytes > max_bytes {
-                return None;
+                return Err(FontPolicyCaptureError::Budget);
             }
             snapshot.queries.insert(key, alternatives);
         }
-        (fontset_generation() == generation && snapshot.bytes <= max_bytes).then_some(snapshot)
+        if fontset_generation() != generation {
+            return Err(FontPolicyCaptureError::Changed);
+        }
+        if snapshot.bytes > max_bytes {
+            return Err(FontPolicyCaptureError::Budget);
+        }
+        Ok(snapshot)
+    }
+
+    fn query_bytes(key: &CharCacheKey, alternatives: &[CapturedCharacterPolicy]) -> Option<usize> {
+        alternatives.iter().try_fold(
+            std::mem::size_of::<CharCacheKey>().checked_add(key.family.len())?,
+            |bytes, alternative| bytes.checked_add(alternative.owned_bytes()),
+        )
     }
 
     pub(crate) fn bytes(&self) -> usize {

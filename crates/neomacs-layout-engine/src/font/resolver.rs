@@ -8,7 +8,9 @@
 //! filters without changing shared fontset selection.
 
 mod worker_policy;
-pub(crate) use worker_policy::FrozenCharacterPolicies;
+pub(crate) use worker_policy::{
+    FontPolicyCaptureError, FontPolicyMergeError, FrozenCharacterPolicies,
+};
 
 use crate::font::policy::{CapturedFontFamilyPolicy, FontFamilySource, GnuFontPolicy};
 use crate::font::selection::{
@@ -182,6 +184,11 @@ impl FontResolver {
 
     pub fn platform_default() -> Self {
         Self::new(crate::font_backend::default_font_backend())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_catalog(&self) -> crate::font::metrics::test_catalog::TestFontCatalogSource {
+        self.backend.test_catalog()
     }
 
     pub fn backend_kind(&self) -> FontBackendKind {

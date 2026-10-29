@@ -88,9 +88,7 @@ struct Capture {
     char_budget: usize,
     position: CharPos0,
     programs: Vec<RowProgram>,
-    font_snapshots:
-        Vec<std::sync::Arc<crate::row_layout::font_measurement::FontMeasurementSnapshot>>,
-    font_bytes: usize,
+    font_snapshots: crate::row_layout::font_measurement::FontSnapshotOwner,
     fringe: Option<crate::buffer_source::fringe_arrows::TruncationContinuationFringeRequest>,
 }
 
@@ -906,8 +904,7 @@ impl LayoutEngine {
             char_budget: 128,
             position: start,
             programs: Vec::with_capacity(row_count),
-            font_snapshots: Vec::new(),
-            font_bytes: 0,
+            font_snapshots: Default::default(),
             fringe: None,
         });
         Ok(())
@@ -1293,9 +1290,13 @@ impl LayoutEngine {
             word_wrap: key.word_wrap,
             fringe: capture.fringe.clone(),
             width: key.partition.text_body().width,
+            text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::at_frame_x(
+                key.partition.text_body().x,
+            )
+            .map_err(|_| RowProgramError::Unsupported)?,
             metrics,
             tabs: crate::display_row::builder::DisplayTabPolicy::from_tab_width_and_stops(
-                0.0,
+                key.partition.text_body().x,
                 key.tab_width,
                 &key.tab_stop_list,
             ),
@@ -1307,40 +1308,17 @@ impl LayoutEngine {
             text_bytes: 512,
             glyphs: 256,
         };
-        let deferred = if RowProgram::supports_deferred_text(&captured.items) {
-            crate::row_layout::font_measurement::FontMeasurementSnapshot::capture(
-                &faces,
-                realizer
-                    .font_metrics_service_mut()
-                    .ok_or(RowProgramError::Unsupported)?,
-                &captured.items,
-            )
-            .ok()
+        let native_fonts = if RowProgram::supports_deferred_text(&captured.items) {
+            realizer.font_metrics_service_mut()
         } else {
             None
         };
-        let program = if let Some(fonts) = deferred {
-            let fonts = if let Some(shared) = capture
-                .font_snapshots
-                .iter()
-                .find(|old| old.as_ref() == &fonts)
-            {
-                shared.clone()
-            } else {
-                let bytes = capture.font_bytes.saturating_add(fonts.bytes());
-                if bytes > crate::row_layout::worker::MAX_FONT_BYTES {
-                    return Err(RowProgramError::Budget);
-                }
-                let shared = std::sync::Arc::new(fonts);
-                capture.font_bytes = bytes;
-                capture.font_snapshots.push(shared.clone());
-                shared
-            };
-            RowProgram::capture_fragment(
+        let program = if let Some(fonts) = native_fonts {
+            capture.font_snapshots.capture_program(
                 geometry,
                 captured.items,
                 faces,
-                RowMeasurements::Deferred(fonts),
+                fonts,
                 limits,
             )?
         } else {

@@ -11,6 +11,7 @@ fn geometry(width: f32) -> RowProgramGeometry {
         word_wrap: false,
         fringe: None,
         width,
+        text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::row_local(),
         metrics: DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
         tabs: DisplayTabPolicy::every(4),
         base_face: FaceId::new(1),
@@ -543,4 +544,67 @@ fn fixed_terminal_prepared_per_char_program_replays_exact_captured_advances() {
         neomacs_display_protocol::glyph_matrix::GlyphType::Char { ch: 'i' }
     ));
     assert_eq!([glyphs[0].pixel_width, glyphs[1].pixel_width], [12.0, 4.0]);
+}
+
+#[test]
+fn contextual_gui_resume_requires_its_native_font_authority() {
+    use crate::font::metrics::test_catalog::TestFontCatalog;
+    let catalog = TestFontCatalog::from_files(&[
+        neomacs_test_fonts::noto_sans_mono_variable(),
+        neomacs_test_fonts::noto_sans_arabic_variable(),
+    ])
+    .expect("pinned contextual shaping fonts");
+    let mut fonts = catalog.metrics_service();
+    let faces = vec![DisplayRowFace::from_resolved(
+        FaceId::new(1),
+        &ResolvedFace::default(),
+    )];
+    let text = "سلامسلامسلامسلام";
+    let chars = text.chars().count();
+    let inputs = vec![
+        DisplayItem::new(
+            SourceSpan::synthetic(1, 0, chars),
+            RenderFaceRef::FaceId(FaceId::new(1)),
+            DisplayItemKind::TextRun(DisplayTextRun::independent(text)),
+        ),
+        DisplayItem::new(
+            SourceSpan::synthetic(1, chars, chars + 1),
+            RenderFaceRef::FaceId(FaceId::new(1)),
+            DisplayItemKind::RowBreak(DisplayRowBreak {
+                line_height: DisplayLineHeightPolicy::Default,
+                line_spacing: DisplayLineSpacingPolicy::Inherit,
+            }),
+        ),
+    ];
+    let mut geometry = geometry(32.0);
+    geometry.character_wrap = true;
+    let mut native = DisplayRowGlyphMeasurer::with_mode(
+        &faces,
+        Some(&mut fonts),
+        8.0,
+        GlyphAdvanceQuantization::PreserveLogicalPixels,
+        DisplayRowMeasurementMode::ConcreteFont,
+    );
+    let captured = RowProgram::capture(
+        geometry.clone(),
+        inputs.clone(),
+        faces.clone(),
+        &mut native,
+        limits(),
+    )
+    .unwrap();
+    assert!(matches!(
+        captured.compute_visual_rows(16, || false),
+        Err(RowProgramError::Unsupported)
+    ));
+    let mut terminal = DisplayRowGlyphMeasurer::with_mode(
+        &faces,
+        None,
+        8.0,
+        GlyphAdvanceQuantization::PreserveLogicalPixels,
+        DisplayRowMeasurementMode::LogicalCells,
+    );
+    let captured =
+        RowProgram::capture(geometry, inputs, faces.clone(), &mut terminal, limits()).unwrap();
+    assert!(captured.compute_visual_rows(16, || false).unwrap().len() > 1);
 }

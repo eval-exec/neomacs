@@ -25,6 +25,7 @@ fn row_with_wrap(text: &str, width: f32, character_wrap: bool) -> RowProgram {
             word_wrap: false,
             fringe: None,
             width,
+            text_origin: crate::display_row::geometry::DisplayRowTextAreaOrigin::row_local(),
             metrics: DisplayRowFallbackMetrics::from_default_face_extents(8.0, 16.0, 12.0),
             tabs: DisplayTabPolicy::every(4),
             base_face: face,

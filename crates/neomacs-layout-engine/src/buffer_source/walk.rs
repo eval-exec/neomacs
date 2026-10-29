@@ -50,6 +50,22 @@ pub(crate) enum BufferSourceRewind {
     CharacterWrap(DisplaySourceTextPosition),
 }
 
+impl BufferSourceRewind {
+    fn restore_invisible_checkpoint(self, checkpoint: &mut InvisibleTextScanCheckpoint) {
+        match self {
+            Self::WordWrap(position) => {
+                // GNU back_to_wrap restores the complete iterator, including
+                // property stops (xdisp.c:26381-26408). A visibility fact
+                // learned after the saved word boundary cannot cross rewind.
+                checkpoint.rewind_to(position);
+            }
+            // This retries only the overflowing character. No previously
+            // classified source interval is replayed, so its stop stays valid.
+            Self::CharacterWrap(_) => {}
+        }
+    }
+}
+
 /// Install side effects while the consumed item remains in its caller-owned
 /// step. Publishing a missing item's source position precedes face/emission
 /// installation; dispatch receives the item only after those side effects.
@@ -214,7 +230,12 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
 
     /// Reseat the producer at a row-wrap retry position so the current character
     /// is re-produced on the continuation row.
-    pub(crate) fn rewind_source_consumption(&mut self, rewind: BufferSourceRewind) {
+    pub(crate) fn rewind_source_consumption(
+        &mut self,
+        rewind: BufferSourceRewind,
+        invisible_checkpoint: &mut InvisibleTextScanCheckpoint,
+    ) {
+        rewind.restore_invisible_checkpoint(invisible_checkpoint);
         match rewind {
             BufferSourceRewind::WordWrap(position) => self.producer.rewind_word_wrap_to(position),
             BufferSourceRewind::CharacterWrap(position) => {
@@ -338,3 +359,7 @@ impl<'request, B: LayoutBufferView> BufferSourceWalk<'request, B> {
         DisplaySourcePositionConsumption::new((), source_position)
     }
 }
+
+#[cfg(test)]
+#[path = "tests/walk_rewind_test.rs"]
+mod tests;

@@ -1264,6 +1264,10 @@ impl InvisibleTextScanCheckpoint {
     pub(crate) fn record_next_visible(&mut self, charpos: i64) {
         self.invisible_next = charpos;
     }
+
+    pub(crate) fn rewind_to(&mut self, position: crate::display_source::DisplaySourceTextPosition) {
+        self.invisible_next = position.charpos();
+    }
 }
 
 /// Window start after scrolling down by `rows_to_scroll` DISPLAY rows, given the

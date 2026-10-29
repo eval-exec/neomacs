@@ -151,6 +151,7 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
     break_candidate: WordWrapBreakCandidate,
 ) -> DisplayRowTransitionContinuation {
     let BufferSourceLoopMutableState {
+        invisible_text_checkpoint,
         mut progress,
         mut source_render,
         row_build,
@@ -192,7 +193,10 @@ fn emit_word_wrap_rewind<B: LayoutBufferView, FS: crate::neovm_bridge::FaceServi
             loop_context.content_x(),
         );
     }
-    source_walk.rewind_source_consumption(BufferSourceRewind::WordWrap(source_position));
+    source_walk.rewind_source_consumption(
+        BufferSourceRewind::WordWrap(source_position),
+        invisible_text_checkpoint,
+    );
     source_walk
         .source_position_update(source_position)
         .apply_to_progress(&mut progress);

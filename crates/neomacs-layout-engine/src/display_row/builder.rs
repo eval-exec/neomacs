@@ -1451,6 +1451,16 @@ impl DisplayRowGlyphSlot {
         }
     }
 
+    /// Convert a completed frame-coordinate append slot once at the owned
+    /// row-program output boundary; source/provenance and widths stay intact.
+    pub(crate) fn into_window_local(
+        mut self,
+        origin: crate::display_row::geometry::DisplayRowTextAreaOrigin,
+    ) -> Self {
+        self.x_px = origin.window_local(self.x_px);
+        self
+    }
+
     pub(crate) fn start_position(&self) -> DisplayRowPosition {
         DisplayRowPosition::new(self.x_px(), self.col())
     }

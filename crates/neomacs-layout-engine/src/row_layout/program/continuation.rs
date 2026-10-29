@@ -31,7 +31,7 @@ pub(super) fn extend_background(
             crate::display_row::finalizer::RowExtendFill::new(
                 extend.background(),
                 extend.face_id(),
-                geometry.width - position.x_px(),
+                geometry.right_edge() - position.x_px(),
                 metrics.row_height(),
                 metrics.ascent(),
                 metrics.char_width(),

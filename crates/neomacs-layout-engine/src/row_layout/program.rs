@@ -47,6 +47,7 @@ pub(crate) struct RowProgramGeometry {
     pub word_wrap: bool,
     pub fringe: Option<crate::buffer_source::fringe_arrows::TruncationContinuationFringeRequest>,
     pub width: f32,
+    pub text_origin: DisplayRowTextAreaOrigin,
     pub metrics: DisplayRowFallbackMetrics,
     pub tabs: DisplayTabPolicy,
     pub base_face: FaceId,
@@ -54,6 +55,17 @@ pub(crate) struct RowProgramGeometry {
 }
 
 impl RowProgramGeometry {
+    fn right_edge(&self) -> f32 {
+        self.text_origin.frame_x() + self.width
+    }
+
+    fn local_position(&self, position: DisplayRowPosition) -> DisplayRowPosition {
+        position.at_screen_position(
+            self.text_origin.window_local(position.x_px()),
+            position.col(),
+        )
+    }
+
     /// GNU `it->line_wrap` for the row this program produces.
     /// `character_wrap` is the window's non-truncating mode and `word_wrap`
     /// its `word-wrap`, which is exactly the pair `init_iterator` folds into
@@ -324,12 +336,61 @@ impl DisplayGlyphMeasurer for Measurements {
     }
 }
 
+/// The font authority follows the captured program through measurement and
+/// assembly. A measured program retains its immutable receipts so a resumed
+/// run never borrows whichever unrelated policy the worker installed last.
+#[derive(Clone, Debug)]
+enum ProgramFonts {
+    Captured,
+    Deferred(std::sync::Arc<super::font_measurement::FontMeasurementSnapshot>),
+    Measured(std::sync::Arc<super::font_measurement::FontMeasurementSnapshot>),
+}
+
+impl ProgramFonts {
+    fn snapshot(
+        &self,
+    ) -> Option<&std::sync::Arc<super::font_measurement::FontMeasurementSnapshot>> {
+        match self {
+            Self::Captured => None,
+            Self::Deferred(snapshot) | Self::Measured(snapshot) => Some(snapshot),
+        }
+    }
+
+    fn merged(&self, other: &Self) -> Result<Self, RowProgramError> {
+        match (self, other) {
+            (Self::Captured, Self::Captured) => Ok(Self::Captured),
+            (
+                Self::Deferred(left) | Self::Measured(left),
+                Self::Deferred(right) | Self::Measured(right),
+            ) => {
+                // Assembly can restore one text run across the capture seam.
+                // Its joined plan must be shaped again before row execution.
+                let owner = if std::sync::Arc::ptr_eq(left, right) {
+                    left.clone()
+                } else {
+                    std::sync::Arc::new(left.merged(right)?)
+                };
+                Ok(Self::Deferred(owner))
+            }
+            (Self::Captured, Self::Deferred(_) | Self::Measured(_))
+            | (Self::Deferred(_) | Self::Measured(_), Self::Captured) => {
+                Err(RowProgramError::Unsupported)
+            }
+        }
+    }
+}
+
+enum ResumedRunFonts<'a> {
+    Captured,
+    Worker(&'a mut crate::font::metrics::FontMetricsService),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RowProgram {
     trailing_text_continues: bool,
     buffer_source_start: Option<DisplaySourcePosition>,
     geometry: RowProgramGeometry,
-    deferred_fonts: Option<std::sync::Arc<super::font_measurement::FontMeasurementSnapshot>>,
+    fonts: ProgramFonts,
     operations: Vec<(Operation, DisplayTextRunMeasurement)>,
     measurements: Measurements,
     faces: Vec<DisplayRowFace>,
@@ -433,7 +494,11 @@ impl RowProgram {
         limits: RowProgramLimits,
         permit_fragment: bool,
     ) -> Result<Self, RowProgramError> {
-        if faces.len() > limits.items || !geometry.width.is_finite() || geometry.width <= 0.0 {
+        if faces.len() > limits.items
+            || !geometry.width.is_finite()
+            || !geometry.right_edge().is_finite()
+            || geometry.width <= 0.0
+        {
             return Err(RowProgramError::Budget);
         }
         let mut metadata_bytes = geometry
@@ -501,10 +566,13 @@ impl RowProgram {
             let plan = if text.is_empty() || measurer.is_none() {
                 DisplayTextRunMeasurement::PerChar
             } else {
-                measurer.as_mut().unwrap().text_run_advances_px(
-                    text,
-                    item_measurement_face(&item, face),
-                    geometry.metrics.char_width().max(1.0),
+                measure_item_text_run(
+                    &item,
+                    *measurer
+                        .as_mut()
+                        .ok_or(RowProgramError::MissingMeasurement)?,
+                    geometry.base_face,
+                    geometry.metrics.char_width(),
                 )
             };
             if let Some(measurer) = measurer.as_mut() {
@@ -528,7 +596,10 @@ impl RowProgram {
             trailing_text_continues: false,
             buffer_source_start: None,
             geometry,
-            deferred_fonts,
+            fonts: match deferred_fonts {
+                Some(snapshot) => ProgramFonts::Deferred(snapshot),
+                None => ProgramFonts::Captured,
+            },
             operations,
             measurements,
             faces,
@@ -547,15 +618,13 @@ impl RowProgram {
     }
 
     pub(crate) fn font_snapshot_identity(&self) -> Option<usize> {
-        self.deferred_fonts
-            .as_ref()
+        self.fonts
+            .snapshot()
             .map(|snapshot| std::sync::Arc::as_ptr(snapshot) as usize)
     }
 
     pub(crate) fn font_bytes(&self) -> usize {
-        self.deferred_fonts
-            .as_ref()
-            .map_or(0, |fonts| fonts.bytes())
+        self.fonts.snapshot().map_or(0, |fonts| fonts.bytes())
     }
 
     pub(crate) fn measure_on_worker(
@@ -563,10 +632,21 @@ impl RowProgram {
         worker: &mut super::font_measurement::WorkerFontMeasurements,
         cancelled: &impl Fn() -> bool,
     ) -> Result<(), RowProgramError> {
-        let Some(snapshot) = self.deferred_fonts.take() else {
-            return Ok(());
+        let snapshot = match &self.fonts {
+            ProgramFonts::Captured | ProgramFonts::Measured(_) => return Ok(()),
+            ProgramFonts::Deferred(snapshot) => snapshot.clone(),
         };
         let fonts = worker.prepare(&snapshot, &self.faces, cancelled)?;
+        self.measure_operations(fonts, cancelled)?;
+        self.fonts = ProgramFonts::Measured(snapshot);
+        Ok(())
+    }
+
+    fn measure_operations(
+        &mut self,
+        fonts: &mut crate::font::metrics::FontMetricsService,
+        cancelled: &impl Fn() -> bool,
+    ) -> Result<(), RowProgramError> {
         let mut measurer = crate::display_row::face_state::DisplayRowGlyphMeasurer::with_mode(
             &self.faces,
             Some(&mut *fonts),
@@ -579,17 +659,21 @@ impl RowProgram {
                 return Err(RowProgramError::Cancelled);
             }
             let item = operation.clone().into_item();
-            let face = render_face_ref_id(item.face, self.geometry.base_face);
             let text = match &item.kind {
                 DisplayItemKind::TextRun(run) => run.text.as_ref(),
                 DisplayItemKind::SourceMappedText(run) => run.text.as_ref(),
-                _ => "",
+                DisplayItemKind::ControlChar { .. }
+                | DisplayItemKind::Glyphless(_)
+                | DisplayItemKind::Stretch(_)
+                | DisplayItemKind::MediaReplacement(_)
+                | DisplayItemKind::RowBreak(_) => "",
             };
             if !text.is_empty() {
-                *plan = measurer.text_run_advances_px(
-                    text,
-                    item_measurement_face(&item, face),
-                    self.geometry.metrics.char_width().max(1.0),
+                *plan = measure_item_text_run(
+                    &item,
+                    &mut measurer,
+                    self.geometry.base_face,
+                    self.geometry.metrics.char_width(),
                 );
             }
             self.measurements
@@ -620,14 +704,50 @@ impl RowProgram {
         Ok(row)
     }
 
+    #[cfg(test)]
     pub(crate) fn compute_visual_rows(
-        mut self,
+        self,
         row_limit: usize,
         cancelled: impl Fn() -> bool,
     ) -> Result<Vec<ComputedRow>, RowProgramError> {
-        if self.deferred_fonts.is_some() {
-            return Err(RowProgramError::MissingMeasurement);
+        match &self.fonts {
+            ProgramFonts::Captured => {
+                self.compute_visual_rows_inner(row_limit, cancelled, ResumedRunFonts::Captured)
+            }
+            ProgramFonts::Deferred(_) | ProgramFonts::Measured(_) => {
+                Err(RowProgramError::MissingMeasurement)
+            }
         }
+    }
+
+    pub(crate) fn compute_visual_rows_on_worker(
+        mut self,
+        worker: &mut super::font_measurement::WorkerFontMeasurements,
+        row_limit: usize,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Vec<ComputedRow>, RowProgramError> {
+        self.measure_on_worker(worker, &cancelled)?;
+        let snapshot = match &self.fonts {
+            ProgramFonts::Captured => {
+                return self.compute_visual_rows_inner(
+                    row_limit,
+                    cancelled,
+                    ResumedRunFonts::Captured,
+                );
+            }
+            ProgramFonts::Deferred(_) => return Err(RowProgramError::MissingMeasurement),
+            ProgramFonts::Measured(snapshot) => snapshot.clone(),
+        };
+        let fonts = worker.prepare(&snapshot, &self.faces, &cancelled)?;
+        self.compute_visual_rows_inner(row_limit, cancelled, ResumedRunFonts::Worker(fonts))
+    }
+
+    fn compute_visual_rows_inner(
+        mut self,
+        row_limit: usize,
+        cancelled: impl Fn() -> bool,
+        mut resumed_fonts: ResumedRunFonts<'_>,
+    ) -> Result<Vec<ComputedRow>, RowProgramError> {
         if row_limit == 0 {
             return Err(RowProgramError::Budget);
         }
@@ -644,7 +764,7 @@ impl RowProgram {
         let physical_complete = self.is_complete();
         let layout = self.geometry.layout();
         let mut row = new_display_row(&layout);
-        let mut position = DisplayRowPosition::new(0.0, 0);
+        let mut position = DisplayRowPosition::new(self.geometry.text_origin.frame_x(), 0);
         let mut slots = Vec::new();
         let mut slot_heights = Vec::new();
         let mut source_start = self.buffer_source_start;
@@ -720,11 +840,54 @@ impl RowProgram {
             } else {
                 original_plan
             };
-            let plan = measurement_suffix(
-                original_plan,
-                operation_offset,
-                text_byte_offset(original, operation_offset)?,
-            );
+            let plan = match &mut resumed_fonts {
+                ResumedRunFonts::Worker(fonts)
+                    if operation_offset > 0 && !scalar_operations.contains(&operation_index) =>
+                {
+                    // A continuation is a fresh source run. Joining scripts
+                    // must be shaped from this suffix, not sliced out of a plan
+                    // whose leading context belongs to the previous row.
+                    let mut measurer =
+                        crate::display_row::face_state::DisplayRowGlyphMeasurer::with_mode(
+                            &self.faces,
+                            Some(&mut **fonts),
+                            self.geometry.metrics.char_width(),
+                            crate::glyph_advance::GlyphAdvanceQuantization::PreserveLogicalPixels,
+                            DisplayRowMeasurementMode::ConcreteFont,
+                        );
+                    let plan = measure_item_text_run(
+                        &item,
+                        &mut measurer,
+                        self.geometry.base_face,
+                        self.geometry.metrics.char_width(),
+                    );
+                    if fonts.worker_font_policy_missing() {
+                        return Err(RowProgramError::MissingMeasurement);
+                    }
+                    plan
+                }
+                ResumedRunFonts::Captured => {
+                    if operation_offset > 0
+                        && self.measurements.backend == DisplayGeometryBackend::WindowSystemPixels
+                        && matches!(original_plan, DisplayTextRunMeasurement::Measured(_))
+                        && matches!(&item.kind, DisplayItemKind::TextRun(run) if !run.text.is_ascii())
+                    {
+                        // Captured advances do not prove that native shaping
+                        // is independent of the context removed by a wrap.
+                        return Err(RowProgramError::Unsupported);
+                    }
+                    measurement_suffix(
+                        original_plan,
+                        operation_offset,
+                        text_byte_offset(original, operation_offset)?,
+                    )
+                }
+                ResumedRunFonts::Worker(_) => measurement_suffix(
+                    original_plan,
+                    operation_offset,
+                    text_byte_offset(original, operation_offset)?,
+                ),
+            };
             if cancelled() {
                 return Err(RowProgramError::Cancelled);
             }
@@ -813,8 +976,12 @@ impl RowProgram {
                 );
             }
             let progress = DisplayRowProgressWriter::with_text_run_measurement_and_glyph_measurer_for_area_and_start_policy(
-                &item_layout, &mut row, plan, &mut self.measurements, position, self.geometry.width,
-                DisplayRowTextAreaOrigin::row_local(), GlyphArea::Text, DisplayRowAppendStartPolicy::ReconcileWithRowTail,
+                &item_layout, &mut row, plan, &mut self.measurements, position, self.geometry.right_edge(),
+                self.geometry.text_origin, GlyphArea::Text,
+                match render_item.source_item().span.start {
+                    DisplaySourcePosition::Buffer { .. } => DisplayRowAppendStartPolicy::SourcePosition,
+                    DisplaySourcePosition::LispString { .. } | DisplaySourcePosition::Synthetic { .. } => DisplayRowAppendStartPolicy::ReconcileWithRowTail,
+                },
             ).with_buffer_tab_admission().push_item(render_item.row_item_for_write());
             if self.measurements.missing {
                 return Err(RowProgramError::MissingMeasurement);
@@ -1005,13 +1172,16 @@ impl RowProgram {
                 completed_glyphs += row.glyphs.iter().map(Vec::len).sum::<usize>();
                 rows.push(ComputedRow {
                     row,
-                    slots: std::mem::take(&mut slots),
+                    slots: std::mem::take(&mut slots)
+                        .into_iter()
+                        .map(|slot| slot.into_window_local(self.geometry.text_origin))
+                        .collect(),
                     slot_heights: std::mem::take(&mut slot_heights),
                     source: SourceSpan::new(
                         source_start.take().ok_or(RowProgramError::Incomplete)?,
                         next_source.clone(),
                     ),
-                    end: position,
+                    end: self.geometry.local_position(position),
                     end_kind: ComputedRowEnd::Continuation,
                     fringe: self.geometry.fringe.clone(),
                     continuation: !rows.is_empty(),
@@ -1022,9 +1192,11 @@ impl RowProgram {
                 if rows.len() == row_limit {
                     return Ok(rows);
                 }
-                physical_line_tabs.continue_after_visual_row(position.x_px());
+                physical_line_tabs.continue_after_visual_row(
+                    self.geometry.text_origin.window_local(position.x_px()),
+                );
                 row = new_display_row(&layout);
-                position = DisplayRowPosition::new(0.0, 0)
+                position = DisplayRowPosition::new(self.geometry.text_origin.frame_x(), 0)
                     .with_tab_coordinates(physical_line_tabs.coordinates());
                 scalar_operations.clear();
                 operation_index = next_index;
@@ -1058,7 +1230,7 @@ impl RowProgram {
                 DisplayRowLineEndFinalizer::new(
                     value,
                     face,
-                    self.geometry.width - position.x_px(),
+                    self.geometry.right_edge() - position.x_px(),
                     self.geometry.metrics,
                     self.geometry.background,
                     mode,
@@ -1109,13 +1281,16 @@ impl RowProgram {
         crate::glyph_row_writer::normalize_external_row(&mut row);
         rows.push(ComputedRow {
             row,
-            slots,
+            slots: slots
+                .into_iter()
+                .map(|slot| slot.into_window_local(self.geometry.text_origin))
+                .collect(),
             slot_heights,
             source: SourceSpan::new(
                 source_start.ok_or(RowProgramError::Incomplete)?,
                 source_end.ok_or(RowProgramError::Incomplete)?,
             ),
-            end: position,
+            end: self.geometry.local_position(position),
             end_kind: ComputedRowEnd::Newline,
             fringe: self.geometry.fringe.clone(),
             continuation: !rows.is_empty(),
@@ -1124,6 +1299,31 @@ impl RowProgram {
         });
         Ok(rows)
     }
+}
+
+/// The initial run and every resumed source run share this one measurement
+/// seam; script/font fallback rules remain in DisplayRowGlyphMeasurer.
+fn measure_item_text_run(
+    item: &DisplayItem,
+    measurer: &mut dyn DisplayGlyphMeasurer,
+    base_face: FaceId,
+    fallback_char_width: f32,
+) -> DisplayTextRunMeasurement {
+    let text = match &item.kind {
+        DisplayItemKind::TextRun(run) => run.text.as_ref(),
+        DisplayItemKind::SourceMappedText(run) => run.text.as_ref(),
+        DisplayItemKind::ControlChar { .. }
+        | DisplayItemKind::Glyphless(_)
+        | DisplayItemKind::Stretch(_)
+        | DisplayItemKind::MediaReplacement(_)
+        | DisplayItemKind::RowBreak(_) => return DisplayTextRunMeasurement::PerChar,
+    };
+    let face = render_face_ref_id(item.face, base_face);
+    measurer.text_run_advances_px(
+        text,
+        item_measurement_face(item, face),
+        fallback_char_width.max(1.0),
+    )
 }
 
 fn item_measurement_face(item: &DisplayItem, paint_face: FaceId) -> FaceId {

@@ -29,8 +29,6 @@ impl RowProgram {
     ) -> Result<(), RowProgramError> {
         if self.is_complete()
             || self.geometry != fragment.geometry
-            || self.deferred_fonts.is_some()
-            || fragment.deferred_fonts.is_some()
             || self.operations.last().map(|(op, _)| &op.span().end)
                 != fragment.operations.first().map(|(op, _)| &op.span().start)
             || self.measurements.backend != fragment.measurements.backend
@@ -61,6 +59,7 @@ impl RowProgram {
         {
             return Err(RowProgramError::Budget);
         }
+        let fonts = self.fonts.merged(&fragment.fonts)?;
         for face in fragment.faces {
             if let Some(previous) = self
                 .faces
@@ -133,6 +132,7 @@ impl RowProgram {
                 );
             fragment.operations.remove(0);
         }
+        self.fonts = fonts;
         self.trailing_text_continues = fragment.trailing_text_continues;
         self.operations.extend(fragment.operations);
         self.limits = limits;

@@ -62,6 +62,10 @@ impl DisplayRowTextAreaOrigin {
         })
     }
 
+    pub(crate) fn frame_x(self) -> f32 {
+        self.x_px.get()
+    }
+
     pub(crate) fn window_local(self, frame_x_px: f32) -> f32 {
         frame_x_px - self.x_px.get()
     }

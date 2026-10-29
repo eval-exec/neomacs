@@ -10,12 +10,14 @@ use neomacs_display_protocol::font::{
     FontCatalogGeneration, ResolvedFont, ResolvedFontAdvance, ResolvedFontIdentity,
 };
 
+#[cfg(test)]
 const MAX_ROW_FONT_BYTES: usize = 4096;
 const MAX_CACHED_FACES: usize = 64;
 const MAX_CACHED_CHARACTER_QUERIES: usize = 512;
 
 #[derive(Clone, Debug, PartialEq)]
 struct PrimaryFontReceipt {
+    face_id: neomacs_display_protocol::types::FaceId,
     identity: ResolvedFontIdentity,
     pixel_size: f32,
     ascent: f32,
@@ -25,8 +27,9 @@ struct PrimaryFontReceipt {
 }
 
 impl PrimaryFontReceipt {
-    fn of(font: ResolvedFont) -> Self {
+    fn of(face_id: neomacs_display_protocol::types::FaceId, font: ResolvedFont) -> Self {
         Self {
+            face_id,
             identity: font.identity,
             pixel_size: font.pixel_size,
             ascent: font.ascent_px,
@@ -63,13 +66,170 @@ pub(crate) struct FontMeasurementSnapshot {
     receipts: Vec<PrimaryFontReceipt>,
     policy: crate::font::metrics::DetachedFontPolicy,
     bytes: usize,
+    #[cfg(test)]
+    catalog: crate::font::metrics::test_catalog::TestFontCatalogSource,
+}
+
+/// One capture's admitted immutable native font authorities. Its private
+/// reservation list and validating insertion are the only publication path;
+/// deduplication and the unchanged mailbox byte ceiling have one owner.
+#[derive(Default)]
+pub(crate) struct FontSnapshotOwner {
+    reserved: Vec<std::sync::Arc<FontMeasurementSnapshot>>,
+}
+
+impl FontSnapshotOwner {
+    fn candidate(
+        &self,
+        faces: &[DisplayRowFace],
+        fonts: &mut FontMetricsService,
+        items: &[crate::display_item::DisplayItem],
+    ) -> Result<std::sync::Arc<FontMeasurementSnapshot>, RowProgramError> {
+        let snapshot = FontMeasurementSnapshot::capture_with_budget(
+            faces,
+            fonts,
+            items,
+            FontSnapshotBudget::for_owner(&self.reserved)?,
+        )?;
+        if let Some(previous) = self.reserved.iter().find(|old| old.as_ref() == &snapshot) {
+            return Ok(previous.clone());
+        }
+        Ok(std::sync::Arc::new(snapshot))
+    }
+
+    fn publish(&mut self, snapshot: std::sync::Arc<FontMeasurementSnapshot>) {
+        // Only candidate() constructs this capability. An already-equal
+        // authority is returned as the existing Arc, so identity suffices here.
+        if !self
+            .reserved
+            .iter()
+            .any(|old| std::sync::Arc::ptr_eq(old, &snapshot))
+        {
+            self.reserved.push(snapshot);
+        }
+    }
+
+    pub(crate) fn capture_program(
+        &mut self,
+        geometry: super::program::RowProgramGeometry,
+        items: Vec<crate::display_item::DisplayItem>,
+        faces: Vec<DisplayRowFace>,
+        fonts: &mut FontMetricsService,
+        limits: super::program::RowProgramLimits,
+    ) -> Result<super::program::RowProgram, RowProgramError> {
+        let snapshot = self.candidate(&faces, fonts, &items)?;
+        let program = super::program::RowProgram::capture_fragment(
+            geometry,
+            items,
+            faces,
+            super::program::RowMeasurements::Deferred(snapshot.clone()),
+            limits,
+        )?;
+        // A rejected row cannot consume another font reservation.
+        self.publish(snapshot);
+        Ok(program)
+    }
+
+    #[cfg(test)]
+    fn capture(
+        &mut self,
+        faces: &[DisplayRowFace],
+        fonts: &mut FontMetricsService,
+        items: &[crate::display_item::DisplayItem],
+    ) -> Result<std::sync::Arc<FontMeasurementSnapshot>, RowProgramError> {
+        let snapshot = self.candidate(faces, fonts, items)?;
+        self.publish(snapshot.clone());
+        Ok(snapshot)
+    }
+}
+
+/// Admission borrowed from one capture owner's existing font reservation.
+/// Scratch capture may rediscover its largest already-reserved snapshot; a new
+/// unequal owner must fit the actual remaining mailbox bytes before publication.
+struct FontSnapshotBudget<'owner> {
+    reserved: &'owner [std::sync::Arc<FontMeasurementSnapshot>],
+    remaining_bytes: usize,
+    capture_bytes: usize,
+}
+
+impl<'owner> FontSnapshotBudget<'owner> {
+    fn for_owner(
+        reserved: &'owner [std::sync::Arc<FontMeasurementSnapshot>],
+    ) -> Result<Self, RowProgramError> {
+        let used = reserved
+            .iter()
+            .try_fold(0usize, |bytes, snapshot| {
+                bytes.checked_add(snapshot.bytes())
+            })
+            .ok_or(RowProgramError::Budget)?;
+        let remaining_bytes = super::worker::MAX_FONT_BYTES
+            .checked_sub(used)
+            .ok_or(RowProgramError::Budget)?;
+        let largest_reserved = reserved
+            .iter()
+            .map(|snapshot| snapshot.bytes())
+            .max()
+            .unwrap_or(0);
+        Ok(Self {
+            reserved,
+            remaining_bytes,
+            capture_bytes: remaining_bytes.max(largest_reserved),
+        })
+    }
+
+    #[cfg(test)]
+    fn bounded(bytes: usize) -> Result<Self, RowProgramError> {
+        if bytes > super::worker::MAX_FONT_BYTES {
+            return Err(RowProgramError::Budget);
+        }
+        Ok(Self {
+            reserved: &[],
+            remaining_bytes: bytes,
+            capture_bytes: bytes,
+        })
+    }
+
+    fn admit(self, snapshot: &FontMeasurementSnapshot) -> Result<(), RowProgramError> {
+        if snapshot.bytes() <= self.remaining_bytes
+            || self.reserved.iter().any(|old| old.as_ref() == snapshot)
+        {
+            Ok(())
+        } else {
+            Err(RowProgramError::Budget)
+        }
+    }
+}
+
+impl From<crate::font::resolver::FontPolicyCaptureError> for RowProgramError {
+    fn from(error: crate::font::resolver::FontPolicyCaptureError) -> Self {
+        match error {
+            crate::font::resolver::FontPolicyCaptureError::Unsupported => Self::Unsupported,
+            crate::font::resolver::FontPolicyCaptureError::Budget => Self::Budget,
+            crate::font::resolver::FontPolicyCaptureError::Changed => Self::Cancelled,
+        }
+    }
 }
 
 impl FontMeasurementSnapshot {
+    #[cfg(test)]
     pub(crate) fn capture(
         faces: &[DisplayRowFace],
         fonts: &mut FontMetricsService,
         items: &[crate::display_item::DisplayItem],
+    ) -> Result<Self, RowProgramError> {
+        Self::capture_with_budget(
+            faces,
+            fonts,
+            items,
+            FontSnapshotBudget::bounded(MAX_ROW_FONT_BYTES)?,
+        )
+    }
+
+    fn capture_with_budget(
+        faces: &[DisplayRowFace],
+        fonts: &mut FontMetricsService,
+        items: &[crate::display_item::DisplayItem],
+        budget: FontSnapshotBudget<'_>,
     ) -> Result<Self, RowProgramError> {
         if faces.len() > MAX_CACHED_FACES {
             return Err(RowProgramError::Budget);
@@ -85,9 +245,9 @@ impl FontMeasurementSnapshot {
                     face.font_size.max(1.0),
                 )
                 .ok_or(RowProgramError::Unsupported)?;
-            let receipt = PrimaryFontReceipt::of(font);
+            let receipt = PrimaryFontReceipt::of(face.face_id, font);
             bytes = bytes.saturating_add(receipt.bytes());
-            if bytes > MAX_ROW_FONT_BYTES {
+            if bytes > budget.capture_bytes {
                 return Err(RowProgramError::Budget);
             }
             receipts.push(receipt);
@@ -150,10 +310,9 @@ impl FontMeasurementSnapshot {
             }
         }
         let policy = fonts
-            .capture_worker_font_policy(&requests, MAX_ROW_FONT_BYTES.saturating_sub(bytes))
-            .ok_or(RowProgramError::Unsupported)?;
+            .capture_worker_font_policy(&requests, budget.capture_bytes.saturating_sub(bytes))?;
         bytes += policy.bytes();
-        Ok(Self {
+        let snapshot = Self {
             revision: MeasurementRevision {
                 catalog: fonts.font_catalog_generation(),
                 fontset: neovm_core::emacs_core::fontset::fontset_generation(),
@@ -162,11 +321,65 @@ impl FontMeasurementSnapshot {
             receipts,
             policy,
             bytes,
-        })
+            #[cfg(test)]
+            catalog: fonts.test_catalog(),
+        };
+        budget.admit(&snapshot)?;
+        Ok(snapshot)
     }
 
     pub(crate) fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// Assembly may erase a capture-budget boundary inside a text run. Its
+    /// resumed shaping must own the union of both original font authorities.
+    pub(crate) fn merged(&self, other: &Self) -> Result<Self, RowProgramError> {
+        if self.revision != other.revision {
+            return Err(RowProgramError::Cancelled);
+        }
+        #[cfg(test)]
+        if self.catalog != other.catalog {
+            return Err(RowProgramError::Cancelled);
+        }
+        let mut receipts = self.receipts.clone();
+        for receipt in &other.receipts {
+            if let Some(previous) = receipts.iter().find(|old| old.face_id == receipt.face_id) {
+                if previous != receipt {
+                    return Err(RowProgramError::Cancelled);
+                }
+            } else {
+                receipts.push(receipt.clone());
+            }
+        }
+        if receipts.len() > MAX_CACHED_FACES {
+            return Err(RowProgramError::Budget);
+        }
+        let policy = self
+            .policy
+            .merged(&other.policy, MAX_CACHED_CHARACTER_QUERIES)
+            .map_err(|error| match error {
+                crate::font::resolver::FontPolicyMergeError::Changed => RowProgramError::Cancelled,
+                crate::font::resolver::FontPolicyMergeError::Budget => RowProgramError::Budget,
+            })?;
+        let bytes = receipts
+            .iter()
+            .try_fold(std::mem::size_of::<Self>(), |bytes, receipt| {
+                bytes.checked_add(receipt.bytes())
+            })
+            .and_then(|bytes| bytes.checked_add(policy.bytes()))
+            .ok_or(RowProgramError::Budget)?;
+        if bytes > super::worker::MAX_FONT_BYTES {
+            return Err(RowProgramError::Budget);
+        }
+        Ok(Self {
+            revision: self.revision,
+            receipts,
+            policy,
+            bytes,
+            #[cfg(test)]
+            catalog: self.catalog.clone(),
+        })
     }
 }
 
@@ -205,14 +418,29 @@ impl WorkerFontMeasurements {
         for (family, weight, italic, size) in &self.faces {
             new_faces.remove(&(family.as_ref(), *weight, *italic, *size));
         }
+        #[cfg(test)]
+        let catalog_changed = self
+            .service
+            .as_ref()
+            .is_some_and(|service| service.test_catalog() != snapshot.catalog);
+        #[cfg(not(test))]
+        let catalog_changed = false;
         if self.revision != Some(snapshot.revision)
+            || catalog_changed
             || self.faces.len() + new_faces.len() > MAX_CACHED_FACES
             || self.service.as_ref().is_none_or(|service| {
                 !service
                     .worker_font_policy_fits_cache(&snapshot.policy, MAX_CACHED_CHARACTER_QUERIES)
             })
         {
-            self.service = Some(FontMetricsService::new());
+            #[cfg(not(test))]
+            {
+                self.service = Some(FontMetricsService::new());
+            }
+            #[cfg(test)]
+            {
+                self.service = Some(snapshot.catalog.metrics_service());
+            }
             #[cfg(test)]
             {
                 self.cache_rebuilds += 1;
@@ -228,7 +456,12 @@ impl WorkerFontMeasurements {
             DeviceScale::new(f32::from_bits(snapshot.revision.scale_bits))
                 .map_err(|_| RowProgramError::Unsupported)?,
         );
-        for (face, expected) in faces.iter().zip(&snapshot.receipts) {
+        for face in faces {
+            let expected = snapshot
+                .receipts
+                .iter()
+                .find(|receipt| receipt.face_id == face.face_id)
+                .ok_or(RowProgramError::Cancelled)?;
             if cancelled() {
                 return Err(RowProgramError::Cancelled);
             }
@@ -239,7 +472,7 @@ impl WorkerFontMeasurements {
                     face.italic,
                     face.font_size.max(1.0),
                 )
-                .map(PrimaryFontReceipt::of)
+                .map(|font| PrimaryFontReceipt::of(face.face_id, font))
                 .ok_or(RowProgramError::MissingMeasurement)?;
             // A newly opened font must agree with the frame's selected font.
             // A catalog race is an admission failure, never guessed geometry.

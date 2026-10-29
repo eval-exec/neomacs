@@ -196,7 +196,7 @@ fn compute_rows(
                 },
             )?;
         }
-        match program.compute_visual_rows(MAX_ROWS - rows.len(), &cancelled) {
+        match program.compute_visual_rows_on_worker(fonts, MAX_ROWS - rows.len(), &cancelled) {
             Ok(computed) => rows.extend(computed),
             Err(
                 RowProgramError::Overflow | RowProgramError::Budget | RowProgramError::Incomplete,

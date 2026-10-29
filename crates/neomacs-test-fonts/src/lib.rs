@@ -58,6 +58,18 @@ const NOTO_SANS_MONO_VARIABLE_NAME: &str = "NotoSansMono-variable.ttf";
 const NOTO_SANS_MONO_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notosansmono/NotoSansMono%5Bwdth,wght%5D.ttf";
 const NOTO_SANS_MONO_VARIABLE_SHA256: &str =
     "2cb2adb378a8f574213e23df697050b83c54c27df465a2015552740b2769a081";
+const NOTO_SANS_ARABIC_VARIABLE_NAME: &str = "NotoSansArabic-variable.ttf";
+const NOTO_SANS_ARABIC_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notosansarabic/NotoSansArabic%5Bwdth,wght%5D.ttf";
+const NOTO_SANS_ARABIC_VARIABLE_SHA256: &str =
+    "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e";
+const NOTO_SERIF_VARIABLE_NAME: &str = "NotoSerif-variable.ttf";
+const NOTO_SERIF_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notoserif/NotoSerif%5Bwdth,wght%5D.ttf";
+const NOTO_SERIF_VARIABLE_SHA256: &str =
+    "4d8e6761424656867019081a1a01336f3cb086982682698714054fc33f782713";
+const NOTO_SANS_HEBREW_VARIABLE_NAME: &str = "NotoSansHebrew-variable.ttf";
+const NOTO_SANS_HEBREW_VARIABLE_URL: &str = "https://raw.githubusercontent.com/google/fonts/142c8963e7606b510c93a644c82a4c4cdeae6ef9/ofl/notosanshebrew/NotoSansHebrew%5Bwdth,wght%5D.ttf";
+const NOTO_SANS_HEBREW_VARIABLE_SHA256: &str =
+    "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88";
 const LXGW_NERD_RELEASE: &str = "lxgw-wenkai-nerd-1.522";
 const LXGW_NERD_ARCHIVE_URL: &str = "https://github.com/Yikai-Liao/LxgwWenKaiNerdFont/releases/download/v1.522/lxgw-wenkai-nerd-1.522.tar.gz";
 const LXGW_NERD_ARCHIVE_SHA256: &str =
@@ -102,6 +114,9 @@ static WOFF2_COLLECTION_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static LXGW_NERD_REGULAR_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static MPLUS_1_CODE_THIN_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_SANS_MONO_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_SANS_ARABIC_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_SERIF_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
+static NOTO_SANS_HEBREW_VARIABLE_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NOTO_COLOR_EMOJI_COLRV1_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
 static NABLA_FIXTURE: OnceLock<PathBuf> = OnceLock::new();
@@ -348,6 +363,60 @@ pub fn noto_sans_mono_variable() -> &'static Path {
             )
             .unwrap_or_else(|error| {
                 panic!("failed to prepare pinned variable Noto Sans Mono test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// Pinned Arabic shaping face for contextual-joining and bidi row tests.
+/// The catalog fixture must select this file explicitly rather than an
+/// installed Noto sibling whose advances may differ between hosts.
+#[must_use]
+pub fn noto_sans_arabic_variable() -> &'static Path {
+    NOTO_SANS_ARABIC_VARIABLE_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                NOTO_SANS_ARABIC_VARIABLE_NAME,
+                NOTO_SANS_ARABIC_VARIABLE_URL,
+                NOTO_SANS_ARABIC_VARIABLE_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned variable Noto Sans Arabic test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// Pinned Hebrew shaping face used alongside the Arabic, CJK, Latin and
+/// emoji fixtures, so a Unicode row never selects an installed fallback.
+#[must_use]
+pub fn noto_sans_hebrew_variable() -> &'static Path {
+    NOTO_SANS_HEBREW_VARIABLE_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                NOTO_SANS_HEBREW_VARIABLE_NAME,
+                NOTO_SANS_HEBREW_VARIABLE_URL,
+                NOTO_SANS_HEBREW_VARIABLE_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned variable Noto Sans Hebrew test font: {error}")
+            })
+        })
+        .as_path()
+}
+
+/// Pinned proportional serif face for rich-face row and boundary-string tests.
+#[must_use]
+pub fn noto_serif_variable() -> &'static Path {
+    NOTO_SERIF_VARIABLE_FIXTURE
+        .get_or_init(|| {
+            prepare_pinned_file(
+                NOTO_SERIF_VARIABLE_NAME,
+                NOTO_SERIF_VARIABLE_URL,
+                NOTO_SERIF_VARIABLE_SHA256,
+            )
+            .unwrap_or_else(|error| {
+                panic!("failed to prepare pinned Noto Serif test font: {error}")
             })
         })
         .as_path()

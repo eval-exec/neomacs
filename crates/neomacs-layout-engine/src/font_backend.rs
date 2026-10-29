@@ -523,6 +523,11 @@ pub enum FontDriverMatch {
 }
 
 pub trait FontBackend: Send {
+    #[cfg(test)]
+    fn test_catalog(&self) -> crate::font::metrics::test_catalog::TestFontCatalogSource {
+        crate::font::metrics::test_catalog::TestFontCatalogSource::System
+    }
+
     fn match_font_spec(&self, query: &FontCandidateQuery) -> FontDriverMatch {
         FontDriverMatch::Enumerated(self.list_candidates(query))
     }

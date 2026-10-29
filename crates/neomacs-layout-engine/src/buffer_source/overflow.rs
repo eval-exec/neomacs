@@ -191,6 +191,7 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
         state: BufferSourceLoopMutableState<'_, '_, '_, FS>,
     ) -> BufferSourceOverflowRenderOutcome {
         let BufferSourceLoopMutableState {
+            invisible_text_checkpoint,
             mut progress,
             source_render,
             row_build,
@@ -317,8 +318,10 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                 // reseat — it used to also have to drop a stale queued run
                 // remainder (candidate + 1) that would otherwise replay first and
                 // drop the candidate char from the layout.
-                source_walk
-                    .rewind_source_consumption(BufferSourceRewind::WordWrap(source_position));
+                source_walk.rewind_source_consumption(
+                    BufferSourceRewind::WordWrap(source_position),
+                    invisible_text_checkpoint,
+                );
                 source_walk
                     .source_position_update(source_position)
                     .apply_to_progress(&mut progress);
@@ -419,9 +422,10 @@ impl<'a> BufferSourceOverflowRenderRequest<'a> {
                     // `source_position` was just rewound to the overflowing
                     // char's start by the transition; reseat the producer to the
                     // same position so that char opens the continuation row.
-                    source_walk.rewind_source_consumption(BufferSourceRewind::CharacterWrap(
-                        source_position,
-                    ));
+                    source_walk.rewind_source_consumption(
+                        BufferSourceRewind::CharacterWrap(source_position),
+                        invisible_text_checkpoint,
+                    );
                 }
                 // GNU `maybe_produce_line_number`: each wrapped continuation row
                 // reserves a blank (no-number) line-number gutter so its text
