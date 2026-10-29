@@ -60,6 +60,8 @@ pub(crate) use size::{
 };
 pub mod split;
 mod string_property_input;
+mod word_wrap;
+pub use word_wrap::{WordWrapCategories, WordWrapDirection, WordWrapMode, WordWrapOpportunity};
 pub mod window_markers;
 
 pub use part::{
@@ -875,6 +877,7 @@ pub enum WindowLayoutVariable {
     TruncatePartialWidthWindows,
     VerticalScrollBar,
     WordWrap,
+    WordWrapByCategory,
     WrapPrefix,
     XCursorForePixel,
     XStretchCursor,
