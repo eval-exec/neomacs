@@ -125,8 +125,8 @@ fn gnu_sit_for_interactive_timeout_returns_t() {
     crate::test_utils::init_test_tracing();
     let mut ev = gnu_subr_sit_for_eval();
     ev.set_variable("noninteractive", Value::NIL);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     let start = Instant::now();
     let result = ev
         .eval_str("(sit-for 0.01 t)")
@@ -165,12 +165,12 @@ fn gnu_sit_for_with_pending_input_does_not_run_timers_first() {
         )]),
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
+
     let result = ev
         .eval_str("(sit-for 0.5 t)")
         .expect("eval interactive sit-for");
@@ -196,12 +196,12 @@ fn gnu_sit_for_pending_input_returns_nil_without_redisplay() {
         *redisplays_in_cb.borrow_mut() += 1;
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
+
     let result = ev
         .eval_str("(sit-for 0.5)")
         .expect("eval interactive sit-for");
@@ -223,8 +223,8 @@ fn gnu_sit_for_zero_without_nodisp_redisplays_once() {
         *redisplays_in_cb.borrow_mut() += 1;
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     let result = ev
         .eval_str("(sit-for 0)")
         .expect("eval zero-second sit-for");
@@ -265,8 +265,8 @@ fn gnu_sit_for_zero_nodisp_runs_due_gnu_timer_without_redisplay() {
         *redisplays_in_cb.borrow_mut() += 1;
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     let result = ev
         .eval_str("(sit-for 0 t)")
         .expect("eval zero-second sit-for");
@@ -357,12 +357,12 @@ fn sleep_for_window_close_uses_special_event_map_handler_when_loaded() {
     let frame = ev.frames.create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::WindowClose {
         emacs_frame_id: frame.0,
     })
     .expect("queue window close");
-    ev.input_rx = Some(rx);
+
     ev.command_loop.running = true;
 
     let result = builtin_sleep_for(&mut ev, vec![Value::make_float(0.01)])
@@ -391,12 +391,12 @@ fn sleep_for_window_close_honors_throw_on_input_before_handler() {
     let frame = ev.frames.create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::WindowClose {
         emacs_frame_id: frame.0,
     })
     .expect("queue window close");
-    ev.input_rx = Some(rx);
+
     ev.command_loop.running = true;
     ev.obarray
         .set_symbol_value("throw-on-input", Value::symbol("tag"));

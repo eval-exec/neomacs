@@ -1603,7 +1603,36 @@ impl InputEvent {
             Self::TtyByte { byte, .. } => *byte == 0x07,
             Self::TtyCharacter { character, .. } => character.code() == 0x07,
             Self::KeyPress { key, .. } => key.is_default_quit_char(),
-            _ => false,
+            Self::Tracked { .. }
+            | Self::Observed { .. }
+            | Self::MousePress { .. }
+            | Self::MouseRelease { .. }
+            | Self::MouseMove { .. }
+            | Self::PresentedRegion { .. }
+            | Self::MouseScroll { .. }
+            | Self::PixelScroll { .. }
+            | Self::LayoutInvalidated
+            | Self::ImageStateChanged { .. }
+            | Self::MenuSelection { .. }
+            | Self::ToolBarClick { .. }
+            | Self::PresentedPointer { .. }
+            | Self::PresentationActivated { .. }
+            | Self::PresentationDiscarded { .. }
+            | Self::PresentationRetired { .. }
+            | Self::MenuBarClick { .. }
+            | Self::Resize { .. }
+            | Self::Focus { .. }
+            | Self::MonitorsChanged { .. }
+            | Self::SystemFontsChanged { .. }
+            | Self::SelectWindow { .. }
+            | Self::WindowClose { .. }
+            | Self::DisplayReset
+            | Self::WebView(_)
+            | Self::SurfaceCreateFailed { .. }
+            | Self::FrameShaderFailed { .. }
+            | Self::TerminalCreateFailed { .. }
+            | Self::TerminalExited { .. }
+            | Self::TerminalTitleChanged { .. } => false,
         }
     }
 }
@@ -2972,7 +3001,7 @@ fn pending_live_gui_resize_target(
 fn sync_pending_resize_events_in_keyboard_runtime(
     frames: &mut crate::window::FrameManager,
     buffers: &crate::buffer::BufferManager,
-    input_rx: &mut Option<crossbeam_channel::Receiver<InputEvent>>,
+    input_rx: &mut crate::host_input::HostInputReceiver,
     keyboard: &mut KeyboardRuntime,
     publications: &mut Vec<crate::window::FrameId>,
 ) -> bool {
@@ -3023,7 +3052,7 @@ fn sync_pending_resize_events_in_keyboard_runtime(
         return applied_resize;
     }
 
-    let Some(rx) = input_rx.clone() else {
+    let Some(rx) = input_rx.as_ref().cloned() else {
         while let Some(event) = deferred.pop_back() {
             pending_input_events.push_front(event);
         }
@@ -4209,7 +4238,7 @@ impl crate::emacs_core::eval::Context {
     pub(crate) fn stage_next_host_input_event_if_available(
         &mut self,
     ) -> Result<bool, crate::emacs_core::error::Flow> {
-        let Some(ref rx) = self.input_rx else {
+        let Some(rx) = self.input_rx.as_ref() else {
             return Ok(false);
         };
         match rx.try_recv() {
@@ -4242,7 +4271,7 @@ impl crate::emacs_core::eval::Context {
         timeout: Duration,
         waiting_for_user_input: bool,
     ) -> Result<bool, crate::emacs_core::error::Flow> {
-        let Some(rx) = self.input_rx.clone() else {
+        let Some(rx) = self.input_rx.as_ref().cloned() else {
             if !timeout.is_zero() {
                 std::thread::sleep(timeout);
             }
@@ -5331,7 +5360,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn handle_display_terminal_disconnect(&mut self) {
-        self.input_rx = None;
+        self.input_rx.clear();
         let _ = crate::emacs_core::terminal::pure::delete_terminal_noelisp_owned(
             self,
             crate::emacs_core::terminal::pure::TERMINAL_ID,

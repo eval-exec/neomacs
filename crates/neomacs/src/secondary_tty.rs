@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use neovm_core::emacs_core::eval::QuitRequest;
-use neovm_core::emacs_core::process::WaitNotifier;
 use neovm_core::emacs_core::terminal::pure::{
     OpenedTtyFrameHost, TerminalHost, TtyFrameHostFactory, TtyFrameOpenRequest, TtyFrameSize,
 };
+use neovm_core::host_input::HostInputPublisher;
 use neovm_core::keyboard::InputEvent;
 
 use super::frame_layout;
@@ -169,8 +169,7 @@ impl SecondaryTtyRegistry {
 
 pub struct SecondaryTtyFactory {
     registry: SecondaryTtyRegistry,
-    input_tx: crossbeam_channel::Sender<InputEvent>,
-    notifier: Option<WaitNotifier>,
+    input_tx: HostInputPublisher,
     quit_requested: QuitRequest,
     /// Installed once, after the first successful `open_tty`, so batch startup
     /// does not build a display runtime before any terminal exists.
@@ -180,14 +179,12 @@ pub struct SecondaryTtyFactory {
 impl SecondaryTtyFactory {
     pub fn new(
         registry: SecondaryTtyRegistry,
-        input_tx: crossbeam_channel::Sender<InputEvent>,
-        notifier: Option<WaitNotifier>,
+        input_tx: HostInputPublisher,
         quit_requested: QuitRequest,
     ) -> Self {
         Self {
             registry,
             input_tx,
-            notifier,
             quit_requested,
             deferred_redisplay: None,
         }
@@ -217,7 +214,6 @@ impl TtyFrameHostFactory for SecondaryTtyFactory {
             let (session, size, attributes) = SecondaryTtySession::open(
                 &request,
                 self.input_tx.clone(),
-                self.notifier.clone(),
                 self.quit_requested.clone(),
             )?;
             let terminal_id = request.terminal_id();
@@ -402,8 +398,7 @@ impl SecondaryTtySession {
 
     fn open(
         request: &TtyFrameOpenRequest,
-        input_tx: crossbeam_channel::Sender<InputEvent>,
-        notifier: Option<WaitNotifier>,
+        input_tx: HostInputPublisher,
         quit_requested: QuitRequest,
     ) -> Result<
         (
@@ -448,18 +443,15 @@ impl SecondaryTtySession {
         let paused = Arc::new(AtomicBool::new(false));
         let reader_stop = Arc::clone(&stop);
         let reader_paused = Arc::clone(&paused);
-        let frame_id = request.frame_id().0;
-        let terminal_id = request.terminal_id();
+        let target = SecondaryTtyInputTarget::from(request);
         let reader = std::thread::Builder::new()
-            .name(format!("tty-input-{frame_id}"))
+            .name(format!("tty-input-{}", target.frame.0))
             .spawn(move || {
                 read_secondary_tty(
                     input,
-                    frame_id,
-                    terminal_id,
+                    target,
                     size,
                     input_tx,
-                    notifier,
                     quit_requested,
                     reader_stop,
                     reader_paused,
@@ -535,14 +527,36 @@ fn query_size(fd: std::os::fd::RawFd) -> Option<TtyFrameSize> {
         .flatten()
 }
 
+/// Input routing identities originate in the validated terminal-open request.
+/// Kept together across the reader thread; conversions to wire integers happen
+/// only while constructing the evaluator event.
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct SecondaryTtyInputTarget {
+    frame: neovm_core::window::FrameId,
+    terminal: SecondaryInputTerminalId,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct SecondaryInputTerminalId(u64);
+
+#[cfg(unix)]
+impl From<&TtyFrameOpenRequest> for SecondaryTtyInputTarget {
+    fn from(request: &TtyFrameOpenRequest) -> Self {
+        Self {
+            frame: request.frame_id(),
+            terminal: SecondaryInputTerminalId(request.terminal_id()),
+        }
+    }
+}
+
 #[cfg(unix)]
 fn read_secondary_tty(
     input: std::fs::File,
-    frame_id: u64,
-    terminal_id: u64,
+    target: SecondaryTtyInputTarget,
     initial_size: TtyFrameSize,
-    input_tx: crossbeam_channel::Sender<InputEvent>,
-    notifier: Option<WaitNotifier>,
+    input_tx: HostInputPublisher,
     quit_requested: QuitRequest,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
@@ -561,17 +575,16 @@ fn read_secondary_tty(
             && size != last_size
         {
             last_size = size;
-            if !publish_input(
+            if publish_input(
                 &input_tx,
-                notifier.as_ref(),
-                &stop,
                 InputEvent::Resize {
                     width: size.columns(),
                     height: size.rows(),
                     scale_factor: 1.0,
-                    emacs_frame_id: frame_id,
+                    emacs_frame_id: target.frame.0,
                 },
-            ) {
+            ) == super::input_bridge::HostInputDelivery::ReceiverClosed
+            {
                 return;
             }
         }
@@ -581,6 +594,8 @@ fn read_secondary_tty(
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: input owns fd for this loop, and pollfd is one initialized
+        // record whose address remains valid for the blocking call.
         let result = unsafe { libc::poll(&mut pollfd, 1, 50) };
         if result < 0 {
             if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
@@ -592,10 +607,8 @@ fn read_secondary_tty(
             if pollfd.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
                 let _ = publish_input(
                     &input_tx,
-                    notifier.as_ref(),
-                    &stop,
                     InputEvent::WindowClose {
-                        emacs_frame_id: frame_id,
+                        emacs_frame_id: target.frame.0,
                     },
                 );
                 return;
@@ -603,14 +616,14 @@ fn read_secondary_tty(
             continue;
         }
         let mut bytes = [0u8; 4095];
+        // SAFETY: input owns a readable fd; the initialized writable array
+        // spans exactly bytes.len() bytes and lives through this call.
         let read = unsafe { libc::read(fd, bytes.as_mut_ptr().cast(), bytes.len()) };
         if read == 0 {
             let _ = publish_input(
                 &input_tx,
-                notifier.as_ref(),
-                &stop,
                 InputEvent::WindowClose {
-                    emacs_frame_id: frame_id,
+                    emacs_frame_id: target.frame.0,
                 },
             );
             return;
@@ -625,10 +638,8 @@ fn read_secondary_tty(
             }
             let _ = publish_input(
                 &input_tx,
-                notifier.as_ref(),
-                &stop,
                 InputEvent::WindowClose {
-                    emacs_frame_id: frame_id,
+                    emacs_frame_id: target.frame.0,
                 },
             );
             return;
@@ -636,16 +647,15 @@ fn read_secondary_tty(
         if stop.load(Ordering::Acquire) {
             continue;
         }
-        let bytes = bytes[..read as usize].to_vec();
-        if bytes.contains(&0x07) {
+        let event = InputEvent::raw_tty_bytes_for_terminal(
+            bytes[..read as usize].to_vec(),
+            target.terminal.0,
+        );
+        if event.requests_default_quit() {
             quit_requested.request();
         }
-        if !publish_input(
-            &input_tx,
-            notifier.as_ref(),
-            &stop,
-            InputEvent::raw_tty_bytes_for_terminal(bytes, terminal_id),
-        ) {
+        if publish_input(&input_tx, event) == super::input_bridge::HostInputDelivery::ReceiverClosed
+        {
             return;
         }
     }
@@ -653,28 +663,10 @@ fn read_secondary_tty(
 
 #[cfg(unix)]
 fn publish_input(
-    input_tx: &crossbeam_channel::Sender<InputEvent>,
-    notifier: Option<&WaitNotifier>,
-    stop: &AtomicBool,
-    mut event: InputEvent,
-) -> bool {
-    use crossbeam_channel::SendTimeoutError;
-    use std::time::Duration;
-
-    loop {
-        match input_tx.send_timeout(event, Duration::from_millis(50)) {
-            Ok(()) => {
-                if let Some(notifier) = notifier {
-                    let _ = notifier.notify();
-                }
-                return true;
-            }
-            Err(SendTimeoutError::Timeout(returned)) if !stop.load(Ordering::Acquire) => {
-                event = returned;
-            }
-            Err(SendTimeoutError::Timeout(_) | SendTimeoutError::Disconnected(_)) => return false,
-        }
-    }
+    input_tx: &HostInputPublisher,
+    event: InputEvent,
+) -> super::input_bridge::HostInputDelivery {
+    super::input_bridge::finish_host_input_publication(input_tx.send(event))
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use crate::emacs_core::print_value;
 use crate::emacs_core::value::{
     ValueKind, VecLikeType, eq_value, get_string_text_properties_table_for_value,
 };
+use crate::host_input::HostInputPublisher;
 use crate::test_utils::{eval_with_ldefs_boot_autoloads, runtime_startup_eval_all};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -1080,12 +1081,11 @@ fn read_from_minibuffer_rejects_more_than_seven_args() {
 fn read_from_minibuffer_runs_setup_edit_and_exit_in_gnu_order() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer command");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1117,12 +1117,11 @@ fn read_from_minibuffer_runs_setup_edit_and_exit_in_gnu_order() {
 fn read_from_minibuffer_initializes_an_unbound_history_before_setup_hooks() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    eval.input_rx = Some(rx);
 
     let result = eval
         .eval_str(
@@ -1158,12 +1157,11 @@ fn read_from_minibuffer_initializes_an_unbound_history_before_setup_hooks() {
 fn active_minibuffer_is_recorded_at_front_of_its_frame_buffer_list() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    eval.input_rx = Some(rx);
 
     let result = eval
         .eval_str(
@@ -1189,12 +1187,11 @@ fn active_minibuffer_is_recorded_at_front_of_its_frame_buffer_list() {
 fn exiting_minibuffer_records_the_restored_calling_buffer_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    eval.input_rx = Some(rx);
 
     let result = eval
         .eval_str(
@@ -1230,14 +1227,13 @@ fn exiting_minibuffer_records_the_restored_calling_buffer_like_gnu() {
 fn read_from_minibuffer_binds_minibuffer_default_for_the_whole_read_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     for _ in 0..2 {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(' '),
         ))
         .expect("queue minibuffer exit key");
     }
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1265,13 +1261,12 @@ fn read_from_minibuffer_binds_minibuffer_default_for_the_whole_read_like_gnu() {
 fn read_from_minibuffer_runs_minibuffer_modes_to_clear_stale_locals() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue space");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1315,13 +1310,12 @@ fn read_from_minibuffer_runs_minibuffer_modes_to_clear_stale_locals() {
 fn read_from_minibuffer_uses_calling_buffers_default_directory_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue space");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1348,12 +1342,11 @@ fn read_from_minibuffer_uses_calling_buffers_default_directory_like_gnu() {
 fn read_from_minibuffer_swallows_exit_hook_signals_after_cleanup() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer command");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1374,13 +1367,12 @@ fn read_from_minibuffer_swallows_exit_hook_signals_after_cleanup() {
 fn read_from_minibuffer_restores_window_splits_created_during_the_read() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer command");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1406,13 +1398,12 @@ fn read_from_minibuffer_restores_window_splits_created_during_the_read() {
 fn read_from_minibuffer_keeps_window_splits_when_restoration_is_disabled() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer command");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1438,12 +1429,11 @@ fn read_from_minibuffer_keeps_window_splits_when_restoration_is_disabled() {
 fn read_from_minibuffer_setup_error_unwinds_the_complete_session() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('x'),
     ))
     .expect("keep the interactive command-loop input source live");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1470,12 +1460,11 @@ fn read_from_minibuffer_setup_error_unwinds_the_complete_session() {
 fn read_from_minibuffer_mode_error_unwinds_before_session_entry() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('x'),
     ))
     .expect("keep the interactive command-loop input source live");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1503,12 +1492,12 @@ fn read_from_minibuffer_mode_error_unwinds_before_session_entry() {
 fn read_from_minibuffer_converts_unibyte_initial_input_to_buffer_text() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return),
     ))
     .expect("queue minibuffer return");
-    ev.input_rx = Some(rx);
+
     let args = vec![
         Value::string("Prompt: "),
         Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF])),
@@ -1535,12 +1524,11 @@ fn read_from_minibuffer_converts_unibyte_initial_input_to_buffer_text() {
 fn read_from_minibuffer_cons_initial_places_point_at_its_one_based_character_position() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1567,12 +1555,11 @@ fn read_from_minibuffer_cons_initial_places_point_at_its_one_based_character_pos
 fn read_from_minibuffer_cons_initial_with_nil_position_keeps_point_at_end() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1609,12 +1596,11 @@ fn read_from_minibuffer_restores_calling_frame_after_frame_switch() {
         "test-minibuffer-other-frame",
         Value::make_frame(other_frame.0),
     );
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer command");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1709,12 +1695,12 @@ fn shared_child_minibuffer_publishes_focus_on_entry_and_unwind() {
                 .find_window_frame_id(ev.frames.get(child).unwrap().minibuffer_window.unwrap()),
             Some(owner)
         );
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let tx = HostInputPublisher::install(&mut ev);
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char('\r'),
         ))
         .unwrap();
-        ev.input_rx = Some(rx);
+
         // Bare Context has no simple.el command dispatcher. Keep the real
         // reader/command loop and substitute only its Lisp dispatch boundary.
         ev.eval_str(
@@ -1825,12 +1811,11 @@ fn read_from_minibuffer_uses_and_restores_a_separate_minibuffer_owner_frame() {
     ev.obarray
         .set_symbol_value("test-minibuffer-owner-was-root", Value::NIL);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer command");
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1864,13 +1849,12 @@ fn read_from_minibuffer_uses_and_restores_a_separate_minibuffer_owner_frame() {
 fn read_from_minibuffer_custom_keymap_lambda_sees_last_command_event() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue space");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1898,7 +1882,7 @@ fn read_from_minibuffer_custom_keymap_lambda_sees_last_command_event() {
 fn read_from_minibuffer_strips_properties_by_default_and_preserves_explicit_opt_in_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     for _ in 0..4 {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(' '),
@@ -1906,7 +1890,6 @@ fn read_from_minibuffer_strips_properties_by_default_and_preserves_explicit_opt_
         .expect("queue minibuffer exit key");
     }
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = ev
         .eval_str(
@@ -1963,13 +1946,12 @@ fn read_from_minibuffer_strips_properties_by_default_and_preserves_explicit_opt_
 fn read_from_minibuffer_uses_live_prompt_field_boundary_after_prompt_rewrite_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
     drop(tx);
-    eval.input_rx = Some(rx);
 
     let result = eval
         .eval_str(
@@ -2007,12 +1989,11 @@ fn read_from_minibuffer_uses_live_prompt_field_boundary_after_prompt_rewrite_lik
 fn read_from_minibuffer_adds_history_after_restoring_the_calling_buffer() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    eval.input_rx = Some(rx);
 
     let result = eval
         .eval_str(
@@ -2040,12 +2021,11 @@ fn read_from_minibuffer_adds_history_after_restoring_the_calling_buffer() {
 fn read_from_minibuffer_uses_empty_input_default_only_for_history_when_read_is_nil() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
-    eval.input_rx = Some(rx);
 
     let result = eval
         .eval_str(
@@ -2684,8 +2664,8 @@ fn minibuffer_input_source_distinguishes_stdin_macros_and_live_input() {
     );
 
     let mut interactive = Context::new();
-    let (_input_tx, input_rx) = crossbeam_channel::unbounded();
-    interactive.init_input_system(input_rx);
+    let _input_tx = HostInputPublisher::install(&mut interactive);
+    interactive.init_input_system();
     assert_eq!(
         interactive.minibuffer_input_source(),
         MinibufferInputSource::CommandLoop
@@ -2996,8 +2976,8 @@ fn yes_or_no_p_uses_dialog_path_for_cons_last_input_event() {
         .frames
         .create_frame("yes-or-no-dialog", 800, 600, scratch);
     ev.frames.select_frame(frame_id);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut ev);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     let hidden = Arc::clone(&host.hidden);
@@ -3055,8 +3035,8 @@ fn yes_or_no_p_respects_use_dialog_box_nil() {
 fn yes_or_no_p_uses_dialog_before_short_answers() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut ev);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     ev.set_display_host(Box::new(host));
@@ -3270,12 +3250,11 @@ fn input_pending_p_accepts_optional_check_timers_arg() {
 fn input_pending_p_returns_t_with_host_keypress() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
 
     let result = builtin_input_pending_p(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::T);
@@ -3288,13 +3267,12 @@ fn input_pending_p_returns_t_with_host_keypress() {
 fn input_pending_p_ignores_focus_events_by_default() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::Focus {
         focused: true,
         emacs_frame_id: 0,
     })
     .expect("queue focus event");
-    ev.input_rx = Some(rx);
 
     let result = builtin_input_pending_p(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
@@ -3344,7 +3322,7 @@ fn input_pending_p_filters_configured_low_level_special_events_like_gnu() {
 fn input_pending_p_ignores_mouse_move_without_track_mouse() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 10.0,
         y: 20.0,
@@ -3352,7 +3330,6 @@ fn input_pending_p_ignores_mouse_move_without_track_mouse() {
         target_frame_id: 0,
     })
     .expect("queue mouse move");
-    ev.input_rx = Some(rx);
 
     let result = builtin_input_pending_p(&mut ev, vec![]).unwrap();
     assert!(result.is_nil());
@@ -3363,7 +3340,7 @@ fn input_pending_p_reports_mouse_move_with_track_mouse() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.obarray.set_symbol_value("track-mouse", Value::T);
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 10.0,
         y: 20.0,
@@ -3371,7 +3348,6 @@ fn input_pending_p_reports_mouse_move_with_track_mouse() {
         target_frame_id: 0,
     })
     .expect("queue mouse move");
-    ev.input_rx = Some(rx);
 
     let result = builtin_input_pending_p(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::T);
@@ -3381,7 +3357,7 @@ fn input_pending_p_reports_mouse_move_with_track_mouse() {
 fn read_char_skips_mouse_move_without_track_mouse() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 10.0,
         y: 20.0,
@@ -3393,7 +3369,6 @@ fn read_char_skips_mouse_move_without_track_mouse() {
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
 
     let result = ev.read_char().expect("keypress should remain readable");
     assert_eq!(result, Value::fixnum('a' as i64));
@@ -3404,7 +3379,7 @@ fn read_char_returns_mouse_move_with_track_mouse() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     ev.obarray.set_symbol_value("track-mouse", Value::T);
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 10.0,
         y: 20.0,
@@ -3416,7 +3391,6 @@ fn read_char_returns_mouse_move_with_track_mouse() {
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
 
     let result = ev.read_char().expect("mouse movement should be readable");
     let slots = crate::emacs_core::value::list_to_vec(&result).expect("mouse movement event");
@@ -3430,7 +3404,7 @@ fn read_char_returns_mouse_move_with_track_mouse() {
 fn read_char_mouse_move_updates_mouse_position_even_without_track_mouse() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 24.0,
         y: 40.0,
@@ -3442,7 +3416,6 @@ fn read_char_mouse_move_updates_mouse_position_even_without_track_mouse() {
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
 
     let result = ev.read_char().expect("keypress should remain readable");
     assert_eq!(result, Value::fixnum('a' as i64));
@@ -3483,8 +3456,7 @@ fn display_update_for_mouse_movement_shows_help_echo_via_read_char() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let _tx = HostInputPublisher::install(&mut ev);
 
     crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
         &mut ev,
@@ -3504,8 +3476,7 @@ fn display_update_for_mouse_movement_clears_help_echo_when_leaving_region() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let _tx = HostInputPublisher::install(&mut ev);
 
     crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
         &mut ev,
@@ -3543,8 +3514,7 @@ fn display_update_for_mouse_movement_respects_help_echo_inhibit_substitution() {
     )
     .expect("put help-echo-inhibit-substitution property");
     let frame = install_mouse_help_echo_snapshot_with_value(&mut ev, help);
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let _tx = HostInputPublisher::install(&mut ev);
 
     crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
         &mut ev,
@@ -3567,8 +3537,7 @@ fn display_update_for_mouse_movement_runs_mouse_fixup_before_echo_message() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let _tx = HostInputPublisher::install(&mut ev);
 
     ev.eval_str(
         r#"(fset 'mouse-fixup-help-message
@@ -3620,8 +3589,7 @@ fn display_update_for_mouse_movement_preserves_raw_unibyte_help_echo() {
     let mut ev = Context::new();
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![0xFF]));
     let frame = install_mouse_help_echo_snapshot_with_value(&mut ev, raw);
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let _tx = HostInputPublisher::install(&mut ev);
 
     crate::emacs_core::builtins::builtin_display_update_for_mouse_movement(
         &mut ev,
@@ -3642,8 +3610,7 @@ fn display_update_for_mouse_movement_runs_mouse_fixup_before_show_help_function(
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let frame = install_mouse_help_echo_snapshot(&mut ev, "tip");
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let _tx = HostInputPublisher::install(&mut ev);
 
     ev.eval_str(
         r#"(progn
@@ -3676,7 +3643,7 @@ fn read_char_mouse_move_sets_help_echo_even_without_track_mouse() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     install_mouse_help_echo_snapshot(&mut ev, "tip");
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::MouseMove {
         x: 12.0,
         y: 4.0,
@@ -3688,7 +3655,6 @@ fn read_char_mouse_move_sets_help_echo_even_without_track_mouse() {
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
 
     let result = ev.read_char().expect("keypress should remain readable");
     assert_eq!(result, Value::fixnum('a' as i64));
@@ -3728,12 +3694,11 @@ fn input_pending_p_check_timers_does_not_run_timer_when_input_is_already_pending
         ])]),
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue keypress");
-    ev.input_rx = Some(rx);
 
     let result = builtin_input_pending_p(&mut ev, vec![Value::T]).unwrap();
     assert_eq!(result, Value::T);
@@ -4242,8 +4207,7 @@ fn read_char_with_nil_seconds_sets_command_keys_when_empty() {
 fn read_char_with_interactive_timeout_returns_nil() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut ev);
 
     let start = std::time::Instant::now();
     let result = builtin_read_char(
@@ -4293,12 +4257,11 @@ fn read_char_preserves_existing_command_keys_context() {
 fn read_char_host_quit_char_returns_event_and_sets_quit_flag() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('g', crate::keyboard::Modifiers::ctrl()),
     ))
     .expect("queue C-g");
-    ev.input_rx = Some(rx);
 
     let result = builtin_read_char(&mut ev, vec![]).unwrap();
     assert_eq!(result, Value::fixnum(7));
@@ -4749,12 +4712,11 @@ fn read_key_sequence_accepts_nil_prompt() {
 fn read_key_sequence_treats_host_quit_char_as_ordinary_input() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('g', crate::keyboard::Modifiers::ctrl()),
     ))
     .expect("queue C-g");
-    ev.input_rx = Some(rx);
 
     let result = builtin_read_key_sequence(&mut ev, vec![Value::string("key: ")]).unwrap();
     assert!(result.is_string() && result.as_utf8_str() == Some("\u{7}"));
@@ -5051,13 +5013,12 @@ fn read_key_sequence_vector_accepts_nil_prompt() {
 fn read_key_sequence_vector_blocks_for_interactive_input_when_receiver_present() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('!'),
     ))
     .expect("queue !");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     let result = builtin_read_key_sequence_vector(&mut ev, vec![Value::string("key: ")])
         .expect("interactive read-key-sequence-vector should block for input");
@@ -6197,13 +6158,12 @@ fn read_from_string_backslash_space_is_a_continuation_escape() {
 fn read_from_minibuffer_clears_the_echo_message_on_entry_like_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue minibuffer exit key");
     drop(tx);
-    ev.input_rx = Some(rx);
 
     // `message' writes to stderr rather than the echo area in a batch context
     // (GNU `message3_frame_nolog' takes the `FRAME_INITIAL_P' arm,

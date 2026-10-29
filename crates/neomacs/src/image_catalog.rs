@@ -107,34 +107,20 @@ type HeaderLayouts =
 /// happened next — exactly the wait this step removes.
 #[derive(Clone)]
 pub(super) struct RedisplayWaker {
-    input: crossbeam_channel::Sender<neovm_core::keyboard::InputEvent>,
-    notifier: Option<neovm_core::emacs_core::process::WaitNotifier>,
+    input: neovm_core::host_input::HostInputPublisher,
 }
 
 impl RedisplayWaker {
-    pub(super) fn new(
-        input: crossbeam_channel::Sender<neovm_core::keyboard::InputEvent>,
-        notifier: Option<neovm_core::emacs_core::process::WaitNotifier>,
-    ) -> Self {
-        Self { input, notifier }
+    pub(super) fn new(input: neovm_core::host_input::HostInputPublisher) -> Self {
+        Self { input }
     }
 
-    /// `LayoutInvalidated` is this codebase's "a display dependency changed and
-    /// evaluator layout must be republished": the image's geometry just became
-    /// known, and the slot it reserved is stale.
+    /// Only the evaluator republishes layout after off-thread image geometry.
     fn request_redisplay(&self) {
-        if self
-            .input
-            .send(neovm_core::keyboard::InputEvent::LayoutInvalidated)
-            .is_err()
-        {
-            return;
-        }
-        if let Some(notifier) = &self.notifier
-            && let Err(error) = notifier.notify()
-        {
-            tracing::warn!(%error, "failed to wake the evaluator for resolved image geometry");
-        }
+        let _ = super::input_bridge::finish_host_input_publication(
+            self.input
+                .send(neovm_core::keyboard::InputEvent::LayoutInvalidated),
+        );
     }
 }
 

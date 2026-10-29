@@ -106,12 +106,12 @@ fn shared_child_reader_projects_redirects_into_applied_native_opacity() {
         eval.set_variable("native", Value::make_frame(native.0));
         eval.eval_str("(redirect-frame-focus native child)")
             .unwrap();
-        let (tx, rx) = crossbeam_channel::unbounded();
+        let tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
         tx.send(neovm_core::keyboard::InputEvent::key_press(
             neovm_core::keyboard::KeyEvent::char('\r'),
         ))
         .unwrap();
-        eval.input_rx = Some(rx);
+
         let result = eval.eval_str(&format!(
             r#"(progn
             (fset 'command-execute (lambda (command &rest ignored) (call-interactively command)))

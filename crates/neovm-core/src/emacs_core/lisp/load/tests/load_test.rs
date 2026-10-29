@@ -2,6 +2,7 @@ use super::*;
 use crate::emacs_core::error::{FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;
+use crate::host_input::HostInputPublisher;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }
@@ -57,7 +58,7 @@ fn simulate_active_top_level_command_loop(eval: &mut Context) {
 
 /// Queue the session-ending key bound by
 /// [`simulate_active_top_level_command_loop`]; must be the last queued event.
-fn queue_end_of_session_key(tx: &crossbeam_channel::Sender<crate::keyboard::InputEvent>) {
+fn queue_end_of_session_key(tx: &HostInputPublisher) {
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Insert),
     ))
@@ -3708,7 +3709,7 @@ fn bootstrap_completing_read_multiple_accepts_exact_must_match_input() {
     assert!(eval.frames.select_frame(frame_id));
     eval.eval_str("(require 'crm)").expect("load crm");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "default".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -3721,7 +3722,6 @@ fn bootstrap_completing_read_multiple_accepts_exact_must_match_input() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let rendered = format_eval_result(&eval.eval_str(
@@ -3900,9 +3900,9 @@ fn bootstrap_runtime_execute_extended_command_exits_minibuffer_on_ret() {
     )
     .expect("eval execute-extended-command RET probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     for ch in "neo-ret-probe".chars() {
@@ -3957,7 +3957,7 @@ fn bootstrap_runtime_command_loop_executes_meta_x_command_on_ret() {
                (exit-recursive-edit)))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -3974,7 +3974,6 @@ fn bootstrap_runtime_command_loop_executes_meta_x_command_on_ret() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -4016,7 +4015,7 @@ fn bootstrap_runtime_rejected_nested_mx_leaves_outer_mx_usable() {
     )
     .expect("install nested M-x recovery probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     let send = |event| {
         tx.send(crate::keyboard::InputEvent::key_press(event))
             .map_err(Box::new)
@@ -4046,7 +4045,6 @@ fn bootstrap_runtime_rejected_nested_mx_leaves_outer_mx_usable() {
     send(crate::keyboard::KeyEvent::char('q')).expect("queue command-loop exit key");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
     let result = command_loop_end_value(
         eval.recursive_edit_inner(),
@@ -4090,13 +4088,13 @@ fn bootstrap_runtime_read_only_local_default_binding_handles_character_input() {
     )
     .expect("install read-only catch-all local binding");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char('a'),
     ))
     .expect("queue catch-all character");
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     let result = command_loop_end_value(
@@ -4171,7 +4169,7 @@ fn bootstrap_runtime_command_loop_executes_help_describe_function_on_ret() {
         }
     }
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -4192,7 +4190,6 @@ fn bootstrap_runtime_command_loop_executes_help_describe_function_on_ret() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let result = command_loop_end_value(
@@ -4247,7 +4244,7 @@ fn bootstrap_runtime_command_loop_meta_s_o_opens_clean_occur_prompt_from_input_r
     )
     .expect("define occur keyboard prompt probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('s', crate::keyboard::Modifiers::meta()),
     ))
@@ -4258,7 +4255,6 @@ fn bootstrap_runtime_command_loop_meta_s_o_opens_clean_occur_prompt_from_input_r
     .expect("queue o");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -4306,7 +4302,7 @@ fn bootstrap_runtime_command_loop_meta_x_ret_opens_clean_nested_grep_prompt_from
     )
     .expect("define grep keyboard prompt probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -4323,7 +4319,6 @@ fn bootstrap_runtime_command_loop_meta_x_ret_opens_clean_nested_grep_prompt_from
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -4393,15 +4388,11 @@ fn bootstrap_runtime_mx_eager_completion_services_printable_input_before_quit() 
         }
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let notifier = eval.wait_notifier();
+    let tx = HostInputPublisher::install(&mut eval);
     let sender = std::thread::spawn(move || {
-        let send = |event, tx: &crossbeam_channel::Sender<crate::keyboard::InputEvent>| {
+        let send = |event, tx: &HostInputPublisher| {
             tx.send(crate::keyboard::InputEvent::key_press(event))
                 .expect("send M-x eager-completion test input");
-            if let Some(notifier) = &notifier {
-                notifier.notify().expect("wake M-x completion wait");
-            }
         };
 
         send(
@@ -4428,7 +4419,6 @@ fn bootstrap_runtime_mx_eager_completion_services_printable_input_before_quit() 
         observed_before_quit
     });
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
     let result = eval
         .recursive_edit_inner()
@@ -4481,7 +4471,7 @@ fn bootstrap_runtime_read_key_after_two_minibuffers_consumes_fresh_key() {
                  (exit-recursive-edit))))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -4522,7 +4512,6 @@ fn bootstrap_runtime_read_key_after_two_minibuffers_consumes_fresh_key() {
     .expect("queue fresh read-key input");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -4578,7 +4567,7 @@ fn bootstrap_runtime_minibuffer_read_restores_outer_this_command_keys() {
              (keymap-global-set "C-c t" #'neo-mb-tck-command))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     // C-c t -> invoke the command (this-command-keys becomes [C-c t]).
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('c', crate::keyboard::Modifiers::ctrl()),
@@ -4601,7 +4590,6 @@ fn bootstrap_runtime_minibuffer_read_restores_outer_this_command_keys() {
     .expect("queue minibuffer RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -4667,12 +4655,12 @@ fn bootstrap_runtime_window_close_routes_through_handle_delete_frame() {
         "new runtime frame should become selectable"
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::WindowClose {
         emacs_frame_id: frame_id.0,
     })
     .expect("queue window close");
-    eval.input_rx = Some(rx);
+
     eval.service_wait_request_special_input_events()
         .expect("window close should be handled as a GNU special event");
 
@@ -4905,8 +4893,8 @@ fn bootstrap_runtime_read_key_sequence_follows_escape_prefix_command() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut eval);
+
     tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
         b"\x1bx".to_vec(),
         0,
@@ -4920,20 +4908,17 @@ fn bootstrap_runtime_read_key_sequence_follows_escape_prefix_command() {
 
 #[test]
 fn bootstrap_runtime_read_key_sequence_prioritizes_timer_unread_command_events() {
-    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
+    use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
     eval.eval_str(r#"(run-at-time 0 nil (lambda () (setq unread-command-events (list ?\e))))"#)
         .expect("schedule unread ESC timer");
 
-    let publisher = InputPublisher::install(&mut eval);
-    let (gate, publication) = InputGate::new(
-        publisher.clone(),
-        vec![crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('x'),
-        )],
-    );
+    let input_owner = InputGateOwner::install(&mut eval);
+    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
+        crate::keyboard::KeyEvent::char('x'),
+    )]);
     gate.arm(&mut eval, WaitWitness::InputWaitEntered);
 
     let read = eval.read_key_sequence();
@@ -4956,8 +4941,8 @@ fn bootstrap_runtime_escape_prefix_bypasses_input_method_function() {
     eval.eval_str("(setq input-method-function (lambda (_char) nil))")
         .expect("install dropping input method");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut eval);
+
     tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
         b"\x1bx".to_vec(),
         0,
@@ -5012,8 +4997,8 @@ fn bootstrap_runtime_input_decode_menu_item_filter_translates_escape() {
     )
     .expect("install menu-item filtered ESC input decode entry");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut eval);
+
     tx.send(crate::keyboard::InputEvent::raw_tty_bytes(vec![0x1b], 0))
         .expect("queue raw TTY escape");
 
@@ -5204,14 +5189,13 @@ fn bootstrap_runtime_read_char_from_input_rx_preserves_ctrl_h_help_char() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
     .expect("queue C-h");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let event = eval.read_char().expect("read queued C-h");
     assert_eq!(event, Value::fixnum(8));
 }
@@ -5222,7 +5206,7 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_help_describe_funct
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5233,7 +5217,6 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_help_describe_funct
     .expect("queue f");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let (keys, binding) = eval
         .read_key_sequence()
         .expect("read C-h f sequence from input_rx");
@@ -5247,7 +5230,7 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_help_describe_bindi
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5258,7 +5241,6 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_help_describe_bindi
     .expect("queue b");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let (keys, binding) = eval
         .read_key_sequence()
         .expect("read C-h b sequence from input_rx");
@@ -5272,7 +5254,7 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_help_info_binding()
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5283,7 +5265,6 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_help_info_binding()
     .expect("queue i");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let (keys, binding) = eval
         .read_key_sequence()
         .expect("read C-h i sequence from input_rx");
@@ -5297,7 +5278,7 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_repeat_complex_comm
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5312,7 +5293,6 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_follows_repeat_complex_comm
     .expect("queue second ESC");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let (keys, binding) = eval
         .read_key_sequence()
         .expect("read C-x ESC ESC sequence from input_rx");
@@ -5329,7 +5309,7 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_leaves_following_minibuffer
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5350,7 +5330,6 @@ fn bootstrap_runtime_read_key_sequence_from_input_rx_leaves_following_minibuffer
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let (keys, binding) = eval
         .read_key_sequence()
         .expect("read C-h f sequence from input_rx");
@@ -5381,14 +5360,13 @@ fn bootstrap_runtime_read_char_from_minibuffer_exits_after_first_self_insert() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue space");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     let result = eval
         .eval_str(
             r#"(condition-case err
@@ -5456,7 +5434,7 @@ fn bootstrap_runtime_save_some_buffers_space_saves_modified_file() {
     ))
     .expect("setup save-some-buffers probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -5477,7 +5455,6 @@ fn bootstrap_runtime_save_some_buffers_space_saves_modified_file() {
     .expect("queue SPC");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5533,7 +5510,7 @@ fn bootstrap_runtime_command_loop_sets_last_nonmenu_event_for_keyboard_invocatio
     )
     .expect("define last-nonmenu probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -5550,7 +5527,6 @@ fn bootstrap_runtime_command_loop_sets_last_nonmenu_event_for_keyboard_invocatio
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5597,7 +5573,7 @@ fn bootstrap_runtime_command_loop_disabled_command_consumes_space_reply_once() {
     )
     .expect("setup disabled-command probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5621,7 +5597,6 @@ fn bootstrap_runtime_command_loop_disabled_command_consumes_space_reply_once() {
     queue_end_of_session_key(&tx);
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5678,7 +5653,7 @@ fn bootstrap_runtime_gui_disabled_command_n_cancels_with_new_help_window() {
     )
     .expect("setup GUI disabled-command probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for event in [
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::ctrl()),
         crate::keyboard::KeyEvent::char_with_mods('l', crate::keyboard::Modifiers::ctrl()),
@@ -5690,7 +5665,6 @@ fn bootstrap_runtime_gui_disabled_command_n_cancels_with_new_help_window() {
     queue_end_of_session_key(&tx);
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5732,7 +5706,7 @@ fn bootstrap_runtime_disabled_narrow_to_region_uses_live_region_after_space_repl
     )
     .expect("setup disabled narrow-to-region probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for event in [
         crate::keyboard::KeyEvent::char_with_mods('n', crate::keyboard::Modifiers::ctrl()),
         crate::keyboard::KeyEvent::char_with_mods(' ', crate::keyboard::Modifiers::ctrl()),
@@ -5747,7 +5721,6 @@ fn bootstrap_runtime_disabled_narrow_to_region_uses_live_region_after_space_repl
     }
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5781,7 +5754,7 @@ fn bootstrap_runtime_command_loop_universal_argument_prefix_reaches_following_co
     )
     .expect("setup universal argument probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('u', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5796,7 +5769,6 @@ fn bootstrap_runtime_command_loop_universal_argument_prefix_reaches_following_co
     .expect("queue a");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5837,7 +5809,7 @@ fn bootstrap_runtime_command_loop_raw_universal_argument_reaches_form_interactiv
     )
     .expect("setup raw universal argument probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('u', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5852,7 +5824,6 @@ fn bootstrap_runtime_command_loop_raw_universal_argument_reaches_form_interactiv
     .expect("queue |");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5888,7 +5859,7 @@ fn bootstrap_runtime_minibuffer_restores_raw_universal_argument_for_form_interac
     )
     .expect("setup raw prefix minibuffer probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('u', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -5913,7 +5884,6 @@ fn bootstrap_runtime_minibuffer_restores_raw_universal_argument_for_form_interac
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -5963,7 +5933,7 @@ fn bootstrap_runtime_read_from_minibuffer_binds_requested_history_variable_and_p
     )
     .expect("setup read-expression-history probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Escape),
     ))
@@ -5984,7 +5954,6 @@ fn bootstrap_runtime_read_from_minibuffer_binds_requested_history_variable_and_p
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6030,7 +5999,7 @@ fn bootstrap_runtime_completing_read_persists_requested_history_variable() {
     )
     .expect("setup completing-read history probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Escape),
     ))
@@ -6051,7 +6020,6 @@ fn bootstrap_runtime_completing_read_persists_requested_history_variable() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6090,7 +6058,7 @@ fn bootstrap_runtime_read_extended_command_recall_uses_extended_command_history(
     )
     .expect("setup read-extended-command history probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Escape),
     ))
@@ -6123,7 +6091,6 @@ fn bootstrap_runtime_read_extended_command_recall_uses_extended_command_history(
     .expect("queue second RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6174,7 +6141,7 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_mx_history_with_numeric_positio
     )
     .expect("setup M-x history command-loop probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -6211,7 +6178,6 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_mx_history_with_numeric_positio
     .expect("queue fallback stop command");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6281,7 +6247,7 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_calendar_after_quit() {
     )
     .expect("setup calendar M-x history probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::meta()),
     ))
@@ -6322,7 +6288,6 @@ fn bootstrap_runtime_command_loop_meta_p_recalls_calendar_after_quit() {
     .expect("queue fallback stop command");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6358,9 +6323,9 @@ fn bootstrap_runtime_previous_history_element_recalls_read_expression_history_en
     let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
     assert!(eval.frames.select_frame(frame_id));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     let rendered = eval_rendered(
@@ -6415,7 +6380,7 @@ fn bootstrap_runtime_disabled_command_from_visited_file_restores_single_selected
     ))
     .expect("setup visited-file disabled-command probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('x', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -6439,7 +6404,6 @@ fn bootstrap_runtime_disabled_command_from_visited_file_restores_single_selected
     queue_end_of_session_key(&tx);
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6565,7 +6529,7 @@ fn bootstrap_runtime_cx_s_space_saves_typed_edit_from_command_loop() {
     ))
     .expect("setup typed save-some probe");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "omega line\n".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -6600,7 +6564,6 @@ fn bootstrap_runtime_cx_s_space_saves_typed_edit_from_command_loop() {
     .expect("queue finish RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -6662,7 +6625,7 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_f() {
              (advice-add 'describe-function :before #'neo--capture-describe-function))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -6683,7 +6646,6 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_f() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let _ = eval.recursive_edit_inner();
@@ -6729,7 +6691,7 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_b() {
              (advice-add 'describe-bindings :before #'neo--capture-describe-bindings))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -6740,7 +6702,6 @@ fn bootstrap_runtime_command_loop_logs_help_route_for_ch_b() {
     .expect("queue b");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let _ = eval.recursive_edit_inner();
@@ -6785,7 +6746,7 @@ fn bootstrap_runtime_command_loop_traces_describe_function_body_for_ch_f() {
              (advice-add 'describe-function :around #'neo--trace-describe-function))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char_with_mods('h', crate::keyboard::Modifiers::ctrl()),
     ))
@@ -6806,7 +6767,6 @@ fn bootstrap_runtime_command_loop_traces_describe_function_body_for_ch_f() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
     let result = command_loop_end_value(
         eval.recursive_edit_inner(),
@@ -7692,9 +7652,9 @@ fn bootstrap_runtime_call_interactively_autoloaded_describe_function_reads_promp
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     for ch in "find-file".chars() {
@@ -7742,9 +7702,9 @@ fn bootstrap_runtime_command_execute_autoloaded_describe_function_reads_prompt()
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     for ch in "find-file".chars() {
@@ -7792,9 +7752,9 @@ fn bootstrap_runtime_command_execute_rename_buffer_reads_gnu_interactive_form() 
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     for ch in "renamed-scratch".chars() {
@@ -7841,9 +7801,9 @@ fn bootstrap_runtime_command_execute_goto_line_records_command_history_for_repea
     );
     assert_eq!(setup, "OK \"goto-history\"");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     for ch in "2".chars() {
@@ -7894,9 +7854,9 @@ fn bootstrap_runtime_command_execute_goto_line_installs_gnu_prompt_text() {
     );
     assert_eq!(setup, "OK \"goto-prompt-probe\"");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     let rendered = eval_rendered(
@@ -7933,9 +7893,9 @@ fn bootstrap_runtime_repeat_complex_command_reads_gnu_redo_form_from_command_his
     );
     assert_eq!(setup, "OK \"repeat-complex-command-probe\"");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     let rendered = eval_rendered(
@@ -7973,9 +7933,9 @@ fn bootstrap_runtime_occur_installs_clean_gnu_prompt_text() {
     );
     assert_eq!(setup, "OK \"occur-prompt-probe\"");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     let rendered = eval_rendered(
@@ -8018,9 +7978,9 @@ fn bootstrap_runtime_grep_installs_clean_gnu_prompt_text_and_default_command() {
     );
     assert_eq!(setup, "OK \"grep-prompt-probe\"");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     let rendered = eval_rendered(
@@ -8058,14 +8018,13 @@ fn bootstrap_runtime_read_buffer_to_switch_ret_uses_other_buffer_default() {
     );
     assert_eq!(setup, "OK (\"*scratch*\" \"buffer-completion-target.txt\")");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::named(crate::keyboard::NamedKey::Return),
     ))
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let result = eval
@@ -8116,7 +8075,7 @@ fn bootstrap_runtime_read_buffer_to_switch_tab_completes_existing_buffer() {
     );
     assert_eq!(setup, "OK (\"*scratch*\" \"buffer-completion-target.txt\")");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "buffer-completion-tar".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -8133,7 +8092,6 @@ fn bootstrap_runtime_read_buffer_to_switch_tab_completes_existing_buffer() {
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let result = eval
@@ -8188,7 +8146,7 @@ fn call_interactively_switch_to_buffer_does_not_redisplay_between_argument_read_
         }
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "buffer-completion-tar".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -8204,7 +8162,7 @@ fn call_interactively_switch_to_buffer_does_not_redisplay_between_argument_read_
     ))
     .expect("queue RET");
     drop(tx);
-    eval.input_rx = Some(rx);
+
     eval.command_loop.running = true;
 
     eval.apply(
@@ -8301,7 +8259,7 @@ fn bootstrap_runtime_command_loop_cx_b_uses_recent_file_buffer_as_second_default
              (advice-add 'switch-to-buffer :after #'neo--stop-after-second-switch))"#,
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     let find_file =
         crate::keyboard::KeySequence::from_description("C-x C-f").expect("C-x C-f sequence");
     for event in find_file.events {
@@ -8346,7 +8304,6 @@ fn bootstrap_runtime_command_loop_cx_b_uses_recent_file_buffer_as_second_default
     .expect("queue RET for second switch-to-buffer");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     simulate_active_top_level_command_loop(&mut eval);
 
     let result = eval
@@ -8377,7 +8334,7 @@ fn bootstrap_runtime_call_interactively_autoloaded_describe_function_reads_promp
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "find-file".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -8390,7 +8347,6 @@ fn bootstrap_runtime_call_interactively_autoloaded_describe_function_reads_promp
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let result = eval
@@ -8427,7 +8383,7 @@ fn bootstrap_runtime_command_execute_autoloaded_describe_function_reads_prompt_f
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "find-file".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -8440,7 +8396,6 @@ fn bootstrap_runtime_command_execute_autoloaded_describe_function_reads_prompt_f
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
 
     let result = eval
@@ -8484,7 +8439,7 @@ fn bootstrap_runtime_call_interactively_describe_function_with_outer_command_sta
     let frame_id = eval.frames.create_frame("F1", 960, 640, scratch);
     assert!(eval.frames.select_frame(frame_id));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     for ch in "find-file".chars() {
         tx.send(crate::keyboard::InputEvent::key_press(
             crate::keyboard::KeyEvent::char(ch),
@@ -8497,7 +8452,6 @@ fn bootstrap_runtime_call_interactively_describe_function_with_outer_command_sta
     .expect("queue RET");
     drop(tx);
 
-    eval.input_rx = Some(rx);
     eval.command_loop.running = true;
     let help_keys = vec![Value::fixnum(8), Value::fixnum('f' as i64)];
     eval.set_command_key_sequences(help_keys.clone(), help_keys);

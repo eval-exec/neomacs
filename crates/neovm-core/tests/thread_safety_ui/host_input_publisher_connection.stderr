@@ -1,0 +1,5 @@
+error[E0616]: field `connection` of struct `HostInputPublisher` is private
+ --> tests/thread_safety_ui/host_input_publisher_connection.rs:4:34
+  |
+4 |     let _connection = &publisher.connection;
+  |                                  ^^^^^^^^^^ private field

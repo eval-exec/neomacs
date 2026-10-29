@@ -165,7 +165,7 @@ impl Context {
         *ev.threads = ThreadManager::new();
         *ev.kmacro = KmacroManager::new();
         *ev.command_loop = crate::keyboard::CommandLoop::default();
-        ev.input_rx = None;
+        ev.input_rx.clear();
         ev.eval_task_rx = None;
         ev.redisplay_fn = None;
         ev.mode_line_display_flow = None;
@@ -2188,7 +2188,7 @@ impl Context {
             threads: world.global.threads,
             kmacro: world.global.kmacro,
             command_loop: world.global.command_loop,
-            input_rx: None,
+            input_rx: crate::host_input::HostInputReceiver::default(),
             eval_task_rx: None,
             quit_requested: QuitRequest::new(),
             redisplay_fn: None,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::keyboard::{InputEvent, KeyEvent, ReadKeySequenceOptions};
-pub(super) use crate::test_utils::input_wait::InputPublisher;
+use crate::test_utils::input_wait::InputGateOwner;
 
 #[derive(Clone, Copy, Debug)]
 enum InputRead {
@@ -43,7 +43,8 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
     )
     .expect("schedule GNU idle timer");
 
-    let publisher = InputPublisher::install(&mut ev);
+    let input_owner = InputGateOwner::install(&mut ev);
+    let publisher = input_owner.publisher();
     let _keepalive = publisher.clone();
     let rescue = ev.wait_notifier().expect("input notification backend");
     let (gate_tx, gate_rx) = crossbeam_channel::bounded(1);
@@ -77,8 +78,8 @@ fn input_after_idle_timer_wakes_wait(read: InputRead) {
                 crossbeam_channel::RecvTimeoutError::Timeout
                 | crossbeam_channel::RecvTimeoutError::Disconnected,
             ) => {
-                publisher
-                    .cancel_wait()
+                input_owner
+                    .cancel_missing_witness()
                     .expect("cancel missing wait witness");
                 return WakeOutcome::GateNotReached;
             }

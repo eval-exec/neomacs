@@ -102,9 +102,9 @@ fn recursive_edit_entry_and_unwind_refresh_all_mode_lines() {
                 crate::tagged::SymbolMode::Bare,
             )
             .unwrap();
-            let (sender, receiver) = crossbeam_channel::unbounded();
+            let sender = crate::host_input::HostInputPublisher::install(&mut eval);
             drop(sender);
-            eval.input_rx = Some(receiver);
+
             eval.command_loop.running = true;
             eval.command_loop.recursive_depth = 1;
             eval.command_loop

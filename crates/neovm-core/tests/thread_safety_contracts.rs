@@ -75,6 +75,7 @@ fn thread_safety_compile_contracts() {
     // A completed method has no public retirement Drop obligation to leak.
     // This fixture type-checks only; runtime coherence is admission_header coverage.
     cases.pass("tests/thread_safety_pass/obarray_writer_method_forget.rs");
+    cases.pass("tests/thread_safety_pass/host_input_publisher.rs");
     // Context's diagnostics reflect the platform's field bounds.
     cases.compile_fail(target.context_cases());
 }

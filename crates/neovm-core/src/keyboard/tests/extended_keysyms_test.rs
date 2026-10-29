@@ -53,8 +53,8 @@ fn extended_keysym_transport_reaches_the_bound_command() {
     )
     .unwrap();
     let frame = eval.frame_manager().selected_frame().unwrap().id.0;
-    let (sender, receiver) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(receiver);
+    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+
     for (keysym, name) in REPORTED_KEYS {
         eval.eval_str(&format!(
             "(define-key (current-local-map) [{name}] #'issue398-record-key)"
@@ -105,8 +105,8 @@ fn extended_keysym_transport_retains_command_modifiers() {
     )
     .unwrap();
     let frame = eval.frame_manager().selected_frame().unwrap().id.0;
-    let (sender, receiver) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(receiver);
+    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+
     sender
         .send(
             render_key_transport_to_input_event(

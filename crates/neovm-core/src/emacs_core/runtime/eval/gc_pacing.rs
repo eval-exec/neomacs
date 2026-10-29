@@ -931,21 +931,10 @@ impl Context {
         }
     }
 
-    /// Connect the input system for interactive mode.
-    ///
-    /// This mirrors GNU Emacs's `init_keyboard()` — it connects the evaluator
-    /// to the render thread's input channel so that `read_char()` can block
-    /// waiting for user input instead of returning immediately (batch mode).
-    /// Producers must send the event before notifying [`Context::wait_notifier`];
-    /// a channel send alone does not wake the unified process/input poller.
-    ///
-    /// # Arguments
-    /// * `input_rx` — Receiver end of the crossbeam channel from the render thread
-    pub fn init_input_system(
-        &mut self,
-        input_rx: crossbeam_channel::Receiver<crate::keyboard::InputEvent>,
-    ) {
-        self.input_rx = Some(input_rx);
+    /// Start the command loop after installing a HostInputPublisher.
+    /// Receiver attachment is owned by that publisher's installer, so a caller
+    /// cannot connect an independent raw channel without its wake capability.
+    pub fn init_input_system(&mut self) {
         self.command_loop.running = true;
     }
 

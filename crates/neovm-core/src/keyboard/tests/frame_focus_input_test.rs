@@ -51,14 +51,13 @@ impl FocusFixture {
     }
 
     fn deliver(&mut self, events: Vec<InputEvent>) {
-        let (sender, receiver) = crossbeam_channel::bounded(events.len());
+        let sender = crate::host_input::HostInputPublisher::install(&mut self.eval);
         for event in events {
             sender.send(event).unwrap();
         }
         // The finite stream makes an accidentally discarded key reach EOF
         // rather than leave the regression waiting for another input forever.
         drop(sender);
-        self.eval.input_rx = Some(receiver);
     }
 
     fn execute_next_frame_key(&mut self, target: FrameId, buffer: BufferId, character: char) {

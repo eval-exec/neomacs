@@ -4181,8 +4181,8 @@ fn x_popup_menu_interactive_keymap_returns_selected_event() {
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("popup-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     let hidden = Arc::clone(&host.hidden);
@@ -4251,8 +4251,8 @@ fn old_style_menu_help_keeps_the_real_submenu_definition() {
 #[test]
 fn x_popup_menu_publishes_selected_item_help_and_keeps_it_after_teardown() {
     let mut eval = crate::emacs_core::Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
     eval.eval_str(
         r##"(progn
@@ -4351,8 +4351,8 @@ fn x_popup_dialog_interactive_returns_selected_value() {
     let scratch = eval.buffers.create_buffer("*scratch*");
     let frame_id = eval.frames.create_frame("dialog-owner", 800, 600, scratch);
     eval.frames.select_frame(frame_id);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     let hidden = Arc::clone(&host.hidden);
@@ -4412,8 +4412,8 @@ fn x_popup_menu_interactive_keymap_collapses_submenu_on_tty() {
             .is_none(),
         "test fixture frame should be a TTY frame (no window system)"
     );
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));
@@ -4468,8 +4468,8 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
         .get_mut(frame_id)
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
     let submenu = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4512,8 +4512,8 @@ fn x_popup_menu_interactive_submenu_selection_returns_full_event_path() {
 #[test]
 fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
     let mut eval = crate::emacs_core::Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
     let tty_menu_navigation_map = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4561,8 +4561,8 @@ fn x_popup_menu_interactive_ignores_tty_mouse_navigation() {
 #[test]
 fn x_popup_menu_interactive_keyboard_select_roots_selected_event() {
     let mut eval = crate::emacs_core::Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
     let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4602,8 +4602,8 @@ fn x_popup_menu_interactive_keyboard_select_roots_selected_event() {
 #[test]
 fn x_popup_menu_interactive_cancel_returns_nil() {
     let mut eval = crate::emacs_core::Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
     let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4639,8 +4639,8 @@ fn x_popup_menu_interactive_menu_bar_position_anchors_below_menu_bar() {
         .expect("frame")
         .menu_bar_height = 24;
     eval.frames.select_frame(frame_id);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));
@@ -4699,8 +4699,8 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
         .expect("frame")
         .menu_bar_height = 24;
     eval.frames.select_frame(frame_id);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));
@@ -4760,8 +4760,8 @@ fn x_popup_menu_interactive_menu_bar_position_uses_pending_native_anchor() {
 #[test]
 fn x_popup_menu_interactive_menu_bar_right_returns_next_menu_position() {
     let mut eval = crate::emacs_core::Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
 
     let menu_bar = crate::emacs_core::keymap::make_sparse_list_keymap();
@@ -4831,8 +4831,8 @@ fn x_popup_menu_preserves_heading_click_queued_before_old_cancellation() {
     let frame = eval.frames.create_frame("menu-owner", 800, 600, buffer);
     eval.frames.select_frame(frame);
     eval.eval_str("(progn (setq global-map (make-sparse-keymap)) (use-global-map global-map) (define-key global-map [menu-bar mouse-1] 'ignore))").unwrap();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.set_display_host(Box::new(RecordingPopupHost::default()));
     let menu = crate::emacs_core::keymap::make_sparse_list_keymap();
     crate::emacs_core::keymap::list_keymap_define(

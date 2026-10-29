@@ -1,0 +1,5 @@
+error[E0616]: field `input_rx` of struct `neovm_core::Context` is private
+ --> tests/thread_safety_ui/host_input_receiver_assignment.rs:5:13
+  |
+5 |     context.input_rx = Some(receiver);
+  |             ^^^^^^^^ private field

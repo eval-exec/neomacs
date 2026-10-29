@@ -3056,12 +3056,9 @@ pub struct Context {
     last_redisplay_signature: WorldSlot<Option<RedisplaySignature>>,
     /// Match data from the last successful search/match operation.
     pub(crate) match_data: Option<MatchData>,
-    /// Input event receiver from the display/render thread.
-    /// `None` in batch mode (tests, non-interactive evaluation).
-    /// When `Some`, `read_char()` drains this queue but normally blocks on the
-    /// unified process/input poller. Producers must enqueue first, then call
-    /// [`Context::wait_notifier`]'s notifier so input cannot miss that wait.
-    pub input_rx: Option<crossbeam_channel::Receiver<crate::keyboard::InputEvent>>,
+    /// Host-input receiving owner. Only HostInputPublisher can attach a queue
+    /// paired with this Context's process wait backend.
+    pub(crate) input_rx: crate::host_input::HostInputReceiver,
     /// Tasks queued from other threads (e.g. the diagnostics server) to run on
     /// the Lisp thread at a safe point. Drained in the `read_char` loop.
     eval_task_rx: Option<crossbeam_channel::Receiver<EvalThreadTask>>,

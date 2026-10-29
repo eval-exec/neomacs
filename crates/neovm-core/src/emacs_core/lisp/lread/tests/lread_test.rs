@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::Context;
+use crate::host_input::HostInputPublisher;
 use malachite::integer::Integer;
 
 /// Test helper: create a fresh eval context for locate-file tests.
@@ -812,8 +813,8 @@ fn read_event_returns_nil() {
 fn read_event_without_inherited_input_method_preserves_raw_tty_bytes() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
         "é".as_bytes().to_vec(),
         0,
@@ -834,8 +835,8 @@ fn read_event_with_inherited_input_method_decodes_tty_bytes() {
     // context has GNU `create_terminal`'s `no-conversion`.
     ev.eval_str("(set-keyboard-coding-system-internal 'utf-8-unix)")
         .expect("set the keyboard coding");
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::raw_tty_bytes(
         "é".as_bytes().to_vec(),
         0,
@@ -918,7 +919,7 @@ fn read_event_preserves_existing_command_keys_context() {
 #[test]
 fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
     use crate::test_utils::input_wait::{
-        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+        InputGateOwner, Readiness, WaitWitness, install_after_redisplay,
     };
     crate::test_utils::init_test_tracing();
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
@@ -931,13 +932,10 @@ fn read_event_echoes_invoking_keys_and_new_event_after_gnu_delay() {
     ev.set_read_command_keys(vec![Value::fixnum(17)]); // C-q
 
     const DECORATED: &str = "C-q- (C-h for help)";
-    let publisher = InputPublisher::install(&mut ev);
-    let (gate, publication) = InputGate::new(
-        publisher.clone(),
-        vec![crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('1'),
-        )],
-    );
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
+        crate::keyboard::KeyEvent::char('1'),
+    )]);
     install_after_redisplay(&mut ev, gate, |context| {
         match context.current_message_text() {
             Some(text) if text == DECORATED => Readiness::Ready(WaitWitness::EchoDecoration(text)),
@@ -1015,8 +1013,7 @@ fn read_event_with_float_seconds_does_not_set_command_keys_when_empty() {
 fn read_event_with_interactive_timeout_returns_nil() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = HostInputPublisher::install(&mut ev);
 
     let start = std::time::Instant::now();
     let result = builtin_read_event(

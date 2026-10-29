@@ -9,8 +9,8 @@ pub(super) fn publish(
         .get_mut(frame)
         .unwrap()
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(eval);
+
     let host = RecordingPopupHost::default();
     let shown = Arc::clone(&host.shown);
     eval.set_display_host(Box::new(host));

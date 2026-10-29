@@ -149,8 +149,8 @@ fn cross_frame_select_window_does_not_steal_the_next_physical_key() {
     }
     eval.obarray_mut()
         .set_symbol_value("test-second-frame", Value::make_frame(second.0));
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.init_input_system(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+    eval.init_input_system();
     tx.send(InputEvent::key_press_in_frame(KeyEvent::char('a'), first.0))
         .unwrap();
     assert_eq!(eval.read_char().unwrap(), Value::fixnum('a' as i64));

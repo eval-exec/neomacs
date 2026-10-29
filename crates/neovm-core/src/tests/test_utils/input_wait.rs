@@ -4,14 +4,15 @@
 //! it does not claim that the kernel has already blocked the reader.
 
 use crate::emacs_core::Context;
-use crate::emacs_core::process::BackendWaitEntry;
+use crate::emacs_core::eval::QuitRequest;
+use crate::emacs_core::process::{BackendWaitEntry, WaitNotifier};
 use crate::keyboard::InputEvent;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 const DEADLOCK_CAP: Duration = Duration::from_secs(30);
 
-pub(crate) use crate::test_utils::{InputPublishError, InputPublisher};
+pub(crate) use crate::host_input::{HostInputPublishError, HostInputPublisher};
 
 /// Give timer fixtures a displayed buffer whose real edits admit redisplay.
 pub(crate) fn select_visible_fixture(context: &mut Context, name: &str) {
@@ -72,6 +73,53 @@ enum GateOutcome {
     Cancelled,
 }
 
+/// Failure-only cancellation, with no event publication capability.
+/// The optional notifier denotes platform availability, not gate state.
+#[derive(Clone)]
+struct WaitCancellation {
+    quit: QuitRequest,
+    notifier: Option<WaitNotifier>,
+}
+
+impl std::fmt::Debug for WaitCancellation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WaitCancellation").finish_non_exhaustive()
+    }
+}
+
+impl WaitCancellation {
+    fn new(context: &Context) -> Self {
+        Self {
+            quit: context.quit_requested.clone(),
+            notifier: context.wait_notifier(),
+        }
+    }
+
+    fn request(&self) -> Result<(), std::io::Error> {
+        self.quit.request();
+        match &self.notifier {
+            Some(notifier) => notifier.notify(),
+            None => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum GateWorkerError {
+    #[error(transparent)]
+    Publish(#[from] HostInputPublishError),
+    #[error("missing-witness cancellation notification failed: {0}")]
+    CancellationWake(#[from] std::io::Error),
+}
+
+/// Installs exactly one core connection and captures its failure-only cancellation.
+/// Private fields prevent gates from combining different Context authorities.
+#[derive(Debug)]
+pub(crate) struct InputGateOwner {
+    publisher: HostInputPublisher,
+    cancellation: WaitCancellation,
+}
+
 /// A consumed, evaluator-local capability to arm exactly one wait observer.
 #[must_use]
 #[derive(Debug)]
@@ -85,21 +133,40 @@ pub(crate) struct InputGate {
 #[must_use]
 #[derive(Debug)]
 pub(crate) struct InputPublication {
-    worker: Option<JoinHandle<Result<GateOutcome, InputPublishError>>>,
+    worker: Option<JoinHandle<Result<GateOutcome, GateWorkerError>>>,
     cancel: crossbeam_channel::Sender<CancelPublication>,
-    _keepalive: InputPublisher,
+    _keepalive: HostInputPublisher,
 }
 
-impl InputGate {
-    pub(crate) fn new(
-        publisher: InputPublisher,
-        events: Vec<InputEvent>,
-    ) -> (Self, InputPublication) {
+impl InputGateOwner {
+    pub(crate) fn install(context: &mut Context) -> Self {
+        let publisher = HostInputPublisher::install(context);
+        let cancellation = WaitCancellation::new(context);
+        Self {
+            publisher,
+            cancellation,
+        }
+    }
+
+    /// Existing fixture producers receive the actual core type, not a wrapper.
+    pub(crate) fn publisher(&self) -> HostInputPublisher {
+        self.publisher.clone()
+    }
+
+    /// Failure-only exit for native wait controls whose witness was absent.
+    /// This capability cannot enqueue the normal fixture input.
+    pub(crate) fn cancel_missing_witness(&self) -> Result<(), std::io::Error> {
+        self.cancellation.request()
+    }
+
+    pub(crate) fn gate(&self, events: Vec<InputEvent>) -> (InputGate, InputPublication) {
+        let publisher = self.publisher.clone();
         let (observed, observations) = crossbeam_channel::bounded(1);
         let (commit, committed) = crossbeam_channel::bounded(1);
         let (cancel, cancelled) = crossbeam_channel::bounded(1);
+        let cancellation = self.cancellation.clone();
         let keepalive = publisher.clone();
-        let worker = std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || -> Result<GateOutcome, GateWorkerError> {
             let outcome = crossbeam_channel::select! {
                 recv(observations) -> observation => match observation {
                     Ok(observation) => GateOutcome::Observed(observation),
@@ -122,14 +189,14 @@ impl InputGate {
                     Ok(GateOutcome::Observed(observation))
                 }
                 GateOutcome::Missing(reason) => {
-                    publisher.cancel_wait()?;
+                    cancellation.request()?;
                     Ok(GateOutcome::Missing(reason))
                 }
                 GateOutcome::Cancelled => Ok(GateOutcome::Cancelled),
             }
         });
         (
-            Self {
+            InputGate {
                 observed,
                 committed,
             },
@@ -140,7 +207,9 @@ impl InputGate {
             },
         )
     }
+}
 
+impl InputGate {
     pub(crate) fn arm(self, context: &mut Context, witness: WaitWitness) {
         context
             .processes
@@ -167,7 +236,9 @@ pub(crate) enum WaitPublicationError {
     #[error("test producer thread panicked")]
     WorkerPanicked,
     #[error(transparent)]
-    Publish(#[from] InputPublishError),
+    Publish(#[from] HostInputPublishError),
+    #[error("missing-witness cancellation notification failed: {0}")]
+    CancellationWake(#[source] std::io::Error),
     #[error("required wait witness absent: {0}")]
     Missing(crossbeam_channel::RecvTimeoutError),
     #[error("required wait publication was cancelled")]
@@ -181,7 +252,13 @@ impl InputPublication {
             .take()
             .ok_or(WaitPublicationError::AlreadyFinished)?
             .join()
-            .map_err(|_| WaitPublicationError::WorkerPanicked)??;
+            .map_err(|_| WaitPublicationError::WorkerPanicked)?
+            .map_err(|error| match error {
+                GateWorkerError::Publish(error) => WaitPublicationError::Publish(error),
+                GateWorkerError::CancellationWake(error) => {
+                    WaitPublicationError::CancellationWake(error)
+                }
+            })?;
         match outcome {
             GateOutcome::Observed(observation) => Ok(observation),
             GateOutcome::Missing(reason) => Err(WaitPublicationError::Missing(reason)),
@@ -226,7 +303,10 @@ pub(crate) fn install_after_redisplay(
     }));
 }
 
-static_assertions::assert_impl_all!(InputPublisher: Send, Sync, Clone, std::fmt::Debug);
+static_assertions::assert_impl_all!(HostInputPublisher: Send, Sync, Clone, std::fmt::Debug);
+static_assertions::assert_impl_all!(WaitCancellation: Send, Sync, std::fmt::Debug);
+static_assertions::assert_impl_all!(InputGateOwner: Send, Sync, std::fmt::Debug);
+static_assertions::assert_not_impl_any!(InputGateOwner: Clone, Copy);
 static_assertions::assert_impl_all!(InputGate: Send, std::fmt::Debug);
 static_assertions::assert_not_impl_any!(InputGate: Clone, Copy);
 static_assertions::assert_impl_all!(InputPublication: Send, std::fmt::Debug);
@@ -241,11 +321,9 @@ mod tests {
     #[test]
     fn zero_service_poll_retains_gate_until_positive_input_wait() {
         let mut context = Context::new();
-        let publisher = InputPublisher::install(&mut context);
-        let (gate, publication) = InputGate::new(
-            publisher.clone(),
-            vec![InputEvent::key_press(KeyEvent::char('x'))],
-        );
+        let input_owner = InputGateOwner::install(&mut context);
+        let (gate, publication) =
+            input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
         gate.arm(&mut context, WaitWitness::InputWaitEntered);
         context
             .processes
@@ -283,11 +361,9 @@ mod tests {
     #[test]
     fn missing_gate_cancels_without_publishing_the_normal_key() {
         let mut context = Context::new();
-        let publisher = InputPublisher::install(&mut context);
-        let (gate, publication) = InputGate::new(
-            publisher.clone(),
-            vec![InputEvent::key_press(KeyEvent::char('x'))],
-        );
+        let input_owner = InputGateOwner::install(&mut context);
+        let (gate, publication) =
+            input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
         // An explicitly dropped, never-armed gate is a deterministic missing
         // witness; it does not wait for the deadlock cap.
         drop(gate);
@@ -314,11 +390,9 @@ mod tests {
     #[test]
     fn dropping_publication_cancels_its_waiting_producer_without_input() {
         let mut context = Context::new();
-        let publisher = InputPublisher::install(&mut context);
-        let (gate, mut publication) = InputGate::new(
-            publisher.clone(),
-            vec![InputEvent::key_press(KeyEvent::char('x'))],
-        );
+        let input_owner = InputGateOwner::install(&mut context);
+        let (gate, mut publication) =
+            input_owner.gate(vec![InputEvent::key_press(KeyEvent::char('x'))]);
         // Retain the join resource in this control while exercising exactly
         // the nonblocking Drop cancellation path.
         let worker = publication.worker.take().expect("worker owner");

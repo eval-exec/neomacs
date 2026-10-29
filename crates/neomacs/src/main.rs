@@ -1077,12 +1077,11 @@ enum FrontendHandle {
     Batch,
 }
 
-/// Startup owns one receiver/factory until the original installation step.
+/// Startup retains the auxiliary-terminal owner until late input activation.
 /// The primary publisher has already moved into its selected native owner.
 enum TtyInputConnection {
     Noninteractive,
     Interactive {
-        receiver: crossbeam_channel::Receiver<neovm_core::keyboard::InputEvent>,
         secondary_factory: secondary_tty::SecondaryTtyFactory,
     },
 }
@@ -1091,9 +1090,8 @@ impl std::fmt::Debug for TtyInputConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Noninteractive => f.write_str("TtyInputConnection::Noninteractive"),
-            Self::Interactive { receiver, .. } => f
+            Self::Interactive { .. } => f
                 .debug_struct("TtyInputConnection::Interactive")
-                .field("receiver", receiver)
                 .finish_non_exhaustive(),
         }
     }
@@ -4120,16 +4118,14 @@ fn run_gui_evaluator_worker(
 
     // Created before the display host: the image catalog resolves geometry
     // off-thread and must be able to ask for the redisplay that publishes it.
-    let (mut input_publisher, input_rx) = InputPublisher::unbounded(
+    let input = neovm_core::host_input::HostInputPublisher::install(&mut evaluator);
+    let mut input_publisher = InputPublisher::new(
+        input.clone(),
         InputRoute::gui(Arc::clone(&primary_frame)),
         Arc::clone(&primary_window_size),
         evaluator.quit_requested.clone(),
-        evaluator.wait_notifier(),
     );
-    let image_redisplay_waker = RedisplayWaker::new(
-        input_publisher.sender().clone(),
-        input_publisher.clone_notifier(),
-    );
+    let image_redisplay_waker = RedisplayWaker::new(input.clone());
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
         resources,
         system_fonts: bootstrap_display.font_defaults.system_fonts(),
@@ -4171,9 +4167,8 @@ fn run_gui_evaluator_worker(
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     let display_input_rx = emacs_comms.input_rx;
     let mut font_changes = font_observer.take_changes();
-    let secondary_input_tx = input_publisher.sender().clone();
-    let secondary_input_notifier = input_publisher.clone_notifier();
-    let secondary_quit_requested = input_publisher.clone_quit_request();
+    let secondary_input_tx = input;
+    let secondary_quit_requested = evaluator.quit_requested.clone();
     std::thread::Builder::new()
         .name("input-bridge".to_string())
         .spawn(move || {
@@ -4208,11 +4203,10 @@ fn run_gui_evaluator_worker(
         })
         .expect("Failed to spawn input bridge thread");
 
-    evaluator.init_input_system(input_rx);
+    evaluator.init_input_system();
     evaluator.set_tty_frame_host_factory(Box::new(secondary_tty::SecondaryTtyFactory::new(
         secondary_ttys.clone(),
         secondary_input_tx,
-        secondary_input_notifier,
         secondary_quit_requested,
     )));
     install_diagnostics_eval_hooks(&mut evaluator);
@@ -4807,21 +4801,21 @@ pub fn run(mode: RuntimeMode) {
     }
 
     // Prepare the unbounded native publication owner before the reader can
-    // acquire input. The receiver is installed at the original step below.
+    // acquire input. The Context retains it until activation at the original step.
     let (frontend, input_connection) = if startup.noninteractive {
         tracing::info!("TTY batch mode — skipping terminal init");
         (FrontendHandle::Batch, TtyInputConnection::Noninteractive)
     } else {
-        let (input_publisher, input_rx) = PrimaryInputPublisher::unbounded(
+        let input = neovm_core::host_input::HostInputPublisher::install(&mut evaluator);
+        let input_publisher = PrimaryInputPublisher::new(
+            input.clone(),
             Arc::clone(&primary_window_size),
             evaluator.quit_requested.clone(),
-            evaluator.wait_notifier(),
         );
         let secondary_factory = secondary_tty::SecondaryTtyFactory::new(
             secondary_ttys.clone(),
-            input_publisher.sender().clone(),
-            input_publisher.clone_notifier(),
-            input_publisher.clone_quit_request(),
+            input,
+            evaluator.quit_requested.clone(),
         );
         let frontend = if startup.daemon.is_some() {
             // Daemon input belongs only to deferred auxiliary terminals.
@@ -4884,20 +4878,14 @@ pub fn run(mode: RuntimeMode) {
         };
         (
             frontend,
-            TtyInputConnection::Interactive {
-                receiver: input_rx,
-                secondary_factory,
-            },
+            TtyInputConnection::Interactive { secondary_factory },
         )
     };
 
     // GNU --batch installs no primary keyboard receiver. Interactive daemon
     // sessions retain secondary input without creating primary TTY I/O.
     match input_connection {
-        TtyInputConnection::Interactive {
-            receiver,
-            secondary_factory,
-        } => {
+        TtyInputConnection::Interactive { secondary_factory } => {
             // This is an interactively displayed session, so its frames show the
             // menu / tab / tool bars, which occupy rows of the window text area.
             // Mark each frame and recompute its window geometry so windows (and
@@ -4914,7 +4902,7 @@ pub fn run(mode: RuntimeMode) {
             }
 
             // Connect the evaluator at the original post-frontend step.
-            evaluator.init_input_system(receiver);
+            evaluator.init_input_system();
             evaluator.set_tty_frame_host_factory(Box::new(secondary_factory));
             install_diagnostics_eval_hooks(&mut evaluator);
         }
@@ -4923,11 +4911,10 @@ pub fn run(mode: RuntimeMode) {
                 // GNU allows an explicit make-terminal-frame even in --batch
                 // (frame.c:1754-1823). Install the deferred auxiliary-device factory
                 // without initializing a primary terminal or a keyboard receiver.
-                let (auxiliary_input_tx, _auxiliary_input_rx) = crossbeam_channel::unbounded();
+                let auxiliary_input_tx = neovm_core::host_input::HostInputPublisher::closed();
                 let mut factory = secondary_tty::SecondaryTtyFactory::new(
                     secondary_ttys.clone(),
                     auxiliary_input_tx,
-                    evaluator.wait_notifier(),
                     evaluator.quit_requested.clone(),
                 );
                 // A noninteractive daemon still installs redisplay immediately below.
@@ -6003,9 +5990,9 @@ fn run_gnu_startup_inner(eval: &mut Context) {
     let top_level = eval.variable_value_by_name("top-level");
     tracing::info!("top-level variable before startup: {:?}", top_level);
 
-    let (_tx, rx) = crossbeam_channel::unbounded();
+    let _input = neovm_core::host_input::HostInputPublisher::install(eval);
 
-    eval.init_input_system(rx);
+    eval.init_input_system();
 
     let result = eval.recursive_edit();
 

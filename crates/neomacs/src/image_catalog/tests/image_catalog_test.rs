@@ -437,12 +437,13 @@ fn stale_decode_completion_cannot_promote_a_replacement_load() {
 fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let metadata = Arc::new(ImageRenderState::default());
-    let (redisplay_tx, redisplay_rx) = crossbeam_channel::unbounded();
+    let mut evaluator = neovm_core::emacs_core::Context::new();
+    let redisplay = neovm_core::host_input::HostInputPublisher::install(&mut evaluator);
     let catalog = test_catalog(
         cmd_tx,
         None,
         Arc::clone(&metadata),
-        Some(RedisplayWaker::new(redisplay_tx, None)),
+        Some(RedisplayWaker::new(redisplay)),
     );
     let fixture = neomacs_infra::workspace_root().join("test/data/image/blank-100x200.png");
     let mut request = file_request(fixture.to_str().expect("utf8 fixture path"));
@@ -506,7 +507,7 @@ fn pending_geometry_resolves_from_the_header_before_any_pixel_exists() {
     );
     assert!(
         matches!(
-            redisplay_rx.recv_timeout(Duration::from_secs(1)),
+            evaluator.receive_host_input_for_test(Duration::from_secs(1)),
             Ok(neovm_core::keyboard::InputEvent::LayoutInvalidated)
         ),
         "resolved geometry must ask the evaluator to republish layout"

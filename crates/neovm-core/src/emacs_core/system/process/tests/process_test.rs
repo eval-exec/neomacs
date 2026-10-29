@@ -5775,8 +5775,8 @@ fn accept_process_output_and_get_process_runtime_surface() {
 fn accept_process_output_yields_to_pending_command_input() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::Focus {
         focused: true,
         emacs_frame_id: 0,
@@ -5854,8 +5854,8 @@ fn accept_process_output_drains_ready_output_before_yielding_to_command_input() 
     // Inject pending command input.  Without the fix, this makes
     // `service_wait_request_processes` early-return before draining the ready
     // process fd.
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::KeyPress {
         key: crate::keyboard::KeyEvent::char('j'),
         emacs_frame_id: 0,
@@ -6152,9 +6152,8 @@ fn command_input_preempts_self_rescheduling_zero_idle_timer_between_batches() {
         }
     }));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
-    let notifier = ev.wait_notifier();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     let sender = std::thread::spawn(move || {
         first_batch_rx
             .recv_timeout(Duration::from_secs(1))
@@ -6163,9 +6162,6 @@ fn command_input_preempts_self_rescheduling_zero_idle_timer_between_batches() {
             crate::keyboard::KeyEvent::char('f'),
         ))
         .expect("send command input while idle timer reschedules");
-        if let Some(notifier) = notifier {
-            notifier.notify().expect("wake command-input wait");
-        }
         input_sent_tx
             .send(())
             .expect("acknowledge queued command input");
@@ -6359,16 +6355,13 @@ fn accept_process_output_request_uses_gnu_wait_deadlines() {
 
 #[test]
 fn wait_scheduler_can_block_until_command_input_arrives() {
-    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
+    use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let publisher = InputPublisher::install(&mut ev);
-    let (gate, publication) = InputGate::new(
-        publisher.clone(),
-        vec![crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('z'),
-        )],
-    );
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
+        crate::keyboard::KeyEvent::char('z'),
+    )]);
     gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
     let completion =
@@ -7815,8 +7808,8 @@ fn accept_process_output_services_pending_resize_from_shared_wait_request() {
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::Focus {
         focused: true,
         emacs_frame_id: 0,
@@ -7846,7 +7839,7 @@ fn accept_process_output_services_pending_resize_from_shared_wait_request() {
 
 #[test]
 fn accept_process_output_services_resize_arriving_during_wait() {
-    use crate::test_utils::input_wait::{InputGate, InputPublisher, WaitWitness};
+    use crate::test_utils::input_wait::{InputGateOwner, WaitWitness};
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let fid = ev
@@ -7857,16 +7850,13 @@ fn accept_process_output_services_resize_arriving_during_wait() {
         .expect("frame should exist")
         .set_parameter(Value::symbol("window-system"), Value::symbol("x"));
 
-    let publisher = InputPublisher::install(&mut ev);
-    let (gate, publication) = InputGate::new(
-        publisher.clone(),
-        vec![crate::keyboard::InputEvent::Resize {
-            width: 710,
-            height: 820,
-            scale_factor: 1.0,
-            emacs_frame_id: 0,
-        }],
-    );
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::Resize {
+        width: 710,
+        height: 820,
+        scale_factor: 1.0,
+        emacs_frame_id: 0,
+    }]);
     gate.arm(&mut ev, WaitWitness::InputWaitEntered);
 
     let result = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.05)]);
@@ -7898,12 +7888,12 @@ fn accept_process_output_window_close_uses_special_event_map_handler_when_loaded
     let frame = ev.frames.create_frame("F1", 80, 24, scratch);
     install_minimal_special_event_command_runtime(&mut ev);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::WindowClose {
         emacs_frame_id: frame.0,
     })
     .expect("queue window close");
-    ev.input_rx = Some(rx);
+
     ev.command_loop.running = true;
 
     let result = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.0)])
@@ -7927,10 +7917,9 @@ fn accept_process_output_window_close_uses_special_event_map_handler_when_loaded
 fn accept_process_output_window_close_quits_without_special_handler() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::WindowClose { emacs_frame_id: 0 })
         .expect("queue window close");
-    ev.input_rx = Some(rx);
 
     let flow = builtin_accept_process_output(&mut ev, vec![Value::NIL, Value::make_float(0.0)])
         .expect_err("unhandled window close should still quit");
@@ -7943,10 +7932,10 @@ fn accept_process_output_window_close_quits_without_special_handler() {
 fn accept_process_output_window_close_honors_throw_on_input_before_quit() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
     tx.send(crate::keyboard::InputEvent::WindowClose { emacs_frame_id: 0 })
         .expect("queue window close");
-    ev.input_rx = Some(rx);
+
     ev.obarray
         .set_symbol_value("throw-on-input", Value::symbol("tag"));
 
@@ -16999,7 +16988,7 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
 #[test]
 fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
     use crate::test_utils::input_wait::{
-        InputGate, InputPublisher, Readiness, WaitWitness, install_after_redisplay,
+        InputGateOwner, Readiness, WaitWitness, install_after_redisplay,
     };
     crate::test_utils::init_test_tracing();
     let _policy = crate::emacs_core::eval::RedisplayHookPolicyGuard::legacy();
@@ -17018,13 +17007,10 @@ fn subprocess_output_during_idle_does_not_reset_the_idle_epoch() {
     )
     .expect("schedule idle timer and chatty subprocess");
 
-    let publisher = InputPublisher::install(&mut ev);
-    let (gate, publication) = InputGate::new(
-        publisher.clone(),
-        vec![crate::keyboard::InputEvent::key_press(
-            crate::keyboard::KeyEvent::char('a'),
-        )],
-    );
+    let input_owner = InputGateOwner::install(&mut ev);
+    let (gate, publication) = input_owner.gate(vec![crate::keyboard::InputEvent::key_press(
+        crate::keyboard::KeyEvent::char('a'),
+    )]);
     install_after_redisplay(&mut ev, gate, |context| {
         let idle = context.eval_symbol("vm-chatter-idle-fired").ok();
         let output = context

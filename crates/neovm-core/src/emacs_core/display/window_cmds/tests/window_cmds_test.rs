@@ -8106,8 +8106,8 @@ fn x_create_frame_syncs_pending_resize_before_adopting_opening_gui_frame() {
     }
     ev.set_variable("terminal-frame", Value::make_frame(fid.0));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::Focus {
         focused: true,
         emacs_frame_id: 0,
@@ -9083,8 +9083,8 @@ fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geomet
         80 * 13 + frame.horizontal_non_text_width()
     };
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::Resize {
         width: expected_width as u32,
         height: 775,
@@ -9683,8 +9683,8 @@ fn set_frame_size_syncs_resize_event_before_followup_frame_width_queries() {
     let resized = host.resized.clone();
     ev.set_display_host(Box::new(host));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::Resize {
         width: 2144,
         height: 1386,
@@ -9738,8 +9738,8 @@ fn set_frame_size_keeps_resize_pending_until_geometry_queries_force_sync() {
     let resized = host.resized.clone();
     ev.set_display_host(Box::new(host));
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    ev.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut ev);
+
     tx.send(crate::keyboard::InputEvent::Resize {
         width: 2144,
         height: 1386,

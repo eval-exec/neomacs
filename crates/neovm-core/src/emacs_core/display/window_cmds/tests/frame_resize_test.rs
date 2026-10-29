@@ -25,8 +25,8 @@ fn overlapping_native_observations_keep_the_latest_requested_grid_for_font_chang
     eval.eval_str("(set-frame-width nil 101)").unwrap();
     let b = requests.borrow().last().unwrap().clone();
     let other = eval.frames.create_frame("other", 300, 200, buffer);
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     for event in [
         crate::keyboard::InputEvent::Focus {
             focused: true,
@@ -382,8 +382,7 @@ fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
         "inhibition must not request another native resize"
     );
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
     // 80 columns at 9px plus 16px of fringes and the GNU 16px scroll-bar
     // default: the explicit native resize is column-aligned, so it must reach
     // the host unchanged.

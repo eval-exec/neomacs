@@ -2423,8 +2423,8 @@ fn display_idle_maintenance_yields_to_input_and_avoids_nested_or_timed_reads() {
             .is_some()
     );
     assert_eq!(calls.get(), 1);
-    let (sender, receiver) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(receiver);
+    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
+
     sender
         .send(InputEvent::Focus {
             focused: true,
@@ -2497,8 +2497,8 @@ fn timed_read_preserves_existing_idle_epoch_at_immediate_timeout() {
 #[test]
 fn timed_read_preserves_existing_idle_epoch_after_wait_timeout() {
     let mut eval = crate::emacs_core::Context::new();
-    let (_sender, receiver) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(receiver);
+    let _sender = crate::host_input::HostInputPublisher::install(&mut eval);
+
     eval.timer_start_idle();
     let epoch = eval.command_loop.idle_start_time;
     assert_eq!(
@@ -2586,9 +2586,9 @@ fn timed_read_preserves_idle_epoch_while_servicing_async_special_input() {
                         (setq vm-test-surface-error (list id error)))))"#,
     )
     .expect("install observable surface-error hook");
-    let (sender, receiver) = crossbeam_channel::unbounded();
+    let sender = crate::host_input::HostInputPublisher::install(&mut eval);
     let _sender_keepalive = sender.clone();
-    eval.input_rx = Some(receiver);
+
     let (release, released) = crossbeam_channel::bounded(0);
     let (delivered, delivery) = crossbeam_channel::bounded(0);
     let worker = std::thread::spawn(move || {

@@ -3,6 +3,7 @@
 //! The counting frontend accepts real frame transactions but measures no glyphs.
 use super::*;
 use crate::emacs_core::eval::{ConditionFrame, Context, RedisplayHookPolicyGuard, ResumeTarget};
+use crate::host_input::HostInputPublisher;
 use crate::window::{FrameId, WindowId};
 
 // Native layout evidence is emitted before the semantic RED assertion and
@@ -140,12 +141,11 @@ fn exercise_reader(restore_windows: bool, throw_inactive: bool, record_active: b
         )
         .expect("inactive-mode transfer");
     }
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = HostInputPublisher::install(&mut eval);
     tx.send(crate::keyboard::InputEvent::key_press(
         crate::keyboard::KeyEvent::char(' '),
     ))
     .expect("queue reader exit");
-    eval.input_rx = Some(rx);
     let map = eval
         .obarray
         .symbol_value_copied("d5-mini-map")

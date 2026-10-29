@@ -117,8 +117,8 @@ fn assert_tty_popup_teardown_repaints(exit: PopupExit) {
     );
     assert!(eval.current_message.is_none());
 
-    let (tx, rx) = crossbeam_channel::unbounded();
-    eval.input_rx = Some(rx);
+    let tx = crate::host_input::HostInputPublisher::install(&mut eval);
+
     match exit {
         PopupExit::KeyboardEscapeQuit => {
             for _ in 0..3 {

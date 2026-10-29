@@ -42,16 +42,17 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
         "xterm-256color".to_string(),
     )
     .expect("valid request");
-    let (tx, rx) = crossbeam_channel::bounded(8);
+    let mut context = neovm_core::emacs_core::Context::new();
+    let input = neovm_core::host_input::HostInputPublisher::install(&mut context);
     let (session, opened_size, _) =
-        super::SecondaryTtySession::open(&request, tx, None, QuitRequest::new())
+        super::SecondaryTtySession::open(&request, input, QuitRequest::new())
             .expect("open secondary TTY");
 
     assert_eq!(opened_size.columns(), 119);
     assert_eq!(opened_size.rows(), 37);
     master.write_all(b"z").expect("write PTY input");
-    let event = rx
-        .recv_timeout(Duration::from_secs(2))
+    let event = context
+        .receive_host_input_for_test(Duration::from_secs(2))
         .expect("secondary TTY input event");
     assert!(matches!(
         event,
@@ -125,9 +126,10 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
         "neo-app-padding".to_owned(),
     )
     .unwrap();
-    let (tx, _rx) = crossbeam_channel::bounded(8);
+    let mut context = neovm_core::emacs_core::Context::new();
+    let input = neovm_core::host_input::HostInputPublisher::install(&mut context);
     let (mut session, _, _) =
-        super::SecondaryTtySession::open(&request, tx, None, QuitRequest::new()).unwrap();
+        super::SecondaryTtySession::open(&request, input, QuitRequest::new()).unwrap();
     drop(slave);
     for _ in 0..2 {
         super::super::tty_output::paint_to(

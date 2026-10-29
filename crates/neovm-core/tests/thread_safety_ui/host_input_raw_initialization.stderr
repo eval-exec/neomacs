@@ -1,0 +1,16 @@
+error[E0061]: this method takes 0 arguments but 1 argument was supplied
+ --> tests/thread_safety_ui/host_input_raw_initialization.rs:5:13
+  |
+5 |     context.init_input_system(receiver);
+  |             ^^^^^^^^^^^^^^^^^ -------- unexpected argument of type `crossbeam_channel::Receiver<InputEvent>`
+  |
+note: method defined here
+ --> src/emacs_core/runtime/eval/gc_pacing.rs
+  |
+  |     pub fn init_input_system(&mut self) {
+  |            ^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+  |
+5 -     context.init_input_system(receiver);
+5 +     context.init_input_system();
+  |

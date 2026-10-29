@@ -1,0 +1,11 @@
+error[E0599]: no method named `sender` found for reference `&HostInputPublisher` in the current scope
+ --> tests/thread_safety_ui/host_input_publisher_raw_sender.rs:4:29
+  |
+4 |     let _sender = publisher.sender();
+  |                             ^^^^^^
+  |
+help: there is a method `send` with a similar name, but with different arguments
+ --> src/host_input.rs
+  |
+  |     pub fn send(&self, event: InputEvent) -> Result<(), HostInputPublishError> {
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

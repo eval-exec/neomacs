@@ -6145,13 +6145,13 @@ fn recursive_edit_processes_load_option_from_forwarded_args_before_first_input()
     ]);
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
     tx.send(neovm_core::keyboard::InputEvent::WindowClose {
         emacs_frame_id: u64::MAX,
     })
     .expect("queue close request");
     drop(tx);
-    eval.init_input_system(rx);
+    eval.init_input_system();
 
     let result = eval.recursive_edit();
     result.expect("close request should let the outer recursive edit exit cleanly");
@@ -6191,8 +6191,8 @@ fn bootstrap_batch_eval_exits_outer_command_loop_like_gnu() {
     let startup = tty_batch_startup_with_args(&["-Q", "--eval", "(setq neomacs--batch-probe 42)"]);
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    eval.init_input_system(rx);
+    let _tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
+    eval.init_input_system();
 
     let result = eval.recursive_edit();
     result.expect("batch recursive edit should exit cleanly");
@@ -6232,8 +6232,8 @@ fn bootstrap_batch_kill_emacs_is_silent_shutdown() {
     let startup = tty_batch_startup_with_args(&["-Q", "--eval", "(kill-emacs)"]);
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    eval.init_input_system(rx);
+    let _tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
+    eval.init_input_system();
 
     let result = eval.recursive_edit();
     result.expect("batch kill-emacs should exit cleanly");
@@ -6266,8 +6266,8 @@ fn bootstrap_batch_startup_error_exits_nonzero_like_gnu() {
     let startup = tty_batch_startup_with_args(&["-Q", "--eval", "(error \"boom\")"]);
     configure_gnu_startup_state(&mut eval, frame_id, &startup);
 
-    let (_tx, rx) = crossbeam_channel::unbounded();
-    eval.init_input_system(rx);
+    let _tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
+    eval.init_input_system();
 
     let result = eval.recursive_edit();
     result.expect("batch startup error should leave through kill-emacs");
@@ -6752,13 +6752,13 @@ fn gnu_startup_clears_terminal_frame_without_deselecting_opening_gui_frame() {
         .expect("bootstrap evaluator");
     let frame_id = bootstrap_runtime_gui_startup(&mut eval);
 
-    let (tx, rx) = crossbeam_channel::unbounded();
+    let tx = neovm_core::host_input::HostInputPublisher::install(&mut eval);
     tx.send(neovm_core::keyboard::InputEvent::WindowClose {
         emacs_frame_id: u64::MAX,
     })
     .expect("queue close request");
     drop(tx);
-    eval.init_input_system(rx);
+    eval.init_input_system();
     let result = eval.recursive_edit();
     result.expect("close request should let recursive edit exit cleanly");
 
