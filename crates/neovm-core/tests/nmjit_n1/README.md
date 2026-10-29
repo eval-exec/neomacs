@@ -6,6 +6,17 @@ production admission. Missing-feature fixtures deliberately fail in N1; their
 validation runner must check the exact assertion plus clean teardown. No test
 is ignored. `sketch.rs` is included only by test clients, never product code.
 
+## N2 landing and continuation
+
+The N2 landing range on `4d489bddf1` implements production GEN1 admission.
+Its manifest keeps the real admission case and the no-op and early-return
+controls, all passing. The seven later missing-feature cases, their enum
+variants and their match arms are absent from that landing range. A single
+continuation commit preserves those cases unchanged as plain failing tests;
+that commit is not eligible to land. Each case returns in an N3-N5 landing
+range only alongside the implementation that makes it pass. The N1 audit and
+ABI sketches below describe the original stage and future work.
+
 ## Current reaches
 
 Paths relative to `crates/neovm-core/src/`:
