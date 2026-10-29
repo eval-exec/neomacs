@@ -17,7 +17,6 @@ mod cons_allocation;
 mod cons_catalog;
 mod construction;
 mod wrappers;
-pub use construction::{Gen1Admission, Gen1AdmissionError};
 pub(crate) use wrappers::EraFinishFailure;
 pub use wrappers::ParallelHeapEra;
 #[cfg(test)]

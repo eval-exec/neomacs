@@ -2,7 +2,8 @@
 //!
 //! A product era always retains the evidence minted from the exclusive GEN1
 //! collector. The test-only proof wrapper cannot convert to that evidence.
-use super::construction::{Gen1Admission, Gen1Construction};
+use super::super::Gen1Admission;
+use super::construction::{Gen1Construction, ProductionAdmission};
 #[cfg(test)]
 use super::construction::{ProofAdmission, ProofConstruction};
 use super::*;
@@ -39,16 +40,20 @@ impl<'heap> ParallelHeapEra<'heap> {
     #[cold]
     pub(crate) fn admit(
         admission: Gen1Admission<'heap>,
+        keeper: Baton,
     ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        EraCore::admit(admission).map(|(core, witness)| Self { core, witness })
+        EraCore::admit(ProductionAdmission::check(admission, keeper)?)
+            .map(|(core, witness)| Self { core, witness })
     }
 
     #[cold]
     pub(crate) fn admit_rooted(
         admission: Gen1Admission<'heap>,
+        keeper: Baton,
         roots: FrozenLegacyRoots,
     ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        EraCore::admit_rooted(admission, roots).map(|(core, witness)| Self { core, witness })
+        EraCore::admit_rooted(ProductionAdmission::check(admission, keeper)?, roots)
+            .map(|(core, witness)| Self { core, witness })
     }
 }
 

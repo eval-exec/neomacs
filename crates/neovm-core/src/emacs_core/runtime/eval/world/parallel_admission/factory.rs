@@ -46,20 +46,22 @@ impl AdmissionPlan for ProductionPlan {
         keeper: Baton,
         roots: FrozenLegacyRoots,
     ) -> Result<Self::Projection<'heap>, AdmissionFailure<'heap>> {
-        let admission = Gen1Admission::check(collector, keeper).map_err(|failure| {
-            let reason = match failure.reason {
-                Gen1AdmissionError::GenerationalRequired => {
-                    OwnedParallelError::GenerationalRequired
-                }
-                Gen1AdmissionError::Registration(error) => map_registration(error),
-            };
-            AdmissionFailure {
-                reason,
-                collector: failure.collector,
-                keeper: failure.keeper,
+        let admission = match Gen1Admission::check(collector) {
+            Ok(admission) => admission,
+            Err(failure) => {
+                let reason = match failure.reason {
+                    Gen1AdmissionError::GenerationalRequired => {
+                        OwnedParallelError::GenerationalRequired
+                    }
+                };
+                return Err(AdmissionFailure {
+                    reason,
+                    collector: failure.collector,
+                    keeper,
+                });
             }
-        })?;
-        ParallelHeapEra::admit_rooted(admission, roots)
+        };
+        ParallelHeapEra::admit_rooted(admission, keeper, roots)
             .map(|era| OwnedParallelProjection { era })
             .map_err(|failure| AdmissionFailure {
                 reason: map_registration(failure.reason),

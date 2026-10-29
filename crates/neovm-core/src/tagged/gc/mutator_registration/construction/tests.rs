@@ -1,6 +1,7 @@
 //! Actual minimal World/collector inputs; no bootstrap or setup collection.
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
 
 #[derive(Debug)]
 enum ActualMode {
@@ -19,14 +20,14 @@ fn nmjit_n2_actual_constructor_checks_mode_and_returns_complete_ownership() {
             false => ActualMode::Gen0,
             true => ActualMode::Gen1,
         };
-        let (collector, keeper) = match (expected, Gen1Admission::check(collector, keeper)) {
+        let (collector, keeper) = match (expected, Gen1Admission::check(collector)) {
             (ActualMode::Gen0, Err(failure)) => {
                 assert_eq!(failure.reason, Gen1AdmissionError::GenerationalRequired);
                 eprintln!("NMJIT_N2_GEN0_TYPED_REFUSAL_OWNERSHIP_RETURNED");
-                (failure.collector, failure.keeper)
+                (failure.collector, keeper)
             }
             (ActualMode::Gen1, Ok(admission)) => {
-                let era = super::super::ParallelHeapEra::admit(admission)
+                let era = super::super::ParallelHeapEra::admit(admission, keeper)
                     .expect("production era consumes actual GEN1 admission");
                 assert_eq!(era.heap_identity(), heap);
                 let permit = era

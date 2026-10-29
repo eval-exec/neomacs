@@ -17,10 +17,9 @@ fn register<'era, 'heap>(
     era.register(1, 1)
 }
 
-fn refusal(error: Gen1AdmissionError) -> Option<RegistrationError> {
+fn refusal(error: Gen1AdmissionError) {
     match error {
-        Gen1AdmissionError::GenerationalRequired => None,
-        Gen1AdmissionError::Registration(reason) => Some(reason),
+        Gen1AdmissionError::GenerationalRequired => {}
     }
 }
 
