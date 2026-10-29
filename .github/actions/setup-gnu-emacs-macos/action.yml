@@ -128,3 +128,16 @@ runs:
           "$EMACS_VERSION" \
           "$manifest" \
           "$EMACS_COMMIT"
+
+    # Save the verified build from an inline step, not the action's post-step:
+    # actions/cache does not save a failed job, and this job's parity suite can
+    # fail for reasons unrelated to the oracle (the frame/overlay expectations
+    # did exactly that).  A build the smoke step above has already attested is
+    # cacheable even when a later step turns red.  The key must stay byte-for-
+    # byte equal to the restore key above.
+    - name: Save the cached oracle build
+      if: success() && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: /opt/gnu-emacs-oracle
+        key: gnu-emacs-oracle-macos-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}
