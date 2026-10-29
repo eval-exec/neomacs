@@ -4966,7 +4966,9 @@ fn startup_dimensions_gui_matches_gnu_default_text_grid() {
     // geometry). The requested window reserves the scroll bar + both 8px fringes on
     // the sides and the menu + tool bars on top, so the text grid lands on 80x35
     // instead of the chrome eating into it (78x33).
-    let side_chrome = metrics.char_width + 2.0 * 8.0;
+    // GNU xfns.c:x_set_scroll_bar_default_width uses the toolkit's pixel
+    // band, not a font cell; startup and layout share that default.
+    let side_chrome = neovm_core::window::GUI_SCROLL_BAR_DEFAULT_WIDTH_PX as f32 + 2.0 * 8.0;
     let top_chrome = metrics.char_height
         + neovm_core::window::default_gui_tool_bar_line_height(metrics.font_pixel_size) as f32;
     assert_eq!(
