@@ -55,8 +55,10 @@ jobs:
         include:
           - arch: x86_64
             runner: windows-latest
+            target: x86_64-pc-windows-msvc
           - arch: aarch64
             runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
@@ -158,7 +160,14 @@ jobs:
         shell: bash
         timeout-minutes: 20
         run: |
-          ./scripts/package-windows-installer.sh --skip-build --no-smoke
+          # The package script's default target used to be x86_64 for every
+          # host, so the aarch64 leg built an x86_64 installer; its silent
+          # install then blocked on the architecture MessageBox until the
+          # contract step hit its 10-minute timeout.  Pass the leg's triple
+          # exactly like release.yml does.
+          ./scripts/package-windows-installer.sh \
+            --target "${{ matrix.target }}" \
+            --skip-build --no-smoke
 
       - name: Verify Windows installer ownership contract
         shell: powershell

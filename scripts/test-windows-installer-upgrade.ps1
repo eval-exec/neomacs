@@ -21,10 +21,25 @@ if (
   throw "This destructive installer contract test may run only with -ConfirmEphemeralRunner on an ephemeral GitHub Actions runner."
 }
 
+function Wait-ForExitOrKill {
+  param(
+    [System.Diagnostics.Process]$Process,
+    [int]$TimeoutSeconds,
+    [string]$Description
+  )
+
+  if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+    try { $Process.Kill() } catch { }
+    throw "$Description did not exit within $TimeoutSeconds seconds"
+  }
+}
+
 function Invoke-Installer {
   param([string]$Path)
 
-  $process = Start-Process -FilePath $Path -ArgumentList "/S" -PassThru -Wait
+  Write-Host "running silent installer: $Path"
+  $process = Start-Process -FilePath $Path -ArgumentList "/S" -PassThru
+  Wait-ForExitOrKill -Process $process -TimeoutSeconds 300 -Description "installer $Path"
   if ($process.ExitCode -ne 0) {
     throw "installer exited with code $($process.ExitCode): $Path"
   }
@@ -305,7 +320,8 @@ try {
   Remove-Item $installDir -Recurse -Force
 } finally {
   if ($installed -and (Test-Path $uninstaller -PathType Leaf)) {
-    Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait | Out-Null
+    $cleanup = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru
+    Wait-ForExitOrKill -Process $cleanup -TimeoutSeconds 120 -Description "cleanup uninstaller $uninstaller"
   }
   if (Test-Path $unrelated -PathType Leaf) {
     Remove-Item $unrelated -Force

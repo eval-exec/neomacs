@@ -17,7 +17,7 @@ Output:
 USAGE
 }
 
-target_triple="x86_64-pc-windows-msvc"
+target_triple=""
 skip_build=0
 smoke=1
 vendor_gstreamer=0
@@ -58,6 +58,22 @@ get_version() {
   v="$(git rev-parse --short=12 HEAD 2>/dev/null)" && echo "$v" && return
   echo "0.0.0-dev"
 }
+
+detect_target() {
+  local machine="${PROCESSOR_ARCHITECTURE:-$(uname -m)}"
+  case "$machine" in
+    AMD64|x86_64|amd64) echo "x86_64-pc-windows-msvc" ;;
+    ARM64|arm64|aarch64) echo "aarch64-pc-windows-msvc" ;;
+    *) return 1 ;;
+  esac
+}
+
+if [[ -z "$target_triple" ]]; then
+  if ! target_triple="$(detect_target)"; then
+    echo "cannot detect the Windows installer target for ${PROCESSOR_ARCHITECTURE:-$(uname -m)}; pass --target" >&2
+    exit 1
+  fi
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

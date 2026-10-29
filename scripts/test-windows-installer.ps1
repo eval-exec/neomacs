@@ -44,10 +44,28 @@ function Assert-RegistryKeyAbsent {
   }
 }
 
+function Wait-ForExitOrKill {
+  param(
+    [System.Diagnostics.Process]$Process,
+    [int]$TimeoutSeconds,
+    [string]$Description
+  )
+
+  if (-not $Process.WaitForExit($TimeoutSeconds * 1000)) {
+    try { $Process.Kill() } catch { }
+    throw "$Description did not exit within $TimeoutSeconds seconds"
+  }
+}
+
 function Invoke-Installer {
   param([string]$Path)
 
-  $process = Start-Process -FilePath $Path -ArgumentList "/S" -PassThru -Wait
+  # A silent install must never wait forever: the aarch64 contract job hung
+  # here because a wrong-architecture installer opened a modal dialog that
+  # Start-Process -Wait could not time out.
+  Write-Host "running silent installer: $Path"
+  $process = Start-Process -FilePath $Path -ArgumentList "/S" -PassThru
+  Wait-ForExitOrKill -Process $process -TimeoutSeconds 300 -Description "installer $Path"
   if ($process.ExitCode -ne 0) {
     throw "installer exited with code $($process.ExitCode)"
   }
@@ -170,7 +188,8 @@ try {
     # The App Paths values were asserted above. PowerShell's Start-Process does
     # not reliably consult App Paths when resolving a bare executable name, so
     # use the validated target for the executable smoke test.
-    $process = Start-Process -FilePath $path -ArgumentList "--version" -PassThru -Wait
+    $process = Start-Process -FilePath $path -ArgumentList "--version" -PassThru
+    Wait-ForExitOrKill -Process $process -TimeoutSeconds 60 -Description "$executable --version"
     if ($process.ExitCode -ne 0) {
       throw "$executable --version exited with code $($process.ExitCode)"
     }
@@ -249,7 +268,8 @@ try {
     [Microsoft.Win32.RegistryValueKind]::ExpandString
   )
 
-  $process = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru -Wait
+  $process = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru
+  Wait-ForExitOrKill -Process $process -TimeoutSeconds 120 -Description "uninstaller $uninstaller"
   if ($process.ExitCode -ne 0) {
     throw "uninstaller exited with code $($process.ExitCode)"
   }
@@ -300,7 +320,8 @@ try {
   Remove-Item $installDir -Force
 } finally {
   if ($installed -and (Test-Path $uninstaller -PathType Leaf)) {
-    Start-Process -FilePath $uninstaller -ArgumentList "/S" -Wait | Out-Null
+    $cleanup = Start-Process -FilePath $uninstaller -ArgumentList "/S" -PassThru
+    Wait-ForExitOrKill -Process $cleanup -TimeoutSeconds 120 -Description "cleanup uninstaller $uninstaller"
   }
 
   if ($originalUserPathExists) {

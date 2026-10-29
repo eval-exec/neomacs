@@ -46,6 +46,22 @@ SetCompressor /SOLID lzma
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
+; A silent install must never wait on a modal dialog: an unattended caller
+; (the CI installer contract, or any /S deployment) sees a usable exit code
+; and a failed install instead of a process that hangs until its job times
+; out.  The aarch64 Windows runner hung exactly this way when it was handed
+; an x86_64 installer: the architecture gate below opened a MessageBox in
+; /S mode, and nothing was logged while Start-Process -Wait blocked forever.
+; Interactive installs keep the explanatory dialog.
+!macro FailInstall ERROR_LEVEL MESSAGE
+  ${If} ${Silent}
+    SetErrorLevel ${ERROR_LEVEL}
+    Quit
+  ${EndIf}
+  MessageBox MB_OK|MB_ICONSTOP "${MESSAGE}"
+  Abort
+!macroend
+
 !define MUI_ABORTWARNING
 !define MUI_ICON "${NSISDIR}\Contrib\Graphics\Icons\modern-install.ico"
 !define MUI_UNICON "${NSISDIR}\Contrib\Graphics\Icons\modern-uninstall.ico"
@@ -81,9 +97,7 @@ Function RemovePreviousUserInstallation
     DetailPrint "Removing the previous ${PRODUCT_NAME} user installation..."
     ExecWait '"$R0\uninstall.exe" /S _?=$R0' $R1
     ${If} $R1 != 0
-      MessageBox MB_OK|MB_ICONSTOP \
-        "The previous ${PRODUCT_NAME} installation could not be removed (exit code $R1)."
-      Abort
+      !insertmacro FailInstall 4 "The previous ${PRODUCT_NAME} installation could not be removed (exit code $R1)."
     ${EndIf}
 
     ; _?= runs the uninstaller IN PLACE, and an in-place uninstaller cannot
@@ -107,9 +121,7 @@ Function RemovePreviousUserInstallation
       ${EndIf}
     ${EndIf}
     ${If} ${FileExists} "$R0\uninstall.exe"
-      MessageBox MB_OK|MB_ICONSTOP \
-        "The previous ${PRODUCT_NAME} uninstaller could not be replaced."
-      Abort
+      !insertmacro FailInstall 5 "The previous ${PRODUCT_NAME} uninstaller could not be replaced."
     ${EndIf}
   ${EndIf}
 FunctionEnd
@@ -117,13 +129,11 @@ FunctionEnd
 Function .onInit
 !if "${PRODUCT_ARCH}" == "aarch64"
   ${IfNot} ${IsNativeARM64}
-    MessageBox MB_OK "${PRODUCT_NAME} for ARM64 requires Windows on ARM64."
-    Abort
+    !insertmacro FailInstall 3 "${PRODUCT_NAME} for ARM64 requires Windows on ARM64."
   ${EndIf}
 !else
   ${IfNot} ${IsNativeAMD64}
-    MessageBox MB_OK "${PRODUCT_NAME} for x86_64 requires x86_64 Windows."
-    Abort
+    !insertmacro FailInstall 3 "${PRODUCT_NAME} for x86_64 requires x86_64 Windows."
   ${EndIf}
 !endif
   SetRegView 64
@@ -154,9 +164,7 @@ Section "!${PRODUCT_NAME}" SEC_MAIN
   ClearErrors
   WriteUninstaller "$INSTDIR\uninstall.exe"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP \
-      "${PRODUCT_NAME} could not write its uninstaller to $INSTDIR."
-    Abort
+    !insertmacro FailInstall 6 "${PRODUCT_NAME} could not write its uninstaller to $INSTDIR."
   ${EndIf}
 
   CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
