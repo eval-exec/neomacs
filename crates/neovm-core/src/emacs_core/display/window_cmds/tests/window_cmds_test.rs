@@ -1748,9 +1748,11 @@ fn window_body_remap_uses_the_current_buffer_default_face_metrics() {
         )
         .expect("window body units");
 
+    // Body = 800 px - 2x8 px fringes - the 16 px scroll-bar band, x_set_scroll_bar_default_width
+    // (src/xfns.c:2393-2407), so 768 px: 96 columns at 8 px, 48 at the remapped 16 px.
     assert_eq!(
         crate::emacs_core::print::print_value(&value),
-        "(97 48 35 17)"
+        "(96 48 35 17)"
     );
 }
 
@@ -1997,7 +1999,9 @@ fn gui_window_scroll_bars_round_trip_explicit_state() {
         ev.eval_str("(window-scroll-bars)")
             .map(|value| crate::emacs_core::print::print_value(&value))
             .expect("default scroll bars"),
-        "(nil 1 t nil 0 t nil)"
+        // COLUMNS is FRAME_CONFIG_SCROLL_BAR_COLS = ceil(16 / 8) = 2 for the 16 px toolkit
+        // default (src/xfns.c:2393-2407, src/window.h:934-939).
+        "(nil 2 t nil 0 t nil)"
     );
     ev.eval_str("(set-window-scroll-bars nil 13 'left 9 'bottom t)")
         .expect("set scroll bars");
@@ -6256,7 +6260,9 @@ fn frame_query_builtins_report_pixel_sizes_for_gui_frames() {
     assert_eq!(
         crate::emacs_core::frame::builtin_frame_text_width(&mut ev, vec![Value::make_frame(fid.0)])
             .unwrap(),
-        Value::fixnum(776)
+        // FRAME_PIXEL_TO_TEXT_WIDTH (src/frame.h:1804-1808): 800 - 16 px scroll-bar area
+        // (the toolkit default, src/xfns.c:2393-2407) - 2x8 px fringes.
+        Value::fixnum(768)
     );
     assert_eq!(
         crate::emacs_core::frame::builtin_frame_text_height(
@@ -6289,7 +6295,9 @@ fn frame_text_width_ignores_window_local_fringe_overrides_for_gui_frames() {
     assert_eq!(
         crate::emacs_core::frame::builtin_frame_text_width(&mut ev, vec![Value::make_frame(fid.0)])
             .unwrap(),
-        Value::fixnum(776)
+        // FRAME_PIXEL_TO_TEXT_WIDTH (src/frame.h:1804-1808): 800 - 16 px scroll-bar area
+        // (the toolkit default, src/xfns.c:2393-2407) - 2x8 px fringes.
+        Value::fixnum(768)
     );
 }
 
@@ -7199,8 +7207,9 @@ fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_windo
     );
     assert_eq!(child.left_pos, 30);
     assert_eq!(child.top_pos, 40);
-    // 20 text columns plus default fringes (8+8) and scrollbar (one cell).
-    assert_eq!(child.width, 226);
+    // 20 text columns x 10 px plus default fringes (8+8) and the 16 px toolkit scroll-bar
+    // area (src/xfns.c:2393-2407; FRAME_TEXT_TO_PIXEL_WIDTH, src/frame.h:1790-1794).
+    assert_eq!(child.width, 232);
     assert_eq!(child.height, 100);
     assert_eq!(child.char_width, 10.0);
     assert_eq!(child.char_height, 20.0);
@@ -7577,13 +7586,14 @@ fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
 
     let child = ev.frames.get(child_id).expect("child frame");
     assert_eq!(requests.borrow().len(), 0);
-    // 190 text pixels, default horizontal chrome (26), and two 2px borders.
-    assert_eq!(child.width, 220);
+    // FRAME_TEXT_TO_PIXEL_WIDTH (src/frame.h:1790-1794): 190 text pixels + 2x8 px fringes +
+    // the 16 px toolkit scroll-bar area (src/xfns.c:2393-2407) + two 2 px borders.
+    assert_eq!(child.width, 226);
     assert_eq!(child.height, 82);
     assert_eq!(child.internal_border_width(), 2);
     assert_eq!(
         *child.root_window().bounds(),
-        crate::window::Rect::new(2.0, 2.0, 216.0, 78.0)
+        crate::window::Rect::new(2.0, 2.0, 222.0, 78.0)
     );
 }
 
@@ -8882,7 +8892,9 @@ fn modify_frame_parameters_width_height_resizes_live_gui_frame() {
     let resize_requests = resized.borrow();
     assert_eq!(resize_requests.len(), 1);
     assert_eq!(resize_requests[0].frame_id, fid);
-    assert_eq!(resize_requests[0].width, 664);
+    // FRAME_TEXT_TO_PIXEL_WIDTH (src/frame.h:1790-1794): 80 columns x 8 px + 2x8 px
+    // fringes + the 16 px toolkit scroll-bar area (src/xfns.c:2393-2407).
+    assert_eq!(resize_requests[0].width, 672);
     assert_eq!(resize_requests[0].height, 400);
     assert_eq!(
         resize_requests[0].geometry_hints,
@@ -8893,7 +8905,7 @@ fn modify_frame_parameters_width_height_resizes_live_gui_frame() {
     );
 
     let frame = ev.frames.get(fid).expect("frame should exist");
-    assert_eq!(frame.width, 664);
+    assert_eq!(frame.width, 672);
     assert_eq!(frame.height, 400);
     assert_eq!(frame.parameter("width"), Some(Value::fixnum(80)));
     assert_eq!(frame.parameter("height"), Some(Value::fixnum(25)));
@@ -9150,7 +9162,9 @@ fn modify_frame_parameters_resize_ignores_window_local_fringes_for_gui_frames() 
     let resize_requests = resized.borrow();
     assert_eq!(resize_requests.len(), 1);
     assert_eq!(resize_requests[0].frame_id, fid);
-    assert_eq!(resize_requests[0].width, 664);
+    // FRAME_TEXT_TO_PIXEL_WIDTH (src/frame.h:1790-1794): 80 columns x 8 px + 2x8 px
+    // fringes + the 16 px toolkit scroll-bar area (src/xfns.c:2393-2407).
+    assert_eq!(resize_requests[0].width, 672);
     assert_eq!(resize_requests[0].height, 400);
     assert_eq!(
         resize_requests[0].geometry_hints,
@@ -9290,7 +9304,9 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
     assert_eq!(request.frame_id, fid);
-    assert_eq!(request.width, 824);
+    // 100 columns x 8 px + 2x8 px fringes + the 16 px toolkit scroll-bar area
+    // (FRAME_TEXT_TO_PIXEL_WIDTH, src/frame.h:1790-1794; src/xfns.c:2393-2407).
+    assert_eq!(request.width, 832);
     assert_eq!(request.height, 560);
     assert_eq!(
         request.geometry_hints,
@@ -9302,14 +9318,14 @@ fn set_frame_size_builtins_resize_live_gui_frames_and_notify_host() {
 
     drop(requests);
 
-    ev.apply_resize_input_event(824, 560, 1.0, fid.0, false)
+    ev.apply_resize_input_event(832, 560, 1.0, fid.0, false)
         .expect("resize redisplay");
 
     let frame = ev
         .frames
         .get(fid)
         .expect("frame should exist after host ack");
-    assert_eq!(frame.width, 824);
+    assert_eq!(frame.width, 832);
     assert_eq!(frame.height, 560);
     assert_eq!(frame.parameter("width"), Some(Value::fixnum(100)));
     assert_eq!(frame.parameter("height"), Some(Value::fixnum(35)));
@@ -10739,7 +10755,9 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
     let inherited = super::builtin_window_scroll_bars(&mut ev, vec![]).expect("scrollbars");
     assert_eq!(
         crate::emacs_core::print::print_value(&inherited),
-        "(nil 1 t nil 0 t nil)",
+        // Inherited COLUMNS = FRAME_CONFIG_SCROLL_BAR_COLS = ceil(16 / 8) = 2 (src/xfns.c:2393-2407,
+        // src/window.h:934-939); the 13 px presented band must not leak into it.
+        "(nil 2 t nil 0 t nil)",
         "realized rectangles must not replace GNU's raw inherited tuple fields"
     );
 }

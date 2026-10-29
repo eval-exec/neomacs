@@ -61,7 +61,9 @@ fn compat_gui_window_scroll_bars_round_trip() {
         .expect("frame")
         .set_window_system(Some(Value::symbol("neo")));
     let before = eval.eval_str("(window-scroll-bars)");
-    assert_eq!(format_eval_result(&before), "OK (nil 1 t nil 0 t nil)");
+    // COLUMNS = FRAME_CONFIG_SCROLL_BAR_COLS = ceil(16 / 8) = 2: GNU reserves the 16 px
+    // toolkit scroll-bar default (src/xfns.c:2393-2407), not one character cell.
+    assert_eq!(format_eval_result(&before), "OK (nil 2 t nil 0 t nil)");
     eval.eval_str("(set-window-scroll-bars nil 13 'left 9 'bottom t)")
         .expect("set scroll bars");
     publish_selected_gui_window_regions(
