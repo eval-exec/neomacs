@@ -492,26 +492,6 @@ fn current_screen_line_start_with_truncation(
     }
 }
 
-/// GNU `char_can_wrap_after` (src/xdisp.c:599-617) with the default
-/// `word-wrap-by-category` nil: a wrap MAY follow a whitespace glyph.
-///
-/// GNU asks the iterator (`IT_DISPLAYING_WHITESPACE`), i.e. the glyph actually
-/// being displayed; this scanner runs only when no realized row is available,
-/// so it asks the buffer character instead.
-fn char_can_wrap_after(code: u32) -> bool {
-    code == b' ' as u32 || code == b'\t' as u32
-}
-
-/// GNU `char_can_wrap_before` (src/xdisp.c:577-596) with the default
-/// `word-wrap-by-category` nil: a wrap MAY precede any non-whitespace glyph.
-///
-/// GNU's own comment is the reason for the asymmetry: "You cannot wrap before
-/// a space or tab because that way you'll have space and tab at the beginning
-/// of next line."
-fn char_can_wrap_before(code: u32) -> bool {
-    !char_can_wrap_after(code)
-}
-
 /// Where a [`LineWrap::WordWrap`] row is allowed to break, as GNU's `wrap_it`
 /// records it (src/xdisp.c:10280-10300).
 ///
@@ -539,11 +519,16 @@ impl WordWrapPoint {
 
     /// Observe the glyph at `pos` before it is placed, updating the saved wrap
     /// point the way GNU does inside `move_it_in_display_line_to`.
-    fn observe(&mut self, pos: EmacsBytePos, row_start: EmacsBytePos, code: u32) {
-        if self.may_wrap && char_can_wrap_before(code) && pos > row_start {
+    fn observe(
+        &mut self,
+        pos: EmacsBytePos,
+        row_start: EmacsBytePos,
+        opportunity: crate::window::WordWrapOpportunity,
+    ) {
+        if self.may_wrap && opportunity.before() && pos > row_start {
             self.saved = Some(pos);
         }
-        self.may_wrap = char_can_wrap_after(code);
+        self.may_wrap = opportunity.after();
     }
 
     /// Where the row breaks when the glyph at `overflow_at` does not fit.
@@ -715,7 +700,29 @@ impl ScreenLineScanPolicy for WordWrapScan {
             .get(buffer_id)
             .and_then(|buf| buf.char_code_after_emacs_byte_pos(scan))
         {
-            state.observe(scan, start, code);
+            use crate::window::{WordWrapCategories, WordWrapDirection, WordWrapMode};
+            let buffer = eval.buffers.get(buffer_id).expect("observed buffer");
+            let mode = if eval
+                .variable_value_in_buffer(
+                    Some(buffer),
+                    crate::window::WindowLayoutVariable::WordWrapByCategory.sym_id(),
+                )
+                .is_some_and(|value| value.is_truthy())
+            {
+                WordWrapMode::Category
+            } else {
+                WordWrapMode::Whitespace
+            };
+            let categories = if mode == WordWrapMode::Category {
+                WordWrapCategories::for_buffer(buffer, code)
+            } else {
+                WordWrapCategories::default()
+            };
+            state.observe(
+                scan,
+                start,
+                mode.opportunity(code, categories, WordWrapDirection::Forward),
+            );
         }
     }
 

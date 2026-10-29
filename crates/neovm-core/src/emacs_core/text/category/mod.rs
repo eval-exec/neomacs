@@ -191,6 +191,14 @@ fn category_set_bits(category_set: &Value) -> Option<u128> {
     }
 }
 
+/// Read one native category projection without retaining a category-set value.
+pub(crate) fn character_category_bits(buffer: &crate::buffer::Buffer, code: u32) -> Option<u128> {
+    let table = active_category_table_for_buffer(Some(buffer)).ok()?;
+    let set =
+        super::chartable::ct_lookup_with_symbols(&table, i64::from(code), SymbolMode::Bare).ok()?;
+    category_set_bits(&set)
+}
+
 fn make_category_set_from_bits(bits: u128) -> Value {
     boolvec::bool_vector_from_u128(128, bits)
 }
