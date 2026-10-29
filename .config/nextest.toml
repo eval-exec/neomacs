@@ -7,6 +7,11 @@ experimental = ["wrapper-scripts", "setup-scripts"]
 [scripts.wrapper.memory-limit]
 command = 'prlimit --as=8589934592 --'
 
+# Compile-contract drivers spawn compiler workers, not Lisp/VM test threads.
+# Keep the same address-space bound without reserving 128MiB for each worker.
+[scripts.wrapper.compiler-memory-limit]
+command = 'env -u RUST_MIN_STACK prlimit --as=8589934592 --'
+
 [scripts.setup.melpa-infra-preflight]
 command = { command-line = "scripts/melpa-infra-preflight.sh", relative-to = "workspace-root" }
 slow-timeout = { period = "60s", terminate-after = 1 }
@@ -34,12 +39,17 @@ slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 # modules of the gui binary, so match their module prefixes instead of the
 # former per-file binary IDs.
 [[profile.default.scripts]]
-filter = 'not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::)))'
+filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::)))'
 # `prlimit` is a Linux util-linux executable, not a generic Unix interface.
 # macOS is cfg(unix) too, but has no `prlimit`; selecting by the actual host OS
 # keeps hosted native tests executable instead of failing before test startup.
 platform = { host = "cfg(target_os = \"linux\")" }
 run-wrapper = 'memory-limit'
+
+[[profile.default.scripts]]
+filter = 'test(/compile_contracts$/)'
+platform = { host = "cfg(target_os = \"linux\")" }
+run-wrapper = 'compiler-memory-limit'
 
 # Start both editor adapters once before package parity cases are dispatched.
 # Harness contract tests use fake runtimes, and source-lock tests only parse
