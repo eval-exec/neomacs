@@ -181,6 +181,14 @@ fn macos_native_replay_never_substitutes_a_different_font() {
         .rasterize(&font, &name, key(&font, ' ', 16.0))
         .unwrap();
     assert!(space.data.is_empty());
+    for size in [16.0, 32.0] {
+        let mask = native
+            .rasterize(&font, &name, key(&font, 't', size))
+            .unwrap();
+        assert!(mask.data.iter().any(|&coverage| coverage > 0));
+        let sized = &native.fonts[&(font.id(), size.to_bits())];
+        assert_eq!(unsafe { sized.post_script_name() }.to_string(), name);
+    }
     let mut synthetic = key(&font, 't', 16.0);
     synthetic.flags = CacheKeyFlags::FAKE_ITALIC;
     assert!(native.rasterize(&font, &name, synthetic).is_none());
