@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail_reclaim_without_grace.rs:4:35
+  |
+4 |     sketch::RetiredTables.reclaim(era);
+  |                           ------- ^^^ expected `JitGracePeriod<'_>`, found `&ProductionEra<'_>`
+  |                           |
+  |                           arguments to this method are incorrect
+  |
+note: method defined here
+ --> tests/ui/../support/sketch.rs
+  |
+  |     pub(crate) fn reclaim(&mut self, _grace: JitGracePeriod<'_>) {}
+  |                   ^^^^^^^            --------------------------

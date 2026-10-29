@@ -1,0 +1,5 @@
+error[E0451]: field `collector` of struct `Gen1Admission` is private
+ --> tests/ui/fail_forge_admission.rs:5:43
+  |
+5 |     let _forged = sketch::Gen1Admission { collector: &mut collector };
+  |                                           ^^^^^^^^^ private field

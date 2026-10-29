@@ -1,4 +1,4 @@
-#[path = "../sketch.rs"]
+#[path = "../support/sketch.rs"]
 mod sketch;
 fn wrong(era: &sketch::ProductionEra<'_>, code: sketch::SerialCompiledCode) {
     let _entry = era.enter(code);

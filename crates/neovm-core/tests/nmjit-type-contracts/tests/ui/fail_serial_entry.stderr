@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/fail_serial_entry.rs:4:28
+  |
+4 |     let _entry = era.enter(code);
+  |                      ----- ^^^^ expected `ParallelCompiledCode`, found `SerialCompiledCode`
+  |                      |
+  |                      arguments to this method are incorrect
+  |
+note: method defined here
+ --> tests/ui/../support/sketch.rs
+  |
+  |     pub(crate) fn enter<'era>(&'era self, _code: ParallelCompiledCode) -> JitEntry<'era, 'heap> {
+  |                   ^^^^^                   ---------------------------

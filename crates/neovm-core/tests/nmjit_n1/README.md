@@ -119,3 +119,9 @@ dependencies including neovm-core. The standalone driver has only pinned
 trybuild 1.0.121, and its generated client project must contain no engine crate.
 The original 600-second watchdog and every assertion remain in effect. This is
 a compiler-harness boundary repair, not a skipped, quarantined or deleted case.
+
+The shared sketch now lives at `nmjit-type-contracts/tests/support/sketch.rs`,
+and every compiler client lives under that workspace's `tests/ui/`. Keeping
+clients inside their manifest root lets trybuild normalize diagnostic paths;
+no committed snapshot may contain a lane's absolute worktree path. All client
+contents and expected type/lifetime bounds are preserved.

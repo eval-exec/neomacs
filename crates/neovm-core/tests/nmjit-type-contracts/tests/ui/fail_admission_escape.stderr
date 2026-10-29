@@ -1,0 +1,8 @@
+error[E0515]: cannot return value referencing local variable `collector`
+ --> tests/ui/fail_admission_escape.rs:5:5
+  |
+5 |     collector.check_gen1().expect("checked GEN1")
+  |     ---------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |     |
+  |     returns a value referencing data owned by the current function
+  |     `collector` is borrowed here

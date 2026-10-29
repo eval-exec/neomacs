@@ -1,4 +1,4 @@
-#[path = "../sketch.rs"]
+#[path = "../support/sketch.rs"]
 mod sketch;
 fn escape() -> sketch::Gen1Admission<'static> {
     let mut collector = sketch::ExclusiveCollector::fixture(sketch::CollectorMode::Gen1);

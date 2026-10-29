@@ -1,0 +1,19 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+ --> tests/ui/fail_table_send.rs:5:20
+  |
+5 |     require_send::<sketch::TableView<'static>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<()>` cannot be sent between threads safely
+  |
+  = help: within `TableView<'static>`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `PhantomData<Rc<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `TableView<'static>`
+ --> tests/ui/../support/sketch.rs
+  |
+  | pub(crate) struct TableView<'view> {
+  |                   ^^^^^^^^^
+note: required by a bound in `require_send`
+ --> tests/ui/fail_table_send.rs:3:20
+  |
+3 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`

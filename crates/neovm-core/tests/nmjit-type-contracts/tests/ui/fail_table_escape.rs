@@ -1,4 +1,4 @@
-#[path = "../sketch.rs"]
+#[path = "../support/sketch.rs"]
 mod sketch;
 fn escape() -> sketch::TableView<'static> {
     let entries = vec![sketch::ChunkSlot(0)];

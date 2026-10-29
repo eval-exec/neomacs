@@ -1,0 +1,13 @@
+error[E0433]: cannot find `ProofEra` in `sketch`
+ --> tests/ui/fail_proof_entry.rs:4:26
+  |
+4 |     let _proof = sketch::ProofEra::fixture();
+  |                          ^^^^^^^^ could not find `ProofEra` in `sketch`
+  |
+note: found an item that was configured out
+ --> tests/ui/../support/sketch.rs
+  |
+  | #[cfg(test)]
+  |       ---- the item is gated here
+  | pub(crate) struct ProofEra {
+  |                   ^^^^^^^^

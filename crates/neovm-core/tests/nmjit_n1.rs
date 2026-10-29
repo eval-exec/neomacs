@@ -1,5 +1,5 @@
 //! N1 contracts for proposed types, not yet contracts of the product runtime.
-#[path = "nmjit_n1/sketch.rs"]
+#[path = "nmjit-type-contracts/tests/support/sketch.rs"]
 mod sketch;
 
 #[test]

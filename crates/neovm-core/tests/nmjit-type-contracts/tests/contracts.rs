@@ -3,6 +3,6 @@
 #[test]
 fn nmjit_n1_sketch_compile_contracts() {
     let cases = trybuild::TestCases::new();
-    cases.pass("../nmjit_n1/ui/pass_checked.rs");
-    cases.compile_fail("../nmjit_n1/ui/fail_*.rs");
+    cases.pass("tests/ui/pass_checked.rs");
+    cases.compile_fail("tests/ui/fail_*.rs");
 }
