@@ -1,9 +1,9 @@
 use super::{
-    AnyAtlasEntry, BitmapFontReplayCache, ComposedGlyphKey, FontconfigSubpixelOrder,
-    GlyphAtlasError, GlyphKey, GlyphPixelKind, RasterizeResult, SampledSubGlyph, SingleCharGlyph,
-    SubGlyph, SubpixelBin, SubpixelRequest, WgpuGlyphAtlas, effective_font_size,
-    frame_font_bindings_identity, glyph_font_identity, key_uses_default_font_metrics,
-    normalize_subpixel_mask, rasterize_missing_glyph_box, resolved_glyph_stream_identity,
+    AnyAtlasEntry, ComposedGlyphKey, FontconfigSubpixelOrder, GlyphAtlasError, GlyphKey,
+    GlyphPixelKind, RasterizeResult, SampledSubGlyph, SingleCharGlyph, SubGlyph, SubpixelBin,
+    SubpixelRequest, WgpuGlyphAtlas, effective_font_size, frame_font_bindings_identity,
+    glyph_font_identity, key_uses_default_font_metrics, normalize_subpixel_mask,
+    rasterize_missing_glyph_box, resolved_glyph_stream_identity,
 };
 use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::font::{
@@ -11,6 +11,9 @@ use neomacs_display_protocol::font::{
     ResolvedFont, ResolvedFontId, ResolvedFontIdentity, ResolvedGlyph, ResolvedGlyphId,
 };
 use neomacs_display_protocol::types::FaceId;
+
+#[cfg(target_os = "linux")]
+use super::BitmapFontReplayCache;
 
 fn test_font_path(path: std::path::PathBuf) -> String {
     path.to_string_lossy().into_owned()
@@ -470,13 +473,134 @@ fn macos_atlas_uses_native_monaco_masks() {
         let expected = reference.rasterize(&font, &name, key).unwrap();
         let actual = atlas.render_cache_key_image(key, false).unwrap();
         assert_eq!(actual.content, super::RasterContent::Mask);
+        assert!(
+            !actual.data.is_empty() && actual.data.iter().any(|&p| p > 0),
+            "native routing must produce ink, not an empty mask"
+        );
         assert_eq!((actual.left, actual.top), (expected.left, expected.top));
         assert_eq!(
             (actual.width, actual.height),
             (expected.width, expected.height)
         );
         assert_eq!(actual.data, expected.data);
+
+        // Synthetic styles must decline the native path and keep Swash's skew;
+        // otherwise the fallback silently renders an upright glyph.
+        let mut synthetic = key;
+        synthetic.flags = cosmic_text::CacheKeyFlags::FAKE_ITALIC;
+        let slanted = atlas
+            .render_cache_key_image(synthetic, false)
+            .expect("fake italic still renders through Swash");
+        assert!(slanted.data.iter().any(|&p| p > 0));
+        assert_ne!(
+            slanted.data, actual.data,
+            "native path must not serve the upright mask for a fake-italic key"
+        );
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_resolved_cluster_applies_backing_scale() {
+    use neomacs_display_protocol::font::FontSlantKind;
+
+    let Some(mut atlas) = try_test_atlas() else {
+        eprintln!("SKIP: no Metal device available for backing-scale test");
+        return;
+    };
+    let source_id = atlas
+        .font_system
+        .db()
+        .query(&fontdb::Query {
+            families: &[fontdb::Family::Name("Monaco")],
+            ..Default::default()
+        })
+        .expect("macOS supplies Monaco");
+    let (path, face_index, post_script_name) = {
+        let source_face = atlas.font_system.db().face(source_id).unwrap();
+        let path = match &source_face.source {
+            fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => path.clone(),
+            fontdb::Source::Binary(_) => panic!("Monaco is a file-backed face"),
+        };
+        (
+            path,
+            source_face.index,
+            source_face.post_script_name.clone(),
+        )
+    };
+    let identity = ResolvedFontIdentity::from_file(&path.to_string_lossy(), face_index, None);
+    let id = ResolvedFontId(91);
+    let font = ResolvedFont {
+        id,
+        identity: identity.clone(),
+        replay: file_replay_for(&identity),
+        family: "Monaco".to_owned(),
+        full_name: None,
+        postscript_name: Some(post_script_name),
+        weight: 400,
+        slant: FontSlantKind::Normal,
+        width: 5,
+        pixel_size: 16.0,
+        ascent_px: 12.0,
+        descent_px: 4.0,
+        space_advance_px: 8.0,
+        glyph_advance: Default::default(),
+    };
+    atlas.install_frame_fonts(
+        &Default::default(),
+        &[(id, font.clone())].into_iter().collect(),
+        &Default::default(),
+        &Default::default(),
+    );
+    let local_id = atlas
+        .local_fontdb_id_for(id)
+        .expect("renderer installs the exact Monaco face");
+    let glyph_id = atlas
+        .font_system
+        .get_font(local_id, fontdb::Weight::NORMAL)
+        .expect("installed Monaco face is reachable")
+        .as_swash()
+        .charmap()
+        .map('H');
+    let glyph = ResolvedGlyph {
+        resolved_font_id: id,
+        glyph_id: ResolvedGlyphId::new(u32::from(glyph_id)),
+        x: 0.0,
+        y: 0.0,
+        x_advance: 8.0,
+        cluster_start: 0,
+        cluster_end: 1,
+    };
+    let rasterize = |atlas: &mut WgpuGlyphAtlas| {
+        atlas
+            .rasterize_resolved_cluster(
+                std::slice::from_ref(&glyph),
+                None,
+                16.0,
+                SubpixelBin::Zero,
+                SubpixelBin::Zero,
+                false,
+            )
+            .and_then(|mut parts| (parts.len() == 1).then(|| parts.remove(0)))
+            .expect("rasterize the installed Monaco glyph")
+    };
+    let at_one = rasterize(&mut atlas);
+    atlas.set_scale_factor(2.0);
+    let at_two = rasterize(&mut atlas);
+    assert!(at_one.width > 0 && at_one.height > 0);
+    assert!(
+        at_two.width.abs_diff(at_one.width * 2) <= 2,
+        "2x scale must double the physical mask width: {} -> {}",
+        at_one.width,
+        at_two.width
+    );
+    assert!(
+        at_two.height.abs_diff(at_one.height * 2) <= 2,
+        "2x scale must double the physical mask height: {} -> {}",
+        at_one.height,
+        at_two.height
+    );
+    assert!((at_two.advance_width - at_one.advance_width * 2.0).abs() < 0.01);
 }
 
 #[test]

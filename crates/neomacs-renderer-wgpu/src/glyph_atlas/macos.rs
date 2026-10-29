@@ -14,14 +14,22 @@ use objc2_core_graphics::{
 use objc2_core_text::{
     CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromData, CTFontOrientation,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::Hasher;
 use std::ptr::{self, NonNull};
 use swash::TableProvider;
 
 #[derive(Default)]
 pub(super) struct NativeRasterizer {
-    // fontdb IDs are generation-local. The atlas clears this cache whenever
-    // its source database or scale changes. Cache failures as well as fonts.
+    // Independently pinned collection faces can map the same file at different
+    // addresses. Intern by content, comparing bytes within hash buckets so a
+    // collision can never substitute another font. `clear()` drops the backing
+    // together with the fonts, which retain their own reference meanwhile.
+    backing: FxHashMap<u64, Vec<CFRetained<CFData>>>,
+    // fontdb IDs are generation-local, so `clear()` drops these caches when
+    // the font system is replaced. Sizes are physical font sizes (the backing
+    // scale is already multiplied in), so a DPI change adds entries instead
+    // of invalidating existing ones. Failures are cached alongside fonts.
     sources: FxHashMap<fontdb::ID, Option<CFRetained<CTFont>>>,
     fonts: FxHashMap<(fontdb::ID, u32), CFRetained<CTFont>>,
 }
@@ -30,6 +38,7 @@ impl NativeRasterizer {
     pub(super) fn clear(&mut self) {
         self.fonts.clear();
         self.sources.clear();
+        self.backing.clear();
     }
 
     pub(super) fn rasterize(
@@ -55,11 +64,16 @@ impl NativeRasterizer {
         if !size.is_finite() || size <= 0.0 {
             return None;
         }
-        // Copy a collection's bytes only once, not once for every text scale.
+        // Hash/compare only when a face is first opened, never per glyph or
+        // size. Separate mappings of identical bytes share the native copy.
+        let backing = &mut self.backing;
         let base = self
             .sources
             .entry(key.font_id)
-            .or_insert_with(|| open_exact_font(source.data(), postscript_name, 1.0))
+            .or_insert_with(|| {
+                let data = intern_backing(backing, source.data());
+                open_exact_font(&data, postscript_name, 1.0)
+            })
             .as_ref()?;
         let font = self
             .fonts
@@ -73,14 +87,36 @@ impl NativeRasterizer {
     }
 }
 
-fn open_exact_font(bytes: &[u8], postscript_name: &str, size: f32) -> Option<CFRetained<CTFont>> {
+fn backing_hash(bytes: &[u8]) -> u64 {
+    let mut hash = FxHasher::default();
+    hash.write(bytes);
+    hash.finish()
+}
+
+fn intern_backing(
+    backing: &mut FxHashMap<u64, Vec<CFRetained<CFData>>>,
+    bytes: &[u8],
+) -> CFRetained<CFData> {
+    let candidates = backing.entry(backing_hash(bytes)).or_default();
+    for data in candidates.iter() {
+        // SAFETY: these are immutable CFData copies created below; no mutable
+        // alias is exposed or passed to CoreText.
+        if unsafe { data.as_bytes_unchecked() } == bytes {
+            return data.clone();
+        }
+    }
     let data = CFData::from_bytes(bytes);
+    candidates.push(data.clone());
+    data
+}
+
+fn open_exact_font(data: &CFData, postscript_name: &str, size: f32) -> Option<CFRetained<CTFont>> {
     // SAFETY: CoreText returns an array of CTFontDescriptor objects, retained
     // here and by each typed get. Descriptors refer to these bytes, not to a
     // system family lookup (which could select another installed font).
     let descriptors = unsafe {
         CFRetained::cast_unchecked::<CFArray<CTFontDescriptor>>(
-            CTFontManagerCreateFontDescriptorsFromData(&data),
+            CTFontManagerCreateFontDescriptorsFromData(data),
         )
     };
     for index in 0..descriptors.len() {
@@ -108,8 +144,9 @@ fn rasterize(font: &CTFont, key: CacheKey) -> Option<RasterGlyphImage> {
         )
     };
     let x_offset = f64::from(key.x_bin.as_float());
-    // Atlas y bins increase downwards, Core Graphics coordinates upwards.
-    let y_offset = -f64::from(key.y_bin.as_float());
+    // Match the Swash placement path this replaces: a positive atlas y bin
+    // shifts ink upwards, and Core Graphics y also increases upwards.
+    let y_offset = f64::from(key.y_bin.as_float());
     if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
         return Some(RasterGlyphImage {
             left: 0,
@@ -143,7 +180,13 @@ fn rasterize(font: &CTFont, key: CacheKey) -> Option<RasterGlyphImage> {
     }
     let width = width as usize;
     let height = height as usize;
-    let mut pixels = vec![0u8; width.checked_mul(height)?.checked_mul(4)?];
+    // A corrupt or oversized font metric must not turn one glyph into a
+    // multi-hundred-megabyte allocation: 4 Mi pixels is 16 MiB of RGBA.
+    let pixel_count = width.checked_mul(height)?;
+    if pixel_count > 4 * 1024 * 1024 {
+        return None;
+    }
+    let mut pixels = vec![0u8; pixel_count.checked_mul(4)?];
     let colorspace = CGColorSpace::new_device_rgb()?;
     // An opaque RGB bitmap enables native font smoothing. Alpha-only contexts
     // disable that treatment and recreate the thin strokes this adapter fixes.
