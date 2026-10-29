@@ -71,20 +71,23 @@ fn auth_source_xoauth2_file_creds_requires_gpg_extension() -> ParityBatchCase {
     ParityBatchCase::value(
         "auth_source_xoauth2_file_creds_requires_gpg_extension",
         r##"(progn
+         (require 'cl-lib)
          (require 'epg)
-         ;; The decryption attempt reaches the host's gpg through `epg', and
-         ;; its failure text is a property of that build (a Nix gpg reports
-         ;; `no usable configuration', the CI image's reports `Can't decrypt,
-         ;; Exit').  The fixture owns the program through the documented
-         ;; `epg-gpg-program' variable and makes it report one fixed failure,
-         ;; so the recorded text is the same on every host.
-         (let* ((root (getenv "NEOMACS_TEST_SANDBOX_ROOT"))
-                (gpg (expand-file-name "auth-source-xoauth2-gpg" root)))
-           (write-region
-            "#!/bin/sh\necho \"gpg: no usable configuration\" >&2\nexit 2\n"
-            nil gpg nil 'silent)
-           (set-file-modes gpg #o755)
-           (let ((epg-gpg-program gpg))
+         ;; The decryption attempt reaches GnuPG through `epg', and its
+         ;; failure text is a property of the host build (a host with no
+         ;; gpg reports `no usable configuration', the CI image's gpg
+         ;; reports `Can't decrypt, Exit').  Binding `epg-gpg-program' does
+         ;; not own that: `epg-context--make' asks `epg-find-configuration',
+         ;; which returns a configuration cached by an earlier probe in this
+         ;; shared process and otherwise searches $PATH itself.  Clear the
+         ;; cache and make gpg/gpg2 invisible for this probe, so the
+         ;; recorded no-GnuPG contract is reproduced on every host.
+         (setq epg--configurations nil)
+         (let ((executable-find-original (symbol-function 'executable-find)))
+           (cl-letf (((symbol-function 'executable-find)
+                      (lambda (program &optional remote)
+                        (unless (member program '("gpg" "gpg2"))
+                          (funcall executable-find-original program remote)))))
              (mapcar
               (lambda (name)
                 (auth-source-xoauth2-test-error-data
