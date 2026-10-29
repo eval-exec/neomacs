@@ -434,11 +434,13 @@ impl RenderApp {
         let w = logical_width;
         let h = logical_height;
         let border = 5.0_f32;
-        let on_left = x < border;
-        let on_right = x >= w - border;
-        // Without a custom titlebar the top rows are buffer text. Only a
-        // positive custom-titlebar height makes the top edge a resize zone.
-        let on_top = chrome.titlebar_height > 0.0 && y < border;
+        let has_custom_titlebar = chrome.titlebar_height > 0.0;
+        let on_left = has_custom_titlebar && x < border;
+        let on_right = has_custom_titlebar && x >= w - border;
+        // Without a custom titlebar the top row and side columns are buffer
+        // text. The bottom edge stays available so an undecorated frame can
+        // still be resized by mouse.
+        let on_top = has_custom_titlebar && y < border;
         let on_bottom = y >= h - border;
         match (on_left, on_right, on_top, on_bottom) {
             (true, _, true, _) => Some(ResizeDirection::NorthWest),
