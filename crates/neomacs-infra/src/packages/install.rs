@@ -213,6 +213,16 @@ pub fn deterministic_process_environment(
             std::ffi::OsString::from("TZ"),
             std::ffi::OsString::from("UTC"),
         ),
+        // CPython 3.11+ adds fine-grained error-location lines
+        // ("    ~~~~~~^^^^^") to tracebacks; earlier interpreters do not,
+        // and which python a host pins is a host property.  A traceback the
+        // editor surfaces is program output, not the interpreter's
+        // decoration, so disable the ranges for every editor-spawned python
+        // (the variable is ignored before 3.11).
+        (
+            std::ffi::OsString::from("PYTHONNODEBUGRANGES"),
+            std::ffi::OsString::from("1"),
+        ),
         (
             std::ffi::OsString::from("USER"),
             std::ffi::OsString::from("melpa-test"),
