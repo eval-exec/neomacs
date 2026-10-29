@@ -5,6 +5,7 @@
 //! JIT's Context ABI.
 
 use super::Context;
+use crate::emacs_core::process::NativeConnectObservationSlot;
 use crate::emacs_core::regex::MatchData;
 use std::mem::{offset_of, size_of};
 
@@ -23,10 +24,22 @@ fn every_context_offset_is_mains() {
     assert_eq!(size_of::<MatchData>(), 232, "MatchData size (debug)");
     #[cfg(not(debug_assertions))]
     assert_eq!(size_of::<MatchData>(), 224, "MatchData size (release)");
+    // Native-connect observation adds a separately typed, cfg(test)-only slot
+    // inside ProcessManager. Its owner pins the slot size at compile time, so
+    // a future change cannot be absorbed into the production layout contract.
+    let observation_extra = size_of::<NativeConnectObservationSlot>();
     #[cfg(debug_assertions)]
-    assert_eq!(size_of::<Context>(), 44464, "Context size (debug)");
+    assert_eq!(
+        size_of::<Context>(),
+        44464 + observation_extra,
+        "Context size (debug with test observer)"
+    );
     #[cfg(not(debug_assertions))]
-    assert_eq!(size_of::<Context>(), 44456, "Context size (release)");
+    assert_eq!(
+        size_of::<Context>(),
+        44456 + observation_extra,
+        "Context size (release with test observer)"
+    );
     let table: &[(usize, usize, &str)] = &[
         (
             0,
@@ -622,15 +635,20 @@ fn every_context_offset_is_mains() {
     ];
     // The table pins the shipped release layout. A debug build adds MatchData's
     // extra word to every field after `match_data`; derive that shift from the
-    // measured type sizes rather than hard-coding it.
+    // measured type sizes rather than hard-coding it. The cfg(test) native
+    // connect slot shifts only fields after ProcessManager; every original
+    // production offset remains pinned in the table.
     let match_data = offset_of!(Context, match_data);
+    let processes = offset_of!(Context, processes);
     let debug_extra = size_of::<MatchData>() - 224;
     let adjusted = |pinned: usize| {
-        if pinned > match_data {
-            pinned + debug_extra
+        let debug_shift = if pinned > match_data { debug_extra } else { 0 };
+        let observation_shift = if pinned > processes {
+            observation_extra
         } else {
-            pinned
-        }
+            0
+        };
+        pinned + debug_shift + observation_shift
     };
     let moved: Vec<String> = table
         .iter()

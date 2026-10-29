@@ -1109,13 +1109,27 @@ static_assertions::assert_impl_all!(NativeConnectWritable: Send, std::fmt::Debug
 #[cfg(test)]
 static_assertions::assert_not_impl_any!(NativeConnectWritable: Clone, Copy);
 
+/// Test-only storage for a consumed native-connect observation.
+/// The layout contract accounts for this slot separately from production state.
+#[cfg(test)]
+#[derive(Default, Debug)]
+#[repr(transparent)]
+pub(crate) struct NativeConnectObservationSlot(std::sync::Mutex<Option<NativeConnectObserver>>);
+
+#[cfg(test)]
+static_assertions::assert_impl_all!(NativeConnectObservationSlot: Send, Sync, std::fmt::Debug);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(NativeConnectObservationSlot: Clone, Copy);
+#[cfg(all(test, target_arch = "x86_64", target_os = "linux"))]
+static_assertions::const_assert_eq!(std::mem::size_of::<NativeConnectObservationSlot>(), 40);
+
 pub(super) struct ProcessWaitBackend {
     /// A per-backend, one-shot scheduling gate for input-wakeup regressions.
     /// Installation and consumption are synchronized; callbacks own no Lisp state.
     #[cfg(test)]
     before_next_wait: std::sync::Mutex<Option<Box<dyn FnOnce(BackendWaitEntry) + Send>>>,
     #[cfg(test)]
-    native_connect_observer: std::sync::Mutex<Option<NativeConnectObserver>>,
+    native_connect_observer: NativeConnectObservationSlot,
     #[cfg(unix)]
     pub(super) signal_fd: Option<std::os::fd::RawFd>,
     /// I/O multiplexer for process descriptors and cross-thread notifications.
@@ -1244,7 +1258,7 @@ impl ProcessWaitBackend {
             #[cfg(test)]
             before_next_wait: std::sync::Mutex::new(None),
             #[cfg(test)]
-            native_connect_observer: std::sync::Mutex::new(None),
+            native_connect_observer: NativeConnectObservationSlot::default(),
             #[cfg(unix)]
             signal_fd,
             notification_pending: Arc::new(AtomicBool::new(false)),
@@ -7322,6 +7336,7 @@ impl ProcessManager {
         let slot = self
             .wait_backend
             .native_connect_observer
+            .0
             .get_mut()
             .expect("connect observer lock");
         assert!(slot.is_none(), "native connect observer already installed");
@@ -7338,6 +7353,7 @@ impl ProcessManager {
             let mut slot = self
                 .wait_backend
                 .native_connect_observer
+                .0
                 .lock()
                 .expect("connect observer lock");
             match slot.as_ref() {
