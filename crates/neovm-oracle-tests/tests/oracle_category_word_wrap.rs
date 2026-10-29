@@ -37,7 +37,7 @@ fn category_word_wrap_cjk_uses_the_real_terminal_row_edge() {
        (wrap623-row text nil) (wrap623-row text t)
        (wrap623-row text t (lambda () (modify-category-entry ?提 ?| nil t))))))"#
     );
-    assert_interactive_parity(&form, "(24 2 15 19 15)");
+    assert_interactive_parity(&form, expect_test::expect![["(24 2 15 19 15)"]]);
 }
 
 #[test]
@@ -55,13 +55,13 @@ fn category_word_wrap_custom_ascii_table_obeys_kinsoku() {
        (wrap623-row opening t (lambda () (modify-category-entry ?x ?|) (modify-category-entry ?? ?|)))
        (wrap623-row opening t (lambda () (modify-category-entry ?x ?|) (modify-category-entry ?? ?|) (modify-category-entry ?? ?<))))))"#
     );
-    assert_interactive_parity(&form, "(15 24 24 23 24 23)");
+    assert_interactive_parity(&form, expect_test::expect![["(15 24 24 23 24 23)"]]);
 }
 
 // GNU --batch does not perform interactive word wrapping, even if a form
 // creates a terminal frame. Reuse the owned PTY/drainer and run each editor's
 // actual event loop; the Lisp probe writes its result independently of ANSI.
-fn assert_interactive_parity(form: &str, expected: &str) {
+fn assert_interactive_parity(form: &str, expected: expect_test::Expect) {
     let temp = tempfile::tempdir().unwrap();
     let script = temp.path().join("probe.el");
     fs::write(
@@ -80,13 +80,22 @@ fn assert_interactive_parity(form: &str, expected: &str) {
         ),
     )
     .unwrap();
-    for (label, binary) in [
-        ("GNU", common::oracle_emacs_path()),
-        ("Neomacs", common::neomacs_binary_path().into()),
-    ] {
+    let run = |label: &str, binary: std::path::PathBuf| {
         let result = temp.path().join(format!("{label}.result"));
         run_editor(&binary, &script, &result);
-        assert_eq!(fs::read_to_string(&result).unwrap(), expected, "{label}");
+        fs::read_to_string(&result).unwrap()
+    };
+    let gnu = || run("GNU", common::oracle_emacs_path());
+    let neo = || run("Neomacs", common::neomacs_binary_path().into());
+    match common::OracleMode::from_env() {
+        common::OracleMode::Snapshot => expected.assert_eq(&neo()),
+        common::OracleMode::Refresh => expected.assert_eq(&gnu()),
+        common::OracleMode::Verify => {
+            let reference = gnu();
+            expected.assert_eq(&reference);
+            assert_eq!(neo(), reference, "interactive word-wrap parity");
+        }
+        common::OracleMode::Live => assert_eq!(neo(), gnu(), "interactive word-wrap parity"),
     }
 }
 
