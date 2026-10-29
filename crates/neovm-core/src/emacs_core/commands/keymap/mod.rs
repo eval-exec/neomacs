@@ -4009,6 +4009,93 @@ pub fn list_keymap_define_seq_in_obarray_ex(
     Ok(())
 }
 
+/// Define a sequence with runtime prefix resolution and the REMOVE flag.
+/// Menu-item filters must run before deciding whether a binding is a prefix,
+/// just as in GNU `access_keymap(..., noinherit=true, autoload=true)`.
+pub(crate) fn list_keymap_define_seq_runtime_ex(
+    ctx: &mut Context,
+    keymap: Value,
+    events: &[Value],
+    def: Value,
+    remove: bool,
+) -> Result<(), Flow> {
+    let symbol_mode = ctx.symbol_mode();
+    note_keymap_mutation();
+    if events.is_empty() {
+        return Ok(());
+    }
+    if events.len() == 1 {
+        if remove {
+            list_keymap_remove(keymap, events[0], symbol_mode);
+        } else {
+            list_keymap_define(keymap, events[0], def, symbol_mode);
+        }
+        return Ok(());
+    }
+
+    // Filters can run arbitrary Lisp, including GC and replacing the original
+    // bindings. Keep resolved maps, the definition and heap events alive for
+    // the entire walk, including maps returned only by a filter.
+    let root_scope = ctx.save_specpdl_roots();
+    ctx.push_specpdl_root(keymap);
+    ctx.push_specpdl_root(def);
+    for event in events {
+        ctx.push_specpdl_root(*event);
+    }
+    let result = (|| {
+        let mut current_map = keymap;
+        for (i, event) in events.iter().enumerate() {
+            if i == events.len() - 1 {
+                if remove {
+                    list_keymap_remove(current_map, *event, symbol_mode);
+                } else {
+                    list_keymap_define(current_map, *event, def, symbol_mode);
+                }
+                return Ok(());
+            }
+            // Use noinherit: only look in current keymap level for prefix,
+            // matching GNU Emacs define-key which uses access_keymap(noinherit=1)
+            let binding = list_keymap_access_with_event(
+                &current_map,
+                KeymapLookupEvent::from_event(*event, symbol_mode),
+                true,
+                false,
+                true,
+                &mut &mut *ctx,
+                symbol_mode,
+            )?;
+            if let Some(prefix_map) =
+                resolve_prefix_keymap_binding_in_obarray(ctx.obarray(), &binding, symbol_mode)
+            {
+                current_map = prefix_map;
+            } else if binding.is_nil() {
+                // No binding, create a new prefix keymap.
+                // Matches GNU `define_as_prefix` (keymap.c:1446-1452).
+                let prefix_map = make_sparse_list_keymap();
+                list_keymap_define(current_map, *event, prefix_map, symbol_mode);
+                current_map = prefix_map;
+            } else {
+                // GNU `Fdefine_key` only calls `define_as_prefix` after
+                // `access_keymap` returns nil.  Existing non-prefix bindings are
+                // errors, even though a fresh undefined key is promoted to a new
+                // prefix keymap.
+                let full = describe_event_sequence(events, symbol_mode);
+                let prefix = describe_event_sequence(&events[..=i], symbol_mode);
+                return Err(signal(
+                    "error",
+                    vec![Value::string(format!(
+                        "Key sequence {full} starts with non-prefix key {prefix}"
+                    ))],
+                ));
+            }
+            ctx.push_specpdl_root(current_map);
+        }
+        Ok(())
+    })();
+    ctx.restore_specpdl_roots(root_scope);
+    result
+}
+
 /// Generate a human-readable description of an event sequence for error messages.
 /// Uses the same format as GNU Emacs `key-description`: function keys use
 /// angle brackets (e.g., `<f1>`), characters use their standard description.

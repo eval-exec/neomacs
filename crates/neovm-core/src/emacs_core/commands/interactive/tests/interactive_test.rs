@@ -2690,6 +2690,80 @@ fn define_key_normalizes_lucid_events_in_keyboard_macro_definitions() {
 }
 
 #[test]
+fn define_key_resolves_filtered_toolbar_prefix_for_define_and_remove() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(let* ((m (make-sparse-keymap))
+                      (tool (make-sparse-keymap))
+                      (calls 0)
+                      (item (list 'menu-item "tool bar" 'ignore :filter
+                                  (lambda (_command)
+                                    (setq calls (1+ calls))
+                                    tool))))
+                 (define-key m [tool-bar] item)
+                 (let ((stored (cdr (assq 'tool-bar m)))
+                       (defined (define-key m [tool-bar S-back-button]
+                                  'back-button-local-backward)))
+                   (list defined
+                         (lookup-key tool [S-back-button])
+                         (eq (cdr (assq 'tool-bar m)) stored)
+                         calls
+                         (define-key m [tool-bar S-back-button] nil t)
+                         (lookup-key tool [S-back-button])
+                         calls)))"#,
+        ),
+        "OK (back-button-local-backward back-button-local-backward t 1 nil nil 2)"
+    );
+}
+
+#[test]
+fn define_key_resolved_filter_preserves_nil_and_nonprefix_behavior() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(let ((m (make-sparse-keymap)))
+                 (define-key m [empty]
+                   '(menu-item "empty" ignore :filter (lambda (_) nil)))
+                 (define-key m [command]
+                   '(menu-item "command" nil :filter (lambda (_) 'ignore)))
+                 (define-key m [empty leaf] 'leaf-command)
+                 (list (lookup-key m [empty leaf])
+                       (condition-case err
+                           (define-key m [command leaf] 'ignore)
+                         (error (car err)))))"#,
+        ),
+        "OK (leaf-command error)"
+    );
+}
+
+#[test]
+fn define_key_filtered_prefix_does_not_modify_parent_bindings() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(
+        eval_one(
+            r#"(let ((m (make-sparse-keymap))
+                     (parent (make-sparse-keymap))
+                     (tool (make-sparse-keymap))
+                     (parent-tool (make-sparse-keymap)))
+                 (define-key parent-tool [leaf] 'parent-command)
+                 (define-key parent [tool-bar]
+                   (list 'menu-item "parent tool bar" 'ignore :filter
+                         (lambda (_) parent-tool)))
+                 (set-keymap-parent m parent)
+                 (define-key m [tool-bar leaf] 'child-command)
+                 (define-key m [filtered]
+                   (list 'menu-item "tool bar" 'ignore :filter (lambda (_) tool)))
+                 (define-key m [filtered leaf] 'filtered-command)
+                 (list (lookup-key m [tool-bar leaf])
+                       (lookup-key parent-tool [leaf])
+                       (lookup-key tool [leaf])))"#,
+        ),
+        "OK (child-command parent-command filtered-command)"
+    );
+}
+
+#[test]
 fn define_key_sequence_preserves_gnu_prefix_symbol_bindings() {
     crate::test_utils::init_test_tracing();
     assert_eq!(

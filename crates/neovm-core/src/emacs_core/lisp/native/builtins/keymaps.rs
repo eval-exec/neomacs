@@ -11,7 +11,7 @@ use super::keymap::{
     collect_minor_mode_maps_in_state, current_active_maps_for_position,
     expand_meta_prefix_char_events_in_obarray, get_keymap_in_obarray, get_keymap_in_runtime,
     is_list_keymap, key_event_to_emacs_event, list_keymap_accessible, list_keymap_copy,
-    list_keymap_define_seq_in_obarray_ex, list_keymap_inherits_from, list_keymap_parent,
+    list_keymap_define_seq_runtime_ex, list_keymap_inherits_from, list_keymap_parent,
     list_keymap_set_parent, lookup_key_in_keymaps_in_obarray_runtime, make_list_keymap,
     make_sparse_list_keymap, maybe_keymap_in_runtime,
 };
@@ -358,16 +358,7 @@ pub(super) fn builtin_define_key(eval: &mut super::eval::Context, args: Vec<Valu
     {
         events = expanded;
     }
-    if let Err(msg) = list_keymap_define_seq_in_obarray_ex(
-        eval.obarray(),
-        keymap,
-        &events,
-        def,
-        remove,
-        symbol_mode,
-    ) {
-        return Err(signal("error", vec![Value::string(msg)]));
-    }
+    list_keymap_define_seq_runtime_ex(eval, keymap, &events, def, remove)?;
     Ok(def)
 }
 
