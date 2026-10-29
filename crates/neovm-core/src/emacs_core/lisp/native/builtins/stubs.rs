@@ -135,13 +135,18 @@ fn cached_primary_selection_text() -> Option<String> {
     NEOMACS_PRIMARY_SELECTION_TEXT.with(|slot| slot.borrow().clone())
 }
 
+/// GNU NS reports monitor geometry in points, the unit frame sizes use;
+/// the frontend snapshot holds device pixels.
 fn monitor_geometry_value(monitor: &NeomacsMonitorInfo) -> Value {
-    Value::list(vec![
-        Value::fixnum(monitor.x as i64),
-        Value::fixnum(monitor.y as i64),
-        Value::fixnum(monitor.width as i64),
-        Value::fixnum(monitor.height as i64),
-    ])
+    // A broken scale factor keeps the old device-pixel values rather than
+    // signaling, so init files that read monitor attributes keep loading.
+    let rect = display::monitor_rect_in_display_pixels(monitor).unwrap_or([
+        monitor.x as i64,
+        monitor.y as i64,
+        monitor.width as i64,
+        monitor.height as i64,
+    ]);
+    Value::list(rect.map(Value::fixnum).to_vec())
 }
 
 fn monitor_mm_size_value(monitor: &NeomacsMonitorInfo) -> Value {

@@ -20,6 +20,7 @@ use crate::window::{FrameId, WindowId};
 use strum::{EnumString, IntoStaticStr};
 
 mod desktop;
+pub(crate) use desktop::monitor_rect_in_display_pixels;
 mod tooltip;
 pub(crate) use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
 

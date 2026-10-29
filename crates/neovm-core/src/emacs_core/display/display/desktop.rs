@@ -30,6 +30,27 @@ impl DisplayPixelConvention {
             Self::MacPoints => Err(DesktopUnavailable),
         }
     }
+
+    fn rect(
+        self,
+        monitor: &NeomacsMonitorInfo,
+    ) -> Result<(f64, f64, f64, f64), DesktopUnavailable> {
+        let divisor = self.divisor(monitor)?;
+        Ok((
+            f64::from(monitor.x) / divisor,
+            f64::from(monitor.y) / divisor,
+            f64::from(monitor.width) / divisor,
+            f64::from(monitor.height) / divisor,
+        ))
+    }
+}
+
+/// One monitor's `(x y width height)` in the same units as frame pixel
+/// sizes: points on macOS, device pixels elsewhere.  `None` when a macOS
+/// monitor has no usable scale factor.
+pub(crate) fn monitor_rect_in_display_pixels(monitor: &NeomacsMonitorInfo) -> Option<[i64; 4]> {
+    let (x, y, w, h) = DisplayPixelConvention::current().rect(monitor).ok()?;
+    Some([x, y, w, h].map(|v| v.round() as i64))
 }
 
 pub(super) struct DesktopExtent {
@@ -48,11 +69,8 @@ impl DesktopExtent {
             if monitor.width <= 0 || monitor.height <= 0 {
                 return Err(DesktopUnavailable);
             }
-            let divisor = convention.divisor(monitor)?;
-            let left = f64::from(monitor.x) / divisor;
-            let top = f64::from(monitor.y) / divisor;
-            let right = left + f64::from(monitor.width) / divisor;
-            let bottom = top + f64::from(monitor.height) / divisor;
+            let (left, top, width, height) = convention.rect(monitor)?;
+            let (right, bottom) = (left + width, top + height);
             bounds = Some(match bounds {
                 None => (left, top, right, bottom),
                 Some((l, t, r, b)) => (l.min(left), t.min(top), r.max(right), b.max(bottom)),

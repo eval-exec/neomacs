@@ -3348,6 +3348,37 @@ fn graphical_display_dimensions_use_monitor_extent() {
 }
 
 #[test]
+fn monitor_attributes_geometry_uses_frame_pixel_units() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
+    let mut eval = crate::emacs_core::Context::new();
+    crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    set_neomacs_monitor_info(vec![NeomacsMonitorInfo {
+        x: 3024,
+        y: 0,
+        width: 3024,
+        height: 1964,
+        scale: 2.0,
+        width_mm: 0,
+        height_mm: 0,
+        name: Some("Retina".into()),
+    }]);
+    let list = crate::emacs_core::builtins::builtin_neomacs_display_monitor_attributes_list(
+        &mut eval,
+        vec![],
+    )
+    .unwrap();
+    set_neomacs_monitor_info(vec![]);
+    let expected = if cfg!(target_os = "macos") {
+        "(geometry 1512 0 1512 982)"
+    } else {
+        "(geometry 3024 0 3024 1964)"
+    };
+    let printed = crate::emacs_core::print::print_value(&list);
+    assert!(printed.contains(expected), "{printed}");
+}
+
+#[test]
 fn graphical_display_without_monitor_snapshot_does_not_invent_dimensions() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
