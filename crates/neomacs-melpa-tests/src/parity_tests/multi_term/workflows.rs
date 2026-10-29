@@ -192,7 +192,26 @@ fn killing_a_terminal_buffer_terminates_its_live_process() -> ParityBatchCase {
       (list :victim-live (and (buffer-live-p victim) t)
             :process (list :live (and (process-live-p process) t)
                            :status (process-status process)
-                           :exit-status (process-exit-status process))
+                           ;; GNU's `kill_buffer_processes' (src/buffer.c)
+                           ;; sends SIGHUP when the buffer dies, while
+                           ;; multi-term's `kill-buffer-hook' runs
+                           ;; `term-quit-subjob', which types VQUIT into the
+                           ;; pty (process.c SIGNALS_VIA_CHARACTERS).  Both
+                           ;; are the product's own termination signals; the
+                           ;; one the child handles first depends on kernel
+                           ;; scheduling (observed: SIGQUIT on a loaded CI
+                           ;; runner, SIGHUP elsewhere for the same binary).
+                           ;; Report the enumerated set so a normal exit or
+                           ;; any other signal still fails the snapshot.
+                           :termination
+                           (let ((status (process-status process))
+                                 (code (process-exit-status process)))
+                             (cond ((and (eq status 'signal)
+                                         (memq code '(1 3)))
+                                    'hangup-or-quit)
+                                   ((eq status 'signal)
+                                    (list 'signal code))
+                                   (t (list status code)))))
             :survivor (list :selected
                             (eq (window-buffer (selected-window)) survivor)
                             :name (buffer-name survivor)
@@ -202,7 +221,7 @@ fn killing_a_terminal_buffer_terminates_its_live_process() -> ParityBatchCase {
             :managed (mapcar #'buffer-name multi-term-buffer-list)))))
 "####;
     let expected = expect![[
-        r#"OK (:victim-live nil :process (:live nil :status signal :exit-status 1) :survivor (:selected t :name "*terminal<2>*" :mode term-mode :process-live t) :managed ("*terminal<2>*"))"#
+        r#"OK (:victim-live nil :process (:live nil :status signal :termination hangup-or-quit) :survivor (:selected t :name "*terminal<2>*" :mode term-mode :process-live t) :managed ("*terminal<2>*"))"#
     ]];
     ParityBatchCase::value(
         "killing_a_terminal_buffer_terminates_its_live_process",
