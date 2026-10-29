@@ -35454,9 +35454,8 @@ What it costs and what it buys, measured in the resulting image against GNU
 The last three rows are the gain: three facts GNU's dump has that this one does
 not.  The first four are the price.
 
-**Cost 1, `easy-mmode` in the dump.**  `lisp/term/neo-win.el:42` requires it,
-and it needs it for two `define-minor-mode`s, at `:514`
-(`neomacs-scroll-indicator-mode`) and `:538` (`neomacs-custom-titlebar-mode`).
+**Cost 1, `easy-mmode` in the dump.**  `lisp/term/neo-win.el` requires it,
+and it needs it for `neomacs-scroll-indicator-mode`.
 **No GNU `term/FOO-win.el` contains a `define-minor-mode.`**  `grep` over
 `lisp/term/` finds exactly two, `tvi970.el:102` and `vt100.el:41`, and both are
 TTY files loaded at runtime and never dumped.  So no GNU image has
