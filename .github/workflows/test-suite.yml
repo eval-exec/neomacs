@@ -621,12 +621,22 @@ jobs:
 
       - name: Run deterministic package ecosystem compatibility tests
         run: |
+          # Every batch test drives a real GNU Emacs and a real Neomacs (and
+          # whatever helpers the package needs) for up to a few minutes, so
+          # nextest's default one-test-per-core scheduling oversubscribes a
+          # 4-vCPU runner: the 2026-10-29 run lost corfu to a RestartProbe
+          # timeout, apheleia to a 255 restart, and multi_term to a signal
+          # race, while the same tests pass on a quiet host.  Two at a time
+          # keeps each editor's processes scheduled; the observed shard wall
+          # times (4-9.5 min at four threads) stay inside the 30-minute
+          # timeout with the halved width.
           cargo nextest run \
             --archive-file neomacs-workspace-tests.tar.zst \
             --extract-to "$TMPDIR/nextest" \
             -E "$NEXTEST_FILTER" \
             --partition "${{ matrix.partition }}" \
             --workspace-remap "$GITHUB_WORKSPACE" \
+            --test-threads 2 \
             --success-output immediate \
             --no-fail-fast
 
