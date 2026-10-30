@@ -4008,6 +4008,7 @@ dependencies = [
  "libc",
  "neomacs-infra",
  "neomacs-melpa-test-support",
+ "neomacs-test-env",
  "neomacs-test-fonts",
  "pollster",
  "rustix 1.1.4",
