@@ -482,11 +482,16 @@ pub(super) fn edit_and_write_gitignore(session: &mut TuiSession, path: &Path) {
 }
 
 pub(super) fn eval_both(pair: &mut PackageTuiPair, form: &str) {
-    send_to_both(pair, |session| {
-        session.send_key("M-:");
-        session.send(form.as_bytes());
-        session.send_key("RET");
-    });
+    // The 17c eval barrier: never let the next command race the eval
+    // minibuffer.  The fixture's expect/await forms can consume its stage
+    // budget, and the minibuffer row is only repainted after the submitted
+    // command returns, so the barrier uses that same budget.
+    neomacs_tui_tests::pair::eval_expression_within(
+        &mut pair.gnu,
+        &mut pair.neo,
+        form,
+        STAGE_TIMEOUT,
+    );
 }
 
 pub(super) fn capture_editor(session: &mut TuiSession, stage: &str, editor: &str) -> String {
@@ -507,14 +512,13 @@ pub(super) fn capture_editor(session: &mut TuiSession, stage: &str, editor: &str
     let pending = elisp_string(&pending_stage);
     let pending_file = elisp_string(&format!("{pending_stage}.state"));
     let final_file = elisp_string(&format!("{stage}.state"));
-    session.send_key("M-:");
-    session.send(
-        format!(
-            r#"(progn (neomacs-helm-gitignore-tui-await-http-idle) (prog1 (neomacs-helm-gitignore-tui-capture {pending}) (rename-file (expand-file-name {pending_file} (getenv "HOME")) (expand-file-name {final_file} (getenv "HOME")) nil)))"#
-        )
-        .as_bytes(),
+    let expression = format!(
+        r#"(progn (neomacs-helm-gitignore-tui-await-http-idle) (prog1 (neomacs-helm-gitignore-tui-capture {pending}) (rename-file (expand-file-name {pending_file} (getenv "HOME")) (expand-file-name {final_file} (getenv "HOME")) nil)))"#
     );
-    session.send_key("RET");
+    // Same 17c barrier as `eval_both`: capture only counts once the eval
+    // minibuffer has exited, so the caller's next input cannot land inside
+    // it.  The form awaits HTTP idle for up to its stage budget.
+    neomacs_tui_tests::pair::eval_expression_one_within(session, &expression, STAGE_TIMEOUT);
     let deadline = Instant::now() + STAGE_TIMEOUT;
     loop {
         session.read(Duration::from_millis(10));

@@ -3,7 +3,10 @@ use std::time::Duration;
 
 use expect_test::expect;
 
-use super::{CachedMelpaOracle, HELM_CORE_MELPA_PIN, HELM_PYDOC_MELPA_PIN};
+use super::{
+    CachedMelpaOracle, HELM_CORE_MELPA_PIN, HELM_PYDOC_MELPA_PIN, eval_pair_expression,
+    eval_pair_expression_enters_minibuffer,
+};
 
 use super::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
@@ -325,11 +328,10 @@ fn helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem() {
         &mut divergences,
     );
 
-    send_to_both(&mut pair, |session| {
-        session.send_key("M-:");
-        session.send(br#"(setenv "NEOMACS_HELM_PYDOC_FAIL_DOCS" "deploymentkit")"#);
-        session.send_key("RET");
-    });
+    eval_pair_expression(
+        &mut pair,
+        r#"(setenv "NEOMACS_HELM_PYDOC_FAIL_DOCS" "deploymentkit")"#,
+    );
     open_and_filter_module(&mut pair, "deploymentkit");
     send_to_both(&mut pair, |session| session.send_key("RET"));
     wait_for_both(&mut pair, Duration::from_secs(12), |grid| {
@@ -413,25 +415,11 @@ fn overlay_face_renders_with_the_minibuffer_active() {
     // helm-selection face, the ingredient the helm-pydoc screens render.
     let setup_form = r#"(progn (switch-to-buffer (get-buffer-create "probe-faces")) (fundamental-mode) (erase-buffer) (insert "SELECTED CANDIDATE") (let ((ov (make-overlay (point-min) (point-max) (current-buffer) t nil))) (overlay-put ov 'face 'helm-selection)) (delete-other-windows) (split-window-right) (other-window 1) (set-window-start (selected-window) (point-min) t))"#;
     let mini_form = r#"(minibuffer-with-setup-hook (lambda () (redisplay)) (read-from-minibuffer "MINIPROBE: "))"#;
-    send_to_both(&mut pair, |session| {
-        session.send_key("M-:");
-        session.read_until(Duration::from_secs(8), |grid| {
-            grid.iter().any(|row| row.contains("Eval:"))
-        });
-        session.paste(setup_form);
-        session.send_key("RET");
-    });
+    eval_pair_expression(&mut pair, setup_form);
     wait_for_both(&mut pair, Duration::from_secs(10), |grid| {
         grid.iter().any(|row| row.contains("SELECTED CANDIDATE"))
     });
-    send_to_both(&mut pair, |session| {
-        session.send_key("M-:");
-        session.read_until(Duration::from_secs(8), |grid| {
-            grid.iter().any(|row| row.contains("Eval:"))
-        });
-        session.paste(mini_form);
-        session.send_key("RET");
-    });
+    eval_pair_expression_enters_minibuffer(&mut pair, mini_form);
     let mini_ready = |grid: &[String]| grid.iter().any(|row| row.contains("MINIPROBE"));
     wait_for_both(&mut pair, Duration::from_secs(10), mini_ready);
     std::thread::sleep(Duration::from_millis(500));

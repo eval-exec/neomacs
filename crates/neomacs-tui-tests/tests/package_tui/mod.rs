@@ -35,6 +35,37 @@ pub mod scenario {
     };
 }
 
+/// The eval barrier every package-TUI pair uses before its next command.
+///
+/// Evaluate a form through `M-:` and return only after the eval minibuffer
+/// has exited in both editors, through the same `minibuffer_exited` contract
+/// the paired TUI suites use (no `Eval:` prompt row, no `Minibuf` menu item,
+/// and no multi-line tail still echoing the unsubmitted form).  Driving the
+/// next command before this barrier lets a keystroke land inside the eval
+/// minibuffer: on a loaded runner the following prompt then paints over the
+/// previous echo row's tail, and the next stage observes a
+/// half-transitioned screen (TUI shard 16, helm_pydoc: `M-x` was sent
+/// 0.15 ms after the eval RET and the prompt check saw
+/// `M-x <stale echo tail>` instead of `M-x`).
+pub fn eval_pair_expression(pair: &mut scenario::PackageTuiPair, expression: &str) {
+    neomacs_tui_tests::pair::eval_expression(&mut pair.gnu, &mut pair.neo, expression);
+}
+
+/// As [`eval_pair_expression`] for a form that intentionally enters a
+/// minibuffer of its own (`read-from-minibuffer`, `completing-read`, ...):
+/// returns as soon as RET is written; the caller owns the new minibuffer and
+/// must drive it before its next display observation.
+pub fn eval_pair_expression_enters_minibuffer(
+    pair: &mut scenario::PackageTuiPair,
+    expression: &str,
+) {
+    neomacs_tui_tests::pair::eval_expression_enters_minibuffer(
+        &mut pair.gnu,
+        &mut pair.neo,
+        expression,
+    );
+}
+
 // ── Pins (rows of the lock manifests) ──────────────────────────────────
 
 pub const ACE_WINDOW_MELPA_PIN: (&str, &str) = ("ace-window", "20220911.358");

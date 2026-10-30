@@ -327,9 +327,23 @@ fn type_expression_one(session: &mut TuiSession, expression: &str) {
 /// [`eval_expression_enters_minibuffer`] instead: this function asserts that
 /// the minibuffer is gone when it returns.
 pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &str) {
+    eval_expression_within(gnu, neo, expression, Duration::from_secs(8));
+}
+
+/// [`eval_expression`] with an explicit barrier bound, for forms whose own
+/// evaluation may legitimately take longer than the default: the minibuffer
+/// exits on RET but its row is repainted only after the submitted command
+/// returns, so a caller that waits for a slow form's side effect needs the
+/// barrier to tolerate that form's own budget.
+pub fn eval_expression_within(
+    gnu: &mut TuiSession,
+    neo: &mut TuiSession,
+    expression: &str,
+    timeout: Duration,
+) {
     type_expression(gnu, neo, expression);
     let exited = |grid: &[String]| minibuffer_exited(grid, expression);
-    wait_for_both(gnu, neo, Duration::from_secs(8), exited);
+    wait_for_both(gnu, neo, timeout, exited);
     // wait_for_both returns on timeout; a barrier that times out must fail
     // loudly with both grids instead of letting the caller race the editor.
     let gnu_grid = gnu.text_grid();
@@ -349,9 +363,14 @@ pub fn eval_expression(gnu: &mut TuiSession, neo: &mut TuiSession, expression: &
 }
 
 pub fn eval_expression_one(session: &mut TuiSession, expression: &str) {
+    eval_expression_one_within(session, expression, Duration::from_secs(8));
+}
+
+/// [`eval_expression_one`] with an explicit barrier bound.
+pub fn eval_expression_one_within(session: &mut TuiSession, expression: &str, timeout: Duration) {
     type_expression_one(session, expression);
     let exited = |grid: &[String]| minibuffer_exited(grid, expression);
-    session.read_until(Duration::from_secs(8), exited);
+    session.read_until(timeout, exited);
     // read_until is silent on timeout; fail loudly here, as in
     // `eval_expression`.
     let grid = session.text_grid();

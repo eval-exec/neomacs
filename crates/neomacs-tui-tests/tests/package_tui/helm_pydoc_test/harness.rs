@@ -347,11 +347,7 @@ pub(super) fn capture_and_assert_pydoc_buffer(
     let expression = format!(
         r##"(with-current-buffer "*Pydoc deploymentkit*" (let ((state (list :point (point) :view-mode view-mode :read-only buffer-read-only :modified (buffer-modified-p)))) (write-region (point-min) (point-max) (expand-file-name "{file_stem}-buffer.txt" (getenv "HOME")) nil 'silent) (with-temp-file (expand-file-name "{file_stem}-state.txt" (getenv "HOME")) (insert (prin1-to-string state)))))"##
     );
-    send_to_both(pair, |session| {
-        session.send_key("M-:");
-        session.send(expression.as_bytes());
-        session.send_key("RET");
-    });
+    super::super::eval_pair_expression(pair, &expression);
 
     let deadline = Instant::now() + Duration::from_secs(8);
     let (gnu_contents, neo_contents, gnu_state, neo_state) = loop {
