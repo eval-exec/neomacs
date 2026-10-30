@@ -5814,7 +5814,12 @@ impl Context {
         let mut result = Value::NIL;
         let mut error = None;
         for form in &forms {
-            let eval_result = self.eval_sub(*form);
+            // Each form is one top-level evaluation: its root group ends
+            // when the form returns (GNU's Feval frame).
+            let eval_result = {
+                let mut boundary = special_forms::EvalBoundaryRoots::enter(self);
+                boundary.context().eval_sub(*form)
+            };
             match self.finalize_public_eval_result(eval_result) {
                 Ok(v) => result = v,
                 Err(e) => {
@@ -5834,7 +5839,10 @@ impl Context {
     /// Evaluate a single Value form, mapping Flow errors to EvalError.
     pub fn eval_form(&mut self, form: Value) -> Result<Value, EvalError> {
         self.setup_thread_locals();
-        let eval_result = self.eval_sub(form);
+        let eval_result = {
+            let mut boundary = special_forms::EvalBoundaryRoots::enter(self);
+            boundary.context().eval_sub(form)
+        };
         self.finalize_public_eval_result(eval_result)
     }
 
@@ -5849,12 +5857,14 @@ impl Context {
         }
     }
 
-    /// Legacy eval_value: delegates to eval_sub.
+    /// Legacy eval_value: delegates to eval_sub inside one evaluation
+    /// boundary (GNU `Feval`: the frame's temp roots die when it returns).
     pub fn eval_value(&mut self, value: &Value) -> EvalResult {
         if !crate::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
             self.setup_thread_locals();
         }
-        self.eval_sub(*value)
+        let mut boundary = special_forms::EvalBoundaryRoots::enter(self);
+        boundary.context().eval_sub(*value)
     }
 
     /// Evaluate all forms in a source string and return per-form results.
@@ -5880,7 +5890,13 @@ impl Context {
         }
         let mut results = Vec::with_capacity(forms.len());
         for form in &forms {
-            let result = self.eval_sub(*form).map_err(map_flow);
+            // Each form is one top-level evaluation: its root group ends when
+            // the form returns (GNU's Feval frame), even though the parsed
+            // forms keep living in `forms`.
+            let result = {
+                let mut boundary = special_forms::EvalBoundaryRoots::enter(self);
+                boundary.context().eval_sub(*form).map_err(map_flow)
+            };
             if let Ok(ref val) = result {
                 self.push_specpdl_root(*val);
             }

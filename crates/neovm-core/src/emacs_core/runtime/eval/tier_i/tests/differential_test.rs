@@ -609,3 +609,91 @@ fn weak_references_drop_when_a_let_scope_ends_in_every_tier() {
         );
     }
 }
+
+/// GNU `Flet` keeps its evaluated initializers in the `SAFE_ALLOCA`'d
+/// `temps[]` array for the whole body (eval.c:1151-1186), independently of
+/// the binding: `(setq obj nil)` drops the binding's reference but not the
+/// temp, so a weak-key table must still see the value. GNU answers (1 1);
+/// 15953b7821 rooted only dynamic values and answered (1 0).
+#[test]
+fn let_initializers_stay_rooted_through_the_body_in_every_tier() {
+    let src = r#"
+(let ((ht (make-hash-table :weakness 'key)))
+  (let ((obj (list 1 2)))
+    (puthash obj t ht)
+    (let ((before (hash-table-count ht)))
+      (setq obj nil)
+      (garbage-collect)
+      (list before (hash-table-count ht)))))
+"#;
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        "OK (1 1)",
+        "the tree walker dropped a let initializer inside the let body"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        assert_eq!(
+            run(mode, src).0,
+            off,
+            "{mode:?} dropped a let initializer inside the let body"
+        );
+    }
+}
+
+/// The dead-slot residue of a `let` stays visible to the rest of the
+/// enclosing body sequence, the way GNU's freed-but-still-scanned stack
+/// slots do: the inner let's initializer is still reachable by the
+/// `garbage-collect` in the outer body. GNU answers 1.
+#[test]
+fn let_initializer_residue_survives_the_enclosing_body_in_every_tier() {
+    let src = r#"
+(let ((ht (make-hash-table :weakness 'value)))
+  (let ((obj (list 1 2)))
+    (puthash 'key obj ht))
+  (garbage-collect)
+  (hash-table-count ht))
+"#;
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        "OK 1",
+        "the tree walker dropped the inner let's residue before the enclosing body ended"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        assert_eq!(
+            run(mode, src).0,
+            off,
+            "{mode:?} dropped the inner let's residue before the enclosing body ended"
+        );
+    }
+}
+
+/// An explicit `eval` is an evaluation boundary like GNU `Feval`'s C frame:
+/// the temps and evaluated-argument residue created while it runs must die
+/// when it returns, even though the enclosing body sequence is still
+/// running. GNU answers 0; the un-scoped `eval_call_roots` run kept the
+/// puthash key alive and answered 1.
+#[test]
+fn eval_boundary_releases_its_temporary_roots_in_every_tier() {
+    let src = r#"
+(progn
+  (setq ti-eb-ht (make-hash-table :weakness 'key))
+  (eval '(let ((obj (list 1 2))) (puthash obj t ti-eb-ht)))
+  (garbage-collect)
+  (hash-table-count ti-eb-ht))
+"#;
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        "OK 0",
+        "the tree walker leaked an eval's temporary roots into the enclosing body"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        assert_eq!(
+            run(mode, src).0,
+            off,
+            "{mode:?} leaked an eval's temporary roots into the enclosing body"
+        );
+    }
+}

@@ -429,3 +429,24 @@ fn div_cx41_undo_redo_marker_overlay_textprop_narrow_widen_mega() {
         expect,
     );
 }
+
+/// GNU `Feval` is an evaluation boundary: the temporary roots and the
+/// evaluated-argument residue of an `eval` die when it returns, so a
+/// weak-key entry created inside the eval'd form is collectable by the
+/// enclosing body's `garbage-collect`. GNU answers 0; the un-scoped
+/// `eval_call_roots` run kept the puthash key alive and answered 1.
+#[test]
+fn div_cx41_eval_boundary_releases_weak_key_residue() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[r#""OK 0""#]];
+    crate::common::assert_oracle_parity_expect(
+        r##"
+(progn
+  (setq div-cx41-boundary-table (make-hash-table :weakness 'key :test 'eq))
+  (eval '(let ((obj (cons 1 2))) (puthash obj :val div-cx41-boundary-table)))
+  (garbage-collect)
+  (hash-table-count div-cx41-boundary-table))
+"##,
+        expect,
+    );
+}

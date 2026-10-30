@@ -54,6 +54,64 @@ impl Drop for EvalTempRootsToSequenceGuard<'_> {
     }
 }
 
+/// The root group owned by one explicit evaluation: GNU `Feval`'s C frame.
+///
+/// `eval_temp_roots` and `eval_call_roots` mirror GNU's in-frame stack
+/// residue for the *enclosing body sequence*, but an explicit evaluation is
+/// itself a frame boundary: when `(eval FORM)` returns, GNU's C frame and
+/// every slot in it are gone, so the caller's body sequence must not inherit
+/// the evaluation's temps or its last call's evaluated arguments.  Drop
+/// releases exactly the roots appended since `enter`; the enclosing
+/// sequence's older run (at or below the base) is untouched, and its stale
+/// `let_floor`/`let_len` are clamped by the next sequence restore.
+#[must_use = "dropping the guard releases the evaluation's temporary roots"]
+pub(super) struct EvalBoundaryRoots<'a> {
+    context: &'a mut Context,
+    eval_base: usize,
+    call_base: usize,
+    _mutator: std::marker::PhantomData<*const ()>,
+}
+
+static_assertions::assert_not_impl_any!(EvalBoundaryRoots<'static>: Send, Sync);
+
+impl std::fmt::Debug for EvalBoundaryRoots<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvalBoundaryRoots")
+            .field("eval_base", &self.eval_base)
+            .field("call_base", &self.call_base)
+            .finish()
+    }
+}
+
+impl<'a> EvalBoundaryRoots<'a> {
+    #[inline]
+    pub(super) fn enter(context: &'a mut Context) -> Self {
+        let eval_base = context.eval_temp_roots.len();
+        let call_base = context.eval_call_roots.len();
+        Self {
+            context,
+            eval_base,
+            call_base,
+            _mutator: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    pub(super) fn context(&mut self) -> &mut Context {
+        self.context
+    }
+}
+
+impl Drop for EvalBoundaryRoots<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        // Values are Copy and their removal does not execute destructors.
+        self.context.eval_temp_roots.truncate(self.eval_base);
+        self.context.eval_call_roots.truncate(self.call_base);
+    }
+}
+
 impl Context {
     pub(super) fn try_special_form_value_id(
         &mut self,
