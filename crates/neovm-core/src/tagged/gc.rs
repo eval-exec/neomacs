@@ -45,6 +45,8 @@ use std::cell::Cell;
 use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub(crate) mod symbol_table;
+
 mod cache_root_scan;
 pub(crate) use cache_root_scan::CacheRootScan;
 
