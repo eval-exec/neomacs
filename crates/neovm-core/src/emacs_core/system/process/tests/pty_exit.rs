@@ -154,8 +154,12 @@ fn accept_process_output_pty_eio_keeps_master_for_exit_drain() {
         inner: Box::new(reader),
         step: EioReadStep::Prefix,
     })));
-    eval.poll_process_output_for_ids(vec![id], Some(id), false)
-        .expect("read prefix and EIO before status notification");
+    eval.poll_process_output_for_readiness(vec![id], Some(id), false)
+        .expect("read prefix before status notification");
+    // A live service pass yields after one read. Observe EIO on the next
+    // pass, before publishing the deliberately delayed child status.
+    eval.poll_process_output_for_readiness(vec![id], Some(id), false)
+        .expect("observe EIO before status notification");
     eval.processes
         .set_child_status_pending(id, process_status_exit_value(0));
     assert_complete_output_before_finished(&mut eval, id);
@@ -172,8 +176,10 @@ fn pty_eof_zero_timeout_polls_do_not_read_master() {
         inner: Box::new(reader),
         step: EioReadStep::Prefix,
     })));
-    eval.poll_process_output_for_ids(vec![id], Some(id), false)
-        .expect("read prefix and remove EIO master from readiness");
+    eval.poll_process_output_for_readiness(vec![id], Some(id), false)
+        .expect("read prefix");
+    eval.poll_process_output_for_readiness(vec![id], Some(id), false)
+        .expect("remove EIO master from readiness");
     let before = calls.load(Ordering::Relaxed);
     eval.obarray
         .set_symbol_value("pty-exit-child", Value::make_process(id));

@@ -159,6 +159,12 @@ pub(crate) enum ProcessOutputServiceRequest {
     TargetOnly(ProcessId),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProcessOutputServicePass {
+    Readiness,
+    StatusNotification,
+}
+
 impl ProcessOutputServiceRequest {
     pub(crate) fn none() -> Self {
         Self::None
@@ -918,6 +924,8 @@ pub struct ProcessManager {
     pub(super) processes: HashMap<ProcessId, Process>,
     pub(super) deleted_processes: HashMap<ProcessId, Process>,
     pub(super) next_id: ProcessId,
+    /// Resume live reads after this source, like GNU's last_read_channel.
+    last_read_process: ProcessId,
     /// GNU's file-scope `process_tick` (src/process.c:232-233), *"Number of
     /// events of change of status of a process"*.  GNU's `update_tick`
     /// counterpart (:234-235) has no field here on purpose: it is only ever
@@ -4265,6 +4273,14 @@ pub(super) enum ProcessOutputDrainDisposition {
     Terminal,
 }
 
+/// Live streams yield after one read; terminal notification must preserve all
+/// final output before the sentinel observes the process buffer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProcessOutputReadPolicy {
+    Live,
+    FinalDrain,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProcessOutputSource {
     Pty,
@@ -5804,6 +5820,7 @@ impl ProcessManager {
             processes: HashMap::new(),
             deleted_processes: HashMap::new(),
             next_id: 1,
+            last_read_process: 0,
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
             env_overrides: HashMap::new(),
@@ -9418,6 +9435,7 @@ impl super::super::eval::Context {
         &mut self,
         stderr_id: ProcessId,
         target_process: Option<ProcessId>,
+        policy: ProcessOutputReadPolicy,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let mut outcome = ProcessOutputServiceOutcome::default();
         let is_target = target_process.is_none_or(|target| target == stderr_id);
@@ -9436,6 +9454,9 @@ impl super::super::eval::Context {
                             .map(|p| p.filter)
                             .unwrap_or(Value::NIL);
                         self.run_process_filter_callback(stderr_id, filter, &data)?;
+                    }
+                    if policy == ProcessOutputReadPolicy::Live {
+                        return Ok(outcome);
                     }
                 }
                 ProcessOutputRead::Eof | ProcessOutputRead::NoSource => {
@@ -9457,48 +9478,39 @@ impl super::super::eval::Context {
         target_process: Option<ProcessId>,
     ) -> Result<(ProcessOutputServiceOutcome, ProcessOutputDrainDisposition), Flow> {
         let mut outcome = ProcessOutputServiceOutcome::default();
-        let mut saw_output = false;
         let is_target = target_process == Some(pid);
-
-        loop {
-            let sink = self.process_output_sink(pid);
-            match self.read_process_output_recording_coding(pid, sink)? {
-                ProcessOutputRead::Data { data, bytes_read } => {
-                    if bytes_read > 0 {
-                        saw_output = true;
-                        outcome.record_activity(is_target);
-                    }
-                    if !data.is_empty() {
-                        let filter = self
-                            .processes
-                            .get(pid)
-                            .map(|p| p.filter)
-                            .unwrap_or(Value::NIL);
-                        self.run_process_filter_callback(pid, filter, &data)?;
-                    }
+        let sink = self.process_output_sink(pid);
+        // This probe also runs for a live owner when its stderr reaches EOF.
+        // Yield after one read just like the normal readiness service path.
+        let disposition = match self.read_process_output_recording_coding(pid, sink)? {
+            ProcessOutputRead::Data { data, bytes_read } => {
+                if bytes_read > 0 {
+                    outcome.record_activity(is_target);
                 }
-                ProcessOutputRead::WouldBlock => {
-                    let disposition = if saw_output {
-                        ProcessOutputDrainDisposition::Output
-                    } else {
-                        ProcessOutputDrainDisposition::Blocked
-                    };
-                    return Ok((outcome, disposition));
+                if !data.is_empty() {
+                    let filter = self
+                        .processes
+                        .get(pid)
+                        .map(|p| p.filter)
+                        .unwrap_or(Value::NIL);
+                    self.run_process_filter_callback(pid, filter, &data)?;
                 }
-                ProcessOutputRead::Eof | ProcessOutputRead::NoSource => {
-                    let disposition = if saw_output {
-                        ProcessOutputDrainDisposition::Output
-                    } else {
-                        ProcessOutputDrainDisposition::Terminal
-                    };
-                    return Ok((outcome, disposition));
-                }
-                ProcessOutputRead::Failed => {
-                    self.processes.retire_process_at_read_failure(pid);
-                    return Ok((outcome, ProcessOutputDrainDisposition::Terminal));
+                if bytes_read > 0 {
+                    ProcessOutputDrainDisposition::Output
+                } else {
+                    ProcessOutputDrainDisposition::Blocked
                 }
             }
-        }
+            ProcessOutputRead::WouldBlock => ProcessOutputDrainDisposition::Blocked,
+            ProcessOutputRead::Eof | ProcessOutputRead::NoSource => {
+                ProcessOutputDrainDisposition::Terminal
+            }
+            ProcessOutputRead::Failed => {
+                self.processes.retire_process_at_read_failure(pid);
+                ProcessOutputDrainDisposition::Terminal
+            }
+        };
+        Ok((outcome, disposition))
     }
 
     pub(super) fn poll_process_stdout_output_without_status(
@@ -9657,7 +9669,12 @@ impl super::super::eval::Context {
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let target_process = request.target_process();
         let proc_ids = request.live_processes(self.processes.live_process_ids());
-        self.poll_process_output_for_ids(proc_ids, target_process, true)
+        self.service_process_output_for_ids(
+            proc_ids,
+            target_process,
+            true,
+            ProcessOutputServicePass::Readiness,
+        )
     }
 
     /// GNU `status_notify (NULL, WAIT_PROC)` (src/process.c:5554, :5854), with
@@ -9700,7 +9717,7 @@ impl super::super::eval::Context {
         // `status_notify` itself: it drains the process's remaining output
         // (:7896-7909) and then runs the sentinel, so the status is what the
         // visit is FOR.
-        self.poll_process_output_for_ids(visit, target_process, true)
+        self.poll_process_output_for_status_notification(visit, target_process, true)
     }
 
     pub(super) fn finish_process_tls_handshake(
@@ -9815,24 +9832,75 @@ impl super::super::eval::Context {
         }
 
         let proc_ids = request.ready_processes(events.ready_processes_ref().to_vec());
-        outcome.absorb(self.poll_process_output_for_ids(proc_ids, target_process, false)?);
+        outcome.absorb(self.service_process_output_for_ids(
+            proc_ids,
+            target_process,
+            false,
+            ProcessOutputServicePass::Readiness,
+        )?);
 
         Ok(outcome)
     }
 
-    pub(super) fn poll_process_output_for_ids(
+    /// GNU `status_notify` reads each visited process once, then runs the
+    /// sentinel walk; unlike a readiness pass it never yields to the wait loop
+    /// between sources, and it does not advance the round-robin cursor.
+    pub(super) fn poll_process_output_for_status_notification(
         &mut self,
         proc_ids: Vec<ProcessId>,
         target_process: Option<ProcessId>,
         publish_status_before_readable_output: bool,
+    ) -> Result<ProcessOutputServiceOutcome, Flow> {
+        self.service_process_output_for_ids(
+            proc_ids,
+            target_process,
+            publish_status_before_readable_output,
+            ProcessOutputServicePass::StatusNotification,
+        )
+    }
+
+    /// Test-only entry point for the readiness pass. Production enters it via
+    /// `poll_process_output_for_service_request` / the wait events.
+    #[cfg(test)]
+    pub(super) fn poll_process_output_for_readiness(
+        &mut self,
+        proc_ids: Vec<ProcessId>,
+        target_process: Option<ProcessId>,
+        publish_status_before_readable_output: bool,
+    ) -> Result<ProcessOutputServiceOutcome, Flow> {
+        self.service_process_output_for_ids(
+            proc_ids,
+            target_process,
+            publish_status_before_readable_output,
+            ProcessOutputServicePass::Readiness,
+        )
+    }
+
+    fn service_process_output_for_ids(
+        &mut self,
+        proc_ids: Vec<ProcessId>,
+        target_process: Option<ProcessId>,
+        publish_status_before_readable_output: bool,
+        pass: ProcessOutputServicePass,
     ) -> Result<ProcessOutputServiceOutcome, Flow> {
         let mut proc_ids = dedupe_process_ids(proc_ids);
 
         if proc_ids.is_empty() {
             return Ok(ProcessOutputServiceOutcome::default());
         }
+        if pass == ProcessOutputServicePass::Readiness {
+            // GNU starts each select pass after `last_read_channel`
+            // (src/process.c:5975-5985). Sorting makes the cursor a stable
+            // rotation. A wait target controls completion, not read priority:
+            // hoisting a continuously ready target would starve its peers.
+            // JUST-THIS-ONE already restricts the request's process set.
+            proc_ids.sort_unstable();
+            let start = proc_ids.partition_point(|id| *id <= self.processes.last_read_process);
+            proc_ids.rotate_left(start);
+        }
         order_pending_status_notifications_newest_first(&self.processes, &mut proc_ids);
-        if let Some(target) = target_process
+        if pass == ProcessOutputServicePass::StatusNotification
+            && let Some(target) = target_process
             && let Some(index) = proc_ids.iter().position(|pid| *pid == target)
         {
             proc_ids.remove(index);
@@ -9843,6 +9911,22 @@ impl super::super::eval::Context {
         let mut split_stderr_owners_with_output = Vec::new();
 
         for pid in proc_ids {
+            if pass == ProcessOutputServicePass::Readiness {
+                // GNU clears Available after a successful read: a filter can
+                // run arbitrary Lisp, including a recursive process wait.
+                // Return to the wait loop to check timers/input and obtain
+                // fresh readiness before dispatching another source. Keep
+                // status_notify's full final-output/sentinel walk separate.
+                if outcome.has_any_process_activity() {
+                    break;
+                }
+                // Advance before callbacks so recursive waits rotate too.
+                // GNU advances `last_read_channel` only after a successful
+                // read; advancing for every scanned id is an approximation,
+                // but the cursor wraps once it passes the largest live id, so
+                // no source can be skipped forever.
+                self.processes.last_read_process = pid;
+            }
             let is_target = target_process.is_none_or(|target| target == pid);
             if self
                 .processes
@@ -10043,130 +10127,118 @@ impl super::super::eval::Context {
                 .get(pid)
                 .is_some_and(is_standalone_pipe_process);
 
-            let mut read_result = {
+            // Service one read per ready source, then return to the wait loop.
+            // Draining until WouldBlock lets a continuously writing bash process
+            // or WebSocket monopolize the evaluator: timers, keyboard input and
+            // redisplay cannot run until the producer stops. The wait layer owns
+            // the zero-time MINIMUM follow-up pass; terminal status notification
+            // below still drains final output before invoking the sentinel.
+            let read_result = {
                 let sink = self.process_output_sink(pid);
                 self.read_process_output_recording_coding(pid, sink)?
             };
             let mut saw_output = false;
             let mut saw_pty_eof = false;
             let mut handled_terminal_eof = false;
-            loop {
-                match read_result {
-                    ProcessOutputRead::Data { data, bytes_read } => {
-                        if bytes_read > 0 {
-                            saw_output = true;
-                            outcome.record_activity(is_target);
-                        }
-                        if !data.is_empty() {
-                            let filter = self
-                                .processes
-                                .get(pid)
-                                .map(|p| p.filter)
-                                .unwrap_or(Value::NIL);
-                            self.run_process_filter_callback(pid, filter, &data)?;
-                        }
-                        if bytes_read == 0 && data.is_empty() {
-                            break;
-                        }
+            match read_result {
+                ProcessOutputRead::Data { data, bytes_read } => {
+                    if bytes_read > 0 {
+                        saw_output = true;
+                        outcome.record_activity(is_target);
                     }
-                    ProcessOutputRead::Eof if is_stderr_pipe => {
-                        if let Some(owner_id) = self.processes.stderr_pipe_owner(pid)
-                            && target_process == Some(owner_id)
-                        {
-                            if !split_stderr_owners_with_output.contains(&owner_id) {
-                                // The poller can report the split-stderr fd
-                                // before the owner's stdout fd.  GNU's
-                                // targeted wait still reports stdout/stderr
-                                // bytes first and leaves the stderr EOF
-                                // sentinel for a later notification pass.
-                                let (owner_outcome, owner_saw_output) = self
-                                    .poll_process_stdout_output_without_status(
-                                        owner_id,
-                                        target_process,
-                                    )?;
-                                outcome.absorb(owner_outcome);
-                                if owner_saw_output {
-                                    split_stderr_owners_with_output.push(owner_id);
-                                }
-                            }
-                            if split_stderr_owners_with_output.contains(&owner_id) {
-                                break;
-                            }
-                        }
-                        outcome.record_serviced();
-
-                        // The pipe finishes HERE (exit 0, so `process-status`
-                        // reports `closed`) and is notified LATER, which is
-                        // where GNU draws the line: the fd loop retires it
-                        // (src/process.c:6072-6080) and `status_notify`
-                        // (src/process.c:7873) runs the sentinel that inserts
-                        // "Process NAME stderr finished" and removes it from
-                        // the alist. Running both halves here published the
-                        // pipe's death to Lisp -- sentinel first, then gone
-                        // from `get-buffer-process' -- ahead of the OWNER's
-                        // sentinel, where GNU's newest-first alist walk always
-                        // puts the owner first (ledger entry 54).
-                        self.processes.retire_pipe_process_at_read_eof(pid);
-                        handled_terminal_eof = true;
-                        break;
+                    if !data.is_empty() {
+                        let filter = self
+                            .processes
+                            .get(pid)
+                            .map(|p| p.filter)
+                            .unwrap_or(Value::NIL);
+                        self.run_process_filter_callback(pid, filter, &data)?;
                     }
-                    ProcessOutputRead::Eof | ProcessOutputRead::Failed if is_network => {
-                        // GNU: EOF is not output; the wait continues (or the
-                        // terminated-target break ends it at the loop top).
-                        outcome.record_serviced();
-
-                        // GNU: EOF on a running network connection sets
-                        // `(exit . 256)` (process.c:6090, "Preserve status of
-                        // processes already terminated" branch) -- exit code 0
-                        // means "deleted\n", non-zero "connection broken by
-                        // remote peer\n" (`status_message`). Derive the
-                        // sentinel text from the status so the two can never
-                        // disagree.
-                        if let Some(proc) = self.processes.get_mut(pid)
-                            && (process_status_is_run(&proc.status)
-                                || ProcessStatusSymbol::from_status_value(proc.status)
-                                    == Some(ProcessStatusSymbol::Open))
-                        {
-                            proc.status = process_status_exit_value(256);
-                        }
-                        // Same `status_notify` ordering as the child exit path
-                        // below: the removal decision (src/process.c:7926-7929)
-                        // precedes `exec_sentinel' (:7937), and the type is what
-                        // makes that the only expressible order.
-                        let disposition = self.exited_process_disposition();
-                        let notification = ProcessStatusNotification::settle_status_and_retire(
-                            &mut self.processes,
-                            pid,
-                            ProcessIoTeardown::Network,
-                            disposition,
-                        );
-                        if let Some(notification) = notification {
-                            self.run_status_notification_sentinel(notification)?;
-                        }
-                        handled_terminal_eof = true;
-                        break;
-                    }
-                    ProcessOutputRead::Failed => {
-                        outcome.record_serviced();
-                        self.processes.retire_process_at_read_failure(pid);
-                        handled_terminal_eof = true;
-                        break;
-                    }
-                    ProcessOutputRead::Eof => {
-                        saw_pty_eof = true;
-                        break;
-                    }
-                    ProcessOutputRead::WouldBlock | ProcessOutputRead::NoSource => break,
                 }
+                ProcessOutputRead::Eof if is_stderr_pipe => {
+                    if let Some(owner_id) = self.processes.stderr_pipe_owner(pid)
+                        && target_process == Some(owner_id)
+                    {
+                        if !split_stderr_owners_with_output.contains(&owner_id) {
+                            // The poller can report the split-stderr fd
+                            // before the owner's stdout fd.  GNU's
+                            // targeted wait still reports stdout/stderr
+                            // bytes first and leaves the stderr EOF
+                            // sentinel for a later notification pass.
+                            let (owner_outcome, owner_saw_output) = self
+                                .poll_process_stdout_output_without_status(
+                                    owner_id,
+                                    target_process,
+                                )?;
+                            outcome.absorb(owner_outcome);
+                            if owner_saw_output {
+                                split_stderr_owners_with_output.push(owner_id);
+                            }
+                        }
+                        if split_stderr_owners_with_output.contains(&owner_id) {
+                            continue;
+                        }
+                    }
+                    outcome.record_serviced();
 
-                // GNU's wait loop does a no-wait follow-up pass after reading
-                // target output (`wait = MINIMUM`), which vacuums up immediately
-                // available bytes and EOF/status transitions before returning.
-                // Keep this non-blocking: stop as soon as the source would block.
-                read_result = {
-                    let sink = self.process_output_sink(pid);
-                    self.read_process_output_recording_coding(pid, sink)?
-                };
+                    // The pipe finishes HERE (exit 0, so `process-status`
+                    // reports `closed`) and is notified LATER, which is
+                    // where GNU draws the line: the fd loop retires it
+                    // (src/process.c:6072-6080) and `status_notify`
+                    // (src/process.c:7873) runs the sentinel that inserts
+                    // "Process NAME stderr finished" and removes it from
+                    // the alist. Running both halves here published the
+                    // pipe's death to Lisp -- sentinel first, then gone
+                    // from `get-buffer-process' -- ahead of the OWNER's
+                    // sentinel, where GNU's newest-first alist walk always
+                    // puts the owner first (ledger entry 54).
+                    self.processes.retire_pipe_process_at_read_eof(pid);
+                    handled_terminal_eof = true;
+                }
+                ProcessOutputRead::Eof | ProcessOutputRead::Failed if is_network => {
+                    // GNU: EOF is not output; the wait continues (or the
+                    // terminated-target break ends it at the loop top).
+                    outcome.record_serviced();
+
+                    // GNU: EOF on a running network connection sets
+                    // `(exit . 256)` (process.c:6090, "Preserve status of
+                    // processes already terminated" branch) -- exit code 0
+                    // means "deleted\n", non-zero "connection broken by
+                    // remote peer\n" (`status_message`). Derive the
+                    // sentinel text from the status so the two can never
+                    // disagree.
+                    if let Some(proc) = self.processes.get_mut(pid)
+                        && (process_status_is_run(&proc.status)
+                            || ProcessStatusSymbol::from_status_value(proc.status)
+                                == Some(ProcessStatusSymbol::Open))
+                    {
+                        proc.status = process_status_exit_value(256);
+                    }
+                    // Same `status_notify` ordering as the child exit path
+                    // below: the removal decision (src/process.c:7926-7929)
+                    // precedes `exec_sentinel' (:7937), and the type is what
+                    // makes that the only expressible order.
+                    let disposition = self.exited_process_disposition();
+                    let notification = ProcessStatusNotification::settle_status_and_retire(
+                        &mut self.processes,
+                        pid,
+                        ProcessIoTeardown::Network,
+                        disposition,
+                    );
+                    if let Some(notification) = notification {
+                        self.run_status_notification_sentinel(notification)?;
+                    }
+                    handled_terminal_eof = true;
+                }
+                ProcessOutputRead::Failed => {
+                    outcome.record_serviced();
+                    self.processes.retire_process_at_read_failure(pid);
+                    handled_terminal_eof = true;
+                }
+                ProcessOutputRead::Eof => {
+                    saw_pty_eof = true;
+                }
+                ProcessOutputRead::WouldBlock | ProcessOutputRead::NoSource => {}
             }
 
             if handled_terminal_eof {
@@ -10201,6 +10273,7 @@ impl super::super::eval::Context {
                     let stderr_outcome = self.drain_associated_stderr_output_without_notifying(
                         stderr_id,
                         target_process,
+                        ProcessOutputReadPolicy::Live,
                     )?;
                     outcome.absorb(stderr_outcome);
                 }
@@ -10344,9 +10417,11 @@ impl super::super::eval::Context {
             .get(pid)
             .and_then(|proc| process_value_to_id(&proc.stderrproc));
         if let Some(stderr_id) = stderr_id.filter(|id| self.processes.get(*id).is_some()) {
-            outcome.absorb(
-                self.drain_associated_stderr_output_without_notifying(stderr_id, target_process)?,
-            );
+            outcome.absorb(self.drain_associated_stderr_output_without_notifying(
+                stderr_id,
+                target_process,
+                ProcessOutputReadPolicy::FinalDrain,
+            )?);
         }
 
         // GNU `status_notify` settles the status, builds the message and takes

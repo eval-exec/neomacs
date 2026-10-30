@@ -366,7 +366,7 @@ impl UpdateStatusSite {
                 by: "src/process.c:1123 discards the record before this line reads it",
             },
             Self::WaitReadingProcessOutput => Recording::AlreadyRecorded {
-                by: "poll_process_output_for_ids -> check_child_status_change",
+                by: "service_process_output_for_ids -> check_child_status_change",
             },
             Self::ReadProcessOutputPipeEof => Recording::AlreadyRecorded {
                 by: "the pipe EOF arm has no child to sweep (SweepableChild::of)",
@@ -806,7 +806,7 @@ impl StatusChangeSite {
                 // service pass, which is the same call, so the tick must be
                 // consumed there or the sentinel runs twice.
                 gnu: "src/process.c:6141, inside wait_reading_process_output's own pass",
-                here: "Context::poll_process_output_for_ids, \
+                here: "Context::service_process_output_for_ids, \
                        PendingNetworkConnectCompletion::Failed",
             },
             Self::ProcessSendSignalSigcont => StatusChangeNotifier::SynchronouslyAtTheSite {

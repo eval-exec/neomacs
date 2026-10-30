@@ -1,0 +1,177 @@
+//! A continuously readable producer must yield to other process/input work.
+
+use super::*;
+use crate::emacs_core::Context;
+use std::io::{self, Read};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+struct ReadyChunks {
+    remaining: usize,
+    reads: Arc<AtomicUsize>,
+}
+
+impl Read for ReadyChunks {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.remaining -= 1;
+        self.reads.fetch_add(1, Ordering::Relaxed);
+        buffer[0] = b'x';
+        Ok(1)
+    }
+}
+
+fn ready_process(eval: &mut Context, name: &str, chunks: usize) -> (ProcessId, Arc<AtomicUsize>) {
+    let buffer = eval
+        .eval_str(&format!("(get-buffer-create \"{name}\")"))
+        .unwrap();
+    let id = eval.processes.create_process(
+        name.into(),
+        buffer,
+        "/bin/sh".into(),
+        vec!["-c".into(), "producer".into()],
+        ProcessCodingSystems::gnu_make_process_initial(),
+    );
+    eval.processes
+        .sync_process_mark(&mut eval.buffers, id)
+        .unwrap();
+    let reads = Arc::new(AtomicUsize::new(0));
+    eval.processes.get_mut(id).unwrap().live_io.pty_reader =
+        Some(PtyOutputReader::new(Box::new(ReadyChunks {
+            remaining: chunks,
+            reads: Arc::clone(&reads),
+        })));
+    (id, reads)
+}
+
+#[test]
+fn continuous_output_yields_before_exhaustion_and_preserves_remaining_bytes() {
+    for targeted in [false, true] {
+        let mut eval = Context::new();
+        let (hot, hot_reads) = ready_process(&mut eval, "hot-output", 128);
+        let (peer, peer_reads) = ready_process(&mut eval, "peer-output", 1);
+        let target = targeted.then_some(hot);
+
+        eval.poll_process_output_for_readiness(vec![hot, peer], target, false)
+            .unwrap();
+        let first_pass = hot_reads.load(Ordering::Relaxed);
+        assert!(
+            first_pass > 0 && first_pass < 128,
+            "return to the wait loop for timers, input and redisplay while output remains; read {first_pass} chunks"
+        );
+        assert_eq!(
+            peer_reads.load(Ordering::Relaxed),
+            0,
+            "one readiness pass must stop after the first source with output"
+        );
+
+        // The cursor resumes after `hot`, including when it is the wait
+        // target: another ready source must not wait for hot to block.
+        let outcome = eval
+            .poll_process_output_for_readiness(vec![hot, peer], target, false)
+            .unwrap();
+        assert!(outcome.has_any_process_activity());
+        assert_eq!(outcome.has_target_process_activity(), !targeted);
+        assert_eq!(
+            peer_reads.load(Ordering::Relaxed),
+            1,
+            "round-robin must service the other ready source next"
+        );
+        assert_eq!(
+            hot_reads.load(Ordering::Relaxed),
+            first_pass,
+            "the second pass must yield to the peer before reading hot again"
+        );
+
+        for _ in 0..128 {
+            eval.poll_process_output_for_readiness(vec![hot, peer], target, false)
+                .unwrap();
+            if hot_reads.load(Ordering::Relaxed) == 128 {
+                break;
+            }
+        }
+        assert_eq!(hot_reads.load(Ordering::Relaxed), 128);
+        let length = eval
+            .eval_str("(save-current-buffer (set-buffer \"hot-output\") (buffer-size))")
+            .unwrap();
+        assert_eq!(
+            length.as_int(),
+            Some(128),
+            "yielding must not discard output"
+        );
+    }
+}
+
+#[test]
+fn status_notification_pass_services_every_ready_source() {
+    let mut eval = Context::new();
+    let (hot, hot_reads) = ready_process(&mut eval, "status-hot", 128);
+    let (peer, peer_reads) = ready_process(&mut eval, "status-peer", 1);
+
+    eval.poll_process_output_for_status_notification(vec![hot, peer], None, false)
+        .unwrap();
+    assert_eq!(
+        hot_reads.load(Ordering::Relaxed),
+        1,
+        "status walks each source once"
+    );
+    assert_eq!(
+        peer_reads.load(Ordering::Relaxed),
+        1,
+        "status notification must not yield between sources"
+    );
+}
+
+#[test]
+fn stdout_status_probe_yields_while_output_remains() {
+    let mut eval = Context::new();
+    let (owner, reads) = ready_process(&mut eval, "probe-output", 128);
+    let (_, disposition) = eval
+        .poll_process_stdout_output_without_status_detailed(owner, Some(owner))
+        .unwrap();
+    assert_eq!(disposition, ProcessOutputDrainDisposition::Output);
+    assert!(
+        reads.load(Ordering::Relaxed) < 128,
+        "the stderr-EOF/status probe must not monopolize the evaluator either"
+    );
+}
+
+#[test]
+fn split_stderr_yields_while_live_and_drains_before_the_exit_sentinel() {
+    let mut eval = Context::new();
+    let (owner, _) = ready_process(&mut eval, "owner-output", 1);
+    let (stderr, reads) = ready_process(&mut eval, "stderr-output", 128);
+    eval.processes.get_mut(owner).unwrap().stderrproc = Value::make_process(stderr);
+    eval.set_variable("fairness-owner", Value::make_process(owner));
+    eval.eval_str(
+        r#"(set-process-sentinel fairness-owner
+             (lambda (_p _message)
+               (setq fairness-final-stderr-size
+                 (save-current-buffer (set-buffer "stderr-output") (buffer-size)))))"#,
+    )
+    .unwrap();
+
+    eval.poll_process_output_for_readiness(vec![owner], Some(owner), false)
+        .unwrap();
+    let live_reads = reads.load(Ordering::Relaxed);
+    assert!(
+        live_reads > 0 && live_reads < 128,
+        "a busy stderr must yield too; read {live_reads} chunks"
+    );
+
+    eval.processes
+        .set_child_status_pending(owner, process_status_exit_value(0));
+    eval.run_process_status_notification(owner, Some(owner))
+        .unwrap();
+    assert_eq!(reads.load(Ordering::Relaxed), 128);
+    assert_eq!(
+        eval.eval_str("fairness-final-stderr-size")
+            .unwrap()
+            .as_int(),
+        Some(128)
+    );
+}
