@@ -243,17 +243,16 @@ fn run_resize_test(scenario: ResizeScenario) {
         .expect("decode resized window capture")
         .to_rgba8();
     assert_eq!(resized.dimensions(), (new_width, new_height));
-    let old_band_red_pixels = old_mode_rows
-        .iter()
-        .filter(|&&y| y < resized.height())
-        .flat_map(|&y| (0..before.width().min(resized.width())).map(move |x| (x, y)))
-        .filter(|&(x, y)| is_red_tinted(resized.get_pixel(x, y).0))
-        .count();
+    let old_band_red_pixels = stale_mode_line_band_pixels(
+        &resized,
+        &old_mode_rows,
+        before.width().min(resized.width()),
+    );
 
-    // The only red pixels in a current presentation belong to its new mode
-    // line near the bottom of the enlarged window. Red at the old mode-line
-    // rows proves that pixels from the old-size presentation are still being
-    // composed over the current one.
+    // The only mode-line-red band in a current presentation is the new mode
+    // line near the bottom of the enlarged window. A contiguous red band at
+    // the old mode-line rows proves that pixels from the old-size presentation
+    // are still being composed over the current one.
     assert_eq!(
         old_band_red_pixels,
         0,
@@ -472,4 +471,90 @@ fn wait_for_resized_mode_line(
 
 fn is_red_tinted([red, green, blue, _alpha]: [u8; 4]) -> bool {
     red >= 180 && red.saturating_sub(green) >= 10 && red.saturating_sub(blue) >= 10
+}
+
+/// The shortest horizontal red run that only a retained presentation can make.
+///
+/// The fixture paints the mode line's background saturated red, so a retained
+/// band is a contiguous run of hundreds of red pixels.  Glyph antialiasing
+/// cannot produce one: with LCD subpixel rasterization (fontconfig `rgba`,
+/// which the CI runner's configuration enables and this host's disables) a
+/// black glyph edge is fringed by one red-tinted pixel column and one
+/// cyan-tinted column, and those columns are isolated single pixels every
+/// glyph cell.  Requiring a four-pixel run keeps a faded or partially
+/// overdrawn stale band detectable (its background between glyphs is still
+/// contiguous) while excluding subpixel fringes; a per-pixel count reported
+/// the fringes as a retained band (TUI/real-GUI: 816 red pixels at the old
+/// mode-line rows under `rgba=rgb`).
+const MIN_STALE_RED_RUN: u32 = 4;
+
+/// Red-tinted pixels in `rows` that belong to a horizontal red run of at least
+/// [`MIN_STALE_RED_RUN`] pixels within the old window's columns.
+fn stale_mode_line_band_pixels(image: &image::RgbaImage, rows: &[u32], old_width: u32) -> usize {
+    let width = image.width().min(old_width);
+    rows.iter()
+        .filter(|&&y| y < image.height())
+        .map(|&y| {
+            let mut count = 0usize;
+            let mut run = 0u32;
+            for x in 0..width {
+                if is_red_tinted(image.get_pixel(x, y).0) {
+                    run += 1;
+                } else {
+                    if run >= MIN_STALE_RED_RUN {
+                        count += run as usize;
+                    }
+                    run = 0;
+                }
+            }
+            if run >= MIN_STALE_RED_RUN {
+                count += run as usize;
+            }
+            count
+        })
+        .sum()
+}
+
+#[test]
+fn subpixel_antialiasing_fringes_are_not_a_retained_mode_line() {
+    // One red-tinted pixel column per glyph cell, as LCD subpixel
+    // rasterization renders a black glyph edge; the complementary cyan
+    // column is present too (kept white here because the predicate is
+    // one-sided). The old per-pixel count would have reported all 8.
+    let mut image = image::RgbaImage::from_pixel(64, 3, image::Rgba([255, 255, 255, 255]));
+    for y in 0..3 {
+        for x in (3..64).step_by(8) {
+            image.put_pixel(x, y, image::Rgba([246, 215, 170, 255]));
+        }
+    }
+    assert_eq!(
+        (0..3)
+            .flat_map(|y| (0..64).map(move |x| (x, y)))
+            .filter(|&(x, y)| is_red_tinted(image.get_pixel(x, y).0))
+            .count(),
+        24,
+        "the fringe fixture must trip the per-pixel predicate"
+    );
+    assert_eq!(
+        stale_mode_line_band_pixels(&image, &[0, 1, 2], 64),
+        0,
+        "isolated subpixel fringes are not a retained mode-line band"
+    );
+}
+
+#[test]
+fn a_retained_mode_line_band_is_still_detected() {
+    let mut image = image::RgbaImage::from_pixel(64, 3, image::Rgba([255, 255, 255, 255]));
+    for x in 10..50 {
+        image.put_pixel(x, 1, image::Rgba([255, 0, 0, 255]));
+    }
+    // A stale band can be faded by a compositor blend; contiguity, not the
+    // exact channel value, is what separates it from glyph antialiasing.
+    for x in 5..25 {
+        image.put_pixel(x, 2, image::Rgba([255, 128, 128, 255]));
+    }
+    assert_eq!(stale_mode_line_band_pixels(&image, &[0, 1, 2], 64), 40 + 20);
+    // Outside the old window's columns the band is not evidence of a stale
+    // presentation of the old size.
+    assert_eq!(stale_mode_line_band_pixels(&image, &[1], 9), 0);
 }
