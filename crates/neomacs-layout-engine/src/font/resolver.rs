@@ -480,7 +480,7 @@ impl FontResolver {
             .find_map(|scope| {
                 query.scope = scope;
                 self.backend
-                    .list_candidates(&query)
+                    .list_candidates_for_identity(&query, identity)
                     .into_iter()
                     .filter(|candidate| candidate.matched.identity == *identity)
                     .find_map(|candidate| {
