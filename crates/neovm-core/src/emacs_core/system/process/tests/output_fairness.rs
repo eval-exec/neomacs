@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::emacs_core::Context;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -128,6 +129,72 @@ fn continuous_output_yields_before_exhaustion_and_preserves_remaining_bytes() {
             length.as_int(),
             Some(128),
             "yielding must not discard output"
+        );
+    }
+}
+
+#[test]
+fn accept_process_output_drains_a_ready_burst_in_one_call() {
+    for (targeted, just_this_one) in [(false, false), (true, false), (true, true)] {
+        let mut eval = Context::new();
+        eval.set_variable("read-process-output-max", Value::make_int(1));
+        eval.sync_process_read_config_from_visible_variables();
+        let (hot, _) = ready_process(&mut eval, "accept-burst", 0);
+        let (peer, _) = ready_process(&mut eval, "accept-peer", 0);
+        // Real, already-written pipes participate in production live-source
+        // discovery. Keep the writers open so EOF/final drain cannot hide an
+        // incomplete readiness drain. Each read is capped at one byte.
+        let mut writers = Vec::new();
+        for (id, bytes) in [(hot, 128), (peer, 3)] {
+            let (reader, mut writer) = os_pipe::pipe().unwrap();
+            sys::set_fd_nonblocking(reader.as_raw_fd()).unwrap();
+            writer.write_all(&vec![b'x'; bytes]).unwrap();
+            let process = eval.processes.get_mut(id).unwrap();
+            process.kind = ProcessKind::Pipe;
+            process.childp = Value::NIL;
+            process.live_io.pty_reader = None;
+            process.live_io.child_stdout = Some(ChildOutputReader::Shared(reader));
+            writers.push(writer);
+        }
+        eval.set_variable("accept-burst-process", Value::make_process(hot));
+        eval.eval_str("(set-process-sentinel accept-burst-process (lambda (_p _event) nil))")
+            .unwrap();
+        let result = builtin_accept_process_output(
+            &mut eval,
+            vec![
+                if targeted {
+                    Value::make_process(hot)
+                } else {
+                    Value::NIL
+                },
+                Value::NIL,
+                Value::NIL,
+                Value::bool(just_this_one),
+            ],
+        )
+        .unwrap();
+
+        assert!(result.is_truthy());
+        assert_eq!(
+            eval.eval_str("(save-current-buffer (set-buffer \"accept-peer\") (buffer-size))")
+                .unwrap()
+                .as_int(),
+            Some(if just_this_one { 0 } else { 3 })
+        );
+        assert_eq!(
+            eval.eval_str("(save-current-buffer (set-buffer \"accept-burst\") (buffer-size))")
+                .unwrap()
+                .as_int(),
+            Some(128),
+            "one accept must drain the burst"
+        );
+        builtin_delete_process(&mut eval, vec![Value::make_process(hot)]).unwrap();
+        assert_eq!(
+            eval.eval_str("(save-current-buffer (set-buffer \"accept-burst\") (buffer-size))")
+                .unwrap()
+                .as_int(),
+            Some(128),
+            "deleting the process after one accept must retain its entire output"
         );
     }
 }

@@ -715,9 +715,7 @@ impl WaitRequest {
         completion: WaitCompletion,
         outcome: WaitServiceOutcome,
     ) -> bool {
-        completion == WaitCompletion::ProcessActivity
-            && self.target_process().is_some()
-            && outcome.has_target_process_activity()
+        completion == WaitCompletion::ProcessActivity && outcome.has_any_process_activity()
     }
 }
 
@@ -1259,18 +1257,19 @@ impl super::eval::Context {
             return Ok(None);
         };
 
-        // GNU `wait_reading_process_output` sets `wait = MINIMUM` after reading
-        // bytes from WAIT_PROC.  That makes one zero-time process wait/service
-        // pass before the function returns, so a concurrent PTY EOF/SIGCHLD can
-        // run `status_notify` and the sentinel in the same
-        // `accept-process-output` call.
-        let explicit_coding_status_deferred = request
-            .target_pid()
-            .is_some_and(|pid| self.processes.defers_minimum_status_drain_after_output(pid));
-        if request.needs_minimum_process_drain_before_completion(completion, outcome)
-            && !explicit_coding_status_deferred
-        {
-            let _ = self.service_minimum_process_drain(request)?;
+        // GNU's MINIMUM mode repeats zero-time select/read cycles until no
+        // output is ready (process.c:5477, :5867-5870, :6021-6032). A single
+        // readiness pass now yields after one read, so completing after just
+        // one follow-up would leave a buffered burst for the next accept call.
+        // Keep rotating sources and checking timers/quit between reads, for
+        // both targeted and untargeted accepts, without blocking for new bytes.
+        // Explicit PTY coding still controls output-before-status ordering in
+        // the process service layer; it must not suppress the output drain.
+        if request.needs_minimum_process_drain_before_completion(completion, outcome) {
+            while self
+                .service_minimum_process_drain(request)?
+                .has_any_process_activity()
+            {}
         }
 
         Ok(Some(completion))

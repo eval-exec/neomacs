@@ -6496,11 +6496,6 @@ impl ProcessManager {
         true
     }
 
-    pub(crate) fn defers_minimum_status_drain_after_output(&self, id: ProcessId) -> bool {
-        self.get(id)
-            .is_some_and(process_defers_pty_status_after_explicit_coding)
-    }
-
     pub(super) fn deactivate_child_status_source(&mut self, id: ProcessId) {
         if let Some(proc) = self.processes.get_mut(&id)
             && let Some(status_source) = proc.live_io.child_status_source.take()
@@ -9467,9 +9462,9 @@ impl super::super::eval::Context {
         Ok(outcome)
     }
 
-    /// GNU `status_notify` reads each visited process once, then runs the
-    /// sentinel walk; unlike a readiness pass it never yields to the wait loop
-    /// between sources, and it does not advance the round-robin cursor.
+    /// Service every visited source, including the full final output drain
+    /// before a terminal sentinel. Unlike a readiness pass, this walk never
+    /// yields between sources or advances the round-robin cursor.
     pub(super) fn poll_process_output_for_status_notification(
         &mut self,
         proc_ids: Vec<ProcessId>,
