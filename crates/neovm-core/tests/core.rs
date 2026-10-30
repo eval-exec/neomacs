@@ -7,9 +7,6 @@
 
 mod common;
 
-#[path = "pentry_contracts.rs"]
-mod pentry_contracts;
-
 #[path = "pentry_inventory_generator.rs"]
 mod pentry_inventory_generator;
 
@@ -42,9 +39,6 @@ mod gdm_region;
 
 #[path = "gdm_widths.rs"]
 mod gdm_widths;
-
-#[path = "p2ht_contracts.rs"]
-mod p2ht_contracts;
 
 #[path = "pixel_measurement.rs"]
 mod pixel_measurement;

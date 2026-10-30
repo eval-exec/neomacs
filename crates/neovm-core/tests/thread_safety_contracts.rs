@@ -79,3 +79,49 @@ fn thread_safety_compile_contracts() {
     // Context's diagnostics reflect the platform's field bounds.
     cases.compile_fail(target.context_cases());
 }
+
+// The sole-owner eval phase's fixtures sit next to its unit tests, but the
+// runner lives here: trybuild compiles them against the non-test lib, so the
+// contract jobs need no opt-level-2 build of the whole lib unit-test binary.
+#[test]
+#[cfg(feature = "contract-fixtures")]
+fn sole_owner_compile_contracts() {
+    let cases = trybuild::TestCases::new();
+    cases.pass("src/emacs_core/runtime/eval/tests/sole_owner_pass/*.rs");
+    cases.compile_fail("src/emacs_core/runtime/eval/tests/sole_owner_ui/*.rs");
+}
+
+// The parallel-Lisp contract runners below lived in the `core` binary, which
+// no contract job builds with `contract-fixtures`, so CI never ran them. Their
+// files and fixtures stay where they are.
+#[path = "p2ht_contracts.rs"]
+mod p2ht_contracts;
+
+#[path = "pentry_contracts.rs"]
+mod pentry_contracts;
+
+#[cfg(feature = "contract-fixtures")]
+#[test]
+fn nmjit_n1_sketch_compile_contracts() {
+    // The sketches have no engine dependency. A trybuild driver in this crate
+    // inherits all core dependencies and rebuilds them for its diagnostic flags,
+    // so use an isolated specification workspace without changing any client.
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/nmjit-type-contracts/Cargo.toml");
+    let status = std::process::Command::new(env!("CARGO"))
+        .args(["test", "--locked", "--manifest-path"])
+        .arg(manifest)
+        .args([
+            "--test",
+            "contracts",
+            "--",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .status()
+        .expect("launch isolated N1 sketch contracts");
+    assert!(
+        status.success(),
+        "N1 sketch compiler contract failed: {status}"
+    );
+}

@@ -120,7 +120,8 @@ all-target checks remain required.
 
 ## Isolated compiler driver
 
-The core `nmjit_n1_sketch_compile_contracts` entry remains opt-in behind
+The `nmjit_n1_sketch_compile_contracts` entry (in the `thread_safety_contracts`
+test target, with the other contract runners) remains opt-in behind
 `contract-fixtures` and invokes the standalone `nmjit-type-contracts` workspace.
 The same positive client and all seven negative clients above remain unchanged.
 The independent sketches must have no neovm-core/Cranelift dependency: otherwise
