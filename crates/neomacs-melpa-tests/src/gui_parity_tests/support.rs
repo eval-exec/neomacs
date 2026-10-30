@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use neomacs_gui_tests::{DisplayHarness, DisplaySession, GuiBackend};
+use neomacs_test_env::CanonicalPin;
 
 use crate::{
     DirectEditorChild, EmacsRuntime, EvalOutcome, MelpaSandbox, PreparedPackageSet,
@@ -173,8 +174,22 @@ fn run_editor(
         .env("RUST_LOG", "off")
         .env("WINIT_UNIX_BACKEND", "x11")
         .args(["--quick", "--geometry", "100x35"]);
+    // The display session pins the locale that keeps X11 clients and the
+    // editor on one message encoding (`locale_pin`, neomacs-infra's
+    // display.rs:869-873).  This command already carries the sandbox's
+    // canonical pins, so a display variable that is itself a canonical pin
+    // is a deliberate per-case override; the typed statement is the only
+    // way to apply it, and a raw `env` would silently undo the recorded
+    // environment (and is refused).
     for (name, value) in display.env() {
-        command.env(name, value);
+        match CanonicalPin::from_env_name(name) {
+            Some(pin) => {
+                command.override_pin(pin, value);
+            }
+            None => {
+                command.env(name, value);
+            }
+        }
     }
     let display_name = display
         .env()
