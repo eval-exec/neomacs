@@ -829,9 +829,16 @@ fn thread_signal_to_main_queues_a_thread_event() {
         let result = builtin_thread_signal(&mut eval, vec![main, Value::symbol("error"), data]);
         eval.threads.restore_thread(0);
         assert_eq!(result.unwrap(), Value::NIL);
-        let mut events = eval.threads.take_thread_events();
-        assert_eq!(events.len(), 1, "one THREAD_EVENT queued");
-        assert!(eval.threads.take_thread_events().is_empty(), "drained once");
+        let mut events = eval.threads.take_thread_events(0);
+        assert_eq!(
+            events.len(),
+            1,
+            "one THREAD_EVENT queued for the main thread"
+        );
+        assert!(
+            eval.threads.take_thread_events(0).is_empty(),
+            "drained once"
+        );
         events.pop().unwrap()
     };
 

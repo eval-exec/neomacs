@@ -5304,7 +5304,8 @@ impl crate::emacs_core::eval::Context {
         if self.threads.current_thread_id() != 0 {
             return;
         }
-        for pending in self.threads.take_thread_events() {
+        // The command loop is the main thread (id 0): drain ITS record only.
+        for pending in self.threads.take_thread_events(0) {
             self.command_loop
                 .keyboard
                 .pending_input_events

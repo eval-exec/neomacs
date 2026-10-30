@@ -134,15 +134,19 @@ impl ThreadName {
     }
 }
 
-/// One GNU `THREAD_EVENT` waiting for the main thread's command loop.
+/// One GNU `THREAD_EVENT` waiting for its target thread's reader.
 ///
 /// GNU's `thread-signal` targeted at the main thread does not store an error
 /// there: it queues an input event whose Lisp form is
 /// `(thread-event SENDER ERROR-SYMBOL DATA)` (`src/thread.c:1007-1013`), and
 /// the main thread's reader delivers it through `special-event-map`
 /// (`src/keyboard.c`, THREAD_EVENT; `lisp/thread.el:thread-handle-event`).
-/// This mailbox is the producer side shared by every Green owner; the main
-/// Context drains it into its own keyboard queue in `keyboard.rs`
+/// The events live in the TARGET thread's own record (thread 0 is the main
+/// thread), i.e. in the heap-allocated thread registry: DESIGN §3 keeps
+/// per-target pending signals in independent durable state, and an inline
+/// `Vec` in `ThreadManager`/`World` would move every later World field and
+/// shift hot displacement immediates.  The main Context drains thread 0's
+/// record into its own keyboard queue in `keyboard.rs`
 /// (`stage_pending_thread_events`).
 ///
 /// The fields are [`SharedRoot`]s, not raw values: a Green worker queues the
@@ -241,6 +245,11 @@ pub struct ThreadState {
     pub error_data: Value,
     /// Resume thunk or remaining top-level forms for a cooperative block.
     pub blocked_remaining_forms: Value,
+    /// GNU `THREAD_EVENT`s queued for THIS thread's reader
+    /// (`src/thread.c:1007-1013`), FIFO.  This record lives in the
+    /// heap-allocated thread registry, so the durable per-target mailbox
+    /// costs no inline `ThreadManager`/`World` bytes.
+    pub pending_thread_events: Vec<PendingThreadEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -295,9 +304,6 @@ pub struct ThreadManager {
     condition_var_handles: HashMap<u64, Value>,
     /// Global last-error value (returned by `thread-last-error`).
     last_error: Option<Value>,
-    /// GNU `THREAD_EVENT`s queued for the main thread's command loop
-    /// (`src/thread.c:1007-1013`). The reader drains them in FIFO order.
-    pending_thread_events: Vec<PendingThreadEvent>,
 }
 
 impl ThreadManager {
@@ -320,6 +326,7 @@ impl ThreadManager {
                 error_symbol: Value::NIL,
                 error_data: Value::NIL,
                 blocked_remaining_forms: Value::NIL,
+                pending_thread_events: Vec::new(),
             },
         );
         let mut thread_handles = HashMap::new();
@@ -336,7 +343,6 @@ impl ThreadManager {
             next_cv_id: 1,
             condition_var_handles: HashMap::new(),
             last_error: None,
-            pending_thread_events: Vec::new(),
         }
     }
 
@@ -362,6 +368,7 @@ impl ThreadManager {
                 error_symbol: Value::NIL,
                 error_data: Value::NIL,
                 blocked_remaining_forms: Value::NIL,
+                pending_thread_events: Vec::new(),
             },
         );
         self.thread_handles
@@ -506,20 +513,28 @@ impl ThreadManager {
         self.threads.get(&id).map(|t| t.name)
     }
 
-    /// Queue GNU's `THREAD_EVENT` for the main thread
+    /// Queue GNU's `THREAD_EVENT` for TARGET's reader
     /// (`src/thread.c:1007-1013`).
     ///
-    /// Non-main targets store an error instead; only the main thread has a
-    /// command loop, and its reader turns this into a Lisp
+    /// The event is appended to TARGET's own durable record, i.e. the
+    /// heap-allocated thread registry: no inline `ThreadManager`/`World`
+    /// field grows.  Non-main targets store an ordinary error instead
+    /// (`builtin_thread_signal`); only the main thread (id 0) has a command
+    /// loop, and its reader turns the event into a Lisp
     /// `(thread-event SENDER ERROR-SYMBOL DATA)` dispatched through
     /// `special-event-map`.
-    pub fn queue_thread_event(&mut self, event: PendingThreadEvent) {
-        self.pending_thread_events.push(event);
+    pub fn queue_thread_event(&mut self, target: u64, event: PendingThreadEvent) {
+        if let Some(thread) = self.threads.get_mut(&target) {
+            thread.pending_thread_events.push(event);
+        }
     }
 
-    /// Take every queued thread event in FIFO order (main-thread reader).
-    pub fn take_thread_events(&mut self) -> Vec<PendingThreadEvent> {
-        std::mem::take(&mut self.pending_thread_events)
+    /// Take every `THREAD_EVENT` queued for TARGET's reader, FIFO.
+    pub fn take_thread_events(&mut self, target: u64) -> Vec<PendingThreadEvent> {
+        self.threads
+            .get_mut(&target)
+            .map(|thread| std::mem::take(&mut thread.pending_thread_events))
+            .unwrap_or_default()
     }
 
     /// Check if a value represents a known thread id.
@@ -1447,7 +1462,7 @@ pub(crate) fn builtin_thread_signal(
         // mutator of this evaluator's heap and keeps all three reachable
         // until admission ends.
         let event = unsafe { PendingThreadEvent::share(ctx, sender, error_symbol, data) }?;
-        ctx.threads.queue_thread_event(event);
+        ctx.threads.queue_thread_event(id, event);
         if ctx.green_threads_running() {
             ctx.green_wake_main_for_thread_event();
         }
