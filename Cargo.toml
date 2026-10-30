@@ -453,12 +453,18 @@ opt-level = 2
 [profile.release-pgo]
 inherits = "release"
 
-# PGO build that keeps its symbols, for profiling the configuration actually
-# shipped: PGO changes inlining and block layout, so hotspots measured on a
-# plain release build do not necessarily hold for release-pgo.
+# PGO build in its own target directory, for profiling the configuration
+# actually shipped: PGO changes inlining and block layout, so hotspots measured
+# on a plain release build do not necessarily hold for release-pgo. Symbols
+# come from strip = "none". Debug info stays off because rustc's codegen depends
+# on it: on one commit, debug = true changed 15 of the 195 protected functions
+# against release, and line-tables-only changed Vm::run_loop. For source-line or
+# inline attribution, build a separate arm with
+# CARGO_PROFILE_RELEASE_PGO_PROFILING_DEBUG=line-tables-only and never gate
+# with it.
 [profile.release-pgo-profiling]
 inherits = "release-pgo"
-debug = true
+debug = false
 strip = "none"
 
 # Internal instrumented stage of native Linux x86_64 release PGO. xtask uses
@@ -477,9 +483,19 @@ strip = "none"
 [profile.release-pgo-gen]
 inherits = "release"
 
+# Measurement profile for benchmark and census arms. Its codegen matches
+# release exactly. The census on one commit found 0 of 195 protected functions
+# different with debug off. Full debug info changed 15 of them (Vm::run_loop
+# 18166 vs 18176 instructions) and line-tables-only changed run_loop alone, so
+# measurements on those builds do not describe the shipped code. Debug info
+# also dominated the fat link: peak RSS 22-24 GiB with full DWARF, 9.7 GiB with
+# line tables, 5.0 GiB without. Symbols come from strip = "none". For
+# source-line or DWARF-inline attribution, build a separate arm with
+# CARGO_PROFILE_PROFILING_DEBUG=line-tables-only (or true) and never use it as
+# an A/B gate arm.
 [profile.profiling]
 inherits = "release"
-debug = true
+debug = false
 strip = "none"
 
 [patch.crates-io]
