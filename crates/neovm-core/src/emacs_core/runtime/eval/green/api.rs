@@ -64,21 +64,20 @@ impl Context {
         Ok(self.threads.thread_result(id))
     }
 
-    /// `(thread-signal THREAD ERROR-SYMBOL DATA)` for another thread (GNU
+    /// `(thread-signal THREAD ERROR-SYMBOL DATA)` for a worker thread (GNU
     /// `Fthread_signal`): THREAD raises the error when it next runs, and a
     /// `mutex-lock`, `condition-wait` or `thread-join` it waits in ends.
-    /// The main thread gets an input event instead, which only the command
-    /// loop reads; a Green World has none, so GNU's batch behaviour holds:
-    /// nothing happens.
+    ///
+    /// A main-thread target never reaches here: `builtin_thread_signal`
+    /// queues GNU's `THREAD_EVENT` for the command loop first
+    /// (`src/thread.c:1002-1021`), exactly as GNU does.
     pub(crate) fn green_thread_signal(
         &mut self,
         id: u64,
         symbol: Value,
         data: Value,
     ) -> EvalResult {
-        if id == 0 {
-            return Ok(Value::NIL);
-        }
+        debug_assert_ne!(id, 0, "the main thread receives a THREAD_EVENT");
         self.threads.set_thread_error(id, symbol, data);
         let key = ThreadKey::from_id(id);
         let control = self.green_control();
@@ -89,6 +88,19 @@ impl Context {
             control.wake(key);
         }
         Ok(Value::NIL)
+    }
+
+    /// Wake the main thread's `thread_select` wait after a `THREAD_EVENT` was
+    /// queued for it.  The event travels through the World-shared manager;
+    /// this only makes a main owner parked in `read-event` re-check its input
+    /// queue.  No other wait is interrupted: GNU's input event does not end a
+    /// join, mutex or condition wait.
+    pub(crate) fn green_wake_main_for_thread_event(&mut self) {
+        let control = self.green_control();
+        let main = ThreadKey::from_id(0);
+        if matches!(control.wait_of(main), Some(Wait::Select { .. })) {
+            control.wake(main);
+        }
     }
 
     /// `(mutex-lock MUTEX)` (GNU `Fmutex_lock`): take mutex ID, waiting

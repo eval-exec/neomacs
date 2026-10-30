@@ -1537,6 +1537,20 @@ pub enum InputEvent {
     SelectWindow { window_id: crate::window::WindowId },
     /// Window-manager close request.
     WindowClose { emacs_frame_id: u64 },
+    /// GNU `THREAD_EVENT`: `thread-signal` targeted the main thread
+    /// (`src/thread.c:1007-1013`).  The reader rebuilds
+    /// `(thread-event SENDER ERROR-SYMBOL DATA)` and runs its
+    /// `special-event-map` binding (`src/keyboard.c`, THREAD_EVENT;
+    /// `lisp/thread.el:thread-handle-event`).  The fields carry the exact
+    /// Lisp objects GNU stores in `event.arg` (`list3`), so the event keeps
+    /// the sender's identity; they travel as [`SharedRoot`]s because a Green
+    /// worker produces the event and the main mutator consumes it, and every
+    /// input event must stay `Send`.
+    ThreadEvent {
+        sender: crate::tagged::transport::SharedRoot,
+        error_symbol: crate::tagged::transport::SharedRoot,
+        data: crate::tagged::transport::SharedRoot,
+    },
     /// The display rebuilt its GPU state after a device loss. Renderer-side
     /// media objects are gone: the display host must re-resolve them and a
     /// full redisplay must be forced.
@@ -1626,6 +1640,8 @@ impl InputEvent {
             | Self::SystemFontsChanged { .. }
             | Self::SelectWindow { .. }
             | Self::WindowClose { .. }
+            // A THREAD_EVENT is an input event, never the quit character.
+            | Self::ThreadEvent { .. }
             | Self::DisplayReset
             | Self::WebView(_)
             | Self::SurfaceCreateFailed { .. }
@@ -5273,6 +5289,56 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
+    /// Move GNU `THREAD_EVENT`s queued for the main thread from the
+    /// World-shared thread manager into this Context's keyboard queue.
+    ///
+    /// GNU's `thread_signal_callback` stores the event in the process-wide
+    /// kbd buffer (`src/thread.c:1007-1013`); the main Context is this
+    /// port's command loop, so its reader is where that buffer becomes
+    /// Lisp-visible.  FIFO with the other input: the event is appended.
+    ///
+    /// Only the main thread's reader owns that conversion.  A Green worker
+    /// shares the World's manager but has no command loop, and its waits must
+    /// not steal the main thread's events.
+    pub(crate) fn stage_pending_thread_events(&mut self) {
+        if self.threads.current_thread_id() != 0 {
+            return;
+        }
+        for pending in self.threads.take_thread_events() {
+            self.command_loop
+                .keyboard
+                .pending_input_events
+                .push_back(InputEvent::ThreadEvent {
+                    sender: pending.sender,
+                    error_symbol: pending.error_symbol,
+                    data: pending.data,
+                });
+        }
+    }
+
+    /// The Lisp object behind one `THREAD_EVENT` field, on this evaluator's
+    /// mutator.
+    ///
+    /// The event's [`SharedRoot`](crate::tagged::transport::SharedRoot) keeps
+    /// the object alive; the input event owns that root for as long as the
+    /// copied value is used.  A foreign-heap root is impossible in a World
+    /// (one heap per World), so report it as an internal error instead of
+    /// assuming a value this evaluator cannot legally touch.
+    fn thread_event_value(
+        &self,
+        root: &crate::tagged::transport::SharedRoot,
+    ) -> Result<Value, crate::emacs_core::error::Flow> {
+        match self.materialize(root) {
+            Ok(local) => Ok(local.value()),
+            Err(err) => Err(crate::emacs_core::error::signal(
+                "error",
+                vec![Value::string(format!(
+                    "THREAD_EVENT carried a value from another heap: {err}"
+                ))],
+            )),
+        }
+    }
+
     /// Read a single input event, blocking if necessary.
     ///
     /// Mirrors GNU Emacs `read_char()` (keyboard.c:2489).
@@ -5284,6 +5350,7 @@ impl crate::emacs_core::eval::Context {
     ) -> Option<InputEvent> {
         loop {
             self.service_leading_internal_frontend_events();
+            self.stage_pending_thread_events();
             if let Some(event) = self
                 .command_loop
                 .keyboard
@@ -5556,6 +5623,36 @@ impl crate::emacs_core::eval::Context {
             InputEvent::WindowClose { emacs_frame_id } => {
                 self.handle_window_close_input_event(emacs_frame_id, idle_policy)?;
                 Ok(None)
+            }
+            InputEvent::ThreadEvent {
+                sender,
+                error_symbol,
+                data,
+            } => {
+                // GNU's Lisp form (`src/thread.c:1011`, `event.arg = list3
+                // (Fcurrent_thread (), error_symbol, data)`): the reader
+                // builds the list, then `read_char` runs the
+                // `special-event-map` binding on its head
+                // (`src/keyboard.c`, THREAD_EVENT).  A bound handler
+                // consumes the event (read-event keeps waiting); an unbound
+                // one surfaces to Lisp like any other input event.
+                //
+                // The roots keep each object alive while this arm runs, so
+                // the local values copied out of them stay valid through
+                // `execute_special_event_if_bound`.
+                let sender = self.thread_event_value(&sender)?;
+                let error_symbol = self.thread_event_value(&error_symbol)?;
+                let data = self.thread_event_value(&data)?;
+                let event = Value::list(vec![
+                    Value::symbol("thread-event"),
+                    sender,
+                    error_symbol,
+                    data,
+                ]);
+                if self.execute_special_event_if_bound(event)? {
+                    return Ok(None);
+                }
+                Ok(Some(event))
             }
             InputEvent::Resize {
                 width,

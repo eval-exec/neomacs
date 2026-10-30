@@ -205,7 +205,12 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::MenuSelection { .. }
         | InputEvent::ToolBarClick { .. }
         | InputEvent::PresentedPointer { .. }
-        | InputEvent::MenuBarClick { .. } => Command,
+        | InputEvent::MenuBarClick { .. }
+        // GNU stores a THREAD_EVENT into the main thread's kbd buffer
+        // (`src/thread.c:1012`), which sets `input_pending` and wakes a
+        // blocked read; `read-event` then either runs its
+        // `special-event-map` handler or returns it like any command event.
+        | InputEvent::ThreadEvent { .. } => Command,
         InputEvent::MouseMove { .. } => MouseMotion,
         InputEvent::PresentedRegion {
             presentation,

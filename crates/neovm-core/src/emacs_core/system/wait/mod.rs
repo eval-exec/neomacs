@@ -1162,6 +1162,12 @@ impl super::eval::Context {
         run_timers: bool,
         notify_status_after_timers: Option<WaitStatusNotifySite>,
     ) -> Result<WaitServiceOutcome, Flow> {
+        // GNU's kbd buffer is process-wide: a `THREAD_EVENT` a worker stored
+        // while this wait blocked (`src/thread.c:1012`) is already visible to
+        // the wait's command-input check below.  Stage it before that check so
+        // a main thread parked in `read-event` wakes on the event instead of
+        // sleeping to its deadline.
+        self.stage_pending_thread_events();
         let mut outcome = WaitServiceOutcome::default();
         let special_input = if request.services_special_input() {
             self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?

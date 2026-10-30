@@ -5,14 +5,19 @@
 //! `tmp/wt-peer-pentry/tmp/pentry/oracle/{apis,edges,main-event}.el'; the
 //! shapes here are those seeds re-targeted through the default dispatch.
 //!
-//! This is the red-0 LANDING RANGE of the suite: the cases both modes pass
-//! on today's binaries — main-thread identity, a worker's join value, name
-//! and liveness, and join-self plus a worker's internal error through
-//! `thread-last-error'.  The full 19-case matrix (mutex handoff,
-//! condition-wait, thread-signal to main, the blocking-I/O Baton, buffer
-//! dispositions) lives on the sibling red branch
-//! `v10x/gapsurvey-threads-oracle', where the divergences are recorded as
-//! failing snapshots; nothing here is ignored, cfg-hidden or weakened.
+//! This is the LANDING RANGE of the suite: first the red-0 cases both modes
+//! passed on the landing binaries — main-thread identity, a worker's join
+//! value, name and liveness, and join-self plus a worker's internal error
+//! through `thread-last-error` — then the two divergences E8-S found and the
+//! shared runtime now fixes: `thread-name` identity (`make-thread` stores the
+//! NAME object, so `(eq name (thread-name th))` is t in both modes) and
+//! `thread-signal` to the main thread arriving as GNU's `THREAD_EVENT`,
+//! dispatched through `special-event-map` to `thread-handle-event`.  The
+//! rest of the 19-case matrix (mutex handoff, condition-wait, the
+//! blocking-I/O Baton, buffer dispositions) lives on the sibling red branch
+//! `v10x/gapsurvey-threads-oracle', where the remaining divergences are
+//! recorded as failing snapshots; nothing here is ignored, cfg-hidden or
+//! weakened.
 //!
 //! GNU picks which thread runs after a `thread-yield' by OS scheduling, so
 //! every form reaches its answer through joins, never through one
@@ -69,6 +74,19 @@ fn e8s_make_thread_join_value_name_and_liveness() {
 }
 
 #[test]
+fn e8s_thread_name_returns_the_stored_string() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let* ((name (copy-sequence "e8s-stored"))
+       (th (make-thread (lambda () nil) name)))
+  (list (eq name (thread-name th)) (eq name (thread-name th))))
+"##,
+        expect_test::expect![[r#""OK (t t)""#]],
+    );
+}
+
+#[test]
 fn e8s_thread_join_self_and_internal_error_last_error() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     assert_default_threads_oracle(
@@ -85,6 +103,43 @@ fn e8s_thread_join_self_and_internal_error_last_error() {
 "##,
         expect_test::expect![[
             r#""OK ((join-self \"Cannot join current thread\") nil (error \"inside\") (error \"inside\") nil)""#
+        ]],
+    );
+}
+
+#[test]
+fn e8s_thread_signal_to_main_is_a_thread_event() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(progn
+  (require 'thread)
+  (require 'cl-lib)
+  (let ((seen nil) (messages nil)
+        (old (lookup-key special-event-map [thread-event])))
+    (unwind-protect
+        (progn
+          (define-key special-event-map [thread-event]
+            (lambda (event)
+              (interactive "e")
+              (setq seen (list (eq (car event) 'thread-event)
+                               (thread-name (nth 1 event))
+                               (nth 2 event) (nth 3 event)))
+              (cl-letf (((symbol-function 'message)
+                         (lambda (fmt &rest args)
+                           (setq messages (list fmt (cdr args))))))
+                (thread-handle-event event))))
+          (thread-join (make-thread
+                        (lambda ()
+                          (thread-signal main-thread 'error '("to-main"))
+                          'sent)
+                        "e8s-sender"))
+          ;; read-event dispatches special events; the time bound terminates it.
+          (list (read-event nil nil 0.1) seen messages))
+      (define-key special-event-map [thread-event] old))))
+"##,
+        expect_test::expect![[
+            r#""OK (nil (t \"e8s-sender\" error (\"to-main\")) (\"Error %s: %S\" ((error (\"to-main\")))))""#
         ]],
     );
 }

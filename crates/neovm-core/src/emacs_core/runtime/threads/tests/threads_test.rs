@@ -103,7 +103,11 @@ fn thread_manager_new_has_main_thread() {
     assert!(mgr.is_thread(0));
     assert_eq!(mgr.current_thread_id(), 0);
     assert!(mgr.thread_alive_p(0));
-    assert_eq!(mgr.thread_name(0), None);
+    assert!(
+        mgr.thread_name(0)
+            .expect("main thread is registered")
+            .is_unnamed()
+    );
     assert_eq!(mgr.thread_buffer_disposition(0), Some(Value::NIL));
 }
 
@@ -111,8 +115,14 @@ fn thread_manager_new_has_main_thread() {
 fn create_thread_assigns_unique_ids() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id1 = mgr.create_thread(Value::NIL, Some(LispString::from_unibyte(b"t1".to_vec())));
-    let id2 = mgr.create_thread(Value::NIL, Some(LispString::from_unibyte(b"t2".to_vec())));
+    let id1 = mgr.create_thread(
+        Value::NIL,
+        ThreadName::from_lisp(Value::string("t1")).expect("a string is a valid NAME"),
+    );
+    let id2 = mgr.create_thread(
+        Value::NIL,
+        ThreadName::from_lisp(Value::string("t2")).expect("a string is a valid NAME"),
+    );
     assert_ne!(id1, id2);
     assert!(mgr.is_thread(id1));
     assert!(mgr.is_thread(id2));
@@ -123,7 +133,7 @@ fn create_thread_assigns_unique_ids() {
 fn thread_lifecycle_created_running_finished() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_thread(Value::NIL, None);
+    let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     assert_eq!(mgr.get_thread(id).unwrap().status, ThreadStatus::Created);
     assert!(mgr.thread_alive_p(id));
 
@@ -144,7 +154,7 @@ fn thread_lifecycle_created_running_finished() {
 fn thread_signal_records_error() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_thread(Value::NIL, None);
+    let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     mgr.start_thread(id);
     mgr.signal_thread(id, Value::symbol("test-error"));
     assert_eq!(mgr.get_thread(id).unwrap().status, ThreadStatus::Signaled);
@@ -155,7 +165,7 @@ fn thread_signal_records_error() {
 fn all_thread_ids_includes_main_and_created() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_thread(Value::NIL, None);
+    let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     let ids = mgr.all_thread_ids();
     assert!(ids.len() >= 2);
     assert!(ids.contains(&0));
@@ -166,7 +176,7 @@ fn all_thread_ids_includes_main_and_created() {
 fn all_thread_ids_excludes_finished_thread() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_thread(Value::NIL, None);
+    let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     let before_join = mgr.all_thread_ids();
     assert!(before_join.contains(&id));
 
@@ -184,7 +194,7 @@ fn all_thread_ids_excludes_finished_thread() {
 fn thread_buffer_disposition_round_trips() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_thread(Value::NIL, None);
+    let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     assert_eq!(mgr.thread_buffer_disposition(id), Some(Value::NIL));
     assert!(mgr.set_thread_buffer_disposition(id, Value::symbol("silently")));
     assert_eq!(
@@ -197,7 +207,7 @@ fn thread_buffer_disposition_round_trips() {
 fn thread_manager_tracks_current_buffer_and_blocker_state() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_thread(Value::NIL, None);
+    let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     let buffer_id = crate::buffer::BufferId(99);
     assert!(mgr.set_thread_current_buffer(id, Some(buffer_id)));
     assert_eq!(mgr.thread_current_buffer(id), Some(buffer_id));
@@ -273,7 +283,7 @@ fn mutex_contended_lock_preserves_existing_owner() {
     let id = mgr.create_mutex(None);
     assert!(mgr.mutex_lock(id));
 
-    let worker = mgr.create_thread(Value::NIL, None);
+    let worker = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     let saved = mgr.enter_thread(worker);
     assert!(!mgr.mutex_lock(id));
     mgr.restore_thread(saved);
@@ -608,7 +618,7 @@ fn failed_thread_entry_discards_unreturned_thread() {
 fn failed_blocked_thread_entry_preserves_continuation() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
-    let thread_id = eval.threads.create_thread(Value::NIL, None);
+    let thread_id = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
     eval.threads.start_thread(thread_id);
     let continuation = Value::list(vec![Value::symbol("ignore")]);
     eval.threads
@@ -797,6 +807,59 @@ fn test_builtin_thread_signal_non_current_is_noop() {
     let err = builtin_thread_last_error(&mut eval, vec![]);
     assert!(err.is_ok());
     assert!(err.unwrap().is_nil());
+}
+
+/// GNU `Fthread_signal`'s main-thread branch (`src/thread.c:1002-1021`):
+/// the error is NOT stored on the main thread; it becomes a `THREAD_EVENT`
+/// carrying the SENDER's handle, the error symbol and the data.
+///
+/// The event crosses a mutator boundary as `SharedRoot`s, and its DATA stays
+/// alive through a full collection after the producing Lisp value is gone.
+#[test]
+fn thread_signal_to_main_queues_a_thread_event() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let main = builtin_current_thread(&mut eval, vec![]).unwrap();
+    let worker = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
+    eval.threads.enter_thread(worker);
+    let sender = eval.threads.thread_handle(worker).expect("worker handle");
+
+    let event = {
+        let data = Value::list(vec![Value::fixnum(424242)]);
+        let result = builtin_thread_signal(&mut eval, vec![main, Value::symbol("error"), data]);
+        eval.threads.restore_thread(0);
+        assert_eq!(result.unwrap(), Value::NIL);
+        let mut events = eval.threads.take_thread_events();
+        assert_eq!(events.len(), 1, "one THREAD_EVENT queued");
+        assert!(eval.threads.take_thread_events().is_empty(), "drained once");
+        events.pop().unwrap()
+    };
+
+    // `data` went out of scope; only the event's root keeps it alive.
+    eval.gc_collect_exact();
+    let sender_value = eval
+        .materialize(&event.sender)
+        .expect("same-heap sender root")
+        .value();
+    assert_eq!(
+        sender_value.bits(),
+        sender.bits(),
+        "the event carries the sending thread's canonical handle"
+    );
+    let error_value = eval
+        .materialize(&event.error_symbol)
+        .expect("same-heap error-symbol root")
+        .value();
+    assert_eq!(error_value, Value::symbol("error"));
+    let data_value = eval
+        .materialize(&event.data)
+        .expect("same-heap data root")
+        .value();
+    assert_eq!(data_value.cons_car(), Value::fixnum(424242));
+    // GNU shows the message through the event; nothing is recorded as the
+    // signalled thread's own error.
+    let last_error = builtin_thread_last_error(&mut eval, vec![]).unwrap();
+    assert!(last_error.is_nil());
 }
 
 #[test]
@@ -1381,6 +1444,67 @@ fn test_thread_signal_noncurrent_thread_changes_join_outcome_without_publishing_
 
     let last_error = builtin_thread_last_error(&mut eval, vec![]).unwrap();
     assert!(last_error.is_nil());
+}
+
+/// GNU stores the NAME object at `make-thread` (`src/thread.c:902-909`) and
+/// `Fthread_name` returns that object (`src/thread.c:941-953`), so Lisp `eq`
+/// survives the round trip.
+#[test]
+fn thread_name_returns_the_stored_object_identity() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let name = Value::string("identity-name");
+    let thread = builtin_make_thread(
+        &mut eval,
+        vec![
+            Value::make_lambda(super::super::value::LambdaData {
+                params: super::super::value::LambdaParams::simple(vec![]),
+                body: vec![],
+                env: None,
+                docstring: None,
+                doc_form: None,
+                interactive: None,
+            }),
+            name,
+        ],
+    )
+    .unwrap();
+
+    let stored = builtin_thread_name(&mut eval, vec![thread]).unwrap();
+    assert_eq!(
+        stored.bits(),
+        name.bits(),
+        "thread-name must return the exact object make-thread stored"
+    );
+}
+
+/// GNU `make-thread`'s `if (!NILP (name)) CHECK_STRING (name)`.
+#[test]
+fn make_thread_rejects_a_non_string_name() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let result = builtin_make_thread(
+        &mut eval,
+        vec![
+            Value::make_lambda(super::super::value::LambdaData {
+                params: super::super::value::LambdaParams::simple(vec![]),
+                body: vec![],
+                env: None,
+                docstring: None,
+                doc_form: None,
+                interactive: None,
+            }),
+            Value::fixnum(7),
+        ],
+    );
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data[0], Value::symbol("stringp"));
+            assert_eq!(sig.data[1], Value::fixnum(7));
+        }
+        other => panic!("expected wrong-type-argument for a fixnum NAME, got {other:?}"),
+    }
 }
 
 #[test]

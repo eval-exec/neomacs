@@ -780,9 +780,8 @@ fn dump_emacs_portable_rejects_other_live_lisp_threads() {
     let mut eval = Context::new();
     eval.threads.create_thread(
         Value::NIL,
-        Some(crate::heap_types::LispString::from_unibyte(
-            b"worker".to_vec(),
-        )),
+        crate::emacs_core::threads::ThreadName::from_lisp(Value::string("worker"))
+            .expect("a string is a valid NAME"),
     );
 
     let err = crate::emacs_core::builtins::builtin_dump_emacs_portable(

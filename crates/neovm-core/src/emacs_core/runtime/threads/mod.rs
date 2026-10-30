@@ -26,6 +26,7 @@ use super::error::{
 use super::value::{Value, ValueKind, eq_value, list_to_vec};
 use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
+use crate::tagged::transport::SharedRoot;
 
 const CONDITION_CASE_CONTINUATION_MARKER: &str = "neomacs--thread-condition-case-continuation";
 const SLEEP_BLOCKER_MARKER: &str = "sleep-for";
@@ -96,13 +97,103 @@ pub enum ThreadStatus {
     Exited,
 }
 
+/// A thread's stored NAME object (GNU `struct thread_state.name`).
+///
+/// GNU validates NAME at `make-thread` (`CHECK_STRING` unless nil,
+/// `src/thread.c:902-903`), stores the object itself, and `thread-name`
+/// returns that same object (`src/thread.c:941-953`), so
+/// `(eq name (thread-name th))` is t.  The newtype keeps the string-or-nil
+/// invariant at the one construction site and makes the identity contract
+/// explicit: readers hand back the stored object, never a copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThreadName(Value);
+
+impl ThreadName {
+    /// No NAME was supplied (GNU stores nil).
+    pub const UNNAMED: Self = Self(Value::NIL);
+
+    /// GNU `make-thread`'s `if (!NILP (name)) CHECK_STRING (name)`.
+    pub fn from_lisp(name: Value) -> Result<Self, Flow> {
+        if name.is_nil() || matches!(name.kind(), ValueKind::String) {
+            Ok(Self(name))
+        } else {
+            Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), name],
+            ))
+        }
+    }
+
+    pub fn is_unnamed(self) -> bool {
+        self.0.is_nil()
+    }
+
+    /// The stored Lisp object itself, identity preserved.
+    pub fn stored(self) -> Value {
+        self.0
+    }
+}
+
+/// One GNU `THREAD_EVENT` waiting for the main thread's command loop.
+///
+/// GNU's `thread-signal` targeted at the main thread does not store an error
+/// there: it queues an input event whose Lisp form is
+/// `(thread-event SENDER ERROR-SYMBOL DATA)` (`src/thread.c:1007-1013`), and
+/// the main thread's reader delivers it through `special-event-map`
+/// (`src/keyboard.c`, THREAD_EVENT; `lisp/thread.el:thread-handle-event`).
+/// This mailbox is the producer side shared by every Green owner; the main
+/// Context drains it into its own keyboard queue in `keyboard.rs`
+/// (`stage_pending_thread_events`).
+///
+/// The fields are [`SharedRoot`]s, not raw values: a Green worker queues the
+/// event on its own mutator thread and the main mutator consumes it later, so
+/// the three Lisp objects must stay alive and cross the mutator boundary in
+/// the heap's designed transport (`tagged::transport`).  The keyboard queue
+/// holds the same handles (`InputEvent::ThreadEvent`), which keeps that
+/// queue `Send` like every other input event.
+#[derive(Clone, Debug)]
+pub struct PendingThreadEvent {
+    pub sender: SharedRoot,
+    pub error_symbol: SharedRoot,
+    pub data: SharedRoot,
+}
+
+impl PendingThreadEvent {
+    /// Root `(SENDER ERROR-SYMBOL DATA)` for transport to the main mutator.
+    ///
+    /// # Safety
+    /// The caller must be the installed mutator of this evaluator's heap and
+    /// keep all three values reachable until this returns; see
+    /// [`SharedRoot::new`](crate::tagged::transport::SharedRoot::new).
+    pub unsafe fn share(
+        ctx: &super::eval::Context,
+        sender: Value,
+        error_symbol: Value,
+        data: Value,
+    ) -> Self {
+        // SAFETY: the caller supplies the live same-heap provenance required
+        // by `share_value`; this Context supplies its heap and checks that it
+        // is the one installed on this thread.
+        let roots = unsafe { ctx.share_values(&[sender, error_symbol, data]) }
+            .expect("the signalling mutator's installed heap is this evaluator's");
+        let [sender, error_symbol, data] = roots.as_slice() else {
+            unreachable!("share_values returns one root per input value");
+        };
+        Self {
+            sender: sender.clone(),
+            error_symbol: error_symbol.clone(),
+            data: data.clone(),
+        }
+    }
+}
+
 /// Per-thread bookkeeping.
 #[derive(Clone, Debug)]
 pub struct ThreadState {
     /// Unique thread id.  0 is always the main thread.
     pub id: u64,
-    /// Optional human-readable name.
-    pub name: Option<LispString>,
+    /// The NAME object `make-thread` received (GNU stores the object).
+    pub name: ThreadName,
     /// The function to invoke (value passed to `make-thread`).
     pub function: Value,
     /// Current status.
@@ -179,6 +270,9 @@ pub struct ThreadManager {
     condition_var_handles: HashMap<u64, Value>,
     /// Global last-error value (returned by `thread-last-error`).
     last_error: Option<Value>,
+    /// GNU `THREAD_EVENT`s queued for the main thread's command loop
+    /// (`src/thread.c:1007-1013`). The reader drains them in FIFO order.
+    pending_thread_events: Vec<PendingThreadEvent>,
 }
 
 impl ThreadManager {
@@ -189,7 +283,7 @@ impl ThreadManager {
             0,
             ThreadState {
                 id: 0,
-                name: None,
+                name: ThreadName::UNNAMED,
                 function: Value::NIL,
                 status: ThreadStatus::Running,
                 result: Value::NIL,
@@ -217,13 +311,14 @@ impl ThreadManager {
             next_cv_id: 1,
             condition_var_handles: HashMap::new(),
             last_error: None,
+            pending_thread_events: Vec::new(),
         }
     }
 
     // -- Thread operations --------------------------------------------------
 
     /// Create a new thread.  Returns the id.
-    pub fn create_thread(&mut self, function: Value, name: Option<LispString>) -> u64 {
+    pub fn create_thread(&mut self, function: Value, name: ThreadName) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.threads.insert(
@@ -377,9 +472,29 @@ impl ThreadManager {
         })
     }
 
-    /// Get thread name.
-    pub fn thread_name(&self, id: u64) -> Option<&LispString> {
-        self.threads.get(&id).and_then(|t| t.name.as_ref())
+    /// The thread's stored NAME object, or `None` when the id is unknown.
+    ///
+    /// GNU `Fthread_name` (`src/thread.c:941-953`) returns the object
+    /// `make-thread` stored; the caller returns it unchanged so identity
+    /// (`eq`) survives the round trip.
+    pub fn thread_name(&self, id: u64) -> Option<ThreadName> {
+        self.threads.get(&id).map(|t| t.name)
+    }
+
+    /// Queue GNU's `THREAD_EVENT` for the main thread
+    /// (`src/thread.c:1007-1013`).
+    ///
+    /// Non-main targets store an error instead; only the main thread has a
+    /// command loop, and its reader turns this into a Lisp
+    /// `(thread-event SENDER ERROR-SYMBOL DATA)` dispatched through
+    /// `special-event-map`.
+    pub fn queue_thread_event(&mut self, event: PendingThreadEvent) {
+        self.pending_thread_events.push(event);
+    }
+
+    /// Take every queued thread event in FIFO order (main-thread reader).
+    pub fn take_thread_events(&mut self) -> Vec<PendingThreadEvent> {
+        std::mem::take(&mut self.pending_thread_events)
     }
 
     /// Check if a value represents a known thread id.
@@ -809,9 +924,9 @@ impl Default for ThreadManager {
 impl GcTrace for ThreadManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         for thread in self.threads.values() {
-            if let Some(name) = &thread.name {
-                name.trace_roots(roots);
-            }
+            // The stored NAME object is a Lisp object now (identity is part
+            // of `thread-name`), so it is a heap edge like every other field.
+            roots.push(thread.name.stored());
             roots.push(thread.function);
             roots.push(thread.result);
             roots.push(thread.buffer_disposition);
@@ -833,6 +948,10 @@ impl GcTrace for ThreadManager {
         for value in self.thread_handles.values() {
             roots.push(*value);
         }
+        // Queued `THREAD_EVENT`s hold `SharedRoot` leases, so the collector
+        // keeps their sender, error symbol and data alive through the heap's
+        // shared-root table; re-rooting their words here would also be unsound
+        // on a non-owning mutator.
         // These Rust-owned names preserve Lisp text-property plists, just as
         // GNU's scanned mutex/condition pseudovector name fields do.
         for name in self
@@ -1007,20 +1126,9 @@ pub(crate) fn prepare_make_thread(
     expect_args_range("make-thread", args, 1, 3)?;
 
     let function = args[0];
-    let name = if args.len() > 1 {
-        match args[1].kind() {
-            ValueKind::String => Some(args[1].as_lisp_string().expect("string").clone()),
-            ValueKind::Nil => None,
-            _other => {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("stringp"), args[1]],
-                ));
-            }
-        }
-    } else {
-        None
-    };
+    // GNU stores the NAME object itself and `thread-name` returns it, so the
+    // constructor validates (string or nil) without copying.
+    let name = ThreadName::from_lisp(args.get(1).copied().unwrap_or(Value::NIL))?;
     let buffer_disposition = args.get(2).copied().unwrap_or(Value::NIL);
 
     let thread_id = threads.create_thread(function, name);
@@ -1234,8 +1342,10 @@ pub(crate) fn builtin_thread_name(
             vec![Value::symbol("threadp"), args[0]],
         ));
     }
+    // GNU returns the stored object itself (identity preserved); a copy
+    // would fail `(eq name (thread-name th))`.
     match ctx.threads.thread_name(id) {
-        Some(name) => Ok(Value::heap_string(name.clone())),
+        Some(name) => Ok(name.stored()),
         None => Ok(Value::NIL),
     }
 }
@@ -1295,6 +1405,28 @@ pub(crate) fn builtin_thread_signal(
     let data = args[2];
     if id == ctx.threads.current_thread_id() {
         return Err(signal_with_data_id(error_symbol_id, data));
+    }
+    // GNU `Fthread_signal` (`src/thread.c:1002-1021`): a signal aimed at the
+    // main thread queues `(thread-event SENDER ERROR-SYMBOL DATA)` on the
+    // input queue instead of storing an error, in both threading modes.  The
+    // main thread's reader delivers it through `special-event-map`
+    // (`src/keyboard.c`, THREAD_EVENT; `lisp/thread.el:thread-handle-event`).
+    if id == 0 {
+        let sender = ctx
+            .threads
+            .thread_handle(ctx.threads.current_thread_id())
+            .unwrap_or(Value::NIL);
+        // SAFETY: SENDER is the canonical handle kept in the manager, and
+        // ERROR-SYMBOL and DATA are this call's live arguments (rooted on the
+        // signalling mutator's stack); the signalling thread is the installed
+        // mutator of this evaluator's heap and keeps all three reachable
+        // until admission ends.
+        let event = unsafe { PendingThreadEvent::share(ctx, sender, error_symbol, data) };
+        ctx.threads.queue_thread_event(event);
+        if ctx.green_threads_running() {
+            ctx.green_wake_main_for_thread_event();
+        }
+        return Ok(Value::NIL);
     }
     if ctx.green_threads_running() {
         return ctx.green_thread_signal(id, error_symbol, data);
