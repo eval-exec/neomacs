@@ -14,6 +14,7 @@ use std::ptr::addr_of_mut;
 pub(crate) enum InitialInternFault {
     ReservationAfterSpineMove = 1,
     AfterSlotPublication = 2,
+    InitialTablePreparation = 3,
 }
 
 #[cfg(test)]

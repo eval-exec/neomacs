@@ -72,7 +72,28 @@ impl SymbolBacking {
 // Calls below require exclusive admission or this exact backing's writer;
 // pointer entries are nonowning and no array or symbol reference escapes.
 unsafe impl SymbolTableBacking for SymbolBacking {
+    #[cfg(test)]
+    unsafe fn arm_initial_table_refusal_for_test(&self) {
+        self.intern_fault.store(
+            super::InitialInternFault::InitialTablePreparation as u8,
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+
     unsafe fn prepare_initial_symbol_table(&self) -> Result<OwnedSymbolTable, RegistrationError> {
+        #[cfg(test)]
+        if self
+            .intern_fault
+            .compare_exchange(
+                super::InitialInternFault::InitialTablePreparation as u8,
+                0,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            return Err(RegistrationError::Capacity);
+        }
         // SAFETY: caller holds exclusive admission before participants exist.
         let shape = unsafe { self.table_shape(SymbolSlotCount::from(0)) }?;
         let prepared = PreparedSymbolTable::new(shape, PointerTableGeneration::INITIAL)

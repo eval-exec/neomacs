@@ -341,6 +341,12 @@ struct CoreFinishFailure<'heap> {
     core: EraCore<'heap>,
 }
 
+#[cfg(test)]
+enum InitialTablePreparation {
+    Actual,
+    RefuseOnce,
+}
+
 impl<'heap> EraCore<'heap> {
     #[cold]
     #[inline(never)]
@@ -348,12 +354,18 @@ impl<'heap> EraCore<'heap> {
         admission: A,
     ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
         let (checked, witness) = admission.into_checked();
-        Self::admit_checked(checked, witness)
+        Self::admit_checked(
+            checked,
+            witness,
+            #[cfg(test)]
+            InitialTablePreparation::Actual,
+        )
     }
 
     fn admit_checked<W: construction::ConstructionEvidence>(
         checked: construction::CheckedCollector<'heap>,
         witness: W,
+        #[cfg(test)] preparation: InitialTablePreparation,
     ) -> Result<(Self, W), EraAdmissionFailure<'heap>> {
         let (mut collector, keeper) = checked.into_parts();
         let heap = collector.heap_identity();
@@ -380,6 +392,19 @@ impl<'heap> EraCore<'heap> {
         // All fallible pointer-table preparation precedes detaching the legacy
         // image, so refusal returns both original construction inputs intact.
         let backing = keeper.parallel_symbol_backing();
+        #[cfg(test)]
+        match preparation {
+            InitialTablePreparation::Actual => {}
+            InitialTablePreparation::RefuseOnce => {
+                // SAFETY: exclusive checked collector and held keeper retain
+                // this freshly created backing before any table or participant.
+                unsafe {
+                    super::symbol_table::SymbolTableBacking::arm_initial_table_refusal_for_test(
+                        &backing,
+                    );
+                }
+            }
+        }
         // SAFETY: exclusive checked collector and retained keeper, with no
         // participant yet published and all ordinary execution excluded.
         let tables = match unsafe {

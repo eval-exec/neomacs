@@ -22,6 +22,8 @@ impl InternOpKind {
 mod fixture;
 #[path = "symbol_intern/tests/publication.rs"]
 mod publication;
+#[path = "symbol_intern/tests/table_failures.rs"]
+mod table_failures;
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod tests;
 

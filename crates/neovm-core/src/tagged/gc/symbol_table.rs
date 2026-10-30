@@ -269,6 +269,12 @@ static_assertions::assert_eq_size!(PointerTableGeneration, u64);
 /// broad mutable references that invalidate previously exported addresses.
 pub(crate) unsafe trait SymbolTableBacking {
     /// # Safety
+    /// The test owns the exclusive collector and retained backing, before
+    /// admission can publish a table or register any participant.
+    #[cfg(test)]
+    unsafe fn arm_initial_table_refusal_for_test(&self);
+
+    /// # Safety
     /// Admission still owns the exclusive collector/backing, before detaching
     /// the legacy image or permitting any participant to run.
     unsafe fn prepare_initial_symbol_table(

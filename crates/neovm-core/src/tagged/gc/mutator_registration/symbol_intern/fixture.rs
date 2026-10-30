@@ -86,6 +86,90 @@ pub(super) fn fixture_owner(
         &mut Homes<'era>,
     ),
 ) -> std::thread::Result<()> {
+    with_query_era(kind, query, |era, ids, target| {
+        let handles = [
+            era.admit_plain_symbol(ids[1]).unwrap(),
+            era.admit_plain_symbol(ids[2]).unwrap(),
+        ];
+        let mut stopped = era.stop().unwrap();
+        let inputs = era
+            .with_stopped_heap_for_test(&stopped, |heap| unsafe {
+                // SAFETY: immediate seed words on the actual matching heap.
+                // Real string operands stay in serially initialized cells.
+                [
+                    SharedRoot::new(heap, Value::NIL),
+                    SharedRoot::new(heap, Value::NIL),
+                    SharedRoot::new(heap, Value::fixnum(23)),
+                ]
+            })
+            .unwrap();
+        stopped.trace(|_, _| Ok(())).unwrap();
+        stopped.complete().unwrap();
+        let owner = era
+            .register(1, 8)
+            .unwrap()
+            .activate(era.heap_identity(), 1)
+            .unwrap();
+        let cleanup = Rc::new(RefCell::new(None));
+        let receipt = Rc::clone(&cleanup);
+        let era_ref = &era;
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let mut guard = FixtureGuard {
+                owner: Some(owner),
+                inputs: Some(inputs),
+                homes: None,
+                cleanup: receipt,
+            };
+            {
+                let mut run = guard.owner.as_mut().unwrap().run_access().unwrap();
+                let inputs = guard.inputs.as_ref().unwrap();
+                guard.homes = Some(Homes {
+                    name: run.root_slot(&inputs[0]).unwrap(),
+                    equal_name: run.root_slot(&inputs[1]).unwrap(),
+                    dst: run.root_slot(&inputs[2]).unwrap(),
+                    value: run.root_slot(&inputs[2]).unwrap(),
+                    target,
+                    old_id: ids[1],
+                    old_handle: handles[0],
+                    equal_holder: handles[1],
+                });
+                let homes = guard.homes.as_mut().unwrap();
+                run.sym_value_into(&handles[0], &mut homes.name).unwrap();
+                run.sym_value_into(&handles[1], &mut homes.equal_name)
+                    .unwrap();
+                assert_ne!(
+                    homes.name.word_for_test(&run),
+                    homes.equal_name.word_for_test(&run)
+                );
+            }
+            body(
+                era_ref,
+                guard.owner.as_mut().unwrap(),
+                guard.homes.as_mut().unwrap(),
+            );
+        }));
+        assert_eq!(
+            cleanup.borrow().as_ref(),
+            Some(&Ok(())),
+            "C5 fixture teardown failed independently of operation outcome"
+        );
+        let (collector, keeper) = era.finish().expect("C5 era finish after clean teardown");
+        drop(collector);
+        drop(keeper);
+        eprintln!("P3SYM_C5_TEARDOWN_OK {kind:?} {query:?}");
+        outcome
+    })
+}
+
+pub(super) fn with_query_era<R>(
+    kind: PlainSymbolBacking,
+    query: Query,
+    body: impl for<'heap> FnOnce(
+        crate::tagged::gc::ProofEra<'heap>,
+        Vec<crate::emacs_core::intern::SymId>,
+        Option<crate::emacs_core::intern::SymId>,
+    ) -> R,
+) -> R {
     static NEXT: AtomicU64 = AtomicU64::new(1);
     // Existing input holders stay below a deliberately distant target ID.
     // Seeding them after the target would pre-grow the World and invalidate
@@ -158,79 +242,7 @@ pub(super) fn fixture_owner(
                     .prepare_initial_nonmember_for_test(ids[0], matches!(query, Query::Nonmember));
             }
         },
-        |era, ids| {
-            let handles = [
-                era.admit_plain_symbol(ids[1]).unwrap(),
-                era.admit_plain_symbol(ids[2]).unwrap(),
-            ];
-            let mut stopped = era.stop().unwrap();
-            let inputs = era
-                .with_stopped_heap_for_test(&stopped, |heap| unsafe {
-                    // SAFETY: immediate seed words on the actual matching heap.
-                    // Real string operands stay in serially initialized cells.
-                    [
-                        SharedRoot::new(heap, Value::NIL),
-                        SharedRoot::new(heap, Value::NIL),
-                        SharedRoot::new(heap, Value::fixnum(23)),
-                    ]
-                })
-                .unwrap();
-            stopped.trace(|_, _| Ok(())).unwrap();
-            stopped.complete().unwrap();
-            let owner = era
-                .register(1, 8)
-                .unwrap()
-                .activate(era.heap_identity(), 1)
-                .unwrap();
-            let cleanup = Rc::new(RefCell::new(None));
-            let receipt = Rc::clone(&cleanup);
-            let era_ref = &era;
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let mut guard = FixtureGuard {
-                    owner: Some(owner),
-                    inputs: Some(inputs),
-                    homes: None,
-                    cleanup: receipt,
-                };
-                {
-                    let mut run = guard.owner.as_mut().unwrap().run_access().unwrap();
-                    let inputs = guard.inputs.as_ref().unwrap();
-                    guard.homes = Some(Homes {
-                        name: run.root_slot(&inputs[0]).unwrap(),
-                        equal_name: run.root_slot(&inputs[1]).unwrap(),
-                        dst: run.root_slot(&inputs[2]).unwrap(),
-                        value: run.root_slot(&inputs[2]).unwrap(),
-                        target,
-                        old_id: ids[1],
-                        old_handle: handles[0],
-                        equal_holder: handles[1],
-                    });
-                    let homes = guard.homes.as_mut().unwrap();
-                    run.sym_value_into(&handles[0], &mut homes.name).unwrap();
-                    run.sym_value_into(&handles[1], &mut homes.equal_name)
-                        .unwrap();
-                    assert_ne!(
-                        homes.name.word_for_test(&run),
-                        homes.equal_name.word_for_test(&run)
-                    );
-                }
-                body(
-                    era_ref,
-                    guard.owner.as_mut().unwrap(),
-                    guard.homes.as_mut().unwrap(),
-                );
-            }));
-            assert_eq!(
-                cleanup.borrow().as_ref(),
-                Some(&Ok(())),
-                "C5 fixture teardown failed independently of operation outcome"
-            );
-            let (collector, keeper) = era.finish().expect("C5 era finish after clean teardown");
-            drop(collector);
-            drop(keeper);
-            eprintln!("P3SYM_C5_TEARDOWN_OK {kind:?} {query:?}");
-            outcome
-        },
+        |era, ids| body(era, ids, target),
     )
 }
 

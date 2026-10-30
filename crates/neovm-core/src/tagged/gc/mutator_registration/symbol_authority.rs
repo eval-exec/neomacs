@@ -28,6 +28,13 @@ use crate::emacs_core::intern::SymId;
 pub use crate::emacs_core::symbol::parallel::PlainSymbolBacking;
 use crate::emacs_core::symbol::parallel::SymbolBacking;
 
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum TableCommitFault {
+    None,
+    AfterDescriptorPublication,
+}
+
 /// Entirely parallel-era metadata; no World, Context or symbol layout grows.
 pub(super) struct SymbolSidecar {
     word: AtomicU64,
@@ -36,6 +43,8 @@ pub(super) struct SymbolSidecar {
     era: NonZeroU64,
     pub(super) functions: functions::write::FunctionState,
     pub(super) tables: super::super::symbol_table::publication::PublishedSymbolTables,
+    #[cfg(test)]
+    table_commit_fault: Mutex<TableCommitFault>,
 }
 impl SymbolSidecar {
     pub(super) fn new(
@@ -50,6 +59,8 @@ impl SymbolSidecar {
             era,
             functions: functions::write::FunctionState::new(),
             tables,
+            #[cfg(test)]
+            table_commit_fault: Mutex::new(TableCommitFault::None),
         }
     }
     pub(super) fn ready(&self) -> Result<(), RegistrationError> {

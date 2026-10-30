@@ -39,6 +39,14 @@ pub(crate) struct TableLimits {
     bytes: RetainedTableBytes,
     retired: RetiredTableCount,
 }
+
+/// Test-only limit selection belongs to one ledger, never process state.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum TestTableLimits {
+    Production,
+    Override(TableLimits),
+}
 impl TableLimits {
     pub(crate) const DEFAULT_BYTES: RetainedTableBytes = RetainedTableBytes::new(64 * 1024 * 1024);
     pub(crate) const DEFAULT_RETIRED: RetiredTableCount = RetiredTableCount::new(1024);
@@ -102,6 +110,8 @@ pub(crate) struct TableStatistics {
 struct TableLedger {
     current: OwnedSymbolTable,
     retired: Vec<OwnedSymbolTable>,
+    #[cfg(test)]
+    test_limits: TestTableLimits,
 }
 
 fn table_bytes(shape: SymbolTableShape) -> Result<usize, TableError> {
@@ -172,6 +182,8 @@ impl PublishedSymbolTables {
             ledger: Mutex::new(TableLedger {
                 current: initial,
                 retired: Vec::new(),
+                #[cfg(test)]
+                test_limits: TestTableLimits::Production,
             }),
             limits,
         };
@@ -208,6 +220,20 @@ impl PublishedSymbolTables {
 
     pub(crate) fn retained_bytes(&self) -> Result<RetainedTableBytes, TablePublicationError> {
         self.stats().map(|statistics| statistics.retained_bytes)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_limits_for_test(
+        &self,
+        limits: TestTableLimits,
+    ) -> Result<(), TablePublicationError> {
+        let mut ledger = match self.ledger.try_lock() {
+            Ok(ledger) => ledger,
+            Err(TryLockError::WouldBlock) => return Err(TablePublicationError::Busy),
+            Err(TryLockError::Poisoned(_)) => return Err(TablePublicationError::Poisoned),
+        };
+        ledger.test_limits = limits;
+        Ok(())
     }
 
     pub(crate) fn try_prepare(&self, shape: SymbolTableShape) -> TablePreparationAccounting<'_> {
@@ -255,6 +281,12 @@ impl PublishedSymbolTables {
         mut ledger: MutexGuard<'owner, TableLedger>,
         shape: SymbolTableShape,
     ) -> Result<PreparedTablePublication<'owner>, (TablePublicationError, RetainedTableBytes)> {
+        let limits = self.limits;
+        #[cfg(test)]
+        let limits = match ledger.test_limits {
+            TestTableLimits::Production => limits,
+            TestTableLimits::Override(limits) => limits,
+        };
         let prepare = (|| {
             let current = ledger.current.table();
             if shape.chunk_slots != current.shape.chunk_slots
@@ -267,7 +299,7 @@ impl PublishedSymbolTables {
                 return Ok(Replacement::Unchanged);
             }
             let generation = current.generation.checked_successor()?;
-            if ledger.retired.len() >= self.limits.retired.0 {
+            if ledger.retired.len() >= limits.retired.0 {
                 return Err(TablePublicationError::NeedGrace(TableLimit::RetiredTables));
             }
             // Reserve BEFORE the backing may mutate. A successful reserve is
@@ -281,7 +313,7 @@ impl PublishedSymbolTables {
                 .0
                 .checked_add(table_bytes(shape)?)
                 .ok_or(TablePublicationError::Table(TableError::Capacity))?;
-            if needed > self.limits.bytes.0 {
+            if needed > limits.bytes.0 {
                 return Err(TablePublicationError::NeedGrace(TableLimit::RetainedBytes));
             }
             Ok(Replacement::Prepared(PreparedSymbolTable::new(

@@ -1,4 +1,5 @@
 //! Actual minimal World/collector inputs; no bootstrap or setup collection.
+use super::super::{EraCore, InitialTablePreparation};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
@@ -71,5 +72,65 @@ fn nmjit_n2_proof_inputs_preserve_collector_mode_without_production_capability()
         );
         drop(collector);
         drop(keeper);
+    });
+}
+
+#[test]
+fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
+    #[derive(Debug, PartialEq, Eq)]
+    enum PreparationOutcome {
+        Refused(RegistrationError),
+        Admitted,
+    }
+
+    Context::with_test_symbol_era(|era, _| {
+        let (mut collector, keeper) = era.finish().expect("empty proof fixture ends");
+        let original_heap = collector.heap_identity();
+        let original_mode = collector.registration_heap_mut().generational_enabled();
+        let admission = ProofAdmission::check(collector, keeper)
+            .expect("empty fixture returns valid exclusive admission inputs");
+        let (checked, witness) = admission.into_checked();
+        let (outcome, mut collector, keeper) =
+            match EraCore::admit_checked(checked, witness, InitialTablePreparation::RefuseOnce) {
+                Err(failure) => (
+                    PreparationOutcome::Refused(failure.reason),
+                    failure.collector,
+                    failure.keeper,
+                ),
+                Ok((core, _witness)) => {
+                    let (collector, keeper) = core.finish().unwrap_or_else(|failure| {
+                        panic!("unexpected admission cleanup refused: {:?}", failure.reason)
+                    });
+                    (PreparationOutcome::Admitted, collector, keeper)
+                }
+            };
+        let returned_heap = collector.heap_identity();
+        let returned_mode = collector.registration_heap_mut().generational_enabled();
+        let returned_keeper_heap = keeper.parallel_heap_identity();
+        let returned_keeper_held = keeper.held_here();
+        // The one-shot refusal must preserve usable ownership, not just scalar
+        // identities. Finish the second admission before any semantic assertion.
+        let era = crate::tagged::gc::ProofEra::admit(collector, keeper)
+            .expect("initial preparation refusal preserves re-admission inputs");
+        let (mut collector, keeper) = era.finish().expect("re-admitted empty fixture ends");
+        let recovered_heap = collector.heap_identity();
+        let recovered_mode = collector.registration_heap_mut().generational_enabled();
+        let recovered_keeper_heap = keeper.parallel_heap_identity();
+        let recovered_keeper_held = keeper.held_here();
+        drop(collector);
+        drop(keeper);
+        assert_eq!(
+            outcome,
+            PreparationOutcome::Refused(RegistrationError::Capacity)
+        );
+        assert_eq!(returned_heap, original_heap);
+        assert_eq!(returned_mode, original_mode);
+        assert_eq!(returned_keeper_heap, original_heap);
+        assert!(returned_keeper_held);
+        assert_eq!(recovered_heap, original_heap);
+        assert_eq!(recovered_mode, original_mode);
+        assert_eq!(recovered_keeper_heap, original_heap);
+        assert!(recovered_keeper_held);
+        eprintln!("NMJIT_N3_INITIAL_TABLE_REFUSAL_OWNERSHIP_RETURNED");
     });
 }

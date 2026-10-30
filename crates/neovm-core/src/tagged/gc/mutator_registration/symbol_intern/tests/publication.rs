@@ -6,7 +6,7 @@ use crate::emacs_core::symbol::LispSymbol;
 use crate::tagged::gc::symbol_table::{PublishedSymbolTable, SymbolChunkIndex};
 use crate::tagged::gc::{InitialInternError, PlainSymbolBacking, RegistrationError, SymbolHandle};
 
-fn name_through_table(
+pub(super) fn name_through_table(
     run: &mut RunAccess<'_, '_>,
     table: &PublishedSymbolTable,
     handle: &SymbolHandle,

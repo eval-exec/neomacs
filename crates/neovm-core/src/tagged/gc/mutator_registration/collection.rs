@@ -180,7 +180,12 @@ impl<'heap> EraCore<'heap> {
             Ok(permit) => permit,
             Err(reason) => return Err(checked.refuse(reason)),
         };
-        let (mut era, witness) = Self::admit_checked(checked, witness)?;
+        let (mut era, witness) = Self::admit_checked(
+            checked,
+            witness,
+            #[cfg(test)]
+            InitialTablePreparation::Actual,
+        )?;
         era.weak_sweep = Some(permit.bind(era.registry.as_ref().expect("new era registry")));
         era.legacy_roots = Some(roots);
         Ok((era, witness))
@@ -212,7 +217,12 @@ impl<'heap> EraCore<'heap> {
         if let Err(reason) = validation {
             return Err(checked.refuse(reason));
         }
-        let (mut era, witness) = Self::admit_checked(checked, witness)?;
+        let (mut era, witness) = Self::admit_checked(
+            checked,
+            witness,
+            #[cfg(test)]
+            InitialTablePreparation::Actual,
+        )?;
         era.legacy_roots = Some(roots);
         Ok((era, witness))
     }

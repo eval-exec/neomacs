@@ -86,6 +86,22 @@ impl Drop for InitialObarrayRef<'_, '_, '_> {
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
     #[cfg(test)]
+    pub(crate) fn initial_table_commit_fault_for_test(
+        &mut self,
+        fault: TableCommitFault,
+    ) -> Result<(), RegistrationError> {
+        let lease = self.initial_obarray_mut()?;
+        let symbols = &lease.run.owner.registry.symbols;
+        let mut armed = match symbols.table_commit_fault.try_lock() {
+            Ok(armed) => armed,
+            Err(std::sync::TryLockError::WouldBlock) => return Err(RegistrationError::Busy),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(RegistrationError::Poisoned),
+        };
+        *armed = fault;
+        Ok(())
+    }
+
+    #[cfg(test)]
     pub(crate) fn initial_table_statistics_for_test(
         &self,
     ) -> Result<super::super::super::symbol_table::publication::TableStatistics, RegistrationError>
@@ -424,7 +440,27 @@ pub(super) fn publish_initial(
             return Err(RegistrationError::Poisoned.into());
         }
     }
-    // No fallible edge remains after successful World publication. The fresh
+    #[cfg(test)]
+    {
+        let fault = match symbols.table_commit_fault.try_lock() {
+            Ok(mut armed) => Ok(std::mem::replace(&mut *armed, TableCommitFault::None)),
+            Err(std::sync::TryLockError::WouldBlock) => Err(RegistrationError::Busy),
+            Err(std::sync::TryLockError::Poisoned(_)) => Err(RegistrationError::Poisoned),
+        };
+        match fault {
+            Ok(TableCommitFault::None) => {}
+            Ok(TableCommitFault::AfterDescriptorPublication) => {
+                symbols.poison();
+                return Err(RegistrationError::Poisoned.into());
+            }
+            Err(reason) => {
+                let _refusal = reason;
+                symbols.poison();
+                return Err(RegistrationError::Poisoned.into());
+            }
+        }
+    }
+    // No fallible edge remains after successful backing/table publication. The fresh
     // record retains exclusive registry access and every required reservation.
     // Canonical mapping and epoch are installed before the rooted answer.
     prepared.commit(charged);
