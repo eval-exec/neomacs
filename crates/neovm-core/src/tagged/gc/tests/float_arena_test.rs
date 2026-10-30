@@ -449,7 +449,7 @@ fn concurrent_tenured_float_dropped_not_claimed() {
     // page walk tenures it (page slots of survivors freeze).
     let f = heap.alloc_float(3.25);
     // The worker's tenured short-circuit is the permanent-image path.
-    assert!(heap.note_image_object(f));
+    assert_eq!(heap.note_image_object(f), ImageStamp::Stamped);
     let root = heap.alloc_cons(f, TaggedValue::fixnum(0));
     heap.collect_exact(std::iter::once(root));
     let f_ptr = f.as_float_ptr().unwrap();

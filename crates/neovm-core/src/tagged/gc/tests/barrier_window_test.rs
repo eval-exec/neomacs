@@ -128,8 +128,11 @@ fn partitioned_heap_owners(heap: &mut TaggedHeap) -> Owners {
     let root = heap.alloc_cons(remembered_vector, root);
     // This file pins the generation-disabled partition path, where the only
     // tenured owners are image residents; stamp the fixtures accordingly.
-    assert!(heap.note_image_object(tenured_vector));
-    assert!(heap.note_image_object(remembered_vector));
+    assert_eq!(heap.note_image_object(tenured_vector), ImageStamp::Stamped);
+    assert_eq!(
+        heap.note_image_object(remembered_vector),
+        ImageStamp::Stamped
+    );
     // The first partition cycle makes image residents permanent (tenured).
     heap.collect_exact(std::iter::once(root));
     assert!(heap.value_is_tenured(tenured_vector));
@@ -363,8 +366,8 @@ fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
     let root = heap.alloc_cons(quiet, TaggedValue::NIL);
     let root = heap.alloc_cons(parent, root);
     // Generation-disabled path: the tenured owners here are image residents.
-    assert!(heap.note_image_object(quiet));
-    assert!(heap.note_image_object(parent));
+    assert_eq!(heap.note_image_object(quiet), ImageStamp::Stamped);
+    assert_eq!(heap.note_image_object(parent), ImageStamp::Stamped);
     for owner in [image, quiet, parent] {
         assert!(!header_remembered(owner), "{owner:?} starts unremembered");
     }

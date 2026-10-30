@@ -133,7 +133,7 @@ fn generational_mapped_and_permanent_logs_are_per_cycle() {
     roots.keep(mapped);
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
-    assert!(heap.note_image_object(permanent));
+    assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
     heap.collect_exact(std::iter::once(permanent));
     assert!(header(permanent).generation.permanent());
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
@@ -174,7 +174,7 @@ fn generational_disabled_never_logs_r() {
     // the partition-only barrier's tenured owner is an image resident.
     let permanent = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(permanent);
-    assert!(heap.note_image_object(permanent));
+    assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
     heap.collect_exact(std::iter::once(permanent));
     let child = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     crate::tagged::mutate::set_vector_slot(mapped, 0, child);
@@ -442,7 +442,7 @@ fn major_before_first_minor_preserves_permanent_edge() {
     let _ = image.register_vector(&mut heap);
     let owner = heap.alloc_vector(vec![TaggedValue::NIL]);
     roots.keep(owner);
-    assert!(heap.note_image_object(owner));
+    assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
     heap.collect_exact(std::iter::once(owner));
     assert!(header(owner).generation.permanent());
     let child = heap.alloc_cons(TaggedValue::fixnum(97), TaggedValue::NIL);
@@ -645,7 +645,7 @@ fn minor_lazy_hydration_keys_survive_from_old_and_permanent_owners() {
         if permanent {
             let image = fake_image::FakeImage::leak(false);
             roots.keep(image.register_vector(&mut heap));
-            assert!(heap.note_image_object(owner));
+            assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
             heap.collect_exact(std::iter::once(owner));
         } else {
             minor(&mut heap, &[owner]);

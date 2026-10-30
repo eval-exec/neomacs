@@ -204,7 +204,7 @@ fn generational_verifier_accepts_mapped_and_permanent_owners() {
     roots.keep(permanent);
     // Stands in for a loader-reconstructed image row: only image residents
     // become permanent at the first partition promotion.
-    assert!(heap.note_image_object(permanent));
+    assert_eq!(heap.note_image_object(permanent), ImageStamp::Stamped);
     heap.collect_exact([mapped, permanent].into_iter());
     let header = TaggedHeap::value_heap_addr(permanent).unwrap() as *const GcHeader;
     assert!(unsafe { (*header).generation.permanent() });

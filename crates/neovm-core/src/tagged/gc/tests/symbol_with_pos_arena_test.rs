@@ -483,7 +483,7 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     );
     // Loader-reconstructed image rows: permanent, full page retires.
     for &b in &objs {
-        assert!(heap.note_image_object(b));
+        assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     }
 
     heap.collect_exact(std::iter::once(root));

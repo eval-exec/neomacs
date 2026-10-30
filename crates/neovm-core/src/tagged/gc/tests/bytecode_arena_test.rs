@@ -537,7 +537,7 @@ fn concurrent_tenured_bytecode_dropped_not_claimed() {
     let young = heap.alloc_cons(TaggedValue::fixnum(4_321), TaggedValue::fixnum(0));
     let b = heap.alloc_bytecode(bytecode_fn(vec![TaggedValue::fixnum(6), young], 4, 16));
     // The worker's tenured short-circuit is the permanent-image path.
-    assert!(heap.note_image_object(b));
+    assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
     heap.collect_exact(std::iter::once(root));
     let b_hdr = b.as_veclike_ptr().unwrap();
@@ -963,7 +963,7 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     assert_eq!(heap.bytecode_arena.pages[0].allocated, BYTECODE_PAGE_SLOTS);
     // Loader-reconstructed image rows: permanent, full page retires.
     for &b in &bytecodes {
-        assert!(heap.note_image_object(b));
+        assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     }
 
     // First partition cycle: full trace + sweep, then promotion.
@@ -1076,7 +1076,7 @@ fn bytecode_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
 
     // Loader-reconstructed image rows; the partial page still must not retire.
     for &b in &keep {
-        assert!(heap.note_image_object(b));
+        assert_eq!(heap.note_image_object(b), ImageStamp::Stamped);
     }
 
     // Promotion cycle: odd-indexed garbage swept first, survivors tenure

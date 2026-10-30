@@ -2149,7 +2149,7 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
     let root = heap.alloc_cons(t, TaggedValue::fixnum(0));
     // Frozen mark bits are a property of the permanent generation only:
     // ordinary-old runtime survivors are re-traced by every full collection.
-    assert!(heap.note_image_object(t));
+    assert_eq!(heap.note_image_object(t), ImageStamp::Stamped);
 
     // First partition cycle: STW full trace + sweep, then promotion.
     heap.collect_exact(std::iter::once(root));
@@ -3183,7 +3183,7 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     // Image residents (loader-reconstructed rows stand-ins): the first
     // partition cycle makes them permanent, hence tenured in every mode.
     for &owner in &owners {
-        assert!(heap.note_image_object(owner));
+        assert_eq!(heap.note_image_object(owner), ImageStamp::Stamped);
     }
     heap.collect_exact(std::iter::once(root));
     assert!(owners.iter().all(|&owner| heap.value_is_tenured(owner)));

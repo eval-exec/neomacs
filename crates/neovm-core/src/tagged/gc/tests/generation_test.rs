@@ -72,8 +72,8 @@ fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     let lambda = heap.alloc_lambda(vec![TaggedValue::NIL]);
     // Two survivors stand in for loader-reconstructed dump-image rows; the
     // rest are runtime allocations.
-    assert!(heap.note_image_object(vector));
-    assert!(heap.note_image_object(lambda));
+    assert_eq!(heap.note_image_object(vector), ImageStamp::Stamped);
+    assert_eq!(heap.note_image_object(lambda), ImageStamp::Stamped);
     let residents = [vector, lambda];
     let runtime = [table, string, float, record];
     let mut root = TaggedValue::NIL;

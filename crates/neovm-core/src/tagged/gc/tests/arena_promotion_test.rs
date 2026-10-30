@@ -55,10 +55,10 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     // residents become permanent and retire full pages; the runtime class
     // (see the reclamation test) stays sweepable.
     for &f in &floats {
-        assert!(heap.note_image_object(f));
+        assert_eq!(heap.note_image_object(f), ImageStamp::Stamped);
     }
-    assert!(heap.note_image_object(s));
-    assert!(heap.note_image_object(v));
+    assert_eq!(heap.note_image_object(s), ImageStamp::Stamped);
+    assert_eq!(heap.note_image_object(v), ImageStamp::Stamped);
 
     // First partition cycle: full trace + sweep, then promotion.
     heap.collect_exact(std::iter::once(root));

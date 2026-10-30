@@ -1000,6 +1000,18 @@ pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
 
 static_assertions::assert_not_impl_any!(TaggedHeap: Send, Sync);
 
+/// Outcome of [`TaggedHeap::note_image_object`]: whether the object now carries
+/// the loader's image-residency stamp.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImageStamp {
+    /// The header now carries `HeaderFlags::image_resident`.
+    Stamped,
+    /// The object cannot carry the stamp: a cons (no header), a mapped image
+    /// object (residency lives in the mapped side tables), or an object this
+    /// heap does not own.
+    NotStamped,
+}
+
 impl TaggedHeap {
     pub fn new() -> Self {
         super::collection_reads::initialize();
@@ -1651,15 +1663,15 @@ impl TaggedHeap {
     /// The loader calls this once per reconstructed image row before the
     /// image is published, so the byte is written before any mutator or
     /// collector can observe the object.
-    pub(crate) fn note_image_object(&mut self, value: TaggedValue) -> bool {
+    pub(crate) fn note_image_object(&mut self, value: TaggedValue) -> ImageStamp {
         if value.is_cons() {
-            return false;
+            return ImageStamp::NotStamped;
         }
         let Some(addr) = Self::value_heap_addr(value) else {
-            return false;
+            return ImageStamp::NotStamped;
         };
         if self.owner_is_mapped(value) || !self.owns_heap_value_object(value, addr) {
-            return false;
+            return ImageStamp::NotStamped;
         }
         // SAFETY: the ownership oracle just proved this is a live initialized
         // non-cons heap object, and the loader runs single-threaded before the
@@ -1668,7 +1680,7 @@ impl TaggedHeap {
             let header = &mut *(addr as *mut GcHeader);
             header.flags = header.flags.with_image_resident();
         }
-        true
+        ImageStamp::Stamped
     }
 
     pub fn dirty_owner_count(&self) -> usize {
