@@ -399,6 +399,14 @@ debug = false
 # in the first place.
 strip = "none"
 
+# Fast local builds with basic optimization and no cross-crate LTO.
+[profile.quick]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 16
+incremental = true
+
 # This test-only crate is a 52 MiB corpus compiled into one test harness.
 # Keep production dependencies in release mode without optimizing test bodies.
 [profile.release.package.neovm-oracle-tests]
