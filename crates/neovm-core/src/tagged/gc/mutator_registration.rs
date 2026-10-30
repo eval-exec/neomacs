@@ -11,6 +11,8 @@
 #![allow(dead_code)]
 
 mod admission;
+#[cfg(test)]
+mod admission_probe;
 mod authority_word;
 mod collection;
 mod cons_allocation;

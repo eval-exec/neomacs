@@ -165,30 +165,7 @@ impl Drop for PoisonOnUnwind<'_> {
 /// proceed.
 #[test]
 pub(super) fn in_slice_admission_word_refuses_catalog_transition() {
-    Context::with_test_collection_era(roots, |era, (_cars, _nil)| {
-        let permit = era.register(1731, 1).unwrap();
-        permit
-            .entry
-            .admission
-            .store(AdmissionWord::in_slice(0), Ordering::Release);
-        assert_eq!(
-            era.start_cons_storage(),
-            Err(RegistrationError::OutstandingLoan)
-        );
-        permit
-            .entry
-            .admission
-            .store(AdmissionWord::OUT, Ordering::Release);
-        era.start_cons_storage().unwrap();
-        let mut stopped = retry(|| era.stop());
-        retry_registration(|| era.return_cons_storage(&stopped));
-        era.collect_stopped(&mut stopped).unwrap();
-        complete(stopped);
-        drop(permit);
-        let (collector, keeper) = era.finish().unwrap();
-        drop(collector);
-        drop(keeper);
-    });
+    super::admission_probe::in_slice_admission_word_refuses_catalog_transition();
 }
 
 #[test]

@@ -280,7 +280,7 @@ fn controls() -> [Control; 31] {
             class: RuntimeRefusal,
             check_name: "admission_scan",
             check: Some(
-                crate::tagged::gc::mutator_registration::cons_allocation_tests::in_slice_admission_word_refuses_catalog_transition,
+                crate::tagged::gc::mutator_registration::admission_probe::in_slice_admission_word_refuses_catalog_transition,
             ),
             expectation: "an IN_SLICE admission word refuses the catalog transition even when every gated precheck passes",
         },
