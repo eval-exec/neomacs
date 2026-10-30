@@ -8,6 +8,18 @@ impl Context {
         Self::with_test_symbol_backing_era(crate::tagged::gc::PlainSymbolBacking::Unprojected, body)
     }
 
+    /// Observe the real rooted-admission result without converting its typed
+    /// refusal to a setup panic. Refused ownership is released before return.
+    pub(crate) fn try_with_test_symbol_era<R>(
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, crate::tagged::gc::RegistrationError> {
+        Self::try_with_test_symbol_backings_init_era(
+            &[crate::tagged::gc::PlainSymbolBacking::Unprojected],
+            |_, _| {},
+            |era, ids| body(era, ids[0]),
+        )
+    }
+
     /// C3 setup only: the same small World, optionally projected before the
     /// era exists. No production cell accessor changes and no setup collection.
     pub(crate) fn with_test_symbol_backing_era<R>(
@@ -125,6 +137,15 @@ impl Context {
         init: impl FnOnce(&mut Obarray, &[SymId]),
         body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
     ) -> R {
+        Self::try_with_test_symbol_backings_init_era(kinds, init, body)
+            .unwrap_or_else(|reason| panic!("minimal symbol fixture admission: {reason:?}"))
+    }
+
+    fn try_with_test_symbol_backings_init_era<R>(
+        kinds: &[crate::tagged::gc::PlainSymbolBacking],
+        init: impl FnOnce(&mut Obarray, &[SymId]),
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, Vec<SymId>) -> R,
+    ) -> Result<R, crate::tagged::gc::RegistrationError> {
         use crate::tagged::gc::{AliasableBox, ProofEra as ParallelHeapEra, TaggedHeap};
 
         let heap = AliasableBox::new(TaggedHeap::new());
@@ -200,9 +221,19 @@ impl Context {
             // No Context or legacy activation exists in this minimal World.
             functions_quiescent: true,
         };
-        let era = ParallelHeapEra::admit_rooted(collector, keeper, frozen)
-            .unwrap_or_else(|e| panic!("minimal symbol fixture admission: {:?}", e.reason));
-        body(era, ids)
+        let era = match ParallelHeapEra::admit_rooted(collector, keeper, frozen) {
+            Ok(era) => era,
+            Err(failure) => {
+                let reason = failure.reason;
+                // Admission returned both exclusive authorities. Release the
+                // collector before its World keeper, then let ready tear down
+                // the retained World. No owner, root home or lease was issued.
+                drop(failure.collector);
+                drop(failure.keeper);
+                return Err(reason);
+            }
+        };
+        Ok(body(era, ids))
         // ready owns the same World until after the body and keeper teardown.
     }
 }

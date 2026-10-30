@@ -34,6 +34,19 @@ fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
             })
         }
         MissingFeature::RetiredPublication => {
+            if cfg!(feature = "gc-memory-telemetry") {
+                // The real constructor must refuse before any descriptor or
+                // owner is published under this unsupported inventory mode.
+                let admission = Context::try_with_test_symbol_era(|era, _| {
+                    // Also make the unexpected-success branch total before
+                    // asserting the policy: no live era on an assertion edge.
+                    let (collector, keeper) = era.finish().expect("N1 admission probe finish");
+                    drop(collector);
+                    drop(keeper);
+                });
+                assert_eq!(admission, Err(RegistrationError::Publication));
+                return Ok(());
+            }
             super::symbol_intern::nmjit_n3_retired_publication_manifest().map_err(|reason| {
                 eprintln!("NMJIT_N3_RETIRED_PUBLICATION_FAILURE {reason}");
                 feature
@@ -100,8 +113,8 @@ fn fixture(
         &SymbolHandle,
         &OwnerRootSlot<'era>,
     ),
-) -> std::thread::Result<()> {
-    Context::with_test_symbol_era(|era, id| {
+) -> Result<std::thread::Result<()>, RegistrationError> {
+    Context::try_with_test_symbol_era(|era, id| {
         let handle = era
             .admit_plain_symbol(id)
             .expect("N1 existing Plain symbol");
@@ -156,6 +169,48 @@ fn fixture(
     })
 }
 
+/// Both feature configurations execute the same checked constructor. The
+/// telemetry inventory must return its exact typed refusal; an admitted body
+/// must run and clean up completely in the supported configuration.
+fn expect_fixture_admission(
+    case: FixtureCase,
+    admission: Result<std::thread::Result<()>, RegistrationError>,
+) -> std::thread::Result<()> {
+    match admission {
+        Ok(outcome) => {
+            assert!(
+                !cfg!(feature = "gc-memory-telemetry"),
+                "telemetry rooted admission unexpectedly succeeded"
+            );
+            outcome
+        }
+        Err(reason) => {
+            assert!(
+                cfg!(feature = "gc-memory-telemetry"),
+                "supported fixture admission refused: {reason:?}"
+            );
+            assert_eq!(reason, RegistrationError::Publication);
+            // The checked fixture released returned collector/keeper before
+            // reporting refusal. No body root/lease exists to tear down.
+            match case {
+                FixtureCase::Missing(feature) => {
+                    eprintln!("NMJIT_N1_TYPED_REFUSAL {feature:?} Publication");
+                    eprintln!("NMJIT_N1_TEARDOWN_OK {feature:?}");
+                }
+                FixtureCase::Noop => {
+                    eprintln!("NMJIT_N1_TYPED_REFUSAL Noop Publication");
+                    eprintln!("NMJIT_N1_TEARDOWN_OK Noop");
+                }
+                FixtureCase::EarlyReturn => {
+                    eprintln!("NMJIT_N1_TYPED_REFUSAL EarlyReturn Publication");
+                    eprintln!("NMJIT_N1_TEARDOWN_OK EarlyReturn");
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn missing_case(feature: MissingFeature) {
     // Completed entries run before the real lease fixture. Constructing a
     // second Context while that old era/lease lives would test a nested World
@@ -167,9 +222,12 @@ fn missing_case(feature: MissingFeature) {
         let _reader = run.symbol_ref(handle).expect("N1 real symbol reader lease");
         assert_eq!(entry, Ok(()), "NMJIT_N1_MISSING_FEATURE {feature:?}");
     });
-    if let Err(assertion) = result {
+    if let Err(assertion) = expect_fixture_admission(FixtureCase::Missing(feature), result) {
         std::panic::resume_unwind(assertion);
     }
+    // A typed admission refusal never makes an absent operation pass. The
+    // supported path already checked this with its real reader lease live.
+    assert_eq!(entry, Ok(()), "NMJIT_N1_MISSING_FEATURE {feature:?}");
 }
 
 macro_rules! missing_test {
@@ -187,10 +245,10 @@ missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);
 
 #[test]
 fn nmjit_n1_noop_fixture_finishes_cleanly() {
-    fixture(FixtureCase::Noop, |run, handle, _home| {
+    let admission = fixture(FixtureCase::Noop, |run, handle, _home| {
         let _reader = run.symbol_ref(handle).expect("N1 no-op reader lease");
-    })
-    .expect("N1 no-op fixture completion");
+    });
+    expect_fixture_admission(FixtureCase::Noop, admission).expect("N1 no-op fixture completion");
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -200,7 +258,7 @@ enum ControlledReturn {
 
 #[test]
 fn nmjit_n1_early_return_fixture_finishes_cleanly() {
-    fixture(FixtureCase::EarlyReturn, |run, handle, _home| {
+    let admission = fixture(FixtureCase::EarlyReturn, |run, handle, _home| {
         let mut early_return = || -> Result<(), ControlledReturn> {
             let _reader = run
                 .symbol_ref(handle)
@@ -208,8 +266,9 @@ fn nmjit_n1_early_return_fixture_finishes_cleanly() {
             Err(ControlledReturn::EntryNotRequested)
         };
         assert_eq!(early_return(), Err(ControlledReturn::EntryNotRequested));
-    })
-    .expect("N1 early-return fixture completion");
+    });
+    expect_fixture_admission(FixtureCase::EarlyReturn, admission)
+        .expect("N1 early-return fixture completion");
 }
 
 // The real fixture refusal uses the shared exhaustive classifier rather than
