@@ -102,6 +102,13 @@ case "$profile" in
             xdotool
             wmctrl
             kwin-x11
+            # KWin's decoration plugin.  Without one KWin loads neither
+            # org.kde.breeze nor aurorae's Plastik fallback (org.kde.plasma.core
+            # is absent), so it never publishes _NET_FRAME_EXTENTS -- the
+            # property the issue-582 GNU fullscreen oracle reads to measure the
+            # GTK3 GNU window's decorated outer edge.  Neomacs's own windows
+            # are undecorated, which is why only the GNU arm failed.
+            kwin-style-breeze
             dbus
             imagemagick
             ripgrep
