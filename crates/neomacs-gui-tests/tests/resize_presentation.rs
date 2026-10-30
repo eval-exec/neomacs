@@ -90,6 +90,7 @@ fn run_resize_test(scenario: ResizeScenario) {
             .expect("resize artifact should have a parent"),
     )
     .expect("resize artifact directory");
+    let (fontconfig, font_cache) = pin_font_rendering(&artifact_root);
     let before_png = artifacts.png.with_file_name(format!("{name}.before.png"));
     let ready_path = artifacts.png.with_file_name(format!("{name}.ready"));
     for path in [
@@ -115,6 +116,11 @@ fn run_resize_test(scenario: ResizeScenario) {
         ])
         .envs(session.env().iter().map(|(key, value)| (key, value)))
         .env("WINIT_UNIX_BACKEND", "x11")
+        // This fixture observes the frame's pixels; pin glyph rasterization
+        // so the same capture applies on a host whose fontconfig selects
+        // subpixel antialiasing (CI) and one whose fontconfig selects none.
+        .env("FONTCONFIG_FILE", &fontconfig)
+        .env("XDG_CACHE_HOME", &font_cache)
         .env("NEOMACS_LOG_FILE", &artifacts.neomacs_log)
         .env("NEOMACS_DUMP_FRAME_GLYPHS", "1")
         .env("NEOMACS_GUI_RESIZE_READY", &ready_path)
@@ -467,6 +473,41 @@ fn wait_for_resized_mode_line(
         );
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Glyph rasterization pinned for this fixture's pixel comparison.
+///
+/// The stale-presentation check samples window pixels, so the text
+/// rasterization mode must be a property of the fixture, not of the host.
+/// Without a pin a fontconfig whose `rgba` selects RGB (the CI runner's
+/// configuration) tints black text with one red and one cyan fringe column
+/// per glyph cell, while a fontconfig that selects none renders grayscale;
+/// the red detector then sees host-dependent pixels in the old mode-line
+/// rows.  Include the host's font directories but assign the rasterization
+/// properties explicitly.  `XDG_CACHE_HOME` keeps fontconfig's cache inside
+/// the test's artifact directory so no host cache state is consulted.
+fn pin_font_rendering(artifact_root: &Path) -> (PathBuf, PathBuf) {
+    let fontconfig = artifact_root.join("resize-fonts.conf");
+    let cache = artifact_root.join("fontconfig-cache");
+    std::fs::create_dir_all(&cache).expect("create the fontconfig cache directory");
+    std::fs::write(
+        &fontconfig,
+        r##"<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>
+  <match target="font">
+    <edit name="antialias" mode="assign"><bool>true</bool></edit>
+    <edit name="hinting" mode="assign"><bool>true</bool></edit>
+    <edit name="hintstyle" mode="assign"><const>hintslight</const></edit>
+    <edit name="rgba" mode="assign"><const>none</const></edit>
+    <edit name="lcdfilter" mode="assign"><const>lcdnone</const></edit>
+  </match>
+</fontconfig>
+"##,
+    )
+    .expect("write the fixture's fontconfig pin");
+    (fontconfig, cache)
 }
 
 fn is_red_tinted([red, green, blue, _alpha]: [u8; 4]) -> bool {
