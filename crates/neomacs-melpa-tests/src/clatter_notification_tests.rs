@@ -20,7 +20,7 @@ fn run_notification_case(
     let service =
         PrivateClatterService::start(&control).expect("start private GNU notification service");
     let script = service.write_client_script(packages).unwrap();
-    let mut runtime = service.configure_runtime(runtime);
+    let mut runtime = runtime;
     for (key, value) in packages.process_environment() {
         runtime = runtime.with_env(key, value);
     }
@@ -35,6 +35,25 @@ fn run_notification_case(
     )
     .expect("clatter scenario roots must be absolute");
     let mut command = runtime.command(&environment);
+    // The service's environment restates HOME/TMPDIR at the control roots --
+    // the same values the canonical environment above pins -- and the client
+    // command is already canonically pinned.  Apply the service entries
+    // through the typed statement: pinned names are deliberate overrides,
+    // everything else (the private bus address, the control directory,
+    // RUST_LOG) is an ordinary variable.
+    for (name, value) in service.environment() {
+        match name
+            .to_str()
+            .and_then(neomacs_test_env::CanonicalPin::from_env_name)
+        {
+            Some(pin) => {
+                command.override_pin(pin, value);
+            }
+            None => {
+                command.env(name, value);
+            }
+        }
+    }
     command.args(["--batch", "-Q", "-l"]).arg(script);
     let output = output_with_timeout_pinned(&mut command, Duration::from_secs(90))
         .unwrap_or_else(|error| panic!("{label} Clatter client: {error:?}; artifacts {control:?}"));

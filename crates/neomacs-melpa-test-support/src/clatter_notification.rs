@@ -144,13 +144,6 @@ impl PrivateClatterService {
         ]
     }
 
-    pub fn configure_runtime(&self, mut runtime: EmacsRuntime) -> EmacsRuntime {
-        for (key, value) in self.environment() {
-            runtime = runtime.with_env(key, value);
-        }
-        runtime
-    }
-
     pub fn write_client_script(&self, packages: &PreparedPackageSet) -> Result<PathBuf, String> {
         let script = self.control.join("client.el");
         fs::write(&script, format!("{}\n{CLIENT}", packages.startup_elisp()))
