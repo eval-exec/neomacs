@@ -183,12 +183,7 @@ macro_rules! missing_test {
 
 missing_test!(nmjit_n1_missing_gen1_admission, Gen1Admission);
 
-
-
-
-
 missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);
-
 
 #[test]
 fn nmjit_n1_noop_fixture_finishes_cleanly() {
