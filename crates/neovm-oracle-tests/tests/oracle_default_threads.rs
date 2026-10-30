@@ -83,6 +83,8 @@ fn e8s_thread_join_self_and_internal_error_last_error() {
           (thread-last-error t)
           (thread-last-error))))
 "##,
-        expect_test::expect![[r#""OK ((join-self \"Cannot join current thread\") nil (error \"inside\") (error \"inside\") nil)""#]],
+        expect_test::expect![[
+            r#""OK ((join-self \"Cannot join current thread\") nil (error \"inside\") (error \"inside\") nil)""#
+        ]],
     );
 }
