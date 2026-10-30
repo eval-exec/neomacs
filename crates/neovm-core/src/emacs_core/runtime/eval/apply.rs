@@ -4218,6 +4218,22 @@ impl Context {
         walk_lambda_formals(fun, arglist, args, &mut DynamicFormalBindings(self))
     }
 
+    /// Retire the call's specpdl root, if it has one. The witnessed root
+    /// lives in a caller-owned traced carrier and is dropped by the caller;
+    /// the body runners have already restored the specpdl to `COUNT`.
+    #[inline(always)]
+    fn unwind_call_root(
+        &mut self,
+        root: CallableRoot<'_>,
+        count: usize,
+        result: EvalResult,
+    ) -> EvalResult {
+        match root {
+            CallableRoot::Specpdl => self.unbind_to_with_result(count, result),
+            CallableRoot::Witnessed(_) => result,
+        }
+    }
+
     /// Apply FUNC_VALUE to ARGS. `root` names the GC root that keeps the
     /// callable alive for the whole call: the specpdl `GcRoot` pushed here
     /// ([`CallableRoot::Specpdl`]), or a caller-witnessed traced carrier
@@ -4275,14 +4291,19 @@ impl Context {
         if !raw_cons_lambda && let Some(env) = env {
             let new_env = match bind_lexical_formals(env, func_value, arglist, &args, self) {
                 Ok(new_env) => new_env,
-                Err(flow) => return self.unbind_to_with_result(root_count, Err(flow)),
+                Err(flow) => return self.unwind_call_root(root, root_count, Err(flow)),
             };
             let result = if self.tier_i.engaged() {
                 self.tier_i_run_lexical_body(arglist, new_env, body)
             } else {
                 self.run_lexical_closure_body(new_env, body)
             };
-            return self.unbind_to_with_result(root_count, result);
+            // `run_lexical_closure_body` / `tier_i_run_lexical_body` retire
+            // their LexicalEnv entry and restore the specpdl to their entry
+            // length on every result. When the callable was witnessed that
+            // length is ROOT_COUNT, so this second truncate is a no-op; the
+            // specpdl variant still has its own GcRoot entry to pop.
+            return self.unwind_call_root(root, root_count, result);
         }
         if raw_cons_lambda {
             let old_lexenv = std::mem::replace(&mut self.lexenv, Value::NIL);
