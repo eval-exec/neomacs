@@ -16,8 +16,23 @@ fn run_active_gnu(form: &str) -> String {
         .expect("mode-line oracle sandbox");
     let mut command = sandbox.pinned_command(oracle.executable());
     sandbox.configure(&mut command);
+    // The display session pins the locale that keeps X clients and the
+    // editor on one message encoding (`locale_pin`, neomacs-infra's
+    // display.rs).  This command is already canonically pinned, so a
+    // display variable that names a canonical pin is a deliberate per-case
+    // override and must be stated through the typed statement; a raw env
+    // write would silently undo the recorded environment (and is refused).
+    for (name, value) in display.env() {
+        match neomacs_test_env::CanonicalPin::from_env_name(name) {
+            Some(pin) => {
+                command.override_pin(pin, value);
+            }
+            None => {
+                command.env(name, value);
+            }
+        }
+    }
     command
-        .envs(display.env().iter().map(|(key, value)| (key, value)))
         .env_remove("WAYLAND_DISPLAY")
         .env("EMACSNATIVELOADPATH", "/dev/null")
         .env("NO_AT_BRIDGE", "1")
