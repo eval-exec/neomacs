@@ -1360,10 +1360,13 @@ impl Context {
         }
         context.lexenv = new_lexenv;
 
-        // As `sf_let_value_named`: lexical values are rooted by the installed
-        // lexenv; only a dynamic value needs a sequence root until
-        // `try_specbind` binds it.
-        for (_, value) in &dynamic_sym_ids {
+        // As `sf_let_value_named`: GNU's Flet temps keep every evaluated
+        // initializer (lexical or dynamic) live for the whole body.
+        for value in lexical_bindings
+            .iter()
+            .map(|(_, value, _)| value)
+            .chain(dynamic_sym_ids.iter().map(|(_, value)| value))
+        {
             context.push_eval_temp_root(*value);
         }
         for (sym_id, value) in &dynamic_sym_ids {

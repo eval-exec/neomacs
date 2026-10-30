@@ -401,11 +401,13 @@ impl Context {
         // Install the new lexenv atomically.
         context.lexenv = new_lexenv;
 
-        // Lexical values are rooted by the lexenv installed above. A dynamic
-        // value is not reachable until `try_specbind` has bound it, and a
-        // specbind watcher may run Lisp before that, so only dynamic values
-        // need a sequence root here.
-        for (_, value) in &dynamic_sym_ids {
+        // GNU Flet keeps its evaluated `temps[]` (eval.c:1151-1186,
+        // SAFE_ALLOCA_LISP) live for the whole body independently of the
+        // lexenv binding: `(setq obj nil)` in the body drops the binding's
+        // reference but not GNU's temp, so a weak table keyed on the value
+        // must still see it. Root every initializer; the lexenv's
+        // reachability is not the contract.
+        for (_, value) in lexical_bindings.iter().chain(dynamic_sym_ids.iter()) {
             context.push_eval_temp_root(*value);
         }
         for (sym_id, value) in &dynamic_sym_ids {
