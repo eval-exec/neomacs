@@ -4220,7 +4220,15 @@ impl Context {
 
     /// Retire the call's specpdl root, if it has one. The witnessed root
     /// lives in a caller-owned traced carrier and is dropped by the caller;
-    /// the body runners have already restored the specpdl to `COUNT`.
+    /// the body runners restore the specpdl to their entry length on every
+    /// result, and for a witnessed callable that entry length is `count`
+    /// (ROOT_COUNT), so the skip is a no-op.
+    ///
+    /// The skip's premise is checked here, at the decision point, in debug
+    /// builds: a body runner (or the bind-error path) that ever stopped
+    /// restoring the specpdl fails this assert before the skip could leave
+    /// bindings behind. `debug_assert_eq!` compiles out, so release code is
+    /// unchanged.
     #[inline(always)]
     fn unwind_call_root(
         &mut self,
@@ -4230,7 +4238,14 @@ impl Context {
     ) -> EvalResult {
         match root {
             CallableRoot::Specpdl => self.unbind_to_with_result(count, result),
-            CallableRoot::Witnessed(_) => result,
+            CallableRoot::Witnessed(_) => {
+                debug_assert_eq!(
+                    self.specpdl.len(),
+                    count,
+                    "witnessed lexical call left specpdl entries above ROOT_COUNT"
+                );
+                result
+            }
         }
     }
 
