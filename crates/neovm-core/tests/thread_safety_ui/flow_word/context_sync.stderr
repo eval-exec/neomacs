@@ -370,6 +370,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Sync`
            `NonNull<MarkerObj>: Send`
            which is required by `neovm_core::Context: Sync`
+           `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+           which is required by `neovm_core::Context: Sync`
            `NonNull<()>: Send`
            which is required by `neovm_core::Context: Sync`
            `(dyn portable_pty::MasterPty + Send + 'static): Sync`

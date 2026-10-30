@@ -287,6 +287,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<LispFwd>: Send`
            which is required by `neovm_core::Context: Send`
+           `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+           which is required by `neovm_core::Context: Send`
            `*mut ConsCell: Sync`
            which is required by `neovm_core::Context: Send`
            `*mut FloatObj: Sync`
