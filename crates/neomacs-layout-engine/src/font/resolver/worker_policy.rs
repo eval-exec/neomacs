@@ -1,13 +1,28 @@
-//! Owned, bounded fontset policy for native work outside the evaluator.
+//! Bounded admitted queries over owner-shared, immutable native font policy.
 use super::*;
+use neovm_core::emacs_core::font::{
+    FontFamilyCaptureError, FrozenFontFamilies, capture_alternative_font_families,
+};
+use neovm_core::emacs_core::fontset::{
+    CapturedFontsetChain, FontSelectionRevision, FontsetCaptureError, FontsetRenderingEntry,
+    FontsetRenderingSpec, capture_default_fontset_chain,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FrozenCharacterPolicies {
-    pub(super) generation: u64,
-    queries: HashMap<CharCacheKey, Vec<CapturedCharacterPolicy>>,
+    pub(super) generation: FontSelectionRevision,
+    queries: HashMap<CharCacheKey, FrozenCharacterQuery>,
     bytes: usize,
+}
+
+/// Chain and inherited-family storage belong to the mutation authority. A page
+/// keeps references, and native resolution visits only the necessary prefix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FrozenCharacterQuery {
+    chain: CapturedFontsetChain,
+    inherited: FrozenFontFamilies,
 }
 
 pub(super) struct WorkerPolicy {
@@ -31,7 +46,7 @@ pub(crate) enum FontPolicyMergeError {
 
 impl FrozenCharacterPolicies {
     /// Join only policies captured under the same authority. Duplicate queries
-    /// must carry identical alternatives; the worker never consults live Lisp.
+    /// must carry identical owner references; the worker never consults Lisp.
     pub(crate) fn merged(
         &self,
         other: &Self,
@@ -41,15 +56,15 @@ impl FrozenCharacterPolicies {
             return Err(FontPolicyMergeError::Changed);
         }
         let mut queries = self.queries.clone();
-        for (key, alternatives) in &other.queries {
+        for (key, query) in &other.queries {
             match queries.entry(key.clone()) {
                 std::collections::hash_map::Entry::Occupied(entry) => {
-                    if entry.get() != alternatives {
+                    if entry.get() != query {
                         return Err(FontPolicyMergeError::Changed);
                     }
                 }
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(alternatives.clone());
+                    entry.insert(query.clone());
                 }
             }
             if queries.len() > query_limit {
@@ -60,9 +75,9 @@ impl FrozenCharacterPolicies {
             return Err(FontPolicyMergeError::Budget);
         }
         let bytes = queries
-            .iter()
-            .try_fold(std::mem::size_of::<Self>(), |bytes, (key, alternatives)| {
-                bytes.checked_add(Self::query_bytes(key, alternatives)?)
+            .keys()
+            .try_fold(std::mem::size_of::<Self>(), |bytes, key| {
+                bytes.checked_add(Self::query_bytes(&key.family)?)
             })
             .ok_or(FontPolicyMergeError::Budget)?;
         Ok(Self {
@@ -76,7 +91,8 @@ impl FrozenCharacterPolicies {
         requests: &[(&str, char, u16, bool, FontSelectionSize)],
         max_bytes: usize,
     ) -> Result<Self, FontPolicyCaptureError> {
-        let generation = fontset_generation();
+        let generation = FontSelectionRevision::try_from(fontset_generation())
+            .map_err(map_fontset_capture_error)?;
         let mut snapshot = Self {
             generation,
             queries: HashMap::default(),
@@ -86,10 +102,12 @@ impl FrozenCharacterPolicies {
             if ch.is_ascii() {
                 continue;
             }
-            if family.len() > 512 {
-                return Err(FontPolicyCaptureError::Unsupported);
-            }
-            if snapshot.queries.len() >= 128 {
+            let query_bytes = Self::query_bytes(family).ok_or(FontPolicyCaptureError::Budget)?;
+            if std::mem::size_of::<Self>()
+                .checked_add(query_bytes)
+                .ok_or(FontPolicyCaptureError::Budget)?
+                > max_bytes
+            {
                 return Err(FontPolicyCaptureError::Budget);
             }
             let slant = if italic {
@@ -103,67 +121,36 @@ impl FrozenCharacterPolicies {
                 weight,
                 slant: slant.gnu_numeric(),
                 width: FontWidth::Normal.gnu_numeric(),
-                fontset_generation: generation,
+                fontset_generation: generation.get(),
                 size,
             };
             if snapshot.queries.contains_key(&key) {
                 continue;
             }
-            let (revision, entries) =
-                neovm_core::emacs_core::fontset::bounded_entries_for_char(ch, 32)
-                    .ok_or(FontPolicyCaptureError::Unsupported)?;
-            if revision != generation {
-                return Err(FontPolicyCaptureError::Changed);
-            }
-            let mut alternatives = Vec::new();
-            let mut fallback = true;
-            for entry in entries {
-                match entry {
-                    FontSpecEntry::ExplicitNone => {
-                        fallback = false;
-                        break;
-                    }
-                    FontSpecEntry::Font(spec) => alternatives.push(
-                        CapturedCharacterPolicy::capture_bounded(
-                            family, ch, weight, slant, size, &spec,
-                        )
-                        .ok_or(FontPolicyCaptureError::Unsupported)?,
-                    ),
-                }
-            }
-            if fallback {
-                alternatives.push(
-                    CapturedCharacterPolicy::capture_bounded(
-                        family,
-                        ch,
-                        weight,
-                        slant,
-                        size,
-                        &StoredFontSpec {
-                            family: None,
-                            registry: None,
-                            lang: None,
-                            weight: None,
-                            slant: None,
-                            width: None,
-                            definition: None,
-                        },
-                    )
-                    .ok_or(FontPolicyCaptureError::Unsupported)?,
-                );
-            }
-            snapshot.bytes = snapshot
-                .bytes
-                .checked_add(
-                    Self::query_bytes(&key, &alternatives).ok_or(FontPolicyCaptureError::Budget)?,
-                )
-                .ok_or(FontPolicyCaptureError::Budget)?;
-            if snapshot.bytes > max_bytes {
+            if snapshot.queries.len() >= 128 {
                 return Err(FontPolicyCaptureError::Budget);
             }
-            snapshot.queries.insert(key, alternatives);
+            let bytes = snapshot
+                .bytes
+                .checked_add(query_bytes)
+                .ok_or(FontPolicyCaptureError::Budget)?;
+            if bytes > max_bytes {
+                return Err(FontPolicyCaptureError::Budget);
+            }
+            let chain = capture_default_fontset_chain(ch).map_err(map_fontset_capture_error)?;
+            if chain.revision() != generation {
+                return Err(FontPolicyCaptureError::Changed);
+            }
+            let inherited =
+                capture_alternative_font_families(family).map_err(|error| match error {
+                    FontFamilyCaptureError::Unavailable => FontPolicyCaptureError::Unsupported,
+                })?;
+            snapshot.bytes = bytes;
+            snapshot
+                .queries
+                .insert(key, FrozenCharacterQuery { chain, inherited });
         }
-        if fontset_generation() != generation {
+        if fontset_generation() != generation.get() {
             return Err(FontPolicyCaptureError::Changed);
         }
         if snapshot.bytes > max_bytes {
@@ -172,11 +159,16 @@ impl FrozenCharacterPolicies {
         Ok(snapshot)
     }
 
-    fn query_bytes(key: &CharCacheKey, alternatives: &[CapturedCharacterPolicy]) -> Option<usize> {
-        alternatives.iter().try_fold(
-            std::mem::size_of::<CharCacheKey>().checked_add(key.family.len())?,
-            |bytes, alternative| bytes.checked_add(alternative.owned_bytes()),
-        )
+    /// Charge page-owned query headers and spelling storage. Shared fontset and
+    /// family-alternative chains are allocated/accounted at their owning policy,
+    /// rather than copied and charged again for each character/page admission.
+    fn query_bytes(family: &str) -> Option<usize> {
+        std::mem::size_of::<CharCacheKey>()
+            .checked_add(std::mem::size_of::<FrozenCharacterQuery>())?
+            .checked_add(std::mem::size_of::<Arc<str>>())?
+            // Conservatively reserve a second request-family spelling for its
+            // transient native-query materialization at resolution time.
+            .checked_add(family.len().checked_mul(2)?)
     }
 
     pub(crate) fn bytes(&self) -> usize {
@@ -187,66 +179,55 @@ impl FrozenCharacterPolicies {
     }
 }
 
-impl CapturedCharacterPolicy {
-    fn capture_bounded(
-        family: &str,
-        ch: char,
-        weight: u16,
-        slant: FontSlant,
-        size: FontSelectionSize,
-        spec: &StoredFontSpec,
-    ) -> Option<Self> {
-        use neovm_core::emacs_core::intern::resolve_sym;
-        for symbol in [spec.family, spec.registry, spec.lang]
-            .into_iter()
-            .flatten()
-        {
-            if resolve_sym(symbol).len() > 512 {
-                return None;
-            }
+fn map_fontset_capture_error(error: FontsetCaptureError) -> FontPolicyCaptureError {
+    match error {
+        FontsetCaptureError::Unavailable | FontsetCaptureError::MissingDefault => {
+            FontPolicyCaptureError::Unsupported
         }
-        let families = match spec.family {
-            Some(symbol) => CapturedFontFamilyPolicy::Explicit(resolve_sym(symbol).to_owned()),
-            None => CapturedFontFamilyPolicy::Inherited(
-                neovm_core::emacs_core::font::bounded_alternative_font_families(family, 32, 2048)?,
-            ),
-        };
-        let constraints = GnuFontPolicy::constraints_for_character(spec, ch);
+        FontsetCaptureError::InvalidRevision => FontPolicyCaptureError::Changed,
+    }
+}
+
+/// Validate the legacy numeric cache-key boundary once per native resolution.
+struct WorkerFontStyle {
+    slant: FontSlant,
+    width: FontWidth,
+}
+
+impl WorkerFontStyle {
+    fn from_key(key: &CharCacheKey) -> Option<Self> {
         Some(Self {
-            requested_family: family.to_owned(),
-            ch,
-            families,
-            charset_ranges: constraints.coverage().ranges().to_vec(),
-            languages: constraints
-                .languages()
-                .iter()
-                .map(|lang| lang.as_str().to_owned())
-                .collect(),
-            weight: spec
-                .weight
-                .map(|weight| weight.css_weight())
-                .unwrap_or(weight),
-            slant: spec.slant.unwrap_or(slant),
-            width: spec.width.unwrap_or(FontWidth::Normal),
-            size,
+            slant: FontSlant::from_gnu_numeric(key.slant)?,
+            width: FontWidth::from_gnu_numeric(key.width)?,
         })
     }
-    fn owned_bytes(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.requested_family.len()
-            + self.charset_ranges.len() * std::mem::size_of::<(u32, u32)>()
-            + self
-                .languages
-                .iter()
-                .map(|s| std::mem::size_of::<String>() + s.len())
-                .sum::<usize>()
-            + match &self.families {
-                CapturedFontFamilyPolicy::Explicit(name) => name.len(),
-                CapturedFontFamilyPolicy::Inherited(names) => names
-                    .iter()
-                    .map(|s| std::mem::size_of::<String>() + s.len())
-                    .sum(),
-            }
+}
+
+impl CapturedCharacterPolicy {
+    /// Canonical per-visited-entry materialization, also used for the final
+    /// unconstrained native fallback. No symbol/evaluator lookup is permitted.
+    fn from_rendering_spec(
+        key: &CharCacheKey,
+        inherited: &FrozenFontFamilies,
+        style: &WorkerFontStyle,
+        spec: &FontsetRenderingSpec,
+    ) -> Self {
+        let families = match &spec.family {
+            Some(family) => CapturedFontFamilyPolicy::Explicit(family.to_string()),
+            None => CapturedFontFamilyPolicy::Inherited(inherited.clone()),
+        };
+        Self {
+            requested_family: key.family.clone(),
+            ch: key.ch,
+            families,
+            charset_ranges: Vec::new(),
+            languages: Vec::new(),
+            weight: key.weight,
+            slant: style.slant,
+            width: style.width,
+            size: key.size,
+        }
+        .with_spec(spec.into())
     }
 }
 
@@ -294,8 +275,8 @@ impl FontResolver {
         mut key: CharCacheKey,
     ) -> Option<PlatformFontMatch> {
         let state = self.worker_policy.as_ref()?;
-        key.fontset_generation = state.policies.generation;
-        let Some(alternatives) = state.policies.queries.get(&key) else {
+        key.fontset_generation = state.policies.generation.get();
+        let Some(query) = state.policies.queries.get(&key) else {
             state.missing.store(true, Ordering::Relaxed);
             return None;
         };
@@ -304,10 +285,9 @@ impl FontResolver {
         {
             return cached.clone();
         }
-        let prefer_monospace = self.family_prefers_monospace(&key.family);
-        let selected = alternatives
-            .iter()
-            .find_map(|policy| self.resolve_from_policy(policy, prefer_monospace))
+        let style = WorkerFontStyle::from_key(&key)?;
+        let selected = self
+            .resolve_frozen_query(&key, query, &style)
             .and_then(|matched| self.backend.finalize_match(matched))
             .map(|matched| self.with_native_metrics(matched));
         if let Ok(mut cache) = self.char_cache.lock() {
@@ -315,8 +295,52 @@ impl FontResolver {
         }
         selected
     }
+
+    fn resolve_frozen_query(
+        &self,
+        key: &CharCacheKey,
+        query: &FrozenCharacterQuery,
+        style: &WorkerFontStyle,
+    ) -> Option<PlatformFontCandidate> {
+        let prefer_monospace = self.family_prefers_monospace(&key.family);
+        for entry in query.chain.iter() {
+            match entry {
+                FontsetRenderingEntry::ExplicitNone => return None,
+                FontsetRenderingEntry::Font(spec) => {
+                    let policy = CapturedCharacterPolicy::from_rendering_spec(
+                        key,
+                        &query.inherited,
+                        style,
+                        spec,
+                    );
+                    if let Some(matched) = self.resolve_from_policy(&policy, prefer_monospace) {
+                        return Some(matched);
+                    }
+                }
+            }
+        }
+        let fallback = FontsetRenderingSpec {
+            family: None,
+            registry: None,
+            lang: None,
+            weight: None,
+            slant: None,
+            width: None,
+        };
+        let policy =
+            CapturedCharacterPolicy::from_rendering_spec(key, &query.inherited, style, &fallback);
+        self.resolve_from_policy(&policy, prefer_monospace)
+    }
 }
 
 #[cfg(test)]
 #[path = "tests/worker_policy_cache_budget_test.rs"]
 mod cache_budget_tests;
+
+#[cfg(test)]
+#[path = "tests/worker_policy_shared_chain_test.rs"]
+mod shared_chain_tests;
+
+#[cfg(test)]
+#[path = "tests/worker_policy_chain_test.rs"]
+mod chain_tests;

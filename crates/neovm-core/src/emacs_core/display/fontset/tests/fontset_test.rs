@@ -759,11 +759,14 @@ fn resolve_fontset_name_maps_a_font_name_to_the_default_fontset() {
 #[test]
 fn bounded_fontset_capture_preserves_order_and_stops_at_explicit_none() {
     let mut data = FontsetData::default();
-    data.fallback = Some(vec![
-        registry_spec("first"),
-        FontSpecEntry::ExplicitNone,
-        registry_spec("unreachable"),
-    ]);
+    data.fallback = Some(
+        vec![
+            registry_spec("first"),
+            FontSpecEntry::ExplicitNone,
+            registry_spec("unreachable"),
+        ]
+        .into(),
+    );
     assert_eq!(
         data.bounded_entries_for_char('好' as u32, 2),
         Some(vec![registry_spec("first"), FontSpecEntry::ExplicitNone])
@@ -781,7 +784,7 @@ fn bounded_fontset_capture_omits_repertory_metadata_without_expansion() {
         encoding: intern("ascii"),
         repertory: Some(FontRepertory::CharTableRanges(vec![(0, 100); 128])),
     });
-    data.fallback = Some(vec![FontSpecEntry::Font(spec.clone())]);
+    data.fallback = Some(vec![FontSpecEntry::Font(spec.clone())].into());
     assert_eq!(
         data.bounded_entries_for_char('好' as u32, 1),
         Some(vec![registry_spec("fixture")])
@@ -790,7 +793,7 @@ fn bounded_fontset_capture_omits_repertory_metadata_without_expansion() {
         encoding: intern("ascii"),
         repertory: Some(FontRepertory::Charset(intern("ascii"))),
     });
-    data.fallback = Some(vec![FontSpecEntry::Font(spec)]);
+    data.fallback = Some(vec![FontSpecEntry::Font(spec)].into());
     assert_eq!(
         data.bounded_entries_for_char('好' as u32, 1),
         Some(vec![registry_spec("fixture")])

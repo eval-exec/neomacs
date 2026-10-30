@@ -20,7 +20,7 @@ use crate::emacs_core::error::LispCondition;
 pub(crate) use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_max_args, expect_min_args,
 };
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::EnumString;
@@ -194,13 +194,113 @@ impl FontSpacing {
     }
 }
 
-static ALTERNATIVE_FONT_FAMILY_ALIST: OnceLock<RwLock<AlternativeFontFamilyAlist>> =
+/// GNU family-name lookup: trim the request and fold ASCII only. Both the
+/// shared native view and the legacy budgeted reader use this single rule.
+struct FontFamilyLookup<'a>(&'a str);
+impl<'a> FontFamilyLookup<'a> {
+    fn new(family: &'a str) -> Self {
+        Self(family.trim())
+    }
+    fn as_str(&self) -> &'a str {
+        self.0
+    }
+    fn matches(&self, name: &[u8]) -> bool {
+        name.eq_ignore_ascii_case(self.0.as_bytes())
+    }
+}
+
+#[derive(Default)]
+struct AlternativeFontFamilyState {
+    source: AlternativeFontFamilyAlist,
+    native: Vec<(FontNameSpelling, FrozenFontFamilies)>,
+}
+
+impl AlternativeFontFamilyState {
+    /// The informational and detached views are constructed together, before
+    /// publishing the owner's new revision under its write lock.
+    fn from_source(source: AlternativeFontFamilyAlist) -> Self {
+        let native = source
+            .iter()
+            .map(|(name, names)| {
+                let spelling = crate::emacs_core::intern::resolve_sym_lisp_string(*name);
+                let names = FrozenFontFamilies(
+                    names
+                        .iter()
+                        .map(|name| {
+                            Arc::from(crate::emacs_core::fontset::native_font_name(*name).as_ref())
+                        })
+                        .collect(),
+                );
+                (FontNameSpelling::from(spelling), names)
+            })
+            .collect();
+        Self { source, native }
+    }
+
+    /// GNU family alternatives preserve configured order, including the
+    /// requested family at the front when the setter provided it there.
+    fn capture(&self, family: &str) -> FrozenFontFamilies {
+        let lookup = FontFamilyLookup::new(family);
+        if lookup.as_str().is_empty() {
+            return std::iter::empty().collect();
+        }
+        self.native
+            .iter()
+            .find_map(|(name, names)| lookup.matches(name.as_bytes()).then(|| names.clone()))
+            .unwrap_or_else(|| std::iter::once(lookup.as_str().to_owned()).collect())
+    }
+}
+
+/// Immutable native family order. Names are materialized once by their owner,
+/// before publication; detached readers never consult an evaluator interner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrozenFontFamilies(Arc<[Arc<str>]>);
+
+impl FrozenFontFamilies {
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(AsRef::as_ref)
+    }
+}
+impl FromIterator<String> for FrozenFontFamilies {
+    fn from_iter<T: IntoIterator<Item = String>>(names: T) -> Self {
+        Self(names.into_iter().map(Arc::from).collect())
+    }
+}
+static_assertions::assert_impl_all!(FrozenFontFamilies: Send, Sync, Clone, std::fmt::Debug);
+
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum FontFamilyCaptureError {
+    #[error("the native family-policy owner is unavailable")]
+    Unavailable,
+}
+
+static ALTERNATIVE_FONT_FAMILY_ALIST: OnceLock<RwLock<AlternativeFontFamilyState>> =
     OnceLock::new();
 static ALTERNATIVE_FONT_REGISTRY_ALIST: OnceLock<RwLock<AlternativeFontRegistryAlist>> =
     OnceLock::new();
 
-pub(crate) fn alternative_font_family_alist() -> &'static RwLock<AlternativeFontFamilyAlist> {
-    ALTERNATIVE_FONT_FAMILY_ALIST.get_or_init(|| RwLock::new(Vec::new()))
+fn alternative_font_family_alist() -> &'static RwLock<AlternativeFontFamilyState> {
+    ALTERNATIVE_FONT_FAMILY_ALIST.get_or_init(|| RwLock::new(AlternativeFontFamilyState::default()))
+}
+
+pub(crate) fn replace_alternative_font_family_alist(source: AlternativeFontFamilyAlist) {
+    let next = AlternativeFontFamilyState::from_source(source);
+    if let Ok(mut state) = alternative_font_family_alist().write() {
+        *state = next;
+        // Publish the epoch while the family owner remains exclusively held.
+        // A detached read sees the old pair or the new pair, never new names
+        // under the old font-selection revision.
+        crate::emacs_core::fontset::invalidate_font_selection_policy();
+    }
+}
+
+pub fn capture_alternative_font_families(
+    family: &str,
+) -> Result<FrozenFontFamilies, FontFamilyCaptureError> {
+    let state = alternative_font_family_alist()
+        .read()
+        .map_err(|_| FontFamilyCaptureError::Unavailable)?;
+    Ok(state.capture(family))
 }
 
 pub(crate) fn alternative_font_registry_alist() -> &'static RwLock<AlternativeFontRegistryAlist> {
@@ -255,36 +355,13 @@ pub(crate) fn init_font_vars(obarray: &mut super::symbol::Obarray) {
 }
 
 pub fn alternative_font_families(family: &str) -> Vec<String> {
-    let lookup = family.trim();
-    if lookup.is_empty() {
+    let lookup = FontFamilyLookup::new(family);
+    if lookup.as_str().is_empty() {
         return Vec::new();
     }
-
-    let Ok(alist) = alternative_font_family_alist().read() else {
-        return vec![lookup.to_string()];
-    };
-
-    alist
-        .iter()
-        .find_map(|(name, families)| {
-            // Issue #131: compare/return font-family names over their real Emacs
-            // bytes (resolve_sym_lisp_string), so raw-unibyte families are not
-            // confused with the PUA-sentinel storage form.
-            crate::emacs_core::intern::resolve_sym_lisp_string(*name)
-                .as_bytes()
-                .eq_ignore_ascii_case(lookup.as_bytes())
-                .then(|| {
-                    families
-                        .iter()
-                        .map(|sym| {
-                            crate::emacs_core::emacs_char::to_utf8_lossy(
-                                crate::emacs_core::intern::resolve_sym_lisp_string(*sym).as_bytes(),
-                            )
-                        })
-                        .collect()
-                })
-        })
-        .unwrap_or_else(|| vec![lookup.to_string()])
+    capture_alternative_font_families(family)
+        .map(|names| names.iter().map(str::to_owned).collect())
+        .unwrap_or_else(|_| vec![lookup.as_str().to_owned()])
 }
 
 /// Capture a bounded family search order without cloning an unbounded alist.
@@ -297,19 +374,19 @@ pub fn bounded_alternative_font_families(
     if family.len() > max_bytes {
         return None;
     }
-    let lookup = family.trim();
-    if lookup.is_empty() {
+    let lookup = FontFamilyLookup::new(family);
+    if lookup.as_str().is_empty() {
         return Some(Vec::new());
     }
     let alist = alternative_font_family_alist().read().ok()?;
     let mut remaining = max_bytes;
-    for (index, (name, families)) in alist.iter().enumerate() {
+    for (index, (name, families)) in alist.source.iter().enumerate() {
         if index >= max_entries {
             return None;
         }
         let name = crate::emacs_core::intern::resolve_sym_lisp_string(*name);
         remaining = remaining.checked_sub(name.as_bytes().len())?;
-        if !name.as_bytes().eq_ignore_ascii_case(lookup.as_bytes()) {
+        if !lookup.matches(name.as_bytes()) {
             continue;
         }
         if families.len() > max_entries {
@@ -325,7 +402,7 @@ pub fn bounded_alternative_font_families(
         }
         return Some(result);
     }
-    Some(vec![lookup.to_owned()])
+    Some(vec![lookup.as_str().to_owned()])
 }
 
 pub fn alternative_font_registries(registry: &str) -> Vec<String> {
@@ -4322,3 +4399,7 @@ pub(crate) fn font_variation_glyphs(args: Vec<Value>) -> EvalResult {
 #[cfg(test)]
 #[path = "tests/font_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/family_snapshot_test.rs"]
+mod family_snapshot_tests;

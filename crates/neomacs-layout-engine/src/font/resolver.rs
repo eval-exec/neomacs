@@ -12,7 +12,9 @@ pub(crate) use worker_policy::{
     FontPolicyCaptureError, FontPolicyMergeError, FrozenCharacterPolicies,
 };
 
-use crate::font::policy::{CapturedFontFamilyPolicy, FontFamilySource, GnuFontPolicy};
+use crate::font::policy::{
+    CapturedFontFamilyPolicy, FontFamilyCandidate, FontFamilySource, GnuFontPolicy,
+};
 use crate::font::selection::{
     CandidateSelectionScore, candidate_selection_score, candidate_style_selection_score,
 };
@@ -523,7 +525,9 @@ impl FontResolver {
             fontset_generation: self
                 .worker_policy
                 .as_ref()
-                .map_or_else(fontset_generation, |policy| policy.policies.generation),
+                .map_or_else(fontset_generation, |policy| {
+                    policy.policies.generation.get()
+                }),
             size,
         };
         if self.worker_policy.is_some() {
@@ -730,9 +734,11 @@ impl FontResolver {
             .families
             .search_order(|family| self.backend.resolve_family(family));
         for family in search_order {
-            let scope = match family.as_deref() {
-                Some(family) => FontCandidateScope::Family(FontFamilyName::new(family)?),
-                None => FontCandidateScope::NativeFallback {
+            let scope = match &family {
+                FontFamilyCandidate::Family(family) => {
+                    FontCandidateScope::Family(FontFamilyName::new(family.as_ref())?)
+                }
+                FontFamilyCandidate::NativeFallback => FontCandidateScope::NativeFallback {
                     base_family: FontFamilyName::new(
                         self.resolve_family(&policy.requested_family),
                     )?,
@@ -756,7 +762,7 @@ impl FontResolver {
                 width: Some(policy.width),
                 spacing: None,
                 prefer_monospace,
-                queried_family: family.as_deref(),
+                queried_family: family.as_family(),
                 size: policy.size,
             };
             if let Some(matched) = select_best_candidate(
@@ -816,25 +822,37 @@ impl CapturedCharacterPolicy {
         size: FontSelectionSize,
         spec: &StoredFontSpec,
     ) -> Self {
-        let constraints = GnuFontPolicy::constraints_for_character(spec, ch);
         Self {
             requested_family: family.to_owned(),
             ch,
             families: FontFamilySource::for_spec(family, spec).capture(),
-            charset_ranges: constraints.coverage().ranges().to_vec(),
-            languages: constraints
-                .languages()
-                .iter()
-                .map(|language| language.as_str().to_owned())
-                .collect(),
-            weight: spec
-                .weight
-                .map(|weight| weight.css_weight())
-                .unwrap_or(weight),
-            slant: spec.slant.unwrap_or(slant),
-            width: spec.width.unwrap_or(width),
+            charset_ranges: Vec::new(),
+            languages: Vec::new(),
+            weight,
+            slant,
+            width,
             size,
         }
+        .with_spec(spec.into())
+    }
+
+    /// The single registry/language and style-override rule for both live and
+    /// detached alternatives. Only their owned naming authority differs.
+    fn with_spec(mut self, spec: super::policy::FontPolicySpec<'_>) -> Self {
+        let constraints = GnuFontPolicy::constraints_for_names(&spec, self.ch);
+        self.charset_ranges = constraints.coverage().ranges().to_vec();
+        self.languages = constraints
+            .languages()
+            .iter()
+            .map(|language| language.as_str().to_owned())
+            .collect();
+        self.weight = spec
+            .weight
+            .map(|weight| weight.css_weight())
+            .unwrap_or(self.weight);
+        self.slant = spec.slant.unwrap_or(self.slant);
+        self.width = spec.width.unwrap_or(self.width);
+        self
     }
 }
 

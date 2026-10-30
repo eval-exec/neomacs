@@ -572,16 +572,20 @@ fn match_font_from_spec(
     let query_langs = combined_query_langs(registry_lang, spec.lang.map(resolve_sym));
     let requested_spacing = requested_spacing(spec);
 
-    for family_option in family_search_order(
+    let family_policy =
+        crate::font::policy::FontFamilySource::for_spec(requested_family, spec).capture();
+    let search_order = family_policy.search_order(
         #[cfg(all(test, unix))]
-        test_config::QueryOwner::System,
-        requested_family,
-        spec,
-    ) {
+        |family| resolve_family(test_config::QueryOwner::System, family),
+        #[cfg(not(all(test, unix)))]
+        resolve_family,
+    );
+    for family in search_order {
+        let family_option = family.as_family();
         let candidates = fc_list_candidates(
             #[cfg(all(test, unix))]
             test_config::QueryOwner::System,
-            family_option.as_deref(),
+            family_option,
             &query_charset_ranges,
             Some(ch as u32),
             &query_langs,
@@ -597,7 +601,7 @@ fn match_font_from_spec(
             spec.slant,
             requested_spacing,
             prefer_monospace,
-            family_option.as_deref(),
+            family_option,
         )?;
         return Some(best);
     }
@@ -652,17 +656,22 @@ fn best_candidate_for_pass(
         .map(|(_, _, matched)| matched)
 }
 
+#[cfg(test)]
 fn family_search_order(
     #[cfg(all(test, unix))] owner: test_config::QueryOwner<'_>,
     requested_family: &str,
     spec: &StoredFontSpec,
 ) -> Vec<Option<String>> {
-    crate::font::policy::FontFamilySource::for_spec(requested_family, spec).search_order(
-        #[cfg(all(test, unix))]
-        |family| resolve_family(owner, family),
-        #[cfg(not(all(test, unix)))]
-        resolve_family,
-    )
+    crate::font::policy::FontFamilySource::for_spec(requested_family, spec)
+        .capture()
+        .search_order(
+            #[cfg(all(test, unix))]
+            |family| resolve_family(owner, family),
+            #[cfg(not(all(test, unix)))]
+            resolve_family,
+        )
+        .map(Option::<String>::from)
+        .collect()
 }
 
 fn candidate_score(

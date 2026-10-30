@@ -9,6 +9,13 @@ use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::heap_types::LispString;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
+
+mod native_policy;
+pub use native_policy::{
+    CapturedFontsetChain, FontSelectionRevision, FontsetCaptureError, FontsetRenderingEntry,
+    FontsetRenderingSpec, capture_default_fontset_chain, native_font_name,
+};
+use native_policy::{SharedFontsetEntries, StoredFontsetEntry};
 use strum::{EnumString, IntoStaticStr};
 
 pub const DEFAULT_FONTSET_NAME: &str = "-*-*-*-*-*-*-*-*-*-*-*-*-fontset-default";
@@ -86,13 +93,13 @@ enum FontsetTarget {
 struct RangeEntry {
     from: u32,
     to: u32,
-    entries: Vec<FontSpecEntry>,
+    entries: SharedFontsetEntries,
 }
 
 #[derive(Clone, Debug, Default)]
 struct FontsetData {
     ranges: Vec<RangeEntry>,
-    fallback: Option<Vec<FontSpecEntry>>,
+    fallback: Option<SharedFontsetEntries>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -263,7 +270,7 @@ impl FontsetData {
         specific
             .iter()
             .chain(self.fallback.as_deref().unwrap_or_default())
-            .filter_map(|entry| entry.for_lookup(code, purpose))
+            .filter_map(|entry| entry.original().for_lookup(code, purpose))
             .collect()
     }
 
@@ -281,8 +288,12 @@ impl FontsetData {
             if index >= max_entries {
                 return None;
             }
-            result.push(entry.for_lookup(code, FontsetLookupPurpose::Rendering)?);
-            if matches!(entry, FontSpecEntry::ExplicitNone) {
+            result.push(
+                entry
+                    .original()
+                    .for_lookup(code, FontsetLookupPurpose::Rendering)?,
+            );
+            if matches!(entry.original(), FontSpecEntry::ExplicitNone) {
                 break;
             }
         }
@@ -290,6 +301,7 @@ impl FontsetData {
     }
 
     fn update_target(&mut self, target: FontsetTarget, entry: FontSpecEntry, add: FontsetAddMode) {
+        let entry = StoredFontsetEntry::from(entry);
         match target {
             FontsetTarget::Fallback => self.update_fallback(entry, add),
             FontsetTarget::Range(from, to) => self.update_range(from, to, entry, add),
@@ -298,7 +310,7 @@ impl FontsetData {
 
     fn specific_entries_for_char(&self, code: u32) -> Vec<FontSpecEntry> {
         self.find_range(code)
-            .map(|range| range.entries.clone())
+            .map(|range| range.entries.to_original_entries())
             .unwrap_or_default()
     }
 
@@ -319,11 +331,11 @@ impl FontsetData {
         None
     }
 
-    fn update_fallback(&mut self, entry: FontSpecEntry, add: FontsetAddMode) {
+    fn update_fallback(&mut self, entry: StoredFontsetEntry, add: FontsetAddMode) {
         self.fallback = Some(apply_fontset_add(self.fallback.as_deref(), entry, add));
     }
 
-    fn update_range(&mut self, from: u32, to: u32, entry: FontSpecEntry, add: FontsetAddMode) {
+    fn update_range(&mut self, from: u32, to: u32, entry: StoredFontsetEntry, add: FontsetAddMode) {
         let mut next = Vec::with_capacity(self.ranges.len() + 2);
         let mut cursor = from;
 
@@ -410,6 +422,20 @@ impl FontsetData {
 }
 
 impl StoredFontSpec {
+    /// Rendering owns native glyph coverage; informational definition metadata
+    /// is never copied into a rendering request.
+    fn for_rendering(&self) -> Self {
+        Self {
+            family: self.family,
+            registry: self.registry,
+            lang: self.lang,
+            weight: self.weight,
+            slant: self.slant,
+            width: self.width,
+            definition: None,
+        }
+    }
+
     fn matches_char(&self, code: u32) -> bool {
         // GNU fontset-font checks FONT_DEF_ENCODING (slot 1), not the
         // separate FONT_DEF_REPERTORY. Rendering never calls this filter.
@@ -437,26 +463,18 @@ impl FontSpecEntry {
                 // GNU fontset_find_font uses actual font_has_char, not the
                 // font definition's encoding/repertory. Exclude that metadata
                 // from native rendering requests without cloning large tables.
-                Some(Self::Font(StoredFontSpec {
-                    family: spec.family,
-                    registry: spec.registry,
-                    lang: spec.lang,
-                    weight: spec.weight,
-                    slant: spec.slant,
-                    width: spec.width,
-                    definition: None,
-                }))
+                Some(Self::Font(spec.for_rendering()))
             }
         }
     }
 }
 
 fn apply_fontset_add(
-    existing: Option<&[FontSpecEntry]>,
-    entry: FontSpecEntry,
+    existing: Option<&[StoredFontsetEntry]>,
+    entry: StoredFontsetEntry,
     add: FontsetAddMode,
-) -> Vec<FontSpecEntry> {
-    match add {
+) -> SharedFontsetEntries {
+    let entries = match add {
         FontsetAddMode::Overwrite => vec![entry],
         FontsetAddMode::Append => {
             let mut entries = existing.map(ToOwned::to_owned).unwrap_or_default();
@@ -470,7 +488,8 @@ fn apply_fontset_add(
             }
             entries
         }
-    }
+    };
+    SharedFontsetEntries::from_stored_entries(entries)
 }
 
 fn push_range_entry(ranges: &mut Vec<RangeEntry>, entry: RangeEntry) {
@@ -546,10 +565,13 @@ pub(crate) fn snapshot_fontset_registry() -> FontsetRegistrySnapshot {
                                 .map(|range| FontsetRangeEntrySnapshot {
                                     from: range.from,
                                     to: range.to,
-                                    entries: range.entries.clone(),
+                                    entries: range.entries.to_original_entries(),
                                 })
                                 .collect(),
-                            fallback: data.fallback.clone(),
+                            fallback: data
+                                .fallback
+                                .as_ref()
+                                .map(SharedFontsetEntries::to_original_entries),
                         },
                     )
                 })
@@ -605,10 +627,10 @@ pub(crate) fn restore_fontset_registry(snapshot: FontsetRegistrySnapshot) {
                         .map(|range| RangeEntry {
                             from: range.from,
                             to: range.to,
-                            entries: range.entries,
+                            entries: range.entries.into(),
                         })
                         .collect(),
-                    fallback: data.fallback,
+                    fallback: data.fallback.map(SharedFontsetEntries::from),
                 },
             )
         })
@@ -635,8 +657,9 @@ pub fn fontset_generation() -> u64 {
 }
 
 /// Alternative selection policy changed without replacing a fontset rule.
-/// Call after releasing the alternative-list lock so readers cannot invert
-/// the lock order while capturing character policy.
+/// Family-policy publishers bump this revision while holding their owner
+/// write lock. Readers acquire the two owners separately and revalidate the
+/// revision; no fontset lock may be held while acquiring the family owner.
 pub(crate) fn invalidate_font_selection_policy() {
     if let Ok(mut slot) = registry().write() {
         slot.generation = slot.generation.wrapping_add(1);

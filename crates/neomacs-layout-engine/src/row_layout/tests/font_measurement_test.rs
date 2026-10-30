@@ -314,3 +314,86 @@ fn native_font_authority_spends_only_its_owner_reservation() {
     assert!(std::sync::Arc::ptr_eq(&first, &reused));
     assert_eq!(owner.reserved.len(), admitted);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn worker_matches_pinned_native_cjk_metrics_through_a_long_fontset_chain() {
+    use crate::display_item::*;
+    use crate::font::metrics::test_catalog::standard_catalog;
+
+    let mut eval = neovm_core::emacs_core::Context::new();
+    eval.eval_str(
+        r#"(progn
+           (set-fontset-font t ?好 "font-policy-specific-0")
+           (let ((i 0))
+             (while (< i 39)
+               (set-fontset-font t ?好 (format "font-policy-specific-%d" (1+ i)) nil 'append)
+               (setq i (1+ i))))
+           (set-fontset-font t nil "font-policy-fallback-0")
+           (let ((i 0))
+             (while (< i 39)
+               (set-fontset-font t nil (format "font-policy-fallback-%d" (1+ i)) nil 'append)
+               (setq i (1+ i))))
+           (set-fontset-font t nil '("Noto Sans CJK SC" . "iso10646-1") nil 'append))"#,
+    )
+    .unwrap();
+    let catalog = standard_catalog().to_native_fontconfig();
+    let mut source = catalog.metrics_service();
+    let faces = [face()];
+    let face = &faces[0];
+    let items = [DisplayItem::new(
+        SourceSpan::synthetic(1, 0, 1),
+        RenderFaceRef::FaceId(face.face_id),
+        DisplayItemKind::TextRun(DisplayTextRun::independent("好")),
+    )];
+    let fresh = source
+        .resolved_font_for_char(
+            '好',
+            &face.font_family,
+            face.font_weight,
+            face.italic,
+            face.font_size,
+        )
+        .expect("pinned fresh CJK selection");
+    let fresh_width = source.char_width(
+        '好',
+        &face.font_family,
+        face.font_weight,
+        face.italic,
+        face.font_size,
+    );
+    assert_eq!(
+        std::path::Path::new(fresh.identity.file_path.as_ref().unwrap()),
+        neomacs_test_fonts::noto_sans_cjk_variable()
+    );
+    let snapshot = FontMeasurementSnapshot::capture(&faces, &mut source, &items)
+        .expect("a long fontset policy cannot reject the whole row");
+    let mut worker = WorkerFontMeasurements::default();
+    let fonts = worker.prepare(&snapshot, &faces, &|| false).unwrap();
+    let measured = fonts
+        .resolved_font_for_char(
+            '好',
+            &face.font_family,
+            face.font_weight,
+            face.italic,
+            face.font_size,
+        )
+        .unwrap();
+    assert_eq!(measured.identity, fresh.identity);
+    assert_eq!(measured.pixel_size, fresh.pixel_size);
+    assert_eq!(measured.ascent_px, fresh.ascent_px);
+    assert_eq!(measured.descent_px, fresh.descent_px);
+    assert_eq!(measured.space_advance_px, fresh.space_advance_px);
+    assert_eq!(measured.glyph_advance, fresh.glyph_advance);
+    assert_eq!(
+        fonts.char_width(
+            '好',
+            &face.font_family,
+            face.font_weight,
+            face.italic,
+            face.font_size
+        ),
+        fresh_width
+    );
+    assert!(!fonts.worker_font_policy_missing());
+}

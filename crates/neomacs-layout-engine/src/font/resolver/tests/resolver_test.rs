@@ -950,7 +950,11 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
             "fontset repertory is not native glyph coverage"
         );
         assert_eq!(
-            policy.families.search_order(str::to_owned),
+            policy
+                .families
+                .search_order(str::to_owned)
+                .map(Option::<String>::from)
+                .collect::<Vec<_>>(),
             vec![Some("Fixture Sans".into())]
         );
         let resolver = FontResolver::new(Box::new(CandidateBackend { candidates }));
@@ -967,13 +971,18 @@ fn captured_character_policy_selects_on_a_thread_without_evaluator_state() {
 
 #[test]
 fn captured_family_policy_keeps_alias_order_and_fallback_boundary() {
-    let families = CapturedFontFamilyPolicy::Inherited(vec!["Alias".into(), "Second".into()]);
+    let families = CapturedFontFamilyPolicy::Inherited(
+        ["Alias".into(), "Second".into()].into_iter().collect(),
+    );
     let resolve = |family: &str| match family {
         "Alias" => "Native".to_owned(),
         _ => family.to_owned(),
     };
     assert_eq!(
-        families.search_order(resolve),
+        families
+            .search_order(resolve)
+            .map(Option::<String>::from)
+            .collect::<Vec<_>>(),
         vec![
             Some("Native".into()),
             Some("Alias".into()),
@@ -982,11 +991,17 @@ fn captured_family_policy_keeps_alias_order_and_fallback_boundary() {
         ]
     );
     assert_eq!(
-        CapturedFontFamilyPolicy::Explicit("Alias".into()).search_order(resolve),
+        CapturedFontFamilyPolicy::Explicit("Alias".into())
+            .search_order(resolve)
+            .map(Option::<String>::from)
+            .collect::<Vec<_>>(),
         vec![Some("Native".into())]
     );
     assert_eq!(
-        CapturedFontFamilyPolicy::Inherited(Vec::new()).search_order(resolve),
+        CapturedFontFamilyPolicy::Inherited(std::iter::empty().collect())
+            .search_order(resolve)
+            .map(Option::<String>::from)
+            .collect::<Vec<_>>(),
         vec![None]
     );
 }
@@ -1191,3 +1206,6 @@ fn opening_by_spec_driver_fallback_replaces_unavailable_explicit_style_with_norm
     let opened = resolver.resolve_entity(&query).expect("fallback face");
     assert_eq!(opened.matched.weight(), Some(400));
 }
+
+#[path = "worker_family_laziness_test.rs"]
+mod worker_family_laziness_test;

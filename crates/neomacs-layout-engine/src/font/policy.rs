@@ -4,37 +4,35 @@
 //! Fontconfig behavior. This module translates a stored Lisp font spec into a
 //! typed native-catalog query without naming any operating-system backend.
 
-use neovm_core::emacs_core::fontset::StoredFontSpec;
-use neovm_core::emacs_core::intern::resolve_sym;
+use neovm_core::emacs_core::font::FrozenFontFamilies;
+use neovm_core::emacs_core::fontset::{FontsetRenderingSpec, StoredFontSpec, native_font_name};
+use std::borrow::Cow;
 
 /// A fontset's explicit family constrains the search. Without one, GNU
 /// `font_find_for_lface` inherits the fully merged face family and may fall
 /// back outside it. Keeping these cases distinct prevents a frame-default
 /// family from masquerading as a fontset rule.
 pub(super) enum FontFamilySource<'a> {
-    Fontset(&'a str),
+    Fontset(Cow<'a, str>),
     Face(&'a str),
 }
 
 impl<'a> FontFamilySource<'a> {
     pub(super) fn for_spec(face_family: &'a str, spec: &StoredFontSpec) -> Self {
         match spec.family {
-            Some(family) => Self::Fontset(resolve_sym(family)),
+            Some(family) => Self::Fontset(native_font_name(family)),
             None => Self::Face(face_family),
         }
-    }
-
-    pub(super) fn search_order(self, resolve: impl Fn(&str) -> String) -> Vec<Option<String>> {
-        self.capture().search_order(resolve)
     }
 
     /// Read evaluator policy before handing native font work to another thread.
     pub(super) fn capture(self) -> CapturedFontFamilyPolicy {
         match self {
-            Self::Fontset(family) => CapturedFontFamilyPolicy::Explicit(family.to_owned()),
-            Self::Face("") => CapturedFontFamilyPolicy::Inherited(Vec::new()),
+            Self::Fontset(family) => CapturedFontFamilyPolicy::Explicit(family.into_owned()),
+            Self::Face("") => CapturedFontFamilyPolicy::Inherited(std::iter::empty().collect()),
             Self::Face(family) => CapturedFontFamilyPolicy::Inherited(
-                neovm_core::emacs_core::font::alternative_font_families(family),
+                neovm_core::emacs_core::font::capture_alternative_font_families(family)
+                    .unwrap_or_else(|_| std::iter::once(family.to_owned()).collect()),
             ),
         }
     }
@@ -44,27 +42,106 @@ impl<'a> FontFamilySource<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CapturedFontFamilyPolicy {
     Explicit(String),
-    Inherited(Vec<String>),
+    Inherited(FrozenFontFamilies),
 }
 
 impl CapturedFontFamilyPolicy {
-    pub(super) fn search_order(&self, resolve: impl Fn(&str) -> String) -> Vec<Option<String>> {
+    /// Resolve only the next visited family. A first winner must not allocate
+    /// or resolve the unused suffix of its owner-shared alternative list.
+    pub(super) fn search_order(
+        &self,
+        resolve: impl Fn(&str) -> String,
+    ) -> impl Iterator<Item = FontFamilyCandidate<'_>> {
+        let state = match self {
+            Self::Explicit(family) => FamilySearchState::Explicit(family),
+            Self::Inherited(families) => FamilySearchState::Inherited(families.iter()),
+        };
+        FamilySearch { state, resolve }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum FontFamilyCandidate<'a> {
+    Family(Cow<'a, str>),
+    NativeFallback,
+}
+
+impl FontFamilyCandidate<'_> {
+    /// Native catalog APIs use an absent family for the unconstrained pass.
+    pub(super) fn as_family(&self) -> Option<&str> {
         match self {
-            Self::Explicit(family) => vec![Some(resolve(family))],
-            Self::Inherited(families) => {
-                let mut order = Vec::new();
-                for family in families {
-                    let resolved = resolve(family);
-                    if resolved != *family {
-                        order.push(Some(resolved));
-                    }
-                    order.push(Some(family.clone()));
-                }
-                order.push(None);
-                order
-            }
+            Self::Family(family) => Some(family),
+            Self::NativeFallback => None,
         }
     }
+}
+
+#[cfg(test)]
+impl From<FontFamilyCandidate<'_>> for Option<String> {
+    fn from(candidate: FontFamilyCandidate<'_>) -> Self {
+        match candidate {
+            FontFamilyCandidate::Family(family) => Some(family.into_owned()),
+            FontFamilyCandidate::NativeFallback => None,
+        }
+    }
+}
+
+/// An alias is tried before its raw spelling; explicit fontset families do not
+/// permit the inherited policy's final unconstrained pass. The variants encode
+/// the outstanding continuation without a fallback flag or an owned list.
+#[derive(Debug)]
+enum FamilySearchState<'a, I> {
+    Explicit(&'a str),
+    Inherited(I),
+    Original { family: &'a str, remaining: I },
+    Exhausted,
+}
+
+#[derive(Debug)]
+struct FamilySearch<'a, I, F> {
+    state: FamilySearchState<'a, I>,
+    resolve: F,
+}
+
+impl<'a, I, F> Iterator for FamilySearch<'a, I, F>
+where
+    I: Iterator<Item = &'a str>,
+    F: Fn(&str) -> String,
+{
+    type Item = FontFamilyCandidate<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match std::mem::replace(&mut self.state, FamilySearchState::Exhausted) {
+            FamilySearchState::Explicit(family) => Some(FontFamilyCandidate::Family(Cow::Owned(
+                (self.resolve)(family),
+            ))),
+            FamilySearchState::Inherited(mut remaining) => match remaining.next() {
+                Some(family) => {
+                    let resolved = (self.resolve)(family);
+                    if resolved == family {
+                        self.state = FamilySearchState::Inherited(remaining);
+                        Some(FontFamilyCandidate::Family(Cow::Borrowed(family)))
+                    } else {
+                        self.state = FamilySearchState::Original { family, remaining };
+                        Some(FontFamilyCandidate::Family(Cow::Owned(resolved)))
+                    }
+                }
+                None => Some(FontFamilyCandidate::NativeFallback),
+            },
+            FamilySearchState::Original { family, remaining } => {
+                self.state = FamilySearchState::Inherited(remaining);
+                Some(FontFamilyCandidate::Family(Cow::Borrowed(family)))
+            }
+            FamilySearchState::Exhausted => None,
+        }
+    }
+}
+
+impl<'a, I, F> std::iter::FusedIterator for FamilySearch<'a, I, F>
+where
+    I: Iterator<Item = &'a str>,
+    F: Fn(&str) -> String,
+{
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -122,6 +199,37 @@ impl NativeQueryConstraints {
     }
 }
 
+/// One borrowed naming view feeds both live and detached registry semantics.
+pub(super) struct FontPolicySpec<'a> {
+    registry: Option<Cow<'a, str>>,
+    language: Option<Cow<'a, str>>,
+    pub(super) weight: Option<neovm_core::face::FontWeight>,
+    pub(super) slant: Option<neovm_core::face::FontSlant>,
+    pub(super) width: Option<neovm_core::face::FontWidth>,
+}
+impl<'a> From<&'a StoredFontSpec> for FontPolicySpec<'a> {
+    fn from(spec: &'a StoredFontSpec) -> Self {
+        Self {
+            registry: spec.registry.map(native_font_name),
+            language: spec.lang.map(native_font_name),
+            weight: spec.weight,
+            slant: spec.slant,
+            width: spec.width,
+        }
+    }
+}
+impl<'a> From<&'a FontsetRenderingSpec> for FontPolicySpec<'a> {
+    fn from(spec: &'a FontsetRenderingSpec) -> Self {
+        Self {
+            registry: spec.registry.as_deref().map(Cow::Borrowed),
+            language: spec.lang.as_deref().map(Cow::Borrowed),
+            weight: spec.weight,
+            slant: spec.slant,
+            width: spec.width,
+        }
+    }
+}
+
 pub struct GnuFontPolicy;
 
 impl GnuFontPolicy {
@@ -141,10 +249,18 @@ impl GnuFontPolicy {
         spec: &StoredFontSpec,
         required_char: char,
     ) -> NativeQueryConstraints {
-        let representative_char = representative_char_for_spec(spec);
-        let coverage_ranges = query_charset_ranges(spec, required_char);
-        let registry_language = spec.registry.map(resolve_sym).and_then(registry_language);
-        let languages = combined_query_langs(registry_language, spec.lang.map(resolve_sym))
+        Self::constraints_for_names(&FontPolicySpec::from(spec), required_char)
+    }
+
+    pub(super) fn constraints_for_names(
+        names: &FontPolicySpec<'_>,
+        required_char: char,
+    ) -> NativeQueryConstraints {
+        let representative_char = representative_char_for_registry(names.registry.as_deref());
+        let coverage_ranges =
+            query_charset_ranges_for_registry(names.registry.as_deref(), required_char);
+        let registry_language = names.registry.as_deref().and_then(registry_language);
+        let languages = combined_query_langs(registry_language, names.language.as_deref())
             .into_iter()
             .filter_map(LanguageTag::new)
             .collect();
@@ -359,15 +475,22 @@ const REGISTRY_HINTS: &[RegistryHint] = &[
 ];
 
 pub(crate) fn representative_char_for_spec(spec: &StoredFontSpec) -> char {
-    spec.registry
-        .map(resolve_sym)
+    representative_char_for_registry(spec.registry.map(native_font_name).as_deref())
+}
+
+fn representative_char_for_registry(registry: Option<&str>) -> char {
+    registry
         .and_then(|registry| registry_query_chars(Some(registry), 'a').into_iter().next())
         .and_then(char::from_u32)
         .unwrap_or('a')
 }
 
 pub(crate) fn query_charset_ranges(spec: &StoredFontSpec, ch: char) -> Vec<(u32, u32)> {
-    if let Some(registry) = spec.registry.map(resolve_sym) {
+    query_charset_ranges_for_registry(spec.registry.map(native_font_name).as_deref(), ch)
+}
+
+fn query_charset_ranges_for_registry(registry: Option<&str>, ch: char) -> Vec<(u32, u32)> {
+    if let Some(registry) = registry {
         if ftfont_registry_uses_unconstrained_charset(registry) {
             return Vec::new();
         }
@@ -382,7 +505,6 @@ pub(crate) fn query_charset_ranges(spec: &StoredFontSpec, ch: char) -> Vec<(u32,
                 .collect(),
         );
     }
-
     Vec::new()
 }
 
