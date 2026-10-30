@@ -51,7 +51,7 @@ impl FontBackend for CoreTextBackend {
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
-        self.candidates_with_postscript_name(query, None)
+        self.candidates_for_identity(query, None)
     }
 
     fn list_candidates_for_identity(
@@ -59,7 +59,7 @@ impl FontBackend for CoreTextBackend {
         query: &FontCandidateQuery,
         identity: &ResolvedFontIdentity,
     ) -> Vec<FontCandidate> {
-        self.candidates_with_postscript_name(query, identity.postscript_name.as_deref())
+        self.candidates_for_identity(query, Some(identity))
             .into_iter()
             .filter(|candidate| candidate.matched.identity == *identity)
             .collect()
@@ -102,18 +102,19 @@ impl FontBackend for CoreTextBackend {
 }
 
 impl CoreTextBackend {
-    fn candidates_with_postscript_name(
+    /// Enumerate candidates that can produce the requested stable key before
+    /// opening font files. PostScript metadata on the caller's identity is not
+    /// authoritative: fontdb and CoreText can name the same file differently.
+    fn candidates_for_identity(
         &self,
         query: &FontCandidateQuery,
-        postscript_name: Option<&str>,
+        identity: Option<&ResolvedFontIdentity>,
     ) -> Vec<FontCandidate> {
         core_text_calls::candidates(query)
             .into_iter()
-            // Establishing a file identity can read a large font collection.
-            // Exact lookups already know the PostScript name, so discard
-            // unrelated catalog entries before touching their font files.
             .filter(|candidate| {
-                postscript_name.is_none_or(|name| name == candidate.postscript_name)
+                identity
+                    .is_none_or(|identity| Self::candidate_may_match_identity(candidate, identity))
             })
             .filter_map(|candidate| {
                 let metadata = PlatformFontMetadata {
@@ -165,6 +166,37 @@ impl CoreTextBackend {
                 Some(FontCandidate { matched })
             })
             .collect()
+    }
+
+    /// Conservatively retain every candidate that could have the same stable
+    /// key. File keys begin with the exact path followed by '#'; the face and
+    /// variations are checked after reading that file. Even a URL-backed
+    /// candidate may fall back to a native key if its container is opaque.
+    fn candidate_may_match_identity(
+        candidate: &core_text_calls::Candidate,
+        identity: &ResolvedFontIdentity,
+    ) -> bool {
+        if candidate
+            .path
+            .as_deref()
+            .and_then(Path::to_str)
+            .is_some_and(|path| {
+                identity
+                    .stable_key
+                    .strip_prefix(path)
+                    .is_some_and(|suffix| suffix.starts_with('#'))
+            })
+        {
+            return true;
+        }
+        identity.stable_key.starts_with("coretext:")
+            && ResolvedFontIdentity::from_native_with_variations(
+                FontBackendKind::CoreText,
+                format!("coretext:{}#0", candidate.postscript_name),
+                0,
+                Some(candidate.postscript_name.clone()),
+                candidate.variation_coords.clone(),
+            ) == *identity
     }
 
     fn file_face_index_for_postscript_name(

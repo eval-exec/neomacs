@@ -74,6 +74,40 @@ fn registered_coretext_thin_fixture_enumerates_and_opens_with_normal_preference(
     assert!(opened.metrics.height > 0);
     assert!(opened.metrics.max_width > 0);
     assert!(opened.metrics.space_width > 0);
+
+    // fontdb and CoreText can attach different diagnostic names to the same
+    // file identity. Neither a different name nor an absent one may hide it.
+    use crate::font_backend::{
+        FontBackend, FontCandidateQuery, FontCandidateScope, RequiredFontCoverage, TextDirection,
+    };
+    let query = FontCandidateQuery {
+        scope: FontCandidateScope::Family(
+            FontFamilyName::new(discovered.matched.family()).unwrap(),
+        ),
+        required: RequiredFontCoverage::Any,
+        charset_ranges: Vec::new(),
+        languages: Vec::new(),
+        requested_weight: 400,
+        requested_slant: FontSlant::Normal,
+        requested_width: FontWidth::Normal,
+        direction: TextDirection::LeftToRight,
+    };
+    for postscript_name in [Some("DifferentFontdbPostScriptName".to_owned()), None] {
+        let mut identity = discovered.matched.identity.clone();
+        identity.postscript_name = postscript_name;
+        assert_eq!(identity, discovered.matched.identity);
+        let backend = CoreTextBackend::default();
+        let matches = backend.list_candidates_for_identity(&query, &identity);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].matched.identity, identity);
+        assert_eq!(
+            matches[0].matched.identity.postscript_name.as_deref(),
+            Some(postscript.as_str())
+        );
+        let files = backend.file_faces.lock().unwrap();
+        assert_eq!(files.len(), 1, "exact lookup only reads the selected file");
+        assert!(files.contains_key(Path::new(identity.file_path.as_deref().unwrap())));
+    }
 }
 
 #[test]
@@ -114,8 +148,8 @@ fn exact_identity_miss_does_not_read_unrelated_font_files() {
         "an exact PostScript miss must not open unrelated candidate files"
     );
 
-    // A matching name is only a prefilter: all identity fields must still
-    // match, including the durable file/instance key.
+    // Passing the cheap prefilter is not enough: the complete stable key
+    // must still match, including the file/instance key.
     let selected = backend.list_candidates(&query).into_iter().next().unwrap();
     assert_eq!(
         backend.list_candidates_for_identity(&query, &selected.matched.identity),
@@ -123,8 +157,8 @@ fn exact_identity_miss_does_not_read_unrelated_font_files() {
     );
     let mut wrong_key = selected.matched.identity;
     wrong_key.stable_key.push_str("-different-instance");
-    // The PostScript prefilter cannot distinguish two instances sharing a
-    // name; disambiguating them requires finalizing/opening the file. Use a
+    // The path prefilter cannot distinguish faces/instances in one file;
+    // disambiguating them requires resolving the file identity. Use a
     // fresh backend so the earlier list_candidates cache cannot hide that.
     let fresh = CoreTextBackend::default();
     assert!(
@@ -132,4 +166,40 @@ fn exact_identity_miss_does_not_read_unrelated_font_files() {
             .list_candidates_for_identity(&query, &wrong_key)
             .is_empty()
     );
+}
+
+#[test]
+fn native_identity_prefilter_uses_the_stable_key_even_with_an_opaque_url() {
+    use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
+
+    let candidate = super::core_text_calls::Candidate {
+        path: Some("/opaque/font-container".into()),
+        postscript_name: "NativeFixture".into(),
+        family: "Fixture".into(),
+        weight: 400,
+        slant: FontSlant::Normal,
+        width: FontWidth::Normal,
+        spacing: 0,
+        variation_coords: Vec::new(),
+    };
+    // A URL is not proof that ttf-parser can open the container. Keep this
+    // candidate's native fallback even when its diagnostic name differs.
+    let mut identity = ResolvedFontIdentity::from_native_with_variations(
+        FontBackendKind::CoreText,
+        "coretext:NativeFixture#0".into(),
+        0,
+        Some("DifferentDiagnosticName".into()),
+        Vec::new(),
+    );
+    assert!(CoreTextBackend::candidate_may_match_identity(
+        &candidate, &identity
+    ));
+    identity.postscript_name = None;
+    assert!(CoreTextBackend::candidate_may_match_identity(
+        &candidate, &identity
+    ));
+    identity.stable_key.push_str("-different-instance");
+    assert!(!CoreTextBackend::candidate_may_match_identity(
+        &candidate, &identity
+    ));
 }

@@ -657,6 +657,79 @@ struct MetricBackend {
     probes: Arc<AtomicUsize>,
 }
 
+struct ExactLookupBackend {
+    selected: FontCandidate,
+    lookups: Arc<AtomicUsize>,
+}
+
+impl FontBackend for ExactLookupBackend {
+    fn kind(&self) -> FontBackendKind {
+        FontBackendKind::CoreText
+    }
+
+    fn list_families(&self) -> Vec<FontFamilyName> {
+        Vec::new()
+    }
+
+    fn resolve_family(&self, family: &str) -> String {
+        family.to_owned()
+    }
+
+    fn family_prefers_monospace(&self, _family: &str) -> bool {
+        false
+    }
+
+    fn list_candidates(&self, _query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        panic!("exact observation must not use ordinary enumeration")
+    }
+
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        assert_eq!(*identity, self.selected.matched.identity);
+        self.lookups.fetch_add(1, Ordering::Relaxed);
+        match query.scope {
+            FontCandidateScope::All => vec![self.selected.clone()],
+            FontCandidateScope::Family(_) => Vec::new(),
+            _ => panic!("unexpected exact-observation scope"),
+        }
+    }
+
+    fn advance_catalog_generation(&mut self) {}
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        crate::font::catalog::FontCatalogChange::Unchanged
+    }
+}
+
+#[test]
+fn exact_observation_dispatches_identity_lookup_for_both_scopes() {
+    let selected = candidate("Fixture", 400, FontSlant::Normal, 100);
+    let identity = selected.matched.identity.clone();
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let resolver = FontResolver::new(Box::new(ExactLookupBackend {
+        selected,
+        lookups: Arc::clone(&lookups),
+    }));
+
+    let observed = resolver
+        .observe_exact_font(&identity, "Synthetic fontdb family")
+        .expect("all-font identity lookup finds the selected face");
+    assert_eq!(observed.identity, identity);
+    assert_eq!(lookups.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        resolver.observe_exact_font(&identity, "Synthetic fontdb family"),
+        Some(observed)
+    );
+    assert_eq!(
+        lookups.load(Ordering::Relaxed),
+        2,
+        "cache hits skip discovery"
+    );
+}
+
 impl FontBackend for MetricBackend {
     fn kind(&self) -> FontBackendKind {
         FontBackendKind::CoreText

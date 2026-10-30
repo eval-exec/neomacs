@@ -581,6 +581,8 @@ pub trait FontBackend: Send {
     /// Enumerate only an already chosen identity, without selecting a family
     /// substitute. Native adapters can discard unrelated catalog entries
     /// before opening files to establish their renderer identities.
+    /// Matching follows `ResolvedFontIdentity` equality (the stable key);
+    /// diagnostic PostScript names or backend provenance must not narrow it.
     fn list_candidates_for_identity(
         &self,
         query: &FontCandidateQuery,
