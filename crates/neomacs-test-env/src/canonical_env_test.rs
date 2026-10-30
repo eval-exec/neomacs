@@ -455,3 +455,52 @@ fn bounded_temp_root_is_short() {
         directory.path().display()
     );
 }
+
+/// GNU's startup treats an environment login that differs from the real
+/// uid's passwd name as `su` and then resolves init files through
+/// `~USER/.emacs.d` instead of `$HOME/.emacs.d`
+/// (`lisp/startup.el:1357-1361,1477-1501`).  The TUI suite loads init files
+/// from an isolated `$HOME`, so its pins must name the process's real login;
+/// the recorded `exec` sends every other uid (the CI runner) down the `su`
+/// path and skips the fixture's init file.
+#[cfg(unix)]
+#[test]
+fn tui_profile_pins_the_real_uid_login_so_gnu_keeps_home_init_discovery() {
+    let environment =
+        CanonicalEnvironment::new(CanonicalProfile::Tui, "/tmp/th", "/tmp/tt", "/workspace")
+            .expect("tui environment");
+    let pairs: Vec<(String, String)> = environment
+        .env_pairs()
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
+        .collect();
+    let value = |name: &str| {
+        pairs
+            .iter()
+            .find(|(pinned, _)| pinned == name)
+            .map(|(_, pinned_value)| pinned_value.as_str())
+            .unwrap_or_else(|| panic!("missing pin {name}; got {pairs:?}"))
+    };
+    // SAFETY: `getpwuid` returns a pointer into process-global storage; the
+    // name is copied immediately, before any other libc call can reuse it.
+    let real = unsafe {
+        let passwd = libc::getpwuid(libc::getuid());
+        assert!(!passwd.is_null(), "the test uid must have a passwd entry");
+        let name = (*passwd).pw_name;
+        assert!(!name.is_null(), "the test uid must have a login name");
+        std::ffi::CStr::from_ptr(name)
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(
+        value("USER"),
+        real,
+        "USER must equal GNU's (user-real-login-name)"
+    );
+    assert_eq!(
+        value("LOGNAME"),
+        real,
+        "LOGNAME must equal GNU's (user-real-login-name)"
+    );
+    assert_eq!(value("EMAIL"), format!("{real}@oracle-host"));
+}

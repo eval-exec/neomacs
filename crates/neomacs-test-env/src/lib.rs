@@ -23,7 +23,12 @@
 //! * [`CanonicalProfile::Package`] -- MELPA package scenarios, recorded under
 //!   `C.UTF-8`, `UTC`, user/full name `melpa-test`, host `melpa-host`.
 //! * [`CanonicalProfile::Tui`] -- paired TUI grid comparisons, recorded under
-//!   `C.UTF-8` for the mode line's mule-info segment.
+//!   `C.UTF-8` for the mode line's mule-info segment.  Its login pin is the
+//!   process's real uid name rather than a recorded one: GNU treats a
+//!   `USER`/`LOGNAME` that differs from `(user-real-login-name)` as `su` and
+//!   then resolves init files through `~USER`, not `$HOME`
+//!   (`lisp/startup.el:1357-1361,1477-1501`), which would skip the isolated
+//!   `$HOME` init file the startup fixtures load.
 //!
 //! A value that a suite's expectations pin per case (a test that deliberately
 //! selects another locale, time zone or TMPDIR) is applied after the canonical
@@ -64,11 +69,26 @@ impl CanonicalProfile {
         }
     }
 
-    /// The login name the suite's expectations were recorded under.
-    pub const fn login_name(self) -> &'static str {
+    /// The login name pinned into this profile's child environment.
+    ///
+    /// GNU derives `user-login-name` from `LOGNAME`/`USER`
+    /// (`src/editfns.c:104-116`) and compares it with
+    /// `(user-real-login-name)`, the passwd name of the process's real uid.
+    /// When they differ, GNU treats the session as `su` and resolves the
+    /// init file through `~USER` instead of `$HOME`
+    /// (`lisp/startup.el:1357-1361,1477-1501`).  The TUI suite is the suite
+    /// that launches init files out of an isolated `$HOME`, so it pins the
+    /// process's real login name; a recorded name made every run whose uid is
+    /// not `exec` -- the CI runner -- take the `su` path, miss
+    /// `$HOME/.emacs.d/init.el`, and display GNU's "User exec has no home
+    /// directory" warning instead of the fixture's startup screen.  The
+    /// oracle and package profiles run `--batch`, where `init-file-user` is
+    /// nil (`lisp/startup.el:1357`), and keep their recorded names.
+    pub fn login_name(self) -> String {
         match self {
-            Self::Oracle | Self::Tui => "exec",
-            Self::Package => "melpa-test",
+            Self::Oracle => "exec".to_string(),
+            Self::Package => "melpa-test".to_string(),
+            Self::Tui => real_login_name().unwrap_or_else(|| "exec".to_string()),
         }
     }
 
@@ -103,6 +123,38 @@ impl CanonicalProfile {
             Self::Package | Self::Tui => false,
         }
     }
+}
+
+/// The passwd name of the process's real uid -- what GNU's
+/// `(user-real-login-name)` returns (`src/editfns.c:99`) and what
+/// [`CanonicalProfile::login_name`] pins for the TUI profile.
+///
+/// `None` when the uid has no passwd entry; the caller then keeps the
+/// recorded name.
+#[cfg(unix)]
+fn real_login_name() -> Option<String> {
+    // SAFETY: `getpwuid` returns a pointer to process-global storage; the
+    // `pw_name` bytes are copied out before any other libc call can reuse it.
+    unsafe {
+        let passwd = libc::getpwuid(libc::getuid());
+        if passwd.is_null() {
+            return None;
+        }
+        let name = (*passwd).pw_name;
+        if name.is_null() {
+            return None;
+        }
+        Some(
+            std::ffi::CStr::from_ptr(name)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+#[cfg(not(unix))]
+fn real_login_name() -> Option<String> {
+    None
 }
 
 /// One canonical variable group a harness may deliberately override.
@@ -430,7 +482,7 @@ impl CanonicalEnvironment {
     /// spawned editor derives them itself from the environment.
     pub fn identity_bindings(&self) -> [(&'static str, String); 5] {
         let profile = self.profile;
-        let login = profile.login_name().to_string();
+        let login = profile.login_name();
         let host = profile.host_name().to_string();
         let full_name = profile.full_name().to_string();
         let mail = format!("{login}@{host}");
@@ -453,6 +505,7 @@ impl CanonicalEnvironment {
     /// [`Self::lisp_environment_form`] instead).
     pub fn env_pairs(&self) -> Vec<(&'static str, OsString)> {
         let profile = self.profile;
+        let login = profile.login_name();
         let mut pairs: Vec<(&'static str, OsString)> = vec![
             ("LANG", OsString::from(profile.locale())),
             ("LC_ALL", OsString::from(profile.locale())),
@@ -461,13 +514,13 @@ impl CanonicalEnvironment {
             ("TMPDIR", self.tmpdir.clone().into_os_string()),
             ("TMP", self.tmpdir.clone().into_os_string()),
             ("TEMP", self.tmpdir.clone().into_os_string()),
-            ("USER", OsString::from(profile.login_name())),
-            ("LOGNAME", OsString::from(profile.login_name())),
+            ("USER", OsString::from(login.as_str())),
+            ("LOGNAME", OsString::from(login.as_str())),
             ("NAME", OsString::from(profile.full_name())),
             ("HOSTNAME", OsString::from(profile.host_name())),
             (
                 "EMAIL",
-                OsString::from(format!("{}@{}", profile.login_name(), profile.host_name())),
+                OsString::from(format!("{login}@{}", profile.host_name())),
             ),
             ("TERM", OsString::from("dumb")),
         ];
