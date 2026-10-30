@@ -27,6 +27,7 @@ pub use era::WorldEra;
 pub(crate) use era::prepare_keeper_backing;
 #[cfg(test)]
 pub(crate) use era::{WorldProofEra, WorldProofEraFinishFailure};
+mod function_write_hooks;
 mod green_owner;
 mod slot;
 mod sole_owner;

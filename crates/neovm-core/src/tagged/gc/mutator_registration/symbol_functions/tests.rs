@@ -183,7 +183,7 @@ fn fixture_initialized(
             pending,
             "original-target root obligation"
         );
-        symbols.reconcile_functions().unwrap();
+        era.reconcile_functions(&mut symbols).unwrap();
         journal.clear();
         symbols.append_function_roots(&mut journal).unwrap();
         assert!(

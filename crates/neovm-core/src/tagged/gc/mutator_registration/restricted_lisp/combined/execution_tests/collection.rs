@@ -264,7 +264,8 @@ fn round(era: &ParallelHeapEra<'_>, graph: GraphWords, cohort: Cohort) -> Collec
         .into_iter()
         .map(|value| WordIdentity(value.bits()))
         .collect();
-    stopped.symbols().unwrap().reconcile_functions().unwrap();
+    era.reconcile_functions(&mut stopped.symbols().unwrap())
+        .unwrap();
     let roots = ledger(era, &mut stopped);
     let report = era.collect_stopped(&mut stopped).unwrap();
     let live = era
@@ -859,7 +860,8 @@ fn cohort(
         });
         let mut stopped = era.stop().unwrap();
         placement.borrow_mut().return_for_finish(&era, &stopped);
-        stopped.symbols().unwrap().reconcile_functions().unwrap();
+        era.reconcile_functions(&mut stopped.symbols().unwrap())
+            .unwrap();
         match scenario {
             Scenario::Fresh
             | Scenario::FreshUnwind

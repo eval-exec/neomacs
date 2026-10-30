@@ -1,6 +1,7 @@
 //! Prepared, bounded function writes and stopped serial-cache reconciliation.
 use super::*;
 use crate::emacs_core::symbol::parallel::FunctionUpdate;
+use crate::tagged::gc::function_write_hooks::InitialDefinition;
 use std::cell::UnsafeCell;
 
 struct FunctionRecord {
@@ -86,46 +87,22 @@ fn validate_definition(
     constant::decode(value, lambda, subset).map(|_| ())
 }
 
-/// Serial preparation may retain an existing compiled constant as an opaque
-/// read/replacement target. Never materialize a saved-image function here,
-/// and never inspect bytecode data during an overlapping owner operation.
-/// Restricted execution and changed fset inputs still validate their typed subset.
-fn opaque_initial_bytecode(value: Value) -> bool {
-    use crate::emacs_core::bytecode::Op;
-
-    value.bytecode_data_if_materialized().is_some_and(|f| {
-        f.lexical
-            && f.params.fixed_arity() == Some(0)
-            && f.arglist.is_nil()
-            && f.ops_sealed
-            && f.stack_verified
-            && f.ops.as_slice() == [Op::Constant(0), Op::Return]
-            && f.constants.len() == 1
-            && f.constants
-                .first()
-                .is_some_and(|answer| answer.is_nil() || answer.is_t() || answer.is_fixnum())
-            && f.env.is_none()
-            && f.interactive.is_none()
-            && f.doc_form.is_none()
-            && f.docstring.is_none()
-            && f.extra_slots.is_empty()
-            && f.gnu_bytecode_bytes.is_none()
-            && f.gnu_byte_offset_map.is_none()
-            && f.lazy_gnu_code.is_none()
-    })
-}
-
-fn keeper_compiler_quiescent() -> bool {
-    #[cfg(feature = "jit")]
-    {
-        return crate::emacs_core::jit::cache::native_depth() == 0
-            && crate::emacs_core::jit::bg::pending_count() == 0;
-    }
-    #[cfg(not(feature = "jit"))]
-    true
-}
-
 impl<K: EraKeeper> EraCore<'_, K> {
+    pub(crate) fn reconcile_functions(
+        &self,
+        symbols: &mut KeeperSymbols<'_>,
+    ) -> Result<(), FunctionError> {
+        if !std::ptr::eq(self.registry(), symbols.registry) {
+            return Err(RegistrationError::StaleRegistration.into());
+        }
+        let keeper = self
+            .keeper
+            .as_ref()
+            .ok_or(RegistrationError::StaleRegistration)?;
+        let designator = keeper.keeper_designator()?;
+        symbols.reconcile_functions(keeper, &designator)
+    }
+
     /// Reserve this existing symbol's stamp and one original-target journal
     /// slot before ANY owner registers. No running write grows Rust metadata.
     pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
@@ -138,6 +115,10 @@ impl<K: EraKeeper> EraCore<'_, K> {
         subset: ReturnSubset,
     ) -> Result<(), FunctionError> {
         let registry = self.registry();
+        let keeper = self
+            .keeper
+            .as_ref()
+            .ok_or(RegistrationError::StaleRegistration)?;
         if registry.keeper_thread != std::thread::current().id() {
             return Err(RegistrationError::WrongThread.into());
         }
@@ -145,7 +126,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
             .legacy_roots
             .as_ref()
             .is_some_and(FrozenLegacyRoots::permits_function_writes)
-            || !keeper_compiler_quiescent()
+            || keeper.check_compiler_quiescent().is_err()
         {
             return Err(RegistrationError::Publication.into());
         }
@@ -167,10 +148,15 @@ impl<K: EraKeeper> EraCore<'_, K> {
         // SAFETY: retained backing, identity checked and exclusive admission.
         let initial = unsafe { symbols.backing.prepare_function(key.symbol, &authority) }?;
         if let FunctionCellSnapshot::Bound(value) = initial {
-            if validate_definition(value, lambda, subset).is_err()
-                && !opaque_initial_bytecode(value)
-            {
-                return Err(FunctionError::UnsupportedDefinition);
+            if validate_definition(value, lambda, subset).is_err() {
+                // SAFETY: the retained original definition and this backing's
+                // exclusive admission writer remain live throughout the hook.
+                match unsafe { keeper.classify_initial_definition(value, &authority) } {
+                    InitialDefinition::OpaqueScalarConstant => {}
+                    InitialDefinition::Unsupported => {
+                        return Err(FunctionError::UnsupportedDefinition);
+                    }
+                }
             }
         }
         // SAFETY: only this keeper can register an owner, and WRITER is held.
@@ -323,9 +309,14 @@ impl KeeperSymbols<'_> {
     /// The retained serial keeper owns these TLS caches. Original admission
     /// retirement occurs in its current returning Context receiver, before
     /// serial execution; no header pointer can outlive that receiver's loan.
-    pub fn reconcile_functions(&mut self) -> Result<(), FunctionError> {
+    pub(crate) fn reconcile_functions<K: EraKeeper>(
+        &mut self,
+        keeper: &K,
+        designator: &super::super::KeeperWorldDesignator<'_>,
+    ) -> Result<(), FunctionError> {
+        self.check_symbol_backing(&self.registry.symbols.backing, designator)?;
         self.registry.symbols.ready()?;
-        if !keeper_compiler_quiescent() {
+        if keeper.check_compiler_quiescent().is_err() {
             return Err(RegistrationError::Publication.into());
         }
         struct PoisonOnUnwind<'a> {
@@ -348,12 +339,11 @@ impl KeeperSymbols<'_> {
         let state = &self.registry.symbols.functions;
         let records = unsafe { &mut *state.records.get() };
         for record in records.iter().filter(|r| r.previous.is_some()) {
-            #[cfg(feature = "jit")]
-            crate::emacs_core::jit::cache::evict_inline_dependents(record.symbol);
-            crate::emacs_core::eval::note_function_epoch_move(
-                crate::emacs_core::symbol::FunctionEpochBump::InternalCellWrite,
-                Some(record.symbol),
-            );
+            // SAFETY: this matching keeper retains AllStopped with word
+            // zero; the compiler preflight above preceded journal access.
+            unsafe {
+                keeper.reconcile_function_write(record.symbol, self);
+            }
         }
         for record in records {
             record.previous = None;

@@ -341,7 +341,8 @@ fn fixture(
                 "C6 name independent teardown"
             );
             let mut stopped = era.stop().unwrap();
-            stopped.symbols().unwrap().reconcile_functions().unwrap();
+            era.reconcile_functions(&mut stopped.symbols().unwrap())
+                .unwrap();
             stopped.trace(|_, _| Ok(())).unwrap();
             stopped.complete().unwrap();
             let (collector, keeper) = era

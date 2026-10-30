@@ -276,7 +276,8 @@ fn round(
         Observation::Warm(_) | Observation::Replacement(_) => regular,
         Observation::Final { .. } => Cycle::Full,
     };
-    stopped.symbols().unwrap().reconcile_functions().unwrap();
+    era.reconcile_functions(&mut stopped.symbols().unwrap())
+        .unwrap();
     let roots = ledger(era, &mut stopped);
     let before = era
         .with_stopped_heap_for_test(&stopped, |heap| snapshot(heap, observation))

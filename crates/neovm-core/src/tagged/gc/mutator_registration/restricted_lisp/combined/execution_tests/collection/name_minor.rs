@@ -143,7 +143,8 @@ fn round(
         contention::rendezvous,
     )
     .unwrap();
-    stopped.symbols().unwrap().reconcile_functions().unwrap();
+    era.reconcile_functions(&mut stopped.symbols().unwrap())
+        .unwrap();
     let roots = ledger(era, &mut stopped);
     let (cycle, before) = era
         .with_stopped_heap_for_test(&stopped, |heap| {

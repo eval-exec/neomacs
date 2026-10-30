@@ -286,6 +286,13 @@ macro_rules! era_operations {
                 self.core.collect_stopped_minor(stopped, roots)
             }
 
+            pub fn reconcile_functions(
+                &self,
+                symbols: &mut KeeperSymbols<'_>,
+            ) -> Result<(), FunctionError> {
+                self.core.reconcile_functions(symbols)
+            }
+
             pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
                 self.core.prepare_function_symbol(key)
             }

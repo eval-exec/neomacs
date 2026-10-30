@@ -347,7 +347,8 @@ fn round(
         Observation::Warm | Observation::Current(_) => placement.cycle(),
         Observation::Released(_) => Cycle::Full,
     };
-    stopped.symbols().unwrap().reconcile_functions().unwrap();
+    era.reconcile_functions(&mut stopped.symbols().unwrap())
+        .unwrap();
     let roots = ledger(era, &mut stopped);
     let before = match observation {
         Observation::Current(graph) => era
