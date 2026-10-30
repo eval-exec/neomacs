@@ -219,6 +219,32 @@ pub(crate) trait LayoutBufferView {
         pos: EmacsBytePos,
         name: Value,
     ) -> Option<EmacsBytePos>;
+    /// Next position after `pos` where any of `keys` changes presence or
+    /// value.  Explicit nil differs from absent; effective-property scans need
+    /// that so an explicit nil can start or stop shadowing a lower-priority
+    /// source.
+    fn layout_next_watched_text_prop_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos>;
+    /// Previous position before `pos` where any of `keys` changes presence or
+    /// value.  The active state is the one at `pos`.
+    fn layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos>;
+    /// True when `name` may occur in any interval of this layout view.  A
+    /// false answer lets effective-value scans skip the boundary walk: the
+    /// only remaining source is the view-constant `default-text-properties`.
+    fn layout_text_prop_present_anywhere(&self, name: Value) -> bool;
+    /// End of the char run from `pos` over which `syntax-table`/`category`
+    /// are constant (see `TextPropertyTable::syntax_prop_free_run_end`).
+    fn layout_syntax_prop_free_run_end_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0;
+    /// Start of the run containing `pos` over which `syntax-table`/`category`
+    /// are constant in presence and value (backward companion).
+    fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0;
     fn layout_overlays(&self) -> &OverlayList;
     /// Automatic-composition span whose first character is `pos`.
     ///
@@ -459,6 +485,34 @@ impl LayoutBufferView for Buffer {
         name: Value,
     ) -> Option<EmacsBytePos> {
         self.text_props_previous_single_change_before_emacs_byte_pos(pos, name)
+    }
+
+    fn layout_next_watched_text_prop_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.next_watched_property_state_change_after_emacs_byte_pos(pos, keys)
+    }
+
+    fn layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.previous_watched_property_state_change_before_emacs_byte_pos(pos, keys)
+    }
+
+    fn layout_text_prop_present_anywhere(&self, name: Value) -> bool {
+        self.text_props_has_property_anywhere(name)
+    }
+
+    fn layout_syntax_prop_free_run_end_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
+        self.syntax_prop_free_run_end_at_char_pos(pos, cap)
+    }
+
+    fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        self.previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
     fn layout_overlays(&self) -> &OverlayList {
@@ -2484,8 +2538,8 @@ impl LayoutCharPropertyLookup {
     }
 
     /// Maximal text range over which this lookup resolves to the same effective
-    /// value.  The scan watches the canonical property, its aliases, and the
-    /// `category` indirection rather than only the canonical plist key.
+    /// value. Direct values can skip shadowed category/alias changes; fallback
+    /// runs resolve each plist boundary, including absent versus explicit nil.
     pub(crate) fn effective_text_extent_at<B: LayoutBufferView + ?Sized>(
         &self,
         buffer: &B,
@@ -2498,52 +2552,88 @@ impl LayoutCharPropertyLookup {
         let target = self
             .text_value_at(buffer, bytepos)
             .filter(|value| !value.is_nil())?;
-        let mut watched: Vec<_> = self.lookup_order.ordered().collect();
+        let canonical = self.lookup_order.canonical_and_aliases().0;
+        // Every key that can supply the effective value. The presence-aware
+        // query is required: an explicit nil suppresses a lower-priority alias,
+        // category or default, while an absent key lets it through, and both
+        // read as nil to a value-only boundary query.
         let category = Value::symbol("category");
+        let mut watched: Vec<Value> = self.lookup_order.ordered().collect();
         if !watched
             .iter()
             .any(|property| property.bits() == category.bits())
         {
             watched.push(category);
         }
-
+        // When the canonical key and every alias are absent from the whole
+        // view, only `category` can change the effective value. Walk the
+        // syntax/category runs instead of every plist boundary, so a default
+        // value spanning a long history with a few category-bearing spans
+        // neither reads unrelated plists nor exhausts the dependency budget.
+        if self
+            .lookup_order
+            .ordered()
+            .all(|key| !buffer.layout_text_prop_present_anywhere(key))
+        {
+            return self.effective_extent_from_syntax_runs(buffer, bytepos, bounds, &target);
+        }
+        // With no watched key present anywhere, only the view-constant
+        // default can supply the (non-nil) target.
+        if !watched
+            .iter()
+            .any(|key| buffer.layout_text_prop_present_anywhere(*key))
+        {
+            return Some(EmacsByteRange::new(bounds.start(), bounds.end()));
+        }
+        let has_direct_value = |cursor| {
+            buffer
+                .layout_text_prop_at_emacs_byte_pos(cursor, canonical)
+                .is_some_and(|value| !value.is_nil())
+        };
         let previous_change = |cursor| {
-            watched
-                .iter()
-                .filter_map(|property| {
-                    buffer.layout_previous_single_text_prop_change_before_emacs_byte_pos(
-                        cursor, *property,
-                    )
-                })
-                .max()
+            // A direct canonical value wins over category and every alias.
+            // Those keys cannot change the effective value until this direct
+            // run ends. Searching their (often distant) boundaries would scan
+            // an entire history for each short mouse-face button.
+            if has_direct_value(cursor) {
+                return buffer.layout_previous_single_text_prop_change_before_emacs_byte_pos(
+                    cursor, canonical,
+                );
+            }
+            buffer.layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(
+                cursor, &watched,
+            )
         };
         let next_change = |cursor| {
-            watched
-                .iter()
-                .filter_map(|property| {
-                    buffer
-                        .layout_next_single_text_prop_change_after_emacs_byte_pos(cursor, *property)
-                })
-                .min()
+            if has_direct_value(cursor) {
+                return buffer
+                    .layout_next_single_text_prop_change_after_emacs_byte_pos(cursor, canonical);
+            }
+            buffer.layout_next_watched_text_prop_state_change_after_emacs_byte_pos(cursor, &watched)
         };
 
-        let mut start = bounds.start();
-        let mut cursor = bytepos;
-        while let Some(boundary) = previous_change(cursor) {
-            if boundary <= bounds.start() {
-                break;
-            }
-            let boundary_char = buffer.layout_emacs_byte_pos_to_char_pos(boundary);
-            let previous_char = CharPos0::new(boundary_char.get().saturating_sub(1));
+        let mut start = bytepos;
+        while start > bounds.start() {
+            let start_char = buffer.layout_emacs_byte_pos_to_char_pos(start);
+            let previous_char = CharPos0::new(start_char.get().saturating_sub(1));
             let probe = buffer.layout_char_pos_to_emacs_byte_pos(previous_char);
             if self
                 .text_value_at(buffer, probe)
                 .is_none_or(|value| !eq_value(&value, &target))
             {
-                start = boundary;
                 break;
             }
-            cursor = boundary;
+            // Resolve just BEFORE the boundary. If an alias/category supplies
+            // the same value across a direct-property transition, looking at
+            // the boundary again would rediscover it without making progress.
+            let next_start = previous_change(probe)
+                .unwrap_or(bounds.start())
+                .max(bounds.start());
+            debug_assert!(
+                next_start < start,
+                "extent walk must move backward: {next_start:?} >= {start:?}"
+            );
+            start = next_start;
         }
 
         let mut end = bounds.end();
@@ -2560,6 +2650,74 @@ impl LayoutCharPropertyLookup {
                 break;
             }
             cursor = boundary;
+        }
+
+        Some(EmacsByteRange::new(start, end))
+    }
+
+    /// Extent for the case where only `category` can vary: the canonical
+    /// property and every alias are provably absent from the whole view.
+    ///
+    /// Both directions walk out from the queried position over
+    /// syntax/category-constant runs. `syntax_prop_free_run_end_char_pos` and
+    /// its backward companion jump prop-free gaps through the syntax-range
+    /// index, so a query near the end of a long history does not touch every
+    /// unrelated plist, and a long default run stays O(number of category
+    /// spans), not O(buffer length).
+    fn effective_extent_from_syntax_runs<B: LayoutBufferView + ?Sized>(
+        &self,
+        buffer: &B,
+        bytepos: EmacsBytePos,
+        bounds: EmacsByteRange,
+        target: &Value,
+    ) -> Option<EmacsByteRange> {
+        let end_char = buffer.layout_emacs_byte_pos_to_char_pos(bounds.end());
+        let mut cursor = buffer.layout_emacs_byte_pos_to_char_pos(bytepos);
+        let mut end = bytepos;
+        loop {
+            let run_end = buffer
+                .layout_syntax_prop_free_run_end_char_pos(cursor, end_char)
+                .max(CharPos0::new(cursor.get().saturating_add(1)));
+            let run_end_byte = buffer.layout_char_pos_to_emacs_byte_pos(run_end);
+            if run_end >= end_char {
+                end = bounds.end();
+                break;
+            }
+            if self
+                .text_value_at(buffer, run_end_byte)
+                .is_some_and(|value| eq_value(&value, target))
+            {
+                end = run_end_byte;
+                cursor = run_end;
+            } else {
+                end = run_end_byte;
+                break;
+            }
+        }
+
+        let mut start = bytepos;
+        while start > bounds.start() {
+            let start_char = buffer.layout_emacs_byte_pos_to_char_pos(start);
+            let probe_char = CharPos0::new(start_char.get().saturating_sub(1));
+            let probe = buffer.layout_char_pos_to_emacs_byte_pos(probe_char);
+            if self
+                .text_value_at(buffer, probe)
+                .is_none_or(|value| !eq_value(&value, target))
+            {
+                break;
+            }
+            let run_start = buffer.layout_previous_syntax_prop_state_run_start_char_pos(probe_char);
+            let next_start = buffer
+                .layout_char_pos_to_emacs_byte_pos(run_start)
+                .max(bounds.start());
+            debug_assert!(
+                next_start < start,
+                "syntax-run walk must move backward: {next_start:?} >= {start:?}"
+            );
+            if next_start >= start {
+                break;
+            }
+            start = next_start;
         }
 
         Some(EmacsByteRange::new(start, end))

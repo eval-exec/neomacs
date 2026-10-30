@@ -161,6 +161,37 @@ impl LayoutBufferView for BorrowedLayoutBuffer<'_> {
             .text_props_previous_single_change_before_emacs_byte_pos(pos, name)
     }
 
+    fn layout_next_watched_text_prop_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .next_watched_property_state_change_after_emacs_byte_pos(pos, keys)
+    }
+
+    fn layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.buffer
+            .previous_watched_property_state_change_before_emacs_byte_pos(pos, keys)
+    }
+
+    fn layout_text_prop_present_anywhere(&self, name: Value) -> bool {
+        self.buffer.text_props_has_property_anywhere(name)
+    }
+
+    fn layout_syntax_prop_free_run_end_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
+        self.buffer.syntax_prop_free_run_end_at_char_pos(pos, cap)
+    }
+
+    fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        self.buffer
+            .previous_syntax_prop_state_run_start_at_char_pos(pos)
+    }
+
     fn layout_overlays(&self) -> &OverlayList {
         self.buffer.overlays()
     }
