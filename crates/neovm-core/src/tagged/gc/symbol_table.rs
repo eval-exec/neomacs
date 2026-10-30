@@ -4,6 +4,8 @@
 //! allocations named by entries. No reader is exposed before initialization.
 //! The era integration must retain the backing and every published table until
 //! its terminal or grace proof; these types do not mint that proof.
+pub(crate) mod publication;
+
 use std::mem::MaybeUninit;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::ptr::NonNull;
