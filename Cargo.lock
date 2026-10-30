@@ -4016,6 +4016,7 @@ dependencies = [
  "serde_json",
  "strum",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
  "wgpu",
  "windows-sys 0.61.2",

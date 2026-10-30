@@ -1,0 +1,164 @@
+Weston 16.0.0 pixman-renderer: revalidate the shm buffer mapping before painting
+
+Target: the 16.0.0 release tarball pinned by scripts/ci/setup-weston.sh
+(sha256 6a81af51..., weston-16.0.0.tar.gz).  The same code is present on
+upstream main as of 2026-10-30: pixman_renderer_attach() calls
+pixman_image_create_bits() with wl_shm_buffer_get_data() once, and
+draw_paint_node() only invalidates the image when the wl_shm_buffer has
+disappeared; nothing revalidates the address afterwards.
+
+The bug: wl_shm_pool.resize() (protocol/wayland.xml, interface
+wl_shm_pool) tells the server to remap the pool's backing memory so it
+can grow.  wayland-server implements shm_pool_resize() ->
+shm_pool_finish_resize() -> shm_pool_grow_mapping() with
+mremap(..., MREMAP_MAYMOVE) (src/wayland-shm.c), which may move the
+mapping to a different address.  wl_shm_buffer_get_data() returns
+pool->data + offset and therefore follows the move, but a compositor
+that cached the old pointer keeps reading unmapped memory.  Resizing
+with live buffers is legal: the protocol only requires the pool to grow
+and the client to enlarge the file first ("This request can only be
+used to make the pool bigger"; "A buffer will keep a reference to the
+pool it was created from so it is valid to destroy the pool immediately
+after creating a buffer from it").  Mesa's Vulkan WSI and sctk-adwaita
+both grow pools while buffers are attached; sctk-adwaita's decoration
+SlotPool growth during a fullscreen transition is what triggers this.
+
+Symptom: repainting the surface whose cached image points at the old
+mapping segfaults inside pixman (observed:
+fast_composite_scaled_bilinear_sse2_8888_8888_pad_OVER <-
+pixman_image_composite32 <- composite_whole <- repaint_region), which
+kills the compositor and with it every client connection.
+
+Why wl_shm_buffer_ref_pool is the documented mechanism, and why this
+patch does not use it: wayland-server defers the move while
+pool->external_refcount > 0, and that count is raised by
+wl_shm_buffer_ref_pool() (wayland-server-core.h; see the comment in
+shm_pool_resize(): "If the compositor has taken references on this pool
+it may be caching pointers into it. In that case we defer the resize").
+But the deferral keeps pool->size at the old value, and
+shm_pool_create_buffer() rejects offsets beyond pool->size ("invalid
+width, height or stride"), so a client that grows a pool and
+immediately allocates buffers in the new region -- exactly what
+sctk-adwaita and Mesa's WSI do -- gets WL_SHM_ERROR_INVALID_STRIDE
+(wayland even logs "Buffer address requested when its parent pool has
+an external reference and a deferred resize pending").  Pinning the
+pool per cached image would therefore break the clients this is meant
+to protect.  The robust fix is to revalidate the address at use, as
+below; a deeper alternative is for wayland-server to accept buffer
+creation anywhere below new_size while a resize is deferred.
+
+Fix: remember the address the image was created against
+(pixman_surface_state.image_data) and rebuild the image from
+wl_shm_buffer_get_data() before painting when the pool moved.  This
+also covers a deferred move: the new address is picked up on the next
+paint.
+
+Regression test: crates/neomacs-gui-tests/tests/wayland_shm_pool_growth.rs
+(a raw protocol client; fails 3/3 on unpatched Weston with SIGSEGV
+cores, passes 3/3 patched).
+
+Upstream: not yet filed; the project owner submits.
+--- a/libweston/pixman-renderer.c	2026-10-30 02:57:23.056418652 -0400
++++ b/libweston/pixman-renderer.c	2026-10-30 02:57:23.058024038 -0400
+@@ -55,6 +55,11 @@
+ 	struct weston_surface *surface;
+ 
+ 	pixman_image_t *image;
++	/* The address `image` was created against.  wl_shm_buffer_get_data()
++	 * follows the pool's current mapping, which a client can move with
++	 * wl_shm_pool.resize (wayland-server mremaps with MREMAP_MAYMOVE), so
++	 * the cached pixman image must be rebuilt when it changes. */
++	void *image_data;
+ 	struct weston_buffer_reference buffer_ref;
+ 	struct weston_buffer_release_reference buffer_release_ref;
+ 
+@@ -460,10 +465,44 @@
+ 	 * terminated. This is a particular use-case and should probably be
+ 	 * refactored to provide some analogue with the GL-renderer (as in, to
+ 	 * still maintain the buffer and let the compositor dispose of it). */
+-	if (ps->buffer_ref.buffer && !ps->buffer_ref.buffer->shm_buffer) {
+-		pixman_image_unref(ps->image);
+-		ps->image = NULL;
+-		return;
++	if (ps->buffer_ref.buffer) {
++		struct wl_shm_buffer *shm_buffer =
++			ps->buffer_ref.buffer->shm_buffer;
++
++		if (!shm_buffer) {
++			pixman_image_unref(ps->image);
++			ps->image = NULL;
++			ps->image_data = NULL;
++			return;
++		}
++
++		/* A client may grow the buffer's shm pool at any time.
++		 * wayland-server then mremaps the pool with MREMAP_MAYMOVE,
++		 * which can move the mapping; wl_shm_buffer_get_data()
++		 * follows the new mapping but the pixman image created at
++		 * attach still points at the old, unmapped address.  Rebuild
++		 * the image when the address it was created against moved. */
++		if (wl_shm_buffer_get_data(shm_buffer) != ps->image_data) {
++			struct weston_buffer *buffer = ps->buffer_ref.buffer;
++			const struct pixel_format_info *pixel_info =
++				pixel_format_get_info_shm(
++					wl_shm_buffer_get_format(shm_buffer));
++			void *data = wl_shm_buffer_get_data(shm_buffer);
++
++			pixman_image_unref(ps->image);
++			ps->image = NULL;
++			if (pixel_info &&
++			    pixman_format_supported_source(pixel_info->pixman_format))
++				ps->image = pixman_image_create_bits(
++					pixel_info->pixman_format,
++					buffer->width, buffer->height,
++					data, buffer->stride);
++			if (!ps->image) {
++				ps->image_data = NULL;
++				return;
++			}
++			ps->image_data = data;
++		}
+ 	}
+ 
+ 	pixman_region32_init(&repaint);
+@@ -661,6 +700,7 @@
+ 		pixman_image_unref(ps->image);
+ 		ps->image = NULL;
+ 	}
++	ps->image_data = NULL;
+ 
+ 	ps->buffer_destroy_listener.notify = NULL;
+ }
+@@ -681,6 +721,7 @@
+ 		pixman_image_unref(ps->image);
+ 		ps->image = NULL;
+ 	}
++	ps->image_data = NULL;
+ 
+ 	ps->image = pixman_image_create_solid_fill(&color);
+ }
+@@ -709,6 +750,7 @@
+ 		pixman_image_unref(ps->image);
+ 		ps->image = NULL;
+ 	}
++	ps->image_data = NULL;
+ 
+ 	if (!buffer)
+ 		return;
+@@ -756,6 +798,8 @@
+ 		buffer->width, buffer->height,
+ 		wl_shm_buffer_get_data(shm_buffer),
+ 		buffer->stride);
++	ps->image_data = ps->image ?
++		wl_shm_buffer_get_data(shm_buffer) : NULL;
+ 
+ 	ps->buffer_destroy_listener.notify =
+ 		buffer_state_handle_buffer_destroy;
+@@ -779,6 +823,7 @@
+ 		pixman_image_unref(ps->image);
+ 		ps->image = NULL;
+ 	}
++	ps->image_data = NULL;
+ 	weston_buffer_reference(&ps->buffer_ref, NULL,
+ 				BUFFER_WILL_NOT_BE_ACCESSED);
+ 	weston_buffer_release_reference(&ps->buffer_release_ref, NULL);

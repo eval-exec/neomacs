@@ -196,3 +196,7 @@ mod xpm_named_colors;
 #[cfg(target_os = "linux")]
 #[path = "wayland_readiness.rs"]
 mod wayland_readiness;
+
+#[cfg(target_os = "linux")]
+#[path = "wayland_shm_pool_growth.rs"]
+mod wayland_shm_pool_growth;

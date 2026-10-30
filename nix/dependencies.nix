@@ -88,13 +88,28 @@ let
       ]
     );
 
+  # Weston 16's pixman renderer caches wl_shm_buffer_get_data() in a
+  # pixman_image at attach; a client growing its shm pool makes
+  # wayland-server mremap the mapping (MREMAP_MAYMOVE), and the cached image
+  # then reads unmapped memory on the next repaint -- the compositor dies with
+  # SIGSEGV in fast_composite_scaled_bilinear and every client loses its
+  # connection (real-GUI: decorated fullscreen at scale 2).  CI builds Weston
+  # from the pinned tarball and applies the same patch in
+  # scripts/ci/setup-weston.sh; patching the shell's Weston keeps local GUI
+  # runs on the same compositor behavior.
+  westonPatched = pkgs.weston.overrideAttrs (old: {
+    patches =
+      (old.patches or [ ])
+      ++ [ ../scripts/ci/patches/weston-16.0.0-pixman-shm-pool-resize.patch ];
+  });
+
   webviewBuildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (
     assert lib.assertMsg (wpeWebkit != null) "Linux webview dependencies require a WPE package";
     [
       wpeWebkit
       pkgs.libwpe
       pkgs.libwpe-fdo
-      pkgs.weston
+      westonPatched
       pkgs.xdg-dbus-proxy
       # Runtime library for the `udev` crate, which enumerates DRM render
       # nodes for the webview reactor's device selection.

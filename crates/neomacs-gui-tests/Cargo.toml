@@ -55,6 +55,7 @@ neomacs-melpa-test-support.workspace = true
 neomacs-test-env.workspace = true
 rustix.workspace = true
 wayland-client.workspace = true
+wayland-protocols.workspace = true
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 
 [target.'cfg(windows)'.dev-dependencies]

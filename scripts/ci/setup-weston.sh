@@ -57,7 +57,7 @@ mkdir -p "$work"
 # the versions above are built against.  `git` is what meson's wrap fetches
 # the display-info subproject with; `hwdata` supplies pnp.ids.
 sudo apt-get install -y --no-install-recommends \
-    meson ninja-build git \
+    meson ninja-build git patch \
     libpixman-1-dev libinput-dev libevdev-dev libdrm-dev \
     libcairo2-dev libxcb-shm0-dev libx11-xcb-dev \
     libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev \
@@ -89,6 +89,16 @@ curl -fsSL -o "$work/weston.tar.gz" "$url"
 echo "$sha256  $work/weston.tar.gz" | sha256sum -c -
 tar xzf "$work/weston.tar.gz" -C "$work"
 source="$work/weston-$version"
+
+# Renderer fix, not a version bump: the pixman renderer caches
+# wl_shm_buffer_get_data() in a pixman_image at attach.  A client growing its
+# shm pool (wl_shm_pool.resize; sctk-adwaita does it when a decorated window
+# resizes) makes wayland-server mremap the pool with MREMAP_MAYMOVE, which can
+# move the mapping, leaving the cached image reading unmapped memory on the
+# next repaint: SIGSEGV in fast_composite_scaled_bilinear, and every client
+# loses its connection.  The patch rebuilds the image when the address moves;
+# see its header for the reproduction.  Upstream report pending.
+patch -p1 -d "$source" < "$(dirname "$0")/patches/weston-16.0.0-pixman-shm-pool-resize.patch"
 
 export PKG_CONFIG_PATH="/usr/local/share/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 meson setup "$work/build" "$source" \
