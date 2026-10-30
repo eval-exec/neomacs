@@ -563,3 +563,7 @@ mod native_deferred_reap_tests;
 #[cfg(all(test, unix))]
 #[path = "tests/pipe_exit.rs"]
 mod pipe_exit_tests;
+
+#[cfg(all(test, unix))]
+#[path = "tests/output_fairness.rs"]
+mod output_fairness_tests;

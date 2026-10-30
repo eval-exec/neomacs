@@ -172,7 +172,7 @@ fn accept_process_output_pipe_interrupted_read_before_status_keeps_remaining_out
             );
             // No recorded status yet: a readiness pass must not mistake EINTR
             // after a UTF-8 prefix for permanent failure and close the pipe.
-            eval.poll_process_output_for_ids(vec![id], Some(id), false)
+            eval.poll_process_output_for_readiness(vec![id], Some(id), false)
                 .expect("readiness pass");
             eval.processes
                 .set_child_status_pending(id, process_status_exit_value(0));
