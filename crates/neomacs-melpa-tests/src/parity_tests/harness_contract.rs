@@ -52,9 +52,8 @@ fn sandbox_keeps_process_state_under_the_cache_root_and_socket_paths_bounded() {
         ]);
         neomacs_infra::packages::configure_helper_process_environment(
             &mut command,
+            sandbox.environment(),
             sandbox.root(),
-            sandbox.home(),
-            sandbox.tmp_dir(),
         );
         let output = command.output().expect("inspect sandbox environment");
         assert!(output.status.success());

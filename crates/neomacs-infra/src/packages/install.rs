@@ -202,22 +202,24 @@ pub fn deterministic_process_environment(
         .collect()
 }
 
-/// Apply the package sandbox's deterministic environment to a NON-editor
+/// Apply a package sandbox's deterministic environment to a NON-editor
 /// helper command (git, package-build tooling).
 ///
-/// The values are the same as the editor environment's, so helper output
-/// (git messages, timestamps, locale-sensitive text) is as deterministic as
-/// the editor's; the helper is not an editor process, so it has no identity
-/// pins to enforce with a `PinnedCommand`.
+/// The caller hands in the *same* [`CanonicalEnvironment`] object the
+/// sandbox gives its editor commands, so helper output (git messages,
+/// timestamps, locale-sensitive text) is as deterministic as the editor's
+/// and the two cannot drift to different roots.  Rebuilding the environment
+/// here from `(root, home, tmp)` used to point `XDG_RUNTIME_DIR` at
+/// `root/xdg/runtime`, a directory the unix sandbox no longer creates: its
+/// runtime is a short socket-sized directory outside the case root
+/// (`RuntimeDirectory::ShortSocketPath`).  The helper is not an editor
+/// process, so it has no identity pins to enforce with a `PinnedCommand`.
 pub fn configure_helper_process_environment(
     command: &mut Command,
-    root: &Path,
-    home: &Path,
-    tmp: &Path,
+    environment: &CanonicalEnvironment,
+    working_directory: &Path,
 ) {
-    let environment = package_environment_with_runtime(root, home, tmp, &root.join("xdg/runtime"))
-        .expect("package sandbox roots must be absolute");
-    command.current_dir(root);
+    command.current_dir(working_directory);
     for (name, value) in environment.env_pairs() {
         command.env(name, value);
     }

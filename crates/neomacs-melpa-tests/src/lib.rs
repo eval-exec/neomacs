@@ -6414,9 +6414,8 @@ fn git<const N: usize>(
     let mut command = Command::new("git");
     neomacs_infra::packages::configure_helper_process_environment(
         &mut command,
+        sandbox.environment(),
         sandbox.root(),
-        sandbox.home(),
-        sandbox.tmp_dir(),
     );
     let output = command
         .current_dir(repository)

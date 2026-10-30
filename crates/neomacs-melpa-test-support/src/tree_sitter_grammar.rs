@@ -63,10 +63,14 @@ impl GrammarCachePaths {
     }
 
     /// Same deterministic environment for the git helper that checks the
-    /// grammar source out: helper output is host-independent too.
+    /// grammar source out: helper output is host-independent too, and the
+    /// helper receives this cache root's one canonical environment instead
+    /// of a second, rebuilt copy that can drift from it.
     fn configure_helper(&self, command: &mut Command) {
         neomacs_infra::packages::configure_helper_process_environment(
-            command, &self.root, &self.home, &self.tmp,
+            command,
+            &self.environment(),
+            &self.root,
         );
     }
 }
