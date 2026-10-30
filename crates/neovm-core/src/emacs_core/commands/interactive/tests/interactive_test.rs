@@ -2836,6 +2836,50 @@ fn remove_through_filtered_prefix_invalidates_where_is_cache() {
 }
 
 #[test]
+fn menu_item_filter_nonlocal_exits_propagate_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // `menu_item_eval_property` catches only `error` (src/keyboard.c:8873-8885),
+    // so quit and a throw with an outer catch stay nonlocal -- the behavior
+    // that requires a separate `MenuItemProperty` barrier instead of
+    // `safe_funcall`'s Qt barrier. A throw with no matching catch becomes the
+    // `no-catch` error and is muted like any other error. The quit also has to
+    // unwind the `inhibit-redisplay` binding. Expected values measured under
+    // GNU Emacs 31.1.
+    assert_eq!(
+        eval_one(
+            r#"(let ((m (make-sparse-keymap)))
+                 (define-key m [q]
+                   (list 'menu-item "q" 'ignore
+                         :filter (lambda (_command) (signal 'quit nil))))
+                 (define-key m [t]
+                   (list 'menu-item "t" 'ignore
+                         :filter (lambda (_command) (throw 'pr627-tag :thrown))))
+                 (define-key m [u]
+                   (list 'menu-item "u" 'ignore
+                         :filter (lambda (_command) (throw 'pr627-none 1))))
+                 (list
+                  (let ((inhibit-redisplay t))
+                    (condition-case nil
+                        (progn (define-key m [q leaf] 'q-command) :no-error)
+                      (quit (list :quit inhibit-redisplay))
+                      (error :error)))
+                  (catch 'pr627-tag
+                    (condition-case nil
+                        (progn (define-key m [t leaf] 't-command) :no-error)
+                      (error :error)))
+                  (condition-case nil
+                      (progn (define-key m [u leaf] 'u-command) :no-error)
+                    (error :error))
+                  (condition-case nil
+                      (lookup-key m [q])
+                    (quit :quit)
+                    (error :error))))"#,
+        ),
+        "OK ((:quit t) :thrown :no-error :quit)"
+    );
+}
+
+#[test]
 fn define_key_sequence_preserves_gnu_prefix_symbol_bindings() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
