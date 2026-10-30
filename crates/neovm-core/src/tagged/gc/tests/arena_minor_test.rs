@@ -28,7 +28,11 @@ fn minor_arena_sweep_resets_old_marks_preserves_permanents_and_frees_young_garba
     let old = float_slot(&mut arena, 10.0, parity);
     unsafe { (*old).header.tenured = true };
     let permanent = float_slot(&mut arena, 20.0, parity);
-    unsafe { (*permanent).header.make_permanent(&ImageResident::for_test()) };
+    unsafe {
+        (*permanent)
+            .header
+            .make_permanent(&ImageResident::for_test())
+    };
     let young = float_slot(&mut arena, 30.0, parity);
     let dead = float_slot(&mut arena, 40.0, parity.flip());
     let mut reclaimed = Vec::new();

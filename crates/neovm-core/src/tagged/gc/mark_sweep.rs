@@ -565,10 +565,7 @@ impl TaggedHeap {
     /// (or mapped) owner never traces again, and an ordinary-old owner is
     /// black during a minor (GEN1), so a missed edge would let the sweep free
     /// a live child.
-    pub(super) fn remember_tenured_owner_if_collectible_children(
-        &mut self,
-        header: *mut GcHeader,
-    ) {
+    pub(super) fn remember_tenured_owner_if_collectible_children(&mut self, header: *mut GcHeader) {
         let kind = unsafe { (*header).kind };
         let has_collectible = match kind {
             HeapObjectKind::VecLike => self.veclike_has_young_child(header as *mut VecLikeHeader),

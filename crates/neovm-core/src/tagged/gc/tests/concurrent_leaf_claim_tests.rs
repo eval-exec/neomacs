@@ -3,8 +3,8 @@
 use super::*;
 use crate::emacs_core::intern::intern_uninterned;
 use crate::heap_types::LispMarker;
-use std::sync::Arc;
 use crate::tagged::header::ImageResident;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Leaf {

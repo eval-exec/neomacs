@@ -80,14 +80,17 @@ fn probe(ev: &mut crate::emacs_core::eval::Context, weakness: &str, maker: &str)
          (setq wk-keep {maker}) (puthash wk-keep 1 wk-tbl))"
     ))
     .expect("weak-key allocation");
-    ev.eval_str("(garbage-collect)").expect("rooted full collection");
+    ev.eval_str("(garbage-collect)")
+        .expect("rooted full collection");
     ev.eval_str("(setq rooted (hash-table-count wk-tbl))")
         .expect("rooted count");
     ev.eval_str("(setq wk-keep nil)").expect("drop root");
-    ev.eval_str("(garbage-collect)").expect("first unrooted collection");
+    ev.eval_str("(garbage-collect)")
+        .expect("first unrooted collection");
     ev.eval_str("(setq d1 (hash-table-count wk-tbl))")
         .expect("first dropped count");
-    ev.eval_str("(garbage-collect)").expect("second unrooted collection");
+    ev.eval_str("(garbage-collect)")
+        .expect("second unrooted collection");
     ev.eval_str("(setq d2 (hash-table-count wk-tbl))")
         .expect("second dropped count");
     ["rooted", "d1", "d2"].map(|name| {
