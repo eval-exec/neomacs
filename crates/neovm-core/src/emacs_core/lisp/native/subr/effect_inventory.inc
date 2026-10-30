@@ -21,6 +21,8 @@ pub(super) static INVENTORY: &[InventoryEntry] = &[
     InventoryEntry { kind: CatalogKind::Primitive, name: "font-match-p", source: "src/emacs_core/display/font/subrs.rs", authority: Authority::World, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "font-at", source: "src/emacs_core/display/font/subrs.rs", authority: Authority::World, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "font-info", source: "src/emacs_core/display/font/subrs.rs", authority: Authority::World, target: None },
+    InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs-set-scroll-indicators", source: "src/emacs_core/display/neo/chrome/subrs.rs", authority: Authority::World, target: None },
+    InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs-set-extra-spacing", source: "src/emacs_core/display/neo/chrome/subrs.rs", authority: Authority::World, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs--effect-set", source: "src/emacs_core/display/neo/effects/subrs.rs", authority: Authority::World, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs-effect-get", source: "src/emacs_core/display/neo/effects/subrs.rs", authority: Authority::World, target: None },
     InventoryEntry { kind: CatalogKind::Primitive, name: "neomacs--effects-apply", source: "src/emacs_core/display/neo/effects/subrs.rs", authority: Authority::World, target: None },

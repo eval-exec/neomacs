@@ -6575,11 +6575,11 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         1,
         Some(1)
     );
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "subrp",
         NativeFn::ContextSlice(|_ctx, args| crate::emacs_core::builtins_extra::builtin_subrp(args)),
         SubrArity::new(1, Some(1)),
-    ));
+    )));
     register_pure_subr!(
         ctx,
         "byte-code-function-p",

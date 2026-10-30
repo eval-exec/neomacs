@@ -26,6 +26,23 @@ fn pentry_catalog_covers_every_installed_subr_opcode_leaf_and_alias() {
         }
     }
     assert!(!installed.is_empty());
+    // Main added chrome controls and replaced subrp's macro registration.
+    // Check both active installation and the cold World classification.
+    for name in [
+        "neomacs-set-scroll-indicators",
+        "neomacs-set-extra-spacing",
+        "subrp",
+    ] {
+        assert!(
+            installed.contains(name),
+            "missing rebased primitive: {name}"
+        );
+        let row = INVENTORY
+            .iter()
+            .find(|entry| entry.kind == CatalogKind::Primitive && entry.name == name)
+            .expect("rebased primitive has a cold inventory row");
+        assert_eq!(row.authority, Authority::World);
+    }
     for batch in crate::emacs_core::builtins::localized_subr_catalog() {
         for spec in batch.specs() {
             assert!(installed.contains(spec.name()));
