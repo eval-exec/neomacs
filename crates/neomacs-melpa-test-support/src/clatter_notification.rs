@@ -90,12 +90,16 @@ impl PrivateClatterService {
         }
         let script = control.join("service.el");
         fs::write(&script, SERVICE).map_err(|error| error.to_string())?;
+        // `environment` is this control root's canonical package environment:
+        // it already pins HOME and TMPDIR to `control/home` and `control/tmp`
+        // (they are the home/tmp roots it was built from above).  A second
+        // `with_env` of either name is a raw overwrite of a canonical pin,
+        // which the hermetic-env contract refuses; there is nothing to
+        // override here.
         let mut service = ScopedProcess(
             EmacsRuntime::gnu_emacs()
                 .with_env("DBUS_SESSION_BUS_ADDRESS", &address)
                 .with_env("NEOMACS_CLATTER_CONTROL", control.as_os_str())
-                .with_env("HOME", control.join("home").into_os_string())
-                .with_env("TMPDIR", control.join("tmp").into_os_string())
                 .command(&environment)
                 .args(["--batch", "-Q", "-l"])
                 .arg(&script)
