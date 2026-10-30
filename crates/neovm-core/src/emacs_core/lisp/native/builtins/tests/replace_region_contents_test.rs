@@ -35,7 +35,7 @@ fn run(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> ReplaceReg
 fn minimal_change_runs_pure_insertion() {
     // "abcdef" -> "abcXYZdef": insert "XYZ" between index 3 and 3.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abcdef"), &codes("abcXYZdef")),
+        replace_region_minimal_change_runs(&codes("abcdef"), &codes("abcXYZdef"), None).unwrap(),
         vec![run(3, 3, 3, 6)]
     );
 }
@@ -43,7 +43,7 @@ fn minimal_change_runs_pure_insertion() {
 #[test]
 fn minimal_change_runs_identical_is_empty() {
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abcdef"), &codes("abcdef")),
+        replace_region_minimal_change_runs(&codes("abcdef"), &codes("abcdef"), None).unwrap(),
         Vec::<ReplaceRegionChangeRun>::new()
     );
 }
@@ -53,7 +53,7 @@ fn minimal_change_runs_two_insertions_keep_interior_match() {
     // "abc" -> "aXbYc": insert X before b, insert Y before c. The "b" between
     // them must remain a matched (untouched) character, i.e. two separate runs.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abc"), &codes("aXbYc")),
+        replace_region_minimal_change_runs(&codes("abc"), &codes("aXbYc"), None).unwrap(),
         vec![run(1, 1, 1, 2), run(2, 2, 3, 4)]
     );
 }
@@ -62,7 +62,7 @@ fn minimal_change_runs_two_insertions_keep_interior_match() {
 fn minimal_change_runs_two_deletions_keep_interior_match() {
     // "abcde" -> "ace": delete b and d, keeping c between them.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("abcde"), &codes("ace")),
+        replace_region_minimal_change_runs(&codes("abcde"), &codes("ace"), None).unwrap(),
         vec![run(1, 2, 1, 1), run(3, 4, 2, 2)]
     );
 }
@@ -71,8 +71,58 @@ fn minimal_change_runs_two_deletions_keep_interior_match() {
 fn minimal_change_runs_substitution() {
     // "abZZef" region "ZZ" (indices 2..4) replaced by "CD": a single run.
     assert_eq!(
-        replace_region_minimal_change_runs(&codes("ZZ"), &codes("CD")),
+        replace_region_minimal_change_runs(&codes("ZZ"), &codes("CD"), None).unwrap(),
         vec![run(0, 2, 0, 2)]
+    );
+}
+
+#[test]
+fn minimal_change_runs_stops_when_positive_deadline_expires() {
+    // A large edit distance used to copy the entire Myers frontier thousands
+    // of times even when dsh requested only 10ms of comparison work.
+    let a = vec![u32::from('a'); 10_000];
+    let b = vec![u32::from('b'); 10_000];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1);
+    assert!(replace_region_minimal_change_runs(&a, &b, Some(deadline)).is_none());
+}
+
+#[test]
+fn replace_region_contents_expired_budget_uses_whole_region_fallback() {
+    // GNU oracle: integer 0 returns t, but float 0, negative seconds, and
+    // expired positive budgets return nil and move interior markers to BEG.
+    for budget in ["0.0", "-1", "0.000000000001", "'(0 0 0 1)"] {
+        assert_eq!(
+            eval_one(&format!(
+                r#"(with-temp-buffer
+                      (insert "abc---def")
+                      (put-text-property 1 2 'old t)
+                      (let* ((m (copy-marker 5))
+                             (result (replace-region-contents
+                                      1 (point-max)
+                                      (propertize "abc+++def" 'face 'bold) {budget})))
+                        (list result (substring-no-properties (buffer-string))
+                              (marker-position m)
+                              (get-text-property 1 'old)
+                              (get-text-property 1 'face))))"#
+            )),
+            r#"OK (nil "abc+++def" 1 nil bold)"#,
+            "budget {budget}",
+        );
+    }
+}
+
+#[test]
+fn replace_region_contents_live_budget_preserves_interior_matches() {
+    assert_eq!(
+        eval_one(
+            r#"(with-temp-buffer
+                  (insert "abc---def")
+                  (let* ((m (copy-marker 5))
+                         (result (replace-region-contents
+                                  1 (point-max) "abc+++def" 10.0)))
+                    (list result (marker-position m) (buffer-string))))"#,
+        ),
+        r#"OK (t 4 "abc+++def")"#,
     );
 }
 
@@ -510,4 +560,65 @@ fn replace_region_contents_insertion_run_reaches_indirect_buffer_siblings() {
              out)"#,
     );
     assert_eq!(result, r#"OK ("aXbYc" 2 3 2 4 1)"#);
+}
+
+#[test]
+fn replace_region_contents_cost_heuristic_preserves_gnu_marker_ties() {
+    // GNU 31 oracle: MAX-COSTS changes partition quality, not the success
+    // result. A negative cost clamps to zero but is NOT the integer-zero
+    // trivial-replacement shortcut. Equal-length minimal scripts also have
+    // different marker positions; the diagonal tie order is observable.
+    for (cost, positions) in [
+        ("nil", "(1 1 2 2 3 3 4 6 7)"),
+        ("2", "(1 1 2 2 3 3 4 6 7)"),
+        (
+            "999999999999999999999999999999999999",
+            "(1 1 2 2 3 3 4 6 7)",
+        ),
+        ("1", "(1 1 2 3 3 3 4 6 7)"),
+        ("-1", "(1 1 2 3 3 3 4 6 7)"),
+        (
+            "-999999999999999999999999999999999999",
+            "(1 1 2 3 3 3 4 6 7)",
+        ),
+        ("0", "(1 1 1 1 1 1 1 1 8)"),
+    ] {
+        let source = format!(
+            r#"(with-temp-buffer
+            (insert "abaacdab")
+            (let* ((markers (mapcar #'copy-marker '(1 2 3 4 5 6 7 8 9)))
+                   (result (replace-region-contents 1 (point-max) "badcaba" nil {cost})))
+              (list result (buffer-string) (mapcar #'marker-position markers))))"#
+        );
+        assert_eq!(
+            eval_one(&source),
+            format!("OK (t \"badcaba\" {positions})"),
+            "cost {cost}"
+        );
+    }
+}
+
+#[test]
+fn replace_region_contents_validates_costs_only_on_comparison_path() {
+    for cost in ["1.0", "'invalid", "'(1)"] {
+        let source = format!(
+            r#"(with-temp-buffer
+            (insert "abc")
+            (condition-case err
+                (replace-region-contents 1 4 "def" nil {cost})
+              (wrong-type-argument (list (car err) (car (cdr err)) (buffer-string)))))"#
+        );
+        assert_eq!(
+            eval_one(&source),
+            "OK (wrong-type-argument integerp \"abc\")"
+        );
+    }
+    assert_eq!(
+        eval_one(
+            r#"(with-temp-buffer
+        (insert "abc")
+        (list (replace-region-contents 1 4 "def" 0 'invalid) (buffer-string)))"#
+        ),
+        "OK (t \"def\")"
+    );
 }
