@@ -122,7 +122,7 @@ fn run_editor(binary: &Path, script: &Path, result: &Path) {
     // allocation, shared lock or Rust runtime state is accessed in the hook.
     unsafe {
         command.pre_exec(|| {
-            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

@@ -217,6 +217,8 @@ error[E0599]: the associated function or constant `share` exists for struct `Thr
            which is required by `BufferManager: Sync`
            `NonNull<MarkerObj>: Send`
            which is required by `BufferManager: Sync`
+           `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+           which is required by `BufferManager: Sync`
            `NonNull<()>: Send`
            which is required by `BufferManager: Sync`
            `Rc<()>: Sync`

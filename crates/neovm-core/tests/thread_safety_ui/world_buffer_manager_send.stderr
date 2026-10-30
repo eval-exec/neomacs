@@ -115,6 +115,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `BufferManager: Send`
            `NonNull<MarkerObj>: Send`
            which is required by `BufferManager: Send`
+           `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+           which is required by `BufferManager: Send`
            `*mut HashTableObj: Sync`
            which is required by `BufferManager: Send`
            `*mut FinalizerObj: Sync`
