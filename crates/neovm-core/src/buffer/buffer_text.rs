@@ -1911,6 +1911,46 @@ impl BufferText {
             .next_watched_property_change(pos, cap, keys)
     }
 
+    /// True when `name` may occur in any interval of this text.
+    pub fn text_props_has_property_anywhere(&self, name: Value) -> bool {
+        self.storage.borrow().text_props.has_property_anywhere(name)
+    }
+
+    /// Presence-aware display query: the next position after `pos` where any
+    /// of `keys` changes presence or value. Returns `None` at the buffer end.
+    pub fn next_watched_property_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        let char_pos = self
+            .byte_range_to_char_range(EmacsByteRange::new(pos, pos))
+            .start();
+        let cap = CharPos0::ZERO.add_len(self.char_count());
+        let next = self
+            .storage
+            .borrow()
+            .text_props
+            .next_watched_property_state_change(char_pos, cap, keys);
+        (next < cap).then(|| self.char_pos_to_emacs_byte_pos(next))
+    }
+
+    /// Presence-aware mirror of the next-state query above.
+    pub fn previous_watched_property_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        let char_pos = self
+            .byte_range_to_char_range(EmacsByteRange::new(pos, pos))
+            .start();
+        self.storage
+            .borrow()
+            .text_props
+            .previous_watched_property_state_change_before_char_pos(char_pos, keys)
+            .map(|previous| self.char_pos_to_emacs_byte_pos(previous))
+    }
+
     /// Test hook: see `TextPropertyTable::debug_syntax_caches_consistent`.
     #[cfg(test)]
     pub(crate) fn debug_syntax_caches_consistent(&self) -> Result<(), String> {
@@ -1928,6 +1968,14 @@ impl BufferText {
     /// scan re-walked the same face-interval chain. A hit may return an end
     /// short of `cap` (the stored walk's own lookahead); that is a valid,
     /// merely conservative answer — the caller just refills again there.
+    /// See [`text_props::TextPropertyTable::previous_syntax_prop_state_run_start_at_char_pos`].
+    pub fn previous_syntax_prop_state_run_start_at_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        self.storage
+            .borrow()
+            .text_props
+            .previous_syntax_prop_state_run_start_at_char_pos(pos)
+    }
+
     pub fn syntax_prop_free_run_end_at_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
         let storage = self.storage.borrow();
         let epoch = storage.content_epoch;

@@ -290,3 +290,184 @@ fn watched_prop_demand_matches_randomized_queries_after_overlapping_edits() {
         }
     }
 }
+
+#[test]
+fn watched_state_change_distinguishes_explicit_nil_from_absent() {
+    let face = Value::symbol("face");
+    let other = Value::symbol("other");
+    let table = TextPropertyTable::from_plist_runs(vec![
+        TextPropertyPlistRun::new(char_range(0, 2), vec![]),
+        TextPropertyPlistRun::new(char_range(2, 4), vec![(face, Value::NIL)]),
+        TextPropertyPlistRun::new(
+            char_range(4, 6),
+            vec![(face, Value::NIL), (other, Value::T)],
+        ),
+        TextPropertyPlistRun::new(char_range(6, 8), vec![]),
+    ]);
+    let keys = [face];
+
+    // Presence changes at 2 (absent -> explicit nil) and 6 (explicit nil ->
+    // absent). The unrelated `other` interval at 4 is not a watched change.
+    assert_eq!(
+        table.next_watched_property_state_change(char_pos(0), char_pos(8), &keys),
+        char_pos(2)
+    );
+    assert_eq!(
+        table.next_watched_property_state_change(char_pos(2), char_pos(8), &keys),
+        char_pos(6)
+    );
+    assert_eq!(
+        table.next_watched_property_state_change(char_pos(6), char_pos(8), &keys),
+        char_pos(8)
+    );
+
+    // Value-only scans see nil throughout, so they cannot report the
+    // absent/explicit-nil transitions that shadow lower-priority sources.
+    assert_eq!(
+        table.next_watched_property_change(char_pos(0), char_pos(8), &keys),
+        char_pos(8)
+    );
+
+    assert_eq!(
+        table.previous_watched_property_state_change_before_char_pos(char_pos(8), &keys),
+        Some(char_pos(6))
+    );
+    assert_eq!(
+        table.previous_watched_property_state_change_before_char_pos(char_pos(6), &keys),
+        Some(char_pos(6))
+    );
+    assert_eq!(
+        table.previous_watched_property_state_change_before_char_pos(char_pos(4), &keys),
+        Some(char_pos(2))
+    );
+    assert_eq!(
+        table.previous_watched_property_state_change_before_char_pos(char_pos(2), &keys),
+        Some(char_pos(2))
+    );
+    assert_eq!(
+        table.previous_watched_property_state_change_before_char_pos(char_pos(0), &keys),
+        None
+    );
+}
+
+#[test]
+fn syntax_state_runs_split_on_presence_and_walk_backward_from_query() {
+    let syntax_table = Value::symbol("syntax-table");
+    let category = Value::symbol("category");
+    let table = TextPropertyTable::from_plist_runs(vec![
+        TextPropertyPlistRun::new(char_range(0, 2), vec![(syntax_table, Value::T)]),
+        TextPropertyPlistRun::new(
+            char_range(2, 3),
+            vec![(syntax_table, Value::T), (category, Value::NIL)],
+        ),
+        TextPropertyPlistRun::new(char_range(3, 5), vec![(syntax_table, Value::T)]),
+        TextPropertyPlistRun::new(
+            char_range(5, 6),
+            vec![(syntax_table, Value::T), (category, Value::NIL)],
+        ),
+        TextPropertyPlistRun::new(char_range(6, 8), vec![(syntax_table, Value::T)]),
+    ]);
+
+    // Value-only runs would coalesce the explicit-nil category interval with
+    // the absent neighbours; presence must split at 2 and 3.
+    assert_eq!(
+        table.syntax_prop_free_run_end(char_pos(1), char_pos(8)),
+        char_pos(2)
+    );
+    assert_eq!(
+        table.syntax_prop_free_run_end(char_pos(2), char_pos(8)),
+        char_pos(3)
+    );
+    assert_eq!(
+        table.syntax_prop_free_run_end(char_pos(3), char_pos(8)),
+        char_pos(5)
+    );
+
+    // Backward run starts are resolved from the queried position, not from 0.
+    assert_eq!(
+        table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(7)),
+        char_pos(6)
+    );
+    assert_eq!(
+        table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(4)),
+        char_pos(3)
+    );
+    assert_eq!(
+        table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(2)),
+        char_pos(2)
+    );
+    assert_eq!(
+        table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(1)),
+        char_pos(0)
+    );
+}
+
+#[test]
+fn syntax_backward_run_start_rechecks_stale_range_coverage() {
+    let category = Value::symbol("category");
+    let mut table = TextPropertyTable::from_plist_runs(vec![TextPropertyPlistRun::new(
+        char_range(0, 8),
+        vec![(category, Value::symbol("cat"))],
+    )]);
+    // Warm the cached syntax-range list over one wide covered range.
+    assert_eq!(
+        table.syntax_prop_free_run_end(char_pos(0), char_pos(8)),
+        char_pos(8)
+    );
+    // Removal leaves the cached coverage wider than the actual prop interval.
+    let _ = table.remove_property_in_char_range(char_range(2, 4), category);
+    assert_eq!(
+        table.syntax_prop_free_run_end(char_pos(0), char_pos(8)),
+        char_pos(2)
+    );
+    // Present run [4,8) must start at 4, not at the stale coverage start 0.
+    assert_eq!(
+        table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(6)),
+        char_pos(4)
+    );
+    // The gap [2,4) starts after the real prop interval [0,2), not at 0.
+    assert_eq!(
+        table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(3)),
+        char_pos(2)
+    );
+}
+
+#[test]
+fn syntax_backward_run_start_preserves_pruned_tail_boundary() {
+    let category = Value::symbol("category");
+    for warm_cache in [false, true] {
+        for unrelated_tail in [false, true] {
+            let mut table = TextPropertyTable::from_plist_runs(vec![TextPropertyPlistRun::new(
+                char_range(0, 10),
+                vec![(category, Value::symbol("cat"))],
+            )]);
+            if warm_cache {
+                table.syntax_prop_free_run_end(char_pos(0), char_pos(10));
+            }
+            // Clearing all properties prunes the real intervals after 5.
+            table.remove_all_properties_in_char_range(char_range(5, 10));
+            if unrelated_tail {
+                // The last real interval may itself be syntax-free: its
+                // history property must not shorten the implicit gap.
+                table.put_property_in_char_range(
+                    char_range(5, 7),
+                    Value::symbol("history-event"),
+                    Value::T,
+                );
+            }
+            for pos in 5..=10 {
+                assert_eq!(
+                    table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(pos)),
+                    char_pos(5),
+                    "warm_cache={warm_cache}, unrelated_tail={unrelated_tail}, pos={pos}"
+                );
+            }
+            table.remove_all_properties_in_char_range(char_range(0, 10));
+            assert_eq!(
+                table.previous_syntax_prop_state_run_start_at_char_pos(char_pos(8)),
+                char_pos(0),
+                "an empty table still has a prop-free run starting at zero"
+            );
+        }
+    }
+}

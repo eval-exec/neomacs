@@ -2363,6 +2363,20 @@ fn watched_keys_equal_eq_plist(left: Value, right: Value, keys: &[Value]) -> boo
     })
 }
 
+/// Like [`watched_keys_equal_eq_plist`], but distinguishes an absent key from
+/// one explicitly present with value nil.  Effective-property scans need that
+/// distinction: an explicit nil `mouse-face` suppresses
+/// `default-text-properties`, while an absent key lets the default apply.
+fn watched_keys_state_equal_eq_plist(left: Value, right: Value, keys: &[Value]) -> bool {
+    keys.iter().all(
+        |key| match (plist_value_get(left, *key), plist_value_get(right, *key)) {
+            (None, None) => true,
+            (Some(left), Some(right)) => eq_value(&left, &right),
+            _ => false,
+        },
+    )
+}
+
 fn plists_equal_eq(left: &[(Value, Value)], right: &[(Value, Value)]) -> bool {
     if left.len() != right.len() {
         return false;
@@ -2881,6 +2895,12 @@ impl TextPropertyTable {
     /// interval tree.
     pub fn property_name_presence(&self, name: Value) -> PropertyNamePresence {
         self.property_names.presence(name)
+    }
+
+    /// True when `name` is not provably absent from every interval. Used by
+    /// display scans to skip boundary walks when a watched key cannot occur.
+    pub fn has_property_anywhere(&self, name: Value) -> bool {
+        self.property_name_presence(name) != PropertyNamePresence::DefinitelyAbsent
     }
 
     /// Copy interval nodes and plist cons spines, while preserving plist
@@ -3503,6 +3523,48 @@ impl TextPropertyTable {
         }
     }
 
+    /// Presence-aware variant of [`Self::next_watched_property_change`].
+    ///
+    /// A key moving between absent and explicitly nil is reported as a change
+    /// even though both read as nil. Layout effective-property scans need this
+    /// to notice when an explicit nil starts (or stops) shadowing a lower
+    /// priority alias, category, or `default-text-properties`.
+    pub fn next_watched_property_state_change(
+        &self,
+        pos: CharPos0,
+        cap: CharPos0,
+        keys: &[Value],
+    ) -> CharPos0 {
+        if cap <= pos {
+            return cap;
+        }
+        let mut cursor = self.intervals.cursor_at(pos);
+        let Some((_, mut boundary, first_node)) = cursor.next() else {
+            return cap;
+        };
+        let current = first_node.plist;
+        loop {
+            if boundary >= cap {
+                return cap;
+            }
+            match cursor.next() {
+                Some((_, end, node)) => {
+                    if !watched_keys_state_equal_eq_plist(current, node.plist, keys) {
+                        return boundary;
+                    }
+                    boundary = end;
+                }
+                None => {
+                    // Trailing implicit-nil region at the tree end.
+                    if !watched_keys_state_equal_eq_plist(current, Value::NIL, keys) {
+                        return boundary;
+                    }
+                    return cap;
+                }
+            }
+        }
+    }
+
     /// Keep the watched-key comparisons of GNU `compute_stop_pos`, but use
     /// the carried end to reject an unused lookahead before `next_id`. Only
     /// this bounded query selects the loop; generic cursors keep their policy.
@@ -3602,7 +3664,11 @@ impl TextPropertyTable {
                 match cursor.next() {
                     Some((_, end, node))
                         if node.has_syntax_prop
-                            && watched_keys_equal_eq_plist(first.plist, node.plist, &keys) =>
+                            && watched_keys_state_equal_eq_plist(
+                                first.plist,
+                                node.plist,
+                                &keys,
+                            ) =>
                     {
                         boundary = end;
                     }
@@ -3623,6 +3689,118 @@ impl TextPropertyTable {
                 }
                 None => return cap, // trailing implicit-nil region
             }
+        }
+    }
+
+    /// Start of the run containing `pos` over which `syntax-table` and
+    /// `category` are constant in presence AND value.
+    ///
+    /// Runs are located through the cached syntax-range list, so alternating
+    /// category spans near the end of a long history need only their own
+    /// ranges inspected; a prop-free gap starts at the previous covered
+    /// range's end. This mirrors `syntax_prop_free_run_end` in the backward
+    /// direction and is used by effective-property extents that must walk
+    /// out from the queried position, not from the buffer start.
+    pub fn previous_syntax_prop_state_run_start_at_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        if pos == CharPos0::ZERO || !self.has_any_syntax_prop_interval() {
+            return CharPos0::ZERO;
+        }
+        let keys = syntax_relevant_names();
+        let Some((start, id)) = self.intervals.find_id(pos) else {
+            // A pruned tail is implicitly prop-free, not an empty table.
+            // If the last real interval carries syntax/category, its end is
+            // the gap start. Otherwise extend that interval's prop-free run
+            // backward; this second lookup is inside the tree.
+            let Some((last_start, last_id)) = self.intervals.last_interval() else {
+                return CharPos0::ZERO;
+            };
+            return if self.intervals.nodes[last_id.0].has_syntax_prop {
+                CharPos0::ZERO.add_len(self.intervals.len())
+            } else {
+                self.previous_syntax_prop_state_run_start_at_char_pos(last_start)
+            };
+        };
+        let current = self.intervals.nodes[id.0].plist;
+        if self.intervals.nodes[id.0].has_syntax_prop {
+            // Inside a prop-carrying run: step contiguous real intervals and
+            // stop at the first gap or state change. Ranges are NOT trusted as
+            // constant runs: an incremental put may merge several intervals,
+            // and a later removal can leave stale/wider coverage.
+            let mut run_start = start;
+            let seat = self.intervals.prev_id(id).map(|previous| {
+                let previous_start = start.saturating_sub_len(self.intervals.node_len(previous));
+                (previous_start, previous)
+            });
+            let mut cursor = self.intervals.reverse_cursor_from(seat);
+            while let Some((previous_start, previous_end, previous)) = cursor.next() {
+                if previous_end != run_start || !previous.has_syntax_prop {
+                    break;
+                }
+                if !watched_keys_state_equal_eq_plist(previous.plist, current, &keys) {
+                    break;
+                }
+                run_start = previous_start;
+            }
+            return run_start;
+        }
+
+        // Prop-free gap. The cached ranges are only hints for where a real
+        // prop-carrying interval may live; verify each candidate against the
+        // interval tree before returning its end as the gap start.
+        if let Ok(mut guard) = self.syntax_prop_ranges.try_lock() {
+            if guard.0 != self.syntax_prop_tick + 1 {
+                let mut ranges = Vec::new();
+                for (start, end, node) in self.intervals.cursor_at(CharPos0::ZERO) {
+                    if node.has_syntax_prop {
+                        ranges.push((start, end));
+                    }
+                }
+                *guard = (self.syntax_prop_tick + 1, ranges);
+            }
+            let ranges = &guard.1;
+            let mut index = ranges.partition_point(|&(range_start, _)| range_start < pos);
+            while index > 0 {
+                index -= 1;
+                let (range_start, range_end) = ranges[index];
+                let window_end = range_end.min(pos);
+                if window_end <= range_start {
+                    continue;
+                }
+                let mut probe = window_end.saturating_sub_len(CharLen::new(1));
+                loop {
+                    let Some((interval_start, interval_id)) = self.intervals.find_id(probe) else {
+                        break;
+                    };
+                    let interval_end = self.intervals.interval_end(interval_start, interval_id);
+                    if self.intervals.nodes[interval_id.0].has_syntax_prop {
+                        return interval_end.min(pos);
+                    }
+                    if interval_start <= range_start {
+                        break;
+                    }
+                    probe = interval_start.saturating_sub_len(CharLen::new(1));
+                }
+            }
+            return CharPos0::ZERO;
+        }
+
+        // Lock-free fallback: bool-only scan; it reads no plists, so it cannot
+        // exhaust the layout dependency budget, but it may cross a gap.
+        let mut probe = pos.saturating_sub_len(CharLen::new(1));
+        loop {
+            let Some((interval_start, interval_id)) = self.intervals.find_id(probe) else {
+                return CharPos0::ZERO;
+            };
+            if self.intervals.nodes[interval_id.0].has_syntax_prop {
+                return self
+                    .intervals
+                    .interval_end(interval_start, interval_id)
+                    .min(pos);
+            }
+            if interval_start == CharPos0::ZERO {
+                return CharPos0::ZERO;
+            }
+            probe = interval_start.saturating_sub_len(CharLen::new(1));
         }
     }
 
@@ -4350,6 +4528,51 @@ impl TextPropertyTable {
                     boundary = start;
                 }
                 None => return current.is_some().then_some(CharPos0::ZERO),
+            }
+        }
+    }
+
+    /// Presence-aware mirror of
+    /// [`Self::previous_single_property_change_before_char_pos`] for several
+    /// keys.  The active state is the one at `pos`.
+    pub fn previous_watched_property_state_change_before_char_pos(
+        &self,
+        pos: CharPos0,
+        keys: &[Value],
+    ) -> Option<CharPos0> {
+        let (current_plist, mut boundary, seat) = match self.intervals.find_id(pos) {
+            Some((start, id)) => {
+                let current = self.intervals.nodes[id.0].plist;
+                let seat = self.intervals.prev_id(id).map(|prev| {
+                    let prev_start = start.saturating_sub_len(self.intervals.node_len(prev));
+                    (prev_start, prev)
+                });
+                (current, start, seat)
+            }
+            None => {
+                // Past the tree end every key is absent.
+                let last = self.intervals.last_interval()?;
+                let tree_len = CharPos0::ZERO.add_len(self.intervals.len());
+                (Value::NIL, tree_len, Some(last))
+            }
+        };
+        let mut cursor = self.intervals.reverse_cursor_from(seat);
+        loop {
+            if boundary == CharPos0::ZERO {
+                return (!watched_keys_state_equal_eq_plist(current_plist, Value::NIL, keys))
+                    .then_some(CharPos0::ZERO);
+            }
+            match cursor.next() {
+                Some((start, _, node)) => {
+                    if !watched_keys_state_equal_eq_plist(current_plist, node.plist, keys) {
+                        return Some(boundary);
+                    }
+                    boundary = start;
+                }
+                None => {
+                    return (!watched_keys_state_equal_eq_plist(current_plist, Value::NIL, keys))
+                        .then_some(CharPos0::ZERO);
+                }
             }
         }
     }

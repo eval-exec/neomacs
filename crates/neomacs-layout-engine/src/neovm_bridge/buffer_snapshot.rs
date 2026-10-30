@@ -241,19 +241,17 @@ fn capture_layout_category_symbol_plists(
 
     let category_property = Value::symbol("category");
     let mut plists = FxHashMap::default();
-    let end = buffer.total_emacs_byte_end_pos();
-    let mut pos = EmacsBytePos::ZERO;
+    let end = buffer.total_char_end_pos();
+    let mut pos = CharPos0::ZERO;
     while pos < end {
-        if let Some(category) =
-            buffer.text_props_get_property_at_emacs_byte_pos(pos, category_property)
-        {
+        if let Some(category) = buffer.text_props_get_property_at_char_pos(pos, category_property) {
             remember(category, obarray, &mut plists);
         }
-        let Some(next) =
-            buffer.text_props_next_single_change_after_emacs_byte_pos(pos, category_property)
-        else {
-            break;
-        };
+        // This indexed run guarantees constant syntax-table AND category
+        // values. A generic single-property walk also reads every unrelated
+        // plist in the gap, exhausting the layout dependency budget in long
+        // histories with only a few category-bearing buttons.
+        let next = buffer.syntax_prop_free_run_end_at_char_pos(pos, end);
         if next <= pos {
             break;
         }
@@ -273,6 +271,170 @@ fn capture_layout_category_symbol_plists(
     }
 
     plists
+}
+
+#[cfg(test)]
+mod category_capture_tests {
+    use super::*;
+    use neovm_core::emacs_core::eval::Context;
+    use neovm_core::tagged::collection_reads::capture;
+
+    #[test]
+    fn absent_categories_do_not_observe_unrelated_property_plists() {
+        let mut eval = Context::new();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
+        buffer.insert("history\n");
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(EmacsBytePos::ZERO, buffer.point_max_emacs_byte_pos()),
+            Value::symbol("face"),
+            Value::symbol("default"),
+        );
+        let plist = buffer.interval_plist_at_char_pos(CharPos0::new(0)).unwrap();
+        let (categories, reads) = capture(|| {
+            capture_layout_category_symbol_plists(
+                eval.buffer_manager().get(id).unwrap(),
+                eval.obarray(),
+            )
+        });
+        assert!(categories.is_empty());
+        let reads = reads.expect("coherent category capture");
+        assert!(reads.unchanged());
+        plist.cons_cdr().set_car(Value::symbol("highlight"));
+        assert!(
+            reads.unchanged(),
+            "proven-absent categories must not scan or depend on unrelated face plists"
+        );
+    }
+
+    #[test]
+    fn sparse_categories_in_long_history_preserve_capture_budget() {
+        let mut eval = Context::new();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let buffer = eval.buffer_manager_mut().get_mut(id).unwrap();
+        let count = 9_000;
+        buffer.insert(&"x".repeat(count));
+        for index in 0..count {
+            buffer.text_props_put_property_in_emacs_byte_range(
+                EmacsByteRange::new(EmacsBytePos::new(index), EmacsBytePos::new(index + 1)),
+                Value::symbol("history-event"),
+                Value::fixnum(index as i64),
+            );
+        }
+        buffer.text_props_put_property_in_emacs_byte_range(
+            EmacsByteRange::new(
+                EmacsBytePos::new(count / 2),
+                EmacsBytePos::new(count / 2 + 1),
+            ),
+            Value::symbol("category"),
+            Value::symbol("history-button"),
+        );
+        let (categories, reads) = capture(|| {
+            capture_layout_category_symbol_plists(
+                eval.buffer_manager().get(id).unwrap(),
+                eval.obarray(),
+            )
+        });
+        assert_eq!(categories.len(), 1);
+        assert!(
+            reads.is_some(),
+            "unrelated history must not exhaust a visible layout's dependency budget"
+        );
+    }
+
+    #[test]
+    fn category_capture_keeps_text_and_overlay_symbol_properties() {
+        let mut eval = Context::new();
+        eval.eval_str(
+            "(progn (insert \"abc\")
+               (put 'text-category 'face 'bold)
+               (put 'overlay-category 'face 'italic)
+               (overlay-put (make-overlay 2 3) 'category 'overlay-category))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        let overlay_only = capture_layout_category_symbol_plists(
+            eval.buffer_manager().get(id).unwrap(),
+            eval.obarray(),
+        );
+        assert_eq!(overlay_only.len(), 1);
+        assert!(
+            overlay_only.contains_key(
+                &Value::symbol("overlay-category")
+                    .as_bare_symbol_id()
+                    .unwrap()
+            )
+        );
+        eval.eval_str("(put-text-property 1 2 'category 'text-category)")
+            .unwrap();
+        let categories = capture_layout_category_symbol_plists(
+            eval.buffer_manager().get(id).unwrap(),
+            eval.obarray(),
+        );
+        assert_eq!(categories.len(), 2);
+        for (name, face) in [("text-category", "bold"), ("overlay-category", "italic")] {
+            let id = Value::symbol(name).as_bare_symbol_id().unwrap();
+            assert_eq!(
+                plist_get(categories[&id], &Value::symbol("face")),
+                Some(Value::symbol(face))
+            );
+        }
+
+        // Clearing text categories keeps a conservative presence summary;
+        // overlay categories still participate independently.
+        eval.eval_str("(remove-text-properties 1 4 '(category nil))")
+            .unwrap();
+        let categories = capture_layout_category_symbol_plists(
+            eval.buffer_manager().get(id).unwrap(),
+            eval.obarray(),
+        );
+        assert_eq!(categories.len(), 1);
+        assert!(
+            categories.contains_key(
+                &Value::symbol("overlay-category")
+                    .as_bare_symbol_id()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn category_runs_follow_multibyte_edits_and_syntax_boundaries() {
+        let mut eval = Context::new();
+        eval.eval_str(
+            "(progn (insert \"历史输出abc\")
+               (put-text-property 2 4 'category 'first-category)
+               (put-text-property 3 6 'syntax-table '(2))
+               (put-text-property 6 8 'category 'last-category))",
+        )
+        .unwrap();
+        let id = eval.buffer_manager().current_buffer().unwrap().id();
+        for edit in [
+            "nil",
+            "(progn (goto-char 1) (insert \"新\"))",
+            "(progn (remove-text-properties 1 (point-max) '(category nil))
+                    (put-text-property 4 5 'category 'replacement-category))",
+        ] {
+            eval.eval_str(edit).unwrap();
+            let buffer = eval.buffer_manager().get(id).unwrap();
+            let captured = capture_layout_category_symbol_plists(buffer, eval.obarray());
+            let mut expected = FxHashMap::default();
+            // An exhaustive character walk is independent of the sparse index
+            // and its memo; it also catches accidental byte/character mixing.
+            for pos in 0..buffer.total_char_end_pos().get() {
+                if let Some(category) = buffer
+                    .text_props_get_property_at_char_pos(
+                        CharPos0::new(pos),
+                        Value::symbol("category"),
+                    )
+                    .and_then(|value| value.as_bare_symbol_id())
+                {
+                    expected.insert(category, eval.obarray().symbol_plist_id(category));
+                }
+            }
+            assert_eq!(captured, expected);
+        }
+    }
 }
 
 /// Resolve every [`LayoutVar`] with the same precedence the per-query path
@@ -430,6 +592,38 @@ impl LayoutBufferView for LayoutBufferSnapshot {
     ) -> Option<EmacsBytePos> {
         self.text_snapshot
             .previous_single_text_prop_change_before_emacs_byte_pos(pos, name)
+    }
+
+    fn layout_next_watched_text_prop_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.text_snapshot
+            .next_watched_property_state_change_after_emacs_byte_pos(pos, keys)
+    }
+
+    fn layout_previous_watched_text_prop_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.text_snapshot
+            .previous_watched_property_state_change_before_emacs_byte_pos(pos, keys)
+    }
+
+    fn layout_text_prop_present_anywhere(&self, name: Value) -> bool {
+        self.text_snapshot.text_props_has_property_anywhere(name)
+    }
+
+    fn layout_syntax_prop_free_run_end_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
+        self.text_snapshot
+            .syntax_prop_free_run_end_at_char_pos(pos, cap)
+    }
+
+    fn layout_previous_syntax_prop_state_run_start_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        self.text_snapshot
+            .previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
     fn layout_overlays(&self) -> &OverlayList {

@@ -2176,6 +2176,38 @@ impl BufferTextSnapshot {
         self.text.text_props_next_change_after_emacs_byte_pos(pos)
     }
 
+    pub fn text_props_has_property_anywhere(&self, name: Value) -> bool {
+        self.text.text_props_has_property_anywhere(name)
+    }
+
+    pub fn syntax_prop_free_run_end_at_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
+        self.text.syntax_prop_free_run_end_at_char_pos(pos, cap)
+    }
+
+    /// See [`buffer_text::BufferText::previous_syntax_prop_state_run_start_at_char_pos`].
+    pub fn previous_syntax_prop_state_run_start_at_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        self.text
+            .previous_syntax_prop_state_run_start_at_char_pos(pos)
+    }
+
+    pub fn next_watched_property_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.text
+            .next_watched_property_state_change_after_emacs_byte_pos(pos, keys)
+    }
+
+    pub fn previous_watched_property_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.text
+            .previous_watched_property_state_change_before_emacs_byte_pos(pos, keys)
+    }
+
     pub fn next_single_text_prop_change_after_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
@@ -3548,9 +3580,39 @@ impl Buffer {
             .next_watched_property_change_at_char_pos(pos, cap, keys)
     }
 
+    /// True when `name` may occur in any interval of this buffer's text.
+    pub fn text_props_has_property_anywhere(&self, name: Value) -> bool {
+        self.text.text_props_has_property_anywhere(name)
+    }
+
+    /// See [`buffer_text::BufferText::next_watched_property_state_change_after_emacs_byte_pos`].
+    pub fn next_watched_property_state_change_after_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.text
+            .next_watched_property_state_change_after_emacs_byte_pos(pos, keys)
+    }
+
+    /// See [`buffer_text::BufferText::previous_watched_property_state_change_before_emacs_byte_pos`].
+    pub fn previous_watched_property_state_change_before_emacs_byte_pos(
+        &self,
+        pos: EmacsBytePos,
+        keys: &[Value],
+    ) -> Option<EmacsBytePos> {
+        self.text
+            .previous_watched_property_state_change_before_emacs_byte_pos(pos, keys)
+    }
+
     /// See [`text_props::TextPropertyTable::syntax_prop_free_run_end`].
     pub fn syntax_prop_free_run_end_at_char_pos(&self, pos: CharPos0, cap: CharPos0) -> CharPos0 {
         self.text.syntax_prop_free_run_end_at_char_pos(pos, cap)
+    }
+
+    pub fn previous_syntax_prop_state_run_start_at_char_pos(&self, pos: CharPos0) -> CharPos0 {
+        self.text
+            .previous_syntax_prop_state_run_start_at_char_pos(pos)
     }
 
     /// See [`crate::buffer::buffer_text::BufferText::syntax_content_key`].
