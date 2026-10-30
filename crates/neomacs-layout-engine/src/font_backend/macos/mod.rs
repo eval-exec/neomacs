@@ -51,8 +51,70 @@ impl FontBackend for CoreTextBackend {
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
+        self.candidates_with_postscript_name(query, None)
+    }
+
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        self.candidates_with_postscript_name(query, identity.postscript_name.as_deref())
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .collect()
+    }
+
+    fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
+        if matches!(&matched.locator, PlatformFontCandidateLocator::File(_)) {
+            return matched.into_file_match();
+        }
+        let postscript_name = matched.identity.postscript_name.as_deref()?;
+        let asset = self
+            .native_assets
+            .get_or_materialize(&matched.identity, || {
+                core_text_calls::standalone_font_bytes(
+                    postscript_name,
+                    &matched.identity.variation_coords,
+                )
+            })?;
+        matched.into_memory_match(asset)
+    }
+
+    fn design_metrics(&self, matched: &PlatformFontMatch) -> Option<PlatformFontDesignMetrics> {
+        core_text_calls::design_metrics(
+            matched.identity.postscript_name.as_deref()?,
+            &matched.identity.variation_coords,
+        )
+    }
+
+    fn advance_catalog_generation(&mut self) {
+        self.native_assets.clear();
+        self.file_faces
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+    }
+
+    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
+        self.catalog.poll()
+    }
+}
+
+impl CoreTextBackend {
+    fn candidates_with_postscript_name(
+        &self,
+        query: &FontCandidateQuery,
+        postscript_name: Option<&str>,
+    ) -> Vec<FontCandidate> {
         core_text_calls::candidates(query)
             .into_iter()
+            // Establishing a file identity can read a large font collection.
+            // Exact lookups already know the PostScript name, so discard
+            // unrelated catalog entries before touching their font files.
+            .filter(|candidate| {
+                postscript_name.is_none_or(|name| name == candidate.postscript_name)
+            })
             .filter_map(|candidate| {
                 let metadata = PlatformFontMetadata {
                     foundry: None,
@@ -105,43 +167,6 @@ impl FontBackend for CoreTextBackend {
             .collect()
     }
 
-    fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
-        if matches!(&matched.locator, PlatformFontCandidateLocator::File(_)) {
-            return matched.into_file_match();
-        }
-        let postscript_name = matched.identity.postscript_name.as_deref()?;
-        let asset = self
-            .native_assets
-            .get_or_materialize(&matched.identity, || {
-                core_text_calls::standalone_font_bytes(
-                    postscript_name,
-                    &matched.identity.variation_coords,
-                )
-            })?;
-        matched.into_memory_match(asset)
-    }
-
-    fn design_metrics(&self, matched: &PlatformFontMatch) -> Option<PlatformFontDesignMetrics> {
-        core_text_calls::design_metrics(
-            matched.identity.postscript_name.as_deref()?,
-            &matched.identity.variation_coords,
-        )
-    }
-
-    fn advance_catalog_generation(&mut self) {
-        self.native_assets.clear();
-        self.file_faces
-            .get_mut()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear();
-    }
-
-    fn poll_catalog_change(&mut self) -> crate::font::catalog::FontCatalogChange {
-        self.catalog.poll()
-    }
-}
-
-impl CoreTextBackend {
     fn file_face_index_for_postscript_name(
         &self,
         path: &Path,

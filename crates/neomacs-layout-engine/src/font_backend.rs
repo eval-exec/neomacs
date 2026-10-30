@@ -578,6 +578,20 @@ pub trait FontBackend: Send {
     /// [`crate::font::resolver::FontResolver`]'s responsibility.
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate>;
 
+    /// Enumerate only an already chosen identity, without selecting a family
+    /// substitute. Native adapters can discard unrelated catalog entries
+    /// before opening files to establish their renderer identities.
+    fn list_candidates_for_identity(
+        &self,
+        query: &FontCandidateQuery,
+        identity: &ResolvedFontIdentity,
+    ) -> Vec<FontCandidate> {
+        self.list_candidates(query)
+            .into_iter()
+            .filter(|candidate| candidate.matched.identity == *identity)
+            .collect()
+    }
+
     /// Enrich the selected candidate into an exact renderer identity.
     ///
     /// Discovery deliberately asks only for policy-relevant metadata because

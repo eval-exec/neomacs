@@ -75,3 +75,61 @@ fn registered_coretext_thin_fixture_enumerates_and_opens_with_normal_preference(
     assert!(opened.metrics.max_width > 0);
     assert!(opened.metrics.space_width > 0);
 }
+
+#[test]
+fn exact_identity_miss_does_not_read_unrelated_font_files() {
+    use crate::font_backend::{
+        FontBackend, FontCandidateQuery, FontCandidateScope, RequiredFontCoverage, TextDirection,
+    };
+    use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
+
+    let backend = CoreTextBackend::default();
+    let query = FontCandidateQuery {
+        scope: FontCandidateScope::Family(
+            FontFamilyName::new(backend.resolve_family("monospace")).unwrap(),
+        ),
+        required: RequiredFontCoverage::Any,
+        charset_ranges: Vec::new(),
+        languages: Vec::new(),
+        requested_weight: 400,
+        requested_slant: FontSlant::Normal,
+        requested_width: FontWidth::Normal,
+        direction: TextDirection::LeftToRight,
+    };
+    assert!(!super::core_text_calls::candidates(&query).is_empty());
+    let identity = ResolvedFontIdentity::from_native_with_variations(
+        FontBackendKind::CoreText,
+        "coretext:missing-fixture#0".into(),
+        0,
+        Some("NeomacsMissingExactIdentityFixture".into()),
+        Vec::new(),
+    );
+    assert!(
+        backend
+            .list_candidates_for_identity(&query, &identity)
+            .is_empty()
+    );
+    assert!(
+        backend.file_faces.lock().unwrap().is_empty(),
+        "an exact PostScript miss must not open unrelated candidate files"
+    );
+
+    // A matching name is only a prefilter: all identity fields must still
+    // match, including the durable file/instance key.
+    let selected = backend.list_candidates(&query).into_iter().next().unwrap();
+    assert_eq!(
+        backend.list_candidates_for_identity(&query, &selected.matched.identity),
+        vec![selected.clone()]
+    );
+    let mut wrong_key = selected.matched.identity;
+    wrong_key.stable_key.push_str("-different-instance");
+    // The PostScript prefilter cannot distinguish two instances sharing a
+    // name; disambiguating them requires finalizing/opening the file. Use a
+    // fresh backend so the earlier list_candidates cache cannot hide that.
+    let fresh = CoreTextBackend::default();
+    assert!(
+        fresh
+            .list_candidates_for_identity(&query, &wrong_key)
+            .is_empty()
+    );
+}
