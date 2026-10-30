@@ -130,23 +130,7 @@ fn char_table_ascii(table: Value, mode: SymbolMode) -> Value {
     }
 }
 
-/// Bumped by every char-table mutation primitive below. Consumers that
-/// cache derived per-table state (the syntax parser's flat ASCII entry
-/// table) key their cache on (table identity, this tick): any char-table
-/// write anywhere invalidates all such caches, which is coarse but cheap -
-/// syntax tables are effectively immutable during editing, and a refill is
-/// ~18K Ir amortized over thousands of parses.
-static CHAR_TABLE_WRITE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-#[inline]
-pub(crate) fn char_table_write_tick() -> u64 {
-    CHAR_TABLE_WRITE_TICK.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[inline]
-pub(crate) fn bump_char_table_write_tick() {
-    CHAR_TABLE_WRITE_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
+pub(crate) use crate::emacs_core::value::{bump_char_table_write_tick, char_table_write_tick};
 
 fn set_char_table_ascii(table: Value, value: Value) {
     bump_char_table_write_tick();

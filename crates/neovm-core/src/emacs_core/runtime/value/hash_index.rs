@@ -354,10 +354,10 @@ fn equal_hash_obj(value: Value, depth: u32, mut hasher: FxHasher) -> FxHasher {
             },
             VecLikeType::Marker => {
                 // `equal` compares the buffer and, in a buffer, the position.
-                match crate::emacs_core::marker::marker_equal_logical_fields(&value) {
+                match super::marker_equal_logical_fields(&value) {
                     Some((buffer, bytepos)) => {
                         EqualHashTag::Marker.write(&mut hasher);
-                        (buffer.map(|buffer| buffer.0), bytepos).hash(&mut hasher);
+                        (buffer, bytepos).hash(&mut hasher);
                         hasher
                     }
                     None => identity(hasher),

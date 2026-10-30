@@ -193,33 +193,13 @@ pub(crate) fn marker_location_or_signal(
 }
 
 pub(crate) fn marker_equal_logical_fields(v: &Value) -> Option<(Option<BufferId>, EmacsBytePos)> {
-    if !v.is_marker() {
-        return None;
-    };
-    let data = v.as_marker_data().unwrap();
-    let bytepos = if data.buffer_id().is_some() {
-        data.bytepos
-    } else {
-        EmacsBytePos::ZERO
-    };
-    Some((data.buffer_id(), bytepos))
+    let (buffer, bytepos) = crate::emacs_core::value::marker_equal_logical_fields(v)?;
+    Some((buffer.map(BufferId), EmacsBytePos::new(bytepos)))
 }
 
 /// Tagged-pointer version: compute equal hash key from a marker Value.
 pub(crate) fn marker_equal_hash_key_value(v: &Value) -> HashKey {
-    if let Some(marker) = v.as_marker_data() {
-        let bytepos = if marker.buffer_id().is_some() {
-            marker.bytepos
-        } else {
-            EmacsBytePos::ZERO
-        };
-        HashKey::Marker(Box::new((
-            marker.buffer_id().map(|buffer| buffer.0),
-            bytepos,
-        )))
-    } else {
-        HashKey::Ptr(v.bits())
-    }
+    crate::emacs_core::value::marker_equal_hash_key_value(v)
 }
 
 /// GNU `unchain_marker` (`src/marker.c`): a marker knows its buffer, so

@@ -3067,7 +3067,7 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
                 .map(|part| dump_byte_code_key_part(encoder, part))
                 .collect(),
         ),
-        HashKey::Marker(parts) => DumpHashKey::Marker(parts.0, parts.1.get()),
+        HashKey::Marker(parts) => DumpHashKey::Marker(parts.0, parts.1),
         HashKey::Overlay(parts) => DumpHashKey::Overlay {
             buffer: parts.0,
             start: parts.1,
@@ -5018,9 +5018,7 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
-        DumpHashKey::Marker(buffer, bytepos) => {
-            HashKey::Marker(Box::new((*buffer, EmacsBytePos::new(*bytepos))))
-        }
+        DumpHashKey::Marker(buffer, bytepos) => HashKey::Marker(Box::new((*buffer, *bytepos))),
         DumpHashKey::Overlay {
             buffer,
             start,
@@ -5113,9 +5111,7 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
-        DumpHashKey::Marker(buffer, bytepos) => {
-            HashKey::Marker(Box::new((buffer, EmacsBytePos::new(bytepos))))
-        }
+        DumpHashKey::Marker(buffer, bytepos) => HashKey::Marker(Box::new((buffer, bytepos))),
         DumpHashKey::Overlay {
             buffer,
             start,

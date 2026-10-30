@@ -17,6 +17,7 @@
 //!   set-terminal-coding-system, coding-system-priority-list
 
 use super::error::{EvalResult, Flow, signal};
+use super::errors::CErrorMessage;
 use super::eval::Context;
 use super::intern::{SymId, intern, lookup_interned, resolve_sym};
 use super::value::*;
@@ -6286,3 +6287,20 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/positioned_symbol_test.rs"]
 mod positioned_symbol_tests;
+
+impl Context {
+    /// GNU eval.c:2285-2287 routes native error templates through doprnt;
+    /// doprnt.c:493-499 translates quotes according to text-quoting-style.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn signal_c_error(&self, message: CErrorMessage<'_>) -> Flow {
+        let style = effective_text_quoting_style(self.variables(), self.symbol_mode());
+        signal(
+            LispCondition::Error,
+            vec![Value::string(requote_c_error_message(
+                message.template(),
+                style,
+            ))],
+        )
+    }
+}

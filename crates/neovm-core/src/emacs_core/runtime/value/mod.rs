@@ -26,7 +26,7 @@ use strum::{EnumString, IntoStaticStr};
 use super::error::{Flow, LispCondition, signal};
 use super::intern::{SymId, intern};
 use crate::buffer::text_props::{PropertyInterval, TextPropertyPlistRun, TextPropertyTable};
-use crate::buffer::{CharPos0, CharRange, EmacsBytePos};
+use crate::buffer::{CharPos0, CharRange};
 use crate::heap_types::LispString;
 use crate::tagged::gc::{
     HeapWriteKind, MEMORY_USE_COUNT_LEN, MemoryUseCountSlot, note_heap_write, with_tagged_heap,
@@ -58,6 +58,49 @@ pub(crate) enum FunctionSourceIdentity {
 
 // Re-export tagged types for downstream use.
 pub use crate::tagged::header::VecLikeType;
+
+/// The logical fields `equal` compares for a marker: the owning buffer (raw
+/// id) and, when attached, the byte position. A detached marker compares
+/// equal to every other detached marker regardless of its stale position.
+/// Reading the raw fields here keeps the bottom layer free of the editing
+/// layer's marker helpers; `editing::marker` delegates to this.
+pub(crate) fn marker_equal_logical_fields(value: &Value) -> Option<(Option<u64>, usize)> {
+    let data = value.as_marker_data()?;
+    let bytepos = if data.buffer_id().is_some() {
+        data.bytepos.get()
+    } else {
+        0
+    };
+    Some((data.buffer_id().map(|buffer| buffer.0), bytepos))
+}
+
+/// [`HashKey`] for a marker, derived from the same logical fields.
+pub(crate) fn marker_equal_hash_key_value(value: &Value) -> HashKey {
+    match marker_equal_logical_fields(value) {
+        Some(parts) => HashKey::Marker(Box::new(parts)),
+        None => HashKey::Ptr(value.bits()),
+    }
+}
+
+/// Bumped by every char-table mutation (allocation included). Consumers that
+/// cache derived per-table state (the syntax parser's flat ASCII entry
+/// table) key their cache on (table identity, this tick): any char-table
+/// write anywhere invalidates all such caches, which is coarse but cheap -
+/// syntax tables are effectively immutable during editing, and a refill is
+/// ~18K Ir amortized over thousands of parses. Lives here because Value's
+/// char-table allocation mints a new table identity; the text layer reads it
+/// downward.
+static CHAR_TABLE_WRITE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+pub(crate) fn char_table_write_tick() -> u64 {
+    CHAR_TABLE_WRITE_TICK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[inline]
+pub(crate) fn bump_char_table_write_tick() {
+    CHAR_TABLE_WRITE_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
 pub use crate::tagged::value::ValueKind;
 
 // ---------------------------------------------------------------------------
@@ -1966,7 +2009,7 @@ pub enum HashKey {
     /// of every part rather than encoding type information as sentinel text.
     ByteCode(Box<[ByteCodeKeyPart]>),
     /// Structural marker key for `equal`-test hash tables.
-    Marker(Box<(Option<u64>, EmacsBytePos)>),
+    Marker(Box<(Option<u64>, usize)>),
     /// Structural overlay key for `equal`-test hash tables.
     Overlay(Box<(Option<u64>, usize, usize, HashKey)>),
     /// Structural key for a packed bool-vector (`BoolVectorObj`): its bit
@@ -2933,7 +2976,7 @@ impl TaggedValue {
     pub fn make_char_table(purpose: Value, init: Value, n_extras: usize) -> Self {
         // A new table can reuse a collected table's address; caches keyed on
         // (table bits, char-table write tick) must not match across that.
-        crate::emacs_core::chartable::bump_char_table_write_tick();
+        bump_char_table_write_tick();
         with_tagged_heap(|h| h.alloc_char_table(purpose, init, n_extras))
     }
 
@@ -2946,7 +2989,7 @@ impl TaggedValue {
         use crate::emacs_core::alloc::{AllocLen, reserved_values};
         let mut extras = reserved_values(count)?;
         extras.resize(count.capacity(), init);
-        crate::emacs_core::chartable::bump_char_table_write_tick();
+        bump_char_table_write_tick();
         Ok(with_tagged_heap(|h| {
             h.alloc_char_table_with_extras(purpose, init, extras)
         }))
@@ -3143,7 +3186,7 @@ impl TaggedValue {
     /// cache, exactly like `make_buffer`/`make_timer`.  A process that has
     /// exited is still a process object in GNU (status `exit`/`signal`), so the
     /// cached value is never evicted on `delete-process`.
-    pub fn make_process(id: crate::emacs_core::process::ProcessId) -> Self {
+    pub fn make_process(id: u64) -> Self {
         with_tagged_heap(|h| {
             if let Some(value) = h.process_value(id) {
                 value
@@ -3971,7 +4014,7 @@ impl TaggedValue {
     }
 
     /// Get the process ID from a process value.
-    pub fn as_process_id(self) -> Option<crate::emacs_core::process::ProcessId> {
+    pub fn as_process_id(self) -> Option<u64> {
         if self.is_process() {
             let ptr = self.as_veclike_ptr().unwrap() as *const ProcessObj;
             Some(unsafe { (*ptr).id })
@@ -4524,9 +4567,7 @@ impl TaggedValue {
                 seen.pop();
                 HashKey::EqualVec(keys.into_boxed_slice())
             }
-            ValueKind::Veclike(VecLikeType::Marker) => {
-                super::marker::marker_equal_hash_key_value(&self)
-            }
+            ValueKind::Veclike(VecLikeType::Marker) => marker_equal_hash_key_value(&self),
             ValueKind::Veclike(VecLikeType::Overlay) => {
                 if let Some(overlay) = self.as_overlay_data() {
                     let (start, end) = overlay.current_range();
@@ -4950,8 +4991,7 @@ fn equal_value_inner(
 
     match left_type {
         VecLikeType::Marker => {
-            super::marker::marker_equal_logical_fields(&left)
-                == super::marker::marker_equal_logical_fields(&right)
+            marker_equal_logical_fields(&left) == marker_equal_logical_fields(&right)
         }
         VecLikeType::Bignum => {
             left.as_bignum().expect("left bignum") == right.as_bignum().expect("right bignum")
@@ -5263,8 +5303,9 @@ fn try_equal_value_inner(
     }
 
     match left_type {
-        VecLikeType::Marker => Ok(super::marker::marker_equal_logical_fields(&left)
-            == super::marker::marker_equal_logical_fields(&right)),
+        VecLikeType::Marker => {
+            Ok(marker_equal_logical_fields(&left) == marker_equal_logical_fields(&right))
+        }
         VecLikeType::Bignum => {
             Ok(left.as_bignum().expect("left bignum") == right.as_bignum().expect("right bignum"))
         }
