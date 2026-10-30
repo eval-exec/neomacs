@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `Gen1Admission<'heap>: Clone` is not satisfied
+ --> tests/p1rv_ui/nmjit_n2_clone_admission.rs:4:6
+  |
+4 |     <Gen1Admission<'heap> as Clone>::clone(&admission)
+  |      ^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `Gen1Admission<'heap>`

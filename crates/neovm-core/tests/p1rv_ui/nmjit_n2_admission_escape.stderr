@@ -1,0 +1,7 @@
+error: lifetime may not live long enough
+ --> tests/p1rv_ui/nmjit_n2_admission_escape.rs:4:5
+  |
+3 | fn escape<'heap>(admission: Gen1Admission<'heap>) -> Gen1Admission<'static> {
+  |           ----- lifetime `'heap` defined here
+4 |     admission
+  |     ^^^^^^^^^ returning this value requires that `'heap` must outlive `'static`

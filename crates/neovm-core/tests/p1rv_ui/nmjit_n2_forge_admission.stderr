@@ -1,0 +1,5 @@
+error: cannot construct `Gen1Admission<'_>` with struct literal syntax due to private fields
+ --> tests/p1rv_ui/nmjit_n2_forge_admission.rs:4:5
+  |
+4 |     Gen1Admission {}
+  |     ^^^^^^^^^^^^^

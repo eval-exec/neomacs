@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/p1rv_ui/nmjit_n2_permit_is_not_admission.rs:6:21
+  |
+6 |     needs_admission(permit);
+  |     --------------- ^^^^^^ expected `Gen1Admission<'_>`, found `MutatorPermit<'_>`
+  |     |
+  |     arguments to this function are incorrect
+  |
+note: function defined here
+ --> tests/p1rv_ui/nmjit_n2_permit_is_not_admission.rs:3:4
+  |
+3 | fn needs_admission(_admission: Gen1Admission<'_>) {}
+  |    ^^^^^^^^^^^^^^^ -----------------------------

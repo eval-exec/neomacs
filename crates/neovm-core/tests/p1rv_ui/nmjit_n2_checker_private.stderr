@@ -1,0 +1,12 @@
+error[E0624]: associated function `check` is private
+ --> tests/p1rv_ui/nmjit_n2_checker_private.rs:4:28
+  |
+4 |       let _ = Gen1Admission::check;
+  |                              ^^^^^ private associated function
+  |
+ ::: src/tagged/gc/gen1_admission.rs
+  |
+  | /     pub(crate) fn check(
+  | |         mut collector: QuiescentCollector<'heap>,
+  | |     ) -> Result<Self, Gen1AdmissionFailure<'heap>> {
+  | |__________________________________________________- private associated function defined here

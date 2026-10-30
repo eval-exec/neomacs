@@ -1,0 +1,13 @@
+error[E0432]: unresolved import `neovm_core::tagged::gc::ProofEra`
+ --> tests/p1rv_ui/nmjit_n2_proof_unavailable.rs:1:5
+  |
+1 | use neovm_core::tagged::gc::ProofEra;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ProofEra` in `tagged::gc`
+  |
+note: found an item that was configured out
+ --> src/tagged/gc.rs
+  |
+  | #[cfg(test)]
+  |       ---- the item is gated here
+  | pub(crate) use mutator_registration::ProofEra;
+  |                                      ^^^^^^^^

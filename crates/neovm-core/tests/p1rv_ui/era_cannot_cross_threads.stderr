@@ -4,7 +4,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 8 |     ThreadTransfer::<ParallelHeapEra<'static>>::transfer(era);
   |                                                 ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<ParallelHeapEra<'static>>` due to unsatisfied trait bounds
   |
- ::: src/tagged/gc/mutator_registration.rs
+ ::: src/tagged/gc/mutator_registration/wrappers.rs
   |
   | pub struct ParallelHeapEra<'heap> {
   | --------------------------------- doesn't satisfy `ParallelHeapEra<'static>: Send`

@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+ --> tests/p1rv_ui/nmjit_n2_cross_heap_lifetime.rs:9:5
+  |
+5 | fn rebind<'source, 'other>(
+  |           -------  ------ lifetime `'other` defined here
+  |           |
+  |           lifetime `'source` defined here
+...
+9 |     admission
+  |     ^^^^^^^^^ function was supposed to return data with lifetime `'other` but it is returning data with lifetime `'source`
+  |
+  = help: consider adding the following bound: `'source: 'other`
