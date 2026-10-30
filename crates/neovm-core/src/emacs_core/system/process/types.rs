@@ -923,9 +923,10 @@ impl std::fmt::Debug for Process {
 pub struct ProcessManager {
     pub(super) processes: HashMap<ProcessId, Process>,
     pub(super) deleted_processes: HashMap<ProcessId, Process>,
-    pub(super) next_id: ProcessId,
-    /// Resume live reads after this source, like GNU's last_read_channel.
-    last_read_process: ProcessId,
+    // WorldSlot reserves ProcessManager's original size in Context. Keep the
+    // new read cursor behind the word formerly occupied by next_id so adding
+    // scheduling state does not shift Context's pinned offsets/JIT ABI.
+    ids: Box<ProcessIdState>,
     /// GNU's file-scope `process_tick` (src/process.c:232-233), *"Number of
     /// events of change of status of a process"*.  GNU's `update_tick`
     /// counterpart (:234-235) has no field here on purpose: it is only ever
@@ -938,6 +939,13 @@ pub struct ProcessManager {
     /// Environment variable overrides (for `setenv`/`getenv`).
     pub(super) env_overrides: HashMap<LispString, Option<LispString>>,
     pub(super) wait_backend: ProcessWaitBackend,
+}
+
+/// Process allocation and round-robin discovery share one manager lifetime.
+struct ProcessIdState {
+    next_id: ProcessId,
+    /// Resume live reads after this source, like GNU's last_read_channel.
+    last_read_process: ProcessId,
 }
 
 /// Transactional ownership of a `make-pipe-process` writer while a child is
@@ -1533,7 +1541,7 @@ impl std::fmt::Debug for ProcessManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ProcessManager")
             .field("processes", &self.processes)
-            .field("next_id", &self.next_id)
+            .field("next_id", &self.ids.next_id)
             .finish()
     }
 }
@@ -5819,8 +5827,10 @@ impl ProcessManager {
         Self {
             processes: HashMap::new(),
             deleted_processes: HashMap::new(),
-            next_id: 1,
-            last_read_process: 0,
+            ids: Box::new(ProcessIdState {
+                next_id: 1,
+                last_read_process: 0,
+            }),
             process_tick: 0,
             default_read_config: ProcessReadConfig::default(),
             env_overrides: HashMap::new(),
@@ -6014,8 +6024,8 @@ impl ProcessManager {
         // kind.  Probe the live process registry and append the smallest free
         // `<N>` suffix before the new record becomes visible.
         let name = self.allocate_process_name(name);
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.ids.next_id;
+        self.ids.next_id += 1;
         let (tty_name, tty_stdin, tty_stdout, tty_stderr) = match kind {
             ProcessKind::Real => {
                 let tty_name = Value::string(default_process_tty_name());
@@ -7657,7 +7667,7 @@ impl ProcessManager {
 
     /// Returns true if this id has been allocated at least once.
     pub fn was_issued_id(&self, id: ProcessId) -> bool {
-        id > 0 && id < self.next_id
+        id > 0 && id < self.ids.next_id
     }
 
     /// Find a process by name.
@@ -9895,7 +9905,7 @@ impl super::super::eval::Context {
             // hoisting a continuously ready target would starve its peers.
             // JUST-THIS-ONE already restricts the request's process set.
             proc_ids.sort_unstable();
-            let start = proc_ids.partition_point(|id| *id <= self.processes.last_read_process);
+            let start = proc_ids.partition_point(|id| *id <= self.processes.ids.last_read_process);
             proc_ids.rotate_left(start);
         }
         order_pending_status_notifications_newest_first(&self.processes, &mut proc_ids);
@@ -9925,7 +9935,7 @@ impl super::super::eval::Context {
                 // read; advancing for every scanned id is an approximation,
                 // but the cursor wraps once it passes the largest live id, so
                 // no source can be skipped forever.
-                self.processes.last_read_process = pid;
+                self.processes.ids.last_read_process = pid;
             }
             let is_target = target_process.is_none_or(|target| target == pid);
             if self

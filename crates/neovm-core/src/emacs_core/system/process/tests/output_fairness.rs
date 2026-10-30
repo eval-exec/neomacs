@@ -8,6 +8,32 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+#[test]
+fn round_robin_cursor_preserves_process_manager_footprint() {
+    // WorldSlot<ProcessManager> reserves this original inline footprint in
+    // Context. Growing it shifts the following fields, including the JIT ABI.
+    // Mirror the pre-cursor fields so this guard works on every host, including
+    // hosts that cannot run the Linux-only full Context offset table.
+    #[allow(dead_code)]
+    struct BeforeRoundRobin {
+        processes: std::collections::HashMap<ProcessId, Process>,
+        deleted_processes: std::collections::HashMap<ProcessId, Process>,
+        next_id: ProcessId,
+        process_tick: u64,
+        default_read_config: ProcessReadConfig,
+        env_overrides: std::collections::HashMap<LispString, Option<LispString>>,
+        wait_backend: ProcessWaitBackend,
+    }
+    assert_eq!(
+        std::mem::size_of::<ProcessManager>(),
+        std::mem::size_of::<BeforeRoundRobin>()
+    );
+    assert_eq!(
+        std::mem::align_of::<ProcessManager>(),
+        std::mem::align_of::<BeforeRoundRobin>()
+    );
+}
+
 struct ReadyChunks {
     remaining: usize,
     reads: Arc<AtomicUsize>,
