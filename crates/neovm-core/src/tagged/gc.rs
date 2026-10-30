@@ -396,16 +396,22 @@ pub struct TaggedHeap {
     /// `mark_and_sweep_weak_table_contents`). Holds raw object pointers, valid
     /// only within a single collection; cleared each cycle.
     weak_hash_tables: Vec<*mut HashTableObj>,
-    /// Weak hash tables that have become PERMANENT (tenured old generation or
-    /// mapped pdump image). The main mark never re-runs `trace_veclike` on a
-    /// permanent-black object, so such a table would otherwise never re-register
-    /// itself for the weak sweep and its entries would be pinned forever (a
-    /// weak-table leak: GNU re-sweeps every weak table on every GC). Populated
-    /// at `promote_and_blacken` (tenuring) and at mapped-dump registration;
-    /// seeded into `weak_hash_tables` at the start of every `mark_and_sweep_
-    /// weak_tables` so permanent weak tables are swept against the CURRENT cycle's
-    /// marks exactly like young ones. Permanent, so its pointers never dangle.
-    permanent_weak_hash_tables: Vec<*mut HashTableObj>,
+    /// Weak hash tables that must be re-swept on EVERY collection without
+    /// relying on the mark walk to re-register them: image residents (mapped
+    /// dump objects and loader-reconstructed permanent rows) and tenured
+    /// runtime tables. The main mark never re-runs `trace_veclike` on a
+    /// permanent-black object, and a tenured runtime table is black during a
+    /// minor, so any of them would otherwise never re-register itself for the
+    /// weak sweep and its entries would be pinned forever (a weak-table leak:
+    /// GNU re-sweeps every weak table on every GC). Populated by
+    /// `promote_and_blacken` and `promote_arena_pages` (every weak-table
+    /// survivor) and at mapped-dump registration; seeded into
+    /// `weak_hash_tables` at the start of every `mark_and_sweep_weak_tables`
+    /// so these tables are swept against the CURRENT cycle's marks exactly
+    /// like young ones. Image/mapped pointers never dangle; a freed runtime
+    /// table is purged from this vector and its membership set in
+    /// `free_gc_object`.
+    always_swept_weak_tables: Vec<*mut HashTableObj>,
     /// Every live finalizer object, registered at allocation — the Rust-side
     /// equivalent of GNU's intrusive `finalizers` list (alloc.c). Scanned at
     /// mark termination by `mark_and_queue_doomed_finalizers`: unmarked
@@ -552,8 +558,8 @@ pub struct TaggedHeap {
     /// with a linear contains per table, O(T^2) across a cycle. The vector
     /// stays authoritative for deterministic sweep order.
     weak_hash_tables_set: rustc_hash::FxHashSet<*mut HashTableObj>,
-    /// Membership shadow for `permanent_weak_hash_tables` (same pattern).
-    permanent_weak_hash_tables_set: rustc_hash::FxHashSet<*mut HashTableObj>,
+    /// Membership shadow for `always_swept_weak_tables` (same pattern).
+    always_swept_weak_tables_set: rustc_hash::FxHashSet<*mut HashTableObj>,
     mapped_veclike_index_by_addr: FxHashMap<usize, usize>,
     mapped_string_index_by_addr: FxHashMap<usize, usize>,
     window_registry: FxHashMap<u64, TaggedValue>,
@@ -1051,8 +1057,8 @@ impl TaggedHeap {
             marked_symbols: SymbolMarkBits::default(),
             weak_hash_tables: Vec::new(),
             weak_hash_tables_set: rustc_hash::FxHashSet::default(),
-            permanent_weak_hash_tables: Vec::new(),
-            permanent_weak_hash_tables_set: rustc_hash::FxHashSet::default(),
+            always_swept_weak_tables: Vec::new(),
+            always_swept_weak_tables_set: rustc_hash::FxHashSet::default(),
             finalizer_registry: Vec::new(),
             doomed_finalizer_functions: Vec::new(),
             pending_surface_destroys: Vec::new(),

@@ -309,7 +309,7 @@ impl TaggedHeap {
                 // permanent tables never trace, and a tenured runtime table
                 // is black during minors. One always-swept list covers all
                 // three; a freed runtime table is purged in `free_gc_object`.
-                // See `permanent_weak_hash_tables`.
+                // See `always_swept_weak_tables`.
                 if (*obj).kind == HeapObjectKind::VecLike {
                     let vptr = obj as *mut VecLikeHeader;
                     if (*vptr).type_tag == VecLikeType::HashTable {
@@ -317,10 +317,10 @@ impl TaggedHeap {
                         if self
                             .collector_tables()
                             .inspect(ht_ptr, |ht| ht.weakness.is_some())
-                            && !self.permanent_weak_hash_tables_set.contains(&ht_ptr)
+                            && !self.always_swept_weak_tables_set.contains(&ht_ptr)
                         {
-                            self.permanent_weak_hash_tables_set.insert(ht_ptr);
-                            self.permanent_weak_hash_tables.push(ht_ptr);
+                            self.always_swept_weak_tables_set.insert(ht_ptr);
+                            self.always_swept_weak_tables.push(ht_ptr);
                         }
                     }
                 }
@@ -397,8 +397,8 @@ impl TaggedHeap {
             })
             .collect();
         for ht_ptr in mapped_weak {
-            if self.permanent_weak_hash_tables_set.insert(ht_ptr) {
-                self.permanent_weak_hash_tables.push(ht_ptr);
+            if self.always_swept_weak_tables_set.insert(ht_ptr) {
+                self.always_swept_weak_tables.push(ht_ptr);
             }
         }
         // 3. Remember every permanent/mapped/tenured owner that points at a
@@ -1801,7 +1801,7 @@ impl TaggedHeap {
         // GC; this restores that for permanents. Young/runtime weak tables are
         // already registered by `trace_veclike` / `register_weak_hash_table_for_
         // sweep` during this cycle's mark.
-        for &tptr in &self.permanent_weak_hash_tables {
+        for &tptr in &self.always_swept_weak_tables {
             if self.weak_hash_tables_set.insert(tptr) {
                 self.weak_hash_tables.push(tptr);
             }

@@ -77,17 +77,17 @@ fn supported_with_weak(
     }
     if !heap.finalizer_registry.is_empty()
         || !heap.doomed_finalizer_functions.is_empty()
-        || !heap.permanent_weak_hash_tables.is_empty()
+        || !heap.always_swept_weak_tables.is_empty()
         || !heap.weak_hash_tables.is_empty()
         || !heap.pending_surface_destroys.is_empty()
         || !heap.pending_video_destroys.is_empty()
     {
         #[cfg(test)]
         eprintln!(
-            "A5 unsupported registry: finalizers={} doomed={} permanent_weak={} weak={} surfaces={} videos={}",
+            "A5 unsupported registry: finalizers={} doomed={} always_swept_weak={} weak={} surfaces={} videos={}",
             heap.finalizer_registry.len(),
             heap.doomed_finalizer_functions.len(),
-            heap.permanent_weak_hash_tables.len(),
+            heap.always_swept_weak_tables.len(),
             heap.weak_hash_tables.len(),
             heap.pending_surface_destroys.len(),
             heap.pending_video_destroys.len()

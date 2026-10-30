@@ -15,7 +15,7 @@ const _: () = {
     assert!(offset_of!(TaggedHeap, gray_queue) == 1072);
     assert!(offset_of!(TaggedHeap, marked_symbols) == 1096);
     assert!(offset_of!(TaggedHeap, weak_hash_tables) == 1120);
-    assert!(offset_of!(TaggedHeap, permanent_weak_hash_tables) == 1144);
+    assert!(offset_of!(TaggedHeap, always_swept_weak_tables) == 1144);
     assert!(offset_of!(TaggedHeap, finalizer_registry) == 1168);
     assert!(offset_of!(TaggedHeap, doomed_finalizer_functions) == 1192);
     assert!(offset_of!(TaggedHeap, pending_surface_destroys) == 1216);
@@ -48,7 +48,7 @@ const _: () = {
     assert!(offset_of!(TaggedHeap, non_cons_object_addrs) == 3048);
     assert!(offset_of!(TaggedHeap, vector_object_addrs) == 3080);
     assert!(offset_of!(TaggedHeap, weak_hash_tables_set) == 3112);
-    assert!(offset_of!(TaggedHeap, permanent_weak_hash_tables_set) == 3144);
+    assert!(offset_of!(TaggedHeap, always_swept_weak_tables_set) == 3144);
     assert!(offset_of!(TaggedHeap, mapped_veclike_index_by_addr) == 3176);
     assert!(offset_of!(TaggedHeap, mapped_string_index_by_addr) == 3208);
     assert!(offset_of!(TaggedHeap, window_registry) == 3240);

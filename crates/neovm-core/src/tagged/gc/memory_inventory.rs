@@ -742,8 +742,8 @@ fn buffer_inventory(heap: &TaggedHeap) -> Vec<BufferInventory> {
         ),
         vector_buffer("weak-table-registry", &heap.weak_hash_tables),
         vector_buffer(
-            "permanent-weak-table-registry",
-            &heap.permanent_weak_hash_tables,
+            "always-swept-weak-table-registry",
+            &heap.always_swept_weak_tables,
         ),
         vector_buffer("finalizer-registry", &heap.finalizer_registry),
         vector_buffer("doomed-finalizers", &heap.doomed_finalizer_functions),

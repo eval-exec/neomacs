@@ -961,7 +961,7 @@ impl TaggedHeap {
                             // (`register_weak_hash_table_for_sweep` registers the table
                             // and pushes only its non-weak closures), and a tenured/mapped
                             // weak table is re-registered every cycle via
-                            // `permanent_weak_hash_tables`, so weak semantics hold for
+                            // `always_swept_weak_tables`, so weak semantics hold for
                             // young, tenured, and dumped tables alike. The weak sweep runs
                             // before `verify_dump_partition`, so dead entries are removed
                             // before the verifier enumerates — no UAF.
@@ -1881,8 +1881,8 @@ impl TaggedHeap {
                         // inspect freed memory. Only registered tables are
                         // in the set (mapped and promoted weak tables).
                         let ht_ptr = ptr as *mut HashTableObj;
-                        if self.permanent_weak_hash_tables_set.remove(&ht_ptr) {
-                            self.permanent_weak_hash_tables
+                        if self.always_swept_weak_tables_set.remove(&ht_ptr) {
+                            self.always_swept_weak_tables
                                 .retain(|&registered| registered != ht_ptr);
                         }
                         drop(Box::from_raw(ht_ptr))
