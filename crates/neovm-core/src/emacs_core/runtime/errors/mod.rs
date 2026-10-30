@@ -141,7 +141,7 @@ pub fn signal_matches_condition_value(
         }),
         _ => {
             // Use symbol_id to handle both bare symbols and symbol-with-pos wrappers.
-            if let Some(id) = super::builtins::symbols::symbol_id(pattern, symbol_mode) {
+            if let Some(id) = crate::emacs_core::value::symbol_id(pattern, symbol_mode) {
                 signal_matches_hierarchical(obarray, signal_sym, resolve_sym(id), symbol_mode)
             } else {
                 false
@@ -206,7 +206,7 @@ fn signal_matches_pattern_against_conditions(
             })
         }),
         _ => {
-            let Some(cond_id) = super::builtins::symbols::symbol_id(pattern, symbol_mode) else {
+            let Some(cond_id) = crate::emacs_core::value::symbol_id(pattern, symbol_mode) else {
                 return false;
             };
             signal_matches_symbol_against_conditions(signal_sym, conditions, cond_id, symbol_mode)

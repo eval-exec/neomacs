@@ -28,6 +28,8 @@
 mod canonical_access;
 mod cell;
 mod fn_stamps;
+#[cfg(debug_assertions)]
+pub(crate) mod leaf_activity;
 pub(crate) mod parallel;
 mod projection;
 mod property_revision;
@@ -62,12 +64,30 @@ pub(crate) use projection::{
 };
 pub use property_revision::SymbolPropertyRevision;
 
-use super::defvar_bool::ByteBooleanVars;
 use super::intern::{
     NameId, SymId, intern, intern_lisp_string, is_canonical_id, lookup_interned,
     lookup_interned_lisp_string, resolve_name, resolve_sym_lisp_string,
 };
 use super::value::{Value, ValueKind, VecLikeType};
+
+/// Whether `defvar_bool''s cons onto `byte-boolean-vars' survives to Lisp.
+///
+/// GNU does not decide this per variable -- it falls out of the order `main'
+/// runs the `syms_of_*' functions in.  Naming it is the only way Neomacs can
+/// reproduce the resulting list without reproducing GNU's whole startup
+/// sequence, and making it a field of [`GnuBoolVariable`] rather than a
+/// defaulted argument is what stops a new row from silently guessing.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ByteBooleanVars {
+    /// Declared after `Vbyte_boolean_vars = Qnil' (`src/lread.c:5774'), so the
+    /// cons survives and the byte optimizer refuses to fold `varset'/`varref'.
+    /// 116 variables in GNU 31.1.
+    Listed,
+    /// Declared before it, so the cons is thrown away again and the byte
+    /// optimizer folds the pair exactly as it would for a plain variable --
+    /// even though the slot still coerces at run time.  31 variables.
+    ErasedByLreadInit,
+}
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::forward::FwdDescriptor;
 use crate::emacs_core::pdump::DumpError;
@@ -3978,7 +3998,8 @@ impl Obarray {
     /// before it. `why` is observability only (the JIT's epoch report counts
     /// per reason).
     pub(crate) fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
-        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a function-epoch bump");
+        #[cfg(debug_assertions)]
+        leaf_activity::assert_no_leaf_active("a function-epoch bump");
         let epoch = self.next_function_epoch();
         // Floor first, then the clock (the publication order, `fn_stamps`).
         self.symbols.raise_fn_floor(epoch);
@@ -5137,14 +5158,40 @@ thread_local! {
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
 pub(crate) struct ObarraySymbolCellSkipGuard {
-    _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
+    _scope: SeedSkipCellsScope,
+}
+
+/// Restores [`SEED_SKIP_OBARRAY_SYMBOL_CELLS`] on drop. Best-effort during
+/// teardown, the same contract as the caller-side TLS scopes: a destroyed key
+/// must not turn unwinding into a second panic.
+#[derive(Debug)]
+struct SeedSkipCellsScope {
+    previous: bool,
+    /// Thread-confined like the scope it replaces; a guard must not cross
+    /// threads with its TLS restoration.
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl SeedSkipCellsScope {
+    fn new(value: bool) -> Self {
+        Self {
+            previous: SEED_SKIP_OBARRAY_SYMBOL_CELLS.with(|slot| slot.replace(value)),
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for SeedSkipCellsScope {
+    fn drop(&mut self) {
+        let _ = SEED_SKIP_OBARRAY_SYMBOL_CELLS.try_with(|slot| slot.replace(self.previous));
+    }
 }
 static_assertions::assert_not_impl_any!(ObarraySymbolCellSkipGuard: Send, Sync);
 
 impl ObarraySymbolCellSkipGuard {
     pub(crate) fn new() -> Self {
         Self {
-            _scope: crate::tls_scope::TlsScope::new(&SEED_SKIP_OBARRAY_SYMBOL_CELLS, true),
+            _scope: SeedSkipCellsScope::new(true),
         }
     }
 }

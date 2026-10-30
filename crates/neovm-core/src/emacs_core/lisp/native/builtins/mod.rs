@@ -441,13 +441,13 @@ pub(crate) mod misc_pure;
 pub(crate) mod strings;
 pub(crate) mod types;
 
+pub use crate::emacs_core::value::lambda_params_to_value;
+pub use crate::emacs_core::value::parse_lambda_params_from_value;
 pub(crate) use arithmetic::*;
 pub(crate) use buffer_text_backend::*;
 pub(crate) use collections::*;
 pub(crate) use cons_list::LIST_SCAN_BUDGET;
-pub use cons_list::lambda_params_to_value;
 pub use cons_list::lambda_to_closure_vector;
-pub use cons_list::parse_lambda_params_from_value;
 pub(crate) use cons_list::*;
 pub(crate) use from_value::*;
 pub(crate) use misc_pure::*;

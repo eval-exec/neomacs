@@ -653,6 +653,78 @@ use crate::tagged::header::{
     CLOSURE_ARGLIST, CLOSURE_CODE, CLOSURE_CONSTANTS, CLOSURE_DOC_STRING, CLOSURE_INTERACTIVE,
 };
 
+/// The symbol identity of a Lisp value, treating an unbound symbol-with-position
+/// wrapper as absent (GNU's `SYMBOLP` plus the unbound check the obarray paths
+/// share). Lives here so the bottom layer's own users -- error-condition
+/// matching included -- need no obarray builtins for it.
+pub(crate) fn symbol_id(value: &Value, mode: crate::tagged::SymbolMode) -> Option<SymId> {
+    value.as_symbol_id(mode).filter(|_| !value.is_unbound())
+}
+
+/// Parse a Lisp arglist Value into LambdaParams.
+pub fn parse_lambda_params_from_value(arglist: &Value) -> Result<LambdaParams, Flow> {
+    use crate::emacs_core::intern::intern;
+    let items = list_to_vec(arglist).unwrap_or_default();
+    let mut required = Vec::new();
+    let mut optional = Vec::new();
+    let mut rest = None;
+    let mut mode = 0; // 0=required, 1=optional, 2=rest
+    for item in &items {
+        let item = if item.is_symbol_with_pos() {
+            item.as_symbol_with_pos_sym().unwrap()
+        } else {
+            *item
+        };
+        if let Some(name) = item.as_bare_symbol_name() {
+            match name {
+                "&optional" => {
+                    mode = 1;
+                    continue;
+                }
+                "&rest" => {
+                    mode = 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        let sym_id = item.as_bare_symbol_id().unwrap_or_else(|| intern("_"));
+        match mode {
+            0 => required.push(sym_id),
+            1 => optional.push(sym_id),
+            2 => {
+                rest = Some(sym_id);
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(LambdaParams {
+        required,
+        optional,
+        rest,
+    })
+}
+
+/// Convert LambdaParams to a Lisp list (a b &optional c &rest d).
+pub fn lambda_params_to_value(params: &LambdaParams) -> Value {
+    let mut elements = Vec::new();
+    for p in &params.required {
+        elements.push(Value::from_sym_id(*p));
+    }
+    if !params.optional.is_empty() {
+        elements.push(Value::symbol("&optional"));
+        for p in &params.optional {
+            elements.push(Value::from_sym_id(*p));
+        }
+    }
+    if let Some(ref rest) = params.rest {
+        elements.push(Value::symbol("&rest"));
+        elements.push(Value::from_sym_id(*rest));
+    }
+    Value::list(elements)
+}
+
 impl LambdaData {
     /// Convert LambdaData to a GNU-compatible closure slot vector.
     ///
@@ -660,7 +732,7 @@ impl LambdaData {
     /// All slots are GC-managed Values.
     pub fn to_closure_slots(&self) -> Vec<Value> {
         // Slot 0: arglist as Lisp list
-        let arglist = crate::emacs_core::builtins::lambda_params_to_value(&self.params);
+        let arglist = lambda_params_to_value(&self.params);
 
         // Slot 1: body as Lisp list of forms
         let body = Value::list(self.body.clone());
@@ -3479,7 +3551,7 @@ impl TaggedValue {
         let cell = self.closure_parsed_params_cell()?;
         Some(cell.get_or_init(|| {
             let arglist = self.closure_slot(CLOSURE_ARGLIST).unwrap_or(Value::NIL);
-            crate::emacs_core::builtins::parse_lambda_params_from_value(&arglist)
+            parse_lambda_params_from_value(&arglist)
                 .unwrap_or_else(|_| LambdaParams::simple(vec![]))
         }))
     }

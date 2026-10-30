@@ -50,26 +50,8 @@
 //! variable on one line, and makes the two counts checkable in a test rather
 //! than re-derived per site.
 
+pub use super::symbol::ByteBooleanVars;
 use super::symbol::Obarray;
-
-/// Whether `defvar_bool''s cons onto `byte-boolean-vars' survives to Lisp.
-///
-/// GNU does not decide this per variable -- it falls out of the order `main'
-/// runs the `syms_of_*' functions in.  Naming it is the only way Neomacs can
-/// reproduce the resulting list without reproducing GNU's whole startup
-/// sequence, and making it a field of [`GnuBoolVariable`] rather than a
-/// defaulted argument is what stops a new row from silently guessing.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ByteBooleanVars {
-    /// Declared after `Vbyte_boolean_vars = Qnil' (`src/lread.c:5774'), so the
-    /// cons survives and the byte optimizer refuses to fold `varset'/`varref'.
-    /// 116 variables in GNU 31.1.
-    Listed,
-    /// Declared before it, so the cons is thrown away again and the byte
-    /// optimizer folds the pair exactly as it would for a plain variable --
-    /// even though the slot still coerces at run time.  31 variables.
-    ErasedByLreadInit,
-}
 
 /// One GNU `DEFVAR_BOOL' declaration.
 #[derive(Copy, Clone, Debug)]

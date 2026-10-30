@@ -25,9 +25,7 @@ pub(crate) const GNU_INITIAL_OBARRAY_SIZE: usize = 1 << 15;
 // Symbol operations (need evaluator for obarray access)
 // ===========================================================================
 
-pub(crate) fn symbol_id(value: &Value, mode: SymbolMode) -> Option<SymId> {
-    value.as_symbol_id(mode).filter(|_| !value.is_unbound())
-}
+pub(crate) use crate::emacs_core::value::symbol_id;
 
 pub(crate) fn symbol_id_checked(value: &Value, symbols_with_pos_enabled: bool) -> Option<SymId> {
     let mode = if symbols_with_pos_enabled {
