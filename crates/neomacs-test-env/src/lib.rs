@@ -1001,3 +1001,7 @@ mod tests;
 #[cfg(test)]
 #[path = "spawn_architecture_test.rs"]
 mod spawn_architecture;
+
+#[cfg(test)]
+#[path = "pin_bypass_test.rs"]
+mod pin_bypass;
