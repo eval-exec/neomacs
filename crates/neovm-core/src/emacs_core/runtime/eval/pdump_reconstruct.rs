@@ -38,6 +38,10 @@ impl Context {
         bookmarks: BookmarkManager,
         watchers: VariableWatcherList,
     ) -> Self {
+        // A restored image can contain byte-code values before any Context
+        // constructor ran; install the structural semantics before the first
+        // one can be compared or hashed.
+        crate::emacs_core::bytecode::semantics::install();
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, false);

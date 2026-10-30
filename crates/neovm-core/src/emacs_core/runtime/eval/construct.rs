@@ -110,10 +110,6 @@ impl RegistryHandles {
 
 impl Context {
     pub fn new() -> Self {
-        // Byte-code structural semantics live above the value layer; install
-        // them before any restored or constructed byte-code value can be
-        // compared or hashed (idempotent with the byte-code constructors).
-        crate::emacs_core::bytecode::semantics::install();
         let mut ctx = Self::new_inner(ConstructionSurface::Full);
         // Register builtins AFTER new_inner returns — the function is too
         // large (1500+ lines) for reliable codegen in debug mode when
@@ -2332,6 +2328,11 @@ impl Context {
     }
 
     pub(super) fn new_inner(surface: ConstructionSurface) -> Self {
+        // Byte-code structural semantics live above the value layer; install
+        // them before any byte-code value can be compared or hashed. This is
+        // the one-time hook, not a per-allocation check: the constructors stay
+        // free of it so the allocation fast path is untouched.
+        crate::emacs_core::bytecode::semantics::install();
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization. The owner carries the allocation's
         // provenance root; installation and every later access derive from it.
