@@ -628,6 +628,19 @@ pub fn canonical_oracle_command(
     canonical_test_spawn().environment.command(program)
 }
 
+/// A canonically pinned command for a hermetic child a unit test spawns that
+/// is not GNU -- a re-executed test binary, for example.
+///
+/// The child gets the same Oracle-profile environment as every other
+/// harness-spawned process: a test that re-executes itself must not inherit
+/// the parent's ambient HOME, TMPDIR, locale or identity, or its result
+/// becomes host-keyed.
+pub fn canonical_test_command(
+    program: impl AsRef<std::ffi::OsStr>,
+) -> neomacs_test_env::PinnedCommand {
+    canonical_oracle_command(program)
+}
+
 /// A canonically pinned command for a GNU probe.
 ///
 /// The campaign's optional process-sandbox wrappers are honored --

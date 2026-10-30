@@ -52,7 +52,11 @@ fn unintern_keeps_the_well_known_identity_while_lisp_reinterns() {
             "{}::unintern_keeps_the_well_known_identity_while_lisp_reinterns",
             module.strip_prefix("neovm_core::").unwrap_or(module)
         );
-        let status = std::process::Command::new(exe)
+        // The child is a harness-spawned process, so it gets the canonical
+        // environment like every other one: inheriting the parent's ambient
+        // HOME/TMPDIR/locale/identity would make the probe host-keyed.
+        let mut child = crate::test_utils::canonical_test_command(exe);
+        let status = child
             .args(["--exact", &test_path, "--nocapture"])
             .env(CHILD_ENV, "1")
             .status()
