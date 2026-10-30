@@ -142,4 +142,59 @@
           (when (and process (process-live-p process))
             (delete-process process)))))))
 
+(defun process-timer-fairness--accept-buffered-burst (targeted)
+  "One accept must drain a buffered burst, with a target when TARGETED."
+  (unless (file-executable-p "/bin/sh") (ert-skip "/bin/sh unavailable"))
+  (dolist (just-this-one (if targeted '(nil t 0) '(nil)))
+    (let ((process-adaptive-read-buffering nil)
+          (read-process-output-max 4096)
+          (buffer (generate-new-buffer " *accept-buffered-burst*"))
+          (process nil) (timer nil) (bytes-at-timer nil))
+      (unwind-protect
+          (progn
+            (setq process
+                  (make-process
+                   :name "accept-buffered-burst" :buffer buffer
+                   :connection-type 'pipe :coding 'binary
+                   :noquery t :sentinel #'ignore
+                   :filter
+                   (lambda (_process output)
+                     (with-current-buffer buffer (insert output))
+                     (unless timer
+                       (setq timer
+                             (run-at-time
+                              0 nil
+                              (lambda ()
+                                (setq bytes-at-timer
+                                      (with-current-buffer buffer
+                                        (buffer-size))))))))
+                   ;; Keep the child alive so status notification cannot mask
+                   ;; an incomplete readiness drain by doing a final drain.
+                   :command '("/bin/sh" "-c" "head -c 12288 /dev/zero; read line")))
+            ;; Unlike sleep-for, call-process does not service this output.
+            (call-process "/bin/sleep" nil nil nil "0.3")
+            (should (accept-process-output (and targeted process)
+                                           nil nil just-this-one))
+            (with-current-buffer buffer
+              (should (= (buffer-size) 12288)))
+            (if (integerp just-this-one)
+                (should-not bytes-at-timer)
+              (should (numberp bytes-at-timer))
+              (should (< bytes-at-timer 12288)))
+            (delete-process process)
+            (with-current-buffer buffer
+              (should (= (buffer-size) 12288))))
+        (when timer (cancel-timer timer))
+        (when (and process (process-live-p process))
+          (delete-process process))
+        (kill-buffer buffer)))))
+
+(ert-deftest process-timer-fairness-one-targeted-accept-drains-buffered-burst ()
+  "A targeted accept drains all ready bytes before the caller deletes it."
+  (process-timer-fairness--accept-buffered-burst t))
+
+(ert-deftest process-timer-fairness-one-untargeted-accept-drains-buffered-burst ()
+  "An accept without a target also drains all ready bytes before returning."
+  (process-timer-fairness--accept-buffered-burst nil))
+
 ;;; process-timer-fairness-test.el ends here
