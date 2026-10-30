@@ -5196,7 +5196,7 @@ impl FaceResolver {
         }
         let face = self.face_table.resolve_fixed_symbol(&handle);
         let mut resolved = self.realize_face(&face);
-        resolved.lisp_name = Some(name.to_string());
+        resolved.lisp_name = Some(std::sync::Arc::from(name));
         if let Some(basic) = BasicFaceId::from_name(name) {
             resolved.face_id = basic.into();
         } else {
@@ -6275,7 +6275,7 @@ impl FaceResolver {
         resolved.face_id = BasicFaceId::SENTINEL;
         resolved.canonical_tty_role = None;
         resolved.tty_space_identity = TtySpaceIdentity::Unknown;
-        resolved.lisp_name = Some(name.to_string());
+        resolved.lisp_name = Some(std::sync::Arc::from(name));
         resolved
     }
 
