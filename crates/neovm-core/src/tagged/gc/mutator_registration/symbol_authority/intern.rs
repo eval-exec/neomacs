@@ -86,6 +86,19 @@ impl Drop for InitialObarrayRef<'_, '_, '_> {
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
     #[cfg(test)]
+    pub(crate) fn initial_table_statistics_for_test(
+        &self,
+    ) -> Result<super::super::super::symbol_table::publication::TableStatistics, RegistrationError>
+    {
+        self.owner
+            .registry
+            .symbols
+            .tables
+            .stats()
+            .map_err(super::super::super::symbol_table::publication_error)
+    }
+
+    #[cfg(test)]
     pub(crate) fn initial_fault_for_test(
         &mut self,
         fault: crate::emacs_core::symbol::parallel::InitialInternFault,
@@ -356,6 +369,24 @@ pub(super) fn publish_initial(
         None => CanonicalPreparation::Fresh(registry.prepare_fresh(value, heap, charged)?),
     };
     let metadata = prepared.metadata();
+    let minimum = (metadata.id().0 as usize)
+        .checked_add(1)
+        .map(super::super::super::symbol_table::SymbolSlotCount::from)
+        .ok_or(RegistrationError::Capacity)?;
+    // SAFETY: this exact backing's writer and guarded canonical decision are
+    // retained throughout preparation, backing and descriptor publication.
+    let shape = unsafe {
+        super::super::super::symbol_table::SymbolTableBacking::symbol_table_shape(
+            &symbols.backing,
+            minimum,
+            authority,
+        )
+    }?;
+    let table_preparation = symbols.tables.try_prepare(shape);
+    *charged = charged.saturating_add(RetainedBytes::from(table_preparation.charged.get()));
+    let table_preparation = table_preparation
+        .result
+        .map_err(super::super::super::symbol_table::publication_error)?;
     // SAFETY: exact era/World writer, with its guarded canonical metadata.
     // No recursive registry, serial projection-scope or mark-gate entry runs.
     let accounting = unsafe { symbols.backing.ensure_initial_member(metadata, authority) };
@@ -369,6 +400,30 @@ pub(super) fn publish_initial(
         );
     }
     accounting.result?;
+    // The prepared storage/ledger slot already exist. An unexpected shape or
+    // provenance/publication refusal AFTER backing mutation cannot be rolled
+    // back; poison while WRITER is still held and keep the ledger/backing.
+    // SAFETY: all backing slot loans ended and the same writer still excludes
+    // observers until table, registry and destination publication completes.
+    let table_change = unsafe {
+        super::super::super::symbol_table::SymbolTableBacking::publish_symbol_table(
+            &symbols.backing,
+            table_preparation,
+            authority,
+        )
+    };
+    match table_change {
+        Ok(change) => {
+            *charged = charged.saturating_add(RetainedBytes::from(change.charged().get()))
+        }
+        Err(reason) => {
+            // Any RegistrationError here is a post-commit protocol refusal;
+            // its discriminant cannot make this backing safe to resume.
+            let _refusal = reason;
+            symbols.poison();
+            return Err(RegistrationError::Poisoned.into());
+        }
+    }
     // No fallible edge remains after successful World publication. The fresh
     // record retains exclusive registry access and every required reservation.
     // Canonical mapping and epoch are installed before the rooted answer.

@@ -35,15 +35,21 @@ pub(super) struct SymbolSidecar {
     backing: SymbolBacking,
     era: NonZeroU64,
     pub(super) functions: functions::write::FunctionState,
+    pub(super) tables: super::super::symbol_table::publication::PublishedSymbolTables,
 }
 impl SymbolSidecar {
-    pub(super) fn new(backing: SymbolBacking, era: NonZeroU64) -> Self {
+    pub(super) fn new(
+        backing: SymbolBacking,
+        era: NonZeroU64,
+        tables: super::super::symbol_table::publication::PublishedSymbolTables,
+    ) -> Self {
         Self {
             word: AtomicU64::new(0),
             poisoned: AtomicBool::new(false),
             backing,
             era,
             functions: functions::write::FunctionState::new(),
+            tables,
         }
     }
     pub(super) fn ready(&self) -> Result<(), RegistrationError> {

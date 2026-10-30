@@ -36,6 +36,7 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
         let registry_before = fresh_registry_facts_for_test(heap, id, name, &spelling);
         let before = run.initial_facts_for_test(id).unwrap();
         let old = run.initial_facts_for_test(homes.old_id).unwrap();
+        let table_before = run.initial_table_statistics_for_test().unwrap().retained_bytes;
         let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
         let output = homes.dst.word_for_test(run);
         run.initial_fault_for_test(InitialInternFault::ReservationAfterSpineMove).unwrap();
@@ -55,8 +56,10 @@ fn refusal(kind: PlainSymbolBacking, query: Query) {
             before.present, before.member, before.projections));
         assert!(!after.present && !after.member);
         assert_eq!(run.owner.local.as_ref().unwrap().hot.bytes_since_gc - charge,
-            after.bytes - before.bytes + registry_after.bytes - registry_before.bytes,
-            "charge retained World AND registry capacity, excluding abandoned staging");
+            after.bytes - before.bytes + registry_after.bytes - registry_before.bytes
+                + run.initial_table_statistics_for_test().unwrap().retained_bytes.get()
+                - table_before.get(),
+            "charge retained World, registry AND table capacity, excluding abandoned staging");
         let old_after = run.initial_facts_for_test(homes.old_id).unwrap();
         assert_eq!((old_after.cells, old_after.backing, old_after.member),
             (old.cells, old.backing, old.member));

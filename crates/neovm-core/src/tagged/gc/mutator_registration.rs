@@ -377,7 +377,41 @@ impl<'heap> EraCore<'heap> {
                 });
             }
         };
-        let image = match PublishedGcImage::from_legacy(collector.registration_heap_mut()) {
+        // All fallible pointer-table preparation precedes detaching the legacy
+        // image, so refusal returns both original construction inputs intact.
+        let backing = keeper.parallel_symbol_backing();
+        // SAFETY: exclusive checked collector and retained keeper, with no
+        // participant yet published and all ordinary execution excluded.
+        let tables = match unsafe {
+            super::symbol_table::SymbolTableBacking::prepare_initial_symbol_table(&backing)
+        }
+        .and_then(|initial| {
+            super::symbol_table::publication::PublishedSymbolTables::new(
+                initial,
+                super::symbol_table::publication::TableLimits::default(),
+            )
+            .map_err(super::symbol_table::publication_error)
+        }) {
+            Ok(tables) => tables,
+            Err(reason) => {
+                return Err(EraAdmissionFailure {
+                    reason,
+                    collector,
+                    keeper,
+                });
+            }
+        };
+        let table_bytes = match tables.retained_bytes() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(EraAdmissionFailure {
+                    reason: super::symbol_table::publication_error(error),
+                    collector,
+                    keeper,
+                });
+            }
+        };
+        let mut image = match PublishedGcImage::from_legacy(collector.registration_heap_mut()) {
             Ok(image) => image,
             Err(error) => {
                 return Err(EraAdmissionFailure {
@@ -387,6 +421,7 @@ impl<'heap> EraCore<'heap> {
                 });
             }
         };
+        image.charge_symbol_tables(table_bytes);
         let young = image.young_id();
         let key = MutatorKey {
             heap,
@@ -416,8 +451,7 @@ impl<'heap> EraCore<'heap> {
         });
         let mut young_index = FxHashMap::default();
         young_index.insert(young, 0);
-        let symbols =
-            symbol_authority::SymbolSidecar::new(keeper.parallel_symbol_backing(), generation);
+        let symbols = symbol_authority::SymbolSidecar::new(backing, generation, tables);
         Ok((
             Self {
                 collector: RefCell::new(Some(collector)),

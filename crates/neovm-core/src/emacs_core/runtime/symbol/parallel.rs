@@ -3,6 +3,7 @@
 
 mod functions;
 mod roots;
+mod table;
 pub(crate) use functions::FunctionUpdate;
 mod intern;
 mod write;

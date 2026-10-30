@@ -362,6 +362,13 @@ impl OwnerGcState {
 }
 
 impl PublishedGcImage {
+    pub(super) fn charge_symbol_tables(
+        &mut self,
+        bytes: super::super::symbol_table::publication::RetainedTableBytes,
+    ) {
+        self.facts.bytes_since_gc = self.facts.bytes_since_gc.saturating_add(bytes.get());
+    }
+
     #[cfg(test)]
     pub(in crate::tagged::gc) fn seed_collection_words_for_test(
         &mut self,

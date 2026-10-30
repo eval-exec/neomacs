@@ -8,6 +8,10 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
         let id = homes.target.unwrap();
         let before = run.initial_facts_for_test(id).unwrap();
         assert!(!before.present && !before.member);
+        let table_before = run
+            .initial_table_statistics_for_test()
+            .unwrap()
+            .retained_bytes;
         let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
         let output = homes.dst.word_for_test(run);
         let old_cell = homes.old_id;
@@ -57,6 +61,12 @@ fn reservation_refusal(kind: PlainSymbolBacking, query: Query) {
         assert_eq!(
             run.owner.local.as_ref().unwrap().hot.bytes_since_gc - charge,
             after.bytes - before.bytes
+                + run
+                    .initial_table_statistics_for_test()
+                    .unwrap()
+                    .retained_bytes
+                    .get()
+                - table_before.get()
         );
         let old_after = run.initial_facts_for_test(old_cell).unwrap();
         assert_eq!(

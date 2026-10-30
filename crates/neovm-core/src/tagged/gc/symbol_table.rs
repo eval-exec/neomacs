@@ -49,6 +49,11 @@ impl SymbolChunkCount {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub(crate) struct SymbolChunkSlots(NonZeroUsize);
+impl SymbolChunkSlots {
+    pub(crate) fn get(self) -> usize {
+        self.0.get()
+    }
+}
 impl From<NonZeroUsize> for SymbolChunkSlots {
     fn from(value: NonZeroUsize) -> Self {
         Self(value)
@@ -142,6 +147,10 @@ impl PublishedSymbolTable {
 
     pub(crate) fn chunk_count(&self) -> SymbolChunkCount {
         self.shape.chunks
+    }
+
+    pub(crate) fn chunk_slots(&self) -> SymbolChunkSlots {
+        self.shape.chunk_slots
     }
 
     pub(crate) fn generation(&self) -> PointerTableGeneration {
@@ -250,6 +259,63 @@ static_assertions::assert_not_impl_any!(OwnedSymbolTable: Send, Sync, Clone, Cop
 static_assertions::assert_not_impl_any!(PublishedSymbolTable: Send, Sync, Clone, Copy);
 static_assertions::assert_eq_size!(SymbolChunkAddress, usize);
 static_assertions::assert_eq_size!(PointerTableGeneration, u64);
+
+/// Backing exports the lower pointer vocabulary without naming its owning
+/// evaluator/obarray types here. Construction and writer entry are distinct.
+///
+/// # Safety
+/// Implementations retain the unique chunk owners for the entire era and
+/// derive provenance-preserving addresses without lending owning handles or
+/// broad mutable references that invalidate previously exported addresses.
+pub(crate) unsafe trait SymbolTableBacking {
+    /// # Safety
+    /// Admission still owns the exclusive collector/backing, before detaching
+    /// the legacy image or permitting any participant to run.
+    unsafe fn prepare_initial_symbol_table(
+        &self,
+    ) -> Result<OwnedSymbolTable, super::RegistrationError>;
+
+    /// # Safety
+    /// The live writer token belongs to this exact retained backing.
+    unsafe fn symbol_table_shape(
+        &self,
+        minimum: SymbolSlotCount,
+        authority: &super::SymbolWriteToken<'_>,
+    ) -> Result<SymbolTableShape, super::RegistrationError>;
+
+    /// # Safety
+    /// The matching writer remains held after backing commit. Unexpected
+    /// refusal here requires poisoning the era before releasing that writer.
+    unsafe fn publish_symbol_table(
+        &self,
+        prepared: publication::PreparedTablePublication<'_>,
+        authority: &super::SymbolWriteToken<'_>,
+    ) -> Result<publication::PublicationChange, super::RegistrationError>;
+}
+
+pub(crate) fn table_error(error: TableError) -> super::RegistrationError {
+    match error {
+        TableError::Capacity => super::RegistrationError::Capacity,
+        TableError::Shape => super::RegistrationError::Publication,
+        TableError::GenerationExhausted => super::RegistrationError::Exhausted,
+    }
+}
+
+pub(crate) fn publication_error(
+    error: publication::TablePublicationError,
+) -> super::RegistrationError {
+    use publication::{TableLimit, TablePublicationError};
+    match error {
+        TablePublicationError::Table(error) => table_error(error),
+        TablePublicationError::NeedGrace(limit) => match limit {
+            TableLimit::RetainedBytes | TableLimit::RetiredTables => {
+                super::RegistrationError::Capacity
+            }
+        },
+        TablePublicationError::Busy => super::RegistrationError::Busy,
+        TablePublicationError::Poisoned => super::RegistrationError::Poisoned,
+    }
+}
 
 #[cfg(test)]
 mod tests;

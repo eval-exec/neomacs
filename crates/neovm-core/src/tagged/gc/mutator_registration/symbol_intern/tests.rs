@@ -55,9 +55,11 @@ impl Drop for FixtureGuard<'_> {
 enum Query {
     Fresh,
     FreshBoundary,
+    TableGrowth,
     FreshReusedAtom,
     Existing,
     RegistryOnly,
+    SameChunk,
     Boundary,
     Nonmember,
     Nil,
@@ -92,11 +94,16 @@ fn fixture_owner(
         crate::emacs_core::intern::intern(spelling);
     }
     let spelling = match query {
-        Query::Fresh | Query::FreshBoundary | Query::FreshReusedAtom => {
+        Query::Fresh | Query::FreshBoundary | Query::TableGrowth | Query::FreshReusedAtom => {
             let spelling = format!("p3sym-c5-new-{}", NEXT.fetch_add(1, Ordering::Relaxed));
-            if matches!(query, Query::FreshBoundary) {
+            if matches!(query, Query::FreshBoundary | Query::TableGrowth) {
                 let mut id = crate::emacs_core::intern::intern_uninterned("p3sym-c5-gap");
-                let target = (u64::from(id.0) / 4096 + 2) * 4096 + 17;
+                let added_chunks = if matches!(query, Query::TableGrowth) {
+                    1
+                } else {
+                    2
+                };
+                let target = (u64::from(id.0) / 4096 + added_chunks) * 4096 + 17;
                 while u64::from(id.0) + 1 < target {
                     id = crate::emacs_core::intern::intern_uninterned("p3sym-c5-gap");
                 }
@@ -106,7 +113,7 @@ fn fixture_owner(
             spelling
         }
         Query::Existing | Query::Nonmember => "p3sym-c2-global".to_owned(),
-        Query::RegistryOnly => {
+        Query::RegistryOnly | Query::SameChunk => {
             let spelling = format!(
                 "p3sym-c5-registry-only-{}",
                 NEXT.fetch_add(1, Ordering::Relaxed)
@@ -130,7 +137,7 @@ fn fixture_owner(
     };
     if matches!(
         query,
-        Query::Fresh | Query::FreshBoundary | Query::FreshReusedAtom
+        Query::Fresh | Query::FreshBoundary | Query::TableGrowth | Query::FreshReusedAtom
     ) {
         assert!(crate::emacs_core::intern::lookup_interned(&spelling).is_none());
     }
@@ -139,6 +146,13 @@ fn fixture_owner(
         kind,
         &spelling,
         |obarray, ids| {
+            if matches!(query, Query::SameChunk) {
+                let id = target.expect("serially prepared canonical identity");
+                let slots = (id.0 as usize).checked_add(1).unwrap();
+                obarray.prepare_symbol_table_slots_for_test(
+                    crate::tagged::gc::symbol_table::SymbolSlotCount::from(slots),
+                );
+            }
             if matches!(query, Query::Existing | Query::Nonmember) {
                 obarray
                     .prepare_initial_nonmember_for_test(ids[0], matches!(query, Query::Nonmember));
@@ -319,6 +333,10 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
             .target
             .expect("existing canonical ID prepared serially");
         let before = run.initial_facts_for_test(id).unwrap();
+        let table_before = run
+            .initial_table_statistics_for_test()
+            .unwrap()
+            .retained_bytes;
         let charge = run.owner.local.as_ref().unwrap().hot.bytes_since_gc;
         intern_retry(run, &homes.name, &mut homes.dst).unwrap();
         assert_eq!(homes.dst.word_for_test(run), Value::from_sym_id(id).bits());
@@ -331,6 +349,12 @@ fn existing_intern(kind: PlainSymbolBacking, query: Query) {
         assert_eq!(
             run.owner.local.as_ref().unwrap().hot.bytes_since_gc - charge,
             after.bytes - before.bytes
+                + run
+                    .initial_table_statistics_for_test()
+                    .unwrap()
+                    .retained_bytes
+                    .get()
+                - table_before.get()
         );
         if before.present {
             assert_eq!(
@@ -418,7 +442,16 @@ fn soft(kind: PlainSymbolBacking, query: Query) {
     let expected = match query {
         Query::Existing => Value::from_sym_id(crate::emacs_core::intern::intern("p3sym-c2-global")),
         Query::T => Value::T,
-        _ => Value::NIL,
+        Query::Fresh
+        | Query::FreshBoundary
+        | Query::TableGrowth
+        | Query::FreshReusedAtom
+        | Query::RegistryOnly
+        | Query::SameChunk
+        | Query::Boundary
+        | Query::Nonmember
+        | Query::Nil
+        | Query::Keyword => Value::NIL,
     };
     fixture(kind, query, |run, homes| {
         let name = homes.name.word_for_test(run);
@@ -801,3 +834,9 @@ mod failures;
 mod fresh_failures;
 mod gc;
 mod histories;
+
+mod publication;
+
+pub(super) fn nmjit_n3_retired_publication_manifest() -> Result<(), String> {
+    publication::manifest()
+}

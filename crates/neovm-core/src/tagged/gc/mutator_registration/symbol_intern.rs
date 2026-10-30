@@ -21,3 +21,8 @@ impl InternOpKind {
 }
 #[cfg(not(feature = "gc-memory-telemetry"))]
 mod tests;
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+pub(super) fn nmjit_n3_retired_publication_manifest() -> Result<(), String> {
+    tests::nmjit_n3_retired_publication_manifest()
+}
