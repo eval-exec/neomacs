@@ -4237,13 +4237,26 @@ impl Context {
             }
             (tail.cons_car(), tail.cons_cdr(), None)
         } else {
-            let Some(arglist) = func_value.closure_slot(CLOSURE_ARGLIST) else {
+            // One slot-vector dispatch for all three slots: each accessor
+            // (`closure_slot`) re-validates the closure kind and re-derives
+            // the slice, so this read the vector three times. GNU reads the
+            // three AREFs once each.
+            let Some(slots) = func_value.closure_slots() else {
                 return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
             };
-            let Some(body) = func_value.closure_body_value() else {
+            let (Some(arglist), Some(body)) = (
+                slots.get(crate::tagged::header::CLOSURE_ARGLIST).copied(),
+                slots.get(crate::tagged::header::CLOSURE_CODE).copied(),
+            ) else {
                 return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
             };
-            (arglist, body, func_value.closure_env().unwrap_or(None))
+            // A missing constants slot is "no captured environment", not an
+            // invalid function (the accessor returned None there too).
+            let env = slots
+                .get(crate::tagged::header::CLOSURE_CONSTANTS)
+                .copied()
+                .filter(|env| !env.is_nil());
+            (arglist, body, env)
         };
 
         let root_count = self.specpdl.len();
