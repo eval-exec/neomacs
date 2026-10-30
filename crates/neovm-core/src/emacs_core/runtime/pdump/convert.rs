@@ -5361,6 +5361,20 @@ pub(crate) fn load_symbol_data(
     ))
 }
 
+/// The symbol layer's forwarder-kind vocabulary for a wire tag.
+fn localized_forwarder_kind(
+    kind: crate::emacs_core::pdump::types::DumpLocalizedForwarder,
+) -> crate::emacs_core::symbol::LocalizedForwarderKind {
+    use crate::emacs_core::pdump::types::DumpLocalizedForwarder as Dump;
+    use crate::emacs_core::symbol::LocalizedForwarderKind as Kind;
+    match kind {
+        Dump::Bool => Kind::Bool,
+        Dump::Int => Kind::Int,
+        Dump::Obj => Kind::Obj,
+        Dump::Kboard => Kind::Kboard,
+    }
+}
+
 #[deny(clippy::wildcard_enum_match_arm)]
 pub(crate) fn load_obarray(
     decoder: &mut LoadDecoder,
@@ -5536,7 +5550,8 @@ pub(crate) fn load_obarray(
         global_members,
         function_unbound,
         dob.function_epoch,
-    )?;
+    )
+    .map_err(|error| DumpError::DeserializationError(error.to_string()))?;
 
     // Second pass: reconstruct BLVs for LOCALIZED symbols.
     //
@@ -5565,7 +5580,7 @@ pub(crate) fn load_obarray(
             // back as an ordinary buffer-local cell that neither coerces nor
             // type-checks.
             if let Some(kind) = forwarder {
-                obarray.reattach_localized_forwarder(*sym_id, *kind);
+                obarray.reattach_localized_forwarder(*sym_id, localized_forwarder_kind(*kind));
             }
             // Restore non-redirect flags from the dump — make_symbol_localized
             // only sets the redirect bit, leaving trapped_write / interned /

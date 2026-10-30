@@ -90,8 +90,51 @@ pub enum ByteBooleanVars {
 }
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::forward::FwdDescriptor;
-use crate::emacs_core::pdump::DumpError;
 use crate::gc_trace::GcTrace;
+
+/// The forwarder kind a localized symbol's BLV rebuilds after a dump. GNU's
+/// `Lisp_Fwd_*` tag is process-lifetime state, so an image carries only the
+/// kind; the dump loader maps its wire tag into this layer's vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LocalizedForwarderKind {
+    /// GNU `Lisp_Fwd_Bool`.
+    Bool,
+    /// GNU `Lisp_Fwd_Int`.
+    Int,
+    /// GNU `Lisp_Fwd_Obj`.
+    Obj,
+    /// GNU `Lisp_Fwd_Kboard_Obj`.
+    Kboard,
+}
+
+/// A dump image's obarray rows contradict each other (a member or
+/// function-unbound entry names a slot the symbol table does not contain).
+/// The dump loader wraps this into its own deserialization error; the message
+/// text is the one the pdump layer has always reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ObarrayRestoreError {
+    GlobalMemberMissingSlot(SymId),
+    FunctionUnboundMissingSlot(SymId),
+}
+
+impl std::fmt::Display for ObarrayRestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GlobalMemberMissingSlot(id) => write!(
+                f,
+                "pdump obarray is inconsistent: global member references missing symbol slot {}",
+                id.0
+            ),
+            Self::FunctionUnboundMissingSlot(id) => write!(
+                f,
+                "pdump obarray is inconsistent: function-unbound entry references missing symbol slot {}",
+                id.0
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObarrayRestoreError {}
 use crate::heap_types::LispString;
 use crate::tagged::header::AtomicTaggedValue;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -3291,10 +3334,7 @@ impl Obarray {
             // descriptor into the BLV (`src/data.c:2112-2140`); flipping the
             // redirect back to `Forwarded` here would orphan every per-buffer
             // binding.  Declare into the BLV instead.
-            self.reattach_localized_forwarder(
-                id,
-                crate::emacs_core::pdump::types::DumpLocalizedForwarder::Bool,
-            );
+            self.reattach_localized_forwarder(id, LocalizedForwarderKind::Bool);
             self.set_canonical_value(
                 CanonicalAccess::STORAGE,
                 id,
@@ -3337,7 +3377,7 @@ impl Obarray {
     /// only reachable after loading a portable dump: the descriptor is a
     /// process-lifetime pointer, so a localized symbol's image carries its
     /// default value plus the KIND of forwarder to rebuild
-    /// ([`DumpLocalizedForwarder`](crate::emacs_core::pdump::types::DumpLocalizedForwarder)),
+    /// ([`LocalizedForwarderKind`]),
     /// never the pointer.  The new descriptor is seeded from that restored
     /// default rather than from a declaration's initial value, so a variable
     /// the bootstrap changed keeps what the dump recorded.
@@ -3347,12 +3387,8 @@ impl Obarray {
     /// Boolean slot, and for an integer slot a value that failed
     /// `LispInteger::check` is impossible to have stored, so a corrupt image
     /// falls back to the slot's zero rather than smuggling a non-integer in.
-    pub fn reattach_localized_forwarder(
-        &mut self,
-        id: SymId,
-        kind: crate::emacs_core::pdump::types::DumpLocalizedForwarder,
-    ) {
-        use crate::emacs_core::pdump::types::DumpLocalizedForwarder as Kind;
+    pub fn reattach_localized_forwarder(&mut self, id: SymId, kind: LocalizedForwarderKind) {
+        use LocalizedForwarderKind as Kind;
         let Some(blv) = self.blv_mut(id) else { return };
         if blv.fwd.is_some() {
             return;
@@ -3479,10 +3515,7 @@ impl Obarray {
             // into the BLV instead -- the case `display-line-numbers-offset`
             // reaches, being both `DEFVAR_INT` and `Fmake_variable_buffer_local`
             // (`src/xdisp.c:38999-39005`).
-            self.reattach_localized_forwarder(
-                id,
-                crate::emacs_core::pdump::types::DumpLocalizedForwarder::Int,
-            );
+            self.reattach_localized_forwarder(id, LocalizedForwarderKind::Int);
             self.set_canonical_value(CanonicalAccess::STORAGE, id, value.value());
             return;
         }
@@ -4997,14 +5030,14 @@ impl Obarray {
     /// Reconstruct an Obarray from pdump data.
     ///
     /// A global-member or function-unbound entry whose slot has no symbol row
-    /// is a corrupt dump: return the typed [`DumpError`] instead of panicking
+    /// is a corrupt dump: return the typed [`ObarrayRestoreError`] instead of panicking
     /// (release builds run no member pre-validation).
     pub(crate) fn from_dump(
         symbols: Vec<(SymId, LispSymbol)>,
         global_members: Vec<SymId>,
         function_unbound: Vec<SymId>,
         function_epoch: u64,
-    ) -> Result<Self, DumpError> {
+    ) -> Result<Self, ObarrayRestoreError> {
         let max_slot = symbols
             .iter()
             .map(|(id, _)| Self::slot_index(*id))
@@ -5041,24 +5074,18 @@ impl Obarray {
             ob.symbols.ensure(Self::slot_index(id)).publish_fill(sym);
         }
         for id in global_members {
-            let sym = ob.slot_mut(id).ok_or_else(|| {
-                DumpError::DeserializationError(format!(
-                    "pdump obarray is inconsistent: global member references missing symbol slot {}",
-                    id.0
-                ))
-            })?;
+            let sym = ob
+                .slot_mut(id)
+                .ok_or(ObarrayRestoreError::GlobalMemberMissingSlot(id))?;
             if !sym.interned_global {
                 sym.interned_global = true;
                 ob.global_member_count += 1;
             }
         }
         for id in function_unbound {
-            let sym = ob.slot_mut(id).ok_or_else(|| {
-                DumpError::DeserializationError(format!(
-                    "pdump obarray is inconsistent: function-unbound entry references missing symbol slot {}",
-                    id.0
-                ))
-            })?;
+            let sym = ob
+                .slot_mut(id)
+                .ok_or(ObarrayRestoreError::FunctionUnboundMissingSlot(id))?;
             sym.function_unbound = true;
             // The flag/cell invariant (`LispSymbol::function_unbound`): a dump
             // may mark only a symbol whose restored cell is NIL.

@@ -1098,10 +1098,7 @@ fn a_reattached_localized_debug_cell_is_what_the_fast_read_follows() {
         "no descriptor yet"
     );
     assert!(!ob.debug_on_next_call_armed_fast());
-    ob.reattach_localized_forwarder(
-        id,
-        crate::emacs_core::pdump::types::DumpLocalizedForwarder::Bool,
-    );
+    ob.reattach_localized_forwarder(id, crate::emacs_core::symbol::LocalizedForwarderKind::Bool);
     let cell = ob
         .debug_on_next_call_bool_fwd_cached()
         .expect("the reattach hook stored the BLV's descriptor");

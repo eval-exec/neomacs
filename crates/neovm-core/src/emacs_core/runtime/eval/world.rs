@@ -884,7 +884,7 @@ obarray_method_proxies! {
             byte_boolean_vars: ByteBooleanVars,
         );
     pub fn reattach_localized_forwarder(id: SymId,
-            kind: crate::emacs_core::pdump::types::DumpLocalizedForwarder,
+            kind: crate::emacs_core::symbol::LocalizedForwarderKind,
         );
     pub fn install_intfwd(id: SymId,
             fwd: &'static crate::emacs_core::forward::LispIntFwd,

@@ -72,8 +72,8 @@ pub enum GnuObjectForward {
 impl GnuObjectForward {
     /// The same variant, spelled the way a BLV records the forwarder it is
     /// carrying.  One conversion in one place beats two parallel matches.
-    fn localized_dump_kind(self) -> crate::emacs_core::pdump::types::DumpLocalizedForwarder {
-        use crate::emacs_core::pdump::types::DumpLocalizedForwarder as Kind;
+    fn localized_forwarder_kind(self) -> crate::emacs_core::symbol::LocalizedForwarderKind {
+        use crate::emacs_core::symbol::LocalizedForwarderKind as Kind;
         match self {
             Self::Global => Kind::Obj,
             Self::Keyboard => Kind::Kboard,
@@ -263,7 +263,7 @@ fn adopt_one(obarray: &mut Obarray, var: &GnuObjectVariable) -> Adoption {
             // returns immediately when `blv->fwd` is already set, which is how
             // a `DEFVAR_BOOL`/`DEFVAR_INT` variable this port localized keeps
             // the descriptor its own declaration gave it.
-            obarray.reattach_localized_forwarder(id, var.kind.localized_dump_kind());
+            obarray.reattach_localized_forwarder(id, var.kind.localized_forwarder_kind());
             return Adoption::Localized;
         }
         SymbolRedirect::Plainval => {}
