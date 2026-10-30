@@ -319,3 +319,45 @@ fn macos_native_visual_probe() {
     }
     sheet.save(path).unwrap();
 }
+
+/// GNU draws ordinary text as dark glyphs on a light background with the
+/// window context's default font smoothing. Core Graphics font smoothing is
+/// contrast-dependent: extracting coverage from white-on-black inflates it by
+/// roughly 20% at 1x and made Neomacs heavier than GNU. The production polarity
+/// must stay dark-on-light; the inverse is rendered as a control.
+#[test]
+fn macos_native_masks_use_dark_on_light_smoothing() {
+    let (font, name) = monaco();
+    let mut native = NativeRasterizer::default();
+    let text = "The quick brown fox jumps over the lazy dog.\n\
+                (defun hello (x) \"doc\" (+ x 1)) ;; {}[]<>|&*\n\
+                iIl1| oO0 rn m ,.;:'\"`~!@#$%^\n\
+                Monaco 16: t H m i 0123456789 gyp\n";
+    for size in [16.0f32, 32.0] {
+        let mut default_ink = 0u64;
+        let mut light_on_dark_ink = 0u64;
+        for ch in text.chars().filter(|ch| *ch != '\n') {
+            let request = key(&font, ch, size);
+            default_ink += native
+                .rasterize(&font, &name, request)
+                .expect("Monaco covers the comparison text")
+                .data
+                .iter()
+                .map(|&coverage| u64::from(coverage))
+                .sum::<u64>();
+            light_on_dark_ink += native
+                .rasterize_with_polarity(&font, &name, request, MaskPolarity::LightOnDark)
+                .expect("Monaco covers the comparison text")
+                .data
+                .iter()
+                .map(|&coverage| u64::from(coverage))
+                .sum::<u64>();
+        }
+        assert!(
+            default_ink < light_on_dark_ink,
+            "size {size}: dark-on-light ink {default_ink} should stay below the \
+             light-on-dark control {light_on_dark_ink}; the contrast-dependent \
+             smoothing gamma must not be inverted"
+        );
+    }
+}

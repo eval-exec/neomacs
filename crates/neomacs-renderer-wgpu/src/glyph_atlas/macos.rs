@@ -1,7 +1,14 @@
 //! Native outline masks, replaying the exact font bytes already pinned by layout.
 //!
-//! Core Graphics font smoothing affects stroke weight even for grayscale text.
-//! Swash's outline coverage is not a substitute for that macOS drawing policy.
+//! Core Graphics antialiasing defines stroke weight for macOS text; Swash's
+//! outline coverage is not a substitute for that drawing policy.
+//!
+//! GNU macfont draws on screen with Core Graphics font smoothing enabled by
+//! the window context and with the usual dark-on-light contrast. Font
+//! smoothing's gamma is contrast-dependent: extracting coverage from white
+//! glyphs on black inflated it by about 20% at 1x, which made Neomacs heavier
+//! than GNU. Masks are therefore rasterized as dark glyphs on white and
+//! inverted.
 //! Keep the native objects on the atlas owner and upload ordinary grayscale
 //! masks, so WGPU composition and layout advances remain shared.
 
@@ -47,6 +54,19 @@ impl NativeRasterizer {
         postscript_name: &str,
         key: CacheKey,
     ) -> Option<RasterGlyphImage> {
+        self.rasterize_with_polarity(source, postscript_name, key, MaskPolarity::DarkOnLight)
+    }
+
+    /// Rasterize with an explicit mask polarity. Production uses the
+    /// dark-on-light polarity of ordinary macOS text; tests render the
+    /// light-on-dark control to keep the contrast choice honest.
+    fn rasterize_with_polarity(
+        &mut self,
+        source: &Font,
+        postscript_name: &str,
+        key: CacheKey,
+        polarity: MaskPolarity,
+    ) -> Option<RasterGlyphImage> {
         let face = source.as_swash();
         // Keep variable instances, synthetic styles and embedded strikes on
         // their existing paths until the native adapter can replay their full
@@ -83,8 +103,23 @@ impl NativeRasterizer {
                 // overridden, so the copied font retains the same exact source.
                 unsafe { base.copy_with_attributes(size.into(), ptr::null(), None) }
             });
-        rasterize(font, key)
+        rasterize(font, key, polarity)
     }
+}
+
+/// Contrast direction used when extracting a smoothing-aware coverage mask.
+///
+/// Core Graphics font smoothing applies a contrast-dependent gamma, so the
+/// same glyph produces different coverage on black and on white. The atlas
+/// stores one polarity-independent mask, so it must use the polarity of the
+/// text it replaces: dark glyphs on the default light background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaskPolarity {
+    /// Dark glyphs on a light background, the default macOS text contrast.
+    DarkOnLight,
+    /// Light glyphs on a dark background, kept as the test control.
+    #[cfg_attr(not(test), allow(dead_code))]
+    LightOnDark,
 }
 
 fn backing_hash(bytes: &[u8]) -> u64 {
@@ -132,7 +167,7 @@ fn open_exact_font(data: &CFData, postscript_name: &str, size: f32) -> Option<CF
     None
 }
 
-fn rasterize(font: &CTFont, key: CacheKey) -> Option<RasterGlyphImage> {
+fn rasterize(font: &CTFont, key: CacheKey, polarity: MaskPolarity) -> Option<RasterGlyphImage> {
     let mut glyph = key.glyph_id;
     // SAFETY: one live glyph, no per-glyph output array, count is one.
     let bounds = unsafe {
@@ -186,10 +221,13 @@ fn rasterize(font: &CTFont, key: CacheKey) -> Option<RasterGlyphImage> {
     if pixel_count > 4 * 1024 * 1024 {
         return None;
     }
-    let mut pixels = vec![0u8; pixel_count.checked_mul(4)?];
+    // A filled background is required for Core Graphics font smoothing. The
+    // background matches the polarity being measured; see `MaskPolarity`.
+    let light_background = polarity == MaskPolarity::DarkOnLight;
+    let mut pixels = vec![if light_background { 255u8 } else { 0u8 }; pixel_count.checked_mul(4)?];
     let colorspace = CGColorSpace::new_device_rgb()?;
-    // An opaque RGB bitmap enables native font smoothing. Alpha-only contexts
-    // disable that treatment and recreate the thin strokes this adapter fixes.
+    // An opaque RGB bitmap is required for Core Graphics to apply any
+    // smoothing at all; alpha-only contexts silently disable it.
     // SAFETY: pixels owns width*height*4 writable bytes and outlives the context.
     let context = unsafe {
         CGBitmapContextCreate(
@@ -203,12 +241,18 @@ fn rasterize(font: &CTFont, key: CacheKey) -> Option<RasterGlyphImage> {
         )
     }?;
     CGContext::set_should_antialias(Some(&context), true);
+    // GNU draws on screen without touching these flags, so the window context
+    // keeps its default smoothing, which is what this adapter must reproduce.
     CGContext::set_allows_font_smoothing(Some(&context), true);
     CGContext::set_should_smooth_fonts(Some(&context), true);
     CGContext::set_allows_font_subpixel_positioning(Some(&context), true);
     CGContext::set_should_subpixel_position_fonts(Some(&context), true);
     CGContext::set_should_subpixel_quantize_fonts(Some(&context), false);
-    CGContext::set_rgb_fill_color(Some(&context), 1.0, 1.0, 1.0, 1.0);
+    if light_background {
+        CGContext::set_rgb_fill_color(Some(&context), 0.0, 0.0, 0.0, 1.0);
+    } else {
+        CGContext::set_rgb_fill_color(Some(&context), 1.0, 1.0, 1.0, 1.0);
+    }
     // Match GNU macfont's ordinary-outline drawing operation. The font size
     // already includes backing scale; do not scale the context a second time.
     let graphics_font = unsafe { font.graphics_font(ptr::null_mut()) };
@@ -225,7 +269,14 @@ fn rasterize(font: &CTFont, key: CacheKey) -> Option<RasterGlyphImage> {
     // to grayscale instead of assuming a physical LCD component order.
     let data: Vec<u8> = pixels
         .chunks_exact(4)
-        .map(|p| ((u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2]) + 1) / 3) as u8)
+        .map(|p| {
+            let luminance = ((u16::from(p[0]) + u16::from(p[1]) + u16::from(p[2]) + 1) / 3) as u8;
+            if light_background {
+                255 - luminance
+            } else {
+                luminance
+            }
+        })
         .collect();
     // Published bitmap bounds are also used as ink bounds by clipping and
     // overlap diagnostics. Remove the transparent smoothing guard band while
