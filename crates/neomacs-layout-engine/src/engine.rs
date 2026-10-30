@@ -5884,6 +5884,14 @@ impl LayoutEngine {
                 .unwrap_or(VisibleFontificationCoverage::Complete);
 
             if let VisibleFontificationCoverage::Requires(plan) = coverage {
+                // Every span here comes from the same certified walk. Fontify
+                // all of them before replaying: a successful fontification
+                // necessarily changes the buffer's property ticks, so testing
+                // freshness inside the loop would replay after the first span
+                // and leave the rest of the plan unfontified. A folded Org
+                // buffer yields dozens of sparse visible runs -- more than the
+                // retry budget -- so that shape could never converge.
+                let mut requires_replay = false;
                 for span in plan.spans() {
                     let outcome = lisp_ledger.rows_fontification.ensure(
                         evaluator,
@@ -5891,18 +5899,29 @@ impl LayoutEngine {
                         span.start(),
                         span.end(),
                     );
-                    let freshness_after_visible_fontification =
-                        evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
+                    requires_replay |= outcome.requires_layout_retry();
                     if evaluator.frame_manager().window_topology_generation() != topology_generation
-                        || freshness_after_visible_fontification.as_ref()
-                            != freshness_after_leaf.as_deref()
-                        || outcome.requires_layout_retry()
                     {
                         if let Some(attempt) = window_end_attempt.take() {
                             evaluator.reject_redisplay_window_end_attempt(attempt);
                         }
                         return LeafLayoutAttempt::LogicalInputsChanged;
                     }
+                }
+                // Check freshness once, after the whole plan ran. The property
+                // ticks it changed were produced by the fontification this
+                // attempt itself requested, and the replay re-walks the frame
+                // with the faces it installed.
+                let freshness_after_visible_fontification =
+                    evaluator.window_layout_attempt_freshness(frame_id, window_id, buf_id);
+                if requires_replay
+                    || freshness_after_visible_fontification.as_ref()
+                        != freshness_after_leaf.as_deref()
+                {
+                    if let Some(attempt) = window_end_attempt.take() {
+                        evaluator.reject_redisplay_window_end_attempt(attempt);
+                    }
+                    return LeafLayoutAttempt::LogicalInputsChanged;
                 }
             }
         }

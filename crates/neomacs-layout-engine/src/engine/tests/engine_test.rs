@@ -1,6 +1,9 @@
 #[path = "category_word_wrap_test.rs"]
 mod category_word_wrap_test;
 
+#[path = "sparse_fontify_query_test.rs"]
+mod sparse_fontify_query_test;
+
 /// A surface point in a presentation composed with nothing in motion.
 ///
 /// The production path builds the same value by mapping through the projection
