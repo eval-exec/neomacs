@@ -2764,6 +2764,78 @@ fn define_key_filtered_prefix_does_not_modify_parent_bindings() {
 }
 
 #[test]
+fn define_key_swallows_menu_item_filter_errors_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU evaluates a menu-item `:filter` through `menu_item_eval_property`
+    // (src/keyboard.c:8873-8884), which binds `inhibit-redisplay` and catches
+    // `error` (returning nil); only quit and other nonlocal exits propagate.
+    // Expected values measured under GNU Emacs 31.1.
+    assert_eq!(
+        eval_one(
+            r#"(let ((m (make-sparse-keymap))
+                     (tool (make-sparse-keymap))
+                     (saw-inhibit nil))
+                 (define-key m [boom]
+                   (list 'menu-item "boom" 'ignore
+                         :filter (lambda (_command) (car 1))))
+                 (let ((defined (condition-case err
+                                    (progn (define-key m [boom leaf] 'leaf-command)
+                                           :no-error)
+                                  (error :signalled)))
+                       (wrapper (cdr (assq 'boom m))))
+                   (define-key m [leaf]
+                     (list 'menu-item "leaf" 'ignore
+                           :filter (lambda (_command) (car 1))))
+                   (define-key m [tool-bar]
+                     (list 'menu-item "tool bar" 'ignore
+                           :filter (lambda (_command)
+                                     (setq saw-inhibit inhibit-redisplay)
+                                     tool)))
+                   (define-key m [tool-bar open] 'open-command)
+                   (list defined
+                         (keymapp wrapper)
+                         (lookup-key m [boom leaf])
+                         (eq (lookup-key m [boom]) wrapper)
+                         (lookup-key m [leaf])
+                         saw-inhibit
+                         (lookup-key tool [open]))))"#,
+        ),
+        "OK (:no-error t leaf-command t nil t open-command)"
+    );
+}
+
+#[test]
+fn remove_through_filtered_prefix_invalidates_where_is_cache() {
+    crate::test_utils::init_test_tracing();
+    // GNU `store_in_keymap` clears the reverse-keymap cache on every store,
+    // including REMOVE (src/keymap.c:733-736). A filter that runs the
+    // where-is reverse index before the removal must not leave a stale
+    // `[remap ...]` target behind.
+    assert_eq!(
+        eval_one(
+            r#"(let* ((m (make-sparse-keymap))
+                      (tool (make-sparse-keymap))
+                      (first-call t))
+                 (define-key tool [x] 'pr627-alt)
+                 (define-key m [direct] tool)
+                 (define-key m [remap pr627-target] 'pr627-alt)
+                 (define-key m [tool-bar]
+                   (list 'menu-item "tool" 'ignore
+                         :filter (lambda (_command)
+                                   (when first-call
+                                     (setq first-call nil)
+                                     (where-is-internal 'pr627-target m t))
+                                   m)))
+                 (define-key m [tool-bar remap pr627-target] nil t)
+                 (list (where-is-internal 'pr627-target m t)
+                       (where-is-internal 'pr627-alt m t)
+                       (lookup-key m [remap pr627-target])))"#,
+        ),
+        "OK (nil [direct x] nil)"
+    );
+}
+
+#[test]
 fn define_key_sequence_preserves_gnu_prefix_symbol_bindings() {
     crate::test_utils::init_test_tracing();
     assert_eq!(

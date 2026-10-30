@@ -2750,6 +2750,12 @@ pub(crate) enum ResumeTarget {
     SafeFuncall {
         condition_stack_base: usize,
     },
+    /// GNU `menu_item_eval_property`'s Qerror barrier. Unlike the Qt
+    /// `SafeFuncall` barrier, only `error` and its subclasses are caught:
+    /// `quit` and throws with an outer catch keep unwinding.
+    MenuItemProperty {
+        condition_stack_base: usize,
+    },
     VmCatch {
         resume_id: u64,
         target: u32,
