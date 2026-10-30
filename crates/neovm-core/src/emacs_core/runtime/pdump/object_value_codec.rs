@@ -486,7 +486,7 @@ fn write_byte_code_key_part(
         }
         DumpByteCodeKeyPart::Ops(ops) => {
             write_u8(out, BYTE_CODE_KEY_OPS);
-            write_ops(out, ops);
+            write_key_op_words(out, ops);
         }
         DumpByteCodeKeyPart::Values(values) => {
             write_u8(out, BYTE_CODE_KEY_VALUES);
@@ -799,6 +799,19 @@ fn write_ops(out: &mut Vec<u8>, ops: &[Op]) {
                 *argc,
             ),
         }
+    }
+}
+
+/// Key-part op words use the in-memory packed form as their record layout:
+/// tag in the first byte, first operand in the next four, second operand in
+/// the sixth. The byte-code module owns the tag numbering; this codec only
+/// stores and restores the word.
+fn write_key_op_words(out: &mut Vec<u8>, words: &[u64]) {
+    write_u64(out, words.len() as u64);
+    for word in words {
+        out.push(*word as u8);
+        out.extend_from_slice(&((*word >> 8) as u32).to_le_bytes());
+        out.push((*word >> 40) as u8);
     }
 }
 
@@ -1253,7 +1266,7 @@ impl<'a> Cursor<'a> {
             )),
             BYTE_CODE_KEY_VALUE => Ok(DumpByteCodeKeyPart::Value(self.read_hash_key()?)),
             BYTE_CODE_KEY_BYTES => Ok(DumpByteCodeKeyPart::Bytes(self.read_bytes()?)),
-            BYTE_CODE_KEY_OPS => Ok(DumpByteCodeKeyPart::Ops(self.read_ops()?)),
+            BYTE_CODE_KEY_OPS => Ok(DumpByteCodeKeyPart::Ops(self.read_key_op_words()?)),
             BYTE_CODE_KEY_VALUES => Ok(DumpByteCodeKeyPart::Values(self.read_hash_keys()?)),
             BYTE_CODE_KEY_TEXT => Ok(DumpByteCodeKeyPart::Text {
                 char_count: self.read_usize("byte-code hash key character count")?,
@@ -1468,6 +1481,20 @@ impl<'a> Cursor<'a> {
             ops.push(op);
         }
         Ok(ops)
+    }
+
+    fn read_key_op_words(&mut self) -> Result<Vec<u64>, DumpError> {
+        let len = self.read_len("byte-code key op count")?;
+        let mut words = Vec::with_capacity(len);
+        for _ in 0..len {
+            let start = self.read_fixed_start(6, "byte-code key op record")?;
+            let rec = &self.section[start..start + 6];
+            let tag = rec[0] as u64;
+            let arg = u32::from_le_bytes([rec[1], rec[2], rec[3], rec[4]]) as u64;
+            let extra = rec[5] as u64;
+            words.push(tag | (arg << 8) | (extra << 40));
+        }
+        Ok(words)
     }
 
     fn read_marker(&mut self) -> Result<DumpMarker, DumpError> {

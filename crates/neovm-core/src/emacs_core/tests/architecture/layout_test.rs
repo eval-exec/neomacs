@@ -335,6 +335,9 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         "tagged/mutate.rs",
         "tagged/tests.rs",
         "emacs_core/runtime/value/mod.rs",
+        // The Value byte-code surface (get_bytecode_data and the projections
+        // beside it) moved here with the representation it projects.
+        "emacs_core/runtime/bytecode/value_api.rs",
     ];
     let allowed_prefix = "emacs_core/runtime/pdump/";
 

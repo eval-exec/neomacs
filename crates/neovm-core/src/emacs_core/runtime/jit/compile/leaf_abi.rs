@@ -22,6 +22,7 @@
 
 use super::*;
 use crate::emacs_core::builtins::leaves;
+use crate::emacs_core::error::InlineErrorOp;
 #[cfg(debug_assertions)]
 use crate::emacs_core::subr::leaf::LeafOutcome;
 use crate::emacs_core::subr::leaf::{
@@ -274,20 +275,21 @@ macro_rules! bare_trampoline {
 // Threading: the request belongs to this mutator's Flow; no state is shared.
 #[inline(always)]
 fn opcode_nth(ctx: &Context, n: Value, list: Value) -> LeafResult {
-    leaves::nth(ctx, n, list).map_err(|exit| opcode_error_backtrace(exit, &Op::Nth, n, list))
+    leaves::nth(ctx, n, list)
+        .map_err(|exit| opcode_error_backtrace(exit, InlineErrorOp::Nth, n, list))
 }
 
 #[inline(always)]
 fn opcode_elt(ctx: &Context, sequence: Value, n: Value) -> LeafResult {
     leaves::elt(ctx, sequence, n)
-        .map_err(|exit| opcode_error_backtrace(exit, &Op::Elt, sequence, n))
+        .map_err(|exit| opcode_error_backtrace(exit, InlineErrorOp::Elt, sequence, n))
 }
 
 // Materialize the argument slice in this cold frame so opcode trampolines
 // do not reserve an error-only array in their successful call frames.
 #[cold]
 #[inline(never)]
-fn opcode_error_backtrace(exit: LeafExit, op: &Op, arg0: Value, arg1: Value) -> LeafExit {
+fn opcode_error_backtrace(exit: LeafExit, op: InlineErrorOp, arg0: Value, arg1: Value) -> LeafExit {
     match exit {
         LeafExit::Signal(flow) => {
             LeafExit::Signal(flow.with_bytecode_error_backtrace(op, &[arg0, arg1]))

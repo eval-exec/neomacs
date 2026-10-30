@@ -371,7 +371,7 @@ pub enum DumpByteCodeKeyPart {
     ObservableSlotCount(usize),
     Value(DumpHashKey),
     Bytes(Vec<u8>),
-    Ops(Vec<crate::emacs_core::bytecode::Op>),
+    Ops(Vec<u64>),
     Values(Vec<DumpHashKey>),
     Text { char_count: usize, bytes: Vec<u8> },
     Absent,

@@ -16,6 +16,7 @@ use strum::IntoStaticStr;
 
 mod bytecode_backtrace;
 use bytecode_backtrace::BytecodeErrorBacktrace;
+pub(crate) use bytecode_backtrace::InlineErrorOp;
 
 /// Public-facing evaluation error.
 ///

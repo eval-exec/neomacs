@@ -10,11 +10,12 @@
 use crate::emacs_core::value::{BytecodeInteractiveProbe, Value};
 use crate::tagged::gc::with_tagged_heap;
 use crate::tagged::header::{ByteCodeObj, VecLikeType};
-use crate::tagged::value::TAG_MASK;
+use crate::tagged::value::{TAG_MASK, TaggedValue};
 
-impl Value {
+impl TaggedValue {
     /// Allocate a bytecode function.
     pub fn make_bytecode(bc: super::ByteCodeFunction) -> Self {
+        super::semantics::install();
         // Test builds hand-assemble instruction vectors all over the suite;
         // route them through the real sealing normalizer so they may enter
         // the unchecked-fetch driver. Production sealing happens exclusively
@@ -37,6 +38,7 @@ impl Value {
         constants: crate::tagged::header::LispValueVec,
         code: Value,
     ) -> Self {
+        super::semantics::install();
         with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants, code))
     }
 

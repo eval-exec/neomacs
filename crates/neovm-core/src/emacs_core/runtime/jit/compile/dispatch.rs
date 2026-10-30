@@ -4,7 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
-use crate::emacs_core::error::FlowKind;
+use crate::emacs_core::error::{FlowKind, InlineErrorOp};
 use crate::emacs_core::eval::AttentionMask;
 #[cfg(feature = "jit")]
 use crate::tagged::header::{SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5};
@@ -58,14 +58,14 @@ pub(crate) type JitBuiltin2Pure = fn(&Context, Value, Value) -> Result<Value, Fl
 
 fn pure_nth(_: &Context, n: Value, list: Value) -> Result<Value, Flow> {
     b::bytecode_nth_values(n, list)
-        .map_err(|flow| flow.with_bytecode_error_backtrace(&Op::Nth, &[n, list]))
+        .map_err(|flow| flow.with_bytecode_error_backtrace(InlineErrorOp::Nth, &[n, list]))
 }
 fn pure_nthcdr(_: &Context, n: Value, list: Value) -> Result<Value, Flow> {
     b::builtin_nthcdr_values(n, list)
 }
 fn pure_elt(context: &Context, sequence: Value, n: Value) -> Result<Value, Flow> {
     b::bytecode_elt_values_in_state(context, sequence, n)
-        .map_err(|flow| flow.with_bytecode_error_backtrace(&Op::Elt, &[sequence, n]))
+        .map_err(|flow| flow.with_bytecode_error_backtrace(InlineErrorOp::Elt, &[sequence, n]))
 }
 fn pure_member(ctx: &Context, target: Value, list: Value) -> Result<Value, Flow> {
     b::builtin_member_values(target, list, ctx.symbols_with_pos_enabled)
@@ -83,15 +83,15 @@ fn pure_equal(ctx: &Context, a: Value, b_: Value) -> Result<Value, Flow> {
 }
 fn pure_setcar(_: &Context, cons: Value, new_car: Value) -> Result<Value, Flow> {
     b::builtin_setcar_values(cons, new_car)
-        .map_err(|flow| flow.with_bytecode_error_backtrace(&Op::Setcar, &[cons, new_car]))
+        .map_err(|flow| flow.with_bytecode_error_backtrace(InlineErrorOp::Setcar, &[cons, new_car]))
 }
 fn pure_setcdr(_: &Context, cons: Value, new_cdr: Value) -> Result<Value, Flow> {
     b::builtin_setcdr_values(cons, new_cdr)
-        .map_err(|flow| flow.with_bytecode_error_backtrace(&Op::Setcdr, &[cons, new_cdr]))
+        .map_err(|flow| flow.with_bytecode_error_backtrace(InlineErrorOp::Setcdr, &[cons, new_cdr]))
 }
 fn pure_aref(ctx: &Context, array: Value, index: Value) -> Result<Value, Flow> {
     b::builtin_aref_values_in_state(ctx, array, index)
-        .map_err(|flow| flow.with_bytecode_error_backtrace(&Op::Aref, &[array, index]))
+        .map_err(|flow| flow.with_bytecode_error_backtrace(InlineErrorOp::Aref, &[array, index]))
 }
 fn pure_get(ctx: &Context, symbol: Value, prop: Value) -> Result<Value, Flow> {
     Ok(b::symbol_property_get(ctx, symbol, prop)?
@@ -392,7 +392,9 @@ fn aref_slow(ctx: *mut u8, array: Value, index: Value) -> i64 {
         match b::builtin_aref_values_in_state(context, array, index) {
             Ok(value) => value.bits() as i64,
             Err(flow) => {
-                stash_pending_flow(flow.with_bytecode_error_backtrace(&Op::Aref, &[array, index]));
+                stash_pending_flow(
+                    flow.with_bytecode_error_backtrace(InlineErrorOp::Aref, &[array, index]),
+                );
                 VALUE_SHIM_SIGNAL
             }
         }
@@ -1084,7 +1086,7 @@ fn aset_slow(ctx: *mut u8, array: Value, index: Value, value: Value) -> i64 {
             Ok(value) => value.bits() as i64,
             Err(flow) => {
                 stash_pending_flow(
-                    flow.with_bytecode_error_backtrace(&Op::Aset, &[array, index, value]),
+                    flow.with_bytecode_error_backtrace(InlineErrorOp::Aset, &[array, index, value]),
                 );
                 VALUE_SHIM_SIGNAL
             }

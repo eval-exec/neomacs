@@ -1983,9 +1983,14 @@ pub enum ByteCodeKeyPart {
     ObservableSlotCount(usize),
     Value(HashKey),
     Bytes(Box<[u8]>),
-    Ops(Box<[super::bytecode::Op]>),
+    /// Decoded instructions packed one lossless `u64` per op (see the
+    /// byte-code module's key encoder); the value layer never names `Op`.
+    Ops(Box<[u64]>),
     Values(Box<[HashKey]>),
-    Text { char_count: usize, bytes: Box<[u8]> },
+    Text {
+        char_count: usize,
+        bytes: Box<[u8]>,
+    },
     Absent,
 }
 
@@ -2390,13 +2395,50 @@ impl ByteCodeKeyPart {
     pub(crate) fn heap_bytes(&self) -> usize {
         match self {
             ByteCodeKeyPart::Bytes(bytes) => bytes.len(),
-            ByteCodeKeyPart::Ops(ops) => ops.len() * size_of::<super::bytecode::Op>(),
+            ByteCodeKeyPart::Ops(ops) => ops.len() * size_of::<u64>(),
             ByteCodeKeyPart::Values(parts) => parts.iter().map(HashKey::heap_bytes).sum(),
             ByteCodeKeyPart::Text { bytes, .. } => bytes.len(),
             ByteCodeKeyPart::Value(key) => key.heap_bytes(),
             _ => 0,
         }
     }
+}
+
+/// The byte-code layer's structural semantics, installed once at startup.
+///
+/// `equal` and `equal`-table keys must walk a byte-code function's structure
+/// (GNU compares and hashes a closure like the pseudovector it is), but the
+/// representation (`ByteCodeFunction`, `Op`, `ByteCodeStructuralPart`) lives
+/// in the byte-code module above this layer. Every entry is used only on a
+/// byte-code value's arm; the ordinary value paths never load these pointers.
+pub(crate) struct BytecodeSemantics {
+    pub(crate) to_equal_key: fn(Value, usize, &mut Vec<usize>, bool) -> HashKey,
+    pub(crate) equal:
+        fn(&Value, &Value, usize, &mut Option<HashSet<EqualSeenPair>>, bool, EqualKind) -> bool,
+    pub(crate) try_equal: fn(
+        &Value,
+        &Value,
+        usize,
+        &mut Option<HashSet<EqualSeenPair>>,
+        bool,
+        EqualKind,
+    ) -> Result<bool, Flow>,
+    pub(crate) sxhash: fn(&Value, usize, crate::tagged::SymbolMode) -> Option<u64>,
+}
+
+static BYTECODE_SEMANTICS: OnceLock<BytecodeSemantics> = OnceLock::new();
+
+/// Install the byte-code module's structural semantics. Idempotent: the
+/// byte-code constructors and `Context::new` both call it, and whichever runs
+/// first wins with the same function table.
+pub(crate) fn install_bytecode_semantics(semantics: BytecodeSemantics) {
+    let _ = BYTECODE_SEMANTICS.set(semantics);
+}
+
+pub(crate) fn bytecode_semantics() -> &'static BytecodeSemantics {
+    BYTECODE_SEMANTICS
+        .get()
+        .expect("bytecode semantics are installed before any byte-code value exists")
 }
 
 impl LispHashTable {
@@ -4201,7 +4243,7 @@ impl TaggedValue {
         self.to_eql_key()
     }
 
-    fn to_eq_key(self) -> HashKey {
+    pub(crate) fn to_eq_key(self) -> HashKey {
         match self.kind() {
             ValueKind::Nil => HashKey::Nil,
             ValueKind::T => HashKey::True,
@@ -4258,7 +4300,7 @@ impl TaggedValue {
         self.to_equal_key_depth_swp(0, &mut seen, symbols_with_pos_enabled)
     }
 
-    fn to_equal_key_depth_swp(
+    pub(crate) fn to_equal_key_depth_swp(
         self,
         depth: usize,
         seen: &mut Vec<usize>,
@@ -4368,7 +4410,12 @@ impl TaggedValue {
                     return HashKey::Cycle(index as u32);
                 }
                 seen.push(ptr);
-                let key = bytecode_to_equal_key(self, depth + 1, seen, symbols_with_pos_enabled);
+                let key = (bytecode_semantics().to_equal_key)(
+                    self,
+                    depth + 1,
+                    seen,
+                    symbols_with_pos_enabled,
+                );
                 seen.pop();
                 key
             }
@@ -4559,19 +4606,19 @@ pub fn try_equal_value_including_properties_swp(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EqualKind {
+pub(crate) enum EqualKind {
     Plain,
     IncludingProperties,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct EqualSeenPair {
+pub(crate) struct EqualSeenPair {
     left_bits: usize,
     right_bits: usize,
 }
 
 impl EqualSeenPair {
-    fn new(left: Value, right: Value) -> Self {
+    pub(crate) fn new(left: Value, right: Value) -> Self {
         Self {
             left_bits: left.bits(),
             right_bits: right.bits(),
@@ -4667,7 +4714,7 @@ impl StructuralPseudovectorView<'_> {
     }
 }
 
-fn equal_value_inner(
+pub(crate) fn equal_value_inner(
     left: &Value,
     right: &Value,
     depth: usize,
@@ -4829,7 +4876,7 @@ fn equal_value_inner(
         }
         VecLikeType::HashTable => false,
         VecLikeType::ByteCode => {
-            bytecode_equal(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
+            (bytecode_semantics().equal)(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
         }
         VecLikeType::Lambda => {
             if depth > 10 {
@@ -4941,7 +4988,7 @@ fn equal_value_cycle(
     Ok(false)
 }
 
-fn try_equal_value_inner(
+pub(crate) fn try_equal_value_inner(
     left: &Value,
     right: &Value,
     depth: usize,
@@ -5141,9 +5188,14 @@ fn try_equal_value_inner(
             Ok(true)
         }
         VecLikeType::HashTable => Ok(false),
-        VecLikeType::ByteCode => {
-            try_bytecode_equal(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
-        }
+        VecLikeType::ByteCode => (bytecode_semantics().try_equal)(
+            &left,
+            &right,
+            depth,
+            seen,
+            symbols_with_pos_enabled,
+            kind,
+        ),
         VecLikeType::Lambda => {
             if depth > 10 {
                 let pair = EqualSeenPair::new(left, right);
@@ -5171,52 +5223,6 @@ fn try_equal_value_inner(
         }
         _ => Ok(false),
     }
-}
-
-/// `equal`-table key for a byte-code object, derived from
-/// [`ByteCodeFunction::structural_parts`] so it agrees with [`bytecode_equal`]
-/// by construction: equal objects produce equal keys, and every difference
-/// `equal` sees -- including an absent versus a present-but-`nil` captured
-/// environment, and a docstring's character count -- reaches the key.  GNU's
-/// `sxhash_obj` -> `sxhash_vector` gives equal closures one bucket
-/// (src/fns.c:5525-5536); this is the table's side of that promise.
-fn bytecode_to_equal_key(
-    value: Value,
-    depth: usize,
-    seen: &mut Vec<usize>,
-    symbols_with_pos_enabled: bool,
-) -> HashKey {
-    use super::bytecode::ByteCodeStructuralPart as Part;
-    if depth > 200 {
-        return value.to_eq_key();
-    }
-    let Some(bc) = value.get_bytecode_data() else {
-        return value.to_eq_key();
-    };
-    let mut key_of =
-        |slot: &Value| slot.to_equal_key_depth_swp(depth + 1, seen, symbols_with_pos_enabled);
-    let parts = bc.structural_parts();
-    let mut keys = Vec::with_capacity(parts.len());
-    for part in parts {
-        keys.push(match part {
-            Part::ObservableSlotCount(count) => ByteCodeKeyPart::ObservableSlotCount(count),
-            Part::Value(value) => ByteCodeKeyPart::Value(key_of(&value)),
-            Part::Bytes(bytes) => ByteCodeKeyPart::Bytes(bytes.into()),
-            Part::Ops(ops) => ByteCodeKeyPart::Ops(ops.into()),
-            Part::Values(values) => {
-                ByteCodeKeyPart::Values(values.iter().map(&mut key_of).collect())
-            }
-            // GNU string equality is characters + bytes + contents; the
-            // representation flag is not part of it, and the character count
-            // is (two raw bytes are not one multibyte character).
-            Part::Text(text) => ByteCodeKeyPart::Text {
-                char_count: text.schars(),
-                bytes: text.as_bytes().into(),
-            },
-            Part::Absent => ByteCodeKeyPart::Absent,
-        });
-    }
-    HashKey::ByteCode(keys.into_boxed_slice())
 }
 
 fn closure_to_equal_key(
@@ -5396,123 +5402,6 @@ fn try_closure_equal(
         }
         _ => Ok(false),
     }
-}
-
-/// GNU string equality (src/fns.c `internal_equal_1`, `Lisp_String`):
-/// character count, byte count and contents.  The unibyte/multibyte
-/// representation flag `LispString::eq` also compares is not part of it: an
-/// ASCII string stored unibyte equals the same text stored multibyte, while
-/// two raw bytes never equal the one multibyte character with those bytes.
-fn gnu_string_contents_equal(left: &LispString, right: &LispString) -> bool {
-    left.schars() == right.schars()
-        && left.sbytes() == right.sbytes()
-        && left.as_bytes() == right.as_bytes()
-}
-
-/// The slot walk behind both [`bytecode_equal`] and [`try_bytecode_equal`]:
-/// GNU's `ASIZE` check first, then [`ByteCodeFunction::structural_parts`]
-/// pairwise, with `value_equal` deciding the Lisp values (constants at one
-/// extra level of depth, as elements of the vector they sit in).
-fn bytecode_slots_equal(
-    left: &super::bytecode::ByteCodeFunction,
-    right: &super::bytecode::ByteCodeFunction,
-    depth: usize,
-    value_equal: &mut dyn FnMut(&Value, &Value, usize) -> Result<bool, Flow>,
-) -> Result<bool, Flow> {
-    use super::bytecode::ByteCodeStructuralPart as Part;
-    let (left_parts, right_parts) = (left.structural_parts(), right.structural_parts());
-    if left_parts.len() != right_parts.len() {
-        return Ok(false);
-    }
-    for (left, right) in left_parts.zip(right_parts) {
-        let equal = match (left, right) {
-            (Part::ObservableSlotCount(a), Part::ObservableSlotCount(b)) => a == b,
-            (Part::Value(a), Part::Value(b)) => value_equal(&a, &b, depth + 1)?,
-            (Part::Bytes(a), Part::Bytes(b)) => a == b,
-            (Part::Ops(a), Part::Ops(b)) => a == b,
-            (Part::Values(a), Part::Values(b)) => {
-                if a.len() != b.len() {
-                    return Ok(false);
-                }
-                for (a, b) in a.iter().zip(b) {
-                    if !value_equal(a, b, depth + 2)? {
-                        return Ok(false);
-                    }
-                }
-                true
-            }
-            (Part::Text(a), Part::Text(b)) => gnu_string_contents_equal(a, b),
-            (Part::Absent, Part::Absent) => true,
-            _ => false,
-        };
-        if !equal {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// GNU `internal_equal_1` compares a `PVEC_CLOSURE` exactly like a vector
-/// (src/fns.c:2984-2998 in emacs-31.1, :2987-3001 on master): the `ASIZE`
-/// test first -- which is also the type test, so a five-slot closure never
-/// equals a four-slot one -- then every slot element-wise.  This port keeps
-/// a byte-code function's GNU slots in typed fields, so the walk reads
-/// [`ByteCodeFunction::structural_parts`], the one place that spells the
-/// schema; `make-closure` (bytecode.c `Fmake_closure`) copies the prototype
-/// and replaces the leading constants, so two instances of one prototype
-/// with `equal` captures are `equal` -- the property `remove-hook` needs to
-/// find a closure it was handed a freshly rebuilt twin of.
-fn bytecode_equal(
-    left: &Value,
-    right: &Value,
-    depth: usize,
-    seen: &mut Option<HashSet<EqualSeenPair>>,
-    symbols_with_pos_enabled: bool,
-    kind: EqualKind,
-) -> bool {
-    let (Some(l), Some(r)) = (left.get_bytecode_data(), right.get_bytecode_data()) else {
-        return false;
-    };
-    if depth > 10 {
-        let pair = EqualSeenPair::new(*left, *right);
-        if !seen.get_or_insert_with(HashSet::new).insert(pair) {
-            return true;
-        }
-    }
-    bytecode_slots_equal(l, r, depth, &mut |a, b, depth| {
-        Ok(equal_value_inner(
-            a,
-            b,
-            depth,
-            seen,
-            symbols_with_pos_enabled,
-            kind,
-        ))
-    })
-    .unwrap_or(false)
-}
-
-/// [`bytecode_equal`] for the error-propagating walk.
-fn try_bytecode_equal(
-    left: &Value,
-    right: &Value,
-    depth: usize,
-    seen: &mut Option<HashSet<EqualSeenPair>>,
-    symbols_with_pos_enabled: bool,
-    kind: EqualKind,
-) -> Result<bool, Flow> {
-    let (Some(l), Some(r)) = (left.get_bytecode_data(), right.get_bytecode_data()) else {
-        return Ok(false);
-    };
-    if depth > 10 {
-        let pair = EqualSeenPair::new(*left, *right);
-        if !seen.get_or_insert_with(HashSet::new).insert(pair) {
-            return Ok(true);
-        }
-    }
-    bytecode_slots_equal(l, r, depth, &mut |a, b, depth| {
-        try_equal_value_inner(a, b, depth, seen, symbols_with_pos_enabled, kind)
-    })
 }
 
 // ---------------------------------------------------------------------------

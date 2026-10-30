@@ -108,7 +108,7 @@ fn heap_object_codec_round_trips_representative_objects() {
                         DumpByteCodeKeyPart::ObservableSlotCount(5),
                         DumpByteCodeKeyPart::Value(DumpHashKey::Int(257)),
                         DumpByteCodeKeyPart::Bytes(vec![0xC0, 0x87]),
-                        DumpByteCodeKeyPart::Ops(vec![Op::Constant(0), Op::Return]),
+                        DumpByteCodeKeyPart::Ops(vec![0, 20]),
                         DumpByteCodeKeyPart::Values(vec![DumpHashKey::Int(42)]),
                         DumpByteCodeKeyPart::Text {
                             char_count: 3,

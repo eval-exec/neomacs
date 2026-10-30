@@ -9205,18 +9205,35 @@ impl<'a> Vm<'a> {
                 if let FlowRef::Signal(sig) = flow.kind()
                     && let Some(value) = sig.data.get(1).copied()
                 {
-                    flow.with_bytecode_error_backtrace(op, &[value])
+                    let inline = match op {
+                        Op::Car => InlineErrorOp::Car,
+                        _ => InlineErrorOp::Cdr,
+                    };
+                    flow.with_bytecode_error_backtrace(inline, &[value])
                 } else {
                     flow
                 }
             }
             Some(op @ (Op::Nth | Op::Elt | Op::Setcar | Op::Setcdr | Op::Aref)) => {
+                let inline = match op {
+                    Op::Nth => InlineErrorOp::Nth,
+                    Op::Elt => InlineErrorOp::Elt,
+                    Op::Setcar => InlineErrorOp::Setcar,
+                    Op::Setcdr => InlineErrorOp::Setcdr,
+                    _ => InlineErrorOp::Aref,
+                };
                 let len = self.ctx.bc_buf.len();
-                flow.with_bytecode_error_backtrace(op, &self.ctx.bc_buf[len.saturating_sub(2)..])
+                flow.with_bytecode_error_backtrace(
+                    inline,
+                    &self.ctx.bc_buf[len.saturating_sub(2)..],
+                )
             }
-            Some(op @ Op::Aset) => {
+            Some(Op::Aset) => {
                 let len = self.ctx.bc_buf.len();
-                flow.with_bytecode_error_backtrace(op, &self.ctx.bc_buf[len.saturating_sub(3)..])
+                flow.with_bytecode_error_backtrace(
+                    InlineErrorOp::Aset,
+                    &self.ctx.bc_buf[len.saturating_sub(3)..],
+                )
             }
             _ => flow,
         };

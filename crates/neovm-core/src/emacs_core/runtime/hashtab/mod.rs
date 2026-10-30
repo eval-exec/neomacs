@@ -104,11 +104,11 @@ impl MaphashCallee {
 }
 
 const SXHASH_MAX_DEPTH: usize = 3;
-const SXHASH_MAX_LEN: usize = 7;
+pub(crate) const SXHASH_MAX_LEN: usize = 7;
 const SXHASH_FIXNUM_SHIFT: u32 = 2;
 const SXHASH_FIXNUM_BITS: u32 = 62;
 const SXHASH_INTMASK: u64 = (1_u64 << SXHASH_FIXNUM_BITS) - 1;
-const SXHASH_FALLBACK_NONNEG_MASK: u64 = (1_u64 << (SXHASH_FIXNUM_BITS - 1)) - 1;
+pub(crate) const SXHASH_FALLBACK_NONNEG_MASK: u64 = (1_u64 << (SXHASH_FIXNUM_BITS - 1)) - 1;
 const LISP_TYPE_INT0: u64 = 2;
 const LISP_TYPE_INT1: u64 = 6;
 const KNUTH_ALPHA: u32 = 2_654_435_769;
@@ -154,7 +154,7 @@ pub(crate) fn hash_key_to_visible_value(table: &LispHashTable, key: &HashKey) ->
         .unwrap_or_else(|| hash_key_to_value(key))
 }
 
-fn sxhash_combine(x: u64, y: u64) -> u64 {
+pub(crate) fn sxhash_combine(x: u64, y: u64) -> u64 {
     x.rotate_left(4).wrapping_add(y)
 }
 
@@ -246,7 +246,11 @@ fn fallback_sxhash_emacs_uint(value: &Value, test: HashTableTest, symbol_mode: S
     hasher.finish() & SXHASH_FALLBACK_NONNEG_MASK
 }
 
-fn emacs_sxhash_obj_with_fallback(value: &Value, depth: usize, symbol_mode: SymbolMode) -> u64 {
+pub(crate) fn emacs_sxhash_obj_with_fallback(
+    value: &Value,
+    depth: usize,
+    symbol_mode: SymbolMode,
+) -> u64 {
     emacs_sxhash_obj(value, depth, symbol_mode)
         .unwrap_or_else(|| fallback_sxhash_emacs_uint(value, HashTableTest::Equal, symbol_mode))
 }
@@ -326,54 +330,6 @@ fn emacs_sxhash_overlay(value: &Value, depth: usize, symbol_mode: SymbolMode) ->
     Some(hash)
 }
 
-/// GNU `sxhash_obj` (src/fns.c:5525-5536) sends a `PVEC_CLOSURE` through
-/// `sxhash_vector` like any pseudovector `internal_equal` walks, so two
-/// `equal` byte-code objects hash alike and share an `equal` hash-table
-/// bucket.  The elements are [`ByteCodeFunction::structural_parts`] -- the
-/// same sequence `equal` compares, so everything `equal` distinguishes,
-/// including a captured environment beside the constants, moves the hash --
-/// folded like `sxhash_vector`: seeded with the slot count, at most
-/// `SXHASH_MAX_LEN` elements.
-fn emacs_sxhash_bytecode(value: &Value, depth: usize, symbol_mode: SymbolMode) -> Option<u64> {
-    use crate::emacs_core::bytecode::ByteCodeStructuralPart as Part;
-    let bc = value.get_bytecode_data()?;
-    let mut parts = bc.structural_parts();
-    let Part::ObservableSlotCount(slot_count) = parts.next()? else {
-        unreachable!("byte-code structure starts with its observable shape")
-    };
-    let mut hash = slot_count as u64;
-    for part in parts.take(SXHASH_MAX_LEN) {
-        let part_hash = match part {
-            Part::ObservableSlotCount(_) => {
-                unreachable!("byte-code structure contains one leading shape")
-            }
-            Part::Value(value) => emacs_sxhash_obj_with_fallback(&value, depth + 1, symbol_mode),
-            Part::Bytes(bytes) => emacs_hash_char_array(bytes),
-            Part::Ops(ops) => {
-                let mut hasher = DefaultHasher::new();
-                ops.hash(&mut hasher);
-                hasher.finish() & SXHASH_FALLBACK_NONNEG_MASK
-            }
-            Part::Values(values) => {
-                let mut vector_hash = values.len() as u64;
-                for value in values.iter().take(SXHASH_MAX_LEN) {
-                    vector_hash = sxhash_combine(
-                        vector_hash,
-                        emacs_sxhash_obj_with_fallback(value, depth + 2, symbol_mode),
-                    );
-                }
-                vector_hash
-            }
-            // GNU `sxhash_string` hashes the bytes; equal strings have equal
-            // bytes whatever their representation.
-            Part::Text(text) => emacs_hash_char_array(text.as_bytes()),
-            Part::Absent => 42,
-        };
-        hash = sxhash_combine(hash, part_hash);
-    }
-    Some(hash)
-}
-
 fn emacs_sxhash_obj(value: &Value, depth: usize, symbol_mode: SymbolMode) -> Option<u64> {
     if depth > SXHASH_MAX_DEPTH {
         return Some(0);
@@ -396,7 +352,7 @@ fn emacs_sxhash_obj(value: &Value, depth: usize, symbol_mode: SymbolMode) -> Opt
             emacs_sxhash_structural_pseudovector(value, depth, symbol_mode)
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => {
-            emacs_sxhash_bytecode(value, depth, symbol_mode)
+            (crate::emacs_core::value::bytecode_semantics().sxhash)(value, depth, symbol_mode)
         }
         ValueKind::Veclike(VecLikeType::Bignum) => sxhash_bignum(value),
         ValueKind::Veclike(VecLikeType::BoolVector) => sxhash_bool_vector(value),

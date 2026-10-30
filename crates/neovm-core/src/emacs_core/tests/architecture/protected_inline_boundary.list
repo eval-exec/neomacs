@@ -198,7 +198,7 @@ always	emacs_core/runtime/symbol/mod.rs	Obarray::function_epoch	run_loop,builtin
 always	emacs_core/runtime/symbol/mod.rs	Obarray::set_plain_untrapped_value_id	run_loop,inline
 always	emacs_core/runtime/symbol/mod.rs	Obarray::swap_plain_untrapped_value_id	run_loop,inline
 always	emacs_core/runtime/symbol/mod.rs	SymbolChunks::get_mut	run_loop,inline
-always	emacs_core/runtime/value/mod.rs	TaggedValue::bytecode_data_typechecked_by_caller	run_loop,inline
+always	emacs_core/runtime/bytecode/value_api.rs	TaggedValue::bytecode_data_typechecked_by_caller	run_loop,inline
 always	emacs_core/runtime/value/mod.rs	TaggedValue::bytecode_runtime_word	run_loop,inline
 always	emacs_core/runtime/value/mod.rs	TaggedValue::make_cons	run_loop,inline
 always	emacs_core/runtime/value/mod.rs	add_wrapping	run_loop,funcall_general_untraced,inline
@@ -300,8 +300,8 @@ exempt	emacs_core/runtime/value/mod.rs	HashTableStorage::pending_entries	run_loo
 exempt	emacs_core/runtime/value/mod.rs	LispHashTable::needs_hydration	run_loop,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/value/mod.rs	TaggedValue::as_hash_table	run_loop	# inlined at the protected site, called out of line by 4 other functions: always would re-tune them
 exempt	emacs_core/runtime/value/mod.rs	TaggedValue::cons	run_loop	# inlined at the protected site, called out of line by 21 other functions: always would re-tune them
-exempt	emacs_core/runtime/value/mod.rs	TaggedValue::get_bytecode_data	run_loop,apply1,funcall_general_untraced	# inlined at the protected site, called out of line by 9 other functions: always would re-tune them
-exempt	emacs_core/runtime/value/mod.rs	TaggedValue::make_bytecode	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+exempt	emacs_core/runtime/bytecode/value_api.rs	TaggedValue::get_bytecode_data	run_loop,apply1,funcall_general_untraced	# inlined at the protected site, called out of line by 9 other functions: always would re-tune them
+exempt	emacs_core/runtime/bytecode/value_api.rs	TaggedValue::make_bytecode	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
 exempt	emacs_core/runtime/value/mod.rs	TaggedValue::symbol	run_loop,funcall_general_untraced	# inlined at the protected site, called out of line by 11 other functions: always would re-tune them
 exempt	emacs_core/runtime/value/mod.rs	eq_value_swp	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	tagged/collection_reads.rs	observe	run_loop,apply1,funcall_general_untraced,builtin_mapcar_2,builtin_mapc_2,mapcar1_with_callee,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
