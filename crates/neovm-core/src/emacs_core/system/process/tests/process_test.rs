@@ -7750,6 +7750,27 @@ fn sleep_for_uses_shared_wait_request_for_process_output_and_timers() {
         ],
     )
     .expect("install sleep-for process filter");
+    // The claim is that sleep-for services output that is ready, not that the
+    // host execs `echo` within the 50 ms sleep: under a loaded gate it may not
+    // have written yet, and GNU would then run no filter either. Wait for the
+    // kernel to report the child exited, so its output and EOF are already in
+    // the pipe when the sleep starts.
+    #[cfg(unix)]
+    {
+        let os_pid = ev
+            .processes
+            .get(pid)
+            .and_then(|process| process.os_pid)
+            .expect("a spawned child has an OS pid");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while std::time::Instant::now() < deadline && !pw187_is_zombie(os_pid, 0) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            pw187_is_zombie(os_pid, 0),
+            "echo must have exited, unreaped, before sleep-for starts"
+        );
+    }
     ev.set_variable(
         "timer-list",
         Value::list(vec![gnu_timer_before(
