@@ -4,8 +4,8 @@
 //! Completed manifest arms exercise their real boundary before entering the
 //! lease fixture. Every remaining red reaches its named assertion, releases
 //! its real lease and root homes, finishes the era, and only then resumes the
-//! original assertion. No machine code, table publication or grace receipt is
-//! minted here.
+//! original assertion. The retired-publication arm exercises the actual era
+//! descriptor boundary. No machine code or grace receipt is minted here.
 
 use super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::{Mutator, OwnerRootSlot, RegistrationError, RunAccess, SymbolHandle};
@@ -19,6 +19,7 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MissingFeature {
     Gen1Admission,
+    RetiredPublication,
 }
 
 /// The staged boundary manifest. An arm becomes green only by exercising its
@@ -29,6 +30,12 @@ fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
         MissingFeature::Gen1Admission => {
             Context::nmjit_n2_production_boundary_for_test().map_err(|reason| {
                 eprintln!("NMJIT_N2_PRODUCTION_BOUNDARY_FAILURE {reason}");
+                feature
+            })
+        }
+        MissingFeature::RetiredPublication => {
+            super::symbol_intern::nmjit_n3_retired_publication_manifest().map_err(|reason| {
+                eprintln!("NMJIT_N3_RETIRED_PUBLICATION_FAILURE {reason}");
                 feature
             })
         }
@@ -175,6 +182,13 @@ macro_rules! missing_test {
 }
 
 missing_test!(nmjit_n1_missing_gen1_admission, Gen1Admission);
+
+
+
+
+
+missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);
+
 
 #[test]
 fn nmjit_n1_noop_fixture_finishes_cleanly() {

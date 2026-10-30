@@ -1,9 +1,10 @@
 //! Actual backing publication: old descriptors are retained across intern.
+use super::fixture::*;
 use super::*;
 use crate::emacs_core::intern::NameId;
 use crate::emacs_core::symbol::LispSymbol;
 use crate::tagged::gc::symbol_table::{PublishedSymbolTable, SymbolChunkIndex};
-use crate::tagged::gc::{InitialInternError, RegistrationError, SymbolHandle};
+use crate::tagged::gc::{InitialInternError, PlainSymbolBacking, RegistrationError, SymbolHandle};
 
 fn name_through_table(
     run: &mut RunAccess<'_, '_>,
