@@ -199,33 +199,46 @@ impl Context {
         })
     }
 
-    /// `eval_lambda_body_forms`.
+    /// `eval_lambda_body_forms`: GNU `funcall_lambda` evaluates the body with
+    /// `Fprogn` (eval.c:3448-3455), so the body is a sequence owner: one
+    /// frame for its temps and a traced slot for the prefetched
+    /// continuation, released on success, error and thread-block returns.
     fn ti_body_forms(&mut self, act: &Act, body: Value, seq: &Seq) -> EvalResult {
-        let mut cursor = body;
-        let mut last = Value::NIL;
-        let mut index = 0;
-        while cursor.is_cons() {
-            // As `sf_progn_value`: GNU Fprogn reads the rest of the list
-            // before the form runs, so a form that mutates the list cannot
-            // skip its later siblings.
-            let form = cursor.cons_car();
-            let rest = cursor.cons_cdr();
-            cursor = rest;
-            match self.ti_nth(act, form, seq, index).kinded() {
-                Ok(value) => last = value,
-                Err(FlowKind::ThreadBlocked(blocked)) => {
-                    let remaining_forms = if blocked.remaining_forms.is_nil() {
-                        rest
-                    } else {
-                        blocked.remaining_forms
-                    };
-                    return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
+        let temp_scope = self.save_sequence_temp_roots();
+        let continuation = self.push_saved_continuation(body);
+        let result = (|| {
+            let mut cursor = body;
+            let mut last = Value::NIL;
+            let mut index = 0;
+            while cursor.is_cons() {
+                // As `sf_progn_value`: GNU Fprogn reads the rest of the list
+                // before the form runs, so a form that mutates the list
+                // cannot skip its later siblings.  A stale compiled Seq node
+                // cannot override the actual form: `ti_nth` falls back to an
+                // island evaluation whenever the form is not the object the
+                // node was compiled from.
+                let form = cursor.cons_car();
+                let rest = cursor.cons_cdr();
+                self.set_saved_continuation(continuation, rest);
+                cursor = rest;
+                match self.ti_nth(act, form, seq, index).kinded() {
+                    Ok(value) => last = value,
+                    Err(FlowKind::ThreadBlocked(blocked)) => {
+                        let remaining_forms = if blocked.remaining_forms.is_nil() {
+                            rest
+                        } else {
+                            blocked.remaining_forms
+                        };
+                        return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
+                    }
+                    Err(flow) => return Err(Flow::from_kind(flow)),
                 }
-                Err(flow) => return Err(Flow::from_kind(flow)),
+                index += 1;
             }
-            index += 1;
-        }
-        Ok(last)
+            Ok(last)
+        })();
+        self.restore_sequence_temp_roots(temp_scope);
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -905,15 +918,20 @@ impl Context {
 
     /// The loop inside `sf_progn_value`'s temp-root scope.
     fn ti_progn_forms(&mut self, act: &Act, forms: Value, seq: &Seq) -> EvalResult {
+        // As `sf_progn_value`: the prefetched continuation is a traced slot
+        // in this progn's sequence scope, not an unrooted stack local.
+        let continuation = self.push_saved_continuation(forms);
         let mut cursor = forms;
         let mut last = Value::NIL;
         let mut index = 0;
         while cursor.is_cons() {
             // As `sf_progn_value`: GNU Fprogn reads the rest of the list
             // before the form runs, so a form that mutates the list cannot
-            // skip its later siblings.
+            // skip its later siblings.  An improper final tail ends the
+            // loop; GNU does not validate it.
             let form = cursor.cons_car();
             let rest = cursor.cons_cdr();
+            self.set_saved_continuation(continuation, rest);
             cursor = rest;
             match self.ti_nth(act, form, seq, index).kinded() {
                 Ok(value) => last = value,
@@ -928,9 +946,6 @@ impl Context {
                 Err(flow) => return Err(Flow::from_kind(flow)),
             }
             index += 1;
-        }
-        if !cursor.is_nil() {
-            return Err(self.listp_error(forms));
         }
         Ok(last)
     }

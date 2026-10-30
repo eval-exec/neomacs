@@ -821,15 +821,23 @@ impl Context {
     #[inline(never)]
     pub(super) fn sf_progn_value(&mut self, forms: Value) -> EvalResult {
         let temp_scope = self.save_sequence_temp_roots();
+        // GNU Fprogn's `body` local lives in the C frame and stays scanned
+        // for the whole iteration; the traced slot is that visibility for a
+        // precise GC, updated before every evaluation that may run Lisp,
+        // collect, or enter the debugger.
+        let continuation = self.push_saved_continuation(forms);
         let result = (|| {
             let mut cursor = forms;
             let mut last = Value::NIL;
             while cursor.is_cons() {
-                // GNU Fprogn (eval.c:440-445) reads the rest of the list
+                // GNU Fprogn (eval.c:433-446) reads the rest of the list
                 // BEFORE evaluating the form: a form that mutates its own
-                // containing list cannot skip its later siblings.
+                // containing list cannot skip its later siblings.  An
+                // improper final tail just ends the loop; GNU does not
+                // validate it.
                 let form = cursor.cons_car();
                 let rest = cursor.cons_cdr();
+                self.set_saved_continuation(continuation, rest);
                 cursor = rest;
                 match self.eval_sub(form).kinded() {
                     Ok(value) => last = value,
@@ -843,9 +851,6 @@ impl Context {
                     }
                     Err(flow) => return Err(Flow::from_kind(flow)),
                 }
-            }
-            if !cursor.is_nil() {
-                return Err(self.listp_error(forms));
             }
             Ok(last)
         })();

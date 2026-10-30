@@ -41,24 +41,39 @@ impl Context {
 
     #[inline(always)]
     fn eval_lambda_body_forms(&mut self, body: Value) -> EvalResult {
-        let mut cursor = body;
-        let mut last = Value::NIL;
-        while cursor.is_cons() {
-            match self.eval_sub(cursor.cons_car()).kinded() {
-                Ok(value) => last = value,
-                Err(FlowKind::ThreadBlocked(blocked)) => {
-                    let remaining_forms = if blocked.remaining_forms.is_nil() {
-                        cursor.cons_cdr()
-                    } else {
-                        blocked.remaining_forms
-                    };
-                    return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
+        // GNU `funcall_lambda` evaluates the body with `Fprogn`
+        // (eval.c:3448-3455, 433-446): the body is a sequence owner, the
+        // rest is read BEFORE the form runs, and the saved continuation is a
+        // Lisp_Object in the C frame that stays visible to GC while the form
+        // runs.  The traced slot is that visibility for a precise GC; an
+        // improper tail ends the loop without a signal.
+        let temp_scope = self.save_sequence_temp_roots();
+        let continuation = self.push_saved_continuation(body);
+        let result = (|| {
+            let mut cursor = body;
+            let mut last = Value::NIL;
+            while cursor.is_cons() {
+                let form = cursor.cons_car();
+                let rest = cursor.cons_cdr();
+                self.set_saved_continuation(continuation, rest);
+                cursor = rest;
+                match self.eval_sub(form).kinded() {
+                    Ok(value) => last = value,
+                    Err(FlowKind::ThreadBlocked(blocked)) => {
+                        let remaining_forms = if blocked.remaining_forms.is_nil() {
+                            rest
+                        } else {
+                            blocked.remaining_forms
+                        };
+                        return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
+                    }
+                    Err(flow) => return Err(Flow::from_kind(flow)),
                 }
-                Err(flow) => return Err(Flow::from_kind(flow)),
             }
-            cursor = cursor.cons_cdr();
-        }
-        Ok(last)
+            Ok(last)
+        })();
+        self.restore_sequence_temp_roots(temp_scope);
+        result
     }
 
     /// Evaluate a runtime Value form, matching GNU Emacs's `eval_sub` in eval.c.

@@ -700,3 +700,90 @@ fn eval_boundary_releases_its_temporary_roots_in_every_tier() {
         );
     }
 }
+
+/// GNU `Fprogn` (eval.c:433-446) reads the rest of the body before evaluating
+/// the form, keeps that continuation visible across a collection, and ends
+/// the loop at an improper tail without signaling.  The ten controls cover
+/// both lexical modes; the tree walker and Tier-I must agree with GNU.
+#[test]
+fn progn_saved_continuation_and_improper_tail_in_every_tier() {
+    let src = r#"
+(progn
+  (defun ti-progn-owner-case (kind lexical)
+    (let* ((f (list 'progn nil '(quote old-next)))
+           (args (cdr f)))
+      (setcar args
+              (cond
+               ((eq kind 'mutate-final-tail-to-atom-no-gc)
+                (list 'progn (list 'setcdr (list 'quote (cddr f)) 7) '(quote step)))
+               (t
+                (list 'progn
+                      (if (memq kind '(detach-tail-no-gc detach-tail-gc))
+                          (list 'setcdr (list 'quote args) nil)
+                        '(quote keep-tail))
+                      (if (memq kind '(keep-tail-gc detach-tail-gc))
+                          '(garbage-collect)
+                        '(quote no-gc))
+                      '(quote step)))))
+      (list kind lexical
+            (condition-case e (list 'value (eval f lexical))
+              (error (list 'signal e))))))
+  (let (results)
+    (dolist (lexical '(nil t))
+      (dolist (kind '(keep-tail-no-gc detach-tail-no-gc keep-tail-gc detach-tail-gc
+                      mutate-final-tail-to-atom-no-gc))
+        (push (ti-progn-owner-case kind lexical) results)))
+    (nreverse results)))
+"#;
+    let expected = "OK ((keep-tail-no-gc nil (value old-next)) (detach-tail-no-gc nil (value old-next)) (keep-tail-gc nil (value old-next)) (detach-tail-gc nil (value old-next)) (mutate-final-tail-to-atom-no-gc nil (value old-next)) (keep-tail-no-gc t (value old-next)) (detach-tail-no-gc t (value old-next)) (keep-tail-gc t (value old-next)) (detach-tail-gc t (value old-next)) (mutate-final-tail-to-atom-no-gc t (value old-next)))";
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        expected,
+        "the tree walker dropped the saved continuation or rejected an improper tail"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        assert_eq!(
+            run(mode, src).0,
+            off,
+            "{mode:?} differs on the saved continuation or the improper tail"
+        );
+    }
+}
+
+/// GNU `funcall_lambda` evaluates a body with `Fprogn` (eval.c:3448-3455), so
+/// a lambda body has the same saved-continuation semantics: a body form that
+/// detaches its own tail and collects must still reach the detached sibling,
+/// and a final atom tail must not be rejected.
+#[test]
+fn lambda_body_saved_continuation_in_every_tier() {
+    let src = r#"
+(list
+ (let* ((body (list nil '(quote old-next)))
+        (cell body)
+        (fn (eval (cons 'lambda (cons nil body)) nil)))
+   (setcar body
+           (list 'progn (list 'setcdr (list 'quote cell) nil)
+                 '(garbage-collect) '(quote step)))
+   (condition-case e (list 'value (funcall fn)) (error (list 'signal e))))
+ (let* ((body (list nil '(quote old-next)))
+        (cell (cdr body))
+        (fn (eval (cons 'lambda (cons nil body)) nil)))
+   (setcar body
+           (list 'progn (list 'setcdr (list 'quote cell) 7) '(quote step)))
+   (condition-case e (list 'value (funcall fn)) (error (list 'signal e)))))
+"#;
+    let off = run(TierIMode::Off, src).0;
+    assert_eq!(
+        last(&off),
+        "OK ((value old-next) (value old-next))",
+        "the tree walker re-read the mutated spine instead of the saved continuation"
+    );
+    for mode in [TierIMode::Verify, TierIMode::On] {
+        assert_eq!(
+            run(mode, src).0,
+            off,
+            "{mode:?} differs on a lambda body's saved continuation"
+        );
+    }
+}

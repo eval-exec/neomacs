@@ -303,3 +303,53 @@ fn oracle_prop_progn_deeply_nested_return() {
     let expect = expect_test::expect![[r#""OK (31 (a b c d))""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+// ---------------------------------------------------------------------------
+// Saved continuation across a mutating body form (GNU Fprogn's `body` local)
+// ---------------------------------------------------------------------------
+
+/// GNU `Fprogn` reads the rest of the body BEFORE evaluating the form
+/// (eval.c:433-446), keeps that saved continuation in its C frame, and ends
+/// the loop at an improper tail without signaling.  A body form that detaches
+/// its own tail and then collects must still reach the detached sibling, and
+/// a final atom tail must not be rejected.  Expected output is GNU 31.1's.
+#[test]
+fn oracle_prop_progn_saved_continuation_detach_and_improper_tail() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let expect = expect_test::expect![[
+        r#""OK ((keep-tail-no-gc nil (value old-next)) (detach-tail-no-gc nil (value old-next)) (keep-tail-gc nil (value old-next)) (detach-tail-gc nil (value old-next)) (mutate-final-tail-to-atom-no-gc nil (value old-next)) (keep-tail-no-gc t (value old-next)) (detach-tail-no-gc t (value old-next)) (keep-tail-gc t (value old-next)) (detach-tail-gc t (value old-next)) (mutate-final-tail-to-atom-no-gc t (value old-next)))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(
+        r##"
+(progn
+  (defun neovm--oracle-progn-owner-case (kind lexical)
+    (let* ((f (list 'progn nil '(quote old-next)))
+           (args (cdr f)))
+      ;; Only F and its first argument cell stay reachable; the old second
+      ;; spine cell is never named outside the pre-fetched continuation.
+      (setcar args
+              (cond
+               ((eq kind 'mutate-final-tail-to-atom-no-gc)
+                (list 'progn (list 'setcdr (list 'quote (cddr f)) 7) '(quote step)))
+               (t
+                (list 'progn
+                      (if (memq kind '(detach-tail-no-gc detach-tail-gc))
+                          (list 'setcdr (list 'quote args) nil)
+                        '(quote keep-tail))
+                      (if (memq kind '(keep-tail-gc detach-tail-gc))
+                          '(garbage-collect)
+                        '(quote no-gc))
+                      '(quote step)))))
+      (list kind lexical
+            (condition-case e (list 'value (eval f lexical))
+              (error (list 'signal e))))))
+  (let (results)
+    (dolist (lexical '(nil t))
+      (dolist (kind '(keep-tail-no-gc detach-tail-no-gc keep-tail-gc detach-tail-gc
+                      mutate-final-tail-to-atom-no-gc))
+        (push (neovm--oracle-progn-owner-case kind lexical) results)))
+    (nreverse results)))
+"##,
+        expect,
+    );
+}

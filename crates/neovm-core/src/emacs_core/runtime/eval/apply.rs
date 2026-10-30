@@ -72,6 +72,33 @@ impl<'a> RootedCallable<'a> {
 cached_symbol_id!(optional_arg_symbol, "&optional");
 cached_symbol_id!(rest_arg_symbol, "&rest");
 
+/// One traced slot holding a body sequence's rest across one form's
+/// evaluation: GNU Fprogn's `body` local (eval.c:433-446), which lives in
+/// the C frame and stays conservatively scanned while the form runs.
+///
+/// Constructible only by [`Context::push_saved_continuation`], and its slot
+/// index is private, so no other code can re-point an arbitrary arena entry.
+/// The token is valid only inside the sequence temp-root scope that created
+/// it; that scope's restore releases the slot on success, error and
+/// thread-block returns. It must not outlive that scope or move to another
+/// Context.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SavedContinuationRoot {
+    slot: usize,
+}
+
+impl SavedContinuationRoot {
+    #[inline]
+    fn new(slot: usize) -> Self {
+        Self { slot }
+    }
+
+    #[inline]
+    fn slot(self) -> usize {
+        self.slot
+    }
+}
+
 /// Restore only this synchronous callback's failed native activation. Its
 /// saved prefix belongs to the current mutator thread's existing scratch roots;
 /// no root snapshot crosses threads. Keep the TLS address and borrow machinery
@@ -1275,6 +1302,27 @@ impl Context {
         let slot = self.eval_temp_roots.len();
         self.eval_temp_roots.push(value);
         slot
+    }
+
+    /// Publish a body sequence's prefetched continuation into its traced
+    /// root slot. The slot is created and updated by the body loop, whose
+    /// enclosing sequence scope releases it on every exit.
+    #[inline]
+    pub(super) fn set_saved_continuation(&mut self, root: SavedContinuationRoot, value: Value) {
+        self.set_eval_temp_root_slot(root.slot(), value);
+    }
+
+    /// Take a traced slot for the rest of a body sequence across one form's
+    /// evaluation: GNU Fprogn's `body` local (eval.c:433-446), a Lisp_Object
+    /// in the C frame that the conservative stack scan keeps visible while a
+    /// form runs. Neo's GC is precise, so the same visibility has to be an
+    /// explicit root. Call only inside a sequence temp-root scope
+    /// ([`Self::push_saved_continuation`] is paired with
+    /// `save_sequence_temp_roots`); that scope's restore releases the slot on
+    /// success, error and thread-block returns.
+    #[inline]
+    pub(super) fn push_saved_continuation(&mut self, value: Value) -> SavedContinuationRoot {
+        SavedContinuationRoot::new(self.push_eval_temp_root_slot(value))
     }
 
     pub(super) fn set_eval_temp_root_slot(&mut self, slot: usize, value: Value) {
