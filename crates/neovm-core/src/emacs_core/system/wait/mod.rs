@@ -17,6 +17,17 @@ use super::process::{
     ProcessOutputWaitTiming, ProcessWaitBackendInterest, ProcessWaitEvents,
 };
 
+/// Upper bound on the zero-time MINIMUM drain that follows a live read.
+///
+/// GNU's loop (`process.c:6021-6032`) has no such counter; it returns when the
+/// zero-time `select` reports no ready fd. That is the right exit for a ready
+/// burst, but a producer that stays readable at every pass would keep an
+/// `accept-process-output` that has already selected its completion inside the
+/// drain indefinitely. 4096 passes is 256 MiB at the default 64 KiB
+/// `read-process-output-max`, and still covers the 128-byte burst the
+/// one-byte-read regression test builds.
+pub(crate) const MAX_MINIMUM_DRAIN_PASSES: usize = 4096;
+
 /// GNU's `status_notify` call *inside* `wait_reading_process_output`
 /// (src/process.c:5554 and :5854), as a capability that only this module can
 /// hand out.
@@ -1307,11 +1318,28 @@ impl super::eval::Context {
         // both targeted and untargeted accepts, without blocking for new bytes.
         // Explicit PTY coding still controls output-before-status ordering in
         // the process service layer; it must not suppress the output drain.
+        //
+        // GNU has no pass limit here; the source must go quiet for the wait to
+        // return. This port keeps the same exit for a ready burst, but bounds
+        // the vacuum so a source that is readable at every pass cannot keep an
+        // already-completed accept from yielding to timers and its caller.
+        // At the default 64 KiB read cap, the bound covers 256 MiB; the
+        // one-byte read-cap burst test still drains its whole 128-byte burst.
+        //
+        // A source left readable past the bound stays in its pipe: the next
+        // accept reads it, exactly like GNU's deferred-output path. At the
+        // default 64 KiB read cap the bound covers 256 MiB, far past a pipe's
+        // usual capacity; a deliberately tiny read cap shrinks the covered
+        // burst, and the rest still waits in the pipe instead of being dropped.
         if request.needs_minimum_process_drain_before_completion(completion, outcome) {
-            while self
-                .service_minimum_process_drain(request)?
-                .has_any_process_activity()
-            {}
+            for _ in 0..MAX_MINIMUM_DRAIN_PASSES {
+                if !self
+                    .service_minimum_process_drain(request)?
+                    .has_any_process_activity()
+                {
+                    break;
+                }
+            }
         }
 
         Ok(Some(completion))

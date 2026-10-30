@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::emacs_core::Context;
+use crate::emacs_core::wait::MAX_MINIMUM_DRAIN_PASSES;
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::sync::{
@@ -197,6 +198,66 @@ fn accept_process_output_drains_a_ready_burst_in_one_call() {
             "deleting the process after one accept must retain its entire output"
         );
     }
+}
+
+#[test]
+fn completed_accept_yields_after_a_bounded_minimum_drain() {
+    let mut eval = Context::new();
+    eval.set_variable("read-process-output-max", Value::make_int(1));
+    eval.sync_process_read_config_from_visible_variables();
+    let (hot, _) = ready_process(&mut eval, "bounded-drain", 0);
+    // Fill a real pipe and keep the writer open: the source stays readable at
+    // every follow-up pass, like a producer that never pauses. The pipe must
+    // hold more than one follow-up bound so only the bound can end the drain.
+    let (reader, mut writer) = os_pipe::pipe().unwrap();
+    sys::set_fd_nonblocking(reader.as_raw_fd()).unwrap();
+    sys::set_fd_nonblocking(writer.as_raw_fd()).unwrap();
+    let chunk = [b'x'; 4096];
+    let mut written = 0usize;
+    loop {
+        match writer.write(&chunk) {
+            Ok(0) => break,
+            Ok(n) => written += n,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) => panic!("fill pipe: {error}"),
+        }
+    }
+    assert!(
+        written > MAX_MINIMUM_DRAIN_PASSES + 1,
+        "pipe holds {written} bytes, too little to observe the follow-up bound"
+    );
+    {
+        let process = eval.processes.get_mut(hot).unwrap();
+        process.kind = ProcessKind::Pipe;
+        process.childp = Value::NIL;
+        process.live_io.pty_reader = None;
+        process.live_io.child_stdout = Some(ChildOutputReader::Shared(reader));
+    }
+    eval.set_variable("bounded-drain-process", Value::make_process(hot));
+    eval.eval_str("(set-process-sentinel bounded-drain-process (lambda (_p _event) nil))")
+        .unwrap();
+    let result = builtin_accept_process_output(
+        &mut eval,
+        vec![Value::make_process(hot), Value::NIL, Value::NIL, Value::NIL],
+    )
+    .unwrap();
+
+    assert!(result.is_truthy());
+    let drained = eval
+        .eval_str(r#"(save-current-buffer (set-buffer "bounded-drain") (buffer-size))"#)
+        .unwrap()
+        .as_int()
+        .unwrap() as usize;
+    assert_eq!(
+        drained,
+        MAX_MINIMUM_DRAIN_PASSES + 1,
+        "one readiness read followed by the bounded follow-up drain"
+    );
+    assert!(
+        written > drained,
+        "the rest of the ready burst must stay in the pipe for the next accept"
+    );
+    drop(writer);
 }
 
 #[test]
