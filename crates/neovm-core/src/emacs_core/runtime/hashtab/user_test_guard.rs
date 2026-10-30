@@ -1,4 +1,4 @@
-use crate::emacs_core::builtins::HashTestGcInhibitAccounting;
+use super::HashTestGcInhibitAccounting;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 use crate::tagged::header::HashTableObj;

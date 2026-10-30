@@ -3685,13 +3685,15 @@ struct GcRuntimeSettingsCache {
 /// the runtime-settings cache's size and its word-sized discriminant niche.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug)]
-struct HashTestGcAccountingSlot(*mut super::builtins::HashTestGcInhibitAccounting);
+struct HashTestGcAccountingSlot(*mut crate::emacs_core::hashtab::HashTestGcInhibitAccounting);
 
 impl HashTestGcAccountingSlot {
     const NEEDS_LIVE_SETTINGS: usize = 1;
 
     #[inline]
-    fn accounting(self) -> Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>> {
+    fn accounting(
+        self,
+    ) -> Option<std::ptr::NonNull<crate::emacs_core::hashtab::HashTestGcInhibitAccounting>> {
         std::ptr::NonNull::new(
             self.0
                 .map_addr(|address| address & !Self::NEEDS_LIVE_SETTINGS),
@@ -3701,8 +3703,8 @@ impl HashTestGcAccountingSlot {
     #[inline]
     fn replace_accounting(
         &mut self,
-        pointer: Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>>,
-    ) -> Option<std::ptr::NonNull<super::builtins::HashTestGcInhibitAccounting>> {
+        pointer: Option<std::ptr::NonNull<crate::emacs_core::hashtab::HashTestGcInhibitAccounting>>,
+    ) -> Option<std::ptr::NonNull<crate::emacs_core::hashtab::HashTestGcInhibitAccounting>> {
         let previous = self.accounting();
         let visibility = self.0.addr() & Self::NEEDS_LIVE_SETTINGS;
         self.0 = pointer
@@ -3731,7 +3733,7 @@ impl Default for HashTestGcAccountingSlot {
 }
 
 const _: () = {
-    assert!(std::mem::align_of::<super::builtins::HashTestGcInhibitAccounting>() >= 2);
+    assert!(std::mem::align_of::<crate::emacs_core::hashtab::HashTestGcInhibitAccounting>() >= 2);
     assert!(std::mem::size_of::<HashTestGcAccountingSlot>() == std::mem::size_of::<usize>());
 };
 

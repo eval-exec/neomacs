@@ -1,7 +1,7 @@
 //! Lazy allocation-countdown accounting for GNU user hash-test callbacks.
 
 use super::*;
-use crate::emacs_core::builtins::HashTestGcInhibitAccounting;
+use crate::emacs_core::hashtab::HashTestGcInhibitAccounting;
 use std::ptr::NonNull;
 
 impl Context {

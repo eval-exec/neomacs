@@ -9711,8 +9711,10 @@ impl<'a> Vm<'a> {
     }
 
     fn builtin_mapatoms_shared(&mut self, args: &[Value]) -> EvalResult {
-        let (func, symbols) =
-            crate::emacs_core::hashtab::collect_mapatoms_symbols(self.ctx, args.to_vec())?;
+        let (func, symbols) = crate::emacs_core::builtins::symbols::collect_mapatoms_symbols(
+            self.ctx,
+            args.to_vec(),
+        )?;
         self.with_dynamic_vm_roots(|vm| {
             vm.push_dynamic_vm_root(func);
             // `symbols` contains immediate IDs backed by the append-only

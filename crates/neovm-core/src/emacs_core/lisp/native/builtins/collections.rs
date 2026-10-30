@@ -638,24 +638,6 @@ pub(crate) struct HashTableTestRegistry {
     aliases: HashMap<String, HashTableTestAlias>,
 }
 
-/// Entry operands for one synchronous, GC-inhibited user-test activation.
-/// The owning mutator pins this on its stack and its Context selects it;
-/// independent mutators never share it. Normalized scalar settings preserve
-/// the entry countdown without holding Lisp values across callbacks.
-#[derive(Clone, Copy)]
-pub(crate) struct HashTestGcInhibitAccounting {
-    pub(crate) bytes_at_start: usize,
-    pub(crate) charged_bytes_at_start: usize,
-    pub(crate) collector_threshold_at_start: usize,
-    /// Resolved only when GC-maybe first needs the saved entry operands.
-    pub(crate) threshold_at_start: Option<std::num::NonZeroUsize>,
-    pub(crate) entry_threshold_bytes: usize,
-    pub(crate) entry_percentage_scaled: Option<std::num::NonZeroU64>,
-    pub(crate) threshold_overridden: bool,
-    pub(crate) memory_full: bool,
-    pub(crate) startup_ceiling: bool,
-}
-
 #[derive(Clone)]
 pub(crate) struct HashTableTestAlias {
     pub(crate) standard_test: Option<HashTableTest>,

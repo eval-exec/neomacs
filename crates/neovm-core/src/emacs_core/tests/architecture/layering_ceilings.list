@@ -1,6 +1,5 @@
-g0 builtins 12
 g0 bytecode 16
-g0 eval 27
+g0 eval 21
 g0 jit 6
 g0 pdump 11
 g0 plist 3

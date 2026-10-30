@@ -7003,6 +7003,207 @@ pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
     LOSSAGE_SIZE.with(|size| std::mem::swap(&mut *size.borrow_mut(), slot));
 }
 
+// ---------------------------------------------------------------------------
+// Argument helpers
+// ---------------------------------------------------------------------------
+
+fn validate_optional_obarray_arg(args: &[Value]) -> Result<(), Flow> {
+    if let Some(obarray) = args.get(1)
+        && !obarray.is_nil()
+    {
+        check_obarray_value(*obarray)?;
+    }
+    Ok(())
+}
+
+fn is_global_obarray_proxy_in_state(
+    vars: crate::emacs_core::eval::VariableView<'_>,
+    value: &Value,
+) -> bool {
+    vars.value_by_name("obarray")
+        .is_some_and(|proxy| proxy == *value)
+}
+
+/// (mapatoms FUNCTION &optional OBARRAY) — call FUNCTION with each interned symbol.
+pub(crate) fn builtin_mapatoms(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let roots = eval.save_specpdl_roots();
+    for arg in &args {
+        eval.push_specpdl_root(*arg);
+    }
+    let (func, symbols) = collect_mapatoms_symbols(eval, args)?;
+    eval.push_specpdl_root(func);
+    // The snapshot contains only immediate `SymId` values. Symbols live in
+    // the process-global append-only registry, so they cannot be reclaimed by
+    // a callback-triggered GC and do not belong in the managed-object root
+    // stack. Rooting every symbol made one Doom startup permanently retain a
+    // multi-megabyte root-vector capacity after `mapatoms` returned.
+    let result = (|| -> EvalResult {
+        for sym in symbols {
+            eval.apply1(func, sym)?;
+        }
+        Ok(Value::NIL)
+    })();
+    eval.restore_specpdl_roots(roots);
+    result
+}
+
+fn effective_mapatoms_obarray_arg(eval: &super::eval::Context, args: &[Value]) -> Value {
+    args.get(1)
+        .copied()
+        .filter(|value| !value.is_nil())
+        .unwrap_or_else(|| current_lisp_obarray_value(eval))
+}
+
+pub(crate) fn collect_mapatoms_symbols(
+    eval: &super::eval::Context,
+    args: Vec<Value>,
+) -> Result<(Value, Vec<Value>), Flow> {
+    expect_min_args("mapatoms", &args, 1)?;
+    expect_max_args("mapatoms", &args, 2)?;
+    let func = args[0];
+    let effective_obarray = effective_mapatoms_obarray_arg(eval, &args);
+
+    if !is_global_obarray_proxy(eval, &effective_obarray) {
+        let custom_obarray = check_obarray_value(effective_obarray)?;
+        let all_slots = obarray_buckets(custom_obarray).unwrap_or_default();
+        let mut symbols = Vec::new();
+        for slot in &all_slots {
+            let mut current = *slot;
+            loop {
+                match current.kind() {
+                    ValueKind::Nil => break,
+                    ValueKind::Cons => {
+                        let car = current.cons_car();
+                        let cdr = current.cons_cdr();
+                        symbols.push(car);
+                        current = cdr;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        return Ok((func, symbols));
+    }
+
+    let symbols = global_obarray_symbols_in_bucket_order(eval.obarray(), effective_obarray);
+    Ok((func, symbols))
+}
+
+/// (unintern NAME OBARRAY) — remove symbol from obarray.
+pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    let symbol_mode = eval.symbol_mode();
+    // GNU `Sunintern` is `2, 2`: OBARRAY is mandatory (may be nil).
+    expect_min_args("unintern", &args, 2)?;
+    expect_max_args("unintern", &args, 2)?;
+    validate_optional_obarray_arg(&args)?;
+
+    // GNU tests SYMBOLP, which includes nil and t. Keep exact-symbol
+    // deletion distinct from name lookup; a namesake in another obarray
+    // must never be removed by a symbol argument.
+    enum UninternTarget<'a> {
+        Symbol(SymId),
+        Name(&'a crate::heap_types::LispString),
+    }
+
+    let target = if let Some(symbol) = args[0].as_symbol_id(eval.symbol_mode()) {
+        UninternTarget::Symbol(symbol)
+    } else if let Some(name) = args[0].as_lisp_string() {
+        UninternTarget::Name(name)
+    } else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[0]],
+        ));
+    };
+
+    let target_name = match &target {
+        UninternTarget::Symbol(id) => crate::emacs_core::intern::resolve_sym_lisp_string(*id),
+        UninternTarget::Name(name) => *name,
+    };
+
+    // Custom obarray path
+    if let Some(custom_obarray) = args
+        .get(1)
+        .filter(|v| !v.is_nil() && !is_global_obarray_proxy_in_state(eval.variables(), v))
+    {
+        let custom_obarray = check_obarray_value(*custom_obarray)?;
+        let vec_len = obarray_len(custom_obarray).unwrap_or(0);
+        if vec_len == 0 {
+            return Ok(Value::NIL);
+        }
+        let bucket_idx = obarray_hash_lisp_string(target_name, vec_len);
+        let bucket = obarray_bucket(custom_obarray, bucket_idx).unwrap_or(Value::NIL);
+
+        // GNU oblookup compares a name's character count and bytes and never
+        // its multibyte flag (lread.c:4945). The canonical name atom of an
+        // ASCII-only spelling is stored unibyte while the query can be
+        // multibyte, so LispString equality (which compares the flag) misses a
+        // symbol that `intern-soft` -- and GNU -- resolve. Compare the way
+        // lookup does.
+        let name_query = match &target {
+            UninternTarget::Name(name) => {
+                Some(crate::emacs_core::intern::SymbolNameQuery::from(*name))
+            }
+            UninternTarget::Symbol(_) => None,
+        };
+
+        // Walk the bucket chain and rebuild without the matching symbol
+        let mut items = Vec::new();
+        let mut found = false;
+        let mut current = bucket;
+        loop {
+            match current.kind() {
+                ValueKind::Nil => break,
+                ValueKind::Cons => {
+                    let car = current.cons_car();
+                    let cdr = current.cons_cdr();
+                    if !found {
+                        let should_remove = match &target {
+                            UninternTarget::Symbol(target_id) => {
+                                car.as_symbol_id(symbol_mode) == Some(*target_id)
+                            }
+                            UninternTarget::Name(_) => name_query.is_some_and(|query| {
+                                car.as_symbol_id(symbol_mode)
+                                    .map(
+                                        crate::emacs_core::intern::resolve_lisp_visible_symbol_name,
+                                    )
+                                    .is_some_and(|sym_name| query.matches(sym_name.text()))
+                            }),
+                        };
+                        if should_remove {
+                            found = true;
+                            current = cdr;
+                            continue;
+                        }
+                    }
+                    items.push(car);
+                    current = cdr;
+                }
+                _ => break,
+            }
+        }
+
+        if found {
+            // Rebuild the bucket chain
+            let new_bucket = items
+                .into_iter()
+                .rev()
+                .fold(Value::NIL, |acc, sym| Value::cons(sym, acc));
+            let _ = set_obarray_bucket(custom_obarray, bucket_idx, new_bucket);
+            note_obarray_symbol_removed(custom_obarray);
+            return Ok(Value::T);
+        }
+        return Ok(Value::NIL);
+    }
+
+    // Global obarray path
+    let removed = match target {
+        UninternTarget::Symbol(id) => eval.obarray.unintern_id(id),
+        UninternTarget::Name(name) => eval.obarray.unintern_lisp_string(name),
+    };
+    Ok(if removed { Value::T } else { Value::NIL })
+}
+
 #[cfg(test)]
 #[path = "tests/positioned_menu_item_identity_test.rs"]
 mod positioned_menu_item_identity_tests;

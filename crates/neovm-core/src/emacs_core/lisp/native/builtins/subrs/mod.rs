@@ -3167,14 +3167,14 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "mapatoms",
-        NativeFn::ContextVec(crate::emacs_core::hashtab::builtin_mapatoms),
+        NativeFn::ContextVec(crate::emacs_core::builtins::symbols::builtin_mapatoms),
         SubrArity::new(1, Some(2)),
     )));
     // GNU `Sunintern` is `2, 2, 0`: the OBARRAY argument is mandatory (it may
     // be nil to default to `obarray`, but it must be supplied).
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "unintern",
-        NativeFn::ContextVec(crate::emacs_core::hashtab::builtin_unintern),
+        NativeFn::ContextVec(crate::emacs_core::builtins::symbols::builtin_unintern),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
