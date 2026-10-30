@@ -161,30 +161,55 @@ pub struct PendingThreadEvent {
 impl PendingThreadEvent {
     /// Root `(SENDER ERROR-SYMBOL DATA)` for transport to the main mutator.
     ///
+    /// This is on `thread-signal`'s Lisp-reachable path, so a heap-identity
+    /// failure is a Lisp error, never a panic: `share_values_array` returns
+    /// `[SharedRoot; 3]` by construction, and its one fallible step (the
+    /// installed-mutator identity check) becomes `(error "…")`.  During Lisp
+    /// execution the check cannot fail — the signalling evaluator is, by
+    /// construction, the mutator whose heap its thread has installed — but
+    /// the runtime still models the failure instead of asserting it.
+    ///
     /// # Safety
     /// The caller must be the installed mutator of this evaluator's heap and
     /// keep all three values reachable until this returns; see
     /// [`SharedRoot::new`](crate::tagged::transport::SharedRoot::new).
+    ///
+    /// # Errors
+    /// A GNU-shaped `(error "…")` when the evaluator's heap is not the one
+    /// installed on this thread (or when none is installed).
     pub unsafe fn share(
         ctx: &super::eval::Context,
         sender: Value,
         error_symbol: Value,
         data: Value,
-    ) -> Self {
+    ) -> Result<Self, Flow> {
         // SAFETY: the caller supplies the live same-heap provenance required
-        // by `share_value`; this Context supplies its heap and checks that it
-        // is the one installed on this thread.
-        let roots = unsafe { ctx.share_values(&[sender, error_symbol, data]) }
-            .expect("the signalling mutator's installed heap is this evaluator's");
-        let [sender, error_symbol, data] = roots.as_slice() else {
-            unreachable!("share_values returns one root per input value");
-        };
-        Self {
-            sender: sender.clone(),
-            error_symbol: error_symbol.clone(),
-            data: data.clone(),
-        }
+        // by `share_values_array`; this Context supplies its heap and checks
+        // that it is the one installed on this thread.
+        let roots = unsafe { ctx.share_values_array([sender, error_symbol, data]) }
+            .map_err(thread_event_transport_error)?;
+        let [sender, error_symbol, data] = roots;
+        Ok(Self {
+            sender,
+            error_symbol,
+            data,
+        })
     }
+}
+
+/// The runtime failure mode of [`PendingThreadEvent::share`], as a Lisp error.
+///
+/// GNU's `Fthread_signal` has no counterpart (its kbd buffer is process-wide
+/// and untyped), so this names the transport invariant instead of inventing a
+/// GNU condition: the event must be rooted on the heap the signalling evaluator
+/// owns.
+fn thread_event_transport_error(error: crate::tagged::transport::SharedRootError) -> Flow {
+    signal(
+        "error",
+        vec![Value::string(format!(
+            "thread-signal cannot root its event on this evaluator's heap: {error}"
+        ))],
+    )
 }
 
 /// Per-thread bookkeeping.
@@ -1421,7 +1446,7 @@ pub(crate) fn builtin_thread_signal(
         // signalling mutator's stack); the signalling thread is the installed
         // mutator of this evaluator's heap and keeps all three reachable
         // until admission ends.
-        let event = unsafe { PendingThreadEvent::share(ctx, sender, error_symbol, data) };
+        let event = unsafe { PendingThreadEvent::share(ctx, sender, error_symbol, data) }?;
         ctx.threads.queue_thread_event(event);
         if ctx.green_threads_running() {
             ctx.green_wake_main_for_thread_event();

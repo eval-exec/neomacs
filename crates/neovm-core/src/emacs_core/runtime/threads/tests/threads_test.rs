@@ -862,6 +862,39 @@ fn thread_signal_to_main_queues_a_thread_event() {
     assert!(last_error.is_nil());
 }
 
+/// `thread-signal`'s THREAD_EVENT transport is fallible by construction: on a
+/// heap that is not the one installed for the current mutator it returns a
+/// Lisp `(error "…")` instead of panicking.
+///
+/// Lisp execution cannot reach this — the signalling evaluator is by
+/// construction the mutator whose heap its thread installed — so the test
+/// builds the mismatch deliberately: constructing a second Context installs
+/// its heap on this thread and makes the first one foreign.
+#[test]
+fn thread_event_sharing_reports_a_foreign_heap_as_a_lisp_error() {
+    crate::test_utils::init_test_tracing();
+    let first = Context::new();
+    let sender = Value::string("sender");
+    let _second = Context::new();
+    // SAFETY: `first` and `sender` outlive the call, and the identity check
+    // fails before either value is touched.
+    let result = unsafe { PendingThreadEvent::share(&first, sender, Value::NIL, Value::NIL) };
+    match result.kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol_name(), "error");
+            assert!(
+                sig.data[0]
+                    .as_utf8_str()
+                    .is_some_and(|message| message.contains("heap")),
+                "the transport error names the heap invariant: {:?}",
+                sig.data
+            );
+        }
+        Ok(_) => panic!("a foreign-heap THREAD_EVENT must be a Lisp error"),
+        Err(other) => panic!("expected the transport error signal, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_builtin_thread_signal_current_thread_raises() {
     crate::test_utils::init_test_tracing();

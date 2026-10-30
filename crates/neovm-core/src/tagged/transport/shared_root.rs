@@ -157,6 +157,33 @@ impl SharedRoot {
             .collect())
     }
 
+    /// Admit exactly `N` values through one private vector root, returning one
+    /// handle per input in order.
+    ///
+    /// This is [`Self::batch_from_current_heap`] with a fixed-size output:
+    /// "one root per input" is then a type-level fact, so no slice-length
+    /// check (and no panic) stands between a fixed-size caller and its result.
+    ///
+    /// # Safety
+    /// Same contract as [`Self::batch_from_current_heap`].
+    pub unsafe fn batch_from_current_heap_array<const N: usize>(
+        values: [TaggedValue; N],
+    ) -> Result<[Self; N], SharedRootError> {
+        let heap = Self::current_heap()?;
+        // This allocator invokes neither Lisp callbacks nor a collection.
+        // The caller keeps inputs reachable until the vector's lease is live.
+        let vector = TaggedValue::vector(values.to_vec());
+        let word = TracedWord::of(vector).expect("a freshly allocated vector is traced");
+        let lease = Arc::new(RootLease::register(heap, word));
+        Ok(std::array::from_fn(|index| Self {
+            heap,
+            transport: Transport::BatchElement {
+                lease: Arc::clone(&lease),
+                child: ChildIdentity(values[index].bits()),
+            },
+        }))
+    }
+
     /// Whether two handles share a collector lease, possibly selecting
     /// different children of the same private vector.
     pub fn shares_backing_root(&self, other: &Self) -> bool {

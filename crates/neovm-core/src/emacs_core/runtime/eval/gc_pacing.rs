@@ -540,6 +540,41 @@ impl Context {
         unsafe { crate::tagged::transport::SharedRoot::batch_from_current_heap(values) }
     }
 
+    /// Share exactly `N` live values through one private vector lease,
+    /// returning one root per input in order.
+    ///
+    /// [`Self::share_values`] with a fixed-size result: the caller gets a
+    /// `[SharedRoot; N]` by construction, so no later length check can fail.
+    ///
+    /// # Safety
+    /// Every value must satisfy [`Self::share_value`]'s admission and lifetime
+    /// requirements. This evaluator must be the installed active mutator;
+    /// raw values stay reachable until the batch has been admitted.
+    ///
+    /// # Errors
+    /// A missing installed heap or an installed heap from another evaluator.
+    pub unsafe fn share_values_array<const N: usize>(
+        &self,
+        values: [Value; N],
+    ) -> Result<[crate::tagged::transport::SharedRoot; N], crate::tagged::transport::SharedRootError>
+    {
+        use crate::tagged::gc::{HeapIdentity, current_tagged_heap_identity};
+        use crate::tagged::transport::SharedRootError;
+        let installed = current_tagged_heap_identity()
+            .and_then(HeapIdentity::from_legacy_word)
+            .ok_or(SharedRootError::NoInstalledHeap)?;
+        let owner = self.tagged_heap.heap_identity();
+        if installed != owner {
+            return Err(SharedRootError::ForeignHeap {
+                owner,
+                mutator: installed,
+            });
+        }
+        // SAFETY: this method's caller establishes live same-evaluator input
+        // provenance, and the identity check establishes its installed heap.
+        unsafe { crate::tagged::transport::SharedRoot::batch_from_current_heap_array(values) }
+    }
+
     /// The local value of `root` on this evaluator's thread.
     ///
     /// # Errors
