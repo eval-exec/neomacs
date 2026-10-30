@@ -34,7 +34,7 @@ impl SymbolPropertyRevision {
         }
     }
 
-    pub(super) fn changed(symbol: SymId) {
+    pub(crate) fn changed(symbol: SymId) {
         if OBSERVED.with(|observed| observed.borrow().contains(&symbol)) {
             REVISION.with(|revision| revision.set(revision.get().wrapping_add(1)));
         }

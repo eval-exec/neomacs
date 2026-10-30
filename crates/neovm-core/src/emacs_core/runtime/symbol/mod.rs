@@ -1772,7 +1772,7 @@ impl Obarray {
         }
     }
 
-    fn mark_global_member(&mut self, id: SymId) {
+    pub(crate) fn mark_global_member(&mut self, id: SymId) {
         // Fast path: already a member. Read-only — no ensure_slot, no growth
         // machinery — so the per-store caller (set_symbol_value_id ->
         // ensure_global_member_if_canonical) pays one presence-checked slot
@@ -1851,7 +1851,7 @@ impl Obarray {
     }
 
     #[inline]
-    fn ensure_global_member_if_canonical(&mut self, id: SymId) {
+    pub(crate) fn ensure_global_member_if_canonical(&mut self, id: SymId) {
         // Steady state is one presence-checked slot read: membership is a
         // slot property (GNU: `intern` sets it once), so ask the slot before
         // paying the epoch-checked interning lookup for a symbol that is
@@ -4362,57 +4362,6 @@ impl Obarray {
     /// Get a property from the symbol's plist.
     pub fn get_property(&self, name: &str, prop: &str) -> Option<Value> {
         self.get_property_id(intern(name), intern(prop))
-    }
-
-    /// Get a property from the symbol's plist by identity.
-    pub fn get_property_id(&self, symbol: SymId, prop: SymId) -> Option<Value> {
-        match self.symbol_plist_snapshot_id(symbol) {
-            SymbolPlistSnapshot::NoEntries => None,
-            SymbolPlistSnapshot::Entries(plist) => {
-                crate::emacs_core::plist::plist_get(plist, &Value::from_sym_id(prop))
-            }
-        }
-    }
-
-    /// Set a property on the symbol's plist.
-    ///
-    /// Returns `Err(Flow)` if the existing plist is malformed (non-cons non-nil),
-    /// matching GNU `Fput` / `Fplist_put` semantics.
-    pub fn put_property(&mut self, name: &str, prop: &str, value: Value) -> Result<(), Flow> {
-        let symbol = intern(name);
-        self.mark_global_member(symbol);
-        let sym = self.ensure_symbol_id(symbol);
-        let (new_plist, _changed) = crate::emacs_core::plist::plist_put(
-            sym.plist.get(),
-            Value::from_sym_id(intern(prop)),
-            value,
-        )?;
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        sym.plist.store_atomic(new_plist);
-        SymbolPropertyRevision::changed(symbol);
-        Ok(())
-    }
-
-    /// Set a property on the symbol's plist by identity.
-    ///
-    /// Returns `Err(Flow)` if the existing plist is malformed (non-cons non-nil),
-    /// matching GNU `Fput` / `Fplist_put` semantics.
-    pub fn put_property_id(
-        &mut self,
-        symbol: SymId,
-        prop: SymId,
-        value: Value,
-    ) -> Result<(), Flow> {
-        self.ensure_global_member_if_canonical(symbol);
-        let sym = self.ensure_symbol_id(symbol);
-        let (new_plist, _changed) =
-            crate::emacs_core::plist::plist_put(sym.plist.get(), Value::from_sym_id(prop), value)?;
-        // SATB: retain the plist cell's pre-image during a concurrent mark.
-        crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        sym.plist.store_atomic(new_plist);
-        SymbolPropertyRevision::changed(symbol);
-        Ok(())
     }
 
     /// Replace the complete plist for a symbol by identity.

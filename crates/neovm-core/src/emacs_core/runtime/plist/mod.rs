@@ -9,6 +9,8 @@ use crate::emacs_core::error::{Flow, signal};
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
+use crate::emacs_core::intern::{SymId, intern};
+use crate::emacs_core::symbol::{Obarray, SymbolPlistSnapshot, SymbolPropertyRevision};
 use crate::emacs_core::value::{Value, eq_value, eq_value_swp};
 
 #[cfg(test)]
@@ -417,6 +419,53 @@ pub fn plist_member(plist: Value, prop: &Value) -> Value {
             return tail;
         }
         tail = rest.cons_cdr();
+    }
+}
+
+impl Obarray {
+    /// Get a property from the symbol's plist by identity.
+    pub fn get_property_id(&self, symbol: SymId, prop: SymId) -> Option<Value> {
+        match self.symbol_plist_snapshot_id(symbol) {
+            SymbolPlistSnapshot::NoEntries => None,
+            SymbolPlistSnapshot::Entries(plist) => plist_get(plist, &Value::from_sym_id(prop)),
+        }
+    }
+
+    /// Set a property on the symbol's plist.
+    ///
+    /// Returns `Err(Flow)` if the existing plist is malformed (non-cons non-nil),
+    /// matching GNU `Fput` / `Fplist_put` semantics.
+    pub fn put_property(&mut self, name: &str, prop: &str, value: Value) -> Result<(), Flow> {
+        let symbol = intern(name);
+        self.mark_global_member(symbol);
+        let sym = self.ensure_symbol_id(symbol);
+        let (new_plist, _changed) =
+            plist_put(sym.plist.get(), Value::from_sym_id(intern(prop)), value)?;
+        // SATB: retain the plist cell's pre-image during a concurrent mark.
+        crate::tagged::gc::note_root_overwrite(sym.plist.get());
+        sym.plist.store_atomic(new_plist);
+        SymbolPropertyRevision::changed(symbol);
+        Ok(())
+    }
+
+    /// Set a property on the symbol's plist by identity.
+    ///
+    /// Returns `Err(Flow)` if the existing plist is malformed (non-cons non-nil),
+    /// matching GNU `Fput` / `Fplist_put` semantics.
+    pub fn put_property_id(
+        &mut self,
+        symbol: SymId,
+        prop: SymId,
+        value: Value,
+    ) -> Result<(), Flow> {
+        self.ensure_global_member_if_canonical(symbol);
+        let sym = self.ensure_symbol_id(symbol);
+        let (new_plist, _changed) = plist_put(sym.plist.get(), Value::from_sym_id(prop), value)?;
+        // SATB: retain the plist cell's pre-image during a concurrent mark.
+        crate::tagged::gc::note_root_overwrite(sym.plist.get());
+        sym.plist.store_atomic(new_plist);
+        SymbolPropertyRevision::changed(symbol);
+        Ok(())
     }
 }
 
