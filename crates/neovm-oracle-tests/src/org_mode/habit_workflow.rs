@@ -342,7 +342,15 @@ fn org_habit_agenda_past_delay_all_today_combo() {
     let expect = expect_test::expect![[
         r#""OK ((default nil nil t nil) (habit-past-window 10 nil t nil) (all-today nil t t nil) (future-with-habits nil nil nil ((\"HabitPast: 0:05 TODO Future stretch                 !                  :future:\" (739765 1 739767 3 nil \".+\") \"    !                  :future:\" ((32 org-habit-overdue-face habit-date) (32 org-habit-overdue-face habit-date) (32 org-habit-overdue-face habit-date) (32 org-habit-overdue-face habit-date) (33 org-habit-overdue-face habit-date) (32 org-habit-overdue-future-face habit-date) (32 org-habit-overdue-future-face habit-date) (32 nil nil) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (32 nil agenda-jump) (58 (org-tag org-scheduled) agenda-jump) (102 (org-tag org-scheduled) agenda-jump) (117 (org-tag org-scheduled) agenda-jump) (116 (org-tag org-scheduled) agenda-jump) (117 (org-tag org-scheduled) agenda-jump) (114 (org-tag org-scheduled) agenda-jump) (101 (org-tag org-scheduled) agenda-jump) (58 (org-tag org-scheduled) agenda-jump)) \"past-scheduled\" 739765 1000 5.0))))""#
     ]];
-    crate::common::assert_oracle_parity_expect(
+    // `org-habit-insert-consistency-graphs' derives its graph window from
+    // `(time-subtract nil ...)', a nil TIME that the primitive resolves from
+    // the real clock (GNU src/timefns.c Ftime_subtract -> current_timespec;
+    // Neomacs timefns decode_lisp_time's nil arm -> SystemTime::now). The
+    // cl-letf below rebinds Lisp `current-time' and does not reach it, so the
+    // graph length changes when the now+3d endpoint crosses the DST boundary
+    // at a local time-of-day under one hour (7 cells instead of 8). GNU and
+    // Neomacs agree with each other in that window; pin the engine clock.
+    crate::common::assert_oracle_parity_frozen_time_expect(
         r##"(progn
   (require 'org)
   (require 'org-agenda)
