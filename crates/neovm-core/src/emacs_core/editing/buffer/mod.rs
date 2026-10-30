@@ -22,6 +22,7 @@ use crate::emacs_core::value::{
 };
 use crate::tagged::value::SymbolMode;
 use crate::window::FrameManager;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 pub(crate) struct MakeIndirectBufferPlan {
@@ -1734,7 +1735,7 @@ pub(crate) fn builtin_ntake(args: Vec<Value>) -> EvalResult {
     }
 }
 
-/// A single change run from the minimal diff used by
+/// A single change run from the diff used by
 /// `replace-region-contents`: replace characters `[a_start, a_end)` of the
 /// destination region with characters `[b_start, b_end)` of the source.
 /// All indices are character indices.
@@ -1762,163 +1763,38 @@ fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
     out
 }
 
-/// Compute the minimal sequence of change runs transforming `a` into `b`,
-/// mirroring GNU's use of the Myers O(ND) difference algorithm (lib/diffseq.h,
-/// referenced from `Freplace_region_contents`).
-///
-/// `a` and `b` are the codepoint sequences of the destination region and the
-/// source.  The returned runs are in ascending order and cover only the
-/// differing portions; common prefix/suffix and matched interior characters are
-/// left untouched, so markers, point and overlays within them are preserved
-/// exactly as GNU does by issuing a `replace_range` only per changed run.
+mod replace_diff;
+
+/// GNU diffseq change runs, with linear workspace and MAX-COSTS heuristics.
+/// None means timeout or an unavailable comparison workspace; no edit has
+/// occurred. Only tests use this default-cost wrapper; the builtin passes the
+/// caller's MAX-COSTS and MAX-SECS directly.
+#[cfg(test)]
 pub(crate) fn replace_region_minimal_change_runs(
     a: &[u32],
     b: &[u32],
-) -> Vec<ReplaceRegionChangeRun> {
-    // Trim the common prefix.
-    let mut lo = 0usize;
-    while lo < a.len() && lo < b.len() && a[lo] == b[lo] {
-        lo += 1;
-    }
-    // Trim the common suffix.
-    let mut a_hi = a.len();
-    let mut b_hi = b.len();
-    while a_hi > lo && b_hi > lo && a[a_hi - 1] == b[b_hi - 1] {
-        a_hi -= 1;
-        b_hi -= 1;
-    }
-
-    let sub_a = &a[lo..a_hi];
-    let sub_b = &b[lo..b_hi];
-
-    // Myers O(ND) shortest-edit-script over the differing middle.  Walking the
-    // backtraced path yields the same minimal edit (and therefore the same
-    // change-run boundaries) as GNU's `compareseq` (lib/diffseq.h).
-    let raw = myers_edit_runs(sub_a, sub_b, lo, lo);
-
-    // Coalesce a deletion immediately followed by an insertion at the same
-    // point (and vice-versa) into a single replacement, matching GNU's
-    // back-to-front merge of contiguous deletion/insertion bits.
-    let mut runs: Vec<ReplaceRegionChangeRun> = Vec::with_capacity(raw.len());
-    for run in raw {
-        match runs.last_mut() {
-            Some(prev) if prev.a_end == run.a_start && prev.b_end == run.b_start => {
-                prev.a_end = run.a_end;
-                prev.b_end = run.b_end;
-            }
-            _ => runs.push(run),
-        }
-    }
-    runs
+    deadline: Option<Instant>,
+) -> Option<Vec<ReplaceRegionChangeRun>> {
+    replace_diff::change_runs(a, b, deadline, replace_diff::DEFAULT_MAX_COSTS)
 }
 
-/// Compute the minimal edit runs transforming `a` into `b` using Myers' O(ND)
-/// algorithm with a recorded trace.  `a_off`/`b_off` are added to every emitted
-/// index so callers can diff a sub-slice while reporting absolute positions.
-///
-/// Runs are returned in ascending position order; pure deletions have
-/// `b_start == b_end`, pure insertions have `a_start == a_end`.  Adjacent
-/// single-character edits are emitted as separate runs (the caller coalesces
-/// truly-contiguous delete+insert pairs).
-fn myers_edit_runs(
-    a: &[u32],
-    b: &[u32],
-    a_off: usize,
-    b_off: usize,
-) -> Vec<ReplaceRegionChangeRun> {
-    let n = a.len() as isize;
-    let m = b.len() as isize;
-
-    if n == 0 && m == 0 {
-        return Vec::new();
-    }
-
-    // `v[k]` holds the furthest-reaching x on diagonal k for the current d.
-    // We snapshot `v` after each d so we can backtrack the path afterwards.
-    let max_d = (n + m) as usize;
-    let offset = n + m; // index shift so k in [-(n+m), n+m] is >= 0.
-    let vsize = (2 * (n + m) + 1) as usize;
-    let mut v = vec![0isize; vsize];
-    let mut trace: Vec<Vec<isize>> = Vec::with_capacity(max_d + 1);
-
-    let mut found_d = 0usize;
-    'outer: for d in 0..=max_d as isize {
-        trace.push(v.clone());
-        let mut k = -d;
-        while k <= d {
-            // Decide whether we arrived here via an insertion (down) or a
-            // deletion (right).  Ties prefer deletion-from-the-left, matching
-            // the canonical Myers backtrack.
-            let mut x = if k == -d
-                || (k != d && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
-            {
-                v[(k + 1 + offset) as usize] // down (insertion)
+fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, Flow> {
+    match value.copied().unwrap_or(Value::NIL) {
+        value if value.is_nil() => Ok(replace_diff::DEFAULT_MAX_COSTS),
+        value if value.is_fixnum() => Ok(value.as_fixnum().unwrap().max(0) as usize),
+        value if value.is_integer() => {
+            let big = value.as_bignum().expect("non-fixnum integer");
+            Ok(if *big < 0 {
+                0
             } else {
-                v[(k - 1 + offset) as usize] + 1 // right (deletion)
-            };
-            let mut y = x - k;
-            // Follow the diagonal (snake) of equal elements.
-            while x < n && y < m && a[x as usize] == b[y as usize] {
-                x += 1;
-                y += 1;
-            }
-            v[(k + offset) as usize] = x;
-            if x >= n && y >= m {
-                found_d = d as usize;
-                break 'outer;
-            }
-            k += 2;
+                isize::try_from(big).unwrap_or(isize::MAX) as usize
+            })
         }
+        value => Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("integerp"), value],
+        )),
     }
-
-    // Backtrack through the recorded traces to recover the edit runs.
-    let mut runs: Vec<ReplaceRegionChangeRun> = Vec::new();
-    let mut x = n;
-    let mut y = m;
-    for d in (1..=found_d as isize).rev() {
-        let vprev = &trace[d as usize];
-        let k = x - y;
-        let prev_k = if k == -d
-            || (k != d && vprev[(k - 1 + offset) as usize] < vprev[(k + 1 + offset) as usize])
-        {
-            k + 1 // came from a down move (insertion)
-        } else {
-            k - 1 // came from a right move (deletion)
-        };
-        let prev_x = vprev[(prev_k + offset) as usize];
-        let prev_y = prev_x - prev_k;
-
-        // Skip the trailing snake (matched diagonal) — those characters are
-        // unchanged and must not be part of any run.
-        while x > prev_x && y > prev_y {
-            x -= 1;
-            y -= 1;
-        }
-
-        // The single edit step between (prev_x, prev_y) and (x, y).
-        if x == prev_x {
-            // Insertion of b[prev_y] (down move): a stays, b advances.
-            runs.push(ReplaceRegionChangeRun {
-                a_start: a_off + x as usize,
-                a_end: a_off + x as usize,
-                b_start: b_off + prev_y as usize,
-                b_end: b_off + y as usize,
-            });
-        } else {
-            // Deletion of a[prev_x] (right move): a advances, b stays.
-            runs.push(ReplaceRegionChangeRun {
-                a_start: a_off + prev_x as usize,
-                a_end: a_off + x as usize,
-                b_start: b_off + y as usize,
-                b_end: b_off + y as usize,
-            });
-        }
-        x = prev_x;
-        y = prev_y;
-    }
-
-    runs.reverse();
-    runs
 }
 
 /// `(replace-buffer-contents SOURCE &optional MAX-SECS MAX-COSTS)` -> t
@@ -2079,10 +1955,32 @@ pub(crate) fn builtin_replace_region_contents(
         .map(|&(c, _)| c)
         .collect();
 
-    // The diff machinery is not prepared for an empty side: just delete or
-    // insert wholesale.  This also covers the trivial cases GNU handles up
-    // front (both empty -> nothing to do).
-    if comparison_disabled || a_codes.is_empty() || b_codes.is_empty() {
+    let trivial = comparison_disabled || a_codes.is_empty() || b_codes.is_empty();
+    let runs = if trivial {
+        None
+    } else {
+        let max_costs = replace_region_max_costs(args.get(4))?;
+        // GNU accepts all Lisp time representations, not just float seconds.
+        // An integer zero takes the trivial path above; an expired nonzero
+        // or float-zero budget takes the timeout path and returns nil.
+        let deadline = if let Some(max_secs) = args.get(3).filter(|value| !value.is_nil()) {
+            let (secs, nanos) = super::timefns::time_value_seconds_and_nanos(max_secs)?;
+            let now = Instant::now();
+            if secs < 0 {
+                Some(now)
+            } else {
+                now.checked_add(Duration::new(secs as u64, nanos as u32))
+            }
+        } else {
+            None
+        };
+        replace_diff::change_runs(&a_codes, &b_codes, deadline, max_costs)
+    };
+
+    // Timeout must use the same whole-region replacement as GNU, rather
+    // than applying a partial diff.  Preserve source properties and run the
+    // normal modification hooks in both this and the trivial empty-side path.
+    if runs.is_none() {
         let replacement = buffer_insert_piece_from_string(source_value, target_multibyte)?
             .into_replacement_text();
         // GNU `replace_range (min_a, min_a + size_a, source, true, ...)`
@@ -2102,11 +2000,10 @@ pub(crate) fn builtin_replace_region_contents(
             )?;
         }
         eval.restore_specpdl_roots(source_root_scope);
-        return Ok(Value::T);
+        return Ok(if trivial { Value::T } else { Value::NIL });
     }
 
-    // Compute the minimal change runs (Myers O(ND), like GNU's compareseq).
-    let runs = replace_region_minimal_change_runs(&a_codes, &b_codes);
+    let runs = runs.expect("completed comparison");
 
     // GNU `Freplace_region_contents` (editfns.c) calls `Fundo_boundary` once
     // compareseq has succeeded, before walking the change runs — including
