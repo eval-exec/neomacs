@@ -843,7 +843,7 @@ fn apheleia_failed_formatter_preserves_the_file_and_opens_its_real_error_log() -
                         '((validation
                            . ("sh"
                               "-c"
-                              "printf 'config.toml:2:8: invalid port\\n' >&2; exit 7"))))
+                              "cat >/dev/null; printf 'config.toml:2:8: invalid port\\n' >&2; exit 7"))))
                        (apheleia-hide-log-buffers nil)
                        (apheleia-log-only-errors t)
                        (apheleia--last-error-marker nil))
@@ -894,7 +894,7 @@ fn apheleia_failed_formatter_preserves_the_file_and_opens_its_real_error_log() -
            (apheleia-test-cleanup root))
          result)"##,
         expect![[
-            r#"OK (:callback (:error (error . "Failed to run sh: exit status 7 (see buffer *apheleia-sh-log*)")) :buffer "[server]\nport = invalid\n" :disk "[server]\nport = invalid\n" :log-buffer "*apheleia-sh-log*" :log-line 1 :log-column 0 :log "Sun Jan  2 03:04:05 2000 :: [ORACLE-SANDBOX]/apheleia-validation-error/\n$ sh -c printf\\ \\'config.toml\\:2\\:8\\:\\ invalid\\ port\\\\n\\'\\ \\>\\&2\\;\\ exit\\ 7\n\nconfig.toml:2:8: invalid port\n\nCommand failed with exit code 7.\n")"#
+            r#"OK (:callback (:error (error . "Failed to run sh: exit status 7 (see buffer *apheleia-sh-log*)")) :buffer "[server]\nport = invalid\n" :disk "[server]\nport = invalid\n" :log-buffer "*apheleia-sh-log*" :log-line 1 :log-column 0 :log "Sun Jan  2 03:04:05 2000 :: [ORACLE-SANDBOX]/apheleia-validation-error/\n$ sh -c cat\\ \\>/dev/null\\;\\ printf\\ \\'config.toml\\:2\\:8\\:\\ invalid\\ port\\\\n\\'\\ \\>\\&2\\;\\ exit\\ 7\n\nconfig.toml:2:8: invalid port\n\nCommand failed with exit code 7.\n")"#
         ]],
     )
 }
