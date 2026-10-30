@@ -16,6 +16,7 @@ pub mod chunk;
 pub mod decode;
 pub mod function_slots;
 pub mod opcode;
+pub(crate) mod value_api;
 pub mod vm;
 
 // Re-export main types
