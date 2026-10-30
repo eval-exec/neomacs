@@ -123,6 +123,8 @@ mod startup_frame;
 mod startup_resources;
 mod termcap_input;
 pub(crate) mod terminal_capabilities;
+#[cfg(target_os = "linux")]
+mod text_huge_pages;
 pub(crate) mod tty_frontend;
 pub(crate) mod tty_init;
 pub(crate) mod tty_output;
@@ -4591,6 +4593,15 @@ pub fn run(mode: RuntimeMode) {
         eprintln!("neomacs: {error}");
         std::process::exit(1);
     });
+
+    // Collapse after daemon::prepare so the post-fork serving process benefits;
+    // the pre-fork parent would waste it. --help/--version already exited, so
+    // they never spawn this thread. Running before tracing initialization adds
+    // no subscriber-ordering constraint. The background thread keeps collapse
+    // off the startup critical path (measured 1.4–3.1 ms warm, 43–105 ms cold
+    // once per binary per boot; tmp/t12/DESIGN.md).
+    #[cfg(target_os = "linux")]
+    text_huge_pages::start_background_collapse();
 
     // GNU parses `--no-site-lisp` (and `-Q` / `-x`) into a C global that
     // `init_lread` reads while it builds `load-path` (src/emacs.c:2126,

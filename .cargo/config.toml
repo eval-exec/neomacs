@@ -25,5 +25,13 @@ RUST_MIN_STACK = "134217728"
 rustflags = ["-Cllvm-args=-align-all-functions=6"]
 
 # Keep an ELF Build-ID on every Linux product, including native PGO releases.
+# ELF Linux products map every LOAD 2 MiB-congruent so
+# crates/neomacs/src/text_huge_pages.rs can fold the executable's own text into
+# file-backed 2 MiB pages; see tmp/t12/DESIGN.md. Cargo joins other target
+# blocks' flags; a RUSTFLAGS environment variable still replaces them.
 [target.'cfg(target_os = "linux")']
-rustflags = ["-Clink-arg=-Wl,--build-id"]
+rustflags = [
+    "-Clink-arg=-Wl,--build-id",
+    "-Clink-arg=-Wl,-z,max-page-size=0x200000",
+    "-Clink-arg=-Wl,-z,common-page-size=0x200000",
+]

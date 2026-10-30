@@ -70,6 +70,10 @@ fn encoded_flags_preserve_spaces_and_override_plain_flags() {
     assert!(use_flags.contains("align-all-functions=6"));
     assert!(!use_flags.contains("--emit-relocs"));
     assert!(use_flags.contains("--build-id"));
+    // The shipping link must stay 2 MiB-congruent even though the encoded
+    // flags replace config rustflags (text_huge_pages depends on it).
+    assert!(use_flags.contains("-z,max-page-size=0x200000"));
+    assert!(use_flags.contains("-z,common-page-size=0x200000"));
 }
 
 #[test]

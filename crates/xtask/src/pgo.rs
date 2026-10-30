@@ -210,9 +210,16 @@ impl RustFlags {
         }) {
             return Err("PGO requires the qualified align-all-functions=6 contract".into());
         }
+        // The encoded flags replace config rustflags, so every flag the
+        // shipping link must carry is restated here. The 2 MiB congruence
+        // flags mirror .cargo/config.toml's Linux block: without them the
+        // release-pgo binary loses the alignment the startup text-collapse
+        // module depends on.
         for required in [
             "llvm-args=-align-all-functions=6",
             "link-arg=-Wl,--build-id",
+            "link-arg=-Wl,-z,max-page-size=0x200000",
+            "link-arg=-Wl,-z,common-page-size=0x200000",
         ] {
             if !codegen.iter().any(|s| s == required) {
                 values.push(format!("-C{required}"));
