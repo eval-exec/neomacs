@@ -144,6 +144,10 @@ enum LowerRoot {
     Tagged,
     TlsScope,
     Window,
+    /// The host input publisher/connection seam added with the parallel-Lisp
+    /// input work (main b243, ipc CONT38). A top-level production module like
+    /// the other lower roots: references out of it are counted as upward.
+    HostInput,
 }
 
 impl LowerRoot {
@@ -166,6 +170,7 @@ impl LowerRoot {
             "tagged" => Self::Tagged,
             "tls_scope" => Self::TlsScope,
             "window" => Self::Window,
+            "host_input" => Self::HostInput,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
             }
@@ -191,6 +196,7 @@ impl LowerRoot {
             Self::Tagged => "tagged",
             Self::TlsScope => "tls_scope",
             Self::Window => "window",
+            Self::HostInput => "host_input",
         }
     }
 }

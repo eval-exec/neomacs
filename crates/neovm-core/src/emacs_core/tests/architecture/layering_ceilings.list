@@ -4,6 +4,7 @@ g0 jit 6
 g0 pdump 11
 g0 print 1
 g0 top:buffer 28
+g0 top:encoding 2
 buffer builtins 6
 buffer chartable 1
 buffer composite 13
@@ -36,7 +37,7 @@ encoding intern 11
 encoding process 3
 encoding value 2
 face emacs_char 6
-face intern 2
+face intern 4
 face terminal 1
 face value 9
 face xfaces 2
@@ -93,10 +94,11 @@ window error 3
 window eval 5
 window fontset 3
 window image_catalog 2
-window intern 5
+window intern 8
 window plist 2
 window symbol 2
 window value 19
 window window_cmds 1
 window xdisp 1
-g0 top:encoding 2
+host_input eval 1
+host_input process 1
