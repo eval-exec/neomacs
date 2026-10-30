@@ -1337,8 +1337,15 @@ impl Context {
             context.ti_untrust(act);
         }
 
-        // As `sf_let_value_named`: nothing below can collect until the
-        // environment is installed (only conses are allocated).
+        // As `sf_let_value_named`: the operand-stack slice is GNU Flet's
+        // `temps[]`, taken as ONE contiguous root run for the whole body
+        // (one reserve and one copy per `let`, never a root push per
+        // binding); the enclosing EvalTempRootsToSequenceGuard owns it.
+        // Nothing below can collect until the environment is installed
+        // (only conses are allocated).
+        let temps = temps_base..context.bc_buf.len();
+        let (bc_buf, eval_temp_roots) = (&context.bc_buf, &mut context.eval_temp_roots);
+        eval_temp_roots.extend_from_slice(&bc_buf[temps]);
         context.bc_buf.truncate(temps_base);
         let lexenv_at_entry = context.lexenv;
         let specpdl_count = context.specpdl.len();
@@ -1360,15 +1367,9 @@ impl Context {
         }
         context.lexenv = new_lexenv;
 
-        // As `sf_let_value_named`: GNU's Flet temps keep every evaluated
-        // initializer (lexical or dynamic) live for the whole body.
-        for value in lexical_bindings
-            .iter()
-            .map(|(_, value, _)| value)
-            .chain(dynamic_sym_ids.iter().map(|(_, value)| value))
-        {
-            context.push_eval_temp_root(*value);
-        }
+        // As `sf_let_value_named`: every evaluated initializer is already in
+        // the body-wide temps run appended above; a dynamic value only needs
+        // it before `try_specbind`'s watchers can run.
         for (sym_id, value) in &dynamic_sym_ids {
             if let Err(flow) = context.try_specbind(*sym_id, *value) {
                 return context.unbind_to_with_result(specpdl_count, Err(flow));

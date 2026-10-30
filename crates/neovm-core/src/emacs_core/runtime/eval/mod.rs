@@ -4080,9 +4080,11 @@ pub(crate) struct SequenceTempRootScopeState {
 struct SequenceTempRootFrame {
     /// `eval_temp_roots.len()` at push: the pop floor.
     eval_base: usize,
-    /// Floor of this frame's retained let/let* residue run.  A returned
-    /// special form's temps stay visible to the rest of the sequence, as
-    /// GNU's freed-but-still-scanned stack slots do.
+    /// Floor of this frame's retained let/let* temps run.  A returned
+    /// special form's temps stay visible to the rest of the sequence: Neo's
+    /// own deterministic, conservative retention rule (the enclosing
+    /// sequence owns the run until the sequence ends), not an emulation of
+    /// any particular GNU stack-slot state.
     let_floor: usize,
     /// Length of that run.
     let_len: usize,

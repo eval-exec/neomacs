@@ -1210,9 +1210,14 @@ impl Context {
     }
 
     /// A special form returned: its temps stay visible to the rest of the
-    /// body sequence, the way GNU's freed-but-still-scanned stack slots do,
-    /// and the residue of the PREVIOUS such form in this sequence stops
-    /// being rooted.
+    /// body sequence, and the retained run of the PREVIOUS such form in this
+    /// sequence stops being rooted.  This visibility is Neo's own
+    /// deterministic, conservative rule for temporary roots: the enclosing
+    /// body sequence owns a returned form's temps until the sequence ends
+    /// (an explicit evaluation ends its run earlier, see
+    /// `EvalBoundaryRoots`).  It is a rule we chose, not an emulation of any
+    /// particular GNU stack-slot state; GNU documents no weak-entry
+    /// collection timing.
     ///
     /// The retained run is compacted down onto the dead one when the two are
     /// adjacent.  When something live sits between them -- an enclosing

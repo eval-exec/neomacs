@@ -7,8 +7,8 @@ use super::*;
 
 /// Temporary root visibility owned by one mutator during a special form.
 ///
-/// The mutable Context borrow is confined to this scope. Drop preserves the same
-/// enclosing-sequence residue as the normal return path; it only compacts
+/// The mutable Context borrow is confined to this scope. Drop applies the same
+/// enclosing-sequence retention as the normal return path; it only compacts
 /// existing arena entries and does not allocate, run Lisp, or perform I/O.
 #[must_use = "dropping the guard restores temporary roots to the enclosing sequence"]
 pub(super) struct EvalTempRootsToSequenceGuard<'a> {
@@ -54,15 +54,17 @@ impl Drop for EvalTempRootsToSequenceGuard<'_> {
     }
 }
 
-/// The root group owned by one explicit evaluation: GNU `Feval`'s C frame.
+/// The root group owned by one explicit evaluation: a hard boundary for
+/// temporary-root visibility.
 ///
-/// `eval_temp_roots` and `eval_call_roots` mirror GNU's in-frame stack
-/// residue for the *enclosing body sequence*, but an explicit evaluation is
-/// itself a frame boundary: when `(eval FORM)` returns, GNU's C frame and
-/// every slot in it are gone, so the caller's body sequence must not inherit
-/// the evaluation's temps or its last call's evaluated arguments.  Drop
-/// releases exactly the roots appended since `enter`; the enclosing
-/// sequence's older run (at or below the base) is untouched, and its stale
+/// A body sequence keeps a returned form's temps visible to the rest of the
+/// sequence (Neo's deterministic conservative retention rule; see
+/// `Context::restore_eval_temp_roots_to_sequence`), but an explicit
+/// evaluation is a frame of its own (GNU `Feval` is such a frame): when
+/// `(eval FORM)` returns, the caller's body sequence must not inherit the
+/// evaluation's temps or its last call's evaluated arguments.  Drop releases
+/// exactly the roots appended since `enter`; the enclosing sequence's older
+/// run (at or below the base) is untouched, and its stale
 /// `let_floor`/`let_len` are clamped by the next sequence restore.
 #[must_use = "dropping the guard releases the evaluation's temporary roots"]
 pub(super) struct EvalBoundaryRoots<'a> {
@@ -422,9 +424,21 @@ impl Context {
         }
 
         // The init values leave the operand stack here, before anything is
-        // pushed on the specpdl.  From here to the install and the temp-root
-        // pushes below nothing can collect: only conses are allocated, and
-        // `alloc_cons` never collects (`tagged/gc/allocation.rs`).
+        // pushed on the specpdl.  GNU Flet keeps its evaluated `temps[]`
+        // (eval.c:1151-1186, SAFE_ALLOCA_LISP) live for the whole body
+        // independently of the lexenv binding: `(setq obj nil)` in the body
+        // drops the binding's reference but not the temp, so a weak table
+        // keyed on the value must still see it.  The operand-stack slice is
+        // exactly that temps array at this point, so take the whole span as
+        // ONE contiguous root run -- one reserve and one copy per `let`,
+        // never a root push per binding.  The enclosing
+        // `EvalTempRootsToSequenceGuard` owns the run; its sequence restore
+        // decides how long it stays visible.  From here to the install
+        // nothing can collect: only conses are allocated, and `alloc_cons`
+        // never collects (`tagged/gc/allocation.rs`).
+        let temps = temps_base..context.bc_buf.len();
+        let (bc_buf, eval_temp_roots) = (&context.bc_buf, &mut context.eval_temp_roots);
+        eval_temp_roots.extend_from_slice(&bc_buf[temps]);
         context.bc_buf.truncate(temps_base);
 
         // Save lexenv AFTER init forms run (matches GNU eval.c:1167:
@@ -459,15 +473,10 @@ impl Context {
         // Install the new lexenv atomically.
         context.lexenv = new_lexenv;
 
-        // GNU Flet keeps its evaluated `temps[]` (eval.c:1151-1186,
-        // SAFE_ALLOCA_LISP) live for the whole body independently of the
-        // lexenv binding: `(setq obj nil)` in the body drops the binding's
-        // reference but not GNU's temp, so a weak table keyed on the value
-        // must still see it. Root every initializer; the lexenv's
-        // reachability is not the contract.
-        for (_, value) in lexical_bindings.iter().chain(dynamic_sym_ids.iter()) {
-            context.push_eval_temp_root(*value);
-        }
+        // The initializer values are already rooted for the whole body by the
+        // temps run appended above; a dynamic value would otherwise be
+        // unreachable until `try_specbind`, and a specbind watcher may run
+        // Lisp before the binding exists.
         for (sym_id, value) in &dynamic_sym_ids {
             if let Err(flow) = context.try_specbind(*sym_id, *value) {
                 return context.unbind_to_with_result(specpdl_count, Err(flow));

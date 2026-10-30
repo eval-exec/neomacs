@@ -641,12 +641,15 @@ fn let_initializers_stay_rooted_through_the_body_in_every_tier() {
     }
 }
 
-/// The dead-slot residue of a `let` stays visible to the rest of the
-/// enclosing body sequence, the way GNU's freed-but-still-scanned stack
-/// slots do: the inner let's initializer is still reachable by the
-/// `garbage-collect` in the outer body. GNU answers 1.
+/// Neo's retention rule keeps a returned form's temps visible to the rest of
+/// its enclosing body sequence: the inner let's initializer is still
+/// reachable by the `garbage-collect` in the outer body.  The rule is
+/// deterministic and conservative, and the enclosing sequence ends it (an
+/// explicit evaluation ends its run earlier; see the boundary test).  GNU
+/// 31.1 answers 1 for this form on the reference builds; the rule is ours,
+/// not an emulation of GNU stack-slot residue.
 #[test]
-fn let_initializer_residue_survives_the_enclosing_body_in_every_tier() {
+fn let_initializer_temps_survive_the_enclosing_body_in_every_tier() {
     let src = r#"
 (let ((ht (make-hash-table :weakness 'value)))
   (let ((obj (list 1 2)))
@@ -658,13 +661,13 @@ fn let_initializer_residue_survives_the_enclosing_body_in_every_tier() {
     assert_eq!(
         last(&off),
         "OK 1",
-        "the tree walker dropped the inner let's residue before the enclosing body ended"
+        "the tree walker dropped the inner let's temps before the enclosing body sequence ended"
     );
     for mode in [TierIMode::Verify, TierIMode::On] {
         assert_eq!(
             run(mode, src).0,
             off,
-            "{mode:?} dropped the inner let's residue before the enclosing body ended"
+            "{mode:?} dropped the inner let's temps before the enclosing body sequence ended"
         );
     }
 }
