@@ -39,6 +39,9 @@ fn snapshot_matrix() -> RetainedWindowMatrix {
     let mut outside = snapshot.rows[0].clone();
     outside.row = -1;
     snapshot.rows.push(outside);
+    // Published row metrics are sorted by row. Keep that owner contract while
+    // retaining duplicate order and every negative/chrome adversarial record.
+    snapshot.rows.sort_by_key(|row| row.row);
     let mut outside = snapshot.points[0].clone();
     outside.row = -1;
     snapshot.points.push(outside);
