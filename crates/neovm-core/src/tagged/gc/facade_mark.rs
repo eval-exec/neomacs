@@ -669,7 +669,12 @@ mod tests {
         let idle = unsafe { heap.drain_to_quiescent(|_| {}) }.unwrap();
         let exclusion = idle.exclude_concurrent_mark().unwrap();
         assert!(heap.dump_blackened);
-        assert!(heap.value_is_tenured(image_child));
+        // GEN1 tenures the runtime child; GEN0 keeps it young and the mapped
+        // owner's remembered edge keeps it live.
+        assert_eq!(
+            heap.value_is_tenured(image_child),
+            heap.generational_enabled(),
+        );
         assert_eq!(image_child.xfloat(), 8.25);
         assert!(!heap.first_cycle_concurrent);
         assert!(!heap.mark_in_progress && !heap.sweep_in_progress);

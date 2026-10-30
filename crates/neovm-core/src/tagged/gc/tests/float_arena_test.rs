@@ -448,6 +448,8 @@ fn concurrent_tenured_float_dropped_not_claimed() {
     // F is alive across the FIRST partitioned cycle, so the promotion
     // page walk tenures it (page slots of survivors freeze).
     let f = heap.alloc_float(3.25);
+    // The worker's tenured short-circuit is the permanent-image path.
+    assert!(heap.note_image_object(f));
     let root = heap.alloc_cons(f, TaggedValue::fixnum(0));
     heap.collect_exact(std::iter::once(root));
     let f_ptr = f.as_float_ptr().unwrap();
@@ -800,9 +802,12 @@ fn tenured_owner_keeps_young_page_float_alive_body(verify: bool) {
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
     let t_header = t.as_veclike_ptr().unwrap();
-    assert!(
+    // Runtime owner: ordinary old in GEN1; young (traced every collection)
+    // in GEN0.
+    assert_eq!(
         unsafe { (*t_header).gc.tenured },
-        "record must have tenured"
+        heap.generational_enabled(),
+        "record tenure must follow the generation mode",
     );
     assert!(heap.owns_non_cons_object(f_ptr));
 

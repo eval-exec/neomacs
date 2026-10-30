@@ -460,6 +460,10 @@ fn record_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
     assert_eq!(heap.record_arena.pages.len(), 2);
     assert_eq!(heap.record_arena.pages[0].allocated, RECORD_PAGE_SLOTS);
+    // Loader-reconstructed image rows: permanent, full page retires.
+    for &b in &records {
+        assert!(heap.note_image_object(b));
+    }
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
@@ -610,7 +614,12 @@ fn tenured_page_record_keeps_young_cons_child_alive_body(verify: bool) {
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
+    // The runtime owner is ordinary old in GEN1; in GEN0 it stays young and
+    // every full collection traces the child directly.
+    assert_eq!(
+        unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
+        heap.generational_enabled(),
+    );
 
     for cycle in 0..2 {
         heap.collect_exact(std::iter::once(root));

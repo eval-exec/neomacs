@@ -51,6 +51,15 @@ fn paged_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     root = heap.alloc_cons(s, root);
     root = heap.alloc_cons(v, root);
 
+    // These stand in for loader-reconstructed dump-image rows: only image
+    // residents become permanent and retire full pages; the runtime class
+    // (see the reclamation test) stays sweepable.
+    for &f in &floats {
+        assert!(heap.note_image_object(f));
+    }
+    assert!(heap.note_image_object(s));
+    assert!(heap.note_image_object(v));
+
     // First partition cycle: full trace + sweep, then promotion.
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
@@ -431,11 +440,18 @@ fn tenured_page_owner_keeps_young_cons_child_alive_body(verify: bool) {
     let tail = heap.alloc_cons(s, TaggedValue::fixnum(0));
     let root = heap.alloc_cons(v, tail);
 
-    // Promotion: v and s tenure via the page walk; y_* stay young.
+    // Promotion: v and s are runtime survivors (ordinary old in GEN1, young
+    // in GEN0); y_* stay young either way.
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(unsafe { (*(v.as_veclike_ptr().unwrap())).gc.tenured });
-    assert!(unsafe { (*(s.as_string_ptr().unwrap())).header.tenured });
+    assert_eq!(
+        unsafe { (*(v.as_veclike_ptr().unwrap())).gc.tenured },
+        heap.generational_enabled(),
+    );
+    assert_eq!(
+        unsafe { (*(s.as_string_ptr().unwrap())).header.tenured },
+        heap.generational_enabled(),
+    );
 
     // Two partitioned cycles (one per parity): the owners are black and
     // never re-traced; the children survive ONLY via the promotion-time

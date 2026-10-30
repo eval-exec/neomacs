@@ -2147,15 +2147,16 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
     let y = heap.alloc_cons(TaggedValue::fixnum(424_242), TaggedValue::fixnum(0));
     let t = heap.alloc_record(vec![y]);
     let root = heap.alloc_cons(t, TaggedValue::fixnum(0));
+    // Frozen mark bits are a property of the permanent generation only:
+    // ordinary-old runtime survivors are re-traced by every full collection.
+    assert!(heap.note_image_object(t));
 
     // First partition cycle: STW full trace + sweep, then promotion.
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
     let t_header = t.as_veclike_ptr().unwrap();
-    assert!(
-        unsafe { (*t_header).gc.tenured },
-        "the surviving record must have been promoted to the old generation",
-    );
+    assert!(unsafe { (*t_header).gc.tenured });
+    assert!(unsafe { (*t_header).gc.generation.permanent() });
     let frozen_bit = unsafe { (*t_header).gc.raw_mark() };
 
     // Two concurrent cycles — parities false then true — with the
@@ -3179,7 +3180,11 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     for &owner in &owners {
         root = heap.alloc_cons(owner, root);
     }
-    // The first partition cycle tenures every survivor.
+    // Image residents (loader-reconstructed rows stand-ins): the first
+    // partition cycle makes them permanent, hence tenured in every mode.
+    for &owner in &owners {
+        assert!(heap.note_image_object(owner));
+    }
     heap.collect_exact(std::iter::once(root));
     assert!(owners.iter().all(|&owner| heap.value_is_tenured(owner)));
     let calls = || RECORD_HEAP_WRITE_CALLS.with(|c| c.get());

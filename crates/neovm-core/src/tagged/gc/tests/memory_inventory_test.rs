@@ -2,6 +2,7 @@ use super::*;
 use crate::buffer::{CharPos0, CharRange};
 use crate::emacs_core::value::Value;
 use crate::heap_types::LispString;
+use crate::tagged::header::ImageResident;
 
 fn heap(on: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();
@@ -34,7 +35,7 @@ fn memory_inventory_splits_retained_ages_and_owned_payload_capacities() {
     let old_cons = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     heap.close_alloc_regions();
     header(old_vector).tenured = true;
-    header(permanent_vector).make_permanent();
+    header(permanent_vector).make_permanent(&ImageResident::for_test());
     let (trailer, index) = heap.old_cons_trailer(old_cons).unwrap();
     trailer.set_old(index);
     // Card marking removed the former per-cons unlogged bitmap. These

@@ -3,6 +3,7 @@
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::{HashTableTest, HashTableWeakness, LispHashTable};
+use crate::tagged::header::ImageResident;
 
 fn clean_context() -> Context {
     let mut context = Context::new();
@@ -110,7 +111,7 @@ fn a6_ht_b8_fence_refuses_permanent_mapped_and_callback_payloads() {
             let header = &mut (*ptr).header.gc;
             let generation = header.generation;
             let tenured = header.tenured;
-            header.make_permanent();
+            header.make_permanent(&ImageResident::for_test());
             assert!(WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).is_err());
             header.generation = generation;
             header.tenured = tenured;

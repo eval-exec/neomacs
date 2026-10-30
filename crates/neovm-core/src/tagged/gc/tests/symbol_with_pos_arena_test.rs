@@ -481,6 +481,10 @@ fn symbol_with_pos_survivors_tenure_and_full_pages_retire_body(verify: bool) {
         heap.symbol_with_pos_arena.pages[0].allocated,
         SYMBOL_WITH_POS_PAGE_SLOTS
     );
+    // Loader-reconstructed image rows: permanent, full page retires.
+    for &b in &objs {
+        assert!(heap.note_image_object(b));
+    }
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
@@ -639,7 +643,11 @@ fn tenured_page_symbol_with_pos_keeps_young_child_alive_body(verify: bool) {
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
+    // Runtime owner: ordinary old in GEN1; young in GEN0.
+    assert_eq!(
+        unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
+        heap.generational_enabled(),
+    );
 
     for cycle in 0..2 {
         heap.collect_exact(std::iter::once(root));

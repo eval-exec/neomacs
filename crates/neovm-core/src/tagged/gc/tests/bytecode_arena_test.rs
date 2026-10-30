@@ -536,6 +536,8 @@ fn concurrent_tenured_bytecode_dropped_not_claimed() {
     // tenure) and is reachable ONLY through B's constants.
     let young = heap.alloc_cons(TaggedValue::fixnum(4_321), TaggedValue::fixnum(0));
     let b = heap.alloc_bytecode(bytecode_fn(vec![TaggedValue::fixnum(6), young], 4, 16));
+    // The worker's tenured short-circuit is the permanent-image path.
+    assert!(heap.note_image_object(b));
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
     heap.collect_exact(std::iter::once(root));
     let b_hdr = b.as_veclike_ptr().unwrap();
@@ -959,6 +961,10 @@ fn bytecode_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
     assert_eq!(heap.bytecode_arena.pages.len(), 2);
     assert_eq!(heap.bytecode_arena.pages[0].allocated, BYTECODE_PAGE_SLOTS);
+    // Loader-reconstructed image rows: permanent, full page retires.
+    for &b in &bytecodes {
+        assert!(heap.note_image_object(b));
+    }
 
     // First partition cycle: full trace + sweep, then promotion.
     heap.collect_exact(std::iter::once(root));
@@ -1066,6 +1072,11 @@ fn bytecode_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
             keep.push(b);
             root = heap.alloc_cons(b, root);
         }
+    }
+
+    // Loader-reconstructed image rows; the partial page still must not retire.
+    for &b in &keep {
+        assert!(heap.note_image_object(b));
     }
 
     // Promotion cycle: odd-indexed garbage swept first, survivors tenure
@@ -1181,7 +1192,12 @@ fn bytecode_constants_test_seam_fires_write_barrier_body(verify: bool) {
     let b = heap.alloc_bytecode(bytecode_fn(vec![TaggedValue::fixnum(0)], 2, 0));
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
     heap.collect_exact(std::iter::once(root));
-    assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
+    // Runtime owner: ordinary old in GEN1; young (traced each collection)
+    // in GEN0. The seam fires either way; GEN0 needs no remembered edge.
+    assert_eq!(
+        unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
+        heap.generational_enabled(),
+    );
 
     // The seam refuses non-bytecode values.
     assert!(crate::tagged::mutate::with_bytecode_data_mut_for_test(root, |_| ()).is_none());
@@ -1235,10 +1251,14 @@ fn tenured_page_bytecode_keeps_young_cons_child_alive_body(verify: bool) {
     let b = heap.alloc_bytecode(bytecode_fn(vec![y], 4, 0));
     let root = heap.alloc_cons(b, TaggedValue::fixnum(0));
 
-    // Promotion: b tenures via the page walk; y stays young.
+    // Promotion: b is an ordinary-old runtime survivor (GEN1) or stays
+    // young (GEN0); y stays young either way.
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
+    assert_eq!(
+        unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
+        heap.generational_enabled(),
+    );
 
     // Two partitioned cycles (one per parity): the owner is black and
     // never re-traced; the child survives ONLY via the promotion-time

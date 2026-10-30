@@ -551,6 +551,11 @@ fn lambda_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
     assert_eq!(heap.lambda_arena.pages.len(), 2);
     assert_eq!(heap.lambda_arena.pages[0].allocated, LAMBDA_PAGE_SLOTS);
+    // Stand-ins for loader-reconstructed image rows: only they become
+    // permanent and retire full pages.
+    for &b in &lambdas {
+        assert!(heap.note_image_object(b));
+    }
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
@@ -619,6 +624,10 @@ fn lambda_mixed_page_tenured_survive_alternating_parities_body(verify: bool) {
             keep.push(b);
             root = heap.alloc_cons(b, root);
         }
+    }
+    // Loader-reconstructed image rows; the partial page still must not retire.
+    for &b in &keep {
+        assert!(heap.note_image_object(b));
     }
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
@@ -718,7 +727,12 @@ fn tenured_page_lambda_keeps_young_cons_child_alive_body(verify: bool) {
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);
-    assert!(unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured });
+    // Runtime owner: ordinary old in GEN1; in GEN0 it stays young and every
+    // full collection traces the child directly.
+    assert_eq!(
+        unsafe { (*b.as_veclike_ptr().unwrap()).gc.tenured },
+        heap.generational_enabled(),
+    );
 
     for cycle in 0..2 {
         heap.collect_exact(std::iter::once(root));
@@ -795,6 +809,10 @@ fn macro_tenure_retire_and_teardown_body(verify: bool) {
         }
         assert_eq!(heap.macro_arena.pages.len(), 2);
         assert!(LIVE_MACRO_PAGES.load(Ordering::Relaxed) > before);
+        // Loader-reconstructed image rows: permanent, full page retires.
+        for &m in &macros {
+            assert!(heap.note_image_object(m));
+        }
 
         heap.collect_exact(std::iter::once(root));
         assert!(heap.dump_blackened);

@@ -4,6 +4,7 @@ use super::*;
 use crate::emacs_core::intern::intern_uninterned;
 use crate::heap_types::LispMarker;
 use std::sync::Arc;
+use crate::tagged::header::ImageResident;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Leaf {
@@ -183,7 +184,7 @@ fn concurrent_leaf_claims_obey_generation_parity_and_once_only_promotion() {
                         if age == 1 {
                             (*header(value)).tenured = true;
                         } else if age == 2 {
-                            (*header(value)).make_permanent();
+                            (*header(value)).make_permanent(&ImageResident::for_test());
                         }
                     }
                     for parity in [heap.mark_parity, heap.mark_parity.flip()] {

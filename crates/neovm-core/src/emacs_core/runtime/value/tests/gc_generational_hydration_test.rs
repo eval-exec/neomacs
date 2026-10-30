@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::tagged::gc::{TaggedHeap, set_tagged_heap};
+use crate::tagged::header::ImageResident;
 
 struct ScratchRootGuard(usize);
 
@@ -45,7 +46,7 @@ fn pending_permanent_table(heap: &mut TaggedHeap) -> Value {
     let header = value.as_veclike_ptr().unwrap() as *mut crate::tagged::header::GcHeader;
     // Model a permanent table loaded before its parked entries are touched.
     // No allocation or safe point occurs between publication and this flag.
-    unsafe { (*header).make_permanent() };
+    unsafe { (*header).make_permanent(&ImageResident::for_test()) };
     value
 }
 

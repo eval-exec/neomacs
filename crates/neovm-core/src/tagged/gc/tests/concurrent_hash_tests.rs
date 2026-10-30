@@ -10,6 +10,7 @@ use crate::emacs_core::value::{HashKey, HashTableTest, HashTableWeakness, LispHa
 use crate::tagged::header::VecLikeHeader;
 use std::cell::UnsafeCell;
 use std::sync::{Arc, Barrier};
+use crate::tagged::header::ImageResident;
 
 fn table_with_entries(count: usize) -> LispHashTable {
     let mut table = LispHashTable::new(HashTableTest::Eq);
@@ -114,7 +115,7 @@ fn tier_h_start_eligibility_excludes_weak_pending_and_generation_black() {
     let mut old = boxed_table(table_with_entries(1));
     old.header.gc.tenured = true;
     let mut permanent = boxed_table(table_with_entries(1));
-    permanent.header.gc.make_permanent();
+    permanent.header.gc.make_permanent(&ImageResident::for_test());
     let mut snapshot = HashTableScanSnapshot::new();
     for object in [&weak, &pending, &old, &permanent] {
         // SAFETY: the four exclusive Boxes are complete and remain live.

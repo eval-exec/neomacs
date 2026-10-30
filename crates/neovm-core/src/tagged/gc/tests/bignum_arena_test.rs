@@ -493,6 +493,10 @@ fn bignum_survivors_tenure_and_full_pages_retire_body(verify: bool) {
     }
     assert_eq!(heap.bignum_arena.pages.len(), 2);
     assert_eq!(heap.bignum_arena.pages[0].allocated, BIGNUM_PAGE_SLOTS);
+    // Loader-reconstructed image rows: permanent, full page retires.
+    for &b in &bigs {
+        assert!(heap.note_image_object(b));
+    }
 
     heap.collect_exact(std::iter::once(root));
     assert!(heap.dump_blackened);

@@ -2,6 +2,7 @@
 //! and the byte map every later header commit builds on (P3.0 §3.1).
 
 use super::*;
+use crate::tagged::header::ImageResident;
 
 fn header_of(value: TaggedValue) -> *mut GcHeader {
     TaggedHeap::value_heap_addr(value).expect("a heap object") as *mut GcHeader
@@ -41,7 +42,7 @@ fn black_by_generation_per_scope() {
     assert!(!old.black_by_generation(CollectionScope::Full));
 
     let mut permanent = GcHeader::new(HeapObjectKind::String);
-    permanent.make_permanent();
+    permanent.make_permanent(&ImageResident::for_test());
     assert!(permanent.tenured);
     assert!(permanent.generation.permanent());
     assert!(permanent.black_by_generation(CollectionScope::Young));
@@ -51,13 +52,15 @@ fn black_by_generation_per_scope() {
     assert_eq!(heap.collection_scope(), CollectionScope::Young);
 }
 
-/// The first partition cycle promotes every survivor — boxed objects and
-/// page slots of every class — to tenured AND permanent, and nothing else;
-/// the permanents then stay black across later cycles of both parities.
+/// The first partition cycle classifies survivors: loader-stamped image
+/// residents become permanent; every runtime survivor is ordinary old (GEN1)
+/// or stays young (GEN0). Nothing else becomes permanent, and the runtime
+/// class is reclaimed by a later full collection once unrooted.
 #[test]
-fn the_first_partition_cycle_makes_survivors_permanent() {
+fn the_first_partition_cycle_reserves_permanence_for_image_residents() {
     let mut heap = TaggedHeap::new();
     set_tagged_heap(&mut heap);
+    let generational = heap.generational_enabled();
     heap.extend_dump_span(4096, 16);
     let table = heap.alloc_hash_table(crate::emacs_core::value::LispHashTable::new(
         crate::emacs_core::value::HashTableTest::Eq,
@@ -67,33 +70,63 @@ fn the_first_partition_cycle_makes_survivors_permanent() {
     let float = heap.alloc_float(1.5);
     let record = heap.alloc_record(vec![TaggedValue::T]);
     let lambda = heap.alloc_lambda(vec![TaggedValue::NIL]);
-    let kept = [table, vector, string, float, record, lambda];
+    // Two survivors stand in for loader-reconstructed dump-image rows; the
+    // rest are runtime allocations.
+    assert!(heap.note_image_object(vector));
+    assert!(heap.note_image_object(lambda));
+    let residents = [vector, lambda];
+    let runtime = [table, string, float, record];
     let mut root = TaggedValue::NIL;
-    for &value in &kept {
+    for &value in residents.iter().chain(runtime.iter()) {
         root = heap.alloc_cons(value, root);
     }
     heap.collect_exact(std::iter::once(root));
-    for &value in &kept {
+    for &value in &residents {
         let header = unsafe { &*header_of(value) };
         assert!(header.tenured, "{value:?}");
         assert!(header.generation.permanent(), "{value:?}");
         assert!(header.black_by_generation(CollectionScope::Full));
+    }
+    for &value in &runtime {
+        let header = unsafe { &*header_of(value) };
+        assert_eq!(header.tenured, generational, "{value:?}");
+        assert!(!header.generation.permanent(), "{value:?}");
+        assert!(!header.black_by_generation(CollectionScope::Full));
     }
     // A young object allocated after the promotion is neither.
     let young = heap.alloc_vector(vec![TaggedValue::NIL]);
     let young_header = unsafe { &*header_of(young) };
     assert!(!young_header.tenured);
     assert_eq!(young_header.generation, GenBits::NONE);
-    // Later cycles leave the permanents alone (tenured-skip unchanged).
+    // With the graph rooted, later cycles keep both classes alive: the
+    // runtime class is traced by every full collection, not skipped.
     let root2 = heap.alloc_cons(young, root);
     for _ in 0..3 {
         heap.collect_exact(std::iter::once(root2));
-        for &value in &kept {
-            assert!(heap.is_value_marked(value));
+        for &value in residents.iter().chain(runtime.iter()).chain([&young]) {
+            assert!(heap.is_value_marked(value), "{value:?}");
+        }
+        for &value in &residents {
             assert!(unsafe { &*header_of(value) }.generation.permanent());
         }
     }
-    assert!(heap.is_value_marked(young));
+    // Drop every root: the next full collection reclaims the runtime
+    // survivors and the young vector; image residents stay forever.
+    drop(root2);
+    heap.collect_exact(std::iter::empty());
+    for &value in &residents {
+        assert!(heap.owns_heap_value_for_test(value), "{value:?}");
+        assert!(unsafe { &*header_of(value) }.generation.permanent());
+    }
+    for &value in runtime.iter().chain([&young]) {
+        assert!(
+            !heap.owns_heap_value_for_test(value),
+            "{value:?} must be reclaimed"
+        );
+    }
+    // The reclaimed weak table left the always-swept registry: cycling the
+    // weak sweep again must not inspect its freed memory.
+    heap.collect_exact(std::iter::empty());
 }
 
 /// The tri-state mark byte (P3.1 C2.2): 0 is unmarked at rest under both
