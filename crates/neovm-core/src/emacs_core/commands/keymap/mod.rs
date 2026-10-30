@@ -871,7 +871,10 @@ pub(crate) fn get_keyelt_runtime(eval: &mut Context, binding: Value, autoload: b
             let tail = pair_cdr.cons_cdr();
             object = nth_list_element(pair_cdr, 1).unwrap_or(Value::NIL);
             if autoload && let Some(filter) = menu_item_filter(tail, symbol_mode) {
-                object = eval.apply(filter, vec![object])?;
+                // GNU applies the filter through `menu_item_eval_property`
+                // (src/keyboard.c:8873-8884): `inhibit-redisplay` bound,
+                // `error` caught to nil, quit still nonlocal.
+                object = eval.eval_menu_item_property(filter, vec![object])?;
             }
             continue;
         }
@@ -1771,6 +1774,11 @@ pub fn list_keymap_define(keymap: Value, event: Value, def: Value, symbol_mode: 
 
 /// Remove a binding from a keymap, matching GNU `define-key` with REMOVE arg.
 pub fn list_keymap_remove(keymap: Value, event: Value, symbol_mode: SymbolMode) {
+    // GNU `store_in_keymap` flushes the reverse keymap cache on every store,
+    // including REMOVE (src/keymap.c:733-736). Filters can run arbitrary Lisp
+    // (and rebuild that cache) between the caller's epoch bump and this
+    // store, so the removal must invalidate it just like a definition does.
+    note_keymap_mutation();
     store_in_keymap(keymap, event, Value::NIL, true, symbol_mode);
 }
 

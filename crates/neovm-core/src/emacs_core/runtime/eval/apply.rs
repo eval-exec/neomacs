@@ -2284,6 +2284,43 @@ impl Context {
         self.unbind_to_with_result(specpdl_count, result)
     }
 
+    /// GNU `menu_item_eval_property` (`src/keyboard.c:8873-8884`): evaluate
+    /// a dynamic menu-item property with `inhibit-redisplay` bound and
+    /// `error` (and its subclasses) caught to nil. GNU wraps the evaluation
+    /// in `internal_condition_case_1 (..., Qerror, ...)`, so `quit`, and
+    /// throws with a matching outer catch, remain nonlocal. Unlike
+    /// [`Self::safe_funcall`] this must not swallow quit.
+    pub(crate) fn eval_menu_item_property<A>(&mut self, function: Value, args: A) -> EvalResult
+    where
+        A: Into<LispArgVec>,
+    {
+        let specpdl_count = self.specpdl.len();
+        self.try_specbind_or_unwind_to(specpdl_count, intern("inhibit-redisplay"), Value::T)?;
+        let condition_stack_base = self.condition_stack_len();
+        let resume = ResumeTarget::MenuItemProperty {
+            condition_stack_base,
+        };
+        self.push_condition_frame(ConditionFrame::ConditionCase {
+            // `error` is the root of every ordinary error condition; quit's
+            // error-conditions are `(quit)`, so it does not match.
+            conditions: Value::symbol(intern("error")),
+            resume: resume.clone(),
+        });
+        let result = self.apply(function, args);
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.truncate_condition_stack(condition_stack_base);
+        let result = match result.kinded() {
+            Err(FlowKind::Signal(flow)) if flow.selected_resume.as_ref() == Some(&resume) => {
+                tracing::debug!(?flow, "menu-item property error muted");
+                Ok(Value::NIL)
+            }
+            other => other.map_err(Flow::from_kind),
+        };
+        // GNU removes the condition handler before muting the error and
+        // before restoring inhibit-redisplay, matching safe_funcall.
+        self.unbind_to_with_result(specpdl_count, result)
+    }
+
     /// Apply from GNU's Lisp-visible `apply` / `funcall` subrs.
     ///
     /// GNU bytecode `Bcall` increments the same `lisp_eval_depth` counter
