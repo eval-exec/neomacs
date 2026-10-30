@@ -600,6 +600,18 @@ impl<'a> LoadDecoder<'a> {
             })?;
         }
         self.hydrate_parked_weak_tables();
+        // Every heap object the loader reconstructed from an image row is an
+        // image resident; the first partition cycle makes exactly these
+        // permanent. Mapped rows are already permanent through the mapped
+        // side tables, and the heap ignores conses, mapped objects and static
+        // values.
+        with_tagged_heap(|heap| {
+            for index in 0..self.state.values.len() {
+                if let Some(value) = self.state.cached_value(index) {
+                    heap.note_image_object(value);
+                }
+            }
+        });
         Ok(())
     }
 

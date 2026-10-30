@@ -400,14 +400,14 @@ impl TaggedHeap {
             }
         }
         let mut newly_promoted_header_bytes = 0usize;
-        // The first partition's existing permanent splice owns non-cons
-        // promotion, including survivors of a late-loaded image.
+        // The first partition's promotion walk owns non-cons classification,
+        // including survivors of a late-loaded image.
         if !partition_first {
             for ptr in headers {
                 let header = unsafe { &mut *ptr };
                 if !header.tenured {
                     debug_assert!(header.is_marked_at(self.mark_parity));
-                    header.tenured = true;
+                    header.promote_to_old_generation();
                     let bytes = self.collector_object_bytes(ptr);
                     self.generational.old_bytes = self.generational.old_bytes.saturating_add(bytes);
                     newly_promoted_header_bytes = newly_promoted_header_bytes.saturating_add(bytes);

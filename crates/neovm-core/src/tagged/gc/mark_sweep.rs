@@ -273,34 +273,43 @@ impl TaggedHeap {
     }
 
     /// Run once at the END of the first partition cycle (after a full
-    /// trace+sweep): promote every survivor to the tenured old generation,
-    /// blacken the mapped dump image, and build the initial remembered set.
-    /// Thereafter both regions are permanently black and skipped each cycle.
+    /// trace+sweep): classify every survivor, blacken the mapped dump image,
+    /// and build the initial remembered set.
+    ///
+    /// Only loader-stamped image residents become permanent (the mapped
+    /// image's equivalent for heap-reconstructed rows); every other survivor
+    /// is a runtime object and is tenured old (GEN1) or left young (GEN0), so
+    /// full collections keep tracing it and the sweep can free it when dead.
     pub(super) fn promote_and_blacken(&mut self) {
-        // An open region's reserved slots would be tenured (and its full
+        // An open region's reserved slots would be classified (and its full
         // pages retired) as survivors.
         self.close_alloc_regions();
         self.join_old_boxes_for_partition_world_stopped();
-        // 1. Promote every surviving heap object to tenured (old generation).
-        //    The first partition cycle ran a full trace+sweep, so everything
-        //    still in `all_objects` is alive = a permanent (the preloaded world
-        //    plus whatever the session has retained). They are already marked;
-        //    setting `tenured` FREEZES that bit — no later parity flip may be
-        //    interpreted against it (every tenured reader short-circuits on
-        //    the flag), so these objects are permanently black without ever
-        //    being re-touched.
-        //    Move the whole young list onto the tenured list and flag each
-        //    node so the nursery (`all_objects`) starts empty; from now on only
-        //    post-loadup allocations land there and get cleared/swept.
-        let mut tail: *mut GcHeader = std::ptr::null_mut();
+        // 1. Classify every surviving heap object. The first partition cycle
+        //    ran a full trace+sweep, so everything still in `all_objects` is
+        //    alive. An image resident (the pdump loader stamped it when it
+        //    reconstructed a dump row) becomes permanent — immortal exactly
+        //    like the mapped image. Any other survivor is a runtime object:
+        //    GEN1 tenures it as ordinary old generation (traced by every full
+        //    collection, swept, freed when dead); GEN0 has no minor
+        //    collections, so it stays in the ordinary young set and every
+        //    full collection traces and sweeps it. Neither path ever sets the
+        //    permanent bit, and no reader freezes their mark against a later
+        //    parity: only the permanent generation is skipped.
+        let mut resident_head: *mut GcHeader = std::ptr::null_mut();
+        let mut young_head: *mut GcHeader = std::ptr::null_mut();
         let mut obj = self.all_objects;
         while !obj.is_null() {
+            // SAFETY: the sweep completed, so every node is a live
+            // initialized owner on this heap's young list. `next` is read
+            // before any relink below rewrites it.
             unsafe {
-                (*obj).make_permanent();
-                // A weak hash table being tenured becomes permanent-black and the
-                // main mark will never re-touch it; record it so the weak sweep
-                // keeps re-evaluating its entries every GC (GNU sweeps every weak
-                // table every GC). See `permanent_weak_hash_tables`.
+                let next = (*obj).next;
+                // A weak table must be re-evaluated every GC: mapped and
+                // permanent tables never trace, and a tenured runtime table
+                // is black during minors. One always-swept list covers all
+                // three; a freed runtime table is purged in `free_gc_object`.
+                // See `permanent_weak_hash_tables`.
                 if (*obj).kind == HeapObjectKind::VecLike {
                     let vptr = obj as *mut VecLikeHeader;
                     if (*vptr).type_tag == VecLikeType::HashTable {
@@ -315,43 +324,51 @@ impl TaggedHeap {
                         }
                     }
                 }
-                tail = obj;
-                obj = (*obj).next;
+                match ImageResident::from_image_row(&*obj) {
+                    Some(resident) => {
+                        (*obj).make_permanent(&resident);
+                        (*obj).next = resident_head;
+                        resident_head = obj;
+                    }
+                    None if self.generational.enabled => {
+                        (*obj).promote_to_old_generation();
+                        self.link_old_object_world_stopped(obj);
+                    }
+                    None => {
+                        (*obj).next = young_head;
+                        young_head = obj;
+                    }
+                }
+                obj = next;
             }
         }
-        if !tail.is_null() {
-            // Splice: [all_objects .. tail] -> front of tenured_objects.
+        // Image residents join the immortal list. GEN1 runtime survivors are
+        // already on the ordinary-old list; GEN0 keeps them on the young list
+        // (which is empty after promotion in GEN1).
+        if !resident_head.is_null() {
+            // Splice: residents -> front of tenured_objects.
             unsafe {
-                (*tail).next = self.tenured_objects;
+                (*resident_head).next = self.tenured_objects;
             }
-            self.tenured_objects = self.all_objects;
-            self.all_objects = std::ptr::null_mut();
+            self.tenured_objects = resident_head;
         }
+        self.all_objects = young_head;
         // 1b. PROMOTION PAGE WALK (stage 3): page objects are on no intrusive
-        //     list, so the splice above cannot tenure them — without this
-        //     walk the (loadup-sized) paged survivor set would stay young and
-        //     be re-seeded + re-traced + re-swept every cycle, defeating
-        //     tenuring. Flip `header.tenured` on every ALLOCATED slot (the
-        //     sweep has already run, so allocated ≡ survivor); the per-object
-        //     header REMAINS the sole mark-path authority — no page-level
-        //     flag is consulted by any mark path. No weak-table registration
-        //     is needed here (the paged classes are Float/String/Vector;
-        //     hash tables stay Box and ride the splice above). Then RETIRE
-        //     full pages: a page whose every slot is allocated (hence, after
-        //     this walk, tenured) can never free a slot again — the sweep
-        //     skips it whole, the allocator never touches it, and it is
-        //     freed only at heap teardown, while STAYING in the page-base
-        //     registry so the ownership oracle keeps answering "owned"
-        //     (`value_is_tenured` gates on ownership — see C1 on the arena
-        //     doc). The criterion is deliberately occupancy==SLOTS, NOT "all
-        //     allocated slots tenured": right after this walk EVERY page
-        //     trivially satisfies the latter, which would retire
-        //     nearly-empty pages and strand their free slots forever.
-        //     Partial pages stay in rotation as MIXED pages — every later
-        //     sweep re-skips their tenured slots, a perpetual per-slot
-        //     branch bounded by the one-time loadup survivor set (the only
-        //     population this one-shot promotion ever tenures).
-        self.promote_arena_pages_and_retire_full();
+        //     list. Classify every ALLOCATED slot (the sweep has already run,
+        //     so allocated ≡ survivor) exactly like the list above: an image
+        //     resident becomes permanent, a runtime slot is tenured (GEN1) or
+        //     left young (GEN0). The per-object header REMAINS the sole
+        //     mark-path authority — no page-level flag is consulted by any
+        //     mark path. No weak-table registration is needed here (the paged
+        //     classes are Float/String/Vector; hash tables stay Box and ride
+        //     the list above). A page is retired only when it is FULL and
+        //     every allocated slot is a permanent image resident: those slots
+        //     can never die, so the sweep may skip the page whole while it
+        //     stays in the page-base registry (the ownership oracle keeps
+        //     answering "owned" — see C1 on the arena doc). Full pages that
+        //     contain any runtime survivor stay sweepable: their dead slots
+        //     must be freed later.
+        self.promote_arena_pages();
         // 2. Blacken the mapped image.
         self.mark_mapped_image_side_tables();
         // Mapped (pdump) weak hash tables become permanent-black here too (the
@@ -384,60 +401,72 @@ impl TaggedHeap {
                 self.permanent_weak_hash_tables.push(ht_ptr);
             }
         }
-        // 3. Remember permanents (mapped or tenured) that point at a YOUNG
-        //    heap object so its children stay live. After promotion (list
-        //    splice + page walk) the only young heap objects are heap CONSES
-        //    (header-less, cannot be tenured), so this scan retains exactly
-        //    the permanent→cons edges. It covers page-tenured owners too —
-        //    see the page walk inside `scan_permanents_for_young_children`.
+        // 3. Remember every permanent/mapped/tenured owner that points at a
+        //    collectible heap object so a minor re-traces it: permanents and
+        //    mapped image objects never trace, and ordinary-old owners are
+        //    black during a minor. After promotion the collectible children
+        //    are young heap conses and (GEN1) the newly tenured runtime
+        //    graph, so this scan retains exactly the edges a minor would
+        //    otherwise miss. It covers page-tenured owners too — see the
+        //    page walk inside `scan_permanents_for_young_children`.
         self.scan_permanents_for_young_children();
         self.clear_black_births_world_stopped();
     }
 
-    /// Stage-3 promotion page walk + retirement (see the call site in
+    /// Stage-3 promotion page walk (see the call site in
     /// `promote_and_blacken` for the full rationale). One-shot: runs only at
     /// the single promotion of the first partition cycle.
-    pub(super) fn promote_arena_pages_and_retire_full(&mut self) {
-        fn walk_one<T: PagedObject>(arena: &mut ObjectArena<T>) {
+    pub(super) fn promote_arena_pages(&mut self) {
+        // A retired page's slots are all permanent image residents, so the
+        // gate is per page: FULL occupancy and no runtime survivor.
+        fn walk_one<T: PagedObject>(arena: &mut ObjectArena<T>, promote_old: bool) {
             for page in &mut arena.pages {
+                let mut all_resident = true;
                 for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
                     let mut bits = page.alloc_bits[word_index];
                     while bits != 0 {
                         let bit = bits.trailing_zeros() as usize;
                         bits &= bits - 1;
                         let index = word_index * usize::BITS as usize + bit;
-                        let slot = page.slot_ptr(index);
-                        // Allocated ⇒ survivor of the just-completed sweep ⇒
-                        // a permanent. Plain store: promotion is STW.
-                        unsafe { (*(slot as *mut GcHeader)).make_permanent() };
+                        let slot = page.slot_ptr(index) as *mut GcHeader;
+                        // Allocated ⇒ survivor of the just-completed sweep.
+                        // Plain stores: promotion is STW.
+                        // SAFETY: the slot's allocation bit is set, so its
+                        // header is initialized storage this stopped heap owns.
+                        match ImageResident::from_image_row(unsafe { &*slot }) {
+                            Some(resident) => unsafe { (*slot).make_permanent(&resident) },
+                            None => {
+                                all_resident = false;
+                                if promote_old {
+                                    unsafe { (*slot).promote_to_old_generation() };
+                                }
+                            }
+                        }
                     }
                 }
-                // RETIREMENT: FULL pages only (occupancy == slots, which
-                // after the flip above implies all-tenured). A full page has
-                // an empty free list and is off the partial chain by
-                // construction.
-                if page.allocated == ObjectPage::<T>::SLOTS {
+                // RETIREMENT: FULL pages whose every slot is an immortal
+                // image resident. Such a page can never free a slot again;
+                // any page with a runtime survivor stays sweepable so its
+                // dead slots are reclaimed. A full page has an empty free
+                // list and is off the partial chain by construction.
+                if all_resident && page.allocated == ObjectPage::<T>::SLOTS {
                     debug_assert!(!page.on_partial, "full page on the partial chain");
                     debug_assert_eq!(page.free_head, PAGE_NONE);
                     page.retired = true;
                 }
             }
         }
-        walk_one(&mut self.float_arena);
-        walk_one(&mut self.string_arena);
-        walk_one(&mut self.vector_arena);
-        // Bytecode is loadup-heavy: most of the population tenures at this
-        // one-time promotion, so FULL-page retirement fires for real here
-        // (unlike floats) — retired pages stay registered/owned (C1).
-        walk_one(&mut self.bytecode_arena);
-        // Lambdas/macros likewise tenure at the loadup promotion (interpreted
-        // closures are loadup-heavy); their arenas retire full pages too.
-        walk_one(&mut self.lambda_arena);
-        walk_one(&mut self.macro_arena);
-        walk_one(&mut self.record_arena);
-        walk_one(&mut self.symbol_with_pos_arena);
-        walk_one(&mut self.marker_arena);
-        walk_one(&mut self.bignum_arena);
+        let promote_old = self.generational.enabled;
+        walk_one(&mut self.float_arena, promote_old);
+        walk_one(&mut self.string_arena, promote_old);
+        walk_one(&mut self.vector_arena, promote_old);
+        walk_one(&mut self.bytecode_arena, promote_old);
+        walk_one(&mut self.lambda_arena, promote_old);
+        walk_one(&mut self.macro_arena, promote_old);
+        walk_one(&mut self.record_arena, promote_old);
+        walk_one(&mut self.symbol_with_pos_arena, promote_old);
+        walk_one(&mut self.marker_arena, promote_old);
+        walk_one(&mut self.bignum_arena, promote_old);
     }
 
     /// Scan every permanent object (mapped dump + tenured old gen) for edges to
@@ -505,7 +534,7 @@ impl TaggedHeap {
             out
         };
         for header in tenured {
-            self.remember_tenured_owner_if_young_children(header);
+            self.remember_tenured_owner_if_collectible_children(header);
         }
         // -- PAGE-TENURED objects (stage 3): the arenas' tenured slots are on
         //    no intrusive list, so the walk above never sees them. They MUST
@@ -523,18 +552,25 @@ impl TaggedHeap {
         //    oracle — retired pages included — so `record_heap_write` keeps
         //    remembering mutated page-tenured owners. --
         for header in self.collect_tenured_page_slot_headers() {
-            self.remember_tenured_owner_if_young_children(header);
+            self.remember_tenured_owner_if_collectible_children(header);
         }
     }
 
-    /// Insert a tenured (list or page) owner into the dump remembered set if
-    /// any of its direct heap children is YOUNG. Floats have no children.
-    pub(super) fn remember_tenured_owner_if_young_children(&mut self, header: *mut GcHeader) {
-        if self.generational.enabled && !unsafe { (*header).generation.permanent() } {
-            return;
-        }
+    /// Insert a tenured (list or page) owner into the remembered set if any
+    /// of its direct heap children is collectible — young (a heap cons) or,
+    /// for an immutable permanent, any non-permanent heap object. Floats have
+    /// no children.
+    ///
+    /// Both permanent and ordinary-old tenured owners need this: a permanent
+    /// (or mapped) owner never traces again, and an ordinary-old owner is
+    /// black during a minor (GEN1), so a missed edge would let the sweep free
+    /// a live child.
+    pub(super) fn remember_tenured_owner_if_collectible_children(
+        &mut self,
+        header: *mut GcHeader,
+    ) {
         let kind = unsafe { (*header).kind };
-        let has_young = match kind {
+        let has_collectible = match kind {
             HeapObjectKind::VecLike => self.veclike_has_young_child(header as *mut VecLikeHeader),
             HeapObjectKind::String => self
                 .heap_object_children(header)
@@ -542,7 +578,7 @@ impl TaggedHeap {
                 .any(|c| self.permanent_child_needs_trace(*c)),
             HeapObjectKind::Float => false,
         };
-        if has_young {
+        if has_collectible {
             let value = match kind {
                 HeapObjectKind::VecLike => unsafe {
                     TaggedValue::from_veclike_ptr(header as *const VecLikeHeader)

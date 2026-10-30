@@ -1876,7 +1876,16 @@ impl TaggedHeap {
                         drop(Box::from_raw(ptr as *mut BoolVectorObj))
                     },
                     VecLikeType::HashTable => unsafe {
-                        drop(Box::from_raw(ptr as *mut HashTableObj))
+                        // A swept weak table must leave the always-swept
+                        // registry, or the next cycle's weak worklist would
+                        // inspect freed memory. Only registered tables are
+                        // in the set (mapped and promoted weak tables).
+                        let ht_ptr = ptr as *mut HashTableObj;
+                        if self.permanent_weak_hash_tables_set.remove(&ht_ptr) {
+                            self.permanent_weak_hash_tables
+                                .retain(|&registered| registered != ht_ptr);
+                        }
+                        drop(Box::from_raw(ht_ptr))
                     },
                     VecLikeType::Obarray => unsafe { drop(Box::from_raw(ptr as *mut ObarrayObj)) },
                     VecLikeType::Lambda => unsafe { drop(Box::from_raw(ptr as *mut LambdaObj)) },

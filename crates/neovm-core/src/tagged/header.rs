@@ -383,10 +383,12 @@ pub struct GcHeader {
     pub marked: AtomicU8,
     /// Exact object category for typed sweep/deallocation.
     pub kind: HeapObjectKind,
-    /// Tenured: an OLD or PERMANENT heap object (sticky once set). Today
-    /// every tenured object is a permanent (the first partition cycle's
-    /// survivors, `generation.permanent()` set with it); P3.1's minors add
-    /// survival-promoted old objects. Whether a collection may skip it is
+    /// Tenured: an OLD or PERMANENT heap object (sticky once set). The first
+    /// partition cycle tenures every surviving runtime object and makes only
+    /// loader-stamped image residents permanent; GEN1 minors add
+    /// survival-promoted old objects. A tenured object is black in a minor
+    /// but traced and swept by every full collection unless it is permanent.
+    /// Whether a collection may skip it is
     /// [`GcHeader::black_by_generation`]'s question, never this byte's
     /// alone; the write barrier asks it directly (a tenured owner needs
     /// remembering). Byte 2, read by compiled code with byte 3 as one `u16`.
@@ -432,6 +434,13 @@ pub struct GcHeader {
 ///   "owned boxed object" from the header instead of the addr-set probe; the
 ///   ownership oracles for arbitrary addresses still ask the set, which is
 ///   exact even for a dangling one.
+/// - bit 1 `image_resident`: the pdump loader reconstructed this heap object
+///   from a dump-image row (`TaggedHeap::note_image_object`). The first
+///   partition cycle is the only reader: an image resident becomes
+///   `permanent`, exactly like the mapped image; every other runtime survivor
+///   becomes ordinary tenured old. Mapped image objects never need it (their
+///   residency is the mapped side tables), and generated code never reads the
+///   byte.
 ///
 /// The pdump image writes this byte as 0; mapped and static headers never
 /// have `boxed`.
@@ -441,6 +450,7 @@ pub struct HeaderFlags(u8);
 
 impl HeaderFlags {
     const BOXED: u8 = 1 << 0;
+    const IMAGE_RESIDENT: u8 = 1 << 1;
 
     /// No flags.
     pub const NONE: Self = Self(0);
@@ -455,6 +465,19 @@ impl HeaderFlags {
     #[inline]
     pub fn with_boxed(self) -> Self {
         Self(self.0 | Self::BOXED)
+    }
+
+    /// Was this heap object reconstructed from a dump-image row by the pdump
+    /// loader? Set once, before the object is published.
+    #[inline(always)]
+    pub(crate) fn image_resident(self) -> bool {
+        self.0 & Self::IMAGE_RESIDENT != 0
+    }
+
+    /// These flags with `image_resident` set.
+    #[inline]
+    pub(crate) fn with_image_resident(self) -> Self {
+        Self(self.0 | Self::IMAGE_RESIDENT)
     }
 }
 
@@ -492,9 +515,13 @@ pub const UNMARKED_AT_REST: u8 = 0;
 
 /// The generation byte of a [`GcHeader`] (byte 6; P3.0 §3.1, P3.1 §3.2).
 ///
-/// - bit 0 `permanent`: a loadup survivor, promoted by the first partition
-///   cycle (`promote_and_blacken`): never traced, never swept, not even by a
-///   major. Implies `tenured`.
+/// - bit 0 `permanent`: an image resident. Reserved for objects that came
+///   from the mapped dump image or that the pdump loader reconstructed from a
+///   dump-image row (the loader-stamped [`HeaderFlags::image_resident`] bit).
+///   The first partition cycle's promotion (`promote_and_blacken`) makes
+///   exactly those permanent, and a [`ImageResident`] proof is required:
+///   never traced, never swept, not even by a major. Implies `tenured`.
+///   Runtime survivors of that same cycle are only tenured, never permanent.
 /// - bit 1: reserved for the age bit of P3.1 C3.3 (age-2 promotion).
 ///
 /// The pdump image writes this byte as 0 and it is never read for mapped
@@ -509,16 +536,42 @@ impl GenBits {
     /// No generation bits: a young (or old, not permanent) object.
     pub const NONE: Self = Self(0);
 
-    /// Is the object a permanent (loadup survivor)?
+    /// Is the object a permanent image resident?
     #[inline(always)]
     pub fn permanent(self) -> bool {
         self.0 & Self::PERMANENT != 0
     }
 
-    /// These bits with `permanent` set.
+    /// These bits with `permanent` set. Private to [`GcHeader::make_permanent`],
+    /// which requires an [`ImageResident`] proof, so no runtime promotion path
+    /// can reach it.
     #[inline]
-    pub fn with_permanent(self) -> Self {
+    fn with_permanent(self) -> Self {
         Self(self.0 | Self::PERMANENT)
+    }
+}
+
+/// Proof that a heap object was reconstructed from a dump-image row.
+///
+/// Minted only from the loader-stamped [`HeaderFlags::image_resident`] bit, and
+/// the only argument [`GcHeader::make_permanent`] accepts. GC promotion code
+/// cannot obtain one for a runtime allocation, so the permanent generation
+/// stays reserved for the dump image.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageResident(());
+
+impl ImageResident {
+    /// Minted only for a header the pdump loader stamped as an image row.
+    #[inline]
+    pub(super) fn from_image_row(header: &GcHeader) -> Option<Self> {
+        header.flags.image_resident().then_some(Self(()))
+    }
+
+    /// Test-only capability for fixtures that need an immortal object.
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn for_test() -> Self {
+        Self(())
     }
 }
 
@@ -665,11 +718,20 @@ impl GcHeader {
     }
 
     /// Promote to the permanent generation (world stopped): tenured and
-    /// permanent.
+    /// permanent. Only an [`ImageResident`] proof may do so; runtime promotion
+    /// uses [`GcHeader::promote_to_old_generation`].
     #[inline]
-    pub(crate) fn make_permanent(&mut self) {
+    pub(crate) fn make_permanent(&mut self, _resident: &ImageResident) {
         self.tenured = true;
         self.generation = self.generation.with_permanent();
+    }
+
+    /// Promote a runtime survivor to the ordinary-old (tenured) generation
+    /// (world stopped): traced by every full collection, swept, and freed when
+    /// dead. Never sets the permanent bit.
+    #[inline]
+    pub(crate) fn promote_to_old_generation(&mut self) {
+        self.tenured = true;
     }
 
     /// The `(tenured, remembered)` byte pair of a header whose owner still

@@ -1639,6 +1639,38 @@ impl TaggedHeap {
         }
     }
 
+    /// Stamp VALUE, a heap object the pdump loader reconstructed from a
+    /// dump-image row, as an image resident.
+    ///
+    /// The first partition cycle's promotion makes exactly these objects
+    /// permanent; every other survivor is tenured only. Mapped image objects
+    /// need no stamp (their residency is the mapped mark side tables), and
+    /// conses have no header: both are ignored, as is anything this heap does
+    /// not own.
+    ///
+    /// The loader calls this once per reconstructed image row before the
+    /// image is published, so the byte is written before any mutator or
+    /// collector can observe the object.
+    pub(crate) fn note_image_object(&mut self, value: TaggedValue) -> bool {
+        if value.is_cons() {
+            return false;
+        }
+        let Some(addr) = Self::value_heap_addr(value) else {
+            return false;
+        };
+        if self.owner_is_mapped(value) || !self.owns_heap_value_object(value, addr) {
+            return false;
+        }
+        // SAFETY: the ownership oracle just proved this is a live initialized
+        // non-cons heap object, and the loader runs single-threaded before the
+        // image is published, so no mark or mutator reads the byte.
+        unsafe {
+            let header = &mut *(addr as *mut GcHeader);
+            header.flags = header.flags.with_image_resident();
+        }
+        true
+    }
+
     pub fn dirty_owner_count(&self) -> usize {
         self.dirty_owners.len()
     }
@@ -2854,6 +2886,10 @@ pub(crate) mod fake_image;
 /// The header's generation byte, THE generation predicate per collection
 /// scope, the byte map, and the first cycle's promotion to permanent.
 #[cfg(test)]
+#[cfg(test)]
+#[path = "gc/tests/weak_key_gc_test.rs"]
+mod weak_key_gc_tests;
+
 #[path = "gc/tests/generation_test.rs"]
 mod generation_tests;
 #[cfg(test)]
