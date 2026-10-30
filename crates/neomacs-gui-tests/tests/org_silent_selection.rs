@@ -42,6 +42,7 @@ fn org_region_survives_silent_emphasis_visibility_updates() {
         plan = plan.with_env(key.clone(), value.clone());
     }
     let env = session.env().to_vec();
+    let input_artifacts = artifacts.clone();
     let input = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         while !ready.exists() {
@@ -51,6 +52,18 @@ fn org_region_survives_silent_emphasis_visibility_updates() {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+        // Lisp readiness can precede native mapping/focus. Losing C-SPC here
+        // makes the final assertion blame silent updates for a region that
+        // was never activated. Match the shift-selection fixture's focus gate.
+        let runtime = &env
+            .iter()
+            .find(|(key, _)| key == "XDG_RUNTIME_DIR")
+            .unwrap()
+            .1;
+        let _mapped_editor = crate::wayland_readiness::wait_for_focused_child(
+            std::path::Path::new(runtime),
+            &input_artifacts,
+        );
         let output = neomacs_gui_tests::run_input_tool(
             {
                 let mut command = std::process::Command::new(
@@ -73,7 +86,7 @@ fn org_region_survives_silent_emphasis_visibility_updates() {
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
-            GuiRunOptions::with_timeout(Duration::from_secs(25)),
+            GuiRunOptions::with_timeout(Duration::from_secs(40)),
         )
         .unwrap();
     input.join().unwrap();
