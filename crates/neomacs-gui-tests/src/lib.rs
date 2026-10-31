@@ -207,6 +207,28 @@ impl GuiBackend {
     }
 }
 
+/// The backend a test should drive: `NEOMACS_GUI_TEST_BACKEND` when set,
+/// otherwise the host's native backend.
+///
+/// One resolver for the whole suite keeps a test from hard-coding a platform
+/// while the runner's environment says another.
+pub fn requested_backend() -> Option<GuiBackend> {
+    let configured = std::env::var("NEOMACS_GUI_TEST_BACKEND").unwrap_or_else(|_| {
+        cfg_select! {
+            target_os = "macos" => { "macos".to_string() }
+            windows => { "windows".to_string() }
+            _ => { "x11".to_string() }
+        }
+    });
+    match configured.as_str() {
+        "wayland" | "linux-wayland" => Some(GuiBackend::LinuxWayland),
+        "x11" | "linux-x11" => Some(GuiBackend::LinuxX11),
+        "macos" => Some(GuiBackend::Macos),
+        "windows" => Some(GuiBackend::Windows),
+        other => panic!("unsupported NEOMACS_GUI_TEST_BACKEND={other:?}"),
+    }
+}
+
 /// Capabilities of the host running the test, beyond the backend's own.
 fn host_capabilities(backend: GuiBackend) -> CapabilitySet {
     let mut capabilities = backend.capabilities();

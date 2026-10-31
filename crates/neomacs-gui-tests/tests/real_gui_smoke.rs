@@ -613,20 +613,7 @@ fn gnu_image_oracle_command(
 }
 
 fn requested_backend() -> Option<GuiBackend> {
-    let configured = std::env::var("NEOMACS_GUI_TEST_BACKEND").unwrap_or_else(|_| {
-        cfg_select! {
-            target_os = "macos" => { "macos".to_string() }
-            windows => { "windows".to_string() }
-            _ => { "x11".to_string() }
-        }
-    });
-    match configured.as_str() {
-        "wayland" | "linux-wayland" => Some(GuiBackend::LinuxWayland),
-        "x11" | "linux-x11" => Some(GuiBackend::LinuxX11),
-        "macos" => Some(GuiBackend::Macos),
-        "windows" => Some(GuiBackend::Windows),
-        other => panic!("unsupported NEOMACS_GUI_TEST_BACKEND={other:?}"),
-    }
+    neomacs_gui_tests::requested_backend()
 }
 
 fn workspace_root() -> PathBuf {

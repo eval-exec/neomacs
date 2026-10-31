@@ -157,8 +157,20 @@ marked Unsupported rather than comparing against an unpinned editor.
 ### 7. Doom and Spacemacs config environments
 
 The sealed config fixtures are platform-neutral (clone + `doom sync`). The
-GUI boot comparison becomes a scenario-tier test: boot each config in a
-window, snapshot the home buffer text and frame geometry, and compare.
+GUI boot splits into two tests with different contracts:
+
+- **Host-backend boot (all scenario-tier backends).** Boot the config on the
+  requested backend, require the fixture's finish line, and require the frame
+  snapshot to contain a rendered window. This needs no GNU and no presented
+  surface, so it runs on Linux X11/Wayland and on the macOS desktop session,
+  including a locked console.
+- **GNU differential (Linux, until a macOS GUI oracle exists).** Boot GNU and
+  Neomacs in X11 sessions and compare the visible home-buffer text and frame
+  geometry. GNU comes from `NEOMACS_GUI_TEST_GNU_EMACS` (the attested pinned
+  oracle), never from whatever `emacs` happens to be on PATH. GNU and
+  Neomacs write distinct artifact variants; sharing one artifact path made
+  the comparison read the Neomacs file twice.
+
 Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
 
 ### 8. Suite governance

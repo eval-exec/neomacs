@@ -976,6 +976,18 @@ jobs:
       - name: Build the runtime under test
         run: cargo xtask fresh-build --release
 
+      # The pinned macOS oracle is a batch build. It is not a GUI reference,
+      # but it is exactly the pinned `emacs` that bootstraps the Doom fixture
+      # (`bin/doom sync`) for the config-boot probe.
+      - name: Set up the pinned GNU batch reference
+        uses: ./.github/actions/setup-gnu-emacs-macos
+
+      # Best effort: the config-boot test prints the absent-fixture reason and
+      # skips, so a network outage must not fail the rendering tier.
+      - name: Materialize the Doom config fixture
+        continue-on-error: true
+        run: cargo run -p xtask -- infra materialize doom
+
       # A locked console or a sleeping display makes every window occluded:
       # the suite reports `surface-present` unsupported and the snapshot
       # canary skips with that reason. Print the evidence once per run so a
@@ -993,7 +1005,7 @@ jobs:
       - name: Run the scenario-tier GUI tests
         run: |
           cargo nextest run -p neomacs-gui-tests --test gui \
-            -E 'test(~real_gui_smoke_generates_surface_readback_png) | test(~child_frame_position) | test(~child_frame_sizing) | test(~compact_frame_geometry) | test(~display_window_geometry::pixelwise_window_resize) | test(~integer_width)' \
+            -E 'test(~real_gui_smoke_generates_surface_readback_png) | test(~child_frame_position) | test(~child_frame_sizing) | test(~compact_frame_geometry) | test(~display_window_geometry::pixelwise_window_resize) | test(~integer_width) | test(~doom_gui_boot_renders_on_the_host_backend)' \
             --test-threads 1 --no-fail-fast
 
       - name: Upload GUI artifacts
