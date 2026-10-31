@@ -88,3 +88,6 @@ fn nmjit_n1_sketch_compile_contracts() {
 
 #[path = "host_effect_contracts.rs"]
 mod host_effect_contracts;
+
+#[path = "intern_shared_contracts.rs"]
+mod intern_shared_contracts;

@@ -1,0 +1,25 @@
+[package]
+name = "intern-shared-models"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Actual read-domain/slot source, substituted atomics only; no engine feature.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+static_assertions = "=1.1.0"
+
+[profile.test]
+opt-level = 1
+
+[[test]]
+name = "domain_loom"
+path = "tests/domain_loom.rs"
+
+[[test]]
+name = "domain_miri"
+path = "tests/domain_miri.rs"

@@ -5,9 +5,12 @@
 //! Heap-name words here are nonowning metadata, never GC roots or permission
 //! to dereference a Lisp object. Frozen atoms retain their existing owner proof.
 
+mod domain;
 mod facets;
 mod pages;
+mod slot;
 mod snapshot;
+mod sync;
 
 pub(crate) use facets::{HeapVisibleNames, ReaderTemplates};
 pub(crate) use pages::{CacheProbe, CanonicalSlot, PagedRows, SnapshotError, TableSpan};
@@ -16,3 +19,13 @@ pub(crate) use snapshot::{
     MaterializationEpoch, NativeIndexShape, NativeQueryClass, NativeSlotCount, PreparedSnapshot,
     ReadySnapshot, RegistryEpoch, SnapshotEpochs, SymbolRow,
 };
+
+pub(crate) use domain::{
+    DrainRefusal, ForeignDomain, InternDrain, InternGrace, InternReadDomain, InternReadScope,
+    InternView, ReadRefusal,
+};
+pub(crate) use slot::{InstalledScope, ScopeInstallation, ScopeSlot, ScopeStillInstalled};
+
+#[cfg(test)]
+#[path = "tests/domain.rs"]
+mod domain_tests;

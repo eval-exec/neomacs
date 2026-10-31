@@ -1,0 +1,11 @@
+error[E0597]: `scope` does not live long enough
+  --> tests/intern_shared_ui/view_escapes_scope.rs:10:16
+   |
+ 9 |         let scope = domain.try_scope().unwrap();
+   |             ----- binding `scope` declared here
+10 |         view = scope.borrow(&snapshot);
+   |                ^^^^^ borrowed value does not live long enough
+11 |     }
+   |     - `scope` dropped here while still borrowed
+12 |     assert_eq!(view.get()[0], 1);
+   |                ---- borrow later used here
