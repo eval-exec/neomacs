@@ -25,10 +25,13 @@ pub struct DoomSpec {
 impl DoomSpec {
     fn load() -> Result<Self, String> {
         let spec = Spec::load("doom")?;
+        // The pin that applies to this host; a macOS or Windows bootstrap
+        // installs a different package set from Linux.
+        let packages = spec.host_packages().map(str::to_owned);
         Ok(Self {
             repo: spec.repo,
             revision: spec.revision,
-            packages: spec.packages,
+            packages,
         })
     }
 }

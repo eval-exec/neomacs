@@ -234,10 +234,19 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
   the paint canary reports
   `backend macos lacks required capabilities: surface-present`. The
   `neomacs-gui-tests-macos` CI job runs that same set.
+- Doom GUI boot verified on this Mac with the locked console: the sealed
+  fixture was materialized with the pinned macOS batch oracle and Neomacs
+  booted it in 7.4 s, with a rendered frame snapshot (semantic tier).
+  Config-fixture package pins are now host-scoped (`packages_<os>`): Doom
+  installs a different package set on Darwin than on Linux, and the
+  single Linux digest correctly refused to mount the macOS fixture. The
+  macOS digest is deliberately not recorded yet; fresh CI materializations
+  are unpinned until the fixture is cached and re-pinned as its own
+  ceremony.
 - Not yet verified: an actual paint readback on macOS (needs an unlocked,
-  awake console), the macOS CI runner's session state, Doom/Spacemacs GUI
-  boot (needs a macOS GUI GNU oracle profile), and the broader port of the
-  47 Linux-gated files.
+  awake console), the macOS CI runner's session state, Spacemacs GUI boot
+  (fixture not materialized), a macOS GUI GNU oracle profile, and the
+  broader port of the 47 Linux-gated files.
 
 ## What stays platform-specific
 
