@@ -756,59 +756,142 @@ impl GcTrace for CustomType {
 
 impl GcTrace for ModeRegistry {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
-        for mode in self.major_modes.values() {
-            if let Some(parent) = mode.parent {
-                roots.push(parent);
+        let Self {
+            major_modes,
+            minor_modes,
+            buffer_major_modes,
+            buffer_minor_modes,
+            global_minor_modes,
+            auto_mode_alist,
+            custom_variables,
+            custom_groups,
+            fundamental_mode,
+        } = self;
+        for mode in major_modes.values() {
+            let MajorMode {
+                pretty_name,
+                parent,
+                mode_hook,
+                keymap_name,
+                syntax_table_name,
+                abbrev_table_name,
+                font_lock,
+                body,
+            } = mode;
+            pretty_name.trace_roots(roots);
+            if let Some(parent) = parent {
+                roots.push(*parent);
             }
-            roots.push(mode.mode_hook);
-            if let Some(keymap_name) = mode.keymap_name {
-                roots.push(keymap_name);
+            roots.push(*mode_hook);
+            if let Some(keymap_name) = keymap_name {
+                roots.push(*keymap_name);
             }
-            if let Some(syntax_table_name) = mode.syntax_table_name {
-                roots.push(syntax_table_name);
+            if let Some(syntax_table_name) = syntax_table_name {
+                roots.push(*syntax_table_name);
             }
-            if let Some(abbrev_table_name) = mode.abbrev_table_name {
-                roots.push(abbrev_table_name);
+            if let Some(abbrev_table_name) = abbrev_table_name {
+                roots.push(*abbrev_table_name);
             }
-            if let Some(body) = &mode.body {
+            if let Some(body) = body {
+                roots.push(*body);
+            }
+            if let Some(defaults) = font_lock {
+                let FontLockDefaults {
+                    keywords,
+                    case_fold: _,
+                    syntax_table,
+                } = defaults;
+                for keyword in keywords {
+                    let FontLockKeyword {
+                        pattern,
+                        face: _,
+                        group: _,
+                        override_: _,
+                        laxmatch: _,
+                    } = keyword;
+                    pattern.trace_roots(roots);
+                }
+                if let Some(syntax_table) = syntax_table {
+                    syntax_table.trace_roots(roots);
+                }
+            }
+        }
+        for mode in minor_modes.values() {
+            let MinorMode {
+                lighter,
+                keymap_name,
+                global: _,
+                body,
+            } = mode;
+            if let Some(lighter) = lighter {
+                lighter.trace_roots(roots);
+            }
+            if let Some(keymap_name) = keymap_name {
+                roots.push(*keymap_name);
+            }
+            if let Some(body) = body {
                 roots.push(*body);
             }
         }
-        for mode in self.minor_modes.values() {
-            if let Some(keymap_name) = mode.keymap_name {
-                roots.push(keymap_name);
-            }
-            if let Some(body) = &mode.body {
-                roots.push(*body);
-            }
-        }
-        for mode in self.buffer_major_modes.values() {
+        for mode in buffer_major_modes.values() {
             roots.push(*mode);
         }
-        for modes in self.buffer_minor_modes.values() {
-            roots.extend(modes.iter().copied());
+        for modes in buffer_minor_modes.values() {
+            for mode in modes {
+                roots.push(*mode);
+            }
         }
-        roots.extend(self.global_minor_modes.iter().copied());
-        roots.extend(self.auto_mode_alist.iter().map(|(_, mode)| *mode));
-        roots.push(self.fundamental_mode);
-        for var in self.custom_variables.values() {
-            roots.push(var.default_value);
-            if let Some(group) = var.group {
-                roots.push(group);
-            }
-            if let Some(set_function) = var.set_function {
-                roots.push(set_function);
-            }
-            if let Some(get_function) = var.get_function {
-                roots.push(get_function);
-            }
-            var.type_.trace_roots_with(&mut |value| roots.push(value));
+        for mode in global_minor_modes {
+            roots.push(*mode);
         }
-        for group in self.custom_groups.values() {
-            if let Some(parent) = group.parent {
-                roots.push(parent);
+        for (pattern, mode) in auto_mode_alist {
+            pattern.trace_roots(roots);
+            roots.push(*mode);
+        }
+        roots.push(*fundamental_mode);
+        for var in custom_variables.values() {
+            let CustomVariable {
+                default_value,
+                doc,
+                type_,
+                group,
+                set_function,
+                get_function,
+                tag,
+            } = var;
+            roots.push(*default_value);
+            if let Some(doc) = doc {
+                doc.trace_roots(roots);
             }
-            roots.extend(group.members.iter().copied());
+            if let Some(group) = group {
+                roots.push(*group);
+            }
+            if let Some(set_function) = set_function {
+                roots.push(*set_function);
+            }
+            if let Some(get_function) = get_function {
+                roots.push(*get_function);
+            }
+            type_.trace_roots_with(&mut |value| roots.push(value));
+            if let Some(tag) = tag {
+                tag.trace_roots(roots);
+            }
+        }
+        for group in custom_groups.values() {
+            let CustomGroup {
+                doc,
+                parent,
+                members,
+            } = group;
+            if let Some(doc) = doc {
+                doc.trace_roots(roots);
+            }
+            if let Some(parent) = parent {
+                roots.push(*parent);
+            }
+            for member in members {
+                roots.push(*member);
+            }
         }
     }
 }

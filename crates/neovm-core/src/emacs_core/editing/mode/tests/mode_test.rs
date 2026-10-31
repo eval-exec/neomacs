@@ -21,6 +21,189 @@ fn mode_pattern(text: &str) -> crate::heap_types::LispString {
     crate::heap_types::LispString::from_utf8(text)
 }
 
+#[test]
+fn mode_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+    use crate::emacs_core::Context;
+
+    struct Probe(usize);
+    fn payload(probes: &mut Vec<Probe>) -> Value {
+        let value = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(Probe(value.bits()));
+        value
+    }
+    fn text(probes: &mut Vec<Probe>, key: Value, mut text: LispString) -> LispString {
+        text.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 1),
+            key,
+            payload(probes),
+        );
+        text
+    }
+    fn choices(probes: &mut Vec<Probe>) -> CustomType {
+        CustomType::Choice(vec![
+            ("first".to_owned(), payload(probes)),
+            ("second".to_owned(), payload(probes)),
+        ])
+    }
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let key = Value::symbol("mode-owned-property");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        let mut registry = ModeRegistry::new();
+        registry.register_major_mode(
+            "owned-mode",
+            MajorMode {
+                pretty_name: text(&mut probes, key, LispString::from_utf8("Mode-é")),
+                parent: Some(mode_symbol("fundamental-mode")),
+                mode_hook: mode_symbol("owned-mode-hook"),
+                keymap_name: Some(mode_symbol("owned-mode-map")),
+                syntax_table_name: Some(mode_symbol("owned-mode-syntax-table")),
+                abbrev_table_name: Some(mode_symbol("owned-mode-abbrev-table")),
+                font_lock: Some(FontLockDefaults {
+                    keywords: vec![
+                        FontLockKeyword {
+                            pattern: text(&mut probes, key, LispString::from_utf8("é")),
+                            face: intern("font-lock-keyword-face"),
+                            group: 0,
+                            override_: false,
+                            laxmatch: false,
+                        },
+                        FontLockKeyword {
+                            pattern: text(&mut probes, key, LispString::from_unibyte(vec![0x80])),
+                            face: intern("font-lock-string-face"),
+                            group: 0,
+                            override_: false,
+                            laxmatch: false,
+                        },
+                    ],
+                    case_fold: false,
+                    syntax_table: Some(text(
+                        &mut probes,
+                        key,
+                        LispString::from_unibyte(b"syntax".to_vec()),
+                    )),
+                }),
+                body: Some(payload(&mut probes)),
+            },
+        );
+        registry.register_minor_mode(
+            "owned-minor-mode",
+            MinorMode {
+                lighter: Some(text(&mut probes, key, LispString::from_utf8(" Light-é"))),
+                keymap_name: Some(mode_symbol("owned-minor-mode-map")),
+                global: false,
+                body: Some(payload(&mut probes)),
+            },
+        );
+        registry.register_custom_group(
+            "owned-group",
+            CustomGroup {
+                doc: Some(text(&mut probes, key, LispString::from_utf8("Group-é"))),
+                parent: Some(mode_symbol("emacs")),
+                members: vec![mode_symbol("owned-option")],
+            },
+        );
+        registry.register_custom_variable(
+            "owned-option",
+            CustomVariable {
+                default_value: payload(&mut probes),
+                doc: Some(text(&mut probes, key, LispString::from_utf8("Option-é"))),
+                type_: CustomType::List(Box::new(CustomType::Alist(
+                    Box::new(choices(&mut probes)),
+                    Box::new(CustomType::Plist(
+                        Box::new(choices(&mut probes)),
+                        Box::new(CustomType::List(Box::new(choices(&mut probes)))),
+                    )),
+                ))),
+                group: Some(mode_symbol("owned-group")),
+                set_function: Some(mode_symbol("set-default")),
+                get_function: Some(mode_symbol("default-value")),
+                tag: Some(text(&mut probes, key, LispString::from_utf8("Tag-é"))),
+            },
+        );
+        registry.add_auto_mode(
+            text(
+                &mut probes,
+                key,
+                LispString::from_unibyte(b"owned-pattern".to_vec()),
+            ),
+            mode_symbol("owned-mode"),
+        );
+        // Public registrations retain the copies; no buffer, function cell,
+        // Lisp variable or explicit root aliases their property graphs.
+        *eval.modes = registry;
+        probes
+    });
+    let check_live = |eval: &Context| {
+        for Probe(bits) in &probes {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "mode-only property vector was reclaimed"
+            );
+        }
+        for (index, Probe(bits)) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live mode property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+        assert_eq!(
+            eval.modes
+                .get_major_mode_def("owned-mode")
+                .expect("retained major mode")
+                .pretty_name
+                .intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, key)
+                .expect("retained name property")
+                .bits(),
+            probes[0].0
+        );
+    };
+
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    *eval.modes = ModeRegistry::new();
+    eval.gc_collect_exact();
+    for Probe(bits) in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired mode graph remained permanently rooted"
+        );
+    }
+}
+
 // -------------------------------------------------------------------
 // ModeRegistry basics
 // -------------------------------------------------------------------
