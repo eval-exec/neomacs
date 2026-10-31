@@ -1,5 +1,6 @@
 use super::{FrameBufferState, builtin_frame_or_buffer_changed_p};
-use crate::emacs_core::builtins::symbols::{builtin_set_2, builtin_symbol_value_1};
+use crate::emacs_core::advice::builtin_add_variable_watcher;
+use crate::emacs_core::builtins::symbols::{builtin_fset, builtin_set_2, builtin_symbol_value_1};
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::{Context, Value};
 
@@ -241,6 +242,73 @@ fn state_vector_reuse_follows_gnu_reallocation_boundaries() {
         "far-oversized vector reallocates"
     );
     assert_eq!(replaced.as_vector_data().unwrap().len(), n + 20);
+}
+
+/// GNU sets VARIABLE only inside its reallocation branch
+/// (src/dispnew.c:7133-7140). An in-place rewrite mutates the vector the
+/// symbol already holds through `ASET`, so `add-variable-watcher` callbacks
+/// run on reallocation only.
+#[test]
+fn variable_watchers_run_only_when_the_vector_is_reallocated() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    let var = Value::symbol("neb-unit-watched-state");
+    let counter = Value::symbol("neb-unit-watch-count");
+    builtin_set_2(&mut eval, var, Value::NIL).unwrap();
+    builtin_set_2(&mut eval, counter, Value::fixnum(0)).unwrap();
+    let watcher = eval
+        .eval_str("(lambda (&rest _) (setq neb-unit-watch-count (+ neb-unit-watch-count 1)))")
+        .expect("watcher lambda");
+    builtin_fset(&mut eval, vec![Value::symbol("neb-unit-watch"), watcher]).unwrap();
+    builtin_add_variable_watcher(&mut eval, vec![var, Value::symbol("neb-unit-watch")]).unwrap();
+    let watcher_count = |eval: &mut Context| {
+        builtin_symbol_value_1(eval, counter)
+            .expect("watcher counter")
+            .as_fixnum()
+            .expect("fixnum counter")
+    };
+
+    // A fresh vector is allocated: GNU calls Fset, so the watcher runs.
+    assert_eq!(
+        builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        watcher_count(&mut eval),
+        1,
+        "reallocation sets the variable"
+    );
+
+    // A change that fits the retained vector is rewritten in place; GNU never
+    // touches the symbol, so the watcher must stay quiet.
+    builtin_set_2(&mut eval, counter, Value::fixnum(0)).unwrap();
+    let visible = eval.buffers.create_buffer("neb-unit-watched-buffer");
+    assert_eq!(
+        builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        watcher_count(&mut eval),
+        0,
+        "an in-place rewrite must not run variable watchers"
+    );
+
+    // Force a reallocation with a far-oversized vector.
+    let n = FrameBufferState::capture(&eval).required_without_headroom;
+    let oversized = Value::vector(vec![lambda(); (n + 20) * 2 + 2]);
+    builtin_set_2(&mut eval, var, oversized).unwrap();
+    builtin_set_2(&mut eval, counter, Value::fixnum(0)).unwrap();
+    assert_eq!(
+        builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        watcher_count(&mut eval),
+        1,
+        "reallocation sets the variable again"
+    );
+    let _ = visible;
 }
 
 #[test]
