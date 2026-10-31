@@ -2,6 +2,8 @@
 //! buffer identity. Owned by the value layer so the lower modules can name
 //! these types without referencing the buffer layer.
 use super::{Value, ValueKind};
+use crate::emacs_core::intern::SymId;
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // BUFFER_SLOT_COUNT — sized to mirror GNU's `MAX_PER_BUFFER_VARS = 50`.
@@ -143,3 +145,38 @@ impl BufferSlotPredicate {
 /// Opaque, cheaply-copyable identifier for a buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BufferId(pub u64);
+
+/// Value-layer view of one per-buffer slot's metadata. Built by the buffer
+/// layer from its `BUFFER_SLOT_INFO` table and installed once; readers need
+/// only the offset and the conditional-local bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BufferSlotMeta {
+    pub offset: BufferSlot,
+    pub local_flags_idx: i16,
+}
+
+static SLOT_META_TABLE: OnceLock<Box<[Option<BufferSlotMeta>]>> = OnceLock::new();
+
+/// Install the symbol-indexed slot metadata view. Called once when the buffer
+/// layer builds its slot map; the table is value-layer data, not TLS.
+pub fn install_slot_meta_table(table: Box<[Option<BufferSlotMeta>]>) {
+    let _ = SLOT_META_TABLE.set(table);
+}
+
+/// Value-layer slot metadata by symbol id.
+#[inline]
+pub fn slot_meta(sym_id: SymId) -> Option<BufferSlotMeta> {
+    SLOT_META_TABLE
+        .get()
+        .and_then(|table| table.get(sym_id.0 as usize).copied().flatten())
+}
+
+/// Per-buffer state the value-layer readers need. Implemented by the buffer
+/// layer for its `Buffer`; generic use keeps the reads monomorphized and
+/// inlined, with no dynamic dispatch and no added TLS.
+pub trait BufferLocalView {
+    fn buffer_id(&self) -> BufferId;
+    fn slot_value(&self, slot: BufferSlot) -> Value;
+    fn local_binding(&self, id: SymId, localized: bool) -> Option<Value>;
+    fn local_binding_cell(&self, id: SymId) -> Option<Value>;
+}

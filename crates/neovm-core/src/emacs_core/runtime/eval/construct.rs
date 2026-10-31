@@ -1734,6 +1734,9 @@ impl Context {
                     obarray.install_buffer_objfwd(id, fwd);
                 }
             }
+            // Build the buffer slot schema and publish its value-layer
+            // `SlotMeta` registry before any value-layer slot reader runs.
+            crate::buffer::buffer::force_slot_schema_install();
         }
 
         // GNU lread.c registers `lexical-binding` with DEFVAR_LISP and

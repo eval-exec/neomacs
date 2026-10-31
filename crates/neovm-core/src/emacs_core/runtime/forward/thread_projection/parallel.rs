@@ -69,7 +69,7 @@ impl ThreadProjectionTable {
                     offset: THREAD_PROJECTION_OFFSET,
                     local_flags_idx: -1,
                     predicate:
-                        crate::emacs_core::value::buffer_schema::BufferSlotPredicate::Unrestricted,
+                        crate::emacs_core::value::buffer_vocab::BufferSlotPredicate::Unrestricted,
                     default: Value::UNBOUND,
                 },
                 index: TlsIndex(next),

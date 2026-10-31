@@ -90,6 +90,7 @@ pub enum ByteBooleanVars {
 }
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::forward::FwdDescriptor;
+use crate::emacs_core::value::buffer_vocab::{BufferLocalView, slot_meta};
 use crate::gc_trace::GcTrace;
 
 /// The forwarder kind a localized symbol's BLV rebuilds after a dump. GNU's
@@ -377,7 +378,7 @@ pub struct LispBufferLocalValue {
     /// Written only through [`LispBufferLocalValue::set_where`], which keeps
     /// [`Self::where_buf_id`] in step.
     pub where_buf: AtomicTaggedValue,
-    /// The raw [`BufferId`](crate::emacs_core::value::buffer_schema::BufferId) of `where_buf`, or
+    /// The raw [`BufferId`](crate::emacs_core::value::buffer_vocab::BufferId) of `where_buf`, or
     /// [`NO_WHERE_BUF`] when it is not a buffer: the read fast path's
     /// where-buffer test as one integer compare. Comparing the object meant
     /// a tag test, a header load and a field load on every read of a
@@ -667,7 +668,7 @@ impl LispSymbol {
     #[inline]
     pub(crate) fn blv_cache_hit(
         &self,
-        buffer: crate::emacs_core::value::buffer_schema::BufferId,
+        buffer: crate::emacs_core::value::buffer_vocab::BufferId,
     ) -> Option<BlvCacheHit> {
         let blv = self.localized_blv()?;
         // SAFETY: a `Localized` cell names a record `make_symbol_localized`
@@ -2227,10 +2228,10 @@ impl Obarray {
     /// `indent::dynamic_buffer_or_global_symbol_value` is the older, identical
     /// reader; it lives in a file ledger 195 owns, so collapsing the two is
     /// owed rather than done here (ledger 196).
-    pub fn canonical_value_in_buffer(
+    pub fn canonical_value_in_buffer<B: BufferLocalView>(
         &self,
         access: CanonicalAccess,
-        buf: Option<&crate::buffer::Buffer>,
+        buf: Option<&B>,
         name: &str,
     ) -> Option<Value> {
         self.canonical_value_in_buffer_id(access, buf, intern(name))
@@ -2245,10 +2246,10 @@ impl Obarray {
     /// [`Self::symbol_value_copied`] on the overwhelmingly common global path, which
     /// matters where a caller reads a dozen names at once -- the `print-*`
     /// family, for one.
-    pub fn canonical_value_in_buffer_id(
+    pub fn canonical_value_in_buffer_id<B: BufferLocalView>(
         &self,
         _access: CanonicalAccess,
-        buf: Option<&crate::buffer::Buffer>,
+        buf: Option<&B>,
         id: SymId,
     ) -> Option<Value> {
         match self.buffer_value(buf, id) {
@@ -2261,9 +2262,9 @@ impl Obarray {
     /// answering the arms [`Self::value_with`] gives it: BUF's slot and
     /// local binding are canonical storage, which no projection changes.
     #[inline(always)]
-    pub(crate) fn value_in_buffer_with(
+    pub(crate) fn value_in_buffer_with<B: BufferLocalView>(
         &self,
-        buf: Option<&crate::buffer::Buffer>,
+        buf: Option<&B>,
         id: SymId,
         projected: impl FnOnce(&Self, SymId) -> Option<Value>,
     ) -> Option<Value> {
@@ -2276,14 +2277,14 @@ impl Obarray {
     /// [`Self::value_in_buffer_with`] once ID is known not to be one of
     /// BUF's slots: BUF's local binding, else the global read.
     #[inline(always)]
-    pub(crate) fn unslotted_value_with(
+    pub(crate) fn unslotted_value_with<B: BufferLocalView>(
         &self,
-        buf: Option<&crate::buffer::Buffer>,
+        buf: Option<&B>,
         id: SymId,
         projected: impl FnOnce(&Self, SymId) -> Option<Value>,
     ) -> Option<Value> {
         if let Some(buf) = buf
-            && let Some(value) = buf.get_buffer_local_by_sym_id_gated(id, self.is_localized(id))
+            && let Some(value) = buf.local_binding(id, self.is_localized(id))
         {
             return Some(value);
         }
@@ -2294,12 +2295,12 @@ impl Obarray {
     /// a closure for the global read: LLVM outlined that closure, storing
     /// its captures on every call.
     #[inline(always)]
-    fn buffer_value(&self, buf: Option<&crate::buffer::Buffer>, id: SymId) -> Option<Value> {
+    fn buffer_value<B: BufferLocalView>(&self, buf: Option<&B>, id: SymId) -> Option<Value> {
         let buf = buf?;
         if let Some(value) = Self::buffer_slot_value(buf, id) {
             return Some(value);
         }
-        buf.get_buffer_local_by_sym_id_gated(id, self.is_localized(id))
+        buf.local_binding(id, self.is_localized(id))
     }
 
     /// BUF's `struct buffer` slot of ID, when ID names one.
@@ -2310,9 +2311,8 @@ impl Obarray {
     /// cases, where `get_buffer_local` would answer `None` and lose it. No
     /// projection changes it: an owner's binding of a slot stays in the slot.
     #[inline(always)]
-    pub(crate) fn buffer_slot_value(buf: &crate::buffer::Buffer, id: SymId) -> Option<Value> {
-        crate::buffer::buffer::lookup_buffer_slot_by_sym_id(id)
-            .map(|info| buf.slots[info.offset.index()])
+    pub(crate) fn buffer_slot_value<B: BufferLocalView>(buf: &B, id: SymId) -> Option<Value> {
+        slot_meta(id).map(|meta| buf.slot_value(meta.offset))
     }
 
     /// A deliberate buffer-less read, with the disagreement with GNU named.
@@ -2334,7 +2334,7 @@ impl Obarray {
         _access: CanonicalAccess,
         id: SymId,
     ) -> BufferlessValue {
-        if crate::buffer::buffer::lookup_buffer_slot_by_sym_id(id).is_some() {
+        if slot_meta(id).is_some() {
             return BufferlessValue::PerBufferSlot;
         }
         let localized = self
@@ -3032,7 +3032,7 @@ impl Obarray {
     pub fn read_localized_for_buffer(
         &self,
         id: SymId,
-        target_buf_id: crate::emacs_core::value::buffer_schema::BufferId,
+        target_buf_id: crate::emacs_core::value::buffer_vocab::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
         let sym = self.slot(id)?;
@@ -3047,7 +3047,7 @@ impl Obarray {
         &self,
         id: SymId,
         sym: &LispSymbol,
-        target_buf_id: crate::emacs_core::value::buffer_schema::BufferId,
+        target_buf_id: crate::emacs_core::value::buffer_vocab::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
         let blv_ptr = sym.localized_blv()?.as_ptr();
@@ -3086,13 +3086,13 @@ impl Obarray {
     /// Resolve through the buffer's canonical binding index when its owner
     /// is available. A cache miss must not scan unrelated binding conses:
     /// dependency observers would otherwise subscribe to their value writes.
-    pub(crate) fn read_localized_in_buffer(
+    pub(crate) fn read_localized_in_buffer<B: BufferLocalView>(
         &self,
         id: SymId,
-        buffer: &crate::buffer::Buffer,
+        buffer: &B,
     ) -> Option<Value> {
-        self.read_localized_with_lookup(id, Value::make_buffer(buffer.id), || {
-            buffer.local_variable_binding_cell(id).unwrap_or(Value::NIL)
+        self.read_localized_with_lookup(id, Value::make_buffer(buffer.buffer_id()), || {
+            buffer.local_binding_cell(id).unwrap_or(Value::NIL)
         })
     }
 
@@ -3621,7 +3621,7 @@ impl Obarray {
     pub fn find_symbol_value_in_buffer(
         &mut self,
         id: SymId,
-        _current_buffer_id: Option<crate::emacs_core::value::buffer_schema::BufferId>,
+        _current_buffer_id: Option<crate::emacs_core::value::buffer_vocab::BufferId>,
         current_buffer_value: Value,
         local_var_alist: Value,
         current_buffer_slots: Option<&[Value]>,

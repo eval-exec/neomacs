@@ -23,7 +23,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHasher};
 use strum::{EnumString, IntoStaticStr};
 
-use self::buffer_schema::BufferId;
+use self::buffer_vocab::BufferId;
 use self::positions::{CharPos0, CharRange};
 use super::error::{Flow, LispCondition, signal};
 use super::intern::{SymId, intern};
@@ -57,7 +57,7 @@ pub(crate) enum FunctionSourceIdentity {
     ByteCode(u64),
 }
 
-pub mod buffer_schema;
+pub mod buffer_vocab;
 pub mod positions;
 
 // Re-export tagged types for downstream use.

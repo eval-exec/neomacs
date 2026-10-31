@@ -86,8 +86,9 @@ pub(crate) fn local_var_alist_entry_probes() -> u64 {
     LOCAL_VAR_ALIST_ENTRY_PROBES.get()
 }
 
-pub use crate::emacs_core::value::buffer_schema::{
-    BUFFER_SLOT_COUNT, BufferId, BufferSlot, BufferSlotPredicate, BufferSlotPredicateError,
+pub use crate::emacs_core::value::buffer_vocab::{
+    BUFFER_SLOT_COUNT, BufferId, BufferLocalView, BufferSlot, BufferSlotMeta, BufferSlotPredicate,
+    BufferSlotPredicateError,
 };
 
 // ---------------------------------------------------------------------------
@@ -1149,6 +1150,7 @@ fn buffer_slot_sym_map() -> &'static [Option<&'static BufferSlotInfo>] {
     BUFFER_SLOT_SYM_MAP
         .get_or_init(|| {
             let mut entries: Vec<Option<&'static BufferSlotInfo>> = Vec::new();
+            let mut metas: Vec<Option<BufferSlotMeta>> = Vec::new();
             for info in BUFFER_SLOT_INFO {
                 if !info.install_as_forwarder {
                     continue;
@@ -1157,12 +1159,27 @@ fn buffer_slot_sym_map() -> &'static [Option<&'static BufferSlotInfo>] {
                 let index = sym_id.0 as usize;
                 if entries.len() <= index {
                     entries.resize(index + 1, None);
+                    metas.resize(index + 1, None);
                 }
                 entries[index] = Some(info);
+                metas[index] = Some(BufferSlotMeta {
+                    offset: info.offset,
+                    local_flags_idx: info.local_flags_idx,
+                });
             }
+            crate::emacs_core::value::buffer_vocab::install_slot_meta_table(
+                metas.into_boxed_slice(),
+            );
             entries.into_boxed_slice()
         })
         .as_ref()
+}
+
+/// Force the buffer slot schema and its value-layer `BufferSlotMeta` registry to be
+/// built. Called during evaluator construction, before any value-layer slot
+/// reader can run.
+pub(crate) fn force_slot_schema_install() {
+    let _ = buffer_slot_sym_map();
 }
 
 pub fn lookup_buffer_slot_by_sym_id(sym_id: SymId) -> Option<&'static BufferSlotInfo> {
@@ -8577,3 +8594,25 @@ mod world_storage_tests;
 // Cold proof-1 collector projection; no change to the serial root walk.
 #[path = "parallel_roots.rs"]
 mod parallel_roots;
+
+impl BufferLocalView for Buffer {
+    #[inline]
+    fn buffer_id(&self) -> BufferId {
+        self.id
+    }
+
+    #[inline]
+    fn slot_value(&self, slot: BufferSlot) -> Value {
+        self.slots[slot.index()]
+    }
+
+    #[inline]
+    fn local_binding(&self, id: SymId, localized: bool) -> Option<Value> {
+        self.get_buffer_local_by_sym_id_gated(id, localized)
+    }
+
+    #[inline]
+    fn local_binding_cell(&self, id: SymId) -> Option<Value> {
+        self.local_variable_binding_cell(id)
+    }
+}
