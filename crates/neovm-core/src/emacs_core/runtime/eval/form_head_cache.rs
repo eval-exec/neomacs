@@ -1,93 +1,12 @@
 //! What an interpreted cons form's head symbol resolves to, remembered for as
 //! long as the obarray's function epoch stands still.
+//!
+//! The classification itself (and the types it returns) lives in
+//! [`super::dispatch_class`], the neutral module shared with E4's parallel
+//! executor; this file is only the epoch cache.
 
+use super::dispatch_class::FormHead;
 use super::*;
-
-/// What dispatch does with a head whose function cell is stable for this
-/// epoch, decided once when the cache slot is filled.
-#[derive(Clone, Copy)]
-pub(super) enum HeadClass {
-    /// The full resolution: no cell, an alias, an autoload, a macro, a cons,
-    /// a `ContextCallable` subr, an aliased special form, anything else.
-    Slow,
-    /// The cell is this symbol's own UNEVALLED subr, whose evaluator handler
-    /// is this special form.
-    SpecialForm(SpecialFormHandler),
-    /// A builtin subr with a native function: the SubrObj's own fields, as
-    /// GNU reads `XSUBR (fun)`.
-    Subr {
-        function: crate::tagged::header::SubrFn,
-        min_args: u16,
-        max_args: Option<u16>,
-    },
-    /// A byte-code object (`get_bytecode_data` still runs at dispatch: it is
-    /// where a dump stub is materialized).
-    ByteCode,
-    /// An interpreted closure: a `Lambda` veclike, never a macro and never a
-    /// cons (`setcar` can change a cons; a veclike's type cannot change).
-    Lambda,
-}
-
-/// The head's answers: whether it is an evaluator-internal literal head,
-/// what its function cell holds, and what dispatch does with that cell.
-#[derive(Clone, Copy)]
-pub(super) struct FormHead {
-    /// True for `lambda` / `byte-code-literal`, which the
-    /// dispatcher answers before resolving anything.
-    pub(super) literal_head: bool,
-    /// The symbol's function cell, or `None` if it had none.
-    pub(super) func: Option<Value>,
-    pub(super) class: HeadClass,
-}
-
-impl FormHead {
-    const EMPTY: Self = Self {
-        literal_head: false,
-        func: None,
-        class: HeadClass::Slow,
-    };
-
-    /// Classify SYM_ID's function cell FUNC.  Only the shapes whose dispatch
-    /// needs nothing but the cell get a fast class; everything else is
-    /// `Slow` and takes the full resolution unchanged.
-    pub(super) fn classify(sym_id: SymId, func: Option<Value>) -> Self {
-        let literal_head = sym_id == lambda_symbol() || sym_id == byte_code_literal_symbol();
-        let class = match func {
-            None => HeadClass::Slow,
-            Some(func) => match subr_call_entry_from_value(func) {
-                Some((target, entry)) => match entry.dispatch_kind {
-                    SubrDispatchKind::SpecialForm if target == sym_id => {
-                        match evaluator_handler(target) {
-                            Some(EvaluatorHandler::SpecialForm(handler)) => {
-                                HeadClass::SpecialForm(handler)
-                            }
-                            _ => HeadClass::Slow,
-                        }
-                    }
-                    SubrDispatchKind::Builtin => match entry.function {
-                        Some(function) => HeadClass::Subr {
-                            function,
-                            min_args: entry.min_args,
-                            max_args: entry.max_args,
-                        },
-                        None => HeadClass::Slow,
-                    },
-                    _ => HeadClass::Slow,
-                },
-                None => match func.veclike_type() {
-                    Some(VecLikeType::ByteCode) => HeadClass::ByteCode,
-                    Some(VecLikeType::Lambda) => HeadClass::Lambda,
-                    _ => HeadClass::Slow,
-                },
-            },
-        };
-        Self {
-            literal_head,
-            func,
-            class,
-        }
-    }
-}
 
 /// One slot: the key beside its answer, so a probe compares the key in
 /// place and copies only the answer out.

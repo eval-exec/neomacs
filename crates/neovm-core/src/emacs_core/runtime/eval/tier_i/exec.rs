@@ -406,16 +406,8 @@ impl Context {
             return None;
         }
         let (head, leaf) = self.ti_head_leaf(f);
-        let (
-            true,
-            Some(func),
-            HeadClass::Subr {
-                function,
-                min_args,
-                max_args,
-            },
-            Op::Call(args),
-        ) = (leaf, head.func, head.class, &f.op)
+        let (true, Some(func), EvalDispatch::Call(CallTarget::Primitive(call)), Op::Call(args)) =
+            (leaf, head.func, head.dispatch, &f.op)
         else {
             return None;
         };
@@ -432,8 +424,8 @@ impl Context {
         let stack_base = self.bc_buf.len();
         let first_arg = stack_base + 1;
         if !cursor.is_nil()
-            || nargs < min_args as usize
-            || max_args.is_some_and(|m| nargs > m as usize)
+            || nargs < call.min_args as usize
+            || call.max_args.is_some_and(|m| nargs > m as usize)
             || BytecodeBacktraceSpan::try_new(first_arg, nargs).is_none()
         {
             return None;
@@ -456,7 +448,7 @@ impl Context {
             };
             self.bc_buf.push(value);
         }
-        match self.dispatch_subr_fn_from_bc_stack(function, first_arg, nargs) {
+        match self.dispatch_subr_fn_from_bc_stack(call.function, first_arg, nargs) {
             Ok(value) => {
                 // `retire_cons_frame`'s trivial arm for an EVALD
                 // operand-stack span.
@@ -581,13 +573,19 @@ impl Context {
             return (head, leaf);
         }
         let head = FormHead::classify(f.head_id, self.obarray.symbol_function_id(f.head_id));
-        let leaf = matches!(head.class, HeadClass::Subr { .. })
+        let leaf = matches!(head.dispatch, EvalDispatch::Call(CallTarget::Primitive(_)))
             && head.func.is_some_and(is_lazy_leaf_subr);
         f.head_cache.set((epoch, head, leaf));
         (head, leaf)
     }
 
-    /// The tree walker's dispatch of a form this node cannot run.
+    /// The tree walker's full resolution of a form this node cannot run.
+    ///
+    /// Every shape that reaches the island is one the classified fast arms
+    /// decline (an Escape shape, or a special-form handler that disagrees with
+    /// the compiled node), so the island takes the one slow entry directly
+    /// instead of re-classifying to reach it.  The frame, the debug arm and
+    /// the signal/retirement wrapper are `ti_form_cons`'s, exactly as before.
     #[inline(never)]
     fn ti_island(
         &mut self,
@@ -598,7 +596,15 @@ impl Context {
     ) -> EvalResult {
         self.tier_i.stats.note(TierIEvent::Island);
         let lexenv = self.lexenv;
-        let result = self.eval_sub_cons_dispatch(original_fun, original_args, outer_bt_count);
+        let symbol_mode = self.symbol_mode();
+        let result = self.eval_cons_slow(
+            original_fun,
+            original_args,
+            outer_bt_count,
+            symbol_mode,
+            original_fun.as_symbol_id(symbol_mode),
+            None,
+        );
         if self.lexenv.bits() != lexenv.bits() {
             act.markers.set(true);
         }
@@ -627,17 +633,14 @@ impl Context {
             return self.ti_island(act, original_fun, original_args, outer_bt_count);
         };
         match &f.op {
-            Op::Call(args) => match head.class {
-                HeadClass::Subr {
-                    function,
-                    min_args,
-                    max_args,
-                } => {
+            Op::Call(args) => match head.dispatch {
+                EvalDispatch::Call(CallTarget::Primitive(call)) => {
                     let numargs = match list_length(&original_args) {
                         Some(n) => n,
                         None => return Err(self.listp_error(original_args)),
                     };
-                    if numargs < min_args as usize || max_args.is_some_and(|m| numargs > m as usize)
+                    if numargs < call.min_args as usize
+                        || call.max_args.is_some_and(|m| numargs > m as usize)
                     {
                         return Err(signal(
                             LispCondition::WrongNumberOfArguments,
@@ -651,14 +654,20 @@ impl Context {
                     let (first_arg, nargs) =
                         self.ti_call_args_onto_stack(act, func, original_args, args)?;
                     self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                    self.dispatch_subr_fn_from_bc_stack(function, first_arg, nargs)
+                    self.dispatch_subr_fn_from_bc_stack(call.function, first_arg, nargs)
                 }
-                HeadClass::ByteCode | HeadClass::Lambda => {
-                    let bc_data = match head.class {
-                        HeadClass::ByteCode => func.get_bytecode_data(),
+                EvalDispatch::Call(CallTarget::Bytecode)
+                | EvalDispatch::Call(CallTarget::InterpretedClosure) => {
+                    let bc_data = match head.dispatch {
+                        EvalDispatch::Call(CallTarget::Bytecode) => func.get_bytecode_data(),
                         _ => None,
                     };
-                    if bc_data.is_none() && !matches!(head.class, HeadClass::Lambda) {
+                    if bc_data.is_none()
+                        && !matches!(
+                            head.dispatch,
+                            EvalDispatch::Call(CallTarget::InterpretedClosure)
+                        )
+                    {
                         return self.ti_island(act, original_fun, original_args, outer_bt_count);
                     }
                     if list_length(&original_args).is_none() {
@@ -674,7 +683,7 @@ impl Context {
                         None => self.apply_closure_from_bc_stack(func, first_arg, nargs),
                     }
                 }
-                HeadClass::Slow => match self.ti_alias_target(f, func) {
+                EvalDispatch::Escape(_) => match self.ti_alias_target(f, func) {
                     AliasTarget::None => {
                         self.ti_island(act, original_fun, original_args, outer_bt_count)
                     }
@@ -687,12 +696,15 @@ impl Context {
                         args,
                     ),
                 },
-                HeadClass::SpecialForm(_) => {
+                EvalDispatch::Special(_)
+                | EvalDispatch::Atom
+                | EvalDispatch::Symbol(_)
+                | EvalDispatch::Literal(_) => {
                     self.ti_island(act, original_fun, original_args, outer_bt_count)
                 }
             },
-            op => match head.class {
-                HeadClass::SpecialForm(handler) if op.handler() == Some(handler) => {
+            op => match head.dispatch {
+                EvalDispatch::Special(kind) if op.handler() == Some(kind.0) => {
                     if list_length(&original_args).is_none() {
                         return Err(self.listp_error(original_args));
                     }

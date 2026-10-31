@@ -480,19 +480,22 @@ impl Compiler<'_> {
             self.summary.evals += 1;
             return Node::Eval(form);
         }
-        let op = match class.class {
-            HeadClass::SpecialForm(handler) => match self.special(handler, tail) {
+        let op = match class.dispatch {
+            EvalDispatch::Special(kind) => match self.special(kind.0, tail) {
                 Some(op) => op,
                 None => {
                     self.summary.evals += 1;
                     return Node::Eval(form);
                 }
             },
-            HeadClass::Subr { .. } | HeadClass::ByteCode | HeadClass::Lambda => {
+            EvalDispatch::Call(_) => {
                 self.summary.calls += 1;
                 Op::Call(self.seq(tail))
             }
-            HeadClass::Slow => {
+            EvalDispatch::Escape(_)
+            | EvalDispatch::Atom
+            | EvalDispatch::Symbol(_)
+            | EvalDispatch::Literal(_) => {
                 if class
                     .func
                     .is_some_and(|func| cell_is_macro(self.obarray, func))

@@ -7758,10 +7758,11 @@ mod signal_dispatch;
 mod signal_room;
 
 mod construct;
+mod dispatch_class;
 mod form_head_cache;
 mod tree_walk;
+use dispatch_class::{CallTarget, EvalDispatch, FormHead};
 pub(crate) use form_head_cache::FormHeadCache;
-use form_head_cache::{FormHead, HeadClass};
 
 #[cfg(test)]
 #[path = "tests/eval_test.rs"]
