@@ -1789,13 +1789,13 @@ impl TaggedHeap {
     /// in one weak table may be a key in another — then non-surviving entries
     /// are removed.
     pub(super) fn mark_and_sweep_weak_tables(&mut self) {
-        // Seed every PERMANENT (tenured/mapped) weak table into this cycle's
-        // worklist. The main mark skips permanent-black objects, so these would
-        // otherwise never be swept again and their entries would be pinned
-        // forever. GNU re-encounters and re-sweeps every live weak table on every
-        // GC; this restores that for permanents. Young/runtime weak tables are
-        // already registered by `trace_veclike` / `register_weak_hash_table_for_
-        // sweep` during this cycle's mark.
+        // Seed the always-swept weak-table registry into this cycle's worklist.
+        // It covers image-permanent and collectible runtime-tenured tables. The
+        // main mark can skip these owners, but their entries still need weak
+        // processing each cycle. Membership is not a root: sweep removes a
+        // collectible table from the registry before freeing its storage.
+        // Young tables join this cycle's worklist through `trace_veclike` /
+        // `register_weak_hash_table_for_sweep`.
         for &tptr in &self.always_swept_weak_tables {
             if self.weak_hash_tables_set.insert(tptr) {
                 self.weak_hash_tables.push(tptr);
