@@ -42,6 +42,13 @@ impl Context {
         // constructor ran; install the structural semantics before the first
         // one can be compared or hashed.
         crate::emacs_core::bytecode::semantics::install();
+        // The function-cell observer is process state, not image state, and a
+        // restored image can hold byte-code functions before any Context
+        // constructor ran. Install it exactly where the semantics hook is
+        // installed; skipping this silently loses redefinition pinning and
+        // inline eviction in every image-restored process.
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::install_function_cell_observer();
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, false);

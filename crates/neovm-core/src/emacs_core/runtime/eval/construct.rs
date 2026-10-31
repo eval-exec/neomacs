@@ -2336,6 +2336,12 @@ impl Context {
         // the one-time hook, not a per-allocation check: the constructors stay
         // free of it so the allocation fast path is untouched.
         crate::emacs_core::bytecode::semantics::install();
+        // The value layer owns the function-cell observer table; the JIT
+        // installs its four observations here, before any compiled leaf can
+        // exist. An uninstalled observer is a typed no-op, so function
+        // objects written outside a Context stay unaffected.
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::install_function_cell_observer();
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization. The owner carries the allocation's
         // provenance root; installation and every later access derive from it.

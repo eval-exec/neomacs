@@ -1738,6 +1738,22 @@ impl Clone for Runtime {
     }
 }
 
+/// Install the value layer's function-cell observer. `Context::new_inner`
+/// calls this with the other one-time hooks, before any compiled leaf can
+/// exist; the observer is a typed no-op until then. The observer only
+/// forwards function-cell writes to the existing JIT metering and cache
+/// invalidation, so function objects outside a `Context` stay unaffected.
+pub(crate) fn install_function_cell_observer() {
+    crate::emacs_core::symbol::install_function_cell_observer(
+        crate::emacs_core::symbol::FunctionCellObserver {
+            epoch_bump: stats::note_function_epoch_bump,
+            cell_unchanged: stats::note_function_cell_unchanged,
+            evict_inline_dependents: cache::evict_inline_dependents,
+            pin_redefined: cache::pin_redefined_function,
+        },
+    );
+}
+
 #[cfg(test)]
 #[path = "tests/jit_test.rs"]
 mod tests;

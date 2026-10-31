@@ -190,7 +190,9 @@ impl SymbolBacking {
         let why = update.reason();
         crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::stats::note_function_epoch_bump(why, Some(id));
+        if let Some(observer) = crate::emacs_core::symbol::function_cell_observer() {
+            (observer.epoch_bump)(why, Some(id));
+        }
         Ok(())
     }
 

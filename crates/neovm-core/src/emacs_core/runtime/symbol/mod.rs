@@ -28,6 +28,7 @@
 mod canonical_access;
 mod cell;
 mod fn_stamps;
+mod function_cell_observer;
 #[cfg(debug_assertions)]
 pub(crate) mod leaf_activity;
 pub(crate) mod parallel;
@@ -58,6 +59,9 @@ pub(crate) use cell::{
 pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(test)]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
+pub(crate) use function_cell_observer::{
+    FunctionCellObserver, function_cell_observer, install_function_cell_observer,
+};
 pub(crate) use projection::{
     AdmissionPlanCell, ConcealOutcome, RevealedProjection, enter_projection_scope,
     leave_projection_scope, reserve_projection_scope,
@@ -752,7 +756,9 @@ pub(crate) enum FunctionEpochBump {
 #[inline]
 fn note_function_cell_unchanged() {
     #[cfg(feature = "jit")]
-    crate::emacs_core::jit::stats::note_function_cell_unchanged();
+    if let Some(observer) = function_cell_observer() {
+        (observer.cell_unchanged)();
+    }
 }
 
 /// Detached domain for the existing function-binding publication clock.
@@ -4044,7 +4050,9 @@ impl Obarray {
             .store(epoch, Ordering::Release);
         crate::emacs_core::eval::note_function_epoch_move(why, None);
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);
+        if let Some(observer) = function_cell_observer() {
+            (observer.epoch_bump)(why, None);
+        }
     }
 
     /// The value `function_epoch` moves to next: one more, skipping the
@@ -4112,10 +4120,10 @@ impl Obarray {
             .store(epoch, Ordering::Release);
         crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
-        {
-            crate::emacs_core::jit::stats::note_function_epoch_bump(why, Some(id));
-            crate::emacs_core::jit::cache::evict_inline_dependents(id);
-            crate::emacs_core::jit::cache::pin_redefined_function(id, previous);
+        if let Some(observer) = function_cell_observer() {
+            (observer.epoch_bump)(why, Some(id));
+            (observer.evict_inline_dependents)(id);
+            (observer.pin_redefined)(id, previous);
         }
         #[cfg(not(feature = "jit"))]
         let _ = (id, why, previous);
