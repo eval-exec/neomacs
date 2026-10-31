@@ -1198,10 +1198,21 @@ fn div_core_timer_absolute_and_idle_shape_combo() {
 #[test]
 fn div_core_divergence_surface_relative_timer_microseconds() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t t t t t nil)""#]];
-    // Divergence surfaced 2026-06-24:
-    // GNU Emacs: relative run-at-time retains a nonzero microsecond component.
-    // Neomacs:   relative run-at-time reports zero microseconds.
+    let expect = expect_test::expect![[
+        r#""OK (t t t t t t t t (27365 25001 123456 789000) (0 1000 123456 789000) nil)""#
+    ]];
+    // `nth 3` is the PICOSECOND field, not the microsecond field. GNU
+    // make_lisp_time sets USEC = ns / 1000 and PSEC = ns % 1000 * 1000
+    // (src/timefns.c:822-830), and Neomacs builds the same pair from
+    // SystemTime::now()'s nanosecond remainder (system/timefns/mod.rs). A
+    // nonzero psec is therefore a 1-in-1000 coincidence on a real ns clock in
+    // both engines (measured: 3 zeros in 1000 GNU runs) -- the old
+    // `(not (zerop (nth 3 tt)))` was a coin flip, and libfaketime cannot pin
+    // it (it freezes the seconds but leaves tv_nsec from the real clock).
+    // Assert the deterministic representation invariants instead, and check
+    // subsecond preservation through the same `timer-relative-time` path
+    // run-at-time uses (lisp/emacs-lisp/timer.el:357 -> :128), with an
+    // explicit base so no ambient clock reaches the output.
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((tm (run-at-time 1000 nil (lambda () 'never))))
@@ -1211,7 +1222,12 @@ fn div_core_divergence_surface_relative_timer_microseconds() {
               (integerp (nth 0 tt))
               (integerp (nth 1 tt))
               (integerp (nth 2 tt))
-              (not (zerop (nth 3 tt)))
+              (integerp (nth 3 tt))
+              (<= 0 (nth 2 tt) 999999)
+              (<= 0 (nth 3 tt) 999999)
+              (zerop (% (nth 3 tt) 1000))
+              (timer-relative-time '(27365 24001 123456 789000) 1000)
+              (time-add '(0 0 123456 789000) 1000)
               (timer--repeat-delay tm)))
     (cancel-timer tm)))
 "##,
@@ -1222,10 +1238,16 @@ fn div_core_divergence_surface_relative_timer_microseconds() {
 #[test]
 fn div_core_divergence_surface_repeating_timer_microseconds() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t t t t t 5)""#]];
-    // Divergence surfaced 2026-06-24:
-    // GNU Emacs: repeating run-at-time keeps a nonzero microsecond component.
-    // Neomacs:   repeating run-at-time reports zero microseconds.
+    let expect = expect_test::expect![[
+        r#""OK (t t t t t t t t (27365 24011 123456 789000) (0 10 123456 789000) 5)""#
+    ]];
+    // Same psec coin flip as the relative probe above: `nth 3` is
+    // ns % 1000 * 1000 (GNU src/timefns.c:822-830; Neomacs
+    // system/timefns/mod.rs), zero once in 1000 GNU and Neomacs runs on a real
+    // clock, and the frozen-clock harness leaves tv_nsec real. Deterministic
+    // checks only: the four integer fields, their ranges, psec's 1000-step
+    // granularity, and the exact +10 s arithmetic through
+    // `timer-relative-time` (lisp/emacs-lisp/timer.el:128) with a fixed base.
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((tm (run-at-time 10 5 (lambda () 'never))))
@@ -1235,7 +1257,12 @@ fn div_core_divergence_surface_repeating_timer_microseconds() {
               (integerp (nth 0 tt))
               (integerp (nth 1 tt))
               (integerp (nth 2 tt))
-              (not (zerop (nth 3 tt)))
+              (integerp (nth 3 tt))
+              (<= 0 (nth 2 tt) 999999)
+              (<= 0 (nth 3 tt) 999999)
+              (zerop (% (nth 3 tt) 1000))
+              (timer-relative-time '(27365 24001 123456 789000) 10)
+              (time-add '(0 0 123456 789000) 10)
               (timer--repeat-delay tm)))
     (cancel-timer tm)))
 "##,
