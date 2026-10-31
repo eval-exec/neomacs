@@ -372,7 +372,7 @@ impl PreparedTablePublication<'_> {
         let next = match self.replacement {
             Replacement::Unchanged => {
                 let mut addresses = addresses.into_iter();
-                for old in &self.ledger.current.table().chunks {
+                for old in self.ledger.current.table().chunks.as_slice() {
                     if addresses.next() != Some(*old) {
                         return Err(TablePublicationError::Table(TableError::Shape));
                     }
@@ -389,7 +389,8 @@ impl PreparedTablePublication<'_> {
         if !next
             .table()
             .chunks
-            .starts_with(&self.ledger.current.table().chunks)
+            .as_slice()
+            .starts_with(self.ledger.current.table().chunks.as_slice())
         {
             return Err(TablePublicationError::Table(TableError::Shape));
         }

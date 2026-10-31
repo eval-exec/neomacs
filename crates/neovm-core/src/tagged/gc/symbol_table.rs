@@ -4,6 +4,7 @@
 //! allocations named by entries. No reader is exposed before initialization.
 //! The era integration must retain the backing and every published table until
 //! its terminal or grace proof; these types do not mint that proof.
+pub(crate) mod abi;
 pub(crate) mod publication;
 
 use std::mem::MaybeUninit;
@@ -107,6 +108,7 @@ impl SymbolChunkAddress {
 
 /// One checked relationship between logical coverage and pointer-array size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(C)]
 pub(crate) struct SymbolTableShape {
     slots: SymbolSlotCount,
     chunks: SymbolChunkCount,
@@ -133,12 +135,56 @@ impl SymbolTableShape {
     }
 }
 
+/// One owner of the separately allocated immutable pointer array. Consume
+/// the Box before exporting its provenance root: moving this thin owner into
+/// a descriptor never retags the allocation or depends on Box/slice layout.
+#[repr(C)]
+struct OwnedChunkAddresses {
+    root: NonNull<SymbolChunkAddress>,
+    len: SymbolChunkCount,
+}
+impl OwnedChunkAddresses {
+    fn from_box(chunks: Box<[SymbolChunkAddress]>) -> Self {
+        let len = SymbolChunkCount::from(chunks.len());
+        let root = Box::into_raw(chunks).cast::<SymbolChunkAddress>();
+        Self {
+            // SAFETY: Box::into_raw is nonnull, including an empty slice's
+            // aligned dangling pointer. It is this allocation's sole owner.
+            root: unsafe { NonNull::new_unchecked(root) },
+            len,
+        }
+    }
+
+    fn as_slice(&self) -> &[SymbolChunkAddress] {
+        // SAFETY: from_box retains the sole root of an initialized immutable
+        // array with this exact length, including a valid aligned empty slice.
+        // This shared borrow prevents Drop, and no mutable view is exposed.
+        unsafe { std::slice::from_raw_parts(self.root.as_ptr(), self.len.get()) }
+    }
+
+    fn get(&self, index: SymbolChunkIndex) -> Option<SymbolChunkAddress> {
+        self.as_slice().get(index.0).copied()
+    }
+}
+impl Drop for OwnedChunkAddresses {
+    fn drop(&mut self) {
+        let array = std::ptr::slice_from_raw_parts_mut(self.root.as_ptr(), self.len.get());
+        // SAFETY: from_box consumed exactly one Box of this pointer and length.
+        // No other owner or mutable array access is exposed. This reconstructs
+        // only the address array, never a backing chunk. Empty arrays are valid.
+        unsafe { drop(Box::from_raw(array)) }
+    }
+}
+static_assertions::assert_not_impl_any!(OwnedChunkAddresses: Send, Sync, Clone, Copy);
+static_assertions::assert_eq_size!(OwnedChunkAddresses, Box<[SymbolChunkAddress]>);
+
 /// Fully initialized immutable payload. Mutable symbol cells remain protected
 /// by their separate symbol authority; a table is not a collector root.
+#[repr(C)]
 pub(crate) struct PublishedSymbolTable {
     shape: SymbolTableShape,
     generation: PointerTableGeneration,
-    chunks: Box<[SymbolChunkAddress]>,
+    chunks: OwnedChunkAddresses,
 }
 impl PublishedSymbolTable {
     pub(crate) fn slots(&self) -> SymbolSlotCount {
@@ -158,7 +204,7 @@ impl PublishedSymbolTable {
     }
 
     pub(crate) fn chunk(&self, index: SymbolChunkIndex) -> Option<SymbolChunkAddress> {
-        self.chunks.get(index.0).copied()
+        self.chunks.get(index)
     }
 }
 
@@ -210,6 +256,7 @@ impl PreparedSymbolTable {
         // SAFETY: the loop initialized every element exactly once. No table
         // or address-array reference escaped this unpublished preparation.
         let chunks = unsafe { self.chunks.assume_init() };
+        let chunks = OwnedChunkAddresses::from_box(chunks);
         self.descriptor.write(PublishedSymbolTable {
             shape: self.shape,
             generation: self.generation,
