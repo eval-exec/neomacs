@@ -441,3 +441,49 @@ mod conversion_byte_boundary;
 #[cfg(test)]
 #[path = "tsb_boundary_numbers.rs"]
 mod tsb_boundary_numbers;
+
+/// GNU buffer.c:1981 ("Don't kill the minibuffer now current"): `kill-buffer`
+/// of the buffer shown in the selected frame's minibuffer window returns nil
+/// and kills nothing, so no ordinary buffer is ever swapped into it.
+#[test]
+fn kill_buffer_refuses_the_buffer_shown_in_the_minibuffer_window() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let scratch = eval
+        .buffers
+        .find_buffer_by_name("*scratch*")
+        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
+    let victim = eval.buffers.create_buffer("victim");
+    eval.buffers.set_current(scratch);
+
+    let fid = eval.frames.create_frame("F1", 800, 600, scratch);
+    assert!(eval.frames.select_frame(fid));
+    eval.frames
+        .get_mut(fid)
+        .expect("frame")
+        .minibuffer_leaf
+        .as_mut()
+        .expect("frame has a minibuffer window")
+        .set_buffer(victim);
+
+    let result = eval
+        .eval_str(r#"(kill-buffer "victim")"#)
+        .expect("kill-buffer");
+    assert!(
+        result.is_nil(),
+        "kill-buffer must return nil, got {result:?}"
+    );
+    assert!(eval.buffers.get(victim).is_some(), "victim must stay live");
+    let shown = eval
+        .frames
+        .get(fid)
+        .expect("frame")
+        .minibuffer_leaf
+        .as_ref()
+        .and_then(|leaf| leaf.buffer_id());
+    assert_eq!(
+        shown,
+        Some(victim),
+        "minibuffer window must keep its buffer"
+    );
+}
