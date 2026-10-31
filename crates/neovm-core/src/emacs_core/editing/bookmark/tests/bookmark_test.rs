@@ -15,6 +15,154 @@ fn bm_runtime(text: Option<&LispString>) -> Option<String> {
 }
 
 #[test]
+fn bookmark_lookup_key_cannot_retain_input_properties() {
+    use crate::buffer::CharRange;
+    use crate::emacs_core::Context;
+
+    struct DroppedProperty(usize);
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let property = Value::symbol("bookmark-key-input-only");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut bookmarks = HashMap::new();
+        let mut probes = Vec::new();
+        for mut text in [
+            LispString::from_utf8("é\u{e0ff}"),
+            LispString::from_unibyte(vec![0xff]),
+            LispString::from_emacs_bytes(crate::emacs_core::emacs_char::str_to_multibyte(&[0x80])),
+        ] {
+            let name = text.without_properties();
+            let payload = Value::vector(vec![Value::fixnum(71)]);
+            probes.push(DroppedProperty(payload.bits()));
+            text.intervals_mut().put_property_in_char_range(
+                CharRange::from_usize(0, 1),
+                property,
+                payload,
+            );
+            let key = BookmarkKey::from_lisp_string(&text);
+            assert!(
+                !key.as_lisp_string().has_intervals(),
+                "bookmark lookup key retained input properties"
+            );
+            assert_eq!(key, BookmarkKey::from_lisp_string(&name));
+            assert!(key.as_lisp_string().is_multibyte());
+            bookmarks.insert(
+                key,
+                Bookmark {
+                    name,
+                    filename: None,
+                    position: LispCharPos1::new(1),
+                    front_context: None,
+                    rear_context: None,
+                    annotation: None,
+                    handler: None,
+                },
+            );
+        }
+        // Exercise the real World's restore boundary with independent plain
+        // records. Only the derived keys could retain these property graphs.
+        *eval.bookmarks = BookmarkManager::from_dump(bookmarks, Vec::new());
+        assert_eq!(eval.bookmarks.dump_bookmarks().len(), 3);
+        probes
+    });
+    let check_dropped = |eval: &Context| {
+        for DroppedProperty(bits) in &probes {
+            assert!(
+                !eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "bookmark key input-only property remained rooted"
+            );
+        }
+        for (key, record) in eval.bookmarks.dump_bookmarks() {
+            assert!(!key.as_lisp_string().has_intervals());
+            assert_eq!(*key, BookmarkKey::from_lisp_string(&record.name));
+            assert!(eval.bookmarks.get(&record.name).is_some());
+        }
+    };
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_dropped(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_dropped(&eval);
+}
+
+#[test]
+fn bookmark_lookup_projection_preserves_semantic_name_properties() {
+    use crate::buffer::{CharPos0, CharRange};
+
+    crate::test_utils::init_test_tracing();
+    let property = Value::symbol("bookmark-semantic-name");
+    let mut name = bm_str("original-é");
+    name.intervals_mut().put_property_in_char_range(
+        CharRange::from_usize(0, 1),
+        property,
+        Value::fixnum(11),
+    );
+    let mut manager = BookmarkManager::new();
+    manager.set(
+        name.clone(),
+        Bookmark {
+            name: name.clone(),
+            filename: None,
+            position: LispCharPos1::new(1),
+            front_context: None,
+            rear_context: None,
+            annotation: None,
+            handler: None,
+        },
+    );
+    let check_name = |manager: &BookmarkManager, expected: &LispString| {
+        for text in [
+            &manager.get(expected).expect("stored bookmark").name,
+            &manager.recent_names()[0],
+        ] {
+            assert_eq!(
+                text.intervals()
+                    .get_property_at_char_pos(CharPos0::ZERO, property),
+                Some(Value::fixnum(11))
+            );
+        }
+        assert!(
+            manager
+                .dump_bookmarks()
+                .keys()
+                .all(|key| !key.as_lisp_string().has_intervals())
+        );
+    };
+    check_name(&manager, &name);
+    let mut renamed = bm_str("renamed-é");
+    renamed.intervals_mut().put_property_in_char_range(
+        CharRange::from_usize(0, 1),
+        property,
+        Value::fixnum(11),
+    );
+    assert!(manager.rename(&name, renamed.clone()));
+    check_name(&manager, &renamed);
+}
+
+#[test]
 fn set_get_delete() {
     crate::test_utils::init_test_tracing();
     let mut mgr = BookmarkManager::new();

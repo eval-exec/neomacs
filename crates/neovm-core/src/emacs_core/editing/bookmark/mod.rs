@@ -302,6 +302,12 @@ fn runtime_string_to_bookmark_string(text: &str) -> LispString {
     super::builtins::plain_str_to_lisp_string(text, true)
 }
 
+/// Property-free, byte-faithful bookmark lookup identity.
+///
+/// GNU's bookmark-get-bookmark uses assoc-string, independent of properties.
+/// Keep the semantic record and recent names separately: bookmark-set-name
+/// preserves their properties. Only this derived identity has no GC edges.
+/// The private field and shared accessor keep its constructor invariant intact.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub(crate) struct BookmarkKey(LispString);
 
@@ -313,7 +319,7 @@ impl BookmarkKey {
         // keeps the bookmark key byte-faithful so distinct names (incl. real PUA
         // glyphs and eight-bit raw bytes) never collide.
         let normalized = if text.is_multibyte() {
-            text.clone()
+            text.without_properties()
         } else {
             LispString::from_emacs_bytes(crate::emacs_core::emacs_char::str_to_multibyte(
                 text.as_bytes(),
