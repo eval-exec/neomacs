@@ -1082,26 +1082,6 @@ pub(crate) fn builtin_frame_internal_border_width(args: &[Value]) -> EvalResult 
     Ok(Value::fixnum(0))
 }
 
-pub(crate) fn builtin_frame_or_buffer_changed_p(
-    args: Vec<Value>,
-    symbol_mode: SymbolMode,
-) -> EvalResult {
-    expect_args_range("frame-or-buffer-changed-p", &args, 0, 1)?;
-    let Some(symbol) = args.first() else {
-        return Ok(Value::T);
-    };
-    if symbol.is_nil() {
-        return Ok(Value::NIL);
-    }
-    if !symbol.is_symbol(symbol_mode) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), *symbol],
-        ));
-    }
-    Err(signal(LispCondition::VoidVariable, vec![*symbol]))
-}
-
 pub(crate) fn builtin_frame_pointer_visible_p(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-pointer-visible-p", &args, 0, 1)?;
     if let Some(frame) = args.first() {

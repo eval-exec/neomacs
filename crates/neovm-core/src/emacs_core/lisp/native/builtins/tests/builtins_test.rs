@@ -11948,16 +11948,6 @@ fn dispatch_builtin_pure_handles_frame_placeholder_accessors() {
             .expect("frame--set-was-invisible should evaluate");
     assert_eq!(was_invisible, Value::T);
 
-    let changed = dispatch_builtin_pure("frame-or-buffer-changed-p", vec![])
-        .expect("frame-or-buffer-changed-p should resolve")
-        .expect("frame-or-buffer-changed-p should evaluate");
-    assert_eq!(changed, Value::T);
-
-    let changed_nil = dispatch_builtin_pure("frame-or-buffer-changed-p", vec![Value::NIL])
-        .expect("frame-or-buffer-changed-p should resolve")
-        .expect("frame-or-buffer-changed-p should evaluate");
-    assert_eq!(changed_nil, Value::NIL);
-
     let scale = dispatch_builtin_pure("frame-scale-factor", vec![])
         .expect("frame-scale-factor should resolve")
         .expect("frame-scale-factor should evaluate");
@@ -11967,14 +11957,6 @@ fn dispatch_builtin_pure_handles_frame_placeholder_accessors() {
         .expect("frame-pointer-visible-p should resolve")
         .expect("frame-pointer-visible-p should evaluate");
     assert_eq!(pointer, Value::T);
-
-    let err = dispatch_builtin_pure("frame-or-buffer-changed-p", vec![Value::fixnum(1)])
-        .expect("frame-or-buffer-changed-p should resolve")
-        .unwrap_err();
-    match err.into_kind() {
-        FlowKind::Signal(sig) => assert_eq!(sig.symbol_name(), "wrong-type-argument"),
-        other => panic!("expected signal, got {other:?}"),
-    }
 }
 
 #[test]

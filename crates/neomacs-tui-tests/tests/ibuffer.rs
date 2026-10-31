@@ -713,3 +713,37 @@ fn ibuffer_truncated_wide_name_at_the_window_edge() {
     dump_pair_grids("ibuffer_truncated_wide_name_at_the_window_edge", &gnu, &neo);
     assert_pair_exact_display("ibuffer_truncated_wide_name_at_the_window_edge", &gnu, &neo);
 }
+
+/// Issue #654: enabling `ibuffer-auto-mode` must initialize the state vector
+/// through `frame-or-buffer-changed-p`, not signal
+/// `void-variable ibuffer-auto-buffers-changed`.
+#[test]
+fn ibuffer_auto_mode_initializes_its_state_vector() {
+    let (mut gnu, mut neo, _visited) = boot_ibuffer_fixture();
+    open_ibuffer(&mut gnu, &mut neo);
+
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let gnu_out = dir.path().join("ibuffer-auto-gnu.out");
+    let neo_out = dir.path().join("ibuffer-auto-neomacs.out");
+    let form = |path: &std::path::Path| {
+        // `prin1` without a stream writes to the echo area, not to the
+        // with-temp-file buffer.
+        format!(
+            r#"(with-temp-file {:?} (prin1 (with-current-buffer "*Ibuffer*" (ibuffer-auto-mode 1) (list ibuffer-auto-mode (boundp 'ibuffer-auto-buffers-changed) (vectorp ibuffer-auto-buffers-changed))) (current-buffer)))"#,
+            path
+        )
+    };
+    neomacs_tui_tests::pair::eval_expression_one(&mut gnu, &form(&gnu_out));
+    neomacs_tui_tests::pair::eval_expression_one(&mut neo, &form(&neo_out));
+
+    let gnu_result = std::fs::read_to_string(&gnu_out).expect("GNU ibuffer-auto result");
+    let neo_result = std::fs::read_to_string(&neo_out).expect("Neomacs ibuffer-auto result");
+    assert_eq!(
+        gnu_result, "(t t t)",
+        "GNU oracle must initialize the state vector"
+    );
+    assert_eq!(
+        neo_result, gnu_result,
+        "ibuffer-auto-mode must initialize ibuffer-auto-buffers-changed"
+    );
+}

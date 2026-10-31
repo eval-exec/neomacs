@@ -395,6 +395,12 @@ impl Context {
         if let Some(table) = self.cached_standard_case_table {
             visit(table);
         }
+        // GNU dispnew.c's frame_and_buffer_state lives for the whole session,
+        // so the internal state vector must survive every collection even
+        // while no Lisp variable refers to it.
+        if let Some(state) = self.frame_and_buffer_state {
+            visit(state);
+        }
         // The Flow registry is private even though the full walk uses the
         // same temporary buffer for it and the following World registries.
         group("in_flight_registry");

@@ -2970,6 +2970,14 @@ impl Buffer {
         self.slots[BUFFER_SLOT_READ_ONLY.index()].is_truthy()
     }
 
+    /// The raw `buffer-read-only` slot, for callers that must publish the
+    /// exact Lisp value rather than its truthiness. GNU
+    /// `frame-or-buffer-changed-p` stores `BVAR (buf, read_only)` itself in
+    /// its state vector (src/dispnew.c:7098).
+    pub fn read_only_value(&self) -> Value {
+        self.slots[BUFFER_SLOT_READ_ONLY.index()]
+    }
+
     /// Write `buffer-read-only`. `true` stores `Value::T`, `false`
     /// stores `Value::NIL`.
     pub fn set_read_only_value(&mut self, v: bool) {
