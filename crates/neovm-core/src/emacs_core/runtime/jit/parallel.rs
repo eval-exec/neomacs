@@ -7,7 +7,7 @@ use crate::tagged::gc::{
     Gen1Admission, ImmediateResult, ImmediateResultError, OwnerRootSlot,
     ParallelExecutionAdmission, RegistrationError, RunAccess,
 };
-use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, condcodes::IntCC, types};
+use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlagsData, condcodes::IntCC, types};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module, default_libcall_names};
@@ -158,9 +158,9 @@ impl ParallelCompiledCode {
             b.append_block_params_for_function_params(entry);
             b.switch_to_block(entry);
             let args = b.block_params(entry).to_vec();
-            let version = b
-                .ins()
-                .load(types::I32, MemFlags::trusted(), args[0], version_offset);
+            let version =
+                b.ins()
+                    .load(types::I32, MemFlagsData::trusted(), args[0], version_offset);
             let matches =
                 b.ins()
                     .icmp_imm(IntCC::Equal, version, i64::from(NativeAbiVersion::V1.0));
@@ -172,11 +172,11 @@ impl ParallelCompiledCode {
                 ScalarProgram::Constant(value) => b.ins().iconst(pointer, value.word() as i64),
                 ScalarProgram::Argument => {
                     b.ins()
-                        .load(pointer, MemFlags::trusted(), args[2], input_offset)
+                        .load(pointer, MemFlagsData::trusted(), args[2], input_offset)
                 }
             };
             b.ins()
-                .store(MemFlags::trusted(), word, args[3], output_offset);
+                .store(MemFlagsData::trusted(), word, args[3], output_offset);
             let returned = b.ins().iconst(types::I32, NativeStatus::Returned as i64);
             b.ins().return_(&[returned]);
             b.switch_to_block(refused);

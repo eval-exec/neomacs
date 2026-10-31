@@ -17,6 +17,21 @@ pub(crate) enum FixtureReceipt {
     TelemetryRefused,
 }
 
+/// Test-only adapter; the production root-bank leaves remain parent-private.
+pub(crate) struct ExecutionTestHomes;
+impl ExecutionTestHomes {
+    pub(crate) fn read(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> ImmediateResult {
+        ImmediateResult::from_word(home.word_for_test(run))
+            .expect("scalar result home is immediate")
+    }
+
+    pub(crate) fn nil<'era>(
+        run: &mut RunAccess<'_, 'era>,
+    ) -> Result<OwnerRootSlot<'era>, RegistrationError> {
+        run.private_nil_root()
+    }
+}
+
 pub(crate) fn fixture(
     body: impl for<'era, 'owner> FnOnce(
         &ParallelExecutionAdmission<'era>,

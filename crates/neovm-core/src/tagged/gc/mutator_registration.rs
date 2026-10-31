@@ -20,9 +20,9 @@ mod cons_catalog;
 mod construction;
 mod execution;
 pub use execution::ParallelExecutionAdmission;
-#[cfg(test)]
-pub(crate) use execution::with_test_prepared_execution;
 pub(crate) use execution::{ExecutionActivation, ImmediateResult, ImmediateResultError};
+#[cfg(test)]
+pub(crate) use execution::{ExecutionTestHomes, with_test_prepared_execution};
 mod wrappers;
 #[cfg(test)]
 use crate::emacs_core::eval::world::{

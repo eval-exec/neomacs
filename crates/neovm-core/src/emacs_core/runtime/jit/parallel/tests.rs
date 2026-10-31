@@ -1,5 +1,5 @@
 use super::*;
-use crate::tagged::gc::with_test_prepared_execution;
+use crate::tagged::gc::{ExecutionTestHomes, with_test_prepared_execution};
 use crate::tagged::value::{Fixnum, TaggedValue};
 
 fn samples() -> [ImmediateResult; 6] {
@@ -23,7 +23,7 @@ fn nmjit_n4_scalar_constant_returns_in_resident_home() {
             |code, admission, run, destination| {
                 code.run(admission, run, destination, ImmediateResult::Nil)
                     .unwrap();
-                assert_eq!(destination.word_for_test(run), expected.word());
+                assert_eq!(ExecutionTestHomes::read(destination, run), expected);
             },
         );
     }
@@ -36,7 +36,7 @@ fn nmjit_n4_scalar_argument_returns_in_resident_home() {
         |code, admission, run, destination| {
             for expected in samples() {
                 code.run(admission, run, destination, expected).unwrap();
-                assert_eq!(destination.word_for_test(run), expected.word());
+                assert_eq!(ExecutionTestHomes::read(destination, run), expected);
             }
         },
     );
@@ -51,17 +51,17 @@ fn nmjit_n4_scalar_stale_home_refuses_before_native_entry() {
         },
         |code, admission, run, destination| {
             run.clear_root_slots().unwrap();
-            let fresh = run.private_nil_root().unwrap();
+            let fresh = ExecutionTestHomes::nil(run).unwrap();
             assert_eq!(
                 code.run(admission, run, destination, ImmediateResult::Nil),
                 Err(ParallelEntryError::Authority(
                     RegistrationError::StaleRegistration
                 ))
             );
-            assert_eq!(fresh.word_for_test(run), ImmediateResult::Nil.word());
+            assert_eq!(ExecutionTestHomes::read(&fresh, run), ImmediateResult::Nil);
             code.run(admission, run, &fresh, ImmediateResult::Nil)
                 .unwrap();
-            assert_eq!(fresh.word_for_test(run), ImmediateResult::True.word());
+            assert_eq!(ExecutionTestHomes::read(&fresh, run), ImmediateResult::True);
         },
     );
 }
@@ -74,10 +74,10 @@ fn nmjit_n4_scalar_code_uses_fresh_activations() {
             code.run(admission, run, destination, ImmediateResult::True)
                 .unwrap();
             run.clear_root_slots().unwrap();
-            let fresh = run.private_nil_root().unwrap();
+            let fresh = ExecutionTestHomes::nil(run).unwrap();
             code.run(admission, run, &fresh, ImmediateResult::Nil)
                 .unwrap();
-            assert_eq!(fresh.word_for_test(run), ImmediateResult::Nil.word());
+            assert_eq!(ExecutionTestHomes::read(&fresh, run), ImmediateResult::Nil);
         },
     );
 }
