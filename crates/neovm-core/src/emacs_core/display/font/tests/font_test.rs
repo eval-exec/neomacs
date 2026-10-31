@@ -2580,3 +2580,107 @@ fn bounded_family_alternatives_preserve_order_and_refuse_excess_payload() {
         None
     );
 }
+
+// GNU font.c:4634-4700 keeps the font driver's shape method installed when
+// shaping returns nil. composite.c:982-989 can call it again on later runs.
+#[derive(Clone, Copy, Debug)]
+enum ShapeFailure {
+    Refused,
+    RetryLimit,
+    Empty,
+    NonIntegerCluster,
+    InvalidCoverage,
+}
+
+fn assert_font_shape_driver_survives(failure: ShapeFailure) {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let font = build_font_object(&RuntimeFace::new("default"));
+    eval.font_shape_fn = Some(Box::new(move |_eval, gstring, _direction| {
+        let header = gstring.as_vector_data().expect("gstring")[0];
+        let failing = header.as_vector_data().expect("header")[1] == Value::fixnum(i64::from(b'b'));
+        let (from, to) = if failing {
+            match failure {
+                ShapeFailure::Refused => return GstringShapeOutcome::NotShapable,
+                ShapeFailure::RetryLimit => return GstringShapeOutcome::NeedLargerGlyphs,
+                ShapeFailure::Empty => return GstringShapeOutcome::Shaped(0),
+                ShapeFailure::NonIntegerCluster => (Value::NIL, Value::fixnum(2)),
+                ShapeFailure::InvalidCoverage => (Value::fixnum(1), Value::fixnum(2)),
+            }
+        } else {
+            (Value::fixnum(0), Value::fixnum(2))
+        };
+        gstring.set_vector_slot(
+            2,
+            Value::vector(vec![
+                from,
+                to,
+                Value::NIL,
+                Value::fixnum(123),
+                Value::fixnum(13),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+        );
+        GstringShapeOutcome::Shaped(1)
+    }));
+    let mut shape = |text: &str| {
+        let input = crate::emacs_core::composite::composition_get_gstring(
+            &mut eval,
+            vec![
+                Value::fixnum(0),
+                Value::fixnum(3),
+                font,
+                Value::string(text),
+            ],
+        )
+        .expect("valid gstring");
+        font_shape_gstring(&mut eval, vec![input, Value::NIL]).expect("shaping must not signal")
+    };
+    assert!(
+        shape("bad").is_nil(),
+        "{failure:?} must retain GNU's nil result"
+    );
+    let following = shape("abc");
+    assert!(
+        following.is_vector(),
+        "{failure:?} consumed the installed shape driver"
+    );
+    let slots = following.as_vector_data().expect("shaped gstring");
+    assert!(
+        slots[1].as_int().is_some(),
+        "the following run must enter the shape cache"
+    );
+    assert_eq!(
+        slots[2].as_vector_data().expect("glyph")[3],
+        Value::fixnum(123)
+    );
+    assert!(
+        eval.font_shape_fn.is_some(),
+        "the driver must remain installed after success"
+    );
+}
+
+#[test]
+fn font_shape_gstring_preserves_driver_after_refusal() {
+    assert_font_shape_driver_survives(ShapeFailure::Refused);
+}
+#[test]
+fn font_shape_gstring_preserves_driver_after_retry_limit() {
+    assert_font_shape_driver_survives(ShapeFailure::RetryLimit);
+}
+#[test]
+fn font_shape_gstring_preserves_driver_after_empty_shape() {
+    assert_font_shape_driver_survives(ShapeFailure::Empty);
+}
+#[test]
+fn font_shape_gstring_preserves_driver_after_noninteger_cluster() {
+    assert_font_shape_driver_survives(ShapeFailure::NonIntegerCluster);
+}
+#[test]
+fn font_shape_gstring_preserves_driver_after_invalid_coverage() {
+    assert_font_shape_driver_survives(ShapeFailure::InvalidCoverage);
+}
