@@ -5725,10 +5725,35 @@ pub fn list_to_vec(value: &Value) -> Option<Vec<Value>> {
 }
 
 /// Length of a list (counts cons cells).
+///
+/// Argument lists are almost always short and acyclic, so the first
+/// [`LIST_LENGTH_SHORT_LIMIT`] cells are walked without Floyd's tortoise.
+/// A list that reaches the limit is re-walked from the head with the cycle
+/// check, so a circular input is still rejected; the only cost is one extra
+/// pass over the first few cells of a genuinely long list.
+#[inline]
 pub fn list_length(value: &Value) -> Option<usize> {
+    let mut len = 0usize;
+    let mut tail = *value;
+    while len < LIST_LENGTH_SHORT_LIMIT {
+        if tail.is_nil() {
+            return Some(len);
+        }
+        if !tail.is_cons() {
+            return None; // improper tail
+        }
+        len += 1;
+        tail = tail.cons_cdr();
+    }
+    list_length_checked(*value)
+}
+
+/// The long/circular arm of [`list_length`]: Floyd's tortoise and hare over
+/// the whole value, including the cells the short walk already counted.
+fn list_length_checked(value: Value) -> Option<usize> {
     let mut len = 0;
-    let mut tortoise = *value;
-    let mut hare = *value;
+    let mut tortoise = value;
+    let mut hare = value;
     loop {
         if hare.is_nil() {
             return Some(len);
@@ -5754,6 +5779,10 @@ pub fn list_length(value: &Value) -> Option<usize> {
         }
     }
 }
+
+/// Cells walked by [`list_length`]'s unchecked short path before it falls
+/// back to the cycle-checking walk.
+const LIST_LENGTH_SHORT_LIMIT: usize = 16;
 
 // ---------------------------------------------------------------------------
 // Display
