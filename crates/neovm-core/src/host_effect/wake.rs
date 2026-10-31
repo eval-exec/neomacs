@@ -697,16 +697,7 @@ impl NativePollLease {
                 if let Some(outcome) = registration.poll() {
                     return Ok(outcome);
                 }
-                let timeout = match deadline {
-                    ReadDeadline::Immediate => Some(std::time::Duration::ZERO),
-                    ReadDeadline::At(value) => {
-                        Some(value.saturating_duration_since(Instant::now()))
-                    }
-                    ReadDeadline::Unbounded => None,
-                };
-                if matches!(deadline, ReadDeadline::At(_))
-                    && timeout.is_some_and(|value| value.is_zero())
-                {
+                if matches!(deadline, ReadDeadline::At(value) if Instant::now() >= value) {
                     return Ok(ControlWakeOutcome::DeadlineElapsed);
                 }
                 events.clear();
@@ -724,12 +715,20 @@ impl NativePollLease {
                 }
                 #[cfg(test)]
                 self.wake.report_wait_stage();
-                let result = match deadline {
-                    ReadDeadline::At(value) => native.poller.wait_deadline(events, value),
-                    ReadDeadline::Immediate | ReadDeadline::Unbounded => {
-                        native.poller.wait(events, timeout)
+                // Keep the existing Poller::wait entry shared with ordinary
+                // input. Introducing wait_deadline creates a second caller of
+                // polling's private wait_impl and changes its fat-LTO inlining
+                // into the ordinary process wait. Derive each relative wait
+                // from the same original deadline, after rearm/final recheck;
+                // unrelated wakes never restart the requested duration.
+                let timeout = match deadline {
+                    ReadDeadline::Immediate => Some(std::time::Duration::ZERO),
+                    ReadDeadline::At(value) => {
+                        Some(value.saturating_duration_since(Instant::now()))
                     }
+                    ReadDeadline::Unbounded => None,
                 };
+                let result = native.poller.wait(events, timeout);
                 if let Err(error) = result {
                     native.health.fail();
                     return Err(error);

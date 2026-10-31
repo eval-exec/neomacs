@@ -16,7 +16,7 @@ source_paths=(
     'src/host_effect/wake/tests/native.rs'
 )
 source_hashes=(
-    'bfa33916b72a971418aeac9ca18b6c6e302dfb5b1dae1af38ec897e70decf89f'
+    '0b5a597d3b55a63185bece589f7ca3b68b4d3e97b236e4b7cebb2592832325c2'
     '74b286788d30e9903a6b91048debfd423b13efa9c05ddef28842b76181a54233'
     'b072785790ce123a989ccc60e2ac77d6bc447ac1ab4c192ade10cdb6de90e96a'
 )
