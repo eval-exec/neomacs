@@ -191,7 +191,7 @@ pub(crate) fn top_margin(window_rows: usize, scroll_margin: ScrollMargin) -> i64
 /// (GNU `scroll_margin_y`, xdisp.c:19420). Rows are 0-based, so a margin-free
 /// window of `window_rows` rows allows `window_rows - 1`.
 pub(crate) fn last_usable_row(window_rows: usize, scroll_margin: ScrollMargin) -> i64 {
-    (window_rows as i64 - 1 - top_margin(window_rows, scroll_margin)).max(0)
+    scroll_margin.last_usable_line(window_rows as i64)
 }
 
 /// Count newlines in `from..to`, stopping once `limit` is exceeded.

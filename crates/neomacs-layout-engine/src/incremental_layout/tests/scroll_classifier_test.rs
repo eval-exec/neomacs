@@ -1,6 +1,6 @@
 use super::*;
 use neomacs_display_protocol::frame_glyphs::GlyphRowRole;
-use neovm_core::window::{WindowDisplaySnapshot, WindowId};
+use neovm_core::window::{ScrollMargin, WindowDisplaySnapshot, WindowId};
 
 fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
     RetainedWindowKey {
@@ -40,6 +40,7 @@ fn synthetic_key(window_start: i64, point: i64) -> RetainedWindowKey {
         selective_display: 0,
         selected: true,
         scroll_margin: Default::default(),
+        viewport_rows: 5,
         cursor_role: crate::types::WindowCursorRole::Active,
         show_trailing_whitespace: false,
         trailing_ws_bg: 0,
@@ -178,6 +179,27 @@ fn forced_start_reuse_still_rejects_a_point_move_into_a_clipped_bottom_row() {
             .cursor_only_replay_with_forced_start(&current, true)
             .err(),
         Some(CursorOnlyDecline::PointMoveMayScrollDown)
+    );
+}
+
+/// GNU computes the margin from the window's height, not from the rows a walk
+/// emitted: a window near end-of-buffer can hold fewer body rows than its
+/// viewport capacity, and the margin must not shrink with them
+/// (window_scroll_margin, src/window.c:6216).
+#[test]
+fn cursor_replay_margin_uses_viewport_capacity_not_emitted_rows() {
+    // Five emitted rows (100..149) in a 20-row viewport.
+    let mut retained = synthetic_matrix(100, 5);
+    retained.key.window_start = 100;
+    retained.key.buffer_begv = 0;
+    retained.key.viewport_rows = 20;
+    retained.key.scroll_margin = ScrollMargin::from_lisp_values(6, Some(0.5));
+    let mut current = retained.key.clone();
+    current.point = 125; // third emitted row, inside the six-row top margin
+    assert_eq!(
+        retained.cursor_only_replay(&current).err(),
+        Some(CursorOnlyDecline::PointMoveMayScrollUp),
+        "a 20-row viewport keeps a six-line margin even when only five rows were emitted"
     );
 }
 

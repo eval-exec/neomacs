@@ -199,6 +199,18 @@ impl BufferWindowGeometryRequest {
         self.base_max_rows()
     }
 
+    /// Row capacity of the physical viewport for this window, i.e. the
+    /// `max_rows` a presentation walk can emit — GNU's
+    /// `window_box_height / frame_line_height` basis for `window_scroll_margin`
+    /// (src/window.c:6216), including a partially visible GUI bottom row.
+    ///
+    /// This is deliberately independent of how many rows a walk actually
+    /// emitted: near end-of-buffer a window may hold fewer rows than its
+    /// viewport can display, and the scroll margin must not shrink with them.
+    pub(crate) fn viewport_rows(params: &WindowParams, layout_box: &WindowLayoutBox) -> usize {
+        Self::new(params, layout_box, params.char_width, params.char_height).visible_max_rows()
+    }
+
     pub(crate) fn into_geometry(
         self,
         line_number_field: LineNumberFieldLayout,
