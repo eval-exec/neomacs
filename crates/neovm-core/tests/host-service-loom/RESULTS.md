@@ -17,3 +17,22 @@ proof, not a proof of production RootBatch registration, heap retention, actual
 channel atomics, panic/fail-stop behavior, hosted activation or host wakeups.
 The adjacent production-source transport harness separately exercises the
 actual crossbeam FIFO and OS actors, including under ThreadSanitizer.
+
+The new cut-1 `wake` target is **NOT RUN; parent integration pending**. It adds
+four positive histories and four named mutation controls. The existing **14/14**
+receipt above applies only to `protocol`; it is not a receipt for `wake`.
+
+Pending command:
+
+```sh
+cargo nextest run \
+  --manifest-path crates/neovm-core/tests/host-service-loom/Cargo.toml \
+  --test wake --test-threads 1 --retries 0
+```
+
+The wake builder uses at most four threads, two preemptions and 256 branches
+per execution with no duration/permutation truncation. Its separate history
+checker covers final durable recheck, independent destination epochs, exclusive
+polling lease and session retirement. This abstract model does not import
+production std atomics, execute a native wait, or prove production socket,
+condvar, TSan, census or hosted-admission behavior.

@@ -132,6 +132,25 @@ impl GreenRuntime {
     }
 }
 
+/// Cold scheduling selection, not a Lisp-visible error. A refused World uses
+/// the existing ordinary thread implementation and never issues a Baton.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GreenAdmissionRefusal {
+    NativeReadinessUnavailable {
+        cause: crate::host_effect::wake::NativeReadinessCause,
+    },
+}
+
+/// Thread startup additionally requires native readiness. The lower keeper
+/// constructor's errors remain unchanged for serial collection/parallel owners.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GreenThreadStartError {
+    #[error("green native readiness is unavailable: {0:?}")]
+    Admission(GreenAdmissionRefusal),
+    #[error(transparent)]
+    Runtime(#[from] GreenStartError),
+}
+
 /// Why the Green runtime could not start, or a Green operation refused.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GreenStartError {
@@ -150,6 +169,18 @@ pub(crate) enum GreenStartError {
 }
 
 impl Context {
+    #[cold]
+    pub(crate) fn green_admission_readiness(&self) -> Result<(), GreenAdmissionRefusal> {
+        self.processes.green_native_readiness().map_err(|cause| {
+            self.processes.observe_green_admission_refusal(|cause| {
+                let refusal = GreenAdmissionRefusal::NativeReadinessUnavailable { cause };
+                tracing::warn!(target: "neovm::green::admission", ?refusal,
+                    "Green admission refused; retaining ordinary Lisp threads");
+            });
+            GreenAdmissionRefusal::NativeReadinessUnavailable { cause }
+        })
+    }
+
     /// Start this World's Green runtime from its first owner: admit
     /// threads, capture the bootstrap further owners are built from, and
     /// issue the World's Baton to this thread. Refused unless the World is

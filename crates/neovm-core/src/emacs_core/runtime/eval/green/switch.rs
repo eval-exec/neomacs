@@ -8,7 +8,7 @@
 use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
 use super::host_service::{self, NativeSettlement, PreparedHostCall, RestoredHostOwner};
-use super::scheduler::{Control, Handoff, Lifecycle, Peers, ServiceReturn, ThreadKey, Wait, Wake};
+use super::scheduler::{Control, Handoff, Lifecycle, ServiceReturn, ThreadKey, Wait, Wake};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
@@ -17,13 +17,7 @@ use crate::tagged::gc::MarkPhase;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-/// How a `thread_select` wait went ([`Context::green_select_switch`]).
-pub(crate) enum SelectTurn {
-    /// This thread gave the Baton up until input, a scheduler event, or its deadline.
-    Switched,
-    /// This thread blocks itself for this long.
-    Block(Duration),
-}
+pub(crate) use crate::host_effect::wake::SelectTurn;
 
 /// Waits that gave the Baton up (tests read it).
 #[cfg(test)]
@@ -551,9 +545,9 @@ impl Context {
 
     /// GNU `thread_select`: how a wait of WAIT_TIME for input or a
     /// deadline shares the Baton.
-    /// With a ready peer this owner parks until input, a scheduler event,
-    /// or WAIT_TIME, with no slices. With no ready peer it uses the existing
-    /// wait backend, clipped to the earliest peer's absolute deadline.
+    /// Every permitted positive wait publishes and parks, even with no ready
+    /// peer: GNU releases its global lock before select in that case too.
+    /// The idle scheduler observes owned native readiness and the deadline.
     /// Outside Green, at zero timeout, or where switching is refused, the
     /// existing wait backend remains responsible for the block.
     pub(crate) fn green_select_switch(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
@@ -566,33 +560,28 @@ impl Context {
     #[cold]
     #[inline(never)]
     fn green_select_turn(&mut self, wait_time: Duration) -> Result<SelectTurn, Flow> {
-        let seat = self.green_seat().expect("seated");
-        let key = seat.key;
-        let control = Arc::clone(&seat.control);
         if wait_time.is_zero() || switch_refusal(self).is_some() {
             return Ok(SelectTurn::Block(wait_time));
         }
-        let now = Instant::now();
-        match control.peers(key, now) {
-            Peers::Ready => {
-                #[cfg(test)]
-                control
-                    .prepare_select_park_for_test(key, &self.processes)
-                    .map_err(|error| {
-                        signal(LispCondition::Error, vec![Value::string(error.to_string())])
-                    })?;
-                #[cfg(test)]
-                SELECT_PARKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                self.green_wait(Wait::Select {
-                    wait_end: now + wait_time,
-                })?;
-                Ok(SelectTurn::Switched)
-            }
-            Peers::Sleeping(deadline) => Ok(SelectTurn::Block(
-                wait_time.min(deadline.saturating_duration_since(now)),
-            )),
-            Peers::Blocked => Ok(SelectTurn::Block(wait_time)),
-        }
+        #[cfg(test)]
+        let (key, control) = {
+            let seat = self.green_seat().expect("seated");
+            (seat.key, Arc::clone(&seat.control))
+        };
+        let wait_end = Instant::now() + wait_time;
+        // GNU really_call_select releases the global lock even when no peer
+        // is ready. Publish this owner before the scheduler's native wait so
+        // a later control publication can wake it without needing the Baton.
+        #[cfg(test)]
+        control
+            .prepare_select_park_for_test(key, &self.processes)
+            .map_err(|error| {
+                signal(LispCondition::Error, vec![Value::string(error.to_string())])
+            })?;
+        #[cfg(test)]
+        SELECT_PARKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.green_wait(Wait::Select { wait_end })?;
+        Ok(SelectTurn::Switched)
     }
 
     /// Yield only when another owner can run. A sleeping selector remains
@@ -833,7 +822,9 @@ impl Context {
     /// Start the Green runtime and seat this owner as its main thread.
     #[cold]
     #[inline(never)]
-    pub(crate) fn start_green_threads(&mut self) -> Result<(), super::GreenStartError> {
+    pub(crate) fn start_green_threads(&mut self) -> Result<(), super::GreenThreadStartError> {
+        self.green_admission_readiness()
+            .map_err(super::GreenThreadStartError::Admission)?;
         let baton = self.start_green_runtime()?;
         // The main carrier runs Lisp on this OS thread; reserve its dense
         // SymId/NameId caches as worker owners do on creation.

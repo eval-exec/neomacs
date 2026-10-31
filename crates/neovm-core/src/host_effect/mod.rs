@@ -5,3 +5,5 @@
 //! stages. No owner provenance or host service can be constructed here.
 
 pub mod contracts;
+
+pub(crate) mod wake;

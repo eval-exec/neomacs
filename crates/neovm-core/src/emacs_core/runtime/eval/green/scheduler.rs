@@ -399,6 +399,20 @@ impl Control {
         }
     }
 
+    pub(super) fn nudge_main_mailbox(&self) {
+        self.nudge_main(crate::host_effect::wake::ControlNudge::MainMailboxReady);
+    }
+
+    fn nudge_main(&self, reason: crate::host_effect::wake::ControlNudge) {
+        self.metadata_changed.notify_all();
+        if let Some(Some(select)) = self.select.get() {
+            select.nudge(
+                crate::host_effect::wake::ControlDestination::NativeMain,
+                reason,
+            );
+        }
+    }
+
     fn state(&self) -> MutexGuard<'_, ControlState> {
         // Every update is a few map/queue operations that leave the state
         // consistent; a panic while holding the lock cannot tear it.
@@ -535,6 +549,8 @@ impl Control {
             }
             Some(OwnerLocation::NativeReleased) => {
                 state.pending_services.push_back(slice.key);
+                drop(state);
+                self.nudge_main(crate::host_effect::wake::ControlNudge::HostServiceReady);
                 Ok(ServiceTransfer::Queued(baton))
             }
             Some(OwnerLocation::Running | OwnerLocation::Serving(_)) | None => {
@@ -1448,6 +1464,14 @@ impl Control {
     /// Baton stays local and no World cell is read during this OS wait.
     fn pick_next(&self) -> Option<NextOwner> {
         loop {
+            // Register BEFORE checking scheduler predicates. A transition
+            // between this check and the OS block advances the same snapshot;
+            // arming after dropping state would discard that durable nudge.
+            let registration = self
+                .select
+                .get()
+                .and_then(Option::as_ref)
+                .map(GreenSelectHandle::arm);
             let deadline = {
                 let mut state = self.state();
                 if state
@@ -1490,7 +1514,11 @@ impl Control {
                 }
             };
             let activity = if let Some(Some(select)) = self.select.get() {
-                select.wait_until(deadline)
+                match &registration {
+                    Some(Ok(registration)) => select.wait_registered(registration, deadline),
+                    Some(Err(_)) => true,
+                    None => false,
+                }
             } else {
                 let mut state = self.state();
                 // Recheck under the same lock used by the notifier: an acquire

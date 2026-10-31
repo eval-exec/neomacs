@@ -18,3 +18,7 @@ opt-level = 1
 [[test]]
 name = "protocol"
 path = "tests/protocol.rs"
+
+[[test]]
+name = "wake"
+path = "tests/wake.rs"

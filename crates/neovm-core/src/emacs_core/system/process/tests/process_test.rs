@@ -17467,3 +17467,39 @@ fn deinitializing_pending_tls_wakes_the_negotiation_owner() {
     ));
     assert_eq!(result, "OK (closed t)");
 }
+
+#[test]
+fn temporary_green_select_capture_does_not_retire_the_backend() {
+    use crate::host_effect::wake::{ControlNudge, ControlWakeOutcome};
+    let manager = ProcessManager::new();
+    drop(manager.green_select_handle());
+    let selector = manager
+        .green_select_handle()
+        .expect("backend control observer");
+    let registration = selector
+        .arm()
+        .expect("temporary capture did not retire backend");
+    selector.notify();
+    assert_eq!(
+        registration.poll(),
+        Some(ControlWakeOutcome::ControlReady(
+            ControlNudge::HostServiceReady
+        ))
+    );
+}
+
+#[test]
+fn backend_retirement_closes_surviving_green_control_observers() {
+    use crate::host_effect::wake::{ControlWakeOutcome, HostClosure};
+    let manager = ProcessManager::new();
+    let selector = manager
+        .green_select_handle()
+        .expect("backend control observer");
+    let registration = selector.arm().expect("live backend");
+    drop(manager);
+    assert_eq!(
+        registration.poll(),
+        Some(ControlWakeOutcome::HostClosed(HostClosure::RetiredSession))
+    );
+    assert!(matches!(selector.arm(), Err(HostClosure::RetiredSession)));
+}

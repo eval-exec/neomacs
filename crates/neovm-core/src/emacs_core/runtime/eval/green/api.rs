@@ -101,6 +101,7 @@ impl Context {
         if matches!(control.wait_of(main), Some(Wait::Select { .. })) {
             control.wake(main);
         }
+        control.nudge_main_mailbox();
     }
 
     /// `(mutex-lock MUTEX)` (GNU `Fmutex_lock`): take mutex ID, waiting
@@ -238,4 +239,5 @@ pub(crate) fn green_make_thread(ctx: &mut Context, args: &[Value]) -> EvalResult
 /// Whether `make-thread` takes the Green path: the World is Green.
 pub(crate) fn green_world(ctx: &Context) -> bool {
     ctx.threading_mode() == super::super::ThreadingMode::Green
+        && ctx.green_admission_readiness().is_ok()
 }

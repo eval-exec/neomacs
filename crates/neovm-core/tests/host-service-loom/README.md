@@ -39,6 +39,38 @@ branch-limit failure or unrelated panic cannot satisfy a negative control.
 These are executable counterexample controls, not ignored or `should_panic`
 tests.
 
+The separate `tests/wake.rs` target adds four positive cases and four negative
+controls for cut 1. **Execution status: NOT RUN; parent integration pending.**
+It is an abstract contract model, with its own Loom mutex and channels; it does
+not import `host_effect/wake.rs` or substitute Loom primitives into production
+`std` synchronization. Its independent history replay checks:
+
+- registration and physical rearm precede the final durable predicate check;
+  publication races before, between and after these steps;
+- scheduler consumption of a physical hint preserves main's independent epoch;
+- main and scheduler cannot simultaneously hold the physical polling lease;
+- retired session allocation rejects late registration/publication while a
+  replacement allocation remains independent.
+
+The named mutations are `NoFinalPredicateRecheck`,
+`SchedulerConsumesMainNudge`, `ConcurrentPollerWaiters` and
+`IgnoreClosedSession`. Each must produce the same invariant diagnostic used by
+the positive history checker. Deadlock, branch exhaustion and unrelated panics
+are rejected as negative witnesses. Exploration uses at most four threads,
+two preemptions and 256 branches per execution, with no duration/permutation
+truncation. Blocking channels order the epoch-drain and overlapping-lease
+witnesses; no spin loop or elapsed-time assumption supplies progress.
+
+This wake model represents physical arm as a history event. It does not perform
+an OS wait, model an actual condvar unlock, prove kernel/socket rearm or closure
+behavior, validate production atomics, establish fairness or prove progress after
+an arbitrary number of spurious wakes. Its durable predicate is monotonic within
+one obligation per destination; it does not model consumption/reuse, epoch
+overflow, generation reuse, cancellation policy, or pending native requests.
+The production wait-path tests, failure controls, TSan and frozen census remain
+separate gates. Run this new target with `--test wake` in the command below;
+`--test protocol --test wake` selects both targets.
+
 | Mutation | Required rejected history |
 | --- | --- |
 | `PublishBeforePark` | request visible before its parked roots |

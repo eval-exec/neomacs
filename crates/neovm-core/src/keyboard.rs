@@ -6257,7 +6257,13 @@ impl crate::emacs_core::eval::Context {
                 .min();
                 if let Some(timer_timeout) = next_timer_timeout {
                     if !timer_timeout.is_zero() {
-                        std::thread::sleep(timer_timeout.min(std::time::Duration::from_millis(50)));
+                        let timeout = timer_timeout.min(std::time::Duration::from_millis(50));
+                        match self.green_select_switch(timeout)? {
+                            crate::host_effect::wake::SelectTurn::Switched => {}
+                            crate::host_effect::wake::SelectTurn::Block(timeout) => {
+                                std::thread::sleep(timeout);
+                            }
+                        }
                     }
                     self.service_timers_without_redisplay()?;
                     continue;

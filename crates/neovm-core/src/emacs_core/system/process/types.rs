@@ -4,6 +4,9 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::host_effect::wake::{
+    ControlDestination, ControlNudge, ControlNudgeOutcome, NotificationLatch,
+};
 use crate::tagged::value::SymbolMode;
 
 /// Unique identifier for a process.
@@ -1026,15 +1029,28 @@ impl Drop for StderrPipeWriterTransfer<'_> {
 #[derive(Clone)]
 pub struct WaitNotifier {
     pub(super) poller: Arc<polling::Poller>,
-    pub(super) notification_pending: Arc<AtomicBool>,
+    pub(super) notification_pending: Arc<NotificationLatch>,
 }
 
 impl WaitNotifier {
-    pub(super) fn new(poller: Arc<polling::Poller>, notification_pending: Arc<AtomicBool>) -> Self {
+    pub(super) fn new(
+        poller: Arc<polling::Poller>,
+        notification_pending: Arc<NotificationLatch>,
+    ) -> Self {
         Self {
             poller,
             notification_pending,
         }
+    }
+
+    /// Metadata-only notification. The caller publishes its durable request
+    /// before this hint; failed wakeup never returns an accepted obligation.
+    pub(crate) fn nudge_control(
+        &self,
+        destination: ControlDestination,
+        reason: ControlNudge,
+    ) -> ControlNudgeOutcome {
+        self.notification_pending.nudge(destination, reason)
     }
 
     /// Wake the current (or next) `poller.wait()` so the evaluator services
@@ -1049,6 +1065,8 @@ impl WaitNotifier {
         self.poller.notify()
     }
 }
+
+static_assertions::assert_eq_size!(WaitNotifier, [usize; 2]);
 
 /// Refusal to observe this fixture's actual pending TCP owner state.
 #[cfg(test)]
@@ -1158,8 +1176,19 @@ pub(super) struct ProcessWaitBackend {
     ///
     /// A bool is sufficient because notifications are coalescing readiness,
     /// not a count: one wake tells the evaluator to service published work.
-    pub(super) notification_pending: Arc<AtomicBool>,
+    pub(super) notification_pending: Arc<NotificationLatch>,
 }
+
+// Frozen x86-64 Linux baseline: replacing only the Arc pointee must not
+// enlarge the process manager reserved inside Context/World storage.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", not(test)))]
+static_assertions::const_assert_eq!(std::mem::size_of::<ProcessWaitBackend>(), 24);
+#[cfg(all(target_arch = "x86_64", target_os = "linux", not(test)))]
+static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 200);
+#[cfg(all(target_arch = "x86_64", target_os = "linux", test))]
+static_assertions::const_assert_eq!(std::mem::size_of::<ProcessWaitBackend>(), 88);
+#[cfg(all(target_arch = "x86_64", target_os = "linux", test))]
+static_assertions::const_assert_eq!(std::mem::size_of::<ProcessManager>(), 264);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProcessWaitBackendInterest {
@@ -1249,6 +1278,16 @@ impl ProcessWaitBackendInterest {
     }
 }
 
+// The process backend is the control source's lifetime authority. A notifier
+// or temporary Green selector may outlive it, but cannot reopen its session.
+impl Drop for ProcessWaitBackend {
+    fn drop(&mut self) {
+        if let Some(wake) = self.notification_pending.control() {
+            wake.retire();
+        }
+    }
+}
+
 impl ProcessWaitBackend {
     pub(super) fn new() -> Self {
         // Miri implements no `timerfd_create`, which `polling::Poller::new`
@@ -1277,7 +1316,7 @@ impl ProcessWaitBackend {
             native_connect_observer: NativeConnectObservationSlot::default(),
             #[cfg(unix)]
             signal_fd,
-            notification_pending: Arc::new(AtomicBool::new(false)),
+            notification_pending: Arc::new(NotificationLatch::new()),
         }
     }
 
@@ -6945,6 +6984,10 @@ impl ProcessManager {
     /// publishing work. `None` if no poller could be created.
     pub(crate) fn wait_notifier(&self) -> Option<WaitNotifier> {
         self.wait_backend.notify_handle()
+    }
+
+    pub(crate) fn host_control_latch(&self) -> Arc<NotificationLatch> {
+        Arc::clone(&self.wait_backend.notification_pending)
     }
 
     #[cfg(test)]

@@ -6,6 +6,9 @@
 
 use crate::emacs_core::Context;
 use crate::emacs_core::process::WaitNotifier;
+use crate::host_effect::wake::{
+    ControlDestination, ControlNudge, ControlNudgeOutcome, HostSessionControl,
+};
 use crate::keyboard::InputEvent;
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::Arc;
@@ -88,15 +91,55 @@ pub enum HostInputPublishError {
 
 /// Declaration order is the disconnect protocol: retire the sender first,
 /// then wake so a blocked reader can observe closure after its buffered tail.
+#[repr(C)]
 struct PublisherConnection {
     sender: Sender<InputEvent>,
     disconnect_wake: DisconnectWake,
 }
 
-struct DisconnectWake(InputWake);
+#[repr(C)]
+struct DisconnectWake(InputWake, Option<HostSessionControl>);
+
+// Compare the original Rust layouts, before adding cold attachment storage.
+// Field placement is part of the frozen publication-code contract.
+struct FrozenPublisherConnection {
+    sender: Sender<InputEvent>,
+    disconnect_wake: FrozenDisconnectWake,
+}
+struct FrozenDisconnectWake(InputWake);
+
+const _: () = {
+    assert!(
+        std::mem::offset_of!(PublisherConnection, sender)
+            == std::mem::offset_of!(FrozenPublisherConnection, sender)
+    );
+    assert!(
+        std::mem::offset_of!(PublisherConnection, disconnect_wake)
+            == std::mem::offset_of!(FrozenPublisherConnection, disconnect_wake)
+    );
+    assert!(
+        std::mem::offset_of!(DisconnectWake, 0) == std::mem::offset_of!(FrozenDisconnectWake, 0)
+    );
+};
 
 impl Drop for DisconnectWake {
     fn drop(&mut self) {
+        if let Some(session) = &self.1 {
+            let outcomes = session.disconnect();
+            // Replacement has already discarded this connection's receiver.
+            // Its stale final drop must not notify the successor's backend.
+            if outcomes
+                .iter()
+                .all(|outcome| matches!(outcome, ControlNudgeOutcome::RetiredSession))
+            {
+                return;
+            }
+            for outcome in outcomes {
+                if let ControlNudgeOutcome::WakeFailedAfterPublication(error) = outcome {
+                    tracing::warn!(%error, "control disconnect wake failed after sender retirement");
+                }
+            }
+        }
         if let Err(error) = self.0.notify().into_result() {
             tracing::warn!(%error, "failed to wake evaluator for host input disconnect");
         }
@@ -231,11 +274,12 @@ impl HostInputPublisher {
     /// Replacing a connection discards its unread channel tail; already-staged
     /// Context events remain queued. Old publishers stay on the retired queue.
     pub fn install(context: &mut Context) -> Self {
+        let session = context.processes.attach_host_control_session();
         let wake = match context.wait_notifier() {
             Some(notifier) => InputWake::Native(notifier),
             None => InputWake::ChannelFallback,
         };
-        let (publisher, receiver) = Self::channel(wake);
+        let (publisher, receiver) = Self::channel_with_session(wake, Some(session));
         context.input_rx = HostInputReceiver(Some(receiver));
         publisher
     }
@@ -249,14 +293,30 @@ impl HostInputPublisher {
     }
 
     fn channel(wake: InputWake) -> (Self, Receiver<InputEvent>) {
+        Self::channel_with_session(wake, None)
+    }
+
+    fn channel_with_session(
+        wake: InputWake,
+        session: Option<HostSessionControl>,
+    ) -> (Self, Receiver<InputEvent>) {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let publisher = Self {
             connection: Arc::new(PublisherConnection {
                 sender,
-                disconnect_wake: DisconnectWake(wake),
+                disconnect_wake: DisconnectWake(wake, session),
             }),
         };
         (publisher, receiver)
+    }
+
+    /// Wake the main host's control observer without publishing keyboard input.
+    /// The scheduler or target mailbox remains the sole durable predicate.
+    pub(crate) fn nudge_control(&self, reason: ControlNudge) -> ControlNudgeOutcome {
+        match &self.connection.disconnect_wake.1 {
+            Some(session) => session.nudge(ControlDestination::NativeMain, reason),
+            None => ControlNudgeOutcome::RetiredSession,
+        }
     }
 
     /// Enqueue one event, then wake the receiving evaluator.

@@ -1,0 +1,18 @@
+[package]
+name = "host-wake-transport"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Instrument the production wake owner without compiling evaluator/JIT code.
+[workspace]
+
+[dependencies]
+polling = "=3.11.0"
+static_assertions = "=1.1.0"
+
+[[test]]
+name = "wake"
+path = "tests/wake.rs"

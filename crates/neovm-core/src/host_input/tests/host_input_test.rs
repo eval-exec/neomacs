@@ -598,3 +598,157 @@ fn no_poller_channel_fallback_delivers_without_a_separate_wake_backend() {
         Err(TryRecvError::Disconnected)
     ));
 }
+
+#[test]
+fn control_nudge_is_value_free_and_uses_the_receiving_owner_session() {
+    use crate::host_effect::wake::{ControlWake, ControlWakeOutcome};
+    let (wake, _) = ControlWake::paired();
+    let (publisher, receiver) = HostInputPublisher::channel_with_session(
+        InputWake::ChannelFallback,
+        Some(wake.attach_host_session()),
+    );
+    let wait = wake.arm(ControlDestination::NativeMain).unwrap();
+    assert!(matches!(
+        publisher.nudge_control(ControlNudge::MainMailboxReady),
+        ControlNudgeOutcome::Notified
+    ));
+    assert_eq!(
+        wait.poll(),
+        Some(ControlWakeOutcome::ControlReady(
+            ControlNudge::MainMailboxReady
+        ))
+    );
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(crossbeam_channel::TryRecvError::Empty)
+    ));
+    wake.retire();
+    assert!(matches!(
+        publisher.nudge_control(ControlNudge::MainMailboxReady),
+        ControlNudgeOutcome::RetiredSession
+    ));
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(crossbeam_channel::TryRecvError::Empty)
+    ));
+}
+
+#[test]
+fn replacement_rejects_old_control_nudges_and_old_disconnect_without_waking_successor() {
+    use crate::host_effect::wake::ControlWakeOutcome;
+    let mut context = Context::new();
+    let old = HostInputPublisher::install(&mut context);
+    let latch = context.processes.host_control_latch();
+    let wake = Arc::clone(latch.control().expect("host session owns a control source"));
+    let current = HostInputPublisher::install(&mut context);
+    let main = wake.arm(ControlDestination::NativeMain).unwrap();
+    let idle = wake.arm(ControlDestination::IdleScheduler).unwrap();
+    assert!(matches!(
+        old.nudge_control(ControlNudge::MainMailboxReady),
+        ControlNudgeOutcome::RetiredSession
+    ));
+    assert!(main.poll().is_none());
+    assert!(idle.poll().is_none());
+    // The stale disconnect must also avoid the ordinary input bit/notify;
+    // unchanged native notify code is reserved for the current connection.
+    latch.swap(false, Ordering::AcqRel);
+    drop(old);
+    assert!(!latch.load(Ordering::Acquire));
+    assert!(main.poll().is_none());
+    assert!(idle.poll().is_none());
+    assert!(matches!(
+        current.nudge_control(ControlNudge::MainMailboxReady),
+        ControlNudgeOutcome::Notified
+    ));
+    assert_eq!(
+        main.poll(),
+        Some(ControlWakeOutcome::ControlReady(
+            ControlNudge::MainMailboxReady
+        ))
+    );
+    assert!(matches!(
+        context.receive_host_input_for_test(Duration::ZERO),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout)
+    ));
+}
+
+#[test]
+fn explicit_host_session_revocation_preserves_backend_control_and_input_installation() {
+    use crate::host_effect::wake::ControlWakeOutcome;
+    let mut context = Context::new();
+    let publisher = HostInputPublisher::install(&mut context);
+    let latch = context.processes.host_control_latch();
+    let wake = Arc::clone(latch.control().expect("host session owns a control source"));
+    context.processes.revoke_host_control_session();
+    let registration = wake.arm(ControlDestination::NativeMain).unwrap();
+    assert!(matches!(
+        publisher.nudge_control(ControlNudge::Cancellation),
+        ControlNudgeOutcome::RetiredSession
+    ));
+    assert!(registration.poll().is_none());
+    assert!(matches!(
+        wake.handle().nudge(
+            ControlDestination::NativeMain,
+            ControlNudge::HostServiceReady
+        ),
+        ControlNudgeOutcome::Notified
+    ));
+    assert_eq!(
+        registration.poll(),
+        Some(ControlWakeOutcome::ControlReady(
+            ControlNudge::HostServiceReady
+        ))
+    );
+    publisher
+        .send(key('r'))
+        .expect("revocation does not disable physical input");
+    assert_key(
+        context.receive_host_input_for_test(Duration::ZERO).unwrap(),
+        'r',
+    );
+}
+
+#[test]
+fn final_current_connection_drop_wakes_both_destinations_and_revokes_only_its_session() {
+    use crate::host_effect::wake::{ControlWake, ControlWakeOutcome};
+    let (wake, _) = ControlWake::paired();
+    let session = wake.attach_host_session();
+    let retained_session = session.clone();
+    let (publisher, receiver) =
+        HostInputPublisher::channel_with_session(InputWake::ChannelFallback, Some(session));
+    let main = wake.arm(ControlDestination::NativeMain).unwrap();
+    let idle = wake.arm(ControlDestination::IdleScheduler).unwrap();
+    drop(publisher);
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(TryRecvError::Disconnected)
+    ));
+    assert_eq!(
+        main.poll(),
+        Some(ControlWakeOutcome::ControlReady(ControlNudge::HostClosing))
+    );
+    assert_eq!(
+        idle.poll(),
+        Some(ControlWakeOutcome::ControlReady(ControlNudge::HostClosing))
+    );
+    assert!(matches!(
+        retained_session.nudge(
+            ControlDestination::NativeMain,
+            ControlNudge::MainMailboxReady
+        ),
+        ControlNudgeOutcome::RetiredSession
+    ));
+    let successor = wake.attach_host_session();
+    let successor_wait = wake.arm(ControlDestination::NativeMain).unwrap();
+    for outcome in retained_session.disconnect() {
+        assert!(matches!(outcome, ControlNudgeOutcome::RetiredSession));
+    }
+    assert!(successor_wait.poll().is_none());
+    assert!(matches!(
+        successor.nudge(
+            ControlDestination::NativeMain,
+            ControlNudge::MainMailboxReady
+        ),
+        ControlNudgeOutcome::Notified
+    ));
+}
