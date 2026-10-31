@@ -608,6 +608,35 @@ impl TaggedHeap {
         self.value_is_tenured(value)
     }
 
+    /// Test hook: the owner's remembered fact lives in the persistent set
+    /// (`mapped_remembered`, or its GEN1 mutator staging `r_mapped_seen`).
+    /// Only a mapped address or a permanent (image-resident) owner enters it.
+    pub(crate) fn is_persistently_remembered_for_test(&self, owner: TaggedValue) -> bool {
+        self.mapped_remembered.contains(&owner.bits())
+            || (self.generational.enabled
+                && self
+                    .mutators()
+                    .any(|mutator| mutator.r_mapped_seen.contains(&owner.bits())))
+    }
+
+    /// Test hook: the owner was claimed into a mutator remembered log
+    /// (`remset`, drained into `r_seed` at a collection boundary). Ordinary
+    /// old owners are remembered only this way.
+    pub(crate) fn is_claimed_remembered_for_test(&self, owner: TaggedValue) -> bool {
+        self.generational.enabled
+            && (self
+                .generational
+                .r_seed
+                .iter()
+                .any(|value| value.bits() == owner.bits())
+                || self.mutators().any(|mutator| {
+                    mutator
+                        .remset
+                        .iter()
+                        .any(|value| value.bits() == owner.bits())
+                }))
+    }
+
     /// Test hook: the window compiled code tests (`JitHeapState`).
     pub(crate) fn jit_barrier_window_for_test(&self) -> BarrierWindow {
         self.jit.barrier_window()

@@ -171,7 +171,14 @@ fn gen0_inline_slot_tenured_immediates_outside_window_keep_bookkeeping() {
     let image = FakeImage::leak(false);
     image.register_cons(&mut heap);
     let vector = heap.alloc_vector(vec![TaggedValue::NIL]);
-    make_tenured_vector(vector);
+    // GEN0 has no old generation for runtime allocations: the only tenured
+    // owner there is a loader-stamped image resident. Stamp the row and let
+    // the first partition cycle make it permanent; it stays outside the dump
+    // span, so the inline store still takes the remembered gate.
+    assert_eq!(heap.note_image_object(vector), ImageStamp::Stamped);
+    heap.collect_exact(std::iter::once(vector));
+    assert!(heap.is_tenured_for_test(vector));
+    assert!(!heap.is_remembered_for_test(vector));
     assert!(!heap.barrier_window().covers(vector.bits() & !TAG_MASK));
     assert!(set_vector_slot(vector, 0, TaggedValue::fixnum(47)));
     assert!(heap.mapped_remembered.contains(&vector.bits()));

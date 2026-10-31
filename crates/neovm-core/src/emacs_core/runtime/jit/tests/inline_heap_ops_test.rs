@@ -74,6 +74,60 @@ fn legacy_context() -> Context {
     crate::test_utils::with_legacy_gc(Context::new)
 }
 
+/// A GEN1 evaluator whose collection pacing is out of the way until a test
+/// asks for one minor.
+fn generational_context() -> Context {
+    // Nextest runs each test in a separate process. Select the constructor
+    // knob before creating the heap, and restore the environment afterward:
+    // compilation must read this heap's immutable setting, not the variable.
+    struct RestoreKnob(Option<std::ffi::OsString>);
+    impl Drop for RestoreKnob {
+        fn drop(&mut self) {
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var("NEOVM_GC_GENERATIONAL", previous),
+                    None => std::env::remove_var("NEOVM_GC_GENERATIONAL"),
+                }
+            }
+        }
+    }
+    let mut context = {
+        let _restore = RestoreKnob(std::env::var_os("NEOVM_GC_GENERATIONAL"));
+        // SAFETY: the process is single-threaded here and the heap reads this
+        // knob at construction.
+        unsafe { std::env::set_var("NEOVM_GC_GENERATIONAL", "1") };
+        Context::new()
+    };
+    context.gc_stress = false;
+    context.tagged_heap.set_gc_threshold(usize::MAX);
+    assert!(context.tagged_heap.generational_enabled());
+    context.gc_collect_exact();
+    context
+}
+
+/// Run one real minor collection through the evaluator's safe point. GEN1's
+/// eager promotion turns every young survivor of it into an ordinary-old
+/// object; that is the production tenure path after the weak-key partition
+/// change. The evaluator roots keep the test's owners alive across it.
+fn minor_collection(context: &mut Context) {
+    assert!(context.tagged_heap.should_run_minor(false, false));
+    let before = context.gc_count;
+    context.tagged_heap.set_gc_threshold(1);
+    // Charge a disposable cell so this real safe point starts the next cycle.
+    let _ = Value::cons(Value::T, Value::NIL);
+    for _ in 0..10_000 {
+        context.gc_safe_point();
+        assert!(!context.tagged_heap.concurrent_mark_running());
+        if context.gc_count != before {
+            assert_eq!(context.gc_count, before + 1);
+            assert!(!context.tagged_heap.sweep_in_progress());
+            context.tagged_heap.set_gc_threshold(usize::MAX);
+            return;
+        }
+    }
+    panic!("safe-point minor did not finish");
+}
+
 fn shim_calls() -> usize {
     super::dispatch::LIST_STORE_SHIM_CALLS.with(|c| c.get())
 }
@@ -906,28 +960,44 @@ fn function_cell_writes_do_not_regate_inline_aset() {
     eval.eval_str("(fset 'aset aset-orig)").expect("restore");
 }
 
-/// Tenured owners (a partitioned heap after its first cycle): an owner the
-/// remembered set lacks goes to the shim once, whose barrier remembers it;
-/// from then on its stores are inline. An image vector (in the window, and
-/// mapped storage a store must copy) always goes to the shim.
+/// Tenured owners: a tenured non-image owner the remembered set lacks goes to
+/// the shim once, whose barrier remembers it; from then on its stores are
+/// inline. An image vector (in the window, and mapped storage a store must
+/// copy) always goes to the shim.
+///
+/// Both tenured kinds are covered. A (a vector) is a loader-stamped image
+/// resident: the fake image's first partition cycle makes it permanent. B (a
+/// record) is a runtime allocation tenured through GEN1's real ageing path: a
+/// minor collection promotes every young survivor eagerly. The remembered
+/// routes differ and are asserted: the permanent owner enters the persistent
+/// set, the ordinary-old owner only the claimed remembered log.
 #[test]
 fn tenured_owners_store_inline_once_remembered() {
-    let mut eval = legacy_context();
+    let mut eval = generational_context();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
-    // The owners exist (and are reachable) before a fake image turns the
-    // dump partition on, so whichever collection runs the partition's first
-    // cycle — the explicit one below, or under GC stress an earlier safe
-    // point — tenures them. The image vector's slots are mapped storage.
-    eval.eval_str("(setq aset-old-a (vector 1 2 3) aset-old-b (record 'r 1 2))")
-        .expect("owners");
+    // (b) Runtime old: create the owner, then let one real minor promote it.
+    eval.eval_str("(setq aset-old-b (record 'r 1 2))")
+        .expect("runtime owner");
+    minor_collection(&mut eval);
+    let b = eval.eval_str("aset-old-b").expect("runtime owner");
+    assert!(eval.tagged_heap.is_tenured_for_test(b));
+    // (a) Image resident: stamp the row the way the pdump loader stamps a
+    // reconstructed row, then let the first partition cycle make it permanent.
+    eval.eval_str("(setq aset-old-a (vector 1 2 3))")
+        .expect("image owner");
+    let a = eval.eval_str("aset-old-a").expect("image owner");
+    assert_eq!(
+        eval.tagged_heap.note_image_object(a),
+        crate::tagged::gc::ImageStamp::Stamped
+    );
     let image = crate::tagged::gc::fake_image::FakeImage::leak(true);
     image.register_cons(&mut eval.tagged_heap);
     let image_vector = image.register_vector(&mut eval.tagged_heap);
     eval.eval_str("(garbage-collect)")
         .expect("first partition cycle");
-    let a = eval.eval_str("aset-old-a").expect("a");
-    let b = eval.eval_str("aset-old-b").expect("b");
+    let a = eval.eval_str("aset-old-a").expect("image owner");
+    let b = eval.eval_str("aset-old-b").expect("runtime owner");
     assert!(eval.tagged_heap.is_tenured_for_test(a));
     assert!(eval.tagged_heap.is_tenured_for_test(b));
     // Perform an initial primitive store before measuring the barriers.
@@ -939,7 +1009,9 @@ fn tenured_owners_store_inline_once_remembered() {
         "arm",
     );
 
-    for owner in [a, b] {
+    // (owner, permanent): the permanent image resident's remembered fact goes
+    // to the persistent set; the ordinary-old owner's only to the claimed log.
+    for (owner, permanent) in [(a, true), (b, false)] {
         assert!(!eval.tagged_heap.is_remembered_for_test(owner));
         let child = keep(&mut eval, &["(list 'young-child)"])[0];
         let before = aset_shim_calls();
@@ -950,6 +1022,15 @@ fn tenured_owners_store_inline_once_remembered() {
             "{owner:?}: the barrier remembers it"
         );
         assert!(eval.tagged_heap.is_remembered_for_test(owner));
+        assert_eq!(
+            eval.tagged_heap.is_persistently_remembered_for_test(owner),
+            permanent,
+            "{owner:?}: permanent owners are the only persistent route"
+        );
+        assert!(
+            eval.tagged_heap.is_claimed_remembered_for_test(owner),
+            "{owner:?}: the claim remembers it in the mutator log"
+        );
         let before = aset_shim_calls();
         for n in 0..4 {
             let child = keep(&mut eval, &["(list 'another)"])[0];
@@ -982,6 +1063,103 @@ fn tenured_owners_store_inline_once_remembered() {
         aset_shim_calls() - before,
         1,
         "an image vector takes the shim"
+    );
+    assert_eq!(print_value(&image_vector), "[t 9 9]");
+}
+
+/// GEN0 has no old generation for runtime allocations, so the only tenured
+/// owners there are loader-stamped image residents. Stamp both owners the way
+/// the pdump loader stamps a reconstructed row; the fake image's first
+/// partition cycle makes them permanent (`ImageResident::from_image_row` ->
+/// `make_permanent`, mark_sweep.rs), and the first inline store into each is
+/// remembered once on the persistent route. A runtime object stays young in
+/// GEN0 (mark_sweep.rs's `None` arm) and never enters the remembered set.
+#[test]
+fn gen0_image_residents_are_tenured_and_store_inline_once_remembered() {
+    let mut eval = legacy_context();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
+    eval.eval_str("(setq aset-old-a (vector 1 2 3) aset-old-b (record 'r 1 2))")
+        .expect("owners");
+    let a = eval.eval_str("aset-old-a").expect("a");
+    let b = eval.eval_str("aset-old-b").expect("b");
+    assert_eq!(
+        eval.tagged_heap.note_image_object(a),
+        crate::tagged::gc::ImageStamp::Stamped
+    );
+    assert_eq!(
+        eval.tagged_heap.note_image_object(b),
+        crate::tagged::gc::ImageStamp::Stamped
+    );
+    let image = crate::tagged::gc::fake_image::FakeImage::leak(true);
+    image.register_cons(&mut eval.tagged_heap);
+    let image_vector = image.register_vector(&mut eval.tagged_heap);
+    eval.eval_str("(garbage-collect)")
+        .expect("first partition cycle");
+    let a = eval.eval_str("aset-old-a").expect("a");
+    let b = eval.eval_str("aset-old-b").expect("b");
+    // Permanent implies tenured; both are loader-stamped image rows.
+    assert!(eval.tagged_heap.is_tenured_for_test(a));
+    assert!(eval.tagged_heap.is_tenured_for_test(b));
+    // Perform an initial primitive store before measuring the barriers.
+    let young = keep(&mut eval, &["(vector 0)"])[0];
+    native(
+        ctx_ptr,
+        &leaf,
+        &[young, Value::make_int(0), Value::T],
+        "arm",
+    );
+    for owner in [a, b] {
+        assert!(!eval.tagged_heap.is_remembered_for_test(owner));
+        let child = keep(&mut eval, &["(list 'young-child)"])[0];
+        let before = aset_shim_calls();
+        native(ctx_ptr, &leaf, &[owner, Value::make_int(1), child], "first");
+        assert_eq!(
+            aset_shim_calls() - before,
+            1,
+            "{owner:?}: the barrier remembers it"
+        );
+        assert!(eval.tagged_heap.is_remembered_for_test(owner));
+        assert!(
+            eval.tagged_heap.is_persistently_remembered_for_test(owner),
+            "{owner:?}: a permanent owner is remembered persistently"
+        );
+        assert!(
+            !eval.tagged_heap.is_claimed_remembered_for_test(owner),
+            "{owner:?}: GEN0 has no claimed old-generation log"
+        );
+        let before = aset_shim_calls();
+        for n in 0..4 {
+            let child = keep(&mut eval, &["(list 'another)"])[0];
+            native(ctx_ptr, &leaf, &[owner, Value::make_int(2), child], "again");
+            let _ = n;
+        }
+        assert_eq!(
+            aset_shim_calls(),
+            before,
+            "{owner:?}: remembered owners store inline"
+        );
+    }
+    // The young children stored into the permanent owners survive a collection
+    // (the persistent remembered set re-seeds them).
+    eval.eval_str("(garbage-collect)").expect("second cycle");
+    assert_eq!(print_value(&a), "[1 (young-child) (another)]");
+    assert_eq!(print_value(&b), "#s(r (young-child) (another))");
+
+    let before = aset_shim_calls();
+    assert_eq!(
+        native(
+            ctx_ptr,
+            &leaf,
+            &[image_vector, Value::make_int(0), Value::T],
+            "image"
+        ),
+        "t"
+    );
+    assert_eq!(
+        aset_shim_calls() - before,
+        1,
+        "mapped image storage takes the shim"
     );
     assert_eq!(print_value(&image_vector), "[t 9 9]");
 }
