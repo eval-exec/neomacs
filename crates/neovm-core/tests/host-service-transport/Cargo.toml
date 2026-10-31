@@ -1,0 +1,18 @@
+[package]
+name = "host-service-transport"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Instrument actual transport code without compiling the evaluator/JIT.
+[workspace]
+
+[dependencies]
+crossbeam-channel = "=0.5.15"
+static_assertions = "=1.1.0"
+
+[[test]]
+name = "channel"
+path = "tests/channel.rs"

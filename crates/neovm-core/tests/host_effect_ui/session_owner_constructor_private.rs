@@ -1,0 +1,6 @@
+use neovm_core::host_effect::contracts::HostSessionId;
+use std::num::NonZeroU64;
+
+fn main() {
+    let _forged = HostSessionId::from_owner_id(NonZeroU64::MIN);
+}

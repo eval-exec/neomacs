@@ -810,7 +810,9 @@ static_assertions::assert_not_impl_any!(HostParkRegistration: Send, Sync, Clone,
 static_assertions::assert_not_impl_any!(DrainBlocked: Send, Sync, Clone, Copy);
 
 #[cfg(test)]
+#[path = "host_service/tests/records.rs"]
 mod tests;
 
 #[cfg(test)]
+#[path = "host_service/tests/runtime.rs"]
 mod runtime_tests;

@@ -634,5 +634,5 @@ static_assertions::assert_not_impl_any!(NativeCompletion: Clone, Copy);
 static_assertions::assert_not_impl_any!(TerminalReceipt: Clone, Copy);
 
 #[cfg(test)]
-#[path = "transport/tests.rs"]
+#[path = "tests/transport.rs"]
 mod tests;

@@ -49,6 +49,14 @@ fn sandbox() -> Option<PathBuf> {
         })
 }
 
+/// A child either inherits the runner's PID isolation or enters it through
+/// the campaign launcher. A systemd scope cannot be nested from that PID
+/// namespace: its bus peer cannot authenticate the namespace-local process.
+enum ChildIsolation {
+    Inherited,
+    Launch(PathBuf),
+}
+
 fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &str) {
     let function = format!("{case}-hello");
     if std::env::var(CHILD_CASE).as_deref() == Ok(case) {
@@ -96,12 +104,17 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
         return;
     }
 
-    let Some(sandbox) = sandbox() else {
-        tracing::warn!(
-            case,
-            "module lifetime probe requires a Lisp sandbox; skipped"
-        );
-        return;
+    let isolation = if std::env::var("CARFRAME_TEST_IN_SANDBOX").as_deref() == Ok("1") {
+        ChildIsolation::Inherited
+    } else {
+        let Some(sandbox) = sandbox() else {
+            tracing::warn!(
+                case,
+                "module lifetime probe requires a Lisp sandbox; skipped"
+            );
+            return;
+        };
+        ChildIsolation::Launch(sandbox)
     };
 
     let directory = neomacs_infra::workspace_root()
@@ -179,9 +192,14 @@ fn lifetime_case(case: &str, result_code: i32, init_status: i32, pending_exit: &
         "{}::{case}_keeps_published_function_callable",
         module_path!()
     );
-    let mut child = Command::new(sandbox);
+    let executable = std::env::current_exe().unwrap();
+    let (program, prefix) = match isolation {
+        ChildIsolation::Inherited => (executable, Vec::new()),
+        ChildIsolation::Launch(sandbox) => (sandbox, vec![executable]),
+    };
+    let mut child = Command::new(program);
     child
-        .arg(std::env::current_exe().unwrap())
+        .args(prefix)
         .args([
             "--exact",
             test_name.strip_prefix("neovm_core::").unwrap(),

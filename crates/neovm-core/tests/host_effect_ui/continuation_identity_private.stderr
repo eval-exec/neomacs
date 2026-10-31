@@ -1,0 +1,21 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/host_effect_ui/continuation_identity_private.rs:5:19
+  |
+5 |     let _forged = OwnerContinuationId(NonZeroU64::MIN);
+  |                   ^^^^^^^^^^^^^^^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/host_effect/contracts.rs
+  |
+  |           pub struct $name(NonZeroU64);
+  |                            ^^^^^^^^^^ private field
+...
+  | / identity!(
+  | |     HostSessionId,
+  | |     HostRequestId,
+  | |     HostRequestGeneration,
+  | |     RootRecordId,
+  | |     OwnerContinuationId
+  | | );
+  | |_- in this macro invocation
+  = note: this error originates in the macro `identity` (in Nightly builds, run with -Z macro-backtrace for more info)

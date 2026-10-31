@@ -1,0 +1,20 @@
+[package]
+name = "host-service-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# Abstract protocol model, independent of the production workspace.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+
+[profile.test]
+opt-level = 1
+
+[[test]]
+name = "protocol"
+path = "tests/protocol.rs"

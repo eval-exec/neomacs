@@ -96,7 +96,7 @@ const EXCEPTIONS: &[Exception] = &[
     },
     Exception {
         path_suffix: "emacs_core/system/dynamic_module/tests/library_lifetime.rs",
-        argument: "sandbox",
+        argument: "program",
         reason: "the campaign sandbox wraps the child test binary (module crash probe)",
     },
     Exception {

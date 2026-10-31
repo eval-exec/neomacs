@@ -1,0 +1,11 @@
+error[E0603]: struct `HostRequestKey` is private
+ --> tests/host_effect_ui/host_request_key_private.rs:2:41
+  |
+2 | use neovm_core::host_effect::contracts::HostRequestKey;
+  |                                         ^^^^^^^^^^^^^^ private struct
+  |
+note: the struct `HostRequestKey` is defined here
+ --> src/host_effect/contracts.rs
+  |
+  | pub(crate) struct HostRequestKey {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

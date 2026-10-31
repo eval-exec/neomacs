@@ -1,0 +1,27 @@
+error[E0603]: module `green` is private
+ --> tests/host_effect_ui/green_service_authority_private.rs:3:35
+  |
+3 | use neovm_core::emacs_core::eval::green::host_service::{
+  |                                   ^^^^^  ------------ module `host_service` is not publicly re-exported
+  |                                   |
+  |                                   private module
+  |
+note: the module `green` is defined here
+ --> src/emacs_core/runtime/eval/mod.rs
+  |
+  | mod green;
+  | ^^^^^^^^^
+
+error[E0603]: module `green` is private
+ --> tests/host_effect_ui/green_service_authority_private.rs:6:35
+  |
+6 | use neovm_core::emacs_core::eval::green::scheduler::ReservedServiceSlice;
+  |                                   ^^^^^  --------- module `scheduler` is not publicly re-exported
+  |                                   |
+  |                                   private module
+  |
+note: the module `green` is defined here
+ --> src/emacs_core/runtime/eval/mod.rs
+  |
+  | mod green;
+  | ^^^^^^^^^
