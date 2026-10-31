@@ -262,4 +262,5 @@ static_assertions::assert_not_impl_any!(ParallelCompiledCode: Sync, Clone, Copy)
 static_assertions::assert_impl_all!(ScalarProgram: Send, Sync, Copy);
 
 #[cfg(test)]
+#[path = "parallel/tests/scalar_test.rs"]
 mod tests;

@@ -112,7 +112,7 @@ fn nmjit_n4_scalar_compile_drop_without_entry() {
 
 #[test]
 fn nmjit_n4_scalar_abi_owner_source_guard_test() {
-    let source = include_str!("../parallel.rs");
+    let source = include_str!("../../parallel.rs");
     assert!(source.contains(".with_activation("));
     assert!(source.contains("ManuallyDrop::take(&mut self.module).free_memory()"));
     assert!(source.contains("&ParallelExecutionAdmission<'era>"));
