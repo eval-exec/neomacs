@@ -146,3 +146,6 @@ static_assertions::assert_impl_all!(ImmediateResult: Send, Sync, Copy);
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::prepared_fixture as with_test_prepared_execution;

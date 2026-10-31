@@ -11,14 +11,31 @@ enum ActualMode {
     Gen1,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FixtureReceipt {
+pub(crate) enum FixtureReceipt {
     Gen0Refused,
     Gen1Completed,
     TelemetryRefused,
 }
 
-fn fixture(
+pub(crate) fn fixture(
     body: impl for<'era, 'owner> FnOnce(
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+    ),
+) -> FixtureReceipt {
+    prepared_fixture(
+        |_| (),
+        |(), admission, run, destination| {
+            body(admission, run, destination);
+        },
+    )
+}
+
+pub(crate) fn prepared_fixture<P>(
+    prepare: impl FnOnce(&Gen1Admission<'_>) -> P,
+    body: impl for<'era, 'owner> FnOnce(
+        &P,
         &ParallelExecutionAdmission<'era>,
         &mut RunAccess<'owner, 'era>,
         &OwnerRootSlot<'era>,
@@ -46,6 +63,7 @@ fn fixture(
                 return FixtureReceipt::Gen0Refused;
             }
         };
+        let prepared = prepare(&admitted);
         let era = ParallelHeapEra::admit(admitted, keeper).expect("real GEN1 era");
         let admission = era.execution_admission();
         let mut owner = era
@@ -56,7 +74,7 @@ fn fixture(
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut run = owner.run_access().expect("activation fixture run");
             let destination = run.private_nil_root().expect("resident result home");
-            body(&admission, &mut run, &destination);
+            body(&prepared, &admission, &mut run, &destination);
         }));
         // Body locals and all borrowed activations have already unwound.
         // Clear resident homes and retire before inspecting its assertion.
@@ -80,6 +98,7 @@ fn fixture(
         let (collector, keeper) = era.finish().expect("activation fixture finish");
         drop(collector);
         drop(keeper);
+        drop(prepared);
         eprintln!("NMJIT_N4_ACTIVATION_TEARDOWN_OK");
         assert_eq!(cleanup, Ok(()));
         assert_eq!(mode, ActualMode::Gen1);
