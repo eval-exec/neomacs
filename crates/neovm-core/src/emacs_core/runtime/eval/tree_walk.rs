@@ -85,6 +85,14 @@ impl Context {
     #[inline(never)]
     pub fn eval_sub(&mut self, form: Value) -> EvalResult {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("eval");
+        // Cons forms are the common case, and `SymbolMode::unwrap` never turns
+        // a cons into anything else (a symbol-with-pos wraps a symbol, and a
+        // bare/disabled value passes through: tagged/value.rs:1353-1362), so
+        // the policy projection can be skipped for them.  Everything else
+        // goes through the unwrap first.
+        if form.is_cons() {
+            return self.eval_cons_dispatch(form);
+        }
         // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
         // Also unwrap symbol-with-pos when symbols-with-pos-enabled is true.
         let form_unwrapped = self.unwrap_symbol(form);
@@ -102,19 +110,25 @@ impl Context {
             return self.dispatch_signal_result_if_needed(result);
         }
 
-        // 2. Non-cons → self-evaluating (GNU eval.c:2564-2565)
-        if !form_unwrapped.is_cons() {
-            return Ok(form_unwrapped);
-        }
+        // 2. Non-cons → self-evaluating (GNU eval.c:2564-2565).  A wrapper
+        // unwraps only to a symbol (handled above), so nothing here can be a
+        // cons.
+        Ok(form_unwrapped)
+    }
 
+    /// The cons-form entry: GNU `eval_sub`'s depth count, then the cons path
+    /// (quit/GC guards and the backtrace frame live in `eval_sub_cons_fast`).
+    #[inline(always)]
+    fn eval_cons_dispatch(&mut self, form: Value) -> EvalResult {
         self.enter_interpreted_eval_depth()?;
 
-        // The depth-sampled stack probe is the rare arm; the common entry
-        // runs GNU's quit/GC guards and the cons dispatch directly instead of
-        // through a grow callback, so one cons form is one call from here.
+        // The depth-sampled stack probe is the rare arm; its enough-stack
+        // half runs the body directly, so a sampled form pays one predicate
+        // instead of the grow wrapper when the stack has room.
         let depth = self.depth;
         let result = if depth < STACK_GROWTH_PROBE_START_DEPTH
             || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
+            || native_stack::stack_has_room(EVAL_STACK_RED_ZONE)
         {
             self.eval_sub_cons_fast(form)
         } else {
@@ -336,11 +350,7 @@ impl Context {
                 {
                     let start = span.start();
                     let end = start.saturating_add(span.len());
-                    self.eval_call_roots.truncate(frame.call_base);
-                    if end <= self.bc_buf.len() {
-                        let (bc_buf, roots) = (&self.bc_buf, &mut self.eval_call_roots);
-                        roots.extend_from_slice(&bc_buf[start..end]);
-                    }
+                    self.publish_bc_span_call_roots(frame.call_base, start, end);
                 }
                 // SAFETY: the top entry is a `Backtrace` without
                 // debug-on-exit whose arguments own no

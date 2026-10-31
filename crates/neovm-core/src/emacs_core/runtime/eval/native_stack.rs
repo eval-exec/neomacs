@@ -91,6 +91,15 @@ pub(crate) fn maybe_grow_tracking_jit_limit<T: ?Sized, R>(
     }
 }
 
+/// The enough-stack predicate behind [`maybe_grow_tracking_jit_limit`], for
+/// callers that want to run their body directly when the stack has room and
+/// enter the growing wrapper only on the rare arm. Unknown bounds answer
+/// `false` (the growing arm), exactly like the wrapper's `_` match.
+#[inline(always)]
+pub(crate) fn stack_has_room(red_zone: usize) -> bool {
+    stacker::remaining_stack().is_some_and(|remaining| remaining >= red_zone)
+}
+
 /// The growing branch of [`maybe_grow_tracking_jit_limit`]: run `f` on a
 /// fresh `segment`-byte stack with the limit naming it, then restore the
 /// caller's limit -- after an unwind as well, since a limit left on a freed

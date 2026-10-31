@@ -577,13 +577,23 @@ impl Context {
     /// [`Self::push_unevalled_backtrace_frame`] for the cons form `eval_sub`
     /// is evaluating (GNU `record_in_backtrace`): its argument forms are a
     /// cons's cdr, so the reserved-tag check is debug-only.
+    ///
+    /// Written into its final slot like [`Self::record_save_excursion`]:
+    /// `Vec::push` built a wide stack temporary for the entry and copied it,
+    /// which stalls on the narrow stores every cons form pays.
     #[inline(always)]
     pub(super) fn push_unevalled_form_frame(&mut self, function: Value, original_args: Value) {
-        self.specpdl.push(SpecBinding::Backtrace {
+        let count = self.specpdl.len();
+        self.specpdl.reserve(1);
+        self.specpdl.spare_capacity_mut()[0].write(SpecBinding::Backtrace {
             function,
             args: BacktraceArgs::unevalled_form_args(original_args),
             debug_on_exit: false,
         });
+        // SAFETY: reserve ensured a spare slot and write initialized it above.
+        // Publishing the length makes the entry visible to the root walk;
+        // reserving Rust memory and writing the entry cannot run Lisp or GC.
+        unsafe { self.specpdl.set_len(count + 1) };
     }
 
     #[inline]
@@ -1371,6 +1381,34 @@ impl Context {
     /// The copy out of `bc_buf` is load-bearing: `eval_sub_cons` truncates
     /// the operand stack a few lines later, so a span into it would go dead
     /// immediately (see the weak-hash-table regressions).
+    /// Publish a finished call's evaluated arguments as this sequence
+    /// frame's root run: the same values `record_sequence_call_roots` keeps
+    /// visible, written with one reserve and one bulk copy.  The generic
+    /// `extend_from_slice` path dominated the per-call cost of the residue
+    /// copy (it goes through `Vec::append_elements` for one or two words).
+    #[inline]
+    pub(super) fn publish_bc_span_call_roots(&mut self, base: usize, start: usize, end: usize) {
+        self.eval_call_roots.truncate(base);
+        if start > end || end > self.bc_buf.len() {
+            return;
+        }
+        let len = end - start;
+        self.eval_call_roots.reserve(len);
+        // SAFETY: the two runs are distinct allocations; `reserve` guarantees
+        // `len` spare slots; Value is Copy so no destructor runs; the length
+        // is published only after the copy, and nothing between the reserve
+        // and the publication can run Lisp or collect.
+        unsafe {
+            let dst = self
+                .eval_call_roots
+                .as_mut_ptr()
+                .add(self.eval_call_roots.len());
+            std::ptr::copy_nonoverlapping(self.bc_buf.as_ptr().add(start), dst, len);
+            let old = self.eval_call_roots.len();
+            self.eval_call_roots.set_len(old + len);
+        }
+    }
+
     #[inline]
     pub(super) fn record_sequence_call_roots(&mut self, count: usize) {
         let Some(&frame) = self.sequence_temp_root_frames.last() else {
@@ -1392,11 +1430,7 @@ impl Context {
             BacktraceArgsView::EvaluatedBcStack(span) => {
                 let start = span.start();
                 let end = start.saturating_add(span.len());
-                ctx.eval_call_roots.truncate(base);
-                if end <= ctx.bc_buf.len() {
-                    let (bc_buf, eval_call_roots) = (&ctx.bc_buf, &mut ctx.eval_call_roots);
-                    eval_call_roots.extend_from_slice(&bc_buf[start..end]);
-                }
+                ctx.publish_bc_span_call_roots(base, start, end);
             }
             BacktraceArgsView::Evaluated(_) => ctx.record_sequence_call_roots_slow(count, base),
         }
