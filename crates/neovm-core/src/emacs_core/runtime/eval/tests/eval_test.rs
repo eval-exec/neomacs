@@ -20152,12 +20152,15 @@ fn aot_bench_compute_loop() {
     let ctx = &mut ev as *mut Context;
     let n = 2_000_000i64;
     let want = Value::make_int(n * (n + 1) / 2);
-    let first = crate::emacs_core::jit::cache::try_run_compiled(
-        ctx,
-        &aot_fn,
-        aot_val,
-        &[Value::make_int(n)],
-    )
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let first = unsafe {
+        crate::emacs_core::jit::cache::try_run_compiled(
+            ctx,
+            &aot_fn,
+            aot_val,
+            &[Value::make_int(n)],
+        )
+    }
     .expect("aot run ok");
     assert_eq!(first, Some(want.bits()), "AOT compute result");
     assert_eq!(
@@ -20172,12 +20175,15 @@ fn aot_bench_compute_loop() {
         let mut best = std::time::Duration::MAX;
         for _ in 0..9 {
             let t = std::time::Instant::now();
-            let r = crate::emacs_core::jit::cache::try_run_compiled(
-                ctx,
-                &aot_fn,
-                aot_val,
-                &[Value::make_int(n)],
-            )
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            let r = unsafe {
+                crate::emacs_core::jit::cache::try_run_compiled(
+                    ctx,
+                    &aot_fn,
+                    aot_val,
+                    &[Value::make_int(n)],
+                )
+            }
             .expect("aot run");
             best = best.min(t.elapsed());
             assert_eq!(r, Some(want.bits()));
@@ -20582,12 +20588,15 @@ fn aot_bench_real_algorithm() {
 
     // Confirm AOT-served at heat=0 + correct result (collatz(27)=111).
     let n0 = 27i64;
-    let r0 = crate::emacs_core::jit::cache::try_run_compiled(
-        ctx,
-        &aot_fn,
-        aot_val,
-        &[Value::make_int(n0)],
-    )
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let r0 = unsafe {
+        crate::emacs_core::jit::cache::try_run_compiled(
+            ctx,
+            &aot_fn,
+            aot_val,
+            &[Value::make_int(n0)],
+        )
+    }
     .expect("aot run ok");
     assert_eq!(
         r0,
@@ -20630,12 +20639,15 @@ fn aot_bench_real_algorithm() {
                     let mut acc = 0i64;
                     for _ in 0..reps {
                         for &n in calls {
-                            let r = crate::emacs_core::jit::cache::try_run_compiled(
-                                ctx,
-                                aot_fn,
-                                aot_val2,
-                                &[Value::make_int(n)],
-                            )
+                            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+                            let r = unsafe {
+                                crate::emacs_core::jit::cache::try_run_compiled(
+                                    ctx,
+                                    aot_fn,
+                                    aot_val2,
+                                    &[Value::make_int(n)],
+                                )
+                            }
                             .expect("aot run")
                             .expect("aot served");
                             acc += Value::from_bits(r).as_fixnum().expect("fixnum");
