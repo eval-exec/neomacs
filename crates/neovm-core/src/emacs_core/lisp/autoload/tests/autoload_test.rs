@@ -10,6 +10,137 @@ use crate::heap_types::LispString;
 use crate::test_utils::load_minimal_gnu_backquote_runtime;
 use std::fs;
 
+#[test]
+fn autoload_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+
+    fn payload(probes: &mut Vec<usize>) -> Value {
+        let value = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(value.bits());
+        value
+    }
+    fn text(probes: &mut Vec<usize>, key: Value) -> LispString {
+        let mut text = LispString::from_utf8("autoload-é");
+        text.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 1),
+            key,
+            payload(probes),
+        );
+        text
+    }
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let key = Value::symbol("autoload-owned-property");
+    let name = intern("autoload-owned-entry");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        // Restore permits property-bearing loaded-file payloads even though
+        // mark_loaded's native &str producer cannot supply properties.
+        let mut manager = AutoloadManager::from_dump(
+            HashMap::new(),
+            HashMap::new(),
+            vec![text(&mut probes, key)],
+            HashMap::new(),
+            HashMap::new(),
+        );
+        manager.register_symbol(
+            name,
+            AutoloadEntry {
+                file: text(&mut probes, key),
+                docstring: Some(text(&mut probes, key)),
+                interactive: false,
+                autoload_type: AutoloadType::Function,
+            },
+        );
+        manager.add_after_load_key(
+            AfterLoadKey::from_lisp_string(&text(&mut probes, key)),
+            payload(&mut probes),
+        );
+        manager.make_obsolete_symbol(
+            intern("autoload-owned-obsolete-function"),
+            text(&mut probes, key),
+            text(&mut probes, key),
+        );
+        manager.make_variable_obsolete_symbol(
+            intern("autoload-owned-obsolete-variable"),
+            text(&mut probes, key),
+            text(&mut probes, key),
+        );
+        // No obarray function cell, Lisp variable, buffer or explicit root
+        // aliases these copies. The real World manager is their sole owner.
+        *eval.autoloads = manager;
+        probes
+    });
+    let check_live = |eval: &Context| {
+        for bits in &probes {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "autoload-only property vector was reclaimed"
+            );
+        }
+        for (index, bits) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live autoload property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+        let entry = eval
+            .autoloads
+            .get_entry_symbol(name)
+            .expect("retained entry");
+        assert_eq!(
+            entry
+                .file
+                .intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, key)
+                .expect("file property")
+                .bits(),
+            probes[1]
+        );
+    };
+
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    *eval.autoloads = AutoloadManager::new();
+    eval.gc_collect_exact();
+    for bits in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired autoload graph remained permanently rooted"
+        );
+    }
+}
+
 fn eval_one(src: &str) -> String {
     let mut ev = Context::new();
     let result = ev.eval_str(src);

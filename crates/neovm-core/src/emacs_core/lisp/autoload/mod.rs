@@ -730,10 +730,49 @@ pub(crate) fn builtin_autoload(eval: &mut super::eval::Context, args: Vec<Value>
 
 impl GcTrace for AutoloadManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
-        for values in self.after_load.values() {
-            for value in values {
-                roots.push(*value);
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        let Self {
+            entries,
+            after_load,
+            loaded_files,
+            obsolete_functions,
+            obsolete_variables,
+        } = self;
+        for entry in entries.values() {
+            let AutoloadEntry {
+                file,
+                docstring,
+                interactive: _,
+                autoload_type,
+            } = entry;
+            file.trace_roots_with(visit);
+            if let Some(docstring) = docstring {
+                docstring.trace_roots_with(visit);
             }
+            match autoload_type {
+                AutoloadType::Function | AutoloadType::Macro | AutoloadType::Keymap => {}
+            }
+        }
+        for (key, values) in after_load {
+            key.as_lisp_string().trace_roots_with(visit);
+            for value in values {
+                visit(*value);
+            }
+        }
+        // Runtime &str inputs are plain, but restoration accepts owned
+        // LispStrings. The stored domain therefore permits interval edges.
+        for file in loaded_files {
+            file.trace_roots_with(visit);
+        }
+        for (new_name, when) in obsolete_functions
+            .values()
+            .chain(obsolete_variables.values())
+        {
+            new_name.trace_roots_with(visit);
+            when.trace_roots_with(visit);
         }
     }
 }
