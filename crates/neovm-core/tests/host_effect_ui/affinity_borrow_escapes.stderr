@@ -1,0 +1,17 @@
+error: lifetime may not live long enough
+ --> tests/host_effect_ui/affinity_borrow_escapes.rs:6:47
+  |
+6 |     let _escaped = with_fixture(|mut fixture| fixture.affinity());
+  |                                  ------------ ^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                                  |          |
+  |                                  |          return type of closure is &'2 mut HostAffinity
+  |                                  has type `neovm_core::host_effect::contracts::contract_fixture::Fixture<'1>`
+
+error[E0515]: cannot return value referencing function parameter `fixture`
+ --> tests/host_effect_ui/affinity_borrow_escapes.rs:6:47
+  |
+6 |     let _escaped = with_fixture(|mut fixture| fixture.affinity());
+  |                                               -------^^^^^^^^^^^
+  |                                               |
+  |                                               returns a value referencing data owned by the current function
+  |                                               `fixture` is borrowed here

@@ -1,0 +1,22 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+ --> tests/host_effect_ui/affinity_no_send.rs:8:45
+  |
+8 |     with_fixture(|mut fixture| require_send(fixture.affinity()));
+  |                                ------------ ^^^^^^^^^^^^^^^^^^ `Rc<()>` cannot be sent between threads safely
+  |                                |
+  |                                required by a bound introduced by this call
+  |
+  = help: within `&mut HostAffinity`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `PhantomData<Rc<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `HostAffinity`
+ --> src/host_effect/contracts.rs
+  |
+  | pub struct HostAffinity {
+  |            ^^^^^^^^^^^^
+  = note: required because it appears within the type `&mut HostAffinity`
+note: required by a bound in `require_send`
+ --> tests/host_effect_ui/affinity_no_send.rs:5:20
+  |
+5 | fn require_send<T: Send>(_: T) {}
+  |                    ^^^^ required by this bound in `require_send`

@@ -10,6 +10,7 @@ mod frontend_events;
 pub mod fuzz_support;
 pub mod gc_trace;
 pub mod heap_types;
+pub mod host_effect;
 pub mod host_input;
 mod image_identity;
 pub mod keyboard;

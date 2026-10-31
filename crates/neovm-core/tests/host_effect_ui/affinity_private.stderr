@@ -1,0 +1,5 @@
+error[E0451]: field `_local` of struct `HostAffinity` is private
+ --> tests/host_effect_ui/affinity_private.rs:4:47
+  |
+4 |     let _affinity = contracts::HostAffinity { _local: std::marker::PhantomData };
+  |                                               ^^^^^^ private field

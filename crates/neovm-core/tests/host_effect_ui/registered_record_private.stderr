@@ -1,0 +1,5 @@
+error[E0616]: field `binding` of struct `RegisteredRootRef` is private
+ --> tests/host_effect_ui/registered_record_private.rs:9:36
+  |
+9 |             binding: plan.record().binding,
+  |                                    ^^^^^^^ private field

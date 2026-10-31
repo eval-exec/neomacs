@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/host_effect_ui/raw_value.rs:7:40
+  |
+7 |         let _request = fixture.message(neovm_core::Value::NIL);
+  |                                ------- ^^^^^^^^^^^^^^^^^^^^^^ expected `OwnedNativeData`, found `TaggedValue`
+  |                                |
+  |                                arguments to this method are incorrect
+  |
+note: method defined here
+ --> src/host_effect/contracts.rs
+  |
+  |         pub fn message(
+  |                ^^^^^^^

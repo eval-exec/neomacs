@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> tests/host_effect_ui/wrong_reply.rs:10:60
+   |
+10 |         let _response = port.complete(HostResult::Returned(fixture.font_reply_for(&font, OwnedNativeData::None)));
+   |                                       -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `MessageReply<'_>`, found `FontReply<'_>`
+   |                                       |
+   |                                       arguments to this enum variant are incorrect
+   |
+help: the type constructed contains `FontReply<'_>` due to the type of the argument passed
+  --> tests/host_effect_ui/wrong_reply.rs:10:39
+   |
+10 |         let _response = port.complete(HostResult::Returned(fixture.font_reply_for(&font, OwnedNativeData::None)));
+   |                                       ^^^^^^^^^^^^^^^^^^^^^----------------------------------------------------^
+   |                                                            |
+   |                                                            this argument influences the type of `Returned`
+note: tuple variant defined here
+  --> src/host_effect/contracts.rs
+   |
+   |     Returned(R),
+   |     ^^^^^^^^

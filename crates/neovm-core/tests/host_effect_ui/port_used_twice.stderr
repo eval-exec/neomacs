@@ -1,0 +1,15 @@
+error[E0382]: use of moved value: `port`
+  --> tests/host_effect_ui/port_used_twice.rs:10:23
+   |
+ 8 |         let (_, port) = fixture.message(OwnedNativeData::None).into_parts();
+   |                 ---- move occurs because `port` has type `ReplyPort<'_, MessageReply<'_>>`, which does not implement the `Copy` trait
+ 9 |         let _first = port.complete(HostResult::Closed(HostClosure::Closed));
+   |                           ------------------------------------------------- `port` moved due to this method call
+10 |         let _second = port.complete(HostResult::Closed(HostClosure::Closed));
+   |                       ^^^^ value used here after move
+   |
+note: `ReplyPort::<'session, R>::complete` takes ownership of the receiver `self`, which moves `port`
+  --> src/host_effect/contracts.rs
+   |
+   |         self,
+   |         ^^^^

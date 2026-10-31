@@ -1,0 +1,12 @@
+error: lifetime may not live long enough
+ --> tests/host_effect_ui/fixture_reference_escapes.rs:6:43
+  |
+6 |     let _escaped = with_fixture(|fixture| fixture.message(contracts::OwnedNativeData::None));
+  |                                  -------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'2`
+  |                                  |      |
+  |                                  |      return type of closure is Submitted<'2, MessagePlan<'_>>
+  |                                  has type `neovm_core::host_effect::contracts::contract_fixture::Fixture<'1>`
+  |
+  = note: requirement occurs because of the type `Submitted<'_, MessagePlan<'_>>`, which makes the generic argument `'_` invariant
+  = note: the struct `Submitted<'session, P>` is invariant over the parameter `'session`
+  = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance

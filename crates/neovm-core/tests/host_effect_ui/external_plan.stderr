@@ -1,0 +1,37 @@
+error[E0277]: the trait bound `ArbitrarySendPayload: contracts::sealed::Plan` is not satisfied
+ --> tests/host_effect_ui/external_plan.rs:5:50
+  |
+5 | impl<'session> contracts::HostPlan<'session> for ArbitrarySendPayload {
+  |                                                  ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `contracts::sealed::Plan` is not implemented for `ArbitrarySendPayload`
+ --> tests/host_effect_ui/external_plan.rs:3:1
+  |
+3 | struct ArbitrarySendPayload(String);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `contracts::sealed::Plan`:
+            CallbackPlan<'_>
+            DisplayQueryPlan<'_>
+            FontPlan<'_>
+            GuiFramePlan<'_>
+            ImagePlan<'_>
+            InputPlan<'_>
+            MenuPlan<'_>
+            MessagePlan<'_>
+          and $N others
+note: required by a bound in `HostPlan`
+ --> src/host_effect/contracts.rs
+  |
+  | pub trait HostPlan<'session>: sealed::Plan + Send + 'session {
+  |                               ^^^^^^^^^^^^ required by this bound in `HostPlan`
+  = note: `HostPlan` is a "sealed trait", because to implement it you also need to implement `neovm_core::host_effect::contracts::sealed::Plan`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+  = help: the following types implement the trait:
+            neovm_core::host_effect::contracts::MessagePlan<'_>
+            neovm_core::host_effect::contracts::RedisplayPlan<'_>
+            neovm_core::host_effect::contracts::GuiFramePlan<'_>
+            neovm_core::host_effect::contracts::DisplayQueryPlan<'_>
+            neovm_core::host_effect::contracts::FontPlan<'_>
+            neovm_core::host_effect::contracts::ImagePlan<'_>
+            neovm_core::host_effect::contracts::SelectionPlan<'_>
+            neovm_core::host_effect::contracts::InputPlan<'_>
+          and $N others

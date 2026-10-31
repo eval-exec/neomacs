@@ -125,3 +125,6 @@ fn nmjit_n1_sketch_compile_contracts() {
         "N1 sketch compiler contract failed: {status}"
     );
 }
+
+#[path = "host_effect_contracts.rs"]
+mod host_effect_contracts;

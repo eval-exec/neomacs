@@ -1,0 +1,5 @@
+error[E0599]: no method named `clone` found for mutable reference `&mut HostAffinity` in the current scope
+ --> tests/host_effect_ui/affinity_no_clone.rs:7:40
+  |
+7 |         let _copy = fixture.affinity().clone();
+  |                                        ^^^^^ method not found in `&mut HostAffinity`

@@ -1,0 +1,21 @@
+error[E0277]: `Rc<()>` cannot be shared between threads safely
+ --> tests/host_effect_ui/affinity_no_sync.rs:8:45
+  |
+8 |     with_fixture(|mut fixture| require_sync(fixture.affinity()));
+  |                                ------------ ^^^^^^^^^^^^^^^^^^ `Rc<()>` cannot be shared between threads safely
+  |                                |
+  |                                required by a bound introduced by this call
+  |
+  = help: within `HostAffinity`, the trait `Sync` is not implemented for `Rc<()>`
+note: required because it appears within the type `PhantomData<Rc<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `HostAffinity`
+ --> src/host_effect/contracts.rs
+  |
+  | pub struct HostAffinity {
+  |            ^^^^^^^^^^^^
+note: required by a bound in `require_sync`
+ --> tests/host_effect_ui/affinity_no_sync.rs:5:20
+  |
+5 | fn require_sync<T: Sync>(_: &T) {}
+  |                    ^^^^ required by this bound in `require_sync`
