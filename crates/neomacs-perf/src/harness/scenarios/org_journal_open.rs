@@ -63,7 +63,8 @@ pub(crate) fn prepare(
                 request.scenario,
             ));
     for dependency in [org_superstar, git_gutter] {
-        let directory = prepare_cached_locked_melpa_package(&gnu_emacs, dependency.package())?;
+        let directory = prepare_cached_locked_melpa_package(&gnu_emacs, dependency.package())?
+            .into_package_dir();
         packages = packages.with_prepared_dependency(dependency.package(), directory)?;
     }
     let startup = packages.write_startup_file(run_directory)?;

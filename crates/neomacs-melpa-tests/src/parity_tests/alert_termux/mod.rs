@@ -22,7 +22,8 @@ fn alert_termux_oracle(source_file: &str) -> CachedMelpaOracle {
     if source_file == "alert-termux.el" {
         let alert_directory =
             prepare_cached_locked_melpa_package(&EmacsRuntime::gnu_emacs(), ALERT_MELPA_PIN)
-                .expect("prepare exact alert dependency below ./tmp");
+                .expect("prepare exact alert dependency below ./tmp")
+                .into_package_dir();
         let alert_source = alert_directory.join("alert.el");
         oracle.with_prelude(format!(
             "(load {:?} nil t t)",

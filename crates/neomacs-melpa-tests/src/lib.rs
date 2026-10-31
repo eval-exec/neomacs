@@ -17,8 +17,8 @@ use neomacs_melpa_test_support::{
 };
 pub use neomacs_melpa_test_support::{
     EmacsRuntime, LockedPackageSource, MelpaSandbox, PackageActivation, PreparedPackageSet,
-    SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan, locked_melpa_source,
-    locked_melpa_sources, neomacs_binary, package_activation_elisp,
+    PreparedSourceInstall, SHALLOW_GIT_FETCH_ARGS, SourceBuild, locked_melpa_install_plan,
+    locked_melpa_source, locked_melpa_sources, neomacs_binary, package_activation_elisp,
     preflight_locked_melpa_packages, prepare_cached_locked_melpa_package,
     prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
     workspace_root,
@@ -4675,7 +4675,7 @@ impl CachedPackageOracle {
     /// package directory while loading the package under test.
     pub fn with_melpa_dependency(self, package: (&str, &str)) -> Result<Self, String> {
         let package_dir = prepare_cached_locked_melpa_package(&EmacsRuntime::gnu_emacs(), package)?;
-        self.with_prepared_dependency(package, package_dir)
+        self.with_prepared_dependency(package, package_dir.into_package_dir())
     }
 
     /// Make another exact GNU ELPA package cache visible as a system-wide
@@ -6825,6 +6825,9 @@ mod parity_tests;
 
 #[cfg(test)]
 mod direct_adapter_tests;
+
+#[cfg(test)]
+mod install_cache_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 mod gui_parity_tests;

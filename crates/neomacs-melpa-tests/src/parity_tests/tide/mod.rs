@@ -300,7 +300,8 @@ impl ReplayRuntimeIdentity {
     pub(crate) fn preflight() -> Result<Self, String> {
         let interpreter = resolve_path_executable("python3")?.0;
         let package =
-            prepare_cached_locked_melpa_package(&EmacsRuntime::gnu_emacs(), TIDE_MELPA_PIN)?;
+            prepare_cached_locked_melpa_package(&EmacsRuntime::gnu_emacs(), TIDE_MELPA_PIN)?
+                .into_package_dir();
         let tsserver = DirectExecutable::preflight(
             package.join("tsserver/tsserver.js"),
             Some(Sha256Digest::parse(PINNED_TSSERVER_SHA256)?),

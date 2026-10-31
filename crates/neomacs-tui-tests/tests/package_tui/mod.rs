@@ -168,7 +168,8 @@ impl PackageOracle {
         let package_dir = neomacs_melpa_test_support::prepare_cached_locked_melpa_package(
             &EmacsRuntime::gnu_emacs(),
             package,
-        )?;
+        )?
+        .into_package_dir();
         self.with_prepared_dependency(package, package_dir)
     }
 

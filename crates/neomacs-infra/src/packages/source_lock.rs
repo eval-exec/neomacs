@@ -79,6 +79,34 @@ pub struct LockedPackageSource<'a> {
 }
 
 impl<'a> LockedPackageSource<'a> {
+    /// Assemble a recorded source row from its identity fields.
+    ///
+    /// Production rows come from the locked manifest ([`locked_melpa_source`]).
+    /// Harness regression fixtures use this constructor to drive the same
+    /// install cache and artifact build against a local repository.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn new(
+        name: &'a str,
+        version: &'a str,
+        upstream_repository: &'a str,
+        upstream_revision: &'a str,
+        repository: &'a str,
+        revision: &'a str,
+        fallback_repository: Option<&'a str>,
+        build: SourceBuild<'a>,
+    ) -> Self {
+        Self {
+            name,
+            version,
+            upstream_repository,
+            upstream_revision,
+            repository,
+            revision,
+            fallback_repository,
+            build,
+        }
+    }
+
     pub const fn package(self) -> (&'a str, &'a str) {
         (self.name, self.version)
     }
@@ -1393,10 +1421,299 @@ fn prepare_cached_source_artifact_with_tools(
     Ok(artifact)
 }
 
+/// Revision of the source install cache's warm phase.
+///
+/// A cached tree is handed to scenarios only after this phase has run; bump
+/// the revision when the phase's behavior changes so existing caches run it
+/// again instead of being trusted.
+const SOURCE_INSTALL_WARM_REVISION: &str = "1";
+
+/// File extensions that mark a package tree as carrying native sources.
+const NATIVE_SOURCE_EXTENSIONS: &[&str] = &["c", "cc", "cpp", "cxx", "m", "mm"];
+
+/// File extensions of a built native artifact Emacs can load.
+const NATIVE_ARTIFACT_EXTENSIONS: &[&str] = &["so", "dylib", "dll"];
+
+/// A source install cache tree that is ready for scenario processes.
+///
+/// [`prepare_cached_locked_package_plan`] constructs this only after the
+/// cache lock has covered the package install and the load-time native build
+/// warm phase below.  A plain `PathBuf` therefore cannot be mistaken for a
+/// prepared tree: holding this value is the proof that the shared package
+/// directory has already run the builds that package loads trigger, so two
+/// editors may load the tree concurrently without racing one build directory.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PreparedSourceInstall {
+    package_dir: PathBuf,
+}
+
+impl PreparedSourceInstall {
+    fn after_warm(package_dir: PathBuf) -> Self {
+        Self { package_dir }
+    }
+
+    /// The prepared directory of the plan's root package.
+    pub fn package_dir(&self) -> &Path {
+        &self.package_dir
+    }
+
+    /// Take the prepared directory, consuming the readiness proof.
+    pub fn into_package_dir(self) -> PathBuf {
+        self.package_dir
+    }
+}
+
+impl AsRef<Path> for PreparedSourceInstall {
+    fn as_ref(&self) -> &Path {
+        &self.package_dir
+    }
+}
+
+impl From<PreparedSourceInstall> for PathBuf {
+    fn from(prepared: PreparedSourceInstall) -> Self {
+        prepared.package_dir
+    }
+}
+
+/// The next step an install cache needs before it can be handed to scenarios.
+enum InstallCacheState {
+    /// Installed and warmed under the cache lock.
+    Ready(PreparedSourceInstall),
+    /// Installed, but populated before the warm phase (or by a cache whose
+    /// warm marker is stale): only the load-time builds remain.
+    NeedsWarm,
+    /// Not installed, or installed for a different source identity.
+    NeedsInstall,
+}
+
+fn installed_package_dir(home: &Path, source: LockedPackageSource<'_>) -> PathBuf {
+    home.join(".emacs.d/elpa")
+        .join(format!("{}-{}", source.name, source.version))
+}
+
+fn installed_package_is_present(home: &Path, source: LockedPackageSource<'_>) -> bool {
+    installed_package_dir(home, source)
+        .join(format!("{}-pkg.el", source.name))
+        .is_file()
+}
+
+fn source_install_cache_state(
+    home: &Path,
+    plan: &[LockedPackageSource<'_>],
+    ready: &Path,
+    warm: &Path,
+    expected: &str,
+    warm_expected: &str,
+    package_dir: &Path,
+) -> InstallCacheState {
+    let installed = plan
+        .iter()
+        .all(|source| installed_package_is_present(home, *source))
+        && fs::read_to_string(ready).is_ok_and(|contents| contents == expected);
+    if !installed {
+        return InstallCacheState::NeedsInstall;
+    }
+    if fs::read_to_string(warm).is_ok_and(|contents| contents == warm_expected) {
+        return InstallCacheState::Ready(PreparedSourceInstall::after_warm(
+            package_dir.to_path_buf(),
+        ));
+    }
+    InstallCacheState::NeedsWarm
+}
+
+fn contains_file_with_extension(
+    directory: &Path,
+    extensions: &[&str],
+    depth: usize,
+) -> Result<bool, String> {
+    const MAX_DEPTH: usize = 4;
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("failed to scan {}: {error}", directory.display()))?;
+    let mut subdirectories = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("failed to scan {}: {error}", directory.display()))?;
+        let file_type = entry.file_type().map_err(|error| {
+            format!(
+                "failed to inspect {} while scanning {}: {error}",
+                entry.path().display(),
+                directory.display()
+            )
+        })?;
+        if file_type.is_dir() {
+            if depth < MAX_DEPTH {
+                subdirectories.push(entry.path());
+            }
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let matching = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extensions
+                    .iter()
+                    .any(|wanted| extension.eq_ignore_ascii_case(wanted))
+            });
+        if matching {
+            return Ok(true);
+        }
+    }
+    for subdirectory in subdirectories {
+        if contains_file_with_extension(&subdirectory, extensions, depth + 1)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Whether a package tree still needs the load-time build that the warm
+/// phase exists to run.
+///
+/// A package with native sources and no built artifact may compile its module
+/// from its own load path (`sqlite3.el` runs `make all` on first load).  The
+/// warm phase loads exactly these packages; a tree that already contains an
+/// artifact has had that build run and is left untouched.
+fn package_needs_native_build_warm(package_dir: &Path) -> Result<bool, String> {
+    Ok(
+        contains_file_with_extension(package_dir, NATIVE_SOURCE_EXTENSIONS, 0)?
+            && !contains_file_with_extension(package_dir, NATIVE_ARTIFACT_EXTENSIONS, 0)?,
+    )
+}
+
+/// Run each installed package's load-time native build once, serially, while
+/// the install cache lock is held.
+///
+/// Scenarios load the same package files in parallel, so a build that the
+/// package's load path starts would otherwise run twice in one package
+/// directory.  Loading the native-source packages here, before the readiness
+/// markers exist, puts the module in the cached tree so scenarios only load
+/// it.
+///
+/// A load that signals is reported on stderr and does not fail the cache:
+/// some packages ask the user before compiling (`vterm`) or compile on a
+/// later command (`ghostel`), and the cache must preserve that behavior
+/// rather than invent a build behind the package's back.  The diagnostics
+/// stay visible instead of being silently swallowed.
+fn warm_load_time_native_builds(
+    driver: &dyn PackageInstallDriver,
+    root: &Path,
+    home: &Path,
+    editor_tmp: &Path,
+    plan: &[LockedPackageSource<'_>],
+) -> Result<(), String> {
+    let mut candidates = Vec::new();
+    for source in plan {
+        let package_dir = installed_package_dir(home, *source);
+        if package_needs_native_build_warm(&package_dir)? {
+            candidates.push((*source, package_dir));
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let loads = candidates
+        .iter()
+        .map(|(source, package_dir)| {
+            elisp_string(
+                &package_dir
+                    .join(format!("{}.el", source.name))
+                    .to_string_lossy(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let form = format!(
+        r##"(progn
+               (require 'package)
+               (setq package-user-dir
+                     (expand-file-name ".emacs.d/elpa" (getenv "HOME"))
+                     package-check-signature nil)
+               (package-initialize)
+               (let ((failures 0))
+                 (dolist (file (list {loads}))
+                   (condition-case error
+                       (load file nil t t)
+                     (error
+                      (setq failures (1+ failures))
+                      (message
+                       "NEOMACS-SOURCE-INSTALL:native-build-load-failed:%s:%S"
+                       file error))))
+                 (princ
+                  (format
+                   "NEOMACS-SOURCE-INSTALL:native-build-failures:%d\n"
+                   failures)))
+               (princ "NEOMACS-SOURCE-INSTALL:warm"))"##
+    );
+    let environment =
+        package_environment_with_runtime(root, home, editor_tmp, &root.join("xdg/runtime"))
+            .expect("package sandbox roots must be absolute");
+    let names = candidates
+        .iter()
+        .map(|(source, _)| format!("{} {}", source.name, source.version))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut command = driver.command(&environment);
+    command.args(["--batch", "--quick", "--eval", &form]);
+    let output = driver.run(&mut command).map_err(|error| match error {
+        InstallCommandError::Launch(error) => format!(
+            "failed to launch {} to warm native builds for {names}: {error}",
+            driver.name()
+        ),
+        InstallCommandError::TimedOut(_) => format!(
+            "{} native build warm-up for {names} timed out after {:?}",
+            driver.name(),
+            driver.timeout()
+        ),
+        InstallCommandError::Capture(error) => format!(
+            "failed to capture {} native build warm-up for {names}: {error}",
+            driver.name()
+        ),
+    })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() || !stdout.contains("NEOMACS-SOURCE-INSTALL:warm") {
+        return Err(format!(
+            "failed to warm load-time native builds for {names} below {}\nstatus: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            root.display(),
+            output.status.code()
+        ));
+    }
+    for line in stderr
+        .lines()
+        .filter(|line| line.contains("native-build-load-failed"))
+    {
+        eprintln!("{line}");
+    }
+    Ok(())
+}
+
+fn publish_cache_marker(marker: &Path, contents: &str, label: &str) -> Result<(), String> {
+    let file_name = marker
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            format!(
+                "source install marker {} has no file name",
+                marker.display()
+            )
+        })?;
+    let temporary = marker.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
+    fs::write(&temporary, contents)
+        .map_err(|error| format!("failed to write {label} {}: {error}", temporary.display()))?;
+    fs::rename(&temporary, marker)
+        .map_err(|error| format!("failed to publish {label} {}: {error}", marker.display()))?;
+    Ok(())
+}
+
 pub fn prepare_cached_locked_package_plan(
     driver: &dyn PackageInstallDriver,
     plan: &[LockedPackageSource<'_>],
-) -> Result<PathBuf, String> {
+) -> Result<PreparedSourceInstall, String> {
     let Some(root_source) = plan.last().copied() else {
         return Err("locked source package preparation requires a non-empty plan".to_string());
     };
@@ -1449,29 +1766,46 @@ pub fn prepare_cached_locked_package_plan(
 
     let home = root.join("home");
     let editor_tmp = root.join("tmp");
-    let package_dir = home
-        .join(".emacs.d/elpa")
-        .join(format!("{}-{}", root_source.name, root_source.version));
+    let package_dir = installed_package_dir(&home, root_source);
     let ready = root.join("ready");
+    let warm = root.join("warm");
     let failed = root.join("failed");
     let expected = plan
         .iter()
         .map(|source| source.identity())
         .collect::<String>();
-    let cache_is_ready = plan.iter().all(|source| {
-        home.join(".emacs.d/elpa")
-            .join(format!("{}-{}", source.name, source.version))
-            .join(format!("{}-pkg.el", source.name))
-            .is_file()
-    }) && fs::read_to_string(&ready)
-        .is_ok_and(|contents| contents == expected);
-    if cache_is_ready {
-        return Ok(package_dir);
-    }
+    let warm_expected = format!("{SOURCE_INSTALL_WARM_REVISION}\n{expected}");
     let failure_prefix = format!(
         "run-id\t{}\nidentity\t{expected}error\n",
         package_preparation_run_id()
     );
+
+    match source_install_cache_state(
+        &home,
+        plan,
+        &ready,
+        &warm,
+        &expected,
+        &warm_expected,
+        &package_dir,
+    ) {
+        InstallCacheState::Ready(prepared) => return Ok(prepared),
+        InstallCacheState::NeedsWarm => {
+            if let Ok(contents) = fs::read_to_string(&failed)
+                && let Some(error) = contents.strip_prefix(&failure_prefix)
+            {
+                return Err(error.to_string());
+            }
+            // A cache populated before the warm phase exists: install is
+            // complete, only the load-time builds remain.
+            warm_load_time_native_builds(driver, &root, &home, &editor_tmp, plan).map_err(
+                |error| publish_package_preparation_failure(&failed, &failure_prefix, error),
+            )?;
+            publish_cache_marker(&warm, &warm_expected, "source install warm marker")?;
+            return Ok(PreparedSourceInstall::after_warm(package_dir));
+        }
+        InstallCacheState::NeedsInstall => {}
+    }
     if let Ok(contents) = fs::read_to_string(&failed)
         && let Some(error) = contents.strip_prefix(&failure_prefix)
     {
@@ -1488,7 +1822,7 @@ pub fn prepare_cached_locked_package_plan(
             })?;
         }
     }
-    for marker in [&ready, &failed] {
+    for marker in [&ready, &warm, &failed] {
         if marker.exists() {
             fs::remove_file(marker).map_err(|error| {
                 format!(
@@ -1617,12 +1951,9 @@ pub fn prepare_cached_locked_package_plan(
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !output.status.success()
         || !stdout.contains("NEOMACS-SOURCE-INSTALL:ready")
-        || !plan.iter().all(|source| {
-            home.join(".emacs.d/elpa")
-                .join(format!("{}-{}", source.name, source.version))
-                .join(format!("{}-pkg.el", source.name))
-                .is_file()
-        })
+        || !plan
+            .iter()
+            .all(|source| installed_package_is_present(&home, *source))
     {
         let error = format!(
             "failed to install {} {} from locked source below {}\nstatus: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
@@ -1638,26 +1969,20 @@ pub fn prepare_cached_locked_package_plan(
         ));
     }
 
-    let marker_tmp = root.join(format!("ready.{}.tmp", std::process::id()));
-    fs::write(&marker_tmp, &expected).map_err(|error| {
-        format!(
-            "failed to write source install marker {}: {error}",
-            marker_tmp.display()
-        )
-    })?;
-    fs::rename(&marker_tmp, &ready).map_err(|error| {
-        format!(
-            "failed to publish source install marker {}: {error}",
-            ready.display()
-        )
-    })?;
-    Ok(package_dir)
+    // The ready marker alone is not readiness: scenarios require the warm
+    // marker too, so a crash between these two writes only repeats the warm
+    // phase instead of reinstalling the whole cache.
+    publish_cache_marker(&ready, &expected, "source install marker")?;
+    warm_load_time_native_builds(driver, &root, &home, &editor_tmp, plan)
+        .map_err(|error| publish_package_preparation_failure(&failed, &failure_prefix, error))?;
+    publish_cache_marker(&warm, &warm_expected, "source install warm marker")?;
+    Ok(PreparedSourceInstall::after_warm(package_dir))
 }
 
 pub fn prepare_cached_locked_melpa_package(
     driver: &dyn PackageInstallDriver,
     package: (&str, &str),
-) -> Result<PathBuf, String> {
+) -> Result<PreparedSourceInstall, String> {
     let plan = locked_melpa_install_plan(package)?;
     prepare_cached_locked_package_plan(driver, &plan)
 }
@@ -1669,12 +1994,14 @@ pub fn preflight_locked_melpa_packages(
     packages
         .iter()
         .map(|package| {
-            prepare_cached_locked_melpa_package(driver, *package).map_err(|error| {
-                format!(
-                    "MELPA source preflight failed before parity tests for {} {}:\n{error}",
-                    package.0, package.1
-                )
-            })
+            prepare_cached_locked_melpa_package(driver, *package)
+                .map(PreparedSourceInstall::into_package_dir)
+                .map_err(|error| {
+                    format!(
+                        "MELPA source preflight failed before parity tests for {} {}:\n{error}",
+                        package.0, package.1
+                    )
+                })
         })
         .collect()
 }
