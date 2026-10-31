@@ -16,9 +16,9 @@ source_paths=(
     'src/host_effect/wake/tests/native.rs'
 )
 source_hashes=(
-    '0b5a597d3b55a63185bece589f7ca3b68b4d3e97b236e4b7cebb2592832325c2'
+    '2b8719ede980f176ce8a660ce26e52d0918cd3dc63fa94d0d8d61fc9f3b3dad2'
     '74b286788d30e9903a6b91048debfd423b13efa9c05ddef28842b76181a54233'
-    'b072785790ce123a989ccc60e2ac77d6bc447ac1ab4c192ade10cdb6de90e96a'
+    '5cebeea2f7c1b3bb49db8e6e9bafeb0789b1f198c8a8bbc6287b9bd6093f90af'
 )
 for index in "${!source_paths[@]}"; do
     source_file="$harness_dir/../../${source_paths[$index]}"

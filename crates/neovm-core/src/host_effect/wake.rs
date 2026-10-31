@@ -844,12 +844,81 @@ fn wake_stream_pair() -> io::Result<(WakeStream, WakeStream)> {
 }
 
 #[cfg(any(not(unix), test))]
+const LOOPBACK_WAKE_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Construction owns the listener until its single accept. It cannot be kept
+/// alive by an endpoint returned to a caller or by the registered wake source.
+#[cfg(any(not(unix), test))]
+struct LoopbackWakeListener(std::net::TcpListener);
+
+#[cfg(any(not(unix), test))]
+impl LoopbackWakeListener {
+    fn bind() -> io::Result<Self> {
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).map(Self)
+    }
+
+    fn into_pair(self) -> io::Result<LoopbackWakePair> {
+        self.into_pair_with(LoopbackWakePair::validate)
+    }
+
+    /// One construction path; the test-only caller can omit just validation
+    /// to prove the foreign-first connection is an actual invariant violation.
+    fn into_pair_with(
+        self,
+        validate: impl FnOnce(
+            std::net::TcpStream,
+            std::net::SocketAddr,
+            std::net::TcpStream,
+        ) -> io::Result<LoopbackWakePair>,
+    ) -> io::Result<LoopbackWakePair> {
+        let address = self.0.local_addr()?;
+        let writer = std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT)?;
+        let accepted = self.0.accept();
+        // Close immediately after the one accept, including failed accept or
+        // subsequent identity rejection. Never read data from a foreign peer.
+        drop(self);
+        let (reader, peer) = accepted?;
+        let pair = validate(reader, peer, writer)?;
+        pair.writer.set_nodelay(true)?;
+        Ok(pair)
+    }
+}
+
+/// Its validating constructor keeps both connected sockets alive while the
+/// OS-owned peer address is compared. Only this paired reader may be returned
+/// for registration; no token, client data read, retry or listener escapes.
+#[cfg(any(not(unix), test))]
+struct LoopbackWakePair {
+    reader: std::net::TcpStream,
+    writer: std::net::TcpStream,
+}
+
+#[cfg(any(not(unix), test))]
+impl LoopbackWakePair {
+    fn validate(
+        reader: std::net::TcpStream,
+        peer: std::net::SocketAddr,
+        writer: std::net::TcpStream,
+    ) -> io::Result<Self> {
+        if peer != writer.local_addr()? {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "loopback wake accepted an unrelated connection",
+            ));
+        }
+        Ok(Self { reader, writer })
+    }
+
+    fn into_streams(self) -> (std::net::TcpStream, std::net::TcpStream) {
+        (self.reader, self.writer)
+    }
+}
+
+#[cfg(any(not(unix), test))]
 fn loopback_wake_stream_pair() -> io::Result<(std::net::TcpStream, std::net::TcpStream)> {
-    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
-    let writer = std::net::TcpStream::connect(listener.local_addr()?)?;
-    writer.set_nodelay(true)?;
-    let (reader, _) = listener.accept()?;
-    Ok((reader, writer))
+    LoopbackWakeListener::bind()?
+        .into_pair()
+        .map(LoopbackWakePair::into_streams)
 }
 
 impl NativeEndpoint {

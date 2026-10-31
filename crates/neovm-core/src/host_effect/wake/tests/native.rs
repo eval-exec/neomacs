@@ -304,3 +304,74 @@ fn poller_rearm_failure_selects_paired_condition_on_next_wait() {
         ControlWakeOutcome::ControlReady(ControlNudge::HostServiceReady)
     );
 }
+
+#[test]
+fn loopback_pair_closes_listener_and_only_carries_the_nudge_byte() {
+    use std::io::{Read, Write};
+    let (mut reader, mut writer) = loopback_wake_stream_pair().unwrap();
+    assert_eq!(reader.peer_addr().unwrap(), writer.local_addr().unwrap());
+    assert_eq!(reader.local_addr().unwrap(), writer.peer_addr().unwrap());
+    let address = writer.peer_addr().unwrap();
+    assert!(
+        std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT).is_err(),
+        "no listener may remain after pairing"
+    );
+    writer.write_all(&[1]).unwrap();
+    let mut byte = [0];
+    reader.read_exact(&mut byte).unwrap();
+    assert_eq!(byte, [1]);
+}
+
+#[test]
+fn foreign_first_loopback_peer_fails_closed_without_reading_its_data() {
+    let listener = LoopbackWakeListener::bind().unwrap();
+    let address = listener.0.local_addr().unwrap();
+    // Connect completion enqueues this client before the private writer is
+    // even constructed. No scheduler timing, sleep or foreign byte is needed.
+    let foreign =
+        std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT).unwrap();
+    let result = listener.into_pair();
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("an unrelated peer must never become a wake source"),
+    };
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT).is_err(),
+        "rejection must close the listener before returning"
+    );
+    drop(foreign);
+}
+
+#[test]
+fn negative_omitting_only_peer_validation_accepts_foreign_wake_injection() {
+    use std::io::{Read, Write};
+    let listener = LoopbackWakeListener::bind().unwrap();
+    let address = listener.0.local_addr().unwrap();
+    let mut foreign =
+        std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT).unwrap();
+    let foreign_address = foreign.local_addr().unwrap();
+    // The same connect/accept/close path: only the validating constructor is
+    // replaced. The bad reader remains connected to the foreign client.
+    let mut unchecked = listener
+        .into_pair_with(|reader, _peer, writer| Ok(LoopbackWakePair { reader, writer }))
+        .unwrap();
+    assert_eq!(unchecked.reader.peer_addr().unwrap(), foreign_address);
+    assert_ne!(
+        unchecked.reader.peer_addr().unwrap(),
+        unchecked.writer.local_addr().unwrap(),
+        "negative control must expose the unpaired connected endpoints"
+    );
+    foreign.write_all(&[1]).unwrap();
+    let mut byte = [0];
+    unchecked.reader.read_exact(&mut byte).unwrap();
+    assert_eq!(
+        byte,
+        [1],
+        "omitting validation lets the foreign peer inject a wake"
+    );
+    assert!(
+        std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT).is_err(),
+        "negative control must retain the real listener-close behavior"
+    );
+}
