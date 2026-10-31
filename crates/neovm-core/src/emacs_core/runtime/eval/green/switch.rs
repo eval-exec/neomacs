@@ -835,6 +835,9 @@ impl Context {
     #[inline(never)]
     pub(crate) fn start_green_threads(&mut self) -> Result<(), super::GreenStartError> {
         let baton = self.start_green_runtime()?;
+        // The main carrier runs Lisp on this OS thread; reserve its dense
+        // SymId/NameId caches as worker owners do on creation.
+        crate::emacs_core::intern::prepare_thread_symbol_caches();
         let control = self.with_green_runtime(|runtime| Arc::clone(&runtime.control));
         control.install_select(self.processes.green_select_handle());
         let receiver = control.register_main();

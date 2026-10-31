@@ -604,6 +604,11 @@ impl StringInterner {
         }
     }
 
+    /// Number of interned name ids allocated so far.
+    fn len(&self) -> usize {
+        self.strings.len()
+    }
+
     /// Look up a symbol-name atom without interning it.
     pub fn lookup(&self, s: &str) -> Option<NameId> {
         self.lookup_name_parts(s.as_bytes(), SymbolNameCharacterCount::from(s))
@@ -958,6 +963,16 @@ impl SymbolRegistry {
 
     fn slot(&self, id: SymId) -> Option<&SymbolSlot> {
         self.symbols.get(id.0 as usize)
+    }
+
+    /// Number of symbol ids allocated so far: the current `SymId` span.
+    fn symbol_span(&self) -> usize {
+        self.symbols.len()
+    }
+
+    /// Number of interned name ids allocated so far: the current `NameId` span.
+    fn name_span(&self) -> usize {
+        self.names.len()
     }
 
     fn intern(&mut self, s: &str) -> SymId {
@@ -2151,6 +2166,52 @@ fn ensure_thread_local_cache_epoch_current() {
         INTERN_STR_CACHE.with(|cache| cache.borrow_mut().clear());
         SYMBOL_CACHE.with(|cache| cache.borrow_mut().clear());
         NAME_CANONICAL_SYMBOL_CACHE.with(|cache| cache.borrow_mut().clear());
+    });
+}
+
+/// Extra `SymId` slots reserved beyond the current interner span.
+///
+/// Reserve-only headroom: the measured many-threads jobs allocate zero new
+/// symbol ids after owner creation, so this is defensive for callers that do
+/// intern during a job, not a measured requirement. One eighth of the span
+/// keeps the reservation below the doubling capacity the natural growth path
+/// would end at (2x), which is what the reservation is saving.
+const SYMBOL_CACHE_HEADROOM_DIVISOR: usize = 8;
+
+/// The capacity [`prepare_thread_symbol_caches`] reserves for `SYMBOL_CACHE`.
+fn symbol_cache_target(span: usize) -> usize {
+    span.saturating_add(span / SYMBOL_CACHE_HEADROOM_DIVISOR)
+}
+
+/// Reserve the per-OS-thread dense `SymId` cache for a fresh Green owner.
+///
+/// A fresh Green owner runs on a fresh OS thread, whose symbol cache starts
+/// empty and is then rebuilt through `resize` growth as the owner touches
+/// ordinary symbols: the first touches allocate, the next higher id reallocates
+/// and copies the prefix, and the natural doubling can end at twice the span.
+/// Callers invoke this once on the cold owner-creation path so one allocation
+/// up front covers the ids the owner will touch.
+///
+/// Reserve-only: `thread_local_record_name`, `_name_id`, `_canonical` and
+/// `_keyword` keep `resize(idx + 1)` as the fill and as the fallback when the
+/// interner grows past the reservation; the epoch reset above clears without
+/// dropping capacity.
+///
+/// The `NameId`-indexed `NAME_CANONICAL_SYMBOL_CACHE` is not reserved: the
+/// measured many-threads jobs never touch it (its length stayed zero while its
+/// full name span would have been allocated per worker), so its first use
+/// grows it lazily. The sparse name-keyed `INTERN_STR_CACHE` is likewise left
+/// to its lazy growth: its size follows the distinct spellings an owner
+/// interns, not the `SymId` span.
+pub(crate) fn prepare_thread_symbol_caches() {
+    let symbol_span = global_symbol_registry().read().symbol_span();
+    let target = symbol_cache_target(symbol_span);
+    SYMBOL_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let len = cache.len();
+        if cache.capacity() < target {
+            cache.reserve_exact(target - len);
+        }
     });
 }
 

@@ -196,6 +196,9 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn new_green_owner(baton: &super::world::Baton) -> Context {
+        // This owner is about to run on this OS thread; reserve the dense
+        // SymId/NameId caches once instead of regrowing them from empty.
+        crate::emacs_core::intern::prepare_thread_symbol_caches();
         let (seed, current, case_table) = {
             let runtime = baton.green_runtime();
             let bootstrap = &runtime

@@ -1066,3 +1066,31 @@ fn reader_name_templates_preserve_count_proof_independently_of_identity() {
         );
     }
 }
+
+#[test]
+fn prepare_thread_symbol_caches_reserves_the_symbol_span_with_headroom() {
+    crate::test_utils::init_test_tracing();
+    let symbol_span = global_symbol_registry().read().symbol_span();
+    assert!(
+        symbol_span > 0,
+        "the process registry always holds the seeded nil/t/unbound symbols"
+    );
+    assert_eq!(
+        symbol_cache_target(symbol_span),
+        symbol_span + symbol_span / SYMBOL_CACHE_HEADROOM_DIVISOR,
+        "the target is the span plus one bounded headroom slice"
+    );
+    assert_eq!(symbol_cache_target(0), 0);
+    assert_eq!(
+        symbol_cache_target(usize::MAX),
+        usize::MAX,
+        "the target saturates instead of overflowing"
+    );
+    prepare_thread_symbol_caches();
+    SYMBOL_CACHE.with(|cache| {
+        assert!(
+            cache.borrow().capacity() >= symbol_cache_target(symbol_span),
+            "the SymId cache must be reserved to the symbol span plus headroom"
+        );
+    });
+}
