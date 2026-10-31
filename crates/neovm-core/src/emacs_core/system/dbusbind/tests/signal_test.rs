@@ -172,6 +172,12 @@ fn directed_signal_reaches_its_handler() {
 /// A directed method call reaches the handler `dbus-register-method` installed.
 #[test]
 fn directed_method_call_reaches_its_handler() {
+    // Hermetic bus: the ambient session bus is shared with every other process
+    // of the user (and every other test process on this host), and its daemon
+    // can disconnect a peer under load. Dispatch to a registered method does
+    // not depend on which daemon serves the bus, so this test brings its own.
+    let bus = super::private_bus::PrivateBus::start("directed-method");
+    let _bus_env = bus.install_env();
     crate::test_utils::init_test_tracing();
     super::super::reset_thread_locals();
     let mut eval = crate::test_utils::runtime_startup_context();

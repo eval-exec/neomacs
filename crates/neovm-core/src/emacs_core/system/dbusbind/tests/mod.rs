@@ -3,6 +3,8 @@ mod surface;
 
 std::cfg_select! {
     neomacs_have_dbus => {
+        #[path = "private_bus.rs"]
+        pub(crate) mod private_bus;
         #[path = "call_test.rs"]
         mod call;
         #[path = "connection_test.rs"]
