@@ -11,6 +11,7 @@
 //! string interner".
 
 pub(crate) mod parallel;
+pub(crate) mod shared;
 mod well_known;
 pub use well_known::{FIRST_ID as FIRST_WELL_KNOWN_SYM_ID, NAMES as WELL_KNOWN_NAMES, WellKnown};
 
