@@ -1322,12 +1322,12 @@ fn write_octal(out: &mut Vec<u8>, b: u32) -> usize {
 ///
 /// Mirrors GNU `strwidth` / `c_string_width` (character.c:290) — the
 /// simplified form without precision cap or display-table consultation.
-/// Sums [`crate::encoding::char_width`] over decoded code points.
+/// Sums [`char_width`] over decoded code points.
 pub fn strwidth(bytes: &[u8], multibyte: bool) -> usize {
     let mut total = 0usize;
     if !multibyte {
         for &b in bytes {
-            total += crate::encoding::char_width(b as char);
+            total += char_width(b as char);
         }
         return total;
     }
@@ -1335,7 +1335,7 @@ pub fn strwidth(bytes: &[u8], multibyte: bool) -> usize {
     while p < bytes.len() {
         let (c, len) = string_char(&bytes[p..]);
         if let Some(ch) = char::from_u32(c.code()) {
-            total += crate::encoding::char_width(ch);
+            total += char_width(ch);
         } else {
             // Raw-byte / extended char: width 4 (octal display).
             total += 4;
@@ -1682,6 +1682,10 @@ pub fn utf8_to_emacs(s: &str) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 // Tests (in separate file per project convention)
 // ---------------------------------------------------------------------------
+
+mod char_width;
+pub use char_width::char_width;
+pub(crate) use char_width::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
 
 #[cfg(test)]
 #[path = "tests/emacs_char_test.rs"]

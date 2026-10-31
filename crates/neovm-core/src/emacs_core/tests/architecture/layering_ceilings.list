@@ -1,6 +1,5 @@
 g0 eval 21
 g0 top:buffer 2
-g0 top:encoding 2
 buffer builtins 6
 buffer chartable 1
 buffer composite 13
@@ -24,7 +23,7 @@ encoding charset 22
 encoding chartable 7
 encoding coding 81
 encoding editfns 2
-encoding emacs_char 61
+encoding emacs_char 63
 encoding error 20
 encoding eval 32
 encoding fns 3
