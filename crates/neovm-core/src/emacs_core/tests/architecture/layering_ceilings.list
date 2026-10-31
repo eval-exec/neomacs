@@ -58,7 +58,7 @@ keyboard builtins 12
 keyboard dbusbind 3
 keyboard display_host 9
 keyboard emacs_char 5
-keyboard error 50
+keyboard error 52
 keyboard eval 17
 keyboard forward 2
 keyboard hook_runtime 8

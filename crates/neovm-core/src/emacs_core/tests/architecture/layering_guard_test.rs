@@ -148,6 +148,10 @@ enum LowerRoot {
     /// input work (main b243, ipc CONT38). A top-level production module like
     /// the other lower roots: references out of it are counted as upward.
     HostInput,
+    /// The owner-selected native host-effect contracts added with the
+    /// parallel-Lisp effect work. A top-level production module like the
+    /// other lower roots; its contracts name no emacs_core item today.
+    HostEffect,
 }
 
 impl LowerRoot {
@@ -171,6 +175,7 @@ impl LowerRoot {
             "tls_scope" => Self::TlsScope,
             "window" => Self::Window,
             "host_input" => Self::HostInput,
+            "host_effect" => Self::HostEffect,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
             }
@@ -197,6 +202,7 @@ impl LowerRoot {
             Self::TlsScope => "tls_scope",
             Self::Window => "window",
             Self::HostInput => "host_input",
+            Self::HostEffect => "host_effect",
         }
     }
 }
