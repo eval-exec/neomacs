@@ -3,17 +3,34 @@
 //! GEN1 construction witnesses confine compilation to the exclusive phase.
 //! Backend absence is a typed compile refusal, not a serial fallback. The
 //! first admitted plan returns an immediate without a call or back edge.
+use crate::tagged::gc::symbol_table::publication::PublicationView;
 use crate::tagged::gc::{
     Gen1Admission, ImmediateResult, ImmediateResultError, OwnerRootSlot,
     ParallelExecutionAdmission, RegistrationError, RunAccess,
 };
 use std::ffi::c_void;
 
+/// A structural slot request, distinct from counts and from a live symbol
+/// handle. Coverage does not prove membership or permit a cell read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TableSlotIndex(usize);
+impl TableSlotIndex {
+    pub(crate) const fn new(index: usize) -> Self {
+        Self(index)
+    }
+    pub(crate) const fn get(self) -> usize {
+        self.0
+    }
+}
+
 /// This closed plan cannot contain a pointer, allocation, call or loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScalarProgram {
     Constant(ImmediateResult),
     Argument,
+    /// True means immutable chunk backing exists, including any unused gaps.
+    /// This is not Lisp fboundp or intern membership.
+    HasSlotBacking(TableSlotIndex),
 }
 
 #[derive(Debug)]
@@ -42,8 +59,9 @@ impl NativeAbiVersion {
 }
 
 #[repr(C)]
-struct ParallelRuntime {
+struct ParallelRuntime<'activation> {
     version: NativeAbiVersion,
+    publication: PublicationView<'activation>,
 }
 #[repr(C)]
 struct ScalarInput {
@@ -72,7 +90,7 @@ impl NativeStatus {
 // The opaque activation is a borrow of the value-layer activation, not a
 // Context or serial frame. No function pointer or native address is exported.
 type ParallelEntry = unsafe extern "C" fn(
-    *const ParallelRuntime,
+    *const ParallelRuntime<'_>,
     *mut c_void,
     *const ScalarInput,
     *mut ScalarOutput,

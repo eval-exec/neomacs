@@ -181,3 +181,76 @@ fn nmjit_n4_scalar_abi_owner_source_guard_test() {
         );
     }
 }
+
+fn assert_slot_probe(index: usize) {
+    let slot = TableSlotIndex::new(index);
+    with_scalar(
+        ScalarProgram::HasSlotBacking(slot),
+        |code, admission, run, home| {
+            let covered = admission
+                .with_activation(run, home, |activation| {
+                    let view = activation.table_view();
+                    let table = view.table();
+                    index < table.slots().get()
+                        && table
+                            .chunk((index / table.chunk_slots().get()).into())
+                            .is_some()
+                })
+                .unwrap();
+            code.run(admission, run, home, ImmediateResult::Nil)
+                .unwrap();
+            assert_eq!(
+                ExecutionTestHomes::read(home, run),
+                if covered {
+                    ImmediateResult::True
+                } else {
+                    ImmediateResult::Nil
+                }
+            );
+            #[cfg(feature = "jit")]
+            {
+                let ir = &code.native.emission;
+                assert_eq!(
+                    ir.matches("atomic_load").count(),
+                    1,
+                    "one descriptor identity: {ir}"
+                );
+                assert!(ir.contains("udiv"), "bounded chunk lookup: {ir}");
+                assert!(
+                    !ir.contains("call "),
+                    "closed probe has no helper call: {ir}"
+                );
+            }
+            eprintln!("NMJIT_N4_NATIVE_DESCRIPTOR_SLOT_OK {index} {covered}");
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn nmjit_n4_native_descriptor_first_and_chunk_boundary() {
+    // Use the backing's own chunk-size definition, then compare with the
+    // actual immutable table rather than assuming the fixture's chunk count.
+    let chunk = crate::emacs_core::symbol::OBARRAY_CHUNK_SLOTS;
+    for index in [0, 1, chunk - 1, chunk, chunk + 1, chunk * 2 - 1, chunk * 2] {
+        assert_slot_probe(index);
+    }
+}
+
+#[test]
+fn nmjit_n4_native_descriptor_large_slot_is_a_total_miss() {
+    for index in [usize::MAX, usize::MAX - 1, usize::MAX / 2] {
+        assert_slot_probe(index);
+    }
+}
+
+#[test]
+fn nmjit_n4_native_descriptor_source_guard_test() {
+    let native = include_str!("../native.rs");
+    let execution = include_str!("../../../../../tagged/gc/mutator_registration/execution.rs");
+    assert_eq!(native.matches(".atomic_load(").count(), 1);
+    assert!(native.contains("activation.publication()"));
+    assert!(execution.contains("pub(crate) fn publication(&self) -> PublicationView<'_>"));
+    assert!(!native.contains("spine_addr"));
+    assert!(!native.contains("initial_symbols"));
+}

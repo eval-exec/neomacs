@@ -7,7 +7,7 @@
 use super::construction::Gen1Construction;
 use super::*;
 use crate::tagged::gc::mark_word::MarkWord;
-use crate::tagged::gc::symbol_table::publication::TableView;
+use crate::tagged::gc::symbol_table::publication::{PublicationView, TableView};
 use crate::tagged::value::{Fixnum, TaggedValue};
 
 /// A checked immediate, never a managed pointer smuggled through native ABI.
@@ -117,6 +117,12 @@ impl ExecutionActivation<'_, '_, '_> {
     /// Its borrow cannot escape the activation callback's return type.
     pub(crate) fn table_view(&self) -> TableView<'_> {
         self.registry.symbols.tables.view()
+    }
+
+    /// The stack-confined consumer loads one immutable descriptor from this
+    /// slot, never from the mutable backing spine. IN_SLICE covers all uses.
+    pub(crate) fn publication(&self) -> PublicationView<'_> {
+        self.registry.symbols.tables.publication()
     }
 
     /// Commit a validated immediate to the canonical resident result home.

@@ -155,3 +155,30 @@ fn nmjit_n4_table_abi_drop_preserves_unique_backing_ownership() {
         "each original backing owner drops exactly once"
     );
 }
+
+#[test]
+fn nmjit_n4_publication_view_keeps_old_descriptor_across_replacement() {
+    use crate::tagged::gc::symbol_table::publication::{PublishedSymbolTables, TableLimits};
+    let mut first = Box::new([41u64, 42]);
+    let mut second = Box::new([51u64, 52]);
+    let first_address = address(&mut *first);
+    let second_address = address(&mut *second);
+    let tables =
+        PublishedSymbolTables::new(table([first_address], 1), TableLimits::default()).unwrap();
+    let publication = tables.publication();
+    let old = publication.load();
+    let shape =
+        SymbolTableShape::new(4.into(), 2.into(), NonZeroUsize::new(2).unwrap().into()).unwrap();
+    tables
+        .try_prepare(shape)
+        .result
+        .unwrap()
+        .publish([first_address, second_address])
+        .unwrap();
+    assert_eq!(old.table().slots().get(), 2);
+    assert_eq!(old.table().chunk(0.into()), Some(first_address));
+    let new = publication.load();
+    assert_eq!(new.table().slots().get(), 4);
+    assert_eq!(new.table().chunk(1.into()), Some(second_address));
+    assert_eq!(tables.stats().unwrap().retired.get(), 1);
+}

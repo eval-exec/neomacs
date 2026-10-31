@@ -244,3 +244,19 @@ fn nmjit_n4_execution_production_only_source_guard_test() {
     assert!(!execution.contains("std::env"));
     assert!(execution.contains("_production: &Gen1Construction"));
 }
+
+#[test]
+fn nmjit_n4_activation_borrows_publication_until_return() {
+    fixture(|admission, run, home| {
+        admission
+            .with_activation(run, home, |activation| {
+                let publication = activation.publication();
+                let observed = publication.load();
+                let checked = activation.table_view();
+                assert!(std::ptr::eq(observed.table(), checked.table()));
+                assert!(observed.table().slots().get() > 0);
+            })
+            .unwrap();
+        assert_eq!(ExecutionTestHomes::read(home, run), ImmediateResult::Nil);
+    });
+}

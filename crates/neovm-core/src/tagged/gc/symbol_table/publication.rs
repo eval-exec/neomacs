@@ -192,6 +192,15 @@ impl PublishedSymbolTables {
         Ok(owner)
     }
 
+    /// Borrow the publication slot while the era retains all predecessors.
+    /// The view cannot be sent away from the bounded activation that owns it.
+    pub(crate) fn publication(&self) -> PublicationView<'_> {
+        PublicationView {
+            slot: &self.published,
+            owner: PhantomData,
+        }
+    }
+
     pub(crate) fn view(&self) -> TableView<'_> {
         let pointer = self.published.load(Ordering::Acquire);
         // SAFETY: construction publishes a fully initialized owned allocation
@@ -330,6 +339,30 @@ impl PublishedSymbolTables {
         }
     }
 }
+
+/// Transparent borrowed atomic slot for consumers of the explicit descriptor
+/// ABI. Its representation is one reference; no mutable slot or chunk owner
+/// escapes. Generated consumers must use an Acquire-or-stronger atomic load.
+#[repr(transparent)]
+#[must_use = "retain this borrow until every descriptor use returns"]
+pub(crate) struct PublicationView<'owner> {
+    slot: &'owner AtomicPtr<PublishedSymbolTable>,
+    owner: PhantomData<std::rc::Rc<()>>,
+}
+impl PublicationView<'_> {
+    pub(crate) fn load(&self) -> TableView<'_> {
+        let pointer = self.slot.load(Ordering::Acquire);
+        // SAFETY: only PublishedSymbolTables constructs this borrow. It
+        // publishes initialized owners before Release and retains every
+        // predecessor until all view/activation borrows have ended.
+        TableView {
+            table: unsafe { &*pointer },
+            owner: PhantomData,
+        }
+    }
+}
+const _: () = assert!(size_of::<PublicationView<'static>>() == size_of::<*const ()>());
+static_assertions::assert_not_impl_any!(PublicationView<'static>: Send, Sync, Clone, Copy);
 
 /// A view never outlives the owner and never loans chunk ownership.
 pub(crate) struct TableView<'owner> {

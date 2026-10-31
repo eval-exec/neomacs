@@ -16,6 +16,7 @@ enum Publication {
 #[derive(Clone, Copy)]
 enum Observation {
     Acquire,
+    NativeSeqCst,
     MissingAcquire,
 }
 
@@ -46,6 +47,7 @@ fn initialization(publication: Publication, observation: Observation, witness: &
     let reader = thread::spawn(move || {
         let ordering = match observation {
             Observation::Acquire => Ordering::Acquire,
+            Observation::NativeSeqCst => Ordering::SeqCst,
             Observation::MissingAcquire => Ordering::Relaxed,
         };
         if current.load(ordering) == 1 {
@@ -63,6 +65,15 @@ fn initialization(publication: Publication, observation: Observation, witness: &
 fn release_acquire_initializes_whole_descriptor() {
     support::exhaustive(3, || {
         initialization(Publication::Release, Observation::Acquire, "INITIALIZATION")
+    });
+}
+
+#[test]
+fn native_atomic_load_initializes_whole_descriptor() {
+    // Cranelift's atomic_load is SeqCst, stronger than the required Acquire.
+    // Model that exact reader edge against the production Release writer.
+    support::exhaustive(3, || {
+        initialization(Publication::Release, Observation::NativeSeqCst, "NATIVE_INITIALIZATION")
     });
 }
 
