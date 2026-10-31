@@ -49,6 +49,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `RootBatchReader<'static>: Send`
           `Cell<*mut TaggedHeap>: Sync`
           which is required by `RootBatchReader<'static>: Send`
+          `Rc<Cell<Vec<TaggedValue>>>: Sync`
+          which is required by `RootBatchReader<'static>: Send`
           `Rc<Cell<*const ()>>: Sync`
           which is required by `RootBatchReader<'static>: Send`
           `Cell<u64>: Sync`

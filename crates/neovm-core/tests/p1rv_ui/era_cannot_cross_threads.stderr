@@ -39,6 +39,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `ParallelHeapEra<'static>: Send`
           `*mut StringObj: Send`
           which is required by `ParallelHeapEra<'static>: Send`
+          `Rc<Cell<Vec<TaggedValue>>>: Send`
+          which is required by `ParallelHeapEra<'static>: Send`
           `Rc<Cell<*const ()>>: Send`
           which is required by `ParallelHeapEra<'static>: Send`
           `*mut TaggedHeap: Send`
