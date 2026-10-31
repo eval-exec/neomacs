@@ -310,6 +310,8 @@ struct EraCore<'heap> {
     suspended_cons: RefCell<Option<super::facade_mark::SuspendedConsCollector<'heap>>>,
     legacy_roots: Option<FrozenLegacyRoots>,
     #[cfg(test)]
+    symbol_table_admission_charge: super::symbol_table::publication::RetainedTableBytes,
+    #[cfg(test)]
     weak_sweep: Option<WeakSweepPermit>,
     keeper: Option<Baton>,
     registry: Option<Arc<Registry>>,
@@ -484,6 +486,8 @@ impl<'heap> EraCore<'heap> {
                 collector: RefCell::new(Some(collector)),
                 suspended_cons: RefCell::new(None),
                 legacy_roots: None,
+                #[cfg(test)]
+                symbol_table_admission_charge: table_bytes,
                 #[cfg(test)]
                 weak_sweep: None,
                 keeper: Some(keeper),

@@ -139,6 +139,15 @@ macro_rules! era_operations {
                 self.core.heap_identity()
             }
 
+            /// Exact value charged to owner 0's image by checked admission.
+            /// Later table growth is intentionally not part of this receipt.
+            #[cfg(test)]
+            pub(crate) fn symbol_table_admission_charge_for_test(
+                &self,
+            ) -> super::super::symbol_table::publication::RetainedTableBytes {
+                self.core.symbol_table_admission_charge
+            }
+
             #[cold]
             pub fn register(
                 &self,
