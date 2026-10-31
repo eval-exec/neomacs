@@ -105,7 +105,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<i64>: Send`
            which is required by `neovm_core::Context: Send`
-           `*mut builtins::collections::HashTestGcInhibitAccounting: Send`
+           `*mut hashtab::HashTestGcInhibitAccounting: Send`
            which is required by `neovm_core::Context: Send`
            `NonNull<neovm_core::buffer::Buffer>: Send`
            which is required by `neovm_core::Context: Send`

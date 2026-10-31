@@ -112,7 +112,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Sync`
            `NonNull<i64>: Sync`
            which is required by `neovm_core::Context: Sync`
-           `*mut builtins::collections::HashTestGcInhibitAccounting: Sync`
+           `*mut hashtab::HashTestGcInhibitAccounting: Sync`
            which is required by `neovm_core::Context: Sync`
            `NonNull<neovm_core::buffer::Buffer>: Sync`
            which is required by `neovm_core::Context: Sync`
