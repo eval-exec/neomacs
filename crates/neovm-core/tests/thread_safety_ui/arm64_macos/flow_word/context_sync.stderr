@@ -122,7 +122,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Sync`
            `Cell<SymId>: Sync`
            which is required by `neovm_core::Context: Sync`
-           `Cell<eval::form_head_cache::FormHead>: Sync`
+           `Cell<eval::dispatch_class::FormHead>: Sync`
            which is required by `neovm_core::Context: Sync`
            `*const i64: Sync`
            which is required by `neovm_core::Context: Sync`
