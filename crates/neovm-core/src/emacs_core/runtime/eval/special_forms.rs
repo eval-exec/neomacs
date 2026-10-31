@@ -673,7 +673,14 @@ impl Context {
                         .unwrap_or_default(),
                 );
             }
-            self.assign_setq_by_id(sym_id, value)?;
+            // GNU Fsetq's one assignment protocol (eval.c:491-502): mutate
+            // the exact lexical binding first, otherwise take the runtime
+            // variable model. This is `assign_setq_by_id` inlined at its
+            // hot caller -- the lexical stage is the common case, so the
+            // call boundary was pure overhead on every pair.
+            if !self.try_assign_lexical_binding_by_id(sym_id, value) {
+                self.assign_setq_dynamic_by_id(sym_id, value)?;
+            }
             last = value;
         }
         if !cursor.is_nil() {
