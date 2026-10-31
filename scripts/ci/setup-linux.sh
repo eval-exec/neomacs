@@ -25,6 +25,9 @@ readonly -a build_packages=(
     fontconfig
     libfontconfig1-dev
     libfreetype-dev
+    # neomacs-layout-engine's GNU CJK metric test (linux only) links libcairo to
+    # reproduce GNU's ftcr backend (ftcrfont.c); the -dev package provides libcairo.so.
+    libcairo2-dev
     libncurses-dev
     libglib2.0-dev
     libunwind-dev
