@@ -24,6 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::error::{EvalResult, Flow, signal};
 use super::value::{Value, ValueKind};
 use crate::buffer::LispCharPos1;
+use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
 #[cfg(test)]
 use strum::{EnumString, IntoStaticStr};
@@ -294,6 +295,52 @@ impl BookmarkManager {
             bookmarks,
             recent,
             modified: false,
+        }
+    }
+}
+
+impl GcTrace for BookmarkManager {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        let Self {
+            bookmarks,
+            recent,
+            modified: _,
+        } = self;
+        // BookmarkKey is a property-free identity. The independently retained
+        // record and recent strings preserve GNU's supplied text properties.
+        for bookmark in bookmarks.values() {
+            let Bookmark {
+                name,
+                filename,
+                position: _,
+                front_context,
+                rear_context,
+                annotation,
+                handler,
+            } = bookmark;
+            name.trace_roots_with(visit);
+            if let Some(filename) = filename {
+                filename.trace_roots_with(visit);
+            }
+            if let Some(front_context) = front_context {
+                front_context.trace_roots_with(visit);
+            }
+            if let Some(rear_context) = rear_context {
+                rear_context.trace_roots_with(visit);
+            }
+            if let Some(annotation) = annotation {
+                annotation.trace_roots_with(visit);
+            }
+            if let Some(handler) = handler {
+                handler.trace_roots_with(visit);
+            }
+        }
+        for name in recent {
+            name.trace_roots_with(visit);
         }
     }
 }

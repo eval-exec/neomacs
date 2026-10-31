@@ -163,6 +163,136 @@ fn bookmark_lookup_projection_preserves_semantic_name_properties() {
 }
 
 #[test]
+fn bookmark_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+    use crate::emacs_core::Context;
+
+    struct Probe(usize);
+    fn text(probes: &mut Vec<Probe>, property: Value, mut text: LispString) -> LispString {
+        let payload = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(Probe(payload.bits()));
+        text.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 1),
+            property,
+            payload,
+        );
+        text
+    }
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let property = Value::symbol("bookmark-owner-only");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        let record = Bookmark {
+            name: text(&mut probes, property, bm_str("root-record-é")),
+            filename: Some(text(
+                &mut probes,
+                property,
+                LispString::from_unibyte(b"/tmp/owned".to_vec()),
+            )),
+            position: LispCharPos1::new(1),
+            front_context: Some(text(&mut probes, property, bm_str("front-é"))),
+            rear_context: Some(text(
+                &mut probes,
+                property,
+                LispString::from_unibyte(vec![0xff]),
+            )),
+            annotation: Some(text(&mut probes, property, bm_str("annotation-é"))),
+            handler: Some(text(
+                &mut probes,
+                property,
+                LispString::from_unibyte(b"owned-handler".to_vec()),
+            )),
+        };
+        let key = BookmarkKey::from_lisp_string(&record.name);
+        assert!(!key.as_lisp_string().has_intervals());
+        // Imported recents need not alias any record. Use a distinct graph so
+        // an incomplete visitor cannot pass by relying on record-name aliases.
+        let recent = text(&mut probes, property, bm_str("independent-recent-é"));
+        *eval.bookmarks = BookmarkManager::from_dump(HashMap::from([(key, record)]), vec![recent]);
+        assert_eq!(probes.len(), 7);
+        probes
+    });
+    let check_live = |eval: &Context| {
+        for Probe(bits) in &probes {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "bookmark-only property vector was reclaimed"
+            );
+        }
+        for (index, Probe(bits)) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live bookmark property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+        let record = eval
+            .bookmarks
+            .get(&bm_str("root-record-é"))
+            .expect("retained bookmark");
+        assert_eq!(
+            record
+                .annotation
+                .as_ref()
+                .expect("retained annotation")
+                .intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, property)
+                .expect("retained annotation property")
+                .bits(),
+            probes[4].0
+        );
+        assert_eq!(
+            eval.bookmarks.recent_names()[0]
+                .intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, property)
+                .expect("retained independent recent property")
+                .bits(),
+            probes[6].0
+        );
+    };
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    *eval.bookmarks = BookmarkManager::new();
+    eval.gc_collect_exact();
+    for Probe(bits) in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired bookmark graph remained permanently rooted"
+        );
+    }
+}
+
+#[test]
 fn set_get_delete() {
     crate::test_utils::init_test_tracing();
     let mut mgr = BookmarkManager::new();
