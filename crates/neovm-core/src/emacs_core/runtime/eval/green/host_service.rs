@@ -21,6 +21,8 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod transport;
+
 /// Process-wide correlation allocation, not host authority or a TLS slot.
 struct SessionSequence(AtomicU64);
 static SESSIONS: SessionSequence = SessionSequence(AtomicU64::new(1));
