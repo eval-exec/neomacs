@@ -31,13 +31,13 @@ fn every_context_offset_is_mains() {
     #[cfg(debug_assertions)]
     assert_eq!(
         size_of::<Context>(),
-        44464 + observation_extra,
+        44480 + observation_extra,
         "Context size (debug with test observer)"
     );
     #[cfg(not(debug_assertions))]
     assert_eq!(
         size_of::<Context>(),
-        44456 + observation_extra,
+        44472 + observation_extra,
         "Context size (release with test observer)"
     );
     let table: &[(usize, usize, &str)] = &[
@@ -632,6 +632,11 @@ fn every_context_offset_is_mains() {
             "macro_perf_enabled",
         ),
         (44455, offset_of!(Context, custom), "custom"),
+        (
+            44456,
+            offset_of!(Context, frame_and_buffer_state),
+            "frame_and_buffer_state",
+        ),
     ];
     // The table pins the shipped release layout. A debug build adds MatchData's
     // extra word to every field after `match_data`; derive that shift from the

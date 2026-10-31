@@ -2327,6 +2327,7 @@ impl Context {
             dynamic_module_registry: seed.registries.dynamic_module,
             in_flight_registry: seed.registries.in_flight,
             cached_standard_case_table: None,
+            frame_and_buffer_state: None,
         }
     }
 

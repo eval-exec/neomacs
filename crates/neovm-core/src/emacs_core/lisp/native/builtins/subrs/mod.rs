@@ -4419,9 +4419,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "frame-or-buffer-changed-p",
-        NativeFn::ContextVec(|ctx, args| {
-            builtin_frame_or_buffer_changed_p(args, ctx.symbol_mode())
-        }),
+        NativeFn::ContextVec(crate::emacs_core::dispnew::builtin_frame_or_buffer_changed_p,),
         SubrArity::new(0, Some(1)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

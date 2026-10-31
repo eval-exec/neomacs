@@ -3594,6 +3594,10 @@ pub struct Context {
     /// runtime redump, loadup must omit build-only environment derivatives.
     /// Use trailing padding to preserve the pinned Context field offsets.
     pub(crate) loadup_dump_mode: Option<super::load::LoadupDumpMode>,
+    /// GNU `dispnew.c`'s static `frame_and_buffer_state`: the internal state
+    /// vector used by `(frame-or-buffer-changed-p)` when VARIABLE is nil.
+    /// Appended after the pinned layout; only the Context size grows.
+    pub(crate) frame_and_buffer_state: Option<Value>,
 }
 
 // A mutex does not make the host hooks, Rc leases or TLS views transferable.
