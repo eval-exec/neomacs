@@ -11,7 +11,7 @@
 //!
 //! The knobs are read once per process; nextest runs each test in its own.
 
-use super::super::frame_layout::{REDISPLAY_RUNTIME, current_layout_frame_id, run_tty_layout_tree};
+use super::super::frame_layout::{current_layout_frame_id, run_tty_layout_tree};
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_display_runtime::backend::tty::rif::damage::{ScreenMatch, TtyDamageMode};
@@ -67,7 +67,7 @@ impl Session {
             ROWS as u32,
             bootstrap_tty_display_config(Interactivity::Interactive),
         );
-        REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+        super::super::frame_layout::disable_cosmic_metrics_for_test();
         let mut damage = TtyRif::new(COLS, ROWS);
         damage.set_damage_mode(TtyDamageMode::Verify);
         let mut session = Self {
@@ -83,7 +83,7 @@ impl Session {
     /// with a fresh runtime's full layout of the same state.
     pub(super) fn frame(&mut self, label: &str) -> LayoutStats {
         let (root, children) = run_tty_layout_tree(&mut self.eval).expect("a TTY presentation");
-        let stats = REDISPLAY_RUNTIME.with(|runtime| runtime.last_layout_stats());
+        let stats = super::super::frame_layout::last_layout_stats_for_test();
         for rif in [&mut self.incremental, &mut self.damage] {
             rif.rasterize_presentations(&root, &children);
             rif.diff_and_render();

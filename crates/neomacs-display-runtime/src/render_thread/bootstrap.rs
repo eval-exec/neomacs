@@ -487,18 +487,18 @@ fn x11_display_responds() -> bool {
 }
 
 /// Build a render event loop for the current OS thread.
-pub fn build_render_event_loop() -> Result<EventLoop, String> {
-    build_render_event_loop_impl(false)
+pub fn build_render_event_loop() -> Result<super::RenderEventLoop, String> {
+    build_render_event_loop_impl(false).map(super::RenderEventLoop)
 }
 
 /// Build a render event loop for the legacy render-thread helper.
-pub(crate) fn build_render_event_loop_any_thread() -> Result<EventLoop, String> {
-    build_render_event_loop_impl(true)
+pub(crate) fn build_render_event_loop_any_thread() -> Result<super::RenderEventLoop, String> {
+    build_render_event_loop_impl(true).map(super::RenderEventLoop)
 }
 
 /// Run the render loop with an already-created event loop.
 pub(crate) fn run_render_loop_with_event_loop(
-    event_loop: EventLoop,
+    event_loop: super::RenderEventLoop,
     comms: RenderComms,
     width: u32,
     height: u32,
@@ -509,7 +509,7 @@ pub(crate) fn run_render_loop_with_event_loop(
     #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
 ) -> Result<(), String> {
     run_render_loop_with_startup(
-        event_loop,
+        event_loop.0,
         comms,
         InitialWindow::Ready {
             preparation: InitialWindowPreparation {
@@ -614,7 +614,7 @@ fn run_render_loop_with_startup(
 /// this path so winit/AppKit/Windows ownership stays on the process main
 /// thread; evaluator-to-render traffic must wake it via EventLoopProxy.
 pub fn run_render_loop_current_thread(
-    event_loop: EventLoop,
+    event_loop: super::RenderEventLoop,
     comms: RenderComms,
     initial: InitialWindowReceiver,
     title: String,
@@ -635,7 +635,7 @@ pub fn run_render_loop_current_thread(
     );
     #[cfg(not(feature = "neo-term"))]
     run_render_loop_with_startup(
-        event_loop,
+        event_loop.0,
         comms,
         InitialWindow::Waiting(initial),
         title,
@@ -652,7 +652,7 @@ pub fn run_render_loop_current_thread(
 /// PTYs and VT state.
 #[cfg(feature = "neo-term")]
 pub fn run_render_loop_current_thread_with_terminals(
-    event_loop: EventLoop,
+    event_loop: super::RenderEventLoop,
     comms: RenderComms,
     initial: InitialWindowReceiver,
     title: String,
@@ -661,7 +661,7 @@ pub fn run_render_loop_current_thread_with_terminals(
     shared_terminals: crate::terminal::SharedTerminals,
 ) -> Result<super::RenderLoopExit, RenderLoopError> {
     run_render_loop_with_startup(
-        event_loop,
+        event_loop.0,
         comms,
         InitialWindow::Waiting(initial),
         title,

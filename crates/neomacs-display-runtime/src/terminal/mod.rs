@@ -5,13 +5,13 @@
 
 pub mod colors;
 pub mod content;
-pub mod view;
+pub(crate) mod view;
 
 pub use content::TerminalContent;
 pub use neovm_core::emacs_core::display_host::{
     TerminalDisplayTarget, TerminalFloatPlacement, TerminalGridSize, TerminalId,
 };
-pub use view::{TerminalManager, TerminalView};
+pub(crate) use view::{TerminalManager, TerminalView};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};

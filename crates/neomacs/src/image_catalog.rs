@@ -127,7 +127,7 @@ impl RedisplayWaker {
 /// Deep host-side module that owns image request identity, state transitions,
 /// renderer scheduling, and completion observation.
 pub(super) struct AsyncImageCatalog {
-    cmd_tx: crossbeam_channel::Sender<RenderCommand>,
+    cmd_tx: neomacs_display_runtime::thread_comm::RenderCommandSender,
     render_waker: Option<GuiEventLoopWaker>,
     image_metadata: SharedImageRenderState,
     image_decode_client: ImageDecodeClient,
@@ -190,7 +190,7 @@ pub(super) struct AsyncImageCatalog {
 
 impl AsyncImageCatalog {
     pub(super) fn new(
-        cmd_tx: crossbeam_channel::Sender<RenderCommand>,
+        cmd_tx: neomacs_display_runtime::thread_comm::RenderCommandSender,
         render_waker: Option<GuiEventLoopWaker>,
         image_metadata: SharedImageRenderState,
         redisplay_waker: Option<RedisplayWaker>,
@@ -939,7 +939,7 @@ fn probed_layout(
 }
 
 struct DeferredRenderCommand {
-    target: crossbeam_channel::Sender<RenderCommand>,
+    target: neomacs_display_runtime::thread_comm::RenderCommandSender,
     waker: Option<GuiEventLoopWaker>,
     command: RenderCommand,
     /// How to turn the command's raw `:file` into an absolute path off-thread,
@@ -974,7 +974,7 @@ fn deferred_render_command_sender() -> &'static crossbeam_channel::Sender<Deferr
 /// the `:file` needs off-thread resolution (relative search, `~user` NSS) or
 /// when the renderer channel is full.
 fn schedule_image_command(
-    target: &crossbeam_channel::Sender<RenderCommand>,
+    target: &neomacs_display_runtime::thread_comm::RenderCommandSender,
     waker: Option<&GuiEventLoopWaker>,
     command: RenderCommand,
     resolution: Option<&ImageFileRequest>,
@@ -1001,7 +1001,7 @@ fn schedule_image_command(
 }
 
 fn defer_render_command(
-    target: &crossbeam_channel::Sender<RenderCommand>,
+    target: &neomacs_display_runtime::thread_comm::RenderCommandSender,
     waker: Option<&GuiEventLoopWaker>,
     command: RenderCommand,
     resolution: Option<ImageFileRequest>,

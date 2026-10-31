@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+mod command_projection;
+pub use command_projection::RenderCommandSender;
+
 mod frame_mailbox;
 mod frame_opacity;
 pub use frame_mailbox::{FrameReceiver, FrameSender, QueuedPresentation, SupersededPresentation};
@@ -995,7 +998,7 @@ pub struct ThreadComms {
     pub frame_rx: FrameReceiver,
 
     /// Commands: Emacs → Render
-    pub cmd_tx: Sender<RenderCommand>,
+    pub cmd_tx: RenderCommandSender,
     pub cmd_rx: Receiver<RenderCommand>,
 
     /// Input events: Render → Emacs
@@ -1012,7 +1015,7 @@ impl ThreadComms {
     /// Create new thread communication channels
     pub fn new() -> Self {
         let (frame_tx, frame_rx) = frame_mailbox::channel();
-        let (cmd_tx, cmd_rx) = bounded(COMMAND_CHANNEL_CAPACITY);
+        let (cmd_tx, cmd_rx) = RenderCommandSender::default_channel();
         let (input_tx, input_rx) = bounded(INPUT_CHANNEL_CAPACITY);
         let capabilities = Arc::new(SharedRenderCapabilities::default());
         Self {
@@ -1071,7 +1074,7 @@ impl Default for ThreadComms {
 /// Emacs thread communication handle
 pub struct EmacsComms {
     pub frame_tx: FrameSender,
-    pub cmd_tx: Sender<RenderCommand>,
+    pub cmd_tx: RenderCommandSender,
     pub input_rx: Receiver<InputEvent>,
     pub capabilities: Arc<SharedRenderCapabilities>,
     pub tooltip_context: Arc<neomacs_display_protocol::tooltip::TooltipContext>,

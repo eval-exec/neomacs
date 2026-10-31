@@ -33,7 +33,7 @@ fn tty_child_mode_line_throw_discards_staged_presentations_before_activation() {
         .get_mut(child)
         .expect("child")
         .parent_frame = Value::make_frame(root.0);
-    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+    super::disable_cosmic_metrics_for_test();
     let (_, initial_children) = run_tty_layout_tree(&mut eval).expect("initial TTY tree");
     assert_eq!(
         initial_children.len(),

@@ -2,7 +2,7 @@ use std::io;
 use std::io::Write;
 
 use neomacs_display_protocol::SelectionOwner;
-use neomacs_display_runtime::thread_comm::{LifecycleCommand, RenderCommand};
+use neomacs_display_runtime::thread_comm::{LifecycleCommand, RenderCommand, RenderCommandSender};
 use neovm_core::emacs_core::{DisplayHost, GuiFrameHostRequest, PopupMenuRequest};
 
 // Re-export the cross-platform TTY input reader from display-runtime.
@@ -14,7 +14,14 @@ pub use neomacs_display_runtime::tty_input::TtyInputReader;
 /// `suspend-tty`, `resume-tty`, and `delete-terminal` functions can
 /// send commands to the render thread.
 pub struct TtyTerminalHost {
-    pub cmd_tx: crossbeam_channel::Sender<RenderCommand>,
+    cmd_tx: RenderCommandSender,
+}
+
+impl TtyTerminalHost {
+    #[inline(always)]
+    pub(crate) fn new(cmd_tx: RenderCommandSender) -> Self {
+        Self { cmd_tx }
+    }
 }
 
 /// Popup I/O is separate from the inherited absent geometry/image/font

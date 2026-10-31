@@ -2,9 +2,7 @@
 //! numeric hook policy before Context creation and until that Context drops.
 //! No process environment or Lisp state is shared across mutators.
 
-use super::super::super::frame_layout::{
-    REDISPLAY_RUNTIME, install_frame_snapshot_fn, run_tty_layout_tree,
-};
+use super::super::super::frame_layout::{install_frame_snapshot_fn, run_tty_layout_tree};
 use super::initialized_redisplay_test_frame;
 use neovm_core::buffer::LispCharPos1;
 use neovm_core::emacs_core::eval::RedisplayHookPolicyGuard;
@@ -62,7 +60,7 @@ fn fixture(gnu: bool) -> SnapshotFixture {
     } else {
         RedisplayHookPolicyGuard::legacy()
     };
-    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+    super::super::super::frame_layout::disable_cosmic_metrics_for_test();
     let (mut eval, _visible_buffer, visible_frame, visible_window) =
         initialized_redisplay_test_frame(
             "snapshot-visible",

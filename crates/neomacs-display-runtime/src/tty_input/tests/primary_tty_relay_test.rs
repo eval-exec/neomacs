@@ -317,7 +317,7 @@ struct DirectFixture {
     reader: Option<TtyInputReader>,
     output: Option<Receiver<Fact>>,
     attempts: Arc<Mutex<Vec<Fact>>>,
-    commands: Option<Sender<RenderCommand>>,
+    commands: Option<crate::thread_comm::RenderCommandSender>,
     legacy_input: LegacyInputReceiver,
     pty: NativePty,
     hooks: Hooks,

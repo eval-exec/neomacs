@@ -77,9 +77,56 @@ pub use neomacs_renderer_wgpu::image_probe::{ImageProbeSource, probe_image_layou
 /// `ImageDecodeTerminal::Band`.
 pub use neomacs_renderer_wgpu::{ImageDecodeClient, ImageDecoder, RowRange, SvgResourceContext};
 
-use winit::event_loop::EventLoopProxy;
+/// Native event loop owned by the display startup family.
+///
+/// Only the display bootstrap can construct this value. Frontends may create
+/// an owned wake capability and return the loop to the display runner; the
+/// native event loop itself never escapes through a raw getter.
+#[repr(transparent)]
+pub struct RenderEventLoop(winit::event_loop::EventLoop);
 
-pub type RenderEventLoopProxy = EventLoopProxy;
-pub type RenderEventLoop = winit::event_loop::EventLoop;
+impl RenderEventLoop {
+    #[inline(always)]
+    pub fn create_proxy(&self) -> RenderEventLoopProxy {
+        RenderEventLoopProxy(self.0.create_proxy())
+    }
+
+    /// Resolve owned connection identity inside the native display owner.
+    #[inline(always)]
+    pub fn display_identity(
+        &self,
+        resolver: crate::display_identity::DisplayIdentityResolver,
+        system_name: &str,
+    ) -> Result<
+        neomacs_display_protocol::GraphicalDisplayIdentity,
+        crate::display_identity::DisplayIdentityError,
+    > {
+        resolver.resolve(&self.0, system_name)
+    }
+
+    /// Observe owned display facts without exposing the native event loop.
+    #[must_use]
+    #[inline(always)]
+    pub fn display_observation(&self) -> neomacs_display_protocol::DisplayObservation {
+        crate::display_scale::observe_event_loop_display(&self.0)
+    }
+}
+
+/// Owned native-loop wake capability, without access to the native proxy.
+#[repr(transparent)]
+#[derive(Clone)]
+pub struct RenderEventLoopProxy(winit::event_loop::EventLoopProxy);
+
+static_assertions::assert_eq_size!(RenderEventLoop, winit::event_loop::EventLoop);
+static_assertions::assert_eq_align!(RenderEventLoop, winit::event_loop::EventLoop);
+static_assertions::assert_eq_size!(RenderEventLoopProxy, winit::event_loop::EventLoopProxy);
+static_assertions::assert_eq_align!(RenderEventLoopProxy, winit::event_loop::EventLoopProxy);
+
+impl RenderEventLoopProxy {
+    #[inline(always)]
+    pub fn wake_up(&self) {
+        self.0.wake_up();
+    }
+}
 
 // All GPU caches (image, video, webkit) are managed by WgpuRenderer

@@ -4,7 +4,7 @@
 //! `RUST_LOG=neomacs::redisplay_sig=debug` the log names which part of the
 //! visible state moved between two redisplays.
 
-use super::super::frame_layout::{REDISPLAY_RUNTIME, run_tty_layout_tree};
+use super::super::frame_layout::run_tty_layout_tree;
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
 use neomacs_display_runtime::redisplay::RedisplayRuntime;
 use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
@@ -20,7 +20,7 @@ fn an_idle_redisplay_skips_layout_in_a_real_session() {
         36,
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
-    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+    super::super::frame_layout::disable_cosmic_metrics_for_test();
     let layouts = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let counter = layouts.clone();
     eval.redisplay_fn = Some(Box::new(move |eval| {

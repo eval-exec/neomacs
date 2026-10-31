@@ -489,3 +489,7 @@ mod architecture_value_ref_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/inline_boundary_test.rs"]
 mod architecture_inline_boundary_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/host_effect_guard_test.rs"]
+mod architecture_host_effect_guard_test;

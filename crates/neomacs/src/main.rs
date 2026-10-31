@@ -141,7 +141,6 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use neomacs_display_protocol::{SelectionOwner, VideoId, VisualConfig, WebViewId};
-use neomacs_display_runtime::display_scale::observe_event_loop_display;
 #[cfg(not(feature = "neo-term"))]
 use neomacs_display_runtime::render_thread::run_render_loop_current_thread;
 #[cfg(feature = "neo-term")]
@@ -1260,7 +1259,7 @@ struct PrimaryWindowDisplayHost {
     resources: neomacs_display_runtime::gui_resources::GuiResources,
     system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
     tooltip_client: neomacs_display_protocol::tooltip::TooltipClient,
-    cmd_tx: crossbeam_channel::Sender<RenderCommand>,
+    cmd_tx: neomacs_display_runtime::thread_comm::RenderCommandSender,
     render_waker: Option<GuiEventLoopWaker>,
     font_sizing: FontSizing,
     primary_frame: PrimaryFrame,
@@ -4213,15 +4212,11 @@ fn run_gui_evaluator_worker(
     )));
     install_diagnostics_eval_hooks(&mut evaluator);
 
-    frame_layout::REDISPLAY_RUNTIME.with(|runtime| {
-        runtime.enable_cosmic_metrics();
-        runtime.set_font_sizing(bootstrap_display.font_sizing());
-    });
+    frame_layout::configure_gui_runtime(bootstrap_display.font_sizing());
     let preview_tx = emacs_comms.cmd_tx.clone();
     let preview_waker = render_waker.clone();
     evaluator.scroll_preview_fn = Some(Box::new(move |eval, frame, window, inputs| {
-        let intent = frame_layout::REDISPLAY_RUNTIME
-            .with(|runtime| runtime.resolved_scroll_preview(eval, frame, window, inputs));
+        let intent = frame_layout::resolved_scroll_preview(eval, frame, window, inputs);
         if let Some(intent) = intent
             && preview_tx
                 .try_send(neomacs_display_runtime::thread_comm::RenderCommand::Window(
@@ -4683,12 +4678,12 @@ pub fn run(mode: RuntimeMode) {
         Interactivity::from_noninteractive(startup.noninteractive || startup.daemon.is_some());
     let mut gui_font_observer = None;
     let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
-        let observation = observe_event_loop_display(event_loop);
+        let observation = event_loop.display_observation();
         let system_name: String = hostname::get()
             .map(|name| name.to_string_lossy().replace([' ', '\t'], "-"))
             .unwrap_or_else(|_| "localhost".into());
-        let identity = display_identity_resolver
-            .resolve(event_loop, &system_name)
+        let identity = event_loop
+            .display_identity(display_identity_resolver, &system_name)
             .unwrap_or_else(|error| {
                 eprintln!("neomacs: failed to resolve graphical display identity: {error:?}");
                 std::process::exit(1);
@@ -4803,9 +4798,9 @@ pub fn run(mode: RuntimeMode) {
     let tty_popup_force_full_redraw = Arc::new(AtomicBool::new(false));
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     if tty_init::should_enable_live_tty_io(&startup) {
-        set_terminal_host(Box::new(tty_frontend::TtyTerminalHost {
-            cmd_tx: emacs_comms.cmd_tx.clone(),
-        }));
+        set_terminal_host(Box::new(tty_frontend::TtyTerminalHost::new(
+            emacs_comms.cmd_tx.clone(),
+        )));
         evaluator.set_display_host(Box::new(tty_frontend::TtyPopupDisplayHost::new(
             tty_popup_force_full_redraw.clone(),
         )));

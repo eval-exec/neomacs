@@ -25,7 +25,7 @@ const SCROLLBACK_HISTORY: usize = 10_000;
 
 /// Event listener that bridges rio-vt events to neomacs.
 #[derive(Clone)]
-pub struct NeomacsEventProxy {
+pub(crate) struct NeomacsEventProxy {
     id: TerminalId,
     /// Signals that the terminal has new content to render.
     wakeup: Arc<std::sync::atomic::AtomicBool>,
@@ -111,7 +111,7 @@ impl EventListener for NeomacsEventProxy {
 }
 
 /// A single terminal instance.
-pub struct TerminalView {
+pub(crate) struct TerminalView {
     pub id: TerminalId,
     pub target: TerminalDisplayTarget,
     /// The terminal state (shared with PTY reader).
@@ -436,7 +436,7 @@ impl TerminalView {
 }
 
 /// Manages all terminal instances.
-pub struct TerminalManager {
+pub(crate) struct TerminalManager {
     pub terminals: HashMap<TerminalId, TerminalView>,
 }
 

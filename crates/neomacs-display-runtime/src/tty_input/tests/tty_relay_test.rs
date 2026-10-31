@@ -260,7 +260,7 @@ struct ReaderFixture {
     reader: Option<TtyInputReader>,
     input: Option<Receiver<InputEvent>>,
     capacity: Option<TtyInputCapacityNotifier>,
-    commands: Sender<RenderCommand>,
+    commands: crate::thread_comm::RenderCommandSender,
     pty: NativePty,
     hooks: Hooks,
 }

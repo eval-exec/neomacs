@@ -5,7 +5,7 @@
 //! This is the `NEOMACS_TTY_DAMAGE=verify` experiment without a terminal: the
 //! TUI suite runs the same comparison against a live binary.
 
-use super::super::frame_layout::{REDISPLAY_RUNTIME, run_tty_layout_tree};
+use super::super::frame_layout::run_tty_layout_tree;
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_display_runtime::backend::tty::rif::damage::{
@@ -148,7 +148,7 @@ fn session_with(silent: bool, identity: TtyRowIdentity) -> Renderers {
         ROWS as u32,
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
-    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+    super::super::frame_layout::disable_cosmic_metrics_for_test();
     let mut r = Renderers::new(silent, identity);
     r.frame(&mut eval, "startup");
     r.step(&mut eval, "load source", SOURCE);

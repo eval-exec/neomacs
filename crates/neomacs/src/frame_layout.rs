@@ -35,12 +35,49 @@ thread_local! {
     /// its ~19 KB were part of every thread's static TLS block, so each new
     /// field grew TLS and moved the `%fs` offsets of every later thread-local
     /// (no-new-TLS-bytes rule; b184 measured +16 bytes from two new fields).
-    pub static REDISPLAY_RUNTIME: Box<RedisplayRuntime> =
+    static REDISPLAY_RUNTIME: Box<RedisplayRuntime> =
         Box::new(RedisplayRuntime::new_without_font_metrics());
 }
 
 // The thread-local slot holds only the handle, whatever `RedisplayRuntime` grows to.
 const _: () = assert!(std::mem::size_of::<Box<RedisplayRuntime>>() == std::mem::size_of::<usize>());
+
+/// Configure the direct GUI owner without exposing its native runtime slot.
+#[inline(always)]
+pub(super) fn configure_gui_runtime(font_sizing: super::FontSizing) {
+    REDISPLAY_RUNTIME.with(|runtime| {
+        runtime.enable_cosmic_metrics();
+        runtime.set_font_sizing(font_sizing);
+    });
+}
+
+/// Resolve native preview work inside the frontend effect owner.
+#[inline(always)]
+pub(super) fn resolved_scroll_preview(
+    evaluator: &Context,
+    frame: FrameId,
+    window: neovm_core::window::WindowId,
+    inputs: Vec<neomacs_display_protocol::input_progress::InputReceipt>,
+) -> Option<neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent> {
+    REDISPLAY_RUNTIME
+        .with(|runtime| runtime.resolved_scroll_preview(evaluator, frame, window, inputs))
+}
+
+#[cfg(test)]
+pub(super) fn enable_cosmic_metrics_for_test() {
+    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+}
+
+#[cfg(test)]
+pub(super) fn disable_cosmic_metrics_for_test() {
+    REDISPLAY_RUNTIME.with(|runtime| runtime.disable_cosmic_metrics());
+}
+
+#[cfg(test)]
+pub(super) fn last_layout_stats_for_test() -> neomacs_layout_engine::incremental_layout::LayoutStats
+{
+    REDISPLAY_RUNTIME.with(|runtime| runtime.last_layout_stats())
+}
 
 // ── Layout helpers ────────────────────────────────────────────────────────
 

@@ -35,7 +35,7 @@ impl DisplayIdentityResolver {
         }
     }
 
-    pub fn resolve(
+    pub(crate) fn resolve(
         self,
         event_loop: &EventLoop,
         system_name: &str,

@@ -1,6 +1,5 @@
 use super::super::frame_layout::{
-    REDISPLAY_RUNTIME, current_layout_frame_id,
-    install_tty_redisplay_callback as maybe_install_tty_redisplay_callback,
+    current_layout_frame_id, install_tty_redisplay_callback as maybe_install_tty_redisplay_callback,
 };
 use super::super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
 use super::super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
@@ -1616,7 +1615,7 @@ fn synchronous_window_end_uses_the_final_source_buffer_identity() {
 }
 
 fn test_image_catalog(
-    cmd_tx: &crossbeam_channel::Sender<RenderCommand>,
+    cmd_tx: &neomacs_display_runtime::thread_comm::RenderCommandSender,
     image_metadata: SharedImageRenderState,
 ) -> Rc<AsyncImageCatalog> {
     Rc::new(AsyncImageCatalog::new(
@@ -1630,7 +1629,7 @@ fn test_image_catalog(
 
 #[test]
 fn image_catalog_reports_renderer_owned_cache_bytes() {
-    let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let image_state = Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
     let catalog = test_image_catalog(&cmd_tx, Arc::clone(&image_state));
 
@@ -2317,7 +2316,7 @@ fn assert_selected_frame_matches_materialized_default_metrics(eval: &Context) {
 
 #[test]
 fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -2399,7 +2398,7 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
 
 #[test]
 fn opening_gui_frame_adoption_applies_fullscreen_mode() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -2459,7 +2458,7 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
 
 #[test]
 fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -2514,7 +2513,7 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
 
 #[test]
 fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -2599,7 +2598,7 @@ fn unbounded_lookup(catalog: &AsyncImageCatalog, request: ImageResolveRequest) -
 
 #[test]
 fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_thread() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let image_metadata = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -2703,7 +2702,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
 
 #[test]
 fn animation_frames_share_sequence_identity_and_retirement_advances_generation() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let catalog = AsyncImageCatalog::new(
         cmd_tx,
         None,
@@ -2757,7 +2756,9 @@ fn animation_frames_share_sequence_identity_and_retirement_advances_generation()
 
 #[test]
 fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::bounded(1);
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::bounded(
+        std::num::NonZeroUsize::new(1).unwrap(),
+    );
     cmd_tx
         .send(RenderCommand::Asset(AssetCommand::ImageRetire {
             image: ImageId::new(1),
@@ -2842,7 +2843,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
 
 #[test]
 fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let image_metadata = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -2912,7 +2913,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
 
 #[test]
 fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3004,7 +3005,7 @@ fn failed_image_decode_wakes_waiter_and_is_negative_cached() {
 
 #[test]
 fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptly() {
-    let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let image_metadata: SharedImageRenderState = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -3099,8 +3100,8 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
 }
 
 #[test]
-fn primary_display_host_request_video_queues_create_once_with_stable_id() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+fn primary_display_host_request_video_reuses_supported_handle_or_reports_unavailable() {
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3131,26 +3132,36 @@ fn primary_display_host_request_video_queues_create_once_with_stable_id() {
         autoplay: true,
     };
 
-    let first = neovm_core::emacs_core::DisplayHost::request_video(&host, request.clone())
-        .expect("request video")
-        .expect("video handle");
-    let second = neovm_core::emacs_core::DisplayHost::request_video(&host, request)
-        .expect("request cached video")
-        .expect("video handle");
+    let first = neovm_core::emacs_core::DisplayHost::request_video(&host, request.clone());
+    let second = neovm_core::emacs_core::DisplayHost::request_video(&host, request);
 
-    assert_eq!(first, second);
-    let commands: Vec<_> = cmd_rx.try_iter().collect();
-    assert_eq!(commands.len(), 1);
-    assert!(matches!(
-        &commands[0],
-        RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Open {
-            id,
-            request,
-        })) if *id == first.video_id
-            && matches!(&request.source, VideoSource::File(path) if path.to_string_lossy() == "/tmp/demo.mp4")
-            && request.loop_mode == LoopMode::Infinite
-            && request.initial_playback == InitialPlayback::Playing
-    ));
+    #[cfg(feature = "video")]
+    {
+        let first = first.expect("request video").expect("video handle");
+        let second = second.expect("request cached video").expect("video handle");
+        assert_eq!(first, second);
+        let commands: Vec<_> = cmd_rx.try_iter().collect();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Open {
+                id,
+                request,
+            })) if *id == first.video_id
+                && matches!(&request.source, VideoSource::File(path) if path.to_string_lossy() == "/tmp/demo.mp4")
+                && request.loop_mode == LoopMode::Infinite
+                && request.initial_playback == InitialPlayback::Playing
+        ));
+    }
+    #[cfg(not(feature = "video"))]
+    {
+        assert_eq!(first, Ok(None));
+        assert_eq!(second, Ok(None));
+        assert!(
+            cmd_rx.is_empty(),
+            "unsupported video must publish no command"
+        );
+    }
 }
 
 #[test]
@@ -3187,8 +3198,8 @@ fn resolved_video_registry_never_evicts_a_still_referenceable_identity() {
 }
 
 #[test]
-fn primary_display_host_request_video_preserves_uri_source() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+fn primary_display_host_request_video_uri_preserves_supported_source_or_reports_unavailable() {
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3219,27 +3230,37 @@ fn primary_display_host_request_video_preserves_uri_source() {
         autoplay: false,
     };
 
-    let resolved = neovm_core::emacs_core::DisplayHost::request_video(&host, request)
-        .expect("request video")
-        .expect("video handle");
+    let resolved = neovm_core::emacs_core::DisplayHost::request_video(&host, request);
 
-    let commands: Vec<_> = cmd_rx.try_iter().collect();
-    assert_eq!(commands.len(), 1);
-    assert!(matches!(
-        &commands[0],
-        RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Open {
-            id,
-            request,
-        })) if *id == resolved.video_id
-            && matches!(&request.source, VideoSource::Uri(uri) if uri == "https://example.com/video.mp4")
-            && request.loop_mode == LoopMode::Off
-            && request.initial_playback == InitialPlayback::Paused
-    ));
+    #[cfg(feature = "video")]
+    {
+        let resolved = resolved.expect("request video").expect("video handle");
+        let commands: Vec<_> = cmd_rx.try_iter().collect();
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Open {
+                id,
+                request,
+            })) if *id == resolved.video_id
+                && matches!(&request.source, VideoSource::Uri(uri) if uri == "https://example.com/video.mp4")
+                && request.loop_mode == LoopMode::Off
+                && request.initial_playback == InitialPlayback::Paused
+        ));
+    }
+    #[cfg(not(feature = "video"))]
+    {
+        assert_eq!(resolved, Ok(None));
+        assert!(
+            cmd_rx.is_empty(),
+            "unsupported video must publish no command"
+        );
+    }
 }
 
 #[test]
-fn primary_display_host_routes_one_typed_video_session_lifecycle() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+fn primary_display_host_video_session_lifecycle_respects_compiled_capability() {
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3270,37 +3291,70 @@ fn primary_display_host_routes_one_typed_video_session_lifecycle() {
         initial_playback: InitialPlayback::Playing,
     };
 
-    let id = neovm_core::emacs_core::DisplayHost::create_video(&host, open.clone())
-        .expect("create video session");
-    neovm_core::emacs_core::DisplayHost::control_video(&host, id, PlaybackAction::Pause)
-        .expect("pause video session");
-    neovm_core::emacs_core::DisplayHost::destroy_video(&host, id).expect("close video session");
+    #[cfg(feature = "video")]
+    {
+        let id = neovm_core::emacs_core::DisplayHost::create_video(&host, open.clone())
+            .expect("create video session");
+        neovm_core::emacs_core::DisplayHost::control_video(&host, id, PlaybackAction::Pause)
+            .expect("pause video session");
+        neovm_core::emacs_core::DisplayHost::destroy_video(&host, id).expect("close video session");
 
-    let commands: Vec<_> = cmd_rx.try_iter().collect();
-    assert!(matches!(
-        &commands[0],
-        RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Open {
-            id: opened,
-            request,
-        })) if *opened == id && *request == open
-    ));
-    assert!(matches!(
-        &commands[1],
-        RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Control {
-            id: controlled,
-            action: PlaybackAction::Pause,
-        })) if *controlled == id
-    ));
-    assert!(matches!(
-        &commands[2],
-        RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Close { id: closed }))
-            if *closed == id
-    ));
+        let commands: Vec<_> = cmd_rx.try_iter().collect();
+        assert_eq!(commands.len(), 3);
+        assert!(matches!(
+            &commands[0],
+            RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Open {
+                id: opened,
+                request,
+            })) if *opened == id && *request == open
+        ));
+        assert!(matches!(
+            &commands[1],
+            RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Control {
+                id: controlled,
+                action: PlaybackAction::Pause,
+            })) if *controlled == id
+        ));
+        assert!(matches!(
+            &commands[2],
+            RenderCommand::Asset(AssetCommand::Video(VideoSessionCommand::Close { id: closed }))
+                if *closed == id
+        ));
+    }
+    #[cfg(not(feature = "video"))]
+    {
+        let unsupported = "native video support is not compiled into this Neomacs build";
+        assert_eq!(
+            neovm_core::emacs_core::DisplayHost::create_video(&host, open),
+            Err(unsupported.to_owned())
+        );
+        let id = neomacs_display_protocol::VideoId::new(1);
+        assert_eq!(
+            neovm_core::emacs_core::DisplayHost::control_video(&host, id, PlaybackAction::Pause),
+            Err(unsupported.to_owned())
+        );
+        assert_eq!(
+            neovm_core::emacs_core::DisplayHost::video_diagnostics(&host),
+            Err(unsupported.to_owned())
+        );
+        assert_eq!(
+            neovm_core::emacs_core::DisplayHost::begin_video_measurement_epoch(&host),
+            Err(unsupported.to_owned())
+        );
+        assert_eq!(
+            neovm_core::emacs_core::DisplayHost::destroy_video(&host, id),
+            Ok(())
+        );
+        assert!(
+            cmd_rx.is_empty(),
+            "unsupported video must publish no command"
+        );
+    }
 }
 
 #[test]
 fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_id() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3356,7 +3410,7 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
 
 #[test]
 fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3402,7 +3456,7 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
 
 #[test]
 fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3477,7 +3531,7 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
         .expect("cached bootstrap evaluator");
     let _bootstrap = bootstrap_buffers(&mut eval, 843, 489, gui_display());
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
 
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -3547,7 +3601,7 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
 
 #[test]
 fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let shared = shared_primary_window_size(843, 489);
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -3619,7 +3673,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
 
 #[test]
 fn primary_window_display_host_forwards_visual_config_to_renderer() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3663,7 +3717,7 @@ fn primary_window_display_host_forwards_visual_config_to_renderer() {
 
 #[test]
 fn primary_window_display_host_forwards_chrome_controls_to_renderer() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3711,7 +3765,7 @@ fn primary_window_display_host_forwards_chrome_controls_to_renderer() {
 
 #[test]
 fn primary_window_display_host_round_trips_clipboard_requests_through_renderer() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let worker = std::thread::spawn(move || {
         let RenderCommand::Clipboard(ClipboardCommand::SetText {
             selection,
@@ -3816,7 +3870,7 @@ fn redisplay_title_sync_formats_frame_title_format_for_primary_window() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
         .expect("cached bootstrap evaluator");
     let _bootstrap = bootstrap_buffers(&mut eval, 843, 489, gui_display());
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
 
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -3868,7 +3922,7 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
         .expect("cached bootstrap evaluator");
     let _bootstrap = bootstrap_buffers(&mut eval, 843, 489, gui_display());
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -3925,8 +3979,8 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
 
 #[test]
 fn tty_terminal_host_delete_terminal_sends_shutdown() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let mut host = TtyTerminalHost { cmd_tx };
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
+    let mut host = TtyTerminalHost::new(cmd_tx);
 
     host.delete_terminal()
         .expect("delete terminal should succeed");
@@ -3978,7 +4032,7 @@ fn publish_gui_frame_sends_opening_frame_before_startup_lisp() {
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
     let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
     let (frame_tx, frame_rx) = (comms.frame_tx, comms.frame_rx);
     let active_before = eval
@@ -4032,7 +4086,7 @@ fn publish_gui_frame_sends_every_visible_top_level_frame_tree() {
         "creating another top-level frame must not make it selected"
     );
 
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
     let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
     let (frame_tx, frame_rx) = (comms.frame_tx, comms.frame_rx);
 
@@ -4058,7 +4112,7 @@ fn rejected_gui_frame_is_discarded_instead_of_becoming_active() {
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
 
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
     let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
     let (frame_tx, frame_rx) = (comms.frame_tx, comms.frame_rx);
     drop(frame_rx);
@@ -6366,7 +6420,7 @@ fn gnu_startup_next_line_moves_point_on_live_gui_frame() {
 
     // Interactive next-line asks default-font-height to realize face-font.
     // A logical GUI frame alone cannot provide that backend font lookup.
-    let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, _cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -6929,7 +6983,7 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
         .expect("selected frame after bootstrap")
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
     super::super::frame_layout::install_frame_snapshot_fn(&mut eval);
 
     let json_value = eval
@@ -6996,7 +7050,7 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
 
 #[test]
 fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let mut host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
         resources: Default::default(),
@@ -7078,7 +7132,7 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
 #[cfg(feature = "neo-term")]
 #[test]
 fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+    let (cmd_tx, cmd_rx) = neomacs_display_runtime::thread_comm::RenderCommandSender::unbounded();
     let shared_terminals = new_shared_terminals();
     let host = PrimaryWindowDisplayHost {
         frame_opacity: Default::default(),
@@ -7279,7 +7333,7 @@ fn superseded_gui_publications_retire_evaluator_records_without_input_roundtrip(
     let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
     let frame_id = eval.frame_manager().selected_frame().unwrap().id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    super::super::frame_layout::enable_cosmic_metrics_for_test();
     let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
     assert!(
         !eval

@@ -1,6 +1,6 @@
 //! Native event-loop startup before font-owned window geometry is available.
 
-use super::{RenderApp, SharedMonitorInfo};
+use super::{RenderApp, RenderEventLoopProxy, SharedMonitorInfo};
 use crate::thread_comm::{
     COMMAND_CHANNEL_CAPACITY, LifecycleCommand, RenderCommand, WindowCommand,
 };
@@ -10,7 +10,7 @@ use std::{collections::VecDeque, ops::ControlFlow as CommandFlow};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::WindowId,
 };
 
@@ -44,7 +44,7 @@ pub struct InitialWindowPreparation {
 /// loop after publishing their outcome; an idle loop never needs a polling timer.
 pub struct InitialWindowReply {
     sender: Option<Sender<Result<InitialWindowPreparation, String>>>,
-    proxy: EventLoopProxy,
+    proxy: RenderEventLoopProxy,
 }
 
 pub struct InitialWindowReceiver(Receiver<Result<InitialWindowPreparation, String>>);
@@ -57,7 +57,7 @@ pub struct InitialWindowLifetime {
 }
 
 impl InitialWindowReply {
-    pub fn channel(proxy: EventLoopProxy) -> (Self, InitialWindowReceiver) {
+    pub fn channel(proxy: RenderEventLoopProxy) -> (Self, InitialWindowReceiver) {
         let (sender, receiver) = crossbeam_channel::bounded(1);
         (
             Self {
