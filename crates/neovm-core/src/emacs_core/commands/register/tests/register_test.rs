@@ -2,6 +2,118 @@ use super::*;
 use crate::buffer::{BufferId, LispCharPos1};
 use crate::heap_types::LispString;
 
+#[test]
+fn register_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+    use crate::emacs_core::Context;
+
+    // Native words alone cross the construction scope: no extra GC roots.
+    struct Probe(usize);
+
+    fn payload(probes: &mut Vec<Probe>) -> Value {
+        let value = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(Probe(value.bits()));
+        value
+    }
+
+    fn text(probes: &mut Vec<Probe>, key: Value) -> LispString {
+        let mut text = LispString::from_utf8("register-é");
+        text.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 1),
+            key,
+            payload(probes),
+        );
+        text
+    }
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let key = Value::symbol("register-owned-property");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        let mut manager = RegisterManager::new();
+        manager.set('t', RegisterContent::Text(text(&mut probes, key)));
+        manager.set(
+            'r',
+            RegisterContent::Rectangle(vec![text(&mut probes, key), text(&mut probes, key)]),
+        );
+        manager.set('f', RegisterContent::File(text(&mut probes, key)));
+        // Control edges keep the pre-existing direct-Value cases covered.
+        manager.set('w', RegisterContent::FrameConfig(payload(&mut probes)));
+        manager.set(
+            'k',
+            RegisterContent::KbdMacro(vec![payload(&mut probes), payload(&mut probes)]),
+        );
+        manager.set('n', RegisterContent::Number(42));
+        *eval.registers = manager;
+        probes
+    });
+    let check_live = |eval: &Context| {
+        for Probe(bits) in &probes {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "register-only property vector was reclaimed"
+            );
+        }
+        for (index, Probe(bits)) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live register property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+        let Some(RegisterContent::Text(text)) = eval.registers.get('t') else {
+            panic!("retained text register");
+        };
+        assert_eq!(
+            text.intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, key)
+                .expect("retained text property")
+                .bits(),
+            probes[0].0
+        );
+    };
+
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    eval.registers.clear_all();
+    eval.gc_collect_exact();
+    for Probe(bits) in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired register graph remained permanently rooted"
+        );
+    }
+}
+
 // -----------------------------------------------------------------------
 // RegisterManager unit tests
 // -----------------------------------------------------------------------

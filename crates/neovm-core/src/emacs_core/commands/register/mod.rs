@@ -28,7 +28,7 @@ use crate::tagged::header::VecLikeType;
 /// The different kinds of data that can be stored in a register.
 #[derive(Clone, Debug)]
 pub enum RegisterContent {
-    /// Plain text string.
+    /// Text string, including its text properties.
     Text(LispString),
     /// An integer value.
     Number(i64),
@@ -174,17 +174,29 @@ impl RegisterManager {
 
 impl GcTrace for RegisterManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
-        for content in self.registers.values() {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        let Self { registers } = self;
+        for content in registers.values() {
             match content {
+                RegisterContent::Text(text) => text.trace_roots_with(visit),
+                RegisterContent::Rectangle(lines) => {
+                    for line in lines {
+                        line.trace_roots_with(visit);
+                    }
+                }
+                RegisterContent::File(file) => file.trace_roots_with(visit),
                 RegisterContent::Marker(v) | RegisterContent::FrameConfig(v) => {
-                    roots.push(*v);
+                    visit(*v);
                 }
                 RegisterContent::KbdMacro(keys) => {
                     for v in keys {
-                        roots.push(*v);
+                        visit(*v);
                     }
                 }
-                _ => {}
+                RegisterContent::Number(_) => {}
             }
         }
     }
