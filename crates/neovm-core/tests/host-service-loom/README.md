@@ -40,7 +40,7 @@ These are executable counterexample controls, not ignored or `should_panic`
 tests.
 
 The separate `tests/wake.rs` target adds four positive cases and four negative
-controls for cut 1. **Execution status: NOT RUN; parent integration pending.**
+controls for cut 1. **Execution status: 8/8 passed; see RESULTS.md.**
 It is an abstract contract model, with its own Loom mutex and channels; it does
 not import `host_effect/wake.rs` or substitute Loom primitives into production
 `std` synchronization. Its independent history replay checks:

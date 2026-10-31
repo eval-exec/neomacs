@@ -1,9 +1,12 @@
-Cut-1 wake compiler contracts are prepared but **NOT RUN**. No stderr snapshots
-have been generated or blessed. The existing `host_effect_compile_contracts`
-runner discovers these fixtures through its existing pass/fail globs; no runner
-or production fixture export was added.
+Cut-1 wake compiler contracts **passed** locally with rustup Rust 1.96.1
+first on PATH and no build-std. The containing thin integration target passed
+8/8 runners. Its host-effect glob now covers two pass cases and 25 intentional
+rejections, including the three new wake rejections below and their positive
+actual-source control. Only these three stderr snapshots were created; no
+existing snapshot changed. The diagnostics were inspected for their intended
+privacy/linearity errors. No runner or production fixture export was added.
 
-Expected primary diagnostics:
+Observed primary diagnostics:
 
 | Fixture | Required rejection |
 | --- | --- |
@@ -22,6 +25,8 @@ its production field visibility and trait implementations. They do not copy
 those definitions or expose a new production constructor. They do not establish
 native readiness, host provenance, OS wake behavior or hosted admission.
 
-Parent integration must run the existing thin compiler-contract target locally
-with rustup first on PATH, without rust-src, then inspect diagnostics and create
-the exact stderr snapshots. Build/test/census receipts remain the parent's gates.
+The new stderr snapshots were blessed with the pinned rustup compiler and
+reviewed for exactly these diagnostics. Missing imports, unsupported APIs or
+unrelated failures did not count as rejection witnesses. Frozen protected and
+explicit hot-owner census, full core correctness, Loom and actual-wake TSan
+are separate gates; a compiler rejection does not establish runtime progress.

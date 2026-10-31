@@ -1,0 +1,11 @@
+error[E0603]: module `wake` is private
+ --> tests/host_effect_ui/wake_source_private.rs:4:30
+  |
+4 | use neovm_core::host_effect::wake::ControlWake;
+  |                              ^^^^ private module
+  |
+note: the module `wake` is defined here
+ --> src/host_effect/mod.rs
+  |
+  | pub(crate) mod wake;
+  | ^^^^^^^^^^^^^^^^^^^

@@ -18,11 +18,13 @@ channel atomics, panic/fail-stop behavior, hosted activation or host wakeups.
 The adjacent production-source transport harness separately exercises the
 actual crossbeam FIFO and OS actors, including under ThreadSanitizer.
 
-The new cut-1 `wake` target is **NOT RUN; parent integration pending**. It adds
-four positive histories and four named mutation controls. The existing **14/14**
-receipt above applies only to `protocol`; it is not a receipt for `wake`.
+The cut-1 `wake` target passed **8/8** on Linux x86_64 with Rust 1.96.1:
+four positive histories and all four named mutation controls. This run used
+heavy-build admission in nix develop, pinned to CPUs 0-3,14-31, one test thread
+and zero retries. The existing **14/14** receipt above applies to `protocol`,
+which was unchanged and not rerun for this cut.
 
-Pending command:
+Executed command:
 
 ```sh
 cargo nextest run \

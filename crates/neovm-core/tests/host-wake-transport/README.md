@@ -1,7 +1,13 @@
 # Instrumented production host wake owner
 
-**Status: NOT RUN.** This harness and runner have been prepared; no ordinary
-or TSan test pass is claimed.
+**Status: TSan 21/21 passed** on Linux x86_64 using the pinned
+`nightly-2026-07-03` (rustc 1.98.0-nightly c397dae80). The run rebuilt and
+instrumented std, polling and the actual owner/tests under heavy-build admission,
+in nix develop, pinned to CPUs 0-3,14-31, with one test thread and zero retries.
+All source pins matched; the runner emitted `TSAN_REAL_WAKE_PASS`.
+
+The same owner tests passed in the full core GEN1/GEN0 suites; this receipt
+specifically covers the isolated instrumented actual-source target.
 
 This isolated workspace imports the actual production `src/host_effect/wake.rs`
 with `#[path]`, including all of its existing `cfg(test)` unit and native
