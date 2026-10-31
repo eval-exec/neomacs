@@ -71,6 +71,9 @@ jobs:
           cache-shared-key: macos-aarch64-release-ws
           cache-workspace-crates: "true"
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          # The test step drives the suite through nextest, like the Linux GUI
+          # job; the harness's own Rust tests run under it too.
+          install-nextest: true
           target: aarch64-apple-darwin
 
       - name: Build the runtime under test
