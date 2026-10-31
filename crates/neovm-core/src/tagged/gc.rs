@@ -3004,3 +3004,7 @@ mod cons_young_shared_tests;
 #[cfg(test)]
 #[path = "gc/tests/cons_sweep_accounting_test.rs"]
 mod cons_sweep_accounting_tests;
+
+#[cfg(test)]
+#[path = "gc/tests/permanent_box_chain_test.rs"]
+mod permanent_box_chain_tests;

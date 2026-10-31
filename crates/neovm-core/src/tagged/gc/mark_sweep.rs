@@ -296,7 +296,6 @@ impl TaggedHeap {
         //    full collection traces and sweeps it. Neither path ever sets the
         //    permanent bit, and no reader freezes their mark against a later
         //    parity: only the permanent generation is skipped.
-        let mut resident_head: *mut GcHeader = std::ptr::null_mut();
         let mut young_head: *mut GcHeader = std::ptr::null_mut();
         let mut obj = self.all_objects;
         while !obj.is_null() {
@@ -327,8 +326,11 @@ impl TaggedHeap {
                 match ImageResident::from_image_row(&*obj) {
                     Some(resident) => {
                         (*obj).make_permanent(&resident);
-                        (*obj).next = resident_head;
-                        resident_head = obj;
+                        // Publish each proven image resident directly into
+                        // the canonical list. A second head-only splice would
+                        // sever the other residents before their edge scan.
+                        (*obj).next = self.tenured_objects;
+                        self.tenured_objects = obj;
                     }
                     None if self.generational.enabled => {
                         (*obj).promote_to_old_generation();
@@ -342,16 +344,9 @@ impl TaggedHeap {
                 obj = next;
             }
         }
-        // Image residents join the immortal list. GEN1 runtime survivors are
-        // already on the ordinary-old list; GEN0 keeps them on the young list
-        // (which is empty after promotion in GEN1).
-        if !resident_head.is_null() {
-            // Splice: residents -> front of tenured_objects.
-            unsafe {
-                (*resident_head).next = self.tenured_objects;
-            }
-            self.tenured_objects = resident_head;
-        }
+        // Image residents and GEN1 runtime survivors are already linked to
+        // their canonical permanent/ordinary-old lists. GEN0 runtime survivors
+        // remain on the young list.
         self.all_objects = young_head;
         // 1b. PROMOTION PAGE WALK (stage 3): page objects are on no intrusive
         //     list. Classify every ALLOCATED slot (the sweep has already run,
