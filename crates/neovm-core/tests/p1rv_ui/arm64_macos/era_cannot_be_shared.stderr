@@ -1,0 +1,257 @@
+error[E0599]: the associated function or constant `check` exists for struct `ThreadSharing<ParallelHeapEra<'static>>`, but its trait bounds were not satisfied
+ --> tests/p1rv_ui/arm64_macos/../era_cannot_be_shared.rs
+  |
+  |     ThreadSharing::<ParallelHeapEra<'static>>::check();
+  |                                                ^^^^^ associated function or constant cannot be called on `ThreadSharing<ParallelHeapEra<'static>>` due to unsatisfied trait bounds
+  |
+ ::: src/tagged/gc/mutator_registration/wrappers.rs
+  |
+  | pub struct ParallelHeapEra<'heap> {
+  | --------------------------------- doesn't satisfy `ParallelHeapEra<'static>: Sync`
+  |
+ ::: tests/p1rv_ui/arm64_macos/../../thread_safety_ui/support/thread_bounds.rs
+  |
+  | pub struct ThreadSharing<T>(PhantomData<T>);
+  | --------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `RefCell<Option<QuiescentCollector<'static>>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<Option<gc::facade_mark::cons_suspend::SuspendedConsCollector<'static>>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<()>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<eval::owner_bindings::OwnerSlabRegistry>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<ThreadProjectionTable>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<eval::admission::ThreadingMode>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<Option<ThreadId>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<TaggedHeap>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut (): Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<neovm_core::emacs_core::Obarray>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<Vec<SymId>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<VariableWatcherList>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<HashSet<SymId>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<AutoloadManager>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<treesit::TreeSitterManager>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<FrameManager>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<CodingSystemManager>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<eval::MacroPerfStats>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<eval::global_state::GlobalState>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut (): Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut GcHeader: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const (): Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const (): Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut GcHeader: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<u8>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut HashTableObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut FinalizerObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut *mut MarkerObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<face::FaceStorage>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<HashMap<LispFaceId, TaggedValue>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<xdisp::mode_line_output::OutputState>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<eval::owner_bindings::OwnerSlab>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<CanonicalArm>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<usize>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut u8: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut ConsCell: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut FloatObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut VecLikeHeader: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut StringObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const u8: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Cell<Vec<TaggedValue>>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Cell<*const ()>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut TaggedHeap: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut HashTableObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut FinalizerObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut *mut MarkerObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<()>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `std::rc::Weak<[TaggedValue]>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut VectorObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut ByteCodeObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut LambdaObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut MacroObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut RecordObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut SymbolWithPosObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut MarkerObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut BignumObj: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<[Cell<usize>; 8192]>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<LispBufferLocalValue>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<LispFwd>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut u8: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut ConsCell: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut FloatObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut VecLikeHeader: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut StringObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `OnceCell<collection_reads::store_state::ObservationWorld>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<*mut TaggedHeap>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<()>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const c_void: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const tree_sitter::ffi::TSTree: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<ccl::CclRegistry>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<charset::CharsetRegistry>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<xfaces::FaceAttrState>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<neovm_core::emacs_core::terminal::pure::TerminalLispRegistry>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<builtins::collections::HashTableTestRegistry>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<builtins::file_notify::FileNotifyState>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<HashMap<i64, builtins::hooks::WindowConfigurationSnapshot>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Cell<Vec<TaggedValue>>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Cell<*const ()>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<u64>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<NonNull<[Cell<usize>; 8192]>>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<collection_reads::JournalPolicy>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<bool>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Cell<gc::barrier_window::BarrierWindow>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<collection_reads::store_state::WorldObservations>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Cell<VisitedFileModtime>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut VectorObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut ByteCodeObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut LambdaObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut MacroObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut RecordObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut SymbolWithPosObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut MarkerObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut BignumObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const LispSymbol: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const Atomic<u32>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<MarkerObj>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `NonNull<()>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<Vec<AutomaticCompositionSpan>>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `(dyn std::any::Any + 'static): Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `UnsafeCell<TaggedValue>: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const AtomicTaggedValue: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const TaggedValue: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*const CharTableObj: Sync`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `Rc<OverlayList>: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+          `*mut emacs_value_tag: Send`
+          which is required by `ParallelHeapEra<'static>: Sync`
+  = help: items from traits can only be used if the trait is in scope
+help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
+ --> tests/p1rv_ui/arm64_macos/era_cannot_be_shared.rs:1:1
+  |
+1 + use objc2::__macro_helpers::class::DoesNotImplDrop;
+  |
+1 + use objc2::__macro_helpers::class::MainThreadOnlyDoesNotImplSendSync;
+  |

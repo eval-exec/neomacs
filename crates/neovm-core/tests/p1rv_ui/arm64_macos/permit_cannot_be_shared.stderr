@@ -1,0 +1,22 @@
+error[E0599]: the associated function or constant `check` exists for struct `ThreadTransfer<&MutatorPermit<'_>>`, but its trait bounds were not satisfied
+ --> tests/p1rv_ui/arm64_macos/../permit_cannot_be_shared.rs
+  |
+  |     ThreadTransfer::<&MutatorPermit<'_>>::check();
+  |                                           ^^^^^ associated function or constant cannot be called on `ThreadTransfer<&MutatorPermit<'_>>` due to unsatisfied trait bounds
+  |
+ ::: tests/p1rv_ui/arm64_macos/../../thread_safety_ui/support/thread_bounds.rs
+  |
+  | pub struct ThreadTransfer<T>(PhantomData<T>);
+  | ---------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `Cell<()>: Sync`
+          which is required by `&MutatorPermit<'_>: Send`
+  = help: items from traits can only be used if the trait is in scope
+help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
+ --> tests/p1rv_ui/arm64_macos/permit_cannot_be_shared.rs:1:1
+  |
+1 + use objc2::__macro_helpers::class::DoesNotImplDrop;
+  |
+1 + use objc2::__macro_helpers::class::MainThreadOnlyDoesNotImplSendSync;
+  |

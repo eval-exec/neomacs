@@ -1,0 +1,27 @@
+error[E0599]: the associated function or constant `check` exists for struct `ThreadSharing<AllStopped<'static>>`, but its trait bounds were not satisfied
+ --> tests/p1rv_ui/arm64_macos/../all_stopped_cannot_be_shared.rs
+  |
+  |     ThreadSharing::<AllStopped<'static>>::check();
+  |                                           ^^^^^ associated function or constant cannot be called on `ThreadSharing<AllStopped<'static>>` due to unsatisfied trait bounds
+  |
+ ::: src/tagged/gc/mutator_registration/rendezvous/keeper.rs
+  |
+  | pub struct AllStopped<'era> {
+  | --------------------------- doesn't satisfy `AllStopped<'static>: Sync`
+  |
+ ::: tests/p1rv_ui/arm64_macos/../../thread_safety_ui/support/thread_bounds.rs
+  |
+  | pub struct ThreadSharing<T>(PhantomData<T>);
+  | --------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `Rc<()>: Sync`
+          which is required by `AllStopped<'static>: Sync`
+  = help: items from traits can only be used if the trait is in scope
+help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
+ --> tests/p1rv_ui/arm64_macos/all_stopped_cannot_be_shared.rs:1:1
+  |
+1 + use objc2::__macro_helpers::class::DoesNotImplDrop;
+  |
+1 + use objc2::__macro_helpers::class::MainThreadOnlyDoesNotImplSendSync;
+  |
