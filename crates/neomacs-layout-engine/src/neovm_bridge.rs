@@ -35,6 +35,10 @@ mod property_keys_canonical_tests;
 #[path = "neovm_bridge/tests/property_keys_alias_test.rs"]
 mod property_keys_alias_tests;
 
+#[cfg(test)]
+#[path = "neovm_bridge/tests/effective_extent_progress_test.rs"]
+mod effective_extent_progress_tests;
+
 mod property_keys;
 use property_keys::PropertyKeyOrder;
 
