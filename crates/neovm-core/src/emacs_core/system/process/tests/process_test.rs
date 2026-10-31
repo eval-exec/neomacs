@@ -17025,10 +17025,16 @@ fn epipe_on_network_send_closes_notifies_and_retires_the_connection() {
                      (let ((i 0))
                        (while (and (< i 200) (not err))
                          (condition-case e
-                             (progn
-                               (process-send-string cli (make-string 4096 ?q))
-                               (setq i (1+ i)))
-                           (error (setq err e)))))
+                             (process-send-string cli (make-string 4096 ?q))
+                           (error
+                            ;; Linux can report ECONNRESET on the first write
+                            ;; after a reset; only the EPIPE arm settles the
+                            ;; status, so keep writing until it is reached.
+                            (when (string-match-p
+                                   "no longer connected to pipe"
+                                   (error-message-string e))
+                              (setq err e))))
+                         (setq i (1+ i))))
                      (let ((at-error
                             (list (and err (error-message-string err))
                                   (process-live-p cli)
