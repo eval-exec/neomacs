@@ -227,9 +227,10 @@ impl Baton {
                     visit(value);
                 }
             }
-            for value in global.gstring_shape_cache.values().copied() {
-                visit(value);
-            }
+            crate::emacs_core::font::trace_gstring_shape_cache(
+                &global.gstring_shape_cache,
+                &mut visit,
+            );
             global.processes.trace_roots_with(&mut visit);
             global.registers.trace_roots_with(&mut visit);
             global.interactive.trace_roots_with(&mut visit);

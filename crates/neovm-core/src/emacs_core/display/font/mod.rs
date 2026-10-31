@@ -4082,6 +4082,17 @@ pub struct GstringShapeCacheKey {
     pub chars: Vec<i64>,
 }
 
+/// The shaped-gstring cache owns its values strongly, like GNU's staticpro'd
+/// gstring_hash_table (src/composite.c:2201-2202). Keys contain no Lisp edges.
+pub(crate) fn trace_gstring_shape_cache(
+    cache: &std::collections::HashMap<GstringShapeCacheKey, Value>,
+    visit: &mut dyn FnMut(Value),
+) {
+    for value in cache.values().copied() {
+        visit(value);
+    }
+}
+
 pub type FontShapeFn =
     Box<dyn FnMut(&mut super::eval::Context, Value, Value) -> GstringShapeOutcome>;
 

@@ -319,6 +319,9 @@ impl Context {
             text.trace_roots_with(visit);
         }
         group("misc");
+        if WORLD {
+            crate::emacs_core::font::trace_gstring_shape_cache(&self.gstring_shape_cache, visit);
+        }
         visit(self.lexenv);
         visit(self.quit_flag);
         visit(self.inhibit_quit);

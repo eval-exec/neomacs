@@ -2189,6 +2189,145 @@ fn font_shape_gstring_caches_by_header_and_returns_the_cached_gstring() {
 }
 
 #[test]
+fn font_shape_gstring_cache_is_the_sole_edge_across_minor_and_full_gc() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    // Establish the old generation before creating the cache-only young graph.
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+
+    let build = |eval: &mut Context| {
+        crate::emacs_core::composite::composition_get_gstring(
+            eval,
+            vec![
+                Value::fixnum(0),
+                Value::fixnum(2),
+                build_font_object(&RuntimeFace::new("default")),
+                Value::string("fi"),
+            ],
+        )
+        .expect("gstring")
+    };
+    eval.font_shape_fn = Some(Box::new(|_eval, gstring, _direction| {
+        gstring.set_vector_slot(
+            2,
+            Value::vector(vec![
+                Value::fixnum(0),
+                Value::fixnum(1),
+                Value::NIL,
+                Value::fixnum(0xF1),
+                Value::fixnum(13),
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+                Value::NIL,
+            ]),
+        );
+        gstring.set_vector_slot(3, Value::NIL);
+        GstringShapeOutcome::Shaped(1)
+    }));
+
+    struct VectorSnapshot {
+        identity_bits: usize,
+        slot_bits: Vec<usize>,
+    }
+    let (cached_bits, snapshots) = eval.with_gc_inhibited(|eval| {
+        let input = build(eval);
+        let cached = font_shape_gstring(eval, vec![input, Value::NIL]).expect("first shaping");
+        let mut pending = vec![cached];
+        let mut snapshots = Vec::new();
+        while let Some(vector) = pending.pop() {
+            let slots = vector.as_vector_data().expect("cached vector graph");
+            snapshots.push(VectorSnapshot {
+                identity_bits: vector.bits(),
+                slot_bits: slots.iter().map(|slot| slot.bits()).collect(),
+            });
+            pending.extend(slots.iter().copied().filter(|slot| slot.is_vector()));
+        }
+        (cached.bits(), snapshots)
+    });
+    // Only native integer snapshots escape setup: no Lisp variable, scratch
+    // root, callback capture, argument vector or other owner retains the graph.
+    assert_eq!(eval.gstring_shape_cache.len(), 1);
+    let check_cached_graph = |eval: &Context| {
+        // Check allocation membership before any payload access, including on
+        // the mutation where the serial cache visitor is removed.
+        for snapshot in &snapshots {
+            assert!(
+                eval.tagged_heap
+                    .retains_veclike(Value::from_bits(snapshot.identity_bits)),
+                "cache-only gstring vector was reclaimed"
+            );
+        }
+        for snapshot in &snapshots {
+            let vector = Value::from_bits(snapshot.identity_bits);
+            let actual: Vec<_> = vector
+                .as_vector_data()
+                .expect("live cached vector")
+                .iter()
+                .map(|slot| slot.bits())
+                .collect();
+            assert_eq!(actual, snapshot.slot_bits, "cached vector slots changed");
+        }
+    };
+
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        assert!(
+            !eval
+                .tagged_heap
+                .value_is_old_for_test(Value::from_bits(cached_bits))
+        );
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(
+            eval.tagged_heap.sweep_in_progress(),
+            "expected deferred minor sweep"
+        );
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(
+            !eval.tagged_heap.sweep_in_progress(),
+            "minor sweep did not finish"
+        );
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        // GEN0 has no minor collector: exercise its real full entry instead.
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_cached_graph(&eval);
+    if eval.tagged_heap.generational_enabled() {
+        assert!(
+            eval.tagged_heap
+                .value_is_old_for_test(Value::from_bits(cached_bits))
+        );
+    }
+
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_cached_graph(&eval);
+
+    eval.with_gc_inhibited(|eval| {
+        let fresh = build(eval);
+        assert_ne!(fresh.bits(), cached_bits, "lookup must use a fresh input");
+        let hit = font_shape_gstring(eval, vec![fresh, Value::NIL]).expect("same-key hit");
+        assert_eq!(hit.bits(), cached_bits, "cache hit must preserve identity");
+    });
+    assert_eq!(eval.gstring_shape_cache.len(), 1);
+    check_cached_graph(&eval);
+}
+
+#[test]
 fn font_shape_gstring_grows_the_glyph_vector_when_the_shaper_needs_room() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
