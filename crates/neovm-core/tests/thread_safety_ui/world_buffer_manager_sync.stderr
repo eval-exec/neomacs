@@ -101,6 +101,8 @@ error[E0599]: the associated function or constant `share` exists for struct `Thr
            which is required by `BufferManager: Sync`
            `*const u8: Send`
            which is required by `BufferManager: Sync`
+           `Rc<Cell<Vec<TaggedValue>>>: Send`
+           which is required by `BufferManager: Sync`
            `Rc<Cell<*const ()>>: Send`
            which is required by `BufferManager: Sync`
            `*mut TaggedHeap: Send`
@@ -174,6 +176,8 @@ error[E0599]: the associated function or constant `share` exists for struct `Thr
            `RefCell<HashMap<i64, builtins::hooks::WindowConfigurationSnapshot>>: Sync`
            which is required by `BufferManager: Sync`
            `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
+           which is required by `BufferManager: Sync`
+           `Rc<Cell<Vec<TaggedValue>>>: Sync`
            which is required by `BufferManager: Sync`
            `Rc<Cell<*const ()>>: Sync`
            which is required by `BufferManager: Sync`

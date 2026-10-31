@@ -71,7 +71,22 @@ impl Context {
         group: &mut dyn FnMut(&'static str),
         visit: &mut dyn FnMut(Value),
     ) {
-        self.trace_root_groups::<true>(heap_id, collect_shared_roots, group, visit);
+        self.trace_roots_reusing(heap_id, collect_shared_roots, group, visit, &mut Vec::new());
+    }
+
+    /// Collector seeding retains this empty scratch's high-water capacity.
+    #[inline(always)]
+    pub(super) fn trace_roots_reusing(
+        &self,
+        heap_id: usize,
+        collect_shared_roots: impl FnOnce(&mut Vec<Value>),
+        group: &mut dyn FnMut(&'static str),
+        visit: &mut dyn FnMut(Value),
+        scratch: &mut Vec<Value>,
+    ) {
+        debug_assert!(scratch.is_empty());
+        self.trace_root_groups::<true>(heap_id, collect_shared_roots, group, visit, scratch);
+        debug_assert!(scratch.is_empty());
     }
 
     /// Only this owner's execution roots. World cells are traced by the
@@ -90,9 +105,13 @@ impl Context {
         called: &mut Vec<SymId>,
     ) {
         let heap_id = self.tagged_heap.identity();
-        self.trace_root_groups::<false>(heap_id, |_| {}, &mut |_| {}, &mut |value| {
-            roots.push(value)
-        });
+        self.trace_root_groups::<false>(
+            heap_id,
+            |_| {},
+            &mut |_| {},
+            &mut |value| roots.push(value),
+            &mut Vec::new(),
+        );
         #[cfg(feature = "jit")]
         self.trace_jit_redefined_functions(heap_id, &mut |value| roots.push(value), called);
         #[cfg(not(feature = "jit"))]
@@ -121,6 +140,7 @@ impl Context {
             |_| {},
             &mut |name| names.push(name),
             &mut |_| {},
+            &mut Vec::new(),
         );
         names
     }
@@ -134,6 +154,7 @@ impl Context {
         collect_shared_roots: impl FnOnce(&mut Vec<Value>),
         group: &mut dyn FnMut(&'static str),
         visit: &mut dyn FnMut(Value),
+        scratch: &mut Vec<Value>,
     ) {
         group("vm_frames");
         for frame in &self.vm_root_frames {
@@ -378,7 +399,7 @@ impl Context {
         // same temporary buffer for it and the following World registries.
         group("in_flight_registry");
         if WORLD {
-            let mut registry_roots = Vec::new();
+            let mut registry_roots = &mut *scratch;
             // Rust-held signals, throws and yields stay rooted when this Context moves.
             self.collect_in_flight_roots(heap_id, &mut registry_roots);
             for root in registry_roots.drain(..) {
@@ -446,16 +467,20 @@ impl Context {
             for root in registry_roots.drain(..) {
                 visit(root);
             }
-            // Registry values are already seeded. Release their scratch storage
-            // before the larger root walks so it does not stay live across them.
-            drop(registry_roots);
+            // Every registry has been drained; its capacity is available to
+            // the larger owner walk below without retaining any Values.
         }
         if WORLD {
             // Full ~all-interned-symbols walk on STW collections; only the
             // BLV-pool residual under `ObarraySymbolCellSkipGuard` (both
             // concurrent handshakes).
             group("obarray");
-            self.obarray.trace_roots_with(visit);
+            // Use the canonical owner enumerator directly: the trait's default
+            // visitor would allocate a fresh vector for this large owner.
+            self.obarray.trace_roots(scratch);
+            for root in scratch.drain(..) {
+                visit(root);
+            }
             group("proc_timer");
             self.processes.trace_roots_with(visit);
             self.watchers.trace_roots_with(visit);
@@ -1014,3 +1039,7 @@ impl Context {
         self.tty_frame_host_factory = Some(factory);
     }
 }
+
+#[cfg(test)]
+#[path = "tests/root_seed_capacity_test.rs"]
+mod root_seed_capacity_tests;

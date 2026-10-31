@@ -243,6 +243,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `neovm_core::Context: Send`
            `NonNull<MarkerObj>: Send`
            which is required by `neovm_core::Context: Send`
+           `Rc<Cell<Vec<TaggedValue>>>: Send`
+           which is required by `neovm_core::Context: Send`
            `Rc<Cell<*const ()>>: Send`
            which is required by `neovm_core::Context: Send`
            `*mut TaggedHeap: Send`
@@ -308,6 +310,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `*const tree_sitter::ffi::TSTree: Send`
            which is required by `neovm_core::Context: Send`
            `Rc<Vec<AutomaticCompositionSpan>>: Send`
+           which is required by `neovm_core::Context: Send`
+           `Rc<Cell<Vec<TaggedValue>>>: Sync`
            which is required by `neovm_core::Context: Send`
            `Rc<Cell<*const ()>>: Sync`
            which is required by `neovm_core::Context: Send`

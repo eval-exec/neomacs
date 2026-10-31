@@ -107,6 +107,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            which is required by `BufferManager: Send`
            `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
            which is required by `BufferManager: Send`
+           `Rc<Cell<Vec<TaggedValue>>>: Send`
+           which is required by `BufferManager: Send`
            `Rc<Cell<*const ()>>: Send`
            which is required by `BufferManager: Send`
            `*mut TaggedHeap: Send`
@@ -188,6 +190,8 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
            `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
            which is required by `BufferManager: Send`
            `Rc<OverlayList>: Send`
+           which is required by `BufferManager: Send`
+           `Rc<Cell<Vec<TaggedValue>>>: Sync`
            which is required by `BufferManager: Send`
            `Rc<Cell<*const ()>>: Sync`
            which is required by `BufferManager: Send`

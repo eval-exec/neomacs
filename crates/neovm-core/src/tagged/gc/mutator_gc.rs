@@ -7,6 +7,9 @@
 
 use super::*;
 
+#[path = "root_seed_scratch.rs"]
+mod root_seed_scratch;
+
 pub(super) struct MutatorGcState {
     /// Charged objects, including the unused tail of an open P0.8 region.
     pub(super) allocated_count: usize,
@@ -269,6 +272,7 @@ struct RegisteredMutatorGc {
 /// This is the legacy one-mutator representation, not a parallel registry:
 /// a real future registry must own each hot/cold pair as one registration.
 struct MutatorSatbRegistry {
+    root_seed_scratch: root_seed_scratch::RootSeedScratch,
     current: SatbMutatorState,
     /// Canonical ID issuance, owner permutation index, and O(1) loan preflight.
     /// Payloads reside only in the hot/cold registrations above and below.
@@ -339,6 +343,7 @@ impl MutatorSatbSlot {
     pub(super) fn new(identity: HeapIdentity) -> Self {
         let (young_control, young) = YoungRegistryControl::new(identity);
         Self(Box::new(MutatorSatbRegistry {
+            root_seed_scratch: root_seed_scratch::RootSeedScratch::default(),
             current: SatbMutatorState::new(young),
             young_control,
             last_termination_partial_words: 0,
@@ -844,5 +849,17 @@ impl AliasableBox<TaggedHeap> {
                 body,
             )
         }
+    }
+}
+
+impl TaggedHeap {
+    /// Loan collector-owned storage only for a stopped root-seeding window.
+    ///
+    /// # Safety
+    /// The caller must keep mutators stopped until the returned loan is dropped.
+    /// No borrow of the heap is retained, so seeding may mutate it meanwhile.
+    pub(crate) unsafe fn root_seed_scratch(&mut self) -> root_seed_scratch::RootSeedLoan {
+        debug_assert!(!self.sweep_in_progress());
+        self._satb_layout_reserve.0.root_seed_scratch.loan()
     }
 }

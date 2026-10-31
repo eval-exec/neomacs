@@ -2757,8 +2757,11 @@ impl Context {
         // Share the count with the group recorder, but capture the stable heap
         // pointer by value so each root does not reload it through a reference.
         let root_count = &cur_count;
+        // SAFETY: this function runs only in the stopped seeding window. The
+        // independent loan drops (including on unwind) before returning.
+        let mut thread_local_roots = unsafe { (*heap_ptr).root_seed_scratch() };
         let heap_identity = unsafe { (*heap_ptr).identity() };
-        self.trace_roots(
+        self.trace_roots_reusing(
             heap_identity,
             |roots| {
                 // SAFETY: borrow only from the live collector loan, and end
@@ -2791,10 +2794,10 @@ impl Context {
                     }
                 }
             },
+            thread_local_roots.roots(),
         );
         close_group();
         let mut groups = groups.into_inner();
-        let mut thread_local_roots = Vec::new();
         // A JIT leaf may keep addresses inside the obarray it was compiled
         // against; drop the cache before its roots are walked if this
         // Context's obarray is not that one (P1.4 §3.6).
@@ -2806,25 +2809,31 @@ impl Context {
         // STW begin does not arm mark_in_progress. This call certifies actual
         // seeding, independently of that flag; snapshots never certify it.
         debug_assert!(!unsafe { (*heap_ptr).sweep_in_progress() });
-        collect_thread_local_gc_roots(
-            &mut thread_local_roots,
+        let mut tl_seed_us = 0;
+        let mut tl_seed_count = 0;
+        for_each_thread_local_root_source(
             heap_identity,
             collection_epoch,
             crate::tagged::gc::CacheRootScan::Collection,
-            &mut groups,
+            |origin, collect| {
+                let roots = thread_local_roots.roots();
+                debug_assert!(roots.is_empty());
+                let collect_t0 = std::time::Instant::now();
+                collect(roots);
+                groups.push((origin, collect_t0.elapsed().as_micros() as u64, roots.len()));
+                let seed_t0 = std::time::Instant::now();
+                tl_seed_count += roots.len();
+                for root in roots.drain(..) {
+                    // SAFETY: same stopped collector loan as the Context walk.
+                    unsafe {
+                        (*heap_ptr).seed_root_with_origin(root, origin);
+                    }
+                }
+                tl_seed_us += seed_t0.elapsed().as_micros() as u64;
+            },
         );
-        let tl_seed_t0 = std::time::Instant::now();
-        let tl_seed_count = thread_local_roots.len();
-        for (root, origin) in thread_local_roots {
-            unsafe {
-                (*heap_ptr).seed_root_with_origin(root, origin);
-            }
-        }
-        groups.push((
-            "tl_seed",
-            tl_seed_t0.elapsed().as_micros() as u64,
-            tl_seed_count,
-        ));
+        drop(thread_local_roots);
+        groups.push(("tl_seed", tl_seed_us, tl_seed_count));
         // Install per-buffer marker-chain head slots so `unchain_dead_markers`
         // can splice unmarked markers out of every live chain before sweep.
         // Mirrors GNU `sweep_buffer → unchain_dead_markers` (alloc.c).
