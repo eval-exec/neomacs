@@ -3,11 +3,3 @@ error[E0432]: unresolved import `neovm_core::tagged::gc::ProofEra`
   |
 1 | use neovm_core::tagged::gc::ProofEra;
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ProofEra` in `tagged::gc`
-  |
-note: found an item that was configured out
- --> src/tagged/gc.rs
-  |
-  | #[cfg(test)]
-  |       ---- the item is gated here
-  | pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
-  |                                                                 ^^^^^^^^
