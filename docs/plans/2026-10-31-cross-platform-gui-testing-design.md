@@ -224,7 +224,7 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
 ## Implementation status (2026-10-31, branch `gui-tests-cross-platform`)
 
 - Capability contract, `Unsupported` reporting, and the manifest fields are
-  in (`875510d0da`, `d7da72eb09`).
+  in (`f36002c4ad`, `7b8ba32d46`).
 - A scenario's status no longer requires a PNG unless it declared
   `surface-present`; semantic scenarios pass on a host whose windows cannot
   be presented.
