@@ -693,8 +693,13 @@ impl TreeSitterManager {
         }
     }
 
+    /// Trace every native Value owner independently of the parser record's
+    /// aliases. Both the serial census and stopped World walk use this list.
     pub(crate) fn roots(&self) -> Vec<Value> {
-        self.parsers.values().map(|entry| entry.value).collect()
+        self.parsers
+            .values()
+            .flat_map(|entry| [entry.value, entry.tag])
+            .collect()
     }
 
     pub(crate) fn loaded_language(&self, key: SymId) -> Option<(Language, Option<String>)> {
@@ -1012,6 +1017,10 @@ impl TreeSitterManager {
 #[cfg(test)]
 #[path = "tests/treesit_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/parser_tag_gc_test.rs"]
+mod parser_tag_gc_tests;
 
 fn parser_point_at(
     buffer: &Buffer,
