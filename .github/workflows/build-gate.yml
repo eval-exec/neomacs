@@ -81,6 +81,13 @@ jobs:
         run: |
           cargo check --workspace --all-targets
 
+      # The harness spawn-architecture tripwire and the canonical-environment
+      # tests live in neomacs-test-env; no other job runs them, so an unpinned
+      # harness spawn could reach main. This leg already installs nextest.
+      - name: Test harness spawn architecture
+        if: matrix.label == 'linux-x86_64'
+        run: cargo nextest run --locked -p neomacs-test-env
+
       - name: Test DirectWrite native font replay
         if: matrix.label == 'windows-msvc-x86_64'
         shell: bash
