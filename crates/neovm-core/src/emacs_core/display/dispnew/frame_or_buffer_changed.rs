@@ -218,30 +218,37 @@ pub(crate) fn builtin_frame_or_buffer_changed_p(
         return Ok(Value::NIL);
     }
 
-    let state = match state.filter(|state| snapshot.reusable(*state)) {
+    let (state, reallocated) = match state.filter(|state| snapshot.reusable(*state)) {
         Some(state) => {
             let size = state.as_vector_data().map_or(0, |slots| slots.len());
             snapshot.write(state, size);
-            state
+            (state, false)
         }
         None => {
             let size = snapshot.required_without_headroom + 20;
             let state = Value::vector(vec![lambda(); size]);
             snapshot.write(state, size);
-            state
+            (state, true)
         }
     };
 
-    if variable.is_nil() {
-        eval.frame_and_buffer_state = Some(state);
-    } else {
-        // `set` can run variable watchers, which may collect; the freshly
-        // built vector is not reachable from Lisp until the set completes.
-        let saved = save_scratch_gc_roots();
-        push_scratch_gc_root(state);
-        let result = builtin_set_2(eval, variable, state);
-        restore_scratch_gc_roots(saved);
-        result?;
+    // GNU calls `Fset` only inside the reallocation branch (src/dispnew.c:
+    // 7125-7135). The in-place branch rewrites the vector the symbol already
+    // holds through `ASET`, so the symbol is never set again and variable
+    // watchers (`add-variable-watcher`) must not run there. Mirroring that is
+    // observable: a watcher otherwise fires on every changed call.
+    if reallocated {
+        if variable.is_nil() {
+            eval.frame_and_buffer_state = Some(state);
+        } else {
+            // `set` can run variable watchers, which may collect; the freshly
+            // built vector is not reachable from Lisp until the set completes.
+            let saved = save_scratch_gc_roots();
+            push_scratch_gc_root(state);
+            let result = builtin_set_2(eval, variable, state);
+            restore_scratch_gc_roots(saved);
+            result?;
+        }
     }
     Ok(Value::T)
 }
