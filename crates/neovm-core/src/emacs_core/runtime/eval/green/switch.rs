@@ -518,7 +518,9 @@ impl Context {
         // collectors/readers have returned. Finish any retained failure before
         // dropping the main reservation; keep the Baton for post-teardown
         // inspection until this Context itself retires.
-        self.finish_ended_parked_roots();
+        if let Err(blocked) = self.finish_ended_parked_roots() {
+            blocked.retain_for_shutdown();
+        }
         self.green_seat().expect("main is seated").parked_root_batch = None;
     }
 

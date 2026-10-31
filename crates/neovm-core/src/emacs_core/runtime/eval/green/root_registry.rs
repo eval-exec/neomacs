@@ -30,10 +30,16 @@ impl super::GreenRuntime {
         collector: &QuiescentCollector<'_>,
     ) {
         let mut parked = self.parked.borrow_mut();
+        if let Err(error) = parked.close_and_drain(collector) {
+            tracing::error!(%error, "terminated host registry cannot drain");
+            // Exclusive World destruction cannot recover a leaked root reader.
+            // Stop before automatic field destruction could reclaim backing.
+            std::process::abort();
+        }
         for publication in parked.values() {
             assert_eq!(publication.heap_identity(), collector.heap_identity());
         }
-        while let Some(key) = parked.keys().next().copied() {
+        while let Some(key) = parked.first_owner_key() {
             let publication = parked.remove(&key).expect("existing key");
             if let Err(failure) = finish(publication) {
                 // An escaped/abandoned explicit reader is an invariant
@@ -49,9 +55,11 @@ impl super::GreenRuntime {
 
 impl super::Context {
     /// Called only after main has restored and joined every worker.
-    pub(super) fn finish_ended_parked_roots(&mut self) {
+    pub(super) fn finish_ended_parked_roots(
+        &mut self,
+    ) -> Result<(), super::host_service::DrainBlocked> {
         if self.with_green_runtime(|runtime| runtime.parked.borrow().is_empty()) {
-            return;
+            return Ok(());
         }
         let heap: *mut crate::tagged::gc::TaggedHeap = self.tagged_heap.heap_root().as_ptr();
         // SAFETY: main holds the Baton after all joins, with no callback or
@@ -62,7 +70,17 @@ impl super::Context {
                 self.seed_registered_mutator_roots_world_stopped(heap);
             })
         }
-        .expect("teardown drains its restored owner's collector");
+        .map_err(|error| {
+            super::host_service::DrainBlocked::new(
+                self.obarray.closing_lease(),
+                super::host_service::HostRootError::Collector(error),
+            )
+        })?;
+        self.with_green_runtime(|runtime| runtime.parked.borrow_mut().close_and_drain(&collector))
+            .map_err(|error| {
+                super::host_service::DrainBlocked::new(self.obarray.closing_lease(), error)
+            })?;
         self.with_green_runtime(|runtime| runtime.finish_terminated_roots(&collector));
+        Ok(())
     }
 }

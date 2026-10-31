@@ -1,10 +1,8 @@
 //! Dormant host-effect boundary contracts; this module activates no host service.
 //!
-//! A registered reference names a future control-owner record. It neither
-//! registers roots nor retains heap backing, and offers no materialization API.
-//! Production constructors remain absent until the owner/lifecycle integration
-//! can supply those obligations. Family envelopes deliberately do not claim to
-//! implement the individual DisplayHost methods or the projection dispatcher.
+//! A registered reference names a control-owner record. The Green owner registry
+//! retains its RootBatch; this vocabulary owns no heap or materialization API.
+//! Family envelopes do not implement DisplayHost methods or activate routing.
 
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -34,29 +32,80 @@ static_assertions::assert_impl_all!(HostAffinity: std::fmt::Debug);
 macro_rules! identity {
     ($($name:ident),+ $(,)?) => {$(
         #[doc = "Opaque correlation identity; construction is reserved to its owner."]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(NonZeroU64);
+
     )+};
 }
 
 identity!(
     HostSessionId,
     HostRequestId,
+    HostRequestGeneration,
     RootRecordId,
     OwnerContinuationId
 );
 
+macro_rules! owner_identity_constructor {
+    ($($name:ident),+ $(,)?) => {$(
+        impl $name {
+            /// Metadata issuance only; live record authority stays in its registry.
+            pub(crate) const fn from_owner_id(id: NonZeroU64) -> Self { Self(id) }
+        }
+    )+};
+}
+owner_identity_constructor!(
+    HostSessionId,
+    HostRequestId,
+    HostRequestGeneration,
+    RootRecordId
+);
+
+/// Metadata correlation for a parked host call, never execution or root authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct HostRequestKey {
+    session: HostSessionId,
+    request: HostRequestId,
+    generation: HostRequestGeneration,
+}
+
+impl HostRequestKey {
+    pub(crate) const fn from_owner_identity(
+        session: HostSessionId,
+        request: HostRequestId,
+        generation: HostRequestGeneration,
+    ) -> Self {
+        Self {
+            session,
+            request,
+            generation,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(request: NonZeroU64) -> Self {
+        Self::from_owner_identity(
+            HostSessionId::from_owner_id(NonZeroU64::MIN),
+            HostRequestId::from_owner_id(request),
+            HostRequestGeneration::from_owner_id(NonZeroU64::MIN),
+        )
+    }
+}
+
 mod sealed {
-    use super::{HostRequestId, HostSessionId};
+    use super::{HostRequestGeneration, HostRequestId, HostSessionId};
 
     /// Private-module identity shared by registered records and reply authority.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct RequestIdentity {
         pub(super) session: HostSessionId,
         pub(super) request: HostRequestId,
+        pub(super) generation: HostRequestGeneration,
     }
 
-    pub trait Record {}
+    pub trait Record {
+        const KIND: super::RecordKind;
+    }
     pub trait Plan {}
     pub trait Reply {
         fn identity(&self) -> RequestIdentity;
@@ -72,7 +121,7 @@ pub trait RegisteredRecord: sealed::Record + Send + Sync + 'static {}
 ///
 /// The invariant lifetime prevents references from escaping a scoped fixture
 /// or being reassociated with another session. This key is not root ownership:
-/// the future control owner must retain roots/backing until owner acknowledgement.
+/// the control owner retains roots/backing until owner acknowledgement.
 pub struct RegisteredRootRef<'session, K: RegisteredRecord> {
     binding: RequestIdentity,
     record: RootRecordId,
@@ -91,6 +140,34 @@ impl<K: RegisteredRecord> RegisteredRootRef<'_, K> {
 
     pub fn record(&self) -> RootRecordId {
         self.record
+    }
+
+    /// Only a registry holding the published batch may issue its metadata.
+    ///
+    /// # Safety
+    /// The owner must retain the matching record of kind K until restored-owner
+    /// acknowledgement, and validate all metadata before materialization.
+    pub(crate) unsafe fn from_registered(key: HostRequestKey, record: RootRecordId) -> Self {
+        Self {
+            binding: RequestIdentity {
+                session: key.session,
+                request: key.request,
+                generation: key.generation,
+            },
+            record,
+            _kind: PhantomData,
+            _session: PhantomData,
+        }
+    }
+
+    pub(crate) fn matches(&self, key: HostRequestKey) -> bool {
+        self.binding.session == key.session
+            && self.binding.request == key.request
+            && self.binding.generation == key.generation
+    }
+
+    pub(crate) fn kind(&self) -> RecordKind {
+        K::KIND
     }
 }
 
@@ -131,15 +208,21 @@ pub trait HostReply<'session>: sealed::Reply + Send + 'session {}
 
 macro_rules! families {
     ($(($family:ident, $plan:ident, $reply:ident, $input:ident, $output:ident)),+ $(,)?) => {
+        /// Closed record vocabulary shared with the root-retaining owner.
+        mod record_kind {
+            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+            pub enum RecordKind { $($input, $output,)+ Condition, ThreadSignal }
+        }
+        pub(crate) use record_kind::RecordKind;
         $(
             #[doc = "Registered owner-prepared argument record kind."]
             pub enum $input {}
-            impl sealed::Record for $input {}
+            impl sealed::Record for $input { const KIND: RecordKind = RecordKind::$input; }
             impl RegisteredRecord for $input {}
 
             #[doc = "Registered owner-completed result record kind."]
             pub enum $output {}
-            impl sealed::Record for $output {}
+            impl sealed::Record for $output { const KIND: RecordKind = RecordKind::$output; }
             impl RegisteredRecord for $output {}
 
             #[doc = "Dormant family envelope, not an implementation of its host methods."]
@@ -151,6 +234,11 @@ macro_rules! families {
             impl<'session> $plan<'session> {
                 pub fn native(&self) -> &OwnedNativeData { &self.native }
                 pub fn record(&self) -> &RegisteredRootRef<'session, $input> { &self.record }
+                pub(crate) fn from_registered(native: OwnedNativeData, record: RegisteredRootRef<'session, $input>) -> Self { Self { native, record } }
+                pub(crate) fn submit(self) -> Submitted<'session, Self> {
+                    let binding = self.record.binding;
+                    Submitted { plan: self, port: ReplyPort { binding, _reply: PhantomData, _session: PhantomData } }
+                }
             }
 
             impl sealed::Plan for $plan<'_> {}
@@ -167,6 +255,7 @@ macro_rules! families {
             impl<'session> $reply<'session> {
                 pub fn native(&self) -> &OwnedNativeData { &self.native }
                 pub fn record(&self) -> &RegisteredRootRef<'session, $output> { &self.record }
+                pub(crate) fn from_registered(native: OwnedNativeData, record: RegisteredRootRef<'session, $output>) -> Self { Self { native, record } }
             }
 
             impl sealed::Reply for $reply<'_> {
@@ -274,24 +363,34 @@ families!(
 
 /// Error payload identity; the symbol/data remain in the registered control record.
 pub enum ConditionRecord {}
-impl sealed::Record for ConditionRecord {}
+impl sealed::Record for ConditionRecord {
+    const KIND: RecordKind = RecordKind::Condition;
+}
 impl RegisteredRecord for ConditionRecord {}
 
 /// Target-local thread signal identity, not a cross-thread Flow or raw Value.
 pub enum ThreadSignalRecord {}
-impl sealed::Record for ThreadSignalRecord {}
+impl sealed::Record for ThreadSignalRecord {
+    const KIND: RecordKind = RecordKind::ThreadSignal;
+}
 impl RegisteredRecord for ThreadSignalRecord {}
 
 pub struct RootedCondition<'session>(RegisteredRootRef<'session, ConditionRecord>);
 pub struct RootedThreadSignal<'session>(RegisteredRootRef<'session, ThreadSignalRecord>);
 
 impl<'session> RootedCondition<'session> {
+    pub(crate) fn from_registered(record: RegisteredRootRef<'session, ConditionRecord>) -> Self {
+        Self(record)
+    }
     pub fn record(&self) -> &RegisteredRootRef<'session, ConditionRecord> {
         &self.0
     }
 }
 
 impl<'session> RootedThreadSignal<'session> {
+    pub(crate) fn from_registered(record: RegisteredRootRef<'session, ThreadSignalRecord>) -> Self {
+        Self(record)
+    }
     pub fn record(&self) -> &RegisteredRootRef<'session, ThreadSignalRecord> {
         &self.0
     }
@@ -465,6 +564,7 @@ pub mod contract_fixture {
             RequestIdentity {
                 session: self.session,
                 request: HostRequestId(request),
+                generation: HostRequestGeneration(NonZeroU64::MIN),
             }
         }
 

@@ -15,6 +15,11 @@
 mod api;
 mod bootstrap;
 mod carried;
+#[allow(
+    dead_code,
+    reason = "S2 control service stays dormant until owned host adapters activate"
+)]
+mod host_service;
 mod owner_carried;
 mod root_registry;
 mod scheduler;
@@ -38,9 +43,7 @@ pub(crate) struct GreenRuntime {
     pub(super) bootstrap: GreenBootstrap,
     pub(super) control: std::sync::Arc<scheduler::Control>,
     /// Each parked thread's private roots (plan-3d §4).
-    pub(super) parked: std::cell::RefCell<
-        rustc_hash::FxHashMap<ThreadKey, crate::tagged::transport::RootBatchLease>,
-    >,
+    pub(super) parked: std::cell::RefCell<host_service::WorldRootRegistry>,
     /// A started thread's function until its OS thread runs it.
     pub(super) pending_starts:
         std::cell::RefCell<rustc_hash::FxHashMap<ThreadKey, crate::emacs_core::value::Value>>,
@@ -172,7 +175,9 @@ impl Context {
         self.install_green_runtime(Box::new(GreenRuntime {
             bootstrap,
             control: Default::default(),
-            parked: Default::default(),
+            parked: std::cell::RefCell::new(host_service::WorldRootRegistry::new(
+                self.tagged_heap.heap_identity(),
+            )),
             pending_starts: Default::default(),
             exit: Default::default(),
             carried: std::cell::RefCell::new(carried::CarriedState::placeholders()),
