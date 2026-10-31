@@ -177,3 +177,27 @@ fn log_snapshot(label: &str, snapshot: &HotpathStats) {
         );
     }
 }
+
+/// Carrier park: drop the hotpath tracing state.
+pub(crate) fn reset_carrier_tls() {
+    HOTPATH_STATE.with(|state| *state.borrow_mut() = HotpathState::default());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        HOTPATH_STATE.with(|slot| {
+            let s = slot.borrow();
+            let mut x = s.op_events;
+            for (_, c) in s.stats.entries() {
+                x = x
+                    .wrapping_add(c.count)
+                    .wrapping_add(c.total.as_nanos() as u64)
+                    .wrapping_add(c.max.as_nanos() as u64);
+            }
+            x
+        }),
+    );
+}

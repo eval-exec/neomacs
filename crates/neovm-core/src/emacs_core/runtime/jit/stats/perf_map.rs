@@ -182,3 +182,16 @@ pub(crate) fn record_entry_name_for_test(name: &str) {
 pub(crate) fn last_entry_name_for_test() -> String {
     LAST_ENTRY_NAME.with(|n| n.borrow().clone())
 }
+
+/// Carrier park: drop perf-map labels.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE_LABEL.with(|slot| *slot.borrow_mut() = None);
+    PENDING_CALLEE.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, ACTIVE_LABEL.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix(h, PENDING_CALLEE.with(|slot| slot.get().is_some() as u64));
+}

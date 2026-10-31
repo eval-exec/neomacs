@@ -7285,3 +7285,24 @@ pub(crate) fn load_watcher_list(
 #[cfg(test)]
 #[path = "convert/tests/convert_test.rs"]
 mod tests;
+
+/// Carrier park: drop the pdump load remaps (fresh-thread values).
+pub(crate) fn reset_carrier_tls() {
+    PDUMP_LOAD_NAME_REMAP.with(|slot| *slot.borrow_mut() = None);
+    PDUMP_LOAD_SYM_REMAP.with(|slot| *slot.borrow_mut() = None);
+    PDUMP_LOAD_SYM_IDENTITY.with(|slot| slot.set(false));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        PDUMP_LOAD_NAME_REMAP.with(|slot| slot.borrow().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(h, PDUMP_LOAD_SYM_IDENTITY.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        PDUMP_LOAD_SYM_REMAP.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

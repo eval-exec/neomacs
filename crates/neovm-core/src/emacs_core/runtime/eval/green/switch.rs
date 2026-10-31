@@ -7,6 +7,7 @@
 
 use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
+use super::carrier::CarrierJob;
 use super::host_service::{self, NativeSettlement, PreparedHostCall, RestoredHostOwner};
 use super::scheduler::{Control, Handoff, Lifecycle, ServiceReturn, ThreadKey, Wait, Wake};
 use crate::emacs_core::error::LispCondition;
@@ -631,9 +632,10 @@ impl Context {
             // nowhere left to go.
             let _ = self.green_park(Wait::Runnable);
         }
-        for (_, os_thread) in control.take_join_handles() {
-            let _ = os_thread.join();
-        }
+        // Every carrier is idle here (no Lisp thread can run after the loop
+        // above). Wake and join them deterministically; idle carriers hold no
+        // Baton and touch no World state.
+        self.with_green_runtime(|runtime| runtime.carriers.drain());
         // All continuations have restored or terminated, and their scoped
         // collectors/readers have returned. Finish any retained failure before
         // dropping the main reservation; keep the Baton for post-teardown
@@ -810,12 +812,17 @@ impl Context {
         self.with_green_runtime(|runtime| {
             runtime.pending_starts.borrow_mut().insert(key, function);
         });
-        let worker_control = Arc::clone(&control);
-        let os_thread = std::thread::Builder::new()
-            .name(format!("neovm-lisp-{id}"))
-            .spawn(move || run_worker(key, receiver, worker_control))
-            .expect("spawning a Lisp thread's OS thread");
-        control.note_join_handle(key, os_thread);
+        let job = CarrierJob {
+            key,
+            receiver,
+            control: Arc::clone(&control),
+            // Set by the pool when an idle carrier is handed this job.
+            reused: false,
+        };
+        // Reuse an idle carrier when one is parked, otherwise spawn one. The
+        // Lisp thread object above is already fresh; only the OS executor is
+        // recycled.
+        self.with_green_runtime(|runtime| runtime.carriers.dispatch(job));
         Ok(handle)
     }
 
@@ -884,18 +891,56 @@ fn receive_owner_turn(
     }
 }
 
-/// A Lisp thread's OS thread: wait for the Baton, build the thread's
-/// owner, run its function, record the outcome and hand the Baton on.
-fn run_worker(key: ThreadKey, receiver: mpsc::Receiver<Wake>, control: Arc<Control>) {
+/// One carrier job: wait for the Baton, build the Lisp thread's owner, run
+/// its function, record the outcome and hand the Baton on. The carrier loop
+/// parks the OS thread afterwards; the job's heap-pointer TLS is nulled at
+/// that park, and the remaining cache resets run here at the start of a
+/// reused job, before the new owner's prologue.
+pub(super) fn run_carrier_job(
+    job: CarrierJob,
+    pool: &super::carrier::PoolShared,
+    carrier: super::carrier::CarrierId,
+) -> super::carrier::ParkResult {
+    let CarrierJob {
+        key,
+        receiver,
+        control,
+        reused,
+    } = job;
     // A panic here would drop the Baton with this thread's owner, and every
     // parked thread would wait for it forever: end the process instead.
     let _abort_on_panic = AbortOnPanic;
     let Ok(wake) = receiver.recv() else {
-        // The runtime went away before this thread ever ran.
-        return;
+        // The runtime went away before this thread ever ran; the pool is
+        // draining and never reuses this slot.
+        return super::carrier::ParkResult::Exit;
     };
+    // A reused carrier went idle with its heap pointers park-nulled; prove it
+    // did not acquire one while idle (debug builds), then run the deferred
+    // cache resets. This is the first action of a reused job, before
+    // `baton.enter` and before any owner or World state is installed. A fresh
+    // carrier captures its pristine TLS reference instead.
+    if reused {
+        super::carrier_tls::carrier_tls_idle_state_and_check();
+        super::carrier_tls::reset_carrier_tls();
+        super::carrier_tls::carrier_tls_reset_and_check();
+    } else {
+        super::carrier_tls::carrier_tls_job_started();
+    }
+    #[cfg(test)]
+    CARRIER_JOB_THREADS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .push((key.id(), std::thread::current().id()));
+    // A reused carrier's park left the heap slot empty; a fresh carrier
+    // starts empty. `new_green_owner` installs the World's heap below.
+    debug_assert!(
+        crate::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
+        "carrier job starts with a stale TAGGED_HEAP TLS pointer"
+    );
     let baton = receive_owner_turn(key, wake, &control, &receiver);
     baton.enter();
+    set_job_thread_name(key);
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::green_owner::begin_owner_turn();
     unstow_carried_state(&baton);
@@ -910,8 +955,15 @@ fn run_worker(key: ThreadKey, receiver: mpsc::Receiver<Wake>, control: Arc<Contr
         stow_owner_state(&mut owner, &baton);
         owner.retire_green_owner();
         stow_carried_state(&baton);
+        // Park-time heap-pointer nulls (see the prologue): the carrier must
+        // name no heap or World object before it may be registered idle.
+        // Park before publishing the exit: no other Lisp thread holds the
+        // Baton until `finish` hands it on, so the idle registration is
+        // visible to any dispatcher that runs after `exited` is observed.
+        super::carrier_tls::park_carrier_tls();
+        let parked = pool.park(carrier);
         control.finish(key, baton);
-        return;
+        return parked;
     }
     let outgoing_error = baton
         .green_runtime()
@@ -987,7 +1039,14 @@ fn run_worker(key: ThreadKey, receiver: mpsc::Receiver<Wake>, control: Arc<Contr
     stow_owner_state(&mut owner, &baton);
     owner.retire_green_owner();
     stow_carried_state(&baton);
+    // Park-time heap-pointer nulls (see the prologue): the carrier must name
+    // no heap or World object before it may be registered idle. Idle
+    // registration precedes the exit publication so a dispatcher that runs
+    // after `exited` is observed always finds the slot parked.
+    super::carrier_tls::park_carrier_tls();
+    let parked = pool.park(carrier);
     control.finish(key, baton);
+    parked
 }
 
 /// The World's thread-local state leaves this OS thread with the Baton
@@ -1021,6 +1080,48 @@ fn unstow_owner_state(owner: &mut Context, baton: &Baton) {
     {
         state.put(owner);
     }
+}
+
+/// Linux `comm` name for a running job (diagnostics only). `std` fixes the
+/// thread name at spawn, so the carrier renames the kernel view per job; other
+/// platforms keep the carrier's spawn name.
+fn set_job_thread_name(key: ThreadKey) {
+    #[cfg(target_os = "linux")]
+    {
+        let name = format!("neovm-lisp-{}", key.id());
+        let mut buf = [0u8; 16];
+        let bytes = name.as_bytes();
+        let n = bytes.len().min(buf.len() - 1);
+        buf[..n].copy_from_slice(&bytes[..n]);
+        // SAFETY: PR_SET_NAME copies a NUL-terminated string of at most 16
+        // bytes from the buffer for the duration of the call.
+        unsafe {
+            libc::prctl(
+                libc::PR_SET_NAME,
+                buf.as_ptr() as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            );
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = key;
+}
+
+/// Test hook: `(Lisp thread id, OS thread id)` for every carrier job, in
+/// dispatch order.
+#[cfg(test)]
+pub(crate) static CARRIER_JOB_THREADS: std::sync::Mutex<Vec<(u64, std::thread::ThreadId)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Recorded `(Lisp thread id, OS thread id)` for every carrier job, in order.
+#[cfg(test)]
+pub(crate) fn carrier_job_threads_for_test() -> Vec<(u64, std::thread::ThreadId)> {
+    CARRIER_JOB_THREADS
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
 }
 
 /// Aborts the process when dropped by a panic.

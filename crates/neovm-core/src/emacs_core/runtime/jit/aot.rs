@@ -5759,3 +5759,23 @@ mod policy_qualification_tests;
 mod tests;
 
 pub(crate) mod retier;
+
+/// Carrier park: drop the AOT prewarm/load caches (they hold heap objects
+/// and per-thread prewarm decisions).
+pub(crate) fn reset_carrier_tls() {
+    LOADED_UNITS.with(|units| units.borrow_mut().clear());
+    PRELOAD_UNIT.with(|slot| *slot.borrow_mut() = None);
+    PREWARM_HASHES.with(|hashes| hashes.borrow_mut().clear());
+    PREWARM_STUBS.with(|stubs| stubs.borrow_mut().clear());
+    PREWARM_STUBS_PENDING.with(|slot| slot.set(false));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, LOADED_UNITS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, PRELOAD_UNIT.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix(h, PREWARM_HASHES.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, PREWARM_STUBS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, PREWARM_STUBS_PENDING.with(|slot| slot.get() as u64));
+}

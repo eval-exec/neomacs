@@ -556,3 +556,8 @@ pub fn install_tty_redisplay_callback_with_popup_redraw(
 #[cfg(test)]
 #[path = "tests/tty_mode_line_flow_test.rs"]
 mod tty_mode_line_flow_test;
+
+// `REDISPLAY_RUNTIME` is CarrierIntrinsic and is not reset at a Green carrier
+// park: it holds layout caches and the font metrics service, never a Lisp
+// `Value`, and rebuilding the font service per park is a system-font scan
+// (measured ~52M instructions per Lisp thread on the many_threads rows).

@@ -280,3 +280,46 @@ pub(crate) fn reset_epoch_counters_for_test() {
     SPEC_REVALIDATIONS.with(|c| c.iter().for_each(|cell| cell.set(0)));
     INLINE_EVICTED_LEAVES.with(|c| c.set(0));
 }
+
+/// Carrier park: reset function-epoch statistics.
+pub(crate) fn reset_carrier_tls() {
+    FN_EPOCH_BUMPS.with(|bumps| {
+        for cell in bumps {
+            cell.set(0);
+        }
+    });
+    FN_CELL_UNCHANGED.with(|slot| slot.set(0));
+    FN_REDEFINED.with(|m| m.borrow_mut().clear());
+    SPEC_REVALIDATIONS.with(|cells| {
+        for cell in cells {
+            cell.set(0);
+        }
+    });
+    INLINE_EVICTED_LEAVES.with(|slot| slot.set(0));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, FN_CELL_UNCHANGED.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        FN_EPOCH_BUMPS.with(|cells| {
+            cells
+                .iter()
+                .map(|c| c.get())
+                .fold(0u64, |a, b| a.wrapping_add(b))
+        }),
+    );
+    crate::tls_fingerprint::mix_debug(h, FN_REDEFINED.with(|slot| format!("{:?}", slot.borrow())));
+    crate::tls_fingerprint::mix(h, INLINE_EVICTED_LEAVES.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        SPEC_REVALIDATIONS.with(|cells| {
+            cells
+                .iter()
+                .map(|c| c.get())
+                .fold(0u64, |a, b| a.wrapping_add(b))
+        }),
+    );
+}

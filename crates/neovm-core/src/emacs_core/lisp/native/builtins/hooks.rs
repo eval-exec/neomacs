@@ -1299,6 +1299,12 @@ pub(super) fn reset_hooks_thread_locals() {
     WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| slot.reset(HashMap::new()));
 }
 
+/// Carrier park: forget the installed window-configuration registry handle
+/// (a plain store). The World's registry stays alive through its Contexts.
+pub(super) fn park_hooks_thread_locals() {
+    WINDOW_CONFIGURATION_SNAPSHOTS.with(HeapRegistrySlot::park);
+}
+
 pub(crate) type WindowConfigurationRegistryHandle =
     HeapRegistryHandle<HashMap<i64, WindowConfigurationSnapshot>>;
 
@@ -2144,3 +2150,13 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
 #[cfg(test)]
 #[path = "tests/gc_tls_window_configuration_test.rs"]
 mod gc_tls_ownership_tests;
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        WINDOW_CONFIGURATION_SNAPSHOTS
+            .with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+}

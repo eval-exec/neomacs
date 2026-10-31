@@ -390,7 +390,16 @@ pub(crate) struct CharsetRegistry {
 
 impl CharsetRegistry {
     /// Create a new registry pre-populated with the standard charsets.
+    ///
+    /// The canonical plists hold Lisp `Value`s and are materialized only when
+    /// a tagged heap is available (always in tests, which use the fallback
+    /// heap). A thread with no heap (the GUI render thread) keeps the plain
+    /// fields and empty plists.
     pub fn new() -> Self {
+        Self::build(cfg!(test) || crate::tagged::gc::current_tagged_heap_identity().is_some())
+    }
+
+    fn build(materialize_plists: bool) -> Self {
         let mut reg = Self {
             charsets: rustc_hash::FxHashMap::default(),
             aliases: rustc_hash::FxHashMap::default(),
@@ -400,7 +409,7 @@ impl CharsetRegistry {
             non_preferred_head: None,
             next_id: 256, // start above the Emacs built-in range
         };
-        reg.init_standard_charsets();
+        reg.init_standard_charsets(materialize_plists);
         // GNU's dumped Emacs has only `ascii` preferred by default (the locale
         // setup runs `set-charset-priority` with the ASCII-first list), so a
         // freshly started session classifies non-ASCII BMP characters as the
@@ -447,7 +456,7 @@ impl CharsetRegistry {
         }
     }
 
-    fn init_standard_charsets(&mut self) {
+    fn init_standard_charsets(&mut self, materialize_plists: bool) {
         // The five C-level charsets are defined by GNU's `init_charset_once`
         // (charset.c:2444-2468) in this exact order — ascii, iso-8859-1,
         // unicode, emacs, eight-bit — and each is appended to
@@ -460,7 +469,7 @@ impl CharsetRegistry {
         ascii.ascii_compatible_p = true;
         ascii.iso_final_char = Some(66); // ISO final char 'B'
         ascii.emacs_mule_id = Some(0);
-        self.register_builtin(ascii);
+        self.register_builtin(ascii, materialize_plists);
 
         // iso-8859-1 is a full 0-255 charset with identity mapping
         // (code_offset=0, min_code=0, max_code=255, ascii_compatible=true),
@@ -473,14 +482,14 @@ impl CharsetRegistry {
         iso_8859_1.max_code = 255;
         iso_8859_1.ascii_compatible_p = true;
         iso_8859_1.method = CharsetMethod::Offset(0);
-        self.register_builtin(iso_8859_1);
+        self.register_builtin(iso_8859_1, materialize_plists);
 
         let mut unicode = Self::make_default(2, "unicode");
         unicode.dimension = 3;
         unicode.code_space = [0, 255, 0, 255, 0, 16, 0, 0];
         unicode.max_code = 0x10FFFF;
         unicode.ascii_compatible_p = true; // GNU charset-plist :ascii-compatible-p t
-        self.register_builtin(unicode);
+        self.register_builtin(unicode, materialize_plists);
 
         let mut emacs = Self::make_default(3, "emacs");
         emacs.dimension = 3;
@@ -488,7 +497,7 @@ impl CharsetRegistry {
         emacs.max_code = 0x3FFF7F;
         emacs.ascii_compatible_p = true; // GNU charset-plist :ascii-compatible-p t
         emacs.supplementary_p = true; // GNU define_charset_internal: supplementary=1
-        self.register_builtin(emacs);
+        self.register_builtin(emacs, materialize_plists);
 
         let mut eight_bit = Self::make_default(4, "eight-bit");
         eight_bit.code_space = [128, 255, 0, 0, 0, 0, 0, 0];
@@ -496,7 +505,7 @@ impl CharsetRegistry {
         eight_bit.max_code = 255;
         eight_bit.supplementary_p = true;
         eight_bit.method = CharsetMethod::Offset(0x3FFF80);
-        self.register_builtin(eight_bit);
+        self.register_builtin(eight_bit, materialize_plists);
 
         // unicode-bmp and latin-iso8859-1 are *Lisp* charsets in GNU
         // (mule-conf.el).  neomacs pre-seeds them so the runtime can use them
@@ -507,7 +516,7 @@ impl CharsetRegistry {
         bmp.dimension = 2;
         bmp.code_space = [0, 255, 0, 255, 0, 0, 0, 0];
         bmp.max_code = 0xFFFF;
-        self.register_builtin_preseed(bmp);
+        self.register_builtin_preseed(bmp, materialize_plists);
 
         let mut latin1 = Self::make_default(5, "latin-iso8859-1");
         latin1.code_space = [32, 127, 0, 0, 0, 0, 0, 0];
@@ -515,7 +524,7 @@ impl CharsetRegistry {
         latin1.method = CharsetMethod::Offset(160);
         latin1.iso_final_char = Some(65); // ISO final char 'A'
         latin1.emacs_mule_id = Some(129);
-        self.register_builtin_preseed(latin1);
+        self.register_builtin_preseed(latin1, materialize_plists);
 
         self.define_alias(intern("ucs"), intern("unicode"));
     }
@@ -528,17 +537,22 @@ impl CharsetRegistry {
     /// appends `:docstring`/`:short-name`/`:long-name` via put-charset-property.
     /// Charsets created from Lisp `define-charset` keep the plist they were
     /// defined with, so they go through the plain `register`.
-    fn register_builtin(&mut self, info: CharsetInfo) {
-        self.register_builtin_impl(info, true);
+    fn register_builtin(&mut self, info: CharsetInfo, materialize_plists: bool) {
+        self.register_builtin_impl(info, true, materialize_plists);
     }
 
     /// Like `register_builtin`, but pre-seeds the charset without adding it to
     /// the ordered/priority list (it is added when mule-conf.el redefines it).
-    fn register_builtin_preseed(&mut self, info: CharsetInfo) {
-        self.register_builtin_impl(info, false);
+    fn register_builtin_preseed(&mut self, info: CharsetInfo, materialize_plists: bool) {
+        self.register_builtin_impl(info, false, materialize_plists);
     }
 
-    fn register_builtin_impl(&mut self, mut info: CharsetInfo, add_ordered: bool) {
+    fn register_builtin_impl(
+        &mut self,
+        mut info: CharsetInfo,
+        add_ordered: bool,
+        materialize_plists: bool,
+    ) {
         // The canonical plist holds Lisp `Value`s (the `:code-space` vector
         // allocates on the tagged heap). `CharsetRegistry` is a thread-local
         // lazily built on whatever thread first needs it — including the GUI
@@ -548,9 +562,7 @@ impl CharsetRegistry {
         // the Lisp thread); the render thread keeps the fields and an empty
         // plist (it never reads `charset-plist`). Without this guard,
         // `Value::vector` panics with "no TaggedHeap set for this thread".
-        let heap_available =
-            cfg!(test) || crate::tagged::gc::current_tagged_heap_identity().is_some();
-        if info.plist.is_empty() && heap_available {
+        if info.plist.is_empty() && materialize_plists {
             let code_offset = match info.method {
                 CharsetMethod::Offset(n) => n,
                 _ => 0,
@@ -1193,11 +1205,23 @@ impl CharsetRegistry {
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};
 
 thread_local! {
-    static CHARSET_REGISTRY: HeapRegistrySlot<CharsetRegistry> = HeapRegistrySlot::new(CharsetRegistry::new());
+    static CHARSET_REGISTRY: HeapRegistrySlot<CharsetRegistry> =
+        HeapRegistrySlot::new(CharsetRegistry::new());
+}
+
+/// Build the thread-local registry before a carrier park or a fresh-job TLS
+/// fingerprint. In test builds the lazy initializer allocates the canonical
+/// charset plists through the fallback heap; doing that first lets the caller
+/// clear the tagged-heap slot before the reset steps or snapshot run.
+pub(crate) fn warm_carrier_charset_registry() {
+    CHARSET_REGISTRY.with(|_| ());
 }
 
 /// Reset charset registry to default state (called from Context::new).
 pub(crate) fn reset_charset_registry() {
+    // A Context activatable on a different heap needs its own mutable registry
+    // bound to the current heap: callers may define charsets through the slot
+    // before installing the Context's registry.
     CHARSET_REGISTRY.with(|slot| slot.reset(CharsetRegistry::new()));
     if let Ok(mut cache) = charset_map_cache().write() {
         cache.clear();
@@ -3043,3 +3067,28 @@ mod gc_tls_ownership_tests;
 #[cfg(test)]
 #[path = "tests/positioned_dispatch_test.rs"]
 mod positioned_dispatch_tests;
+
+/// Carrier park: forget the installed registry handle (a plain store). The
+/// World's registry stays alive through its Contexts; the idle carrier keeps
+/// no heap-identified handle.
+pub(crate) fn park_carrier_tls() {
+    CHARSET_REGISTRY.with(HeapRegistrySlot::park);
+}
+
+/// Deferred carrier reset: the charset map memo is native data with no heap
+/// pointer, so clearing it may wait for the reused job's reset.
+pub(crate) fn reset_carrier_tls() {
+    CHARSET_MAP_MEMO.with(|memo| memo.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, CHARSET_MAP_MEMO.with(|slot| slot.borrow().len() as u64));
+    // The registry slot's own fingerprint is a constant: reading it would run
+    // the lazy initializer, which in test builds allocates the canonical
+    // plists through the fallback heap and perturbs every later module's
+    // fingerprint. The park reset still empties the slot, and the
+    // architecture test covers its classification.
+    crate::tls_fingerprint::mix(h, 0);
+}

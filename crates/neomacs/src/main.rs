@@ -5061,7 +5061,43 @@ fn run_temacs_dump_mode(dump_mode: LoadupDumpMode, startup: &StartupOptions) {
 }
 
 #[allow(dead_code)]
+fn register_workspace_carrier_tls() {
+    use neovm_core::emacs_core::eval::{CarrierTlsReset, register_carrier_tls_reset};
+    #[cfg(debug_assertions)]
+    {
+        register_carrier_tls_reset(CarrierTlsReset::with_fingerprint(
+            "neomacs-layout-engine",
+            neomacs_layout_engine::reset_carrier_tls,
+            neomacs_layout_engine::carrier_tls_fingerprint,
+        ));
+        register_carrier_tls_reset(CarrierTlsReset::with_fingerprint(
+            "neomacs-terminfo",
+            neomacs_terminfo::reset_carrier_tls,
+            neomacs_terminfo::carrier_tls_fingerprint,
+        ));
+        // `frame_layout::REDISPLAY_RUNTIME` is CarrierIntrinsic: it holds
+        // layout caches and the font metrics service, never a Lisp `Value`.
+        // Rebuilding the font service per park is a system-font scan
+        // (measured ~52M instructions per Lisp thread on many_threads), so it
+        // is deliberately not reset.
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        register_carrier_tls_reset(CarrierTlsReset::new(
+            "neomacs-layout-engine",
+            neomacs_layout_engine::reset_carrier_tls,
+        ));
+        register_carrier_tls_reset(CarrierTlsReset::new(
+            "neomacs-terminfo",
+            neomacs_terminfo::reset_carrier_tls,
+        ));
+        // `frame_layout::REDISPLAY_RUNTIME` is CarrierIntrinsic (layout caches
+        // and font metrics, never a Lisp `Value`); see the debug block above.
+    }
+}
+
 fn main() {
+    register_workspace_carrier_tls();
     neomacs_display_runtime::macos_bundle_runtime::configure_before_threads();
     #[cfg(feature = "gc-memory-telemetry")]
     neovm_core::tagged::gc::memory_telemetry::set_allocator_sampler(gc_memory_allocator::sample);

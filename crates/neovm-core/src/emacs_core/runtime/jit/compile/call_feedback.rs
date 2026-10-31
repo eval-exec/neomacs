@@ -393,3 +393,24 @@ pub(crate) fn emit_record_call_target(
     let site_v = fb.ins().iconst(rt.ptr_ty, site as usize as i64);
     fb.ins().call_indirect(sig, callee, &[site_v, target]);
 }
+
+/// Carrier park: drop the call-feedback compile scratch.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE_CALL_SOURCE.with(|slot| *slot.borrow_mut() = None);
+    ACTIVE_CALL_TARGETS_READ.with(|slot| slot.set(false));
+    ACTIVE_FEEDBACK_HOLDS.with(|holds| holds.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        ACTIVE_CALL_SOURCE.with(|slot| slot.borrow().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(h, ACTIVE_CALL_TARGETS_READ.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        ACTIVE_FEEDBACK_HOLDS.with(|slot| slot.borrow().len() as u64),
+    );
+}

@@ -2678,3 +2678,19 @@ pub(crate) fn window_chrome_row_height_for_face_at_scale(
 #[cfg(test)]
 #[path = "display_status_line/tests/display_status_line_test.rs"]
 mod tests;
+
+/// Carrier park: reset the per-redisplay chrome counters and records.
+pub(crate) fn reset_carrier_tls() {
+    reset_mode_line_eval_count();
+    reset_chrome_generation_record();
+}
+
+/// Debug-only carrier TLS fingerprint.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    let counts = MODE_LINE_EVAL_COUNT.with(std::cell::Cell::get) as u64
+        ^ ((HEADER_LINE_EVAL_COUNT.with(std::cell::Cell::get) as u64) << 8)
+        ^ ((TAB_LINE_EVAL_COUNT.with(std::cell::Cell::get) as u64) << 16)
+        ^ ((CHROME_GENERATION_RECORD.with(|r| r.borrow().len()) as u64) << 24);
+    *h = (*h ^ counts).wrapping_mul(0x0000_0100_0000_01b3);
+}

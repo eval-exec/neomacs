@@ -112,3 +112,15 @@ impl Database {
         map.get(name).copied().unwrap_or(false)
     }
 }
+
+/// Carrier park (Green S-track): reset this crate's classified thread-local
+/// state. Registered with the neovm-core carrier pool by the editor binary.
+pub fn reset_carrier_tls() {
+    native::padding::reset_carrier_tls();
+}
+
+/// Debug-only fingerprint of this crate's carrier TLS.
+#[cfg(debug_assertions)]
+pub fn carrier_tls_fingerprint() -> u64 {
+    native::padding::carrier_tls_fingerprint()
+}

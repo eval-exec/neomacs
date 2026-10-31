@@ -6937,3 +6937,14 @@ mod lazy_doc_tests;
 #[cfg(test)]
 #[path = "tests/load_test.rs"]
 mod tests;
+
+/// Carrier park: fresh eager-expansion failure policy.
+pub(crate) fn reset_carrier_tls() {
+    EAGER_EXPANSION_FAILURE.with(|slot| slot.set(EagerExpansionFailure::Propagate));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix_debug(h, EAGER_EXPANSION_FAILURE.with(|slot| slot.get()));
+}

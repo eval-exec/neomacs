@@ -54,10 +54,9 @@ impl Context {
             })?;
         }
         self.threads.join_thread(id);
-        // Reap its OS thread: it handed the Baton on as its last act.
-        if let Some(os_thread) = control.take_join_handle(key) {
-            let _ = os_thread.join();
-        }
+        // Join is about the Lisp thread, not the OS carrier: the carrier stays
+        // in the pool for the next Lisp thread. `exited(key)` is published
+        // after owner retirement; the TLS reset is deferred to that next job.
         if let Some(flow) = pending {
             return Err(flow);
         }

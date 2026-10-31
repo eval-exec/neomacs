@@ -549,3 +549,17 @@ mod tests {
         }
     }
 }
+
+/// Carrier park: drop the concurrent-hash mutator identity.
+pub(crate) fn reset_carrier_tls() {
+    CONCURRENT_HASH_MUTATOR_ID.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        CONCURRENT_HASH_MUTATOR_ID.with(|slot| slot.get().is_some() as u64),
+    );
+}

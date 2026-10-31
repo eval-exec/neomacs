@@ -580,3 +580,33 @@ pub(crate) use policy::{
     charge_compile, cpu_time_us, rearm_fallback, reserve_compile, revert_if_t2, upgrade_deferred,
     upgrade_failed, wait_for_opt_budget,
 };
+
+/// Carrier park: drop the active tier-2 build and reset its counters.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE_BUILD.with(|slot| *slot.borrow_mut() = None);
+    T2_STATS.with(|slot| {
+        slot.set(T2Stats {
+            requests: 0,
+            kept: 0,
+            stale: 0,
+            due: 0,
+            upgraded: 0,
+            hof_credits: 0,
+            unstable: 0,
+            budget_denied: 0,
+            not_worth: 0,
+            deferred: 0,
+            failed: 0,
+            reverted: 0,
+        })
+    });
+    policy::reset_carrier_tls();
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    policy::carrier_tls_fingerprint(h);
+    crate::tls_fingerprint::mix(h, ACTIVE_BUILD.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix_debug(h, T2_STATS.with(|slot| slot.get()));
+}

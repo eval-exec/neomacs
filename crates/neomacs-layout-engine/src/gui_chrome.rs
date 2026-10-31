@@ -817,3 +817,15 @@ fn key_symbol_name(key: &Value) -> String {
 #[cfg(test)]
 #[path = "gui_chrome/tests/gui_chrome_test.rs"]
 mod tests;
+
+/// Carrier park: drop the tool-bar item cache.
+pub(crate) fn reset_carrier_tls() {
+    TOOL_BAR_ITEMS_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    let len = TOOL_BAR_ITEMS_CACHE.with(|cache| cache.borrow().len()) as u64;
+    *h = (*h ^ len).wrapping_mul(0x0000_0100_0000_01b3);
+}

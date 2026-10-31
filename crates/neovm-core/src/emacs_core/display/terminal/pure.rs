@@ -1795,3 +1795,19 @@ pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
 #[cfg(test)]
 #[path = "tests/registry_reinstall_test.rs"]
 mod registry_reinstall_tests;
+
+/// Carrier park: forget the installed Lisp terminal registry handle (a plain
+/// store). `TERMINAL_MANAGER` is a World-carried swap slot and must not be
+/// touched.
+pub(crate) fn park_carrier_tls() {
+    TERMINAL_LISP_STATE.with(HeapRegistrySlot::park);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        TERMINAL_LISP_STATE.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+}

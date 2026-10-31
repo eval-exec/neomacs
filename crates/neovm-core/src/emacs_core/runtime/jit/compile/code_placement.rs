@@ -369,3 +369,14 @@ pub(crate) fn define_placed_function<M: Module>(
 #[cfg(test)]
 #[path = "code_placement/tests/placement_test.rs"]
 mod tests;
+
+/// Carrier park: clear the code-placement hint.
+pub(crate) fn reset_carrier_tls() {
+    ALLOCATION_HINT.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, ALLOCATION_HINT.with(|slot| slot.get().is_some() as u64));
+}

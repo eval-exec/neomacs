@@ -275,3 +275,14 @@ mod tests {
         assert_eq!(state.acc_ns, [u64::MAX; CompilePhase::COUNT]);
     }
 }
+
+/// Carrier park: drop the phase clock.
+pub(crate) fn reset_carrier_tls() {
+    PHASE_CLOCK.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, PHASE_CLOCK.with(|slot| slot.get().is_some() as u64));
+}

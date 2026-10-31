@@ -3767,3 +3767,40 @@ pub(crate) fn prepare_upgrade_for_test(ctx: *mut Context, func: &ByteCodeFunctio
         drain_ready_pending(unsafe { ctx.as_ref() });
     }
 }
+
+/// Carrier park: drop the compiled-leaf caches. The world's heap stays alive,
+/// but the cached leaves' reloc Values are unrooted while the carrier is idle,
+/// so the cache must not survive into the next job.
+pub(crate) fn reset_carrier_tls() {
+    clear();
+    COMPILED_HEAP.with(|slot| slot.set(None));
+    DROPPED_LEAF_TOTALS.with(|totals| {
+        totals.set(LeafTotals {
+            leaves: 0,
+            entries: 0,
+            deopt_at: 0,
+            deopt_rerun: 0,
+            signals: 0,
+        })
+    });
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        COMPILED.with(|c| {
+            let c = c.borrow();
+            (c.len() as u64) ^ ((c.retired.len() as u64) << 32)
+        }),
+    );
+    crate::tls_fingerprint::mix(h, COMPILED_HEAP.with(|slot| slot.get().is_some() as u64));
+    crate::tls_fingerprint::mix(h, COMPILED_OBARRAY.with(|slot| slot.get().is_some() as u64));
+    crate::tls_fingerprint::mix_debug(h, DROPPED_LEAF_TOTALS.with(|slot| slot.get()));
+    crate::tls_fingerprint::mix(h, INLINE_DEPS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, INLINE_EVICTIONS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, OSR_CACHE.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, OSR_PENDING.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, REDEFINED_PINS.with(|slot| slot.borrow().len() as u64));
+}

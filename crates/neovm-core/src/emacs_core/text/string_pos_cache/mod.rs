@@ -242,3 +242,15 @@ mod gc_collection_epoch_minor_tests;
 #[cfg(test)]
 #[path = "tests/signed_string_positions.rs"]
 mod signed_string_positions_tests;
+
+/// Carrier park: reset the owner-installed cache and the per-thread epoch.
+pub(crate) fn reset_carrier_tls() {
+    reset_string_pos_cache();
+    EPOCH.with(|slot| slot.set(0));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, EPOCH.with(|slot| slot.get() as u64));
+}

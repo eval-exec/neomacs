@@ -213,3 +213,15 @@ fn correct_apple_speed(native: i32, device: Option<u32>) -> io::Result<i32> {
     }
     Ok(speed as i32)
 }
+
+/// Carrier park: the synchronous tputs sink pointer is always null between
+/// jobs; reset defensively so a leaked pointer can never survive.
+pub fn reset_carrier_tls() {
+    SINK.with(|slot| slot.set(std::ptr::null_mut()));
+}
+
+/// Debug-only carrier TLS fingerprint.
+#[cfg(debug_assertions)]
+pub fn carrier_tls_fingerprint() -> u64 {
+    SINK.with(|slot| slot.get() as usize as u64)
+}

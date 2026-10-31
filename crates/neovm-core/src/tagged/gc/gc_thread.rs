@@ -1606,6 +1606,59 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
     clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
 }
 
+/// Clear the carrier's heap-pointer TLS after a retired job (peer review,
+/// condition 1: defence in depth).
+///
+/// The World's heap stays alive; only this OS thread's slot and its hot-path
+/// mirrors are reset to their fresh values. The next job's `new_green_owner`
+/// installs the heap again, and the debug assertion at job start proves the
+/// slot was empty, so a read before that install faults deterministically
+/// instead of following a stale but plausible pointer.
+pub(crate) fn clear_carrier_heap_tls() {
+    TAGGED_HEAP.with(|slot| slot.set(std::ptr::null_mut()));
+    TAGGED_HEAP_ID.with(|slot| slot.set(None));
+    TAGGED_HEAP_WRITE_TRACKING_MODE.with(|slot| slot.set(WriteTrackingMode::Disabled));
+    TAGGED_HEAP_PARTITION_ACTIVE.with(|slot| slot.set(false));
+    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|slot| slot.set(false));
+    TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|slot| slot.set(false));
+    TAGGED_HEAP_DUMP_SPAN.with(|slot| slot.set((usize::MAX, 0)));
+    TAGGED_HEAP_BARRIER_WINDOW.with(|slot| slot.set(BarrierWindow::NONE));
+    TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|slot| slot.set(BarrierWindow::NONE));
+    clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
+}
+
+/// Whether this carrier may start a Lisp job with its current heap slot
+/// (job-prologue and park-reset debug assertion).
+///
+/// The slot must be empty: a stale World heap from the previous owner is the
+/// use-after-free the carrier reset exists to prevent. Test builds add one
+/// harness exception: reading lazily initialized TLS while no heap is
+/// installed allocates the per-thread test fallback heap, and that heap is
+/// not a stale owner heap. The strict release behaviour stays "null only".
+///
+/// Unconditional so the `debug_assert!` that calls it also type-checks in a
+/// release build (the macro compiles its expression there and only folds the
+/// check away).
+#[inline(always)]
+pub(crate) fn carrier_heap_is_acceptable_for_job_start() -> bool {
+    let ptr = TAGGED_HEAP.with(|slot| slot.get());
+    if ptr.is_null() {
+        return true;
+    }
+    #[cfg(test)]
+    {
+        TEST_FALLBACK_TAGGED_HEAP.with(|fb| {
+            fb.borrow()
+                .as_ref()
+                .is_some_and(|heap| heap.root().as_ptr() == ptr)
+        })
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 /// Uninstall `heap` from this thread's allocation slot, if it is the heap
 /// currently installed there.
 ///
@@ -2445,4 +2498,58 @@ mod worker_symbol_classification_tests {
         );
         assert_eq!(next_cycle.seen_symbols.count(), ids.len());
     }
+}
+
+/// Carrier park: reset the GC's per-thread helper state (cold path).
+pub(crate) fn reset_carrier_tls() {
+    cold_gc::reset_carrier_tls();
+}
+
+/// Debug-only carrier TLS fingerprint: the heap slot and its mirrors, then
+/// the cold-GC helper state.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, TAGGED_HEAP.with(|slot| slot.get() as usize as u64));
+    crate::tls_fingerprint::mix(h, TAGGED_HEAP_ID.with(|slot| slot.get().is_some() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_WRITE_TRACKING_MODE.with(|slot| slot.get() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_PARTITION_ACTIVE.with(|slot| slot.get() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|slot| slot.get() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|slot| slot.get() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_DUMP_SPAN.with(|slot| {
+            let (lo, hi) = slot.get();
+            (lo as u64) ^ ((hi as u64) << 1)
+        }),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_BARRIER_WINDOW.with(|slot| (slot.get() == BarrierWindow::NONE) as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|slot| (slot.get() == BarrierWindow::NONE) as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        TAGGED_HEAP_SATB_CACHE.with(|cells| {
+            cells
+                .iter()
+                .map(|c| c.get() as u64)
+                .fold(0u64, |a, b| a.wrapping_add(b))
+        }),
+    );
+    cold_gc::carrier_tls_fingerprint(h);
 }

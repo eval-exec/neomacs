@@ -1186,3 +1186,32 @@ mod phases_tests;
 #[cfg(test)]
 #[path = "stats/tests/verdict_test.rs"]
 mod verdict_tests;
+
+/// Carrier park: reset per-thread JIT statistics and the loop mark.
+pub(crate) fn reset_carrier_tls() {
+    MIR_BAIL_REASONS.with(|m| m.borrow_mut().clear());
+    INLINE_CENSUS.with(|m| m.borrow_mut().clear());
+    STATS.with(|slot| slot.set(CompileStats::default()));
+    LOOP_MARK.with(|slot| *slot.borrow_mut() = None);
+    asm_dump::reset_carrier_tls();
+    epoch::reset_carrier_tls();
+    front_diag::reset_carrier_tls();
+    perf_map::reset_carrier_tls();
+    phases::reset_carrier_tls();
+    verdict::reset_carrier_tls();
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    asm_dump::carrier_tls_fingerprint(h);
+    epoch::carrier_tls_fingerprint(h);
+    front_diag::carrier_tls_fingerprint(h);
+    perf_map::carrier_tls_fingerprint(h);
+    phases::carrier_tls_fingerprint(h);
+    verdict::carrier_tls_fingerprint(h);
+    crate::tls_fingerprint::mix(h, INLINE_CENSUS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, LOOP_MARK.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix(h, MIR_BAIL_REASONS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix_debug(h, STATS.with(|slot| slot.get()));
+}

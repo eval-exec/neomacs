@@ -399,3 +399,14 @@ pub(crate) fn register_thunk_for(abi: LeafAbi) -> RegisterThunk {
 #[cfg(test)]
 #[path = "reg_abi/tests/reg_abi_test.rs"]
 mod tests;
+
+/// Carrier park: fresh lambda-list shape.
+pub(crate) fn reset_carrier_tls() {
+    LAMBDA_LIST.with(|slot| slot.set(LambdaList::Exact));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix_debug(h, LAMBDA_LIST.with(|slot| slot.get()));
+}

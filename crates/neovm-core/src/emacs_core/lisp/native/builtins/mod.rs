@@ -1177,3 +1177,28 @@ mod gdl_format;
 #[cfg(test)]
 #[path = "tests/positioned_symbol_test.rs"]
 mod positioned_symbol_test;
+
+/// Deferred carrier reset: the integer-width policy binding is native (a
+/// `&'static` descriptor plus a `Weak`), so it may wait for reuse.
+pub(crate) fn reset_carrier_builtins_thread_locals() {
+    arithmetic::reset_carrier_tls();
+}
+
+/// Carrier park: replace the builtins registries that hold heap `Value`s
+/// (hash-table test closures, file-notify callbacks, window-configuration
+/// snapshots) with empty handles. The selection stubs and lossage size stay
+/// with the World and are never touched here.
+pub(crate) fn park_carrier_builtins_thread_locals() {
+    collections::park_collections_thread_locals();
+    file_notify::park_file_notify_thread_locals();
+    hooks::park_hooks_thread_locals();
+}
+
+/// Debug-only carrier TLS fingerprint for the non-World-carried builtins TLS.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    arithmetic::carrier_tls_fingerprint(h);
+    collections::carrier_tls_fingerprint(h);
+    file_notify::carrier_tls_fingerprint(h);
+    hooks::carrier_tls_fingerprint(h);
+}

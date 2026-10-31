@@ -288,3 +288,28 @@ pub(crate) fn flush_at_exit() {
 #[cfg(test)]
 #[path = "front_diag/tests/front_diag_test.rs"]
 mod tests;
+
+/// Carrier park: drop the front-end diagnostic scratch.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE.with(|slot| slot.set(None));
+    BUFFER.with(|slot| *slot.borrow_mut() = Buffer::default());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, ACTIVE.with(|slot| slot.get().is_some() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        BUFFER.with(|slot| {
+            let b = slot.borrow();
+            (b.anchor.is_some() as u64)
+                ^ (b.thread << 1)
+                ^ (b.started << 2)
+                ^ (b.finished << 3)
+                ^ (b.aborted << 4)
+                ^ (b.lost << 5)
+                ^ ((b.samples.len() as u64) << 6)
+        }),
+    );
+}

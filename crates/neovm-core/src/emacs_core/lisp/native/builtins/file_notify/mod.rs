@@ -74,6 +74,12 @@ pub(crate) fn reset_file_notify_thread_locals() {
     FILE_NOTIFY_STATE.with(|slot| slot.reset(FileNotifyState::default()));
 }
 
+/// Carrier park: forget the installed file-notify registry handle (a plain
+/// store). The World's registry stays alive through its Contexts.
+pub(crate) fn park_file_notify_thread_locals() {
+    FILE_NOTIFY_STATE.with(HeapRegistrySlot::park);
+}
+
 pub(crate) type FileNotifyRegistryHandle = HeapRegistryHandle<FileNotifyState>;
 
 pub(crate) fn current_file_notify_registry_handle() -> FileNotifyRegistryHandle {
@@ -155,3 +161,12 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        FILE_NOTIFY_STATE.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+}

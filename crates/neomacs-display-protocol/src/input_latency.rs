@@ -401,3 +401,14 @@ pub fn observed(
 #[cfg(test)]
 #[path = "tests/input_latency_test.rs"]
 mod tests;
+
+/// Carrier park: drop the tokens collected for the finished command.
+pub fn reset_carrier_tls() {
+    CONSUMED.with_borrow_mut(Vec::clear);
+}
+
+/// Debug-only carrier TLS fingerprint (pending input tokens).
+#[cfg(debug_assertions)]
+pub fn carrier_tls_fingerprint() -> u64 {
+    CONSUMED.with_borrow(|tokens| tokens.len() as u64)
+}

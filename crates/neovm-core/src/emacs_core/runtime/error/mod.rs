@@ -1241,3 +1241,21 @@ mod memory_signal_policy_tests;
 #[cfg(test)]
 #[path = "tests/issue554_throw_roundtrip.rs"]
 mod issue554_throw_roundtrip_tests;
+
+/// Carrier park: forget the owner's in-flight root registry handle. The
+/// handle points into a Context-owned root table, not into the heap, but the
+/// next owner installs its own handle, so the parked carrier keeps nothing.
+pub(crate) fn park_carrier_tls() {
+    IN_FLIGHT_ROOTS.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified record.
+/// `FORMAT_OBJECT_STACK` moved to the print error-format module; its probe
+/// rides along `print::carrier_tls_fingerprint`.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        IN_FLIGHT_ROOTS.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

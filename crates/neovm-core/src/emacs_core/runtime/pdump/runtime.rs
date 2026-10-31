@@ -157,3 +157,21 @@ pub(crate) fn run_after_pdump_load_hook(eval: &mut Context) {
 #[cfg(test)]
 #[path = "runtime/tests/runtime_test.rs"]
 mod tests;
+
+/// Carrier park: reset the per-thread pdump runtime state. `CORE_PDUMP_HOOKS`
+/// is a process-lifetime `Once` latch, not per-thread state.
+pub(crate) fn reset_carrier_tls() {
+    PDUMP_RUNTIME_STATE.with(|state| *state.borrow_mut() = PdumpRuntimeState::default());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        PDUMP_RUNTIME_STATE.with(|slot| {
+            let s = slot.borrow();
+            ((s.load_hooks.len() as u64) << 1) ^ (s.loaded_dump.is_some() as u64)
+        }),
+    );
+}

@@ -2437,3 +2437,23 @@ mod native_lookup_cache_tests;
 #[cfg(test)]
 #[path = "tests/ascii_reader_name.rs"]
 mod ascii_reader_name_tests;
+
+/// Carrier park: drop the heap-keyed visible symbol-name cache. The intern
+/// epoch caches are carrier-intrinsic and keep their capacity.
+pub(crate) fn reset_carrier_tls() {
+    VISIBLE_SYMBOL_NAME_CACHE.with(|cache| {
+        *cache.borrow_mut() = VisibleSymbolNameCache::default();
+    });
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        VISIBLE_SYMBOL_NAME_CACHE.with(|c| {
+            let c = c.borrow();
+            ((c.heap_id.is_some() as u64) << 32) ^ (c.names.len() as u64)
+        }),
+    );
+}

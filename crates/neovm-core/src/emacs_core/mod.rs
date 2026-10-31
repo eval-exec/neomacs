@@ -496,6 +496,10 @@ mod architecture_value_ref_guard_test;
 mod architecture_inline_boundary_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/carrier_tls_class_test.rs"]
+mod architecture_carrier_tls_class_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/host_effect_guard_test.rs"]
 mod architecture_host_effect_guard_test;
 

@@ -27,6 +27,21 @@ thread_local! {
     static FORMAT_OBJECT_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
+/// Carrier reuse reset: drop the per-thread format object stack. The stack
+/// holds only `Copy` object keys; clearing never dereferences a heap object.
+pub(crate) fn reset_error_format_for_carrier() {
+    FORMAT_OBJECT_STACK.with(|stack| stack.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified record.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        FORMAT_OBJECT_STACK.with(|stack| stack.borrow().len() as u64),
+    );
+}
+
 /// Format an eval result for the compat test harness (TSV output).
 pub fn format_eval_result(result: &Result<Value, EvalError>) -> String {
     match result {

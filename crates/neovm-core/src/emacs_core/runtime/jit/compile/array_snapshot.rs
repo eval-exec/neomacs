@@ -83,3 +83,17 @@ pub(super) fn admission(ops_len: usize, constants: &[Value], prefix: usize) -> A
         constant_types,
     }
 }
+
+/// Carrier park: drop the array-kind masks of the compile in progress.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE_ARRAY_KINDS.with(|kinds| kinds.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        ACTIVE_ARRAY_KINDS.with(|slot| slot.borrow().len() as u64),
+    );
+}

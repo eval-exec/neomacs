@@ -202,6 +202,11 @@ pub(crate) fn reset_ccl_registry() {
     CCL_REGISTRY.with(|slot| slot.reset(CclRegistry::with_defaults()));
 }
 
+/// Carrier park: forget the installed registry handle (a plain store).
+pub(crate) fn park_ccl_registry() {
+    CCL_REGISTRY.with(HeapRegistrySlot::park);
+}
+
 /// Trace a Context's registry even when another heap is installed on this thread.
 pub(crate) fn collect_ccl_registry_gc_roots(handle: &CclRegistryHandle, roots: &mut Vec<Value>) {
     let registry = handle.borrow();
@@ -1574,3 +1579,13 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        CCL_REGISTRY.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+    crate::tls_fingerprint::mix(h, CCL_VARIABLES.with(|slot| slot.get() as usize as u64));
+}

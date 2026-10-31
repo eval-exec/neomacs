@@ -1097,3 +1097,30 @@ mod observed_collisions_tests;
 #[cfg(all(test, feature = "jit"))]
 #[path = "collection_reads/tests/observed_reused_subtype_test.rs"]
 mod observed_reused_subtype_tests;
+
+/// Carrier park: clear this thread's read-observation scope and recent-read
+/// cache. `STATE` is World-carried by the swap protocol and is not touched.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE.with(|slot| slot.set(false));
+    // Epoch 0 is the fresh-thread value (`RecentReads::new`), so the snapshot
+    // probe can compare a parked carrier with a fresh one; any later lookup
+    // validates against the live epoch and misses.
+    RECENT_READS.with(|recent| recent.clear(0));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, ACTIVE.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        RECENT_READS.with(|r| {
+            r.words
+                .iter()
+                .map(|w| w.get() as u64)
+                .fold(0u64, |a, b| a.wrapping_add(b))
+                ^ ((r.epoch.get()) << 1)
+                ^ ((r.observed.get() as u64) << 2)
+        }),
+    );
+}

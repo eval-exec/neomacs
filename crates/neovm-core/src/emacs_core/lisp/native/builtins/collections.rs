@@ -649,6 +649,12 @@ pub(super) fn reset_collections_thread_locals() {
     HASH_TABLE_TEST_ALIASES.with(|slot| slot.reset(HashTableTestRegistry::default()));
 }
 
+/// Carrier park: forget the installed hash-table-test registry handle (a
+/// plain store). The World's registry stays alive through its Contexts.
+pub(super) fn park_collections_thread_locals() {
+    HASH_TABLE_TEST_ALIASES.with(HeapRegistrySlot::park);
+}
+
 /// Root the custom comparison/hash closures registered via
 /// `define-hash-table-test`. They live in the Context-owned registry selected by this thread, so
 /// without rooting them the GC sweeps a still-referenced closure and the next
@@ -2132,3 +2138,12 @@ mod vector_storage_tests;
 #[cfg(test)]
 #[path = "tests/positioned_builtin_classes_test.rs"]
 mod positioned_builtin_classes_tests;
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        HASH_TABLE_TEST_ALIASES.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+}

@@ -10493,3 +10493,38 @@ mod raw_byte_syntax_tests;
 #[cfg(test)]
 #[path = "tests/declared_boundary_positions.rs"]
 mod declared_boundary_positions_tests;
+
+/// Carrier park: reset the Emacs-regex scratch and abort latches.
+/// `STANDARD_BYTE` is a pure function of the case table (no owner state) and
+/// is deliberately not reset.
+pub(crate) fn reset_carrier_tls() {
+    CHAR_TABLE_ASCII_FOLD.with(|slot| slot.set(None));
+    MATCH_SCRATCH.with(|slot| *slot.borrow_mut() = Some(Box::default()));
+    MATCHER_OVERFLOW.with(|slot| slot.set(false));
+    PIKE_FALLBACK.with(|slot| slot.set(false));
+    PIKE_SCRATCH.with(|slot| *slot.borrow_mut() = PikeScratch::default());
+    dfa::reset_carrier_tls();
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    dfa::carrier_tls_fingerprint(h);
+    crate::tls_fingerprint::mix(
+        h,
+        CHAR_TABLE_ASCII_FOLD.with(|slot| slot.get().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(h, MATCHER_OVERFLOW.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, MATCH_SCRATCH.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix(h, PIKE_FALLBACK.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        PIKE_SCRATCH.with(|s| {
+            let s = s.borrow();
+            ((s.seen.len() as u64) << 40)
+                ^ ((s.clist.len() as u64) << 20)
+                ^ (s.nlist.len() as u64)
+                ^ ((s.generation as u64) << 50)
+        }),
+    );
+}

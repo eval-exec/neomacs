@@ -15,6 +15,8 @@
 mod api;
 mod bootstrap;
 mod carried;
+mod carrier;
+pub(crate) mod carrier_tls;
 #[allow(
     dead_code,
     reason = "S2 control service stays dormant until owned host adapters activate"
@@ -60,6 +62,10 @@ pub(crate) struct GreenRuntime {
     /// roots. A same-owner reacquire consumes the marker without signalling.
     pub(super) outgoing_constant_error:
         std::cell::Cell<Option<(ThreadKey, crate::emacs_core::intern::SymId)>>,
+    /// The bounded carrier OS-thread pool (S-track). Carriers share its
+    /// `Arc` while idle; it owns every carrier's join handle. Visible to the
+    /// Green module and its children only, matching `CarrierPool`.
+    carriers: carrier::CarrierPool,
 
     /// The standard case table, one for every thread as in GNU:
     /// `set-standard-case-table` sets it here, and each thread installs it
@@ -216,6 +222,7 @@ impl Context {
             standard_case_table: std::cell::Cell::new(self.cached_standard_case_table),
             outgoing_constant_error: std::cell::Cell::new(None),
             deferred_errors: Default::default(),
+            carriers: carrier::CarrierPool::new(),
         }));
         Ok(baton)
     }
@@ -227,8 +234,11 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn new_green_owner(baton: &super::world::Baton) -> Context {
-        // This owner is about to run on this OS thread; reserve the dense
-        // SymId/NameId caches once instead of regrowing them from empty.
+        // The job prologue restored the World's carried state before this
+        // call (the carrier reset and `unstow_carried_state` run in
+        // `run_carrier_job`). This owner is about to run on this OS thread;
+        // reserve the dense SymId cache once instead of regrowing it from
+        // empty.
         crate::emacs_core::intern::prepare_thread_symbol_caches();
         let (seed, current, case_table) = {
             let runtime = baton.green_runtime();
@@ -276,6 +286,10 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/green_switch_test.rs"]
 mod switch_tests;
+
+#[cfg(test)]
+#[path = "../tests/carrier_pool_test.rs"]
+mod carrier_pool_tests;
 
 #[cfg(test)]
 #[path = "../tests/green_parked_root_equivalence_test.rs"]

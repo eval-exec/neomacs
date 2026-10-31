@@ -1547,3 +1547,29 @@ pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
 // Selected array observer; no change to main exports or registration order.
 pub use super::array_profile::neovm_jit_t2_record_array_use;
 pub use super::sqrt_binding::neovm_jit_sqrt_binding_valid;
+
+/// Carrier park: drop shim scratch and pending panic state.
+pub(crate) fn reset_carrier_tls() {
+    PENDING_FLOW.with(|slot| *slot.borrow_mut() = None);
+    PENDING_SHIM_PANIC.with(|slot| *slot.borrow_mut() = None);
+    CURRENT_LEAF_BASES.with(|slot| slot.set(None));
+    PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        CURRENT_LEAF_BASES.with(|slot| slot.get().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(h, PENDING_FLOW.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        PENDING_ROOT_SWEEP_FLOOR.with(|slot| slot.get().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        PENDING_SHIM_PANIC.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

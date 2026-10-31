@@ -909,3 +909,13 @@ fn map_case_table_with_symbols(
 ) -> Result<(), Flow> {
     super::chartable::for_each_char_table_mapping_with_symbols(&table, f, mode)
 }
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, STANDARD_CASE_TABLE_HEAP.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        STANDARD_CASE_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

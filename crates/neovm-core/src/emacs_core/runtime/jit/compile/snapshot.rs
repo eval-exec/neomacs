@@ -219,3 +219,22 @@ mod array_feedback;
 #[cfg(test)]
 pub(crate) use array_feedback::SelectedFeedbackSnapshot;
 pub(crate) use array_feedback::{FrontFeedbackScope, publish_numeric_feedback_with_arrays};
+
+/// Carrier park: drop the compile-snapshot scratch vectors.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE_NUMERIC_FEEDBACK.with(|v| v.borrow_mut().clear());
+    ACTIVE_NO_INLINE_CALL_SITES.with(|v| v.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        ACTIVE_NO_INLINE_CALL_SITES.with(|slot| slot.borrow().len() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        ACTIVE_NUMERIC_FEEDBACK.with(|slot| slot.borrow().len() as u64),
+    );
+}

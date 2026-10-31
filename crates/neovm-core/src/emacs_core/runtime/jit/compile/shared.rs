@@ -838,3 +838,16 @@ impl WorkerBackend {
 #[cfg(test)]
 #[path = "shared/tests/collection_journal_test.rs"]
 mod collection_journal_tests;
+
+/// Carrier park: drop the shared backend and its code-memory counters.
+pub(crate) fn reset_carrier_tls() {
+    SHARED_JIT.with(|slot| *slot.borrow_mut() = None);
+    STATS.with(|slot| slot.set(CodeMemoryStats::default()));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, SHARED_JIT.with(|s| s.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix_debug(h, STATS.with(|slot| slot.get()));
+}

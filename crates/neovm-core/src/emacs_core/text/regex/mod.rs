@@ -5464,3 +5464,20 @@ fn buffer_search_translation_table_with_symbols(
 #[cfg(test)]
 #[path = "tests/declared_signed_positions.rs"]
 mod declared_signed_position_tests;
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        LISP_REGEX_PATTERN_CACHE.with(|slot| slot.borrow().len() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        LITERAL_TRT_CACHE.with(|slot| slot.borrow().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        SEARCH_PATTERN_CACHE.with(|slot| slot.borrow().len() as u64),
+    );
+}

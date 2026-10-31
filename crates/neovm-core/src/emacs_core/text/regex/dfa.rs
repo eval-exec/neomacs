@@ -2966,3 +2966,14 @@ impl LiveDfa {
 #[cfg(test)]
 #[path = "tests/dfa_test.rs"]
 mod tests;
+
+/// Carrier park: reset the DFA filter counters.
+pub(crate) fn reset_carrier_tls() {
+    STATS.with(|stats| *stats.borrow_mut() = DfaStats::default());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix_debug(h, STATS.with(|slot| format!("{:?}", slot.borrow())));
+}

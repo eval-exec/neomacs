@@ -99,3 +99,14 @@ pub(crate) fn take() -> Option<Box<str>> {
 pub(crate) fn profile_row(compiled_id: &str, verdict: Option<&str>) -> String {
     format!("#mir,{compiled_id},{}\n", verdict.unwrap_or("-"))
 }
+
+/// Carrier park: fresh compile verdict.
+pub(crate) fn reset_carrier_tls() {
+    CURRENT.with(|slot| *slot.borrow_mut() = MirVerdict::default());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix_debug(h, CURRENT.with(|slot| format!("{:?}", slot.borrow())));
+}

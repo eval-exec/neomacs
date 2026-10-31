@@ -828,3 +828,16 @@ pub(crate) fn char_has_category_in_table_with_symbols(
     let category_set = super::chartable::ct_lookup_with_symbols(&table, c as i64, mode)?;
     category_set_contains(&category_set, category as char)
 }
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        STANDARD_CATEGORY_TABLE_HEAP.with(|slot| slot.get() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        STANDARD_CATEGORY_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

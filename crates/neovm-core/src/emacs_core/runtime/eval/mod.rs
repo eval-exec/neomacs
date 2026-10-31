@@ -7711,6 +7711,8 @@ pub use native_stack::raise_main_stack_rlimit;
 mod var_fast;
 
 mod cconv_memo;
+
+pub use green::carrier_tls::{CarrierTlsReset, register_carrier_tls_reset};
 mod cconv_shape;
 mod cconv_trust;
 pub(crate) use apply::{CallableRoot, RootedCallable};
@@ -7962,3 +7964,33 @@ mod issue554_function_policy;
 
 mod rows_observation;
 pub use rows_observation::{RowsDependencyMetadata, RowsObservationEpoch, RowsObservationRefusal};
+
+/// Carrier park: forget the owner's quit request. The next owner replaces it;
+/// leaving it would leak a request raised against the retired owner.
+pub(crate) fn park_carrier_tls() {
+    QUIT_REQUESTED_TLS.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Deferred carrier reset: drop the owner-installed subr tables and scratch GC
+/// roots. They are native containers of `Copy` `Value`s; clearing them never
+/// dereferences a heap object. The next owner's `install_native_tables`
+/// repopulates the tables.
+pub(crate) fn reset_carrier_tls() {
+    cconv_memo::reset_carrier_tls();
+    GLOBAL_SUBR_TABLE.with(|table| table.borrow_mut().clear());
+    INLINE_SUBR_TABLE.with(|table| table.borrow_mut().clear());
+    SCRATCH_GC_ROOTS.with(|roots| roots.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    cconv_memo::carrier_tls_fingerprint(h);
+    crate::tls_fingerprint::mix(h, GLOBAL_SUBR_TABLE.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, INLINE_SUBR_TABLE.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        QUIT_REQUESTED_TLS.with(|slot| slot.borrow().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(h, SCRATCH_GC_ROOTS.with(|slot| slot.borrow().len() as u64));
+}

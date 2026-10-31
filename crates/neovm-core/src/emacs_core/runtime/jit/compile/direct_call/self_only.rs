@@ -119,3 +119,14 @@ pub(crate) fn source_for_abi(abi: LeafAbi) -> Option<usize> {
         .then(|| SELF_SOURCE.with(core::cell::Cell::get))
         .flatten()
 }
+
+/// Carrier park: drop the self-source cache.
+pub(crate) fn reset_carrier_tls() {
+    SELF_SOURCE.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, SELF_SOURCE.with(|slot| slot.get().is_some() as u64));
+}

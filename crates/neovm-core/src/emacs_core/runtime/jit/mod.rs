@@ -1777,3 +1777,20 @@ mod green_release_tests;
 #[cfg(all(test, feature = "jit", not(feature = "gc-memory-telemetry")))]
 #[path = "tests/p3sym_functions_test.rs"]
 mod p3sym_functions_tests;
+
+/// Debug-only carrier TLS fingerprint for the JIT subsystem.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    #[cfg(feature = "jit")]
+    {
+        aot::carrier_tls_fingerprint(h);
+        bg::carrier_tls_fingerprint(h);
+        cache::carrier_tls_fingerprint(h);
+        compile::carrier_tls_fingerprint(h);
+        inline::carrier_tls_fingerprint(h);
+        stats::carrier_tls_fingerprint(h);
+        tier2::carrier_tls_fingerprint(h);
+    }
+    #[cfg(not(feature = "jit"))]
+    let _ = h;
+}

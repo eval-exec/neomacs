@@ -1076,3 +1076,16 @@ pub(crate) fn render_direct_call_stats() -> Option<String> {
 }
 
 pub(crate) use profile::{note_arming, render_stats as render_direct_profile_stats};
+
+/// Carrier park: fresh-thread unbounded-body default.
+pub(crate) fn reset_carrier_tls() {
+    UNBOUNDED_BODY.with(|slot| slot.set(true));
+    self_only::reset_carrier_tls();
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    self_only::carrier_tls_fingerprint(h);
+    crate::tls_fingerprint::mix(h, UNBOUNDED_BODY.with(|slot| slot.get() as u64));
+}

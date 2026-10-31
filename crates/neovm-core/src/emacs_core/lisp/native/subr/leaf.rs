@@ -601,3 +601,14 @@ pub(crate) fn call_checked(spec: &'static LeafSpec, ctx: &Context, args: &[Value
 #[cfg(test)]
 #[path = "tests/leaf_contract_test.rs"]
 mod leaf_contract_tests;
+
+/// Carrier park: drop the per-thread leaf table.
+pub(crate) fn reset_carrier_tls() {
+    LEAF_BY_SUBR.with(|table| table.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, LEAF_BY_SUBR.with(|slot| slot.borrow().len() as u64));
+}

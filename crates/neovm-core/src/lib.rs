@@ -20,6 +20,8 @@ pub mod tagged;
 #[cfg(test)]
 #[path = "tests/test_utils_test.rs"]
 pub mod test_utils;
+#[cfg(debug_assertions)]
+pub(crate) mod tls_fingerprint;
 mod tls_scope;
 pub mod window;
 

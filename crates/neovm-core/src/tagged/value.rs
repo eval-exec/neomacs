@@ -1475,3 +1475,19 @@ mod gc_tls_ownership_tests;
 #[cfg(test)]
 #[path = "value/tests/fixnum_boundary.rs"]
 mod fixnum_boundary_tests;
+
+/// Carrier park: drop subr-object caches (they hold heap Values).
+pub(crate) fn reset_carrier_tls() {
+    STATIC_SUBR_OBJECTS.with(|table| table.borrow_mut().clear());
+    SUBR_BY_SYM.with(|table| *table.borrow_mut() = (u64::MAX, Vec::new()));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        STATIC_SUBR_OBJECTS.with(|slot| slot.borrow().len() as u64),
+    );
+    crate::tls_fingerprint::mix_debug(h, SUBR_BY_SYM.with(|slot| format!("{:?}", slot.borrow())));
+}

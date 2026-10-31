@@ -74,3 +74,23 @@ pub use types::*;
 #[cfg(test)]
 #[path = "tests/test_composition.rs"]
 mod test_composition;
+
+/// Carrier park (Green S-track): reset this crate's classified thread-local
+/// state. Registered with the neovm-core carrier pool by the editor binary.
+pub fn reset_carrier_tls() {
+    display_status_line::reset_carrier_tls();
+    gui_chrome::reset_carrier_tls();
+    tty_menu_bar::reset_carrier_tls();
+    incremental_layout::chrome_memo::reset_carrier_tls();
+}
+
+/// Debug-only fingerprint of this crate's carrier TLS.
+#[cfg(debug_assertions)]
+pub fn carrier_tls_fingerprint() -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    display_status_line::carrier_tls_fingerprint(&mut h);
+    gui_chrome::carrier_tls_fingerprint(&mut h);
+    tty_menu_bar::carrier_tls_fingerprint(&mut h);
+    incremental_layout::chrome_memo::carrier_tls_fingerprint(&mut h);
+    h
+}

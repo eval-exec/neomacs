@@ -140,3 +140,14 @@ impl ColdSpan {
 #[cfg(test)]
 #[path = "../tests/cold_exits_test.rs"]
 mod tests;
+
+/// Carrier park: drop the previous function's deopt tail.
+pub(crate) fn reset_carrier_tls() {
+    DEOPT_TAIL.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, DEOPT_TAIL.with(|slot| slot.get().is_some() as u64));
+}

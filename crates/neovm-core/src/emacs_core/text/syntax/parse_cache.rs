@@ -1463,3 +1463,14 @@ mod memo_tests;
 #[cfg(test)]
 #[path = "tests/back_comment_canonical_test.rs"]
 mod back_comment_canonical_tests;
+
+/// Carrier park: reset the syntax parse-cache counters.
+pub(crate) fn reset_carrier_tls() {
+    STATS.with(|stats| stats.set(ParseCacheStats::default()));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix_debug(h, STATS.with(|slot| slot.get()));
+}

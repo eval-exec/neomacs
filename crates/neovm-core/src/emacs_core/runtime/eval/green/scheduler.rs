@@ -257,7 +257,6 @@ struct ControlState {
     senders: BTreeMap<ThreadKey, mpsc::SyncSender<Wake>>,
     waits: BTreeMap<ThreadKey, Wait>,
     ready: VecDeque<ThreadKey>,
-    joins: BTreeMap<ThreadKey, std::thread::JoinHandle<()>>,
     closing: bool,
     physical: BTreeMap<ThreadKey, OwnerLocation>,
     services: BTreeMap<HostRequestKey, ServiceMetadata>,
@@ -1140,11 +1139,6 @@ impl Control {
         receiver
     }
 
-    /// Keep the OS thread KEY runs on, to join at shutdown.
-    pub(crate) fn note_join_handle(&self, key: ThreadKey, handle: std::thread::JoinHandle<()>) {
-        self.state().joins.insert(key, handle);
-    }
-
     /// Whether KEY has ended.
     pub(crate) fn exited(&self, key: ThreadKey) -> bool {
         matches!(self.state().waits.get(&key), Some(Wait::Exited) | None)
@@ -1699,22 +1693,6 @@ impl Control {
         }
         drop(state);
         self.notify_select();
-    }
-
-    /// Take KEY's join handle, once KEY has ended.
-    pub(crate) fn take_join_handle(&self, key: ThreadKey) -> Option<std::thread::JoinHandle<()>> {
-        let mut state = self.state();
-        if !matches!(state.waits.get(&key), Some(Wait::Exited)) {
-            return None;
-        }
-        state.joins.remove(&key)
-    }
-
-    /// Take every worker's join handle (shutdown).
-    pub(crate) fn take_join_handles(&self) -> Vec<(ThreadKey, std::thread::JoinHandle<()>)> {
-        std::mem::take(&mut self.state().joins)
-            .into_iter()
-            .collect()
     }
 }
 

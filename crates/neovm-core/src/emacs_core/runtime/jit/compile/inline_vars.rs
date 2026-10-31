@@ -1986,3 +1986,19 @@ pub(crate) fn lower_unbind(
     fb.switch_to_block(cont);
     fb.seal_block(cont);
 }
+
+/// Carrier park: fresh compile env and no unbind sites.
+pub(crate) fn reset_carrier_tls() {
+    ENV.with(|slot| slot.set(CompileEnvState::Absent));
+    UNBIND_SITES.with(|sites| sites.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        matches!(ENV.with(|slot| slot.get()), CompileEnvState::Absent) as u64,
+    );
+    crate::tls_fingerprint::mix(h, UNBIND_SITES.with(|slot| slot.borrow().len() as u64));
+}

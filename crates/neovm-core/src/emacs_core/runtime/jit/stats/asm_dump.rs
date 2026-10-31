@@ -174,3 +174,14 @@ fn render(info: &AsmLeafInfo<'_>, pending: &PendingAsm) -> String {
     out.push('\n');
     out
 }
+
+/// Carrier park: drop a pending ASM dump.
+pub(crate) fn reset_carrier_tls() {
+    PENDING.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, PENDING.with(|slot| slot.borrow().is_some() as u64));
+}

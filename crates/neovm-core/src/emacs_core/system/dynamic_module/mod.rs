@@ -392,6 +392,12 @@ pub(crate) fn reset_dynamic_module_registry() {
     GLOBAL_REFS.with(|slot| slot.reset(Vec::new()));
 }
 
+/// Carrier park: forget the installed global-ref registry handle (a plain
+/// store). The World's registry stays alive through its Contexts.
+pub(crate) fn park_dynamic_module_registry() {
+    GLOBAL_REFS.with(HeapRegistrySlot::park);
+}
+
 pub(crate) fn retire_dynamic_module_registry(registry: &DynamicModuleRegistryHandle) {
     registry.borrow_mut().clear();
 }
@@ -2462,3 +2468,21 @@ mod gc_tls_ownership_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "tests/library_lifetime.rs"]
 mod library_lifetime_tests;
+
+/// Carrier park: clear the module-environment stack and the raw Context
+/// pointer. `GLOBAL_REFS` is reset by `reset_dynamic_module_registry`.
+pub(crate) fn reset_carrier_tls() {
+    ACTIVE_ENVS.with(|stack| stack.borrow_mut().clear());
+    MODULE_CTX.with(|slot| slot.set(std::ptr::null_mut()));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, ACTIVE_ENVS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        GLOBAL_REFS.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+    crate::tls_fingerprint::mix(h, MODULE_CTX.with(|slot| slot.get() as usize as u64));
+}

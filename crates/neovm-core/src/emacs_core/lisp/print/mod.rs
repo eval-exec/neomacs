@@ -12,7 +12,7 @@ pub(crate) use error_format::{
     format_opaque_handle_in_state, format_signal_data_with_eval,
     format_value_bytes_in_state_with_options, format_window_handle_in_state,
     print_options_from_state, print_value_bytes_in_state, print_value_bytes_in_state_with_options,
-    print_value_in_state, print_value_in_state_with_options,
+    print_value_in_state, print_value_in_state_with_options, reset_error_format_for_carrier,
 };
 pub use error_format::{
     format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval, map_flow,
@@ -4064,3 +4064,27 @@ fn threading_handle_print_name(kind: crate::tagged::header::VecLikeType) -> &'st
 #[cfg(test)]
 #[path = "tests/print_test.rs"]
 mod tests;
+
+/// Carrier park: drop print scratch stacks and counters.
+pub(crate) fn reset_carrier_tls() {
+    reset_print_number_index();
+    PRINT_CALL_DEPTH.with(|slot| slot.set(0));
+    PRINT_OBJECT_STACK.with(|stack| stack.borrow_mut().clear());
+    PRINT_BYTES_OBJECT_STACK.with(|stack| stack.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        PRINT_BYTES_OBJECT_STACK.with(|slot| slot.borrow().len() as u64),
+    );
+    crate::tls_fingerprint::mix(h, PRINT_CALL_DEPTH.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, PRINT_NUMBER_INDEX.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        PRINT_OBJECT_STACK.with(|slot| slot.borrow().len() as u64),
+    );
+    error_format::carrier_tls_fingerprint(h);
+}

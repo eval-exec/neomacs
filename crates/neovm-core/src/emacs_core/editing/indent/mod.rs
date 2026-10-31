@@ -3530,3 +3530,17 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/scan_policy_test.rs"]
 mod scan_policy_tests;
+
+/// Carrier park: drop the last-known-column memo.
+pub(crate) fn reset_carrier_tls() {
+    LAST_KNOWN_COLUMN.with(|slot| slot.set(None));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        LAST_KNOWN_COLUMN.with(|slot| slot.get().is_some() as u64),
+    );
+}

@@ -1587,3 +1587,17 @@ impl Context {
         lisp
     }
 }
+
+/// Carrier park: drop the observed function-write log.
+pub(crate) fn reset_carrier_tls() {
+    OBSERVED_FUNCTION_WRITES.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        OBSERVED_FUNCTION_WRITES.with(|slot| slot.borrow().is_some() as u64),
+    );
+}

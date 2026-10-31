@@ -5024,3 +5024,18 @@ mod font_remapping_test;
 #[cfg(test)]
 #[path = "tests/gc_tls_ownership_test.rs"]
 mod gc_tls_ownership_tests;
+
+/// Carrier park: forget the installed face-attribute registry handle (a
+/// plain store). The next activation installs the new owner's handle.
+pub(crate) fn park_carrier_tls() {
+    FACE_ATTR_STATE.with(HeapRegistrySlot::park);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        FACE_ATTR_STATE.with(|slot| slot.installed_heap_identity().unwrap_or(0) as u64),
+    );
+}

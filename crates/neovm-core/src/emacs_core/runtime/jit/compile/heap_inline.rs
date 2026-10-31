@@ -986,3 +986,14 @@ fn op_is_inline_heap_site(
         _ => super::inline_vars::op_reads_heap_window(op),
     }
 }
+
+/// Carrier park: clear the inline-heap-site count.
+pub(crate) fn reset_carrier_tls() {
+    INLINE_HEAP_SITES.with(|slot| slot.set(0));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, INLINE_HEAP_SITES.with(|slot| slot.get() as u64));
+}

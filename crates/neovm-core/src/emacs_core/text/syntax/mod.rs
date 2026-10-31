@@ -8244,3 +8244,61 @@ mod signed_string_positions_tests;
 #[cfg(test)]
 #[path = "tests/declared_logical_state.rs"]
 mod declared_logical_state_tests;
+
+/// Carrier park: drop the flat-ASCII syntax caches (the standard-table
+/// objects are reset by `reset_syntax_thread_locals`).
+pub(crate) fn reset_carrier_tls() {
+    SYNTAX_FLAT_ASCII_CACHE.with(|slot| slot.set(None));
+    SYNTAX_FLAT_ASCII_ENTRIES
+        .with(|entries| *entries.borrow_mut() = [ParseSyntaxEntry::WHITESPACE; 128]);
+    SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| slot.set(None));
+    SYNTAX_FLAT_ASCII_ENTRY_ENTRIES
+        .with(|entries| *entries.borrow_mut() = [SYNTAX_ENTRY_WHITESPACE; 128]);
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, STANDARD_SYNTAX_TABLE_HEAP.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        STANDARD_SYNTAX_TABLE_OBJECT.with(|slot| slot.borrow().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        SYNTAX_CODE_OBJECTS.with(|slot| slot.borrow().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(h, SYNTAX_CODE_OBJECTS_HEAP.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(
+        h,
+        SYNTAX_FLAT_ASCII_CACHE.with(|slot| slot.get().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        SYNTAX_FLAT_ASCII_ENTRIES.with(|slot| {
+            let entries = slot.borrow();
+            let mut x = 0u64;
+            for (i, e) in entries.iter().enumerate() {
+                x ^= ((e.class as u8 as u64) << (i % 8)) ^ ((e.flags.bits() as u64) << (8 + i % 8));
+            }
+            x
+        }),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        SYNTAX_FLAT_ASCII_ENTRY_CACHE.with(|slot| slot.get().is_some() as u64),
+    );
+    crate::tls_fingerprint::mix(
+        h,
+        SYNTAX_FLAT_ASCII_ENTRY_ENTRIES.with(|slot| {
+            let entries = slot.borrow();
+            let mut x = 0u64;
+            for (i, e) in entries.iter().enumerate() {
+                x ^= ((e.class as u8 as u64) << (i % 8))
+                    ^ ((e.matching_char.map(|c| c as u64).unwrap_or(0)) << (8 + i % 8))
+                    ^ ((e.flags.bits() as u64) << (16 + i % 8));
+            }
+            x
+        }),
+    );
+}

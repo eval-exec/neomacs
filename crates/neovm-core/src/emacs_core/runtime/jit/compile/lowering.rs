@@ -9201,3 +9201,33 @@ pub(crate) fn emit_verified_plain_aref(
     let element = fb.ins().load(types::I64, MemFlagsData::trusted(), slot, 0);
     Ok((element, SlotRep::Tagged))
 }
+
+/// Carrier park: reset per-function lowering scratch and counters.
+pub(crate) fn reset_carrier_tls() {
+    GUARD_COUNT.with(|slot| slot.set(0));
+    UNTAG_COUNT.with(|slot| slot.set(0));
+    RETAG_COUNT.with(|slot| slot.set(0));
+    ACTIVE_REGALLOC.with(|slot| slot.set(RegallocChoice::Full));
+    ROOTWIN_CARRY.with(|carry| {
+        carry.stored.borrow_mut().clear();
+        carry.counts.set(RootWinCounts::ZERO);
+    });
+    IMM_POOL.with(|pool| pool.borrow_mut().clear());
+    ACTIVE_REGION.with(|slot| *slot.borrow_mut() = None);
+    LAST_IR_STATS.with(|slot| slot.set((0, 0, 0, 0)));
+    FLONUM_CENSUS.with(|slot| slot.set(FlonumCensus::default()));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix_debug(h, ACTIVE_REGALLOC.with(|slot| slot.get()));
+    crate::tls_fingerprint::mix(h, ACTIVE_REGION.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix_debug(h, FLONUM_CENSUS.with(|slot| slot.get()));
+    crate::tls_fingerprint::mix(h, GUARD_COUNT.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, IMM_POOL.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix_debug(h, LAST_IR_STATS.with(|slot| slot.get()));
+    crate::tls_fingerprint::mix(h, RETAG_COUNT.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, ROOTWIN_CARRY.with(|c| c.stored.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, UNTAG_COUNT.with(|slot| slot.get() as u64));
+}

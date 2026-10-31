@@ -1647,3 +1647,24 @@ impl Drop for TestModeScope {
         MODE_TEST_OVERRIDE.with(|override_| override_.set(self.prior));
     }
 }
+
+/// Carrier park: drop background-compile scratch and counters.
+pub(crate) fn reset_carrier_tls() {
+    STATS.with(|stats| stats.set(BgStats::default()));
+    DEFER_SCOPE.with(|slot| slot.set(None));
+    DEFERRED.with(|slot| *slot.borrow_mut() = None);
+    PENDING_COUNT.with(|count| count.set(0));
+    PENDING_IDS.with(|ids| ids.borrow_mut().clear());
+    EPOCH_DISCARDS.with(|discards| discards.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, DEFERRED.with(|slot| slot.borrow().is_some() as u64));
+    crate::tls_fingerprint::mix(h, DEFER_SCOPE.with(|slot| slot.get().is_some() as u64));
+    crate::tls_fingerprint::mix(h, EPOCH_DISCARDS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix(h, PENDING_COUNT.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, PENDING_IDS.with(|slot| slot.borrow().len() as u64));
+    crate::tls_fingerprint::mix_debug(h, STATS.with(|slot| slot.get()));
+}

@@ -688,3 +688,15 @@ pub(crate) fn recorded_fingerprints(window_id: i64) -> Option<Arc<[ChromeRowFing
 #[cfg(test)]
 #[path = "tests/chrome_memo_test.rs"]
 mod tests;
+
+/// Carrier park: drop the previous frame's chrome fingerprints.
+pub(crate) fn reset_carrier_tls() {
+    FINGERPRINT_RECORD.with(|record| record.borrow_mut().clear());
+}
+
+/// Debug-only carrier TLS fingerprint.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    let len = FINGERPRINT_RECORD.with(|record| record.borrow().len()) as u64;
+    *h = (*h ^ len).wrapping_mul(0x0000_0100_0000_01b3);
+}

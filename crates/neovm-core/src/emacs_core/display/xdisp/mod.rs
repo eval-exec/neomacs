@@ -10775,3 +10775,14 @@ mod mode_line_point_test;
 #[cfg(test)]
 #[path = "tests/mode_line_nested_point_test.rs"]
 mod mode_line_nested_point_test;
+
+/// Carrier park: clear the column-spec consumption latch.
+pub(crate) fn reset_carrier_tls() {
+    COLUMN_SPEC_CONSUMED.with(|slot| slot.set(false));
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(h, COLUMN_SPEC_CONSUMED.with(|slot| slot.get() as u64));
+}

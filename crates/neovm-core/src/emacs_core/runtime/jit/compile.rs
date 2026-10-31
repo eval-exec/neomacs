@@ -4543,3 +4543,42 @@ mod function_param_tests;
 #[cfg(test)]
 #[path = "tests/gdl_integer_width_test.rs"]
 mod gdl_integer_width_tests;
+
+/// Carrier park: clear per-compile flags and the last CLIF size.
+pub(crate) fn reset_carrier_tls() {
+    BYPASS_PROFIT_GATE.with(|slot| slot.set(false));
+    ACTIVE_CALL_HEAVY.with(|slot| slot.set(false));
+    LAST_CLIF_SIZE.with(|slot| slot.set((0, 0)));
+    array_snapshot::reset_carrier_tls();
+    call_feedback::reset_carrier_tls();
+    code_placement::reset_carrier_tls();
+    cold_exits::reset_carrier_tls();
+    direct_call::reset_carrier_tls();
+    heap_inline::reset_carrier_tls();
+    inline_vars::reset_carrier_tls();
+    lowering::reset_carrier_tls();
+    reg_abi::reset_carrier_tls();
+    shared::reset_carrier_tls();
+    shims::reset_carrier_tls();
+    snapshot::reset_carrier_tls();
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    array_snapshot::carrier_tls_fingerprint(h);
+    call_feedback::carrier_tls_fingerprint(h);
+    code_placement::carrier_tls_fingerprint(h);
+    cold_exits::carrier_tls_fingerprint(h);
+    direct_call::carrier_tls_fingerprint(h);
+    heap_inline::carrier_tls_fingerprint(h);
+    inline_vars::carrier_tls_fingerprint(h);
+    lowering::carrier_tls_fingerprint(h);
+    reg_abi::carrier_tls_fingerprint(h);
+    shared::carrier_tls_fingerprint(h);
+    shims::carrier_tls_fingerprint(h);
+    snapshot::carrier_tls_fingerprint(h);
+    crate::tls_fingerprint::mix(h, ACTIVE_CALL_HEAVY.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix(h, BYPASS_PROFIT_GATE.with(|slot| slot.get() as u64));
+    crate::tls_fingerprint::mix_debug(h, LAST_CLIF_SIZE.with(|slot| slot.get()));
+}

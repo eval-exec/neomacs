@@ -517,3 +517,25 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/policy_opt_test.rs"]
 mod opt_tests;
+
+/// Carrier park: fresh tier-2 budget ledger.
+pub(crate) fn reset_carrier_tls() {
+    LEDGER.with(|slot| {
+        slot.set(Ledger {
+            spent: 0,
+            reserved: 0,
+        })
+    });
+}
+
+/// Debug-only carrier TLS fingerprint for this module's classified records.
+#[cfg(debug_assertions)]
+pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+    crate::tls_fingerprint::mix(
+        h,
+        LEDGER.with(|slot| {
+            let l = slot.get();
+            l.spent ^ (l.reserved << 32)
+        }),
+    );
+}
