@@ -21,7 +21,11 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod scheduling;
 mod transport;
+pub(super) use scheduling::RealWaitPermit;
+pub(super) use scheduling::{HostResume, dispatch_host, serve_main_wake};
+pub(super) use transport::NativeSettlement;
 
 /// Process-wide correlation allocation, not host authority or a TLS slot.
 struct SessionSequence(AtomicU64);
@@ -306,6 +310,7 @@ impl DrainBlocked {
 pub(in crate::emacs_core::eval) struct WorldRootRegistry {
     owners: FxHashMap<ThreadKey, RootBatchLease>,
     hosts: HostRegistry,
+    pub(super) services: scheduling::ServiceRuntime,
 }
 
 impl WorldRootRegistry {
@@ -313,6 +318,7 @@ impl WorldRootRegistry {
         Self {
             owners: FxHashMap::default(),
             hosts: HostRegistry::new(heap),
+            services: scheduling::ServiceRuntime::default(),
         }
     }
     pub(in crate::emacs_core::eval) fn is_empty(&self) -> bool {
@@ -376,7 +382,9 @@ impl WorldRootRegistry {
         &mut self,
         collector: &QuiescentCollector<'_>,
     ) -> Result<DrainReceipt, HostRootError> {
+        self.services.prepare_shutdown()?;
         let receipt = self.hosts.close_and_drain(collector)?;
+        self.services.finish_shutdown();
         Ok(receipt)
     }
 
@@ -709,6 +717,90 @@ impl HostRegistry {
     }
 }
 
+/// Decode and acknowledge only after the requester's complete restore. The
+/// consumer gets no mutable evaluator, so no Lisp, GC or recursive park can
+/// intervene between decoding a registered reply and closing its root reader.
+pub(super) fn finish_owner_reply<R>(
+    context: &mut super::super::Context,
+    baton: &Baton,
+    resume: HostResume,
+    consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, super::super::Flow>,
+) -> Result<R, super::super::Flow> {
+    use crate::emacs_core::error::{LispCondition, signal};
+    use crate::emacs_core::value::Value;
+    let as_flow =
+        |error: HostRootError| signal(LispCondition::Error, vec![Value::string(error.to_string())]);
+    context.prepare_parked_root_retirement()?;
+    let restored = RestoredHostOwner::after_restore(context, baton).map_err(as_flow)?;
+    enum RestoredReply {
+        Actor(scheduling::HostTerminal),
+        Refused {
+            key: HostRequestKey,
+            settlement: NativeSettlement,
+        },
+    }
+    let reply = match resume {
+        HostResume::Actor(key) => {
+            let terminal = {
+                let runtime = baton.green_runtime();
+                let runtime = runtime
+                    .as_ref()
+                    .ok_or(HostRootError::BatonRequired)
+                    .map_err(as_flow)?;
+                runtime
+                    .parked
+                    .borrow_mut()
+                    .services
+                    .take_terminal(key)
+                    .map_err(as_flow)?
+            };
+            RestoredReply::Actor(terminal)
+        }
+        HostResume::Refused { key, settlement } => RestoredReply::Refused { key, settlement },
+    };
+    let (key, settlement) = match &reply {
+        RestoredReply::Actor(terminal) => (terminal.key, &terminal.settlement),
+        RestoredReply::Refused { key, settlement } => (*key, settlement),
+    };
+    let decoded = consume(&restored, settlement);
+    let roots = restored.with_registry(|registry, owner| {
+        let ack = match registry.acknowledge(owner, key) {
+            Ok(ack) => ack,
+            Err(error) => {
+                tracing::error!(%error, "restored host reply cannot acknowledge its registered roots");
+                std::process::abort();
+            }
+        };
+        match registry.retire(ack) {
+            Ok(roots) => roots,
+            Err(blocked) => {
+                // This scope has closed every root reader and completed the
+                // collector preflight. Retirement may already have closed an
+                // earlier lease; preserve the returned linear obligation and
+                // stop rather than exposing a partly-retired reply to Lisp.
+                let (_acknowledgement, error) = blocked.into_parts();
+                tracing::error!(%error, "restored host root retirement invariant failed");
+                std::process::abort();
+            }
+        }
+    });
+    if let RestoredReply::Actor(terminal) = reply {
+        let runtime = baton.green_runtime();
+        let runtime = runtime
+            .as_ref()
+            .ok_or(HostRootError::BatonRequired)
+            .map_err(as_flow)?;
+        if let Err(refusal) = runtime.parked.borrow_mut().services.retire(roots, terminal) {
+            tracing::error!(error = %refusal.error, "retired root receipt rejected by host transport");
+            // Root retirement has committed. Preserve both rejected receipts
+            // until fail-stop; this metadata mismatch is never a replay.
+            let _obligation = refusal;
+            std::process::abort();
+        }
+    }
+    decoded
+}
+
 static_assertions::assert_not_impl_any!(SettledHostCall: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(RestoredHostOwner<'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(OwnerAcknowledged<'static>: Send, Sync, Clone, Copy);
@@ -719,3 +811,6 @@ static_assertions::assert_not_impl_any!(DrainBlocked: Send, Sync, Clone, Copy);
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod runtime_tests;

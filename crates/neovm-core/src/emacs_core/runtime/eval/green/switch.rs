@@ -7,11 +7,12 @@
 
 use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
-use super::scheduler::{Control, Handoff, Lifecycle, Peers, ThreadKey, Wait};
-#[cfg(test)]
+use super::host_service::{self, NativeSettlement, PreparedHostCall, RestoredHostOwner};
+use super::scheduler::{Control, Handoff, Lifecycle, Peers, ServiceReturn, ThreadKey, Wait, Wake};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
+use crate::host_effect::contracts::OwnedNativeData;
 use crate::tagged::gc::MarkPhase;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -36,11 +37,38 @@ enum BindingResumeError {
     Forward(crate::emacs_core::forward::ForwardStoreError, Value),
 }
 
+/// Ordinary waits and host service share the exact owner publication/restore path.
+#[allow(
+    dead_code,
+    reason = "routed host calls remain dormant until hosted activation"
+)]
+enum ParkRequest {
+    Ordinary(Wait),
+    Host {
+        call: PreparedHostCall,
+        native: OwnedNativeData,
+    },
+}
+
+/// The consumer runs only on its restored requesting owner. It cannot borrow
+/// a mutable evaluator or run Lisp while registered reply roots are retired.
+#[allow(
+    dead_code,
+    reason = "routed host calls remain dormant until hosted activation"
+)]
+enum ParkCompletion<'owner> {
+    Ordinary,
+    Host {
+        owner: &'owner RestoredHostOwner<'owner>,
+        settlement: &'owner NativeSettlement,
+    },
+}
+
 /// A Lisp thread's place in its Green runtime, kept in its owner slab.
 pub(crate) struct GreenSeat {
     pub(crate) key: ThreadKey,
     pub(super) control: Arc<Control>,
-    receiver: Option<mpsc::Receiver<Baton>>,
+    receiver: Option<mpsc::Receiver<Wake>>,
     /// The World's Baton, while this thread runs.
     baton: Option<Baton>,
     /// A constant or native forwarder refused a rebind. Deliver this after
@@ -56,6 +84,12 @@ pub(crate) struct GreenSeat {
     #[cfg(feature = "jit")]
     pub(super) parked_jit_scratch: crate::emacs_core::jit::green_owner::ParkedJitScratch,
 }
+
+// Wake envelopes change only the cold channel payload, never the owner slot.
+static_assertions::const_assert_eq!(
+    std::mem::size_of::<mpsc::Receiver<Baton>>(),
+    std::mem::size_of::<mpsc::Receiver<Wake>>()
+);
 
 impl GreenSeat {
     pub(crate) fn trace_binding_resume_error(&self, visit: &mut dyn FnMut(Value)) {
@@ -103,7 +137,7 @@ impl Context {
         &mut self,
         key: ThreadKey,
         control: Arc<Control>,
-        receiver: mpsc::Receiver<Baton>,
+        receiver: mpsc::Receiver<Wake>,
         baton: Baton,
     ) {
         self.ensure_owner_slab()
@@ -162,8 +196,84 @@ impl Context {
     /// when the process is exiting. A pending `thread-signal` stays pending:
     /// [`Context::green_wait`] raises it.
     pub(crate) fn green_park(&mut self, wait: Wait) -> Result<(), Flow> {
+        self.green_park_impl(ParkRequest::Ordinary(wait), |completion| match completion {
+            ParkCompletion::Ordinary => Ok(()),
+            ParkCompletion::Host { .. } => std::process::abort(),
+        })
+    }
+
+    /// Reserve request roots while this original owner still holds the Baton.
+    ///
+    /// # Safety
+    /// Every input must be this owner's live same-heap Lisp value; no callback,
+    /// GC or handoff may occur until the retained batch has been published.
+    #[allow(
+        dead_code,
+        reason = "owned host adapters are installed in a later range"
+    )]
+    pub(super) unsafe fn green_prepare_host_call(
+        &mut self,
+        roots: &[Value],
+    ) -> Result<PreparedHostCall, host_service::HostRootError> {
+        let heap = &self.tagged_heap;
+        let seat = self
+            .owner
+            .slab_mut()
+            .and_then(|slab| slab.green_seat_mut())
+            .ok_or(host_service::HostRootError::ForeignOwner)?;
+        let baton = seat
+            .baton
+            .as_ref()
+            .ok_or(host_service::HostRootError::BatonRequired)?;
+        let runtime = baton.green_runtime();
+        let runtime = runtime
+            .as_ref()
+            .ok_or(host_service::HostRootError::BatonRequired)?;
+        // SAFETY: private original-owner admission keeps the supplied roots live
+        // through retained publication while the unique Baton remains held.
+        unsafe {
+            runtime
+                .parked
+                .borrow_mut()
+                .hosts()
+                .prepare(baton, heap, seat.key, roots)
+        }
+    }
+
+    /// Dormant routed boundary. Native service never receives this consumer;
+    /// response decoding and errors stay on the requesting worker's OS thread.
+    #[allow(
+        dead_code,
+        reason = "owned host adapters are installed in a later range"
+    )]
+    pub(super) fn green_host_call<R>(
+        &mut self,
+        call: PreparedHostCall,
+        native: OwnedNativeData,
+        consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, Flow>,
+    ) -> Result<R, Flow> {
+        self.green_park_impl(
+            ParkRequest::Host { call, native },
+            |completion| match completion {
+                ParkCompletion::Host { owner, settlement } => consume(owner, settlement),
+                ParkCompletion::Ordinary => std::process::abort(),
+            },
+        )
+    }
+
+    fn green_park_impl<R>(
+        &mut self,
+        request: ParkRequest,
+        consume: impl FnOnce(ParkCompletion<'_>) -> Result<R, Flow>,
+    ) -> Result<R, Flow> {
         let Some(seat) = self.green_seat() else {
-            return Ok(());
+            return match request {
+                ParkRequest::Ordinary(_) => consume(ParkCompletion::Ordinary),
+                ParkRequest::Host { .. } => Err(signal(
+                    LispCondition::Error,
+                    vec![Value::string("Host request requires a Green owner")],
+                )),
+            };
         };
         let key = seat.key;
         let control = Arc::clone(&seat.control);
@@ -268,11 +378,22 @@ impl Context {
         stow_owner_state(self, &baton);
         stow_carried_state(&baton);
         self.publish_parked_roots(&baton, key, publication);
-        let outcome = control.transfer(key, wait, baton, &receiver);
-        let (baton, deadlocked) = match outcome {
-            Ok(baton) => (baton, false),
-            Err(Handoff::NoRunnable(baton)) => (baton, true),
+        // All World/registry borrows have ended before the unique Baton moves.
+        let (outcome, host_resume) = match request {
+            ParkRequest::Ordinary(wait) => (control.transfer(key, wait, baton, &receiver), None),
+            ParkRequest::Host { call, native } => {
+                let (wake, resume) =
+                    host_service::dispatch_host(call, native, baton, &control, &receiver);
+                (Ok(wake), Some(resume))
+            }
         };
+        let (wake, deadlocked) = match outcome {
+            Ok(wake) => (wake, false),
+            Err(Handoff::NoRunnable(baton)) => (Wake::Resume(baton), true),
+        };
+        // A service turn must not restore main's Lisp continuation, JIT pins,
+        // bindings or TLS, or consume its original semantic Wait.
+        let baton = receive_owner_turn(key, wake, &control, &receiver);
         // Only the returning continuation refreshes its private dispatch
         // header from canonical cells. A peer's function write updates its own
         // header, so comparing our stale header would miss that redefinition.
@@ -312,7 +433,6 @@ impl Context {
             .unwrap_or((None, self.cached_standard_case_table));
         let seat = self.green_seat().expect("seated above");
         seat.receiver = Some(receiver);
-        seat.baton = Some(baton);
         // GNU enters this owner before unbinding the previous one. Its
         // failure wins over this owner's own rebind, and condition-wait
         // still retakes its mutex before either error is delivered.
@@ -343,6 +463,17 @@ impl Context {
         // syntax tables these caches answer from.
         crate::emacs_core::string_pos_cache::reset_string_pos_cache();
         crate::emacs_core::regex::reset_regex_thread_locals();
+        // Registered results/errors are decoded, acknowledged and retired on
+        // this restored owner BEFORE its ordinary parked publication retires.
+        let completion = match host_resume {
+            Some(resume) => {
+                host_service::finish_owner_reply(self, &baton, resume, |owner, settlement| {
+                    consume(ParkCompletion::Host { owner, settlement })
+                })
+            }
+            None => consume(ParkCompletion::Ordinary),
+        };
+        self.green_seat().expect("restored owner is seated").baton = Some(baton);
         let retirement = self.retire_parked_roots(key);
         if let Some(request) = exit {
             // The process exits: like GNU's `exit`, no cleanup form of this
@@ -361,7 +492,7 @@ impl Context {
                 )],
             ));
         }
-        Ok(())
+        completion
     }
 
     /// [`Context::green_park`], then raise an error another thread signalled
@@ -718,16 +849,58 @@ impl Context {
     }
 }
 
+/// Native service runs on evaluator-host main before ANY owner restoration.
+/// Returning from it resumes main's original channel wait, not its Lisp Wait.
+fn receive_owner_turn(
+    key: ThreadKey,
+    mut wake: Wake,
+    control: &Control,
+    receiver: &mpsc::Receiver<Wake>,
+) -> Baton {
+    let _abort_on_panic = AbortOnPanic;
+    loop {
+        wake = control.intercept_acquire(key, wake, receiver);
+        match wake {
+            Wake::Resume(baton) => {
+                baton.enter();
+                return baton;
+            }
+            Wake::ServiceTurn {
+                key: request,
+                baton,
+            } => {
+                if key != ThreadKey::Main {
+                    tracing::error!(?key, "native service addressed a non-main owner");
+                    std::process::abort();
+                }
+                match host_service::serve_main_wake(request, baton, control, receiver) {
+                    ServiceReturn::ResumeMain(baton) => {
+                        baton.enter();
+                        return baton;
+                    }
+                    ServiceReturn::Sent => {
+                        wake = match receiver.recv() {
+                            Ok(wake) => wake,
+                            Err(_) => std::process::abort(),
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A Lisp thread's OS thread: wait for the Baton, build the thread's
 /// owner, run its function, record the outcome and hand the Baton on.
-fn run_worker(key: ThreadKey, receiver: mpsc::Receiver<Baton>, control: Arc<Control>) {
+fn run_worker(key: ThreadKey, receiver: mpsc::Receiver<Wake>, control: Arc<Control>) {
     // A panic here would drop the Baton with this thread's owner, and every
     // parked thread would wait for it forever: end the process instead.
     let _abort_on_panic = AbortOnPanic;
-    let Ok(baton) = receiver.recv() else {
+    let Ok(wake) = receiver.recv() else {
         // The runtime went away before this thread ever ran.
         return;
     };
+    let baton = receive_owner_turn(key, wake, &control, &receiver);
     baton.enter();
     #[cfg(feature = "jit")]
     crate::emacs_core::jit::green_owner::begin_owner_turn();
