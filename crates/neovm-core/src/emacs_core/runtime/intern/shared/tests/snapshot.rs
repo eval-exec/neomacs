@@ -69,7 +69,7 @@ fn snapshot_covers_rows_and_keeps_canonical_and_atom_keyword_distinct() {
         CacheProbe::Miss => panic!("covered row"),
     }
     assert!(matches!(snapshot.symbol(SymId(3)), CacheProbe::Miss));
-    assert_eq!(std::mem::size_of_val(&snapshot), 80);
+    assert_eq!(std::mem::size_of_val(&snapshot), 112);
 }
 
 #[test]
@@ -101,5 +101,102 @@ fn clocks_are_separate_checked_domains_and_bypass_has_no_ready_payload() {
         PreparedSnapshot::DeferredPublication(reason) => {
             assert_eq!(reason, DeferredPublication::NeedGrace)
         }
+    }
+}
+
+fn next_epochs() -> SnapshotEpochs {
+    SnapshotEpochs {
+        registry: RegistryEpoch::from_published(8),
+        materialization: MaterializationEpoch::from_published(8),
+        generation: DescriptorGeneration::from_published(10),
+    }
+}
+
+#[test]
+fn incremental_append_checks_only_new_cross_column_edges() {
+    let old = snapshot(NameId(1)).unwrap();
+    let mut row = match old.symbol(SymId(0)) {
+        CacheProbe::Hit(row) => *row,
+        CacheProbe::Miss => panic!("prefix row"),
+    };
+    row.name = NameId(2);
+    let new = old
+        .extending([row], [CanonicalSlot::from_symbol(SymId(3))], next_epochs())
+        .unwrap();
+    assert_eq!(old.canonical(NameId(2)), CacheProbe::Miss);
+    assert_eq!(new.canonical(NameId(2)), CacheProbe::Hit(SymId(3)));
+    assert!(matches!(old.symbol(SymId(3)), CacheProbe::Miss));
+    match new.symbol(SymId(3)) {
+        CacheProbe::Hit(row) => assert_eq!(row.name(), NameId(2)),
+        CacheProbe::Miss => panic!("new row"),
+    }
+    assert!(Arc::ptr_eq(&old.native, &new.native));
+    assert!(Arc::ptr_eq(&old.templates, &new.templates));
+    assert!(Arc::ptr_eq(&old.visible, &new.visible));
+    assert!(matches!(
+        old.extending([row], [], next_epochs()),
+        Err(SnapshotError::NameOutsideSpan)
+    ));
+    assert!(matches!(
+        old.extending([], [CanonicalSlot::from_symbol(SymId(3))], next_epochs()),
+        Err(SnapshotError::OutsideSpan)
+    ));
+    let stale = SnapshotEpochs {
+        generation: old.generation,
+        ..next_epochs()
+    };
+    assert!(matches!(
+        old.extending([], [], stale),
+        Err(SnapshotError::NonMonotonicEpoch)
+    ));
+}
+
+#[test]
+fn invalidation_changes_canonical_facts_and_preserves_identity_and_predecessor() {
+    let old = snapshot(NameId(1)).unwrap();
+    let new = old
+        .invalidating(SymId(1), EmptyNativeIndex, next_epochs())
+        .unwrap();
+    assert_eq!(old.canonical(NameId(1)), CacheProbe::Hit(SymId(1)));
+    assert_eq!(new.canonical(NameId(1)), CacheProbe::Miss);
+    match (old.symbol(SymId(1)), new.symbol(SymId(1))) {
+        (CacheProbe::Hit(before), CacheProbe::Hit(after)) => {
+            assert_eq!(before.canonical(), CanonicalClass::Canonical);
+            assert_eq!(after.canonical(), CanonicalClass::Uninterned);
+            assert!(std::ptr::eq(before.atom().0, after.atom().0));
+            assert_eq!(before.name(), after.name());
+            assert_eq!(before.origin(), after.origin());
+            assert_eq!(after.atom_keyword(), AtomKeyword::Colon);
+        }
+        (CacheProbe::Hit(_), CacheProbe::Miss)
+        | (CacheProbe::Miss, CacheProbe::Hit(_))
+        | (CacheProbe::Miss, CacheProbe::Miss) => panic!("identity coverage changed"),
+    }
+    let unchanged_epoch = SnapshotEpochs {
+        registry: old.registry_epoch,
+        ..next_epochs()
+    };
+    assert!(matches!(
+        old.invalidating(SymId(1), EmptyNativeIndex, unchanged_epoch),
+        Err(SnapshotError::NonMonotonicEpoch)
+    ));
+    assert!(matches!(
+        old.invalidating(SymId(3), EmptyNativeIndex, next_epochs()),
+        Err(SnapshotError::OutsideSpan)
+    ));
+}
+
+#[test]
+fn invalidating_an_alias_keeps_another_symbols_canonical_mapping() {
+    let old = snapshot(NameId(1)).unwrap();
+    let new = old
+        .invalidating(SymId(2), EmptyNativeIndex, next_epochs())
+        .unwrap();
+    assert_eq!(new.canonical(NameId(1)), CacheProbe::Hit(SymId(1)));
+    match (old.names.probe(NameId(1)), new.names.probe(NameId(1))) {
+        (CacheProbe::Hit(before), CacheProbe::Hit(after)) => assert!(std::ptr::eq(before, after)),
+        (CacheProbe::Hit(_), CacheProbe::Miss)
+        | (CacheProbe::Miss, CacheProbe::Hit(_))
+        | (CacheProbe::Miss, CacheProbe::Miss) => panic!("unchanged canonical page"),
     }
 }

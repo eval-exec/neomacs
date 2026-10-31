@@ -37,14 +37,9 @@ impl ReaderTemplates {
 /// No Value conversion is offered. P9.2 must supply a matching live-heap/name
 /// authority before adding one; process publication is never that authority.
 pub(crate) struct HeapVisibleName {
-    heap: HeapIdentity,
     word: HeapNameWord,
 }
-impl HeapVisibleName {
-    pub(crate) fn heap(&self) -> HeapIdentity {
-        self.heap
-    }
-}
+
 pub(crate) struct HeapVisibleNames {
     by_heap: FxHashMap<HeapIdentity, FxHashMap<SymId, HeapVisibleName>>,
 }
@@ -59,10 +54,7 @@ impl HeapVisibleNames {
                 return Err(SnapshotError::OutsideSpan);
             }
             let names = by_heap.entry(heap).or_default();
-            if names
-                .insert(symbol, HeapVisibleName { heap, word })
-                .is_some()
-            {
+            if names.insert(symbol, HeapVisibleName { word }).is_some() {
                 return Err(SnapshotError::DuplicateHeapName);
             }
         }
@@ -83,6 +75,9 @@ impl HeapVisibleNames {
             .all(|names| names.keys().all(|id| span.contains(*id)))
     }
 }
+
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+const _: () = assert!(std::mem::size_of::<HeapVisibleName>() == 8);
 
 static_assertions::assert_impl_all!(HeapVisibleNames: Send, Sync);
 static_assertions::assert_impl_all!(ReaderTemplates: Send, Sync);

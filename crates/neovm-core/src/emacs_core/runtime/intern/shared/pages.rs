@@ -18,6 +18,7 @@ pub(crate) enum SnapshotError {
     NameOutsideSpan,
     DuplicateTemplate,
     DuplicateHeapName,
+    NonMonotonicEpoch,
 }
 
 /// Sealed by crate visibility; SymId and NameId never share an index type.
@@ -57,6 +58,13 @@ impl<I> TableSpan<I> {
     pub(crate) fn len(self) -> usize {
         self.slots as usize
     }
+    pub(super) fn extending(self, rows: usize) -> Result<Self, SnapshotError> {
+        Self::try_from_len(
+            self.len()
+                .checked_add(rows)
+                .ok_or(SnapshotError::SpanOverflow)?,
+        )
+    }
 }
 impl<I: RowKey> TableSpan<I> {
     pub(crate) fn contains(self, id: I) -> bool {
@@ -86,10 +94,15 @@ impl PageAddress {
 /// unchanged pages and replaces only its changed page/directory ownership.
 pub(crate) struct PagedRows<T, I> {
     span: TableSpan<I>,
-    pages: Box<[Arc<RowPage<T>>]>,
+    pages: Arc<[Arc<[T]>]>,
 }
-struct RowPage<T> {
-    rows: Box<[T]>,
+impl<T, I> Clone for PagedRows<T, I> {
+    fn clone(&self) -> Self {
+        Self {
+            span: self.span,
+            pages: Arc::clone(&self.pages),
+        }
+    }
 }
 impl<T, I> PagedRows<T, I> {
     pub(crate) fn span(&self) -> TableSpan<I> {
@@ -99,18 +112,23 @@ impl<T, I> PagedRows<T, I> {
 impl<T: Clone, I: RowKey> PagedRows<T, I> {
     pub(crate) fn from_rows(rows: Vec<T>) -> Result<Self, SnapshotError> {
         let span = TableSpan::try_from_len(rows.len())?;
-        let pages = rows
-            .chunks(PAGE_ROWS)
-            .map(|chunk| Arc::new(RowPage { rows: chunk.into() }))
-            .collect();
-        Ok(Self { span, pages })
+        let mut pages = Vec::with_capacity(rows.len().div_ceil(PAGE_ROWS));
+        let mut rows = rows.into_iter().peekable();
+        while rows.peek().is_some() {
+            let page: Vec<T> = rows.by_ref().take(PAGE_ROWS).collect();
+            pages.push(Arc::from(page));
+        }
+        Ok(Self {
+            span,
+            pages: Arc::from(pages),
+        })
     }
     pub(crate) fn probe(&self, id: I) -> CacheProbe<&T> {
         if !self.span.contains(id) {
             return CacheProbe::Miss;
         }
         let PageAddress { page, row } = PageAddress::of(id);
-        CacheProbe::Hit(&self.pages[page.0].rows[row.0])
+        CacheProbe::Hit(&self.pages[page.0][row.0])
     }
     pub(crate) fn replacing(&self, id: I, value: T) -> Result<Self, SnapshotError> {
         if !self.span.contains(id) {
@@ -118,38 +136,48 @@ impl<T: Clone, I: RowKey> PagedRows<T, I> {
         }
         let PageAddress { page, row } = PageAddress::of(id);
         let mut pages = self.pages.to_vec();
-        let mut rows = pages[page.0].rows.to_vec();
+        let mut rows = pages[page.0].to_vec();
         rows[row.0] = value;
-        pages[page.0] = Arc::new(RowPage {
-            rows: rows.into_boxed_slice(),
-        });
+        pages[page.0] = Arc::from(rows);
         Ok(Self {
             span: self.span,
-            pages: pages.into_boxed_slice(),
+            pages: Arc::from(pages),
         })
     }
     pub(crate) fn appending(&self, value: T) -> Result<Self, SnapshotError> {
-        let span = TableSpan::try_from_len(
-            self.span
-                .len()
-                .checked_add(1)
-                .ok_or(SnapshotError::SpanOverflow)?,
-        )?;
+        self.extending(std::iter::once(value))
+    }
+    /// One COW directory per batch, one copy of the existing partial tail.
+    /// Complete prefix pages are retained, never scanned or row-cloned.
+    /// Directory metadata costs O(page count) per nonempty batch; row work is
+    /// O(changed rows + at most one partial page), not O(total symbol span).
+    pub(crate) fn extending(
+        &self,
+        rows: impl IntoIterator<Item = T>,
+    ) -> Result<Self, SnapshotError> {
+        let rows: Vec<T> = rows.into_iter().collect();
+        if rows.is_empty() {
+            return Ok(self.clone());
+        }
+        let span = self.span.extending(rows.len())?;
         let mut pages = self.pages.to_vec();
-        if self.span.len() % PAGE_ROWS == 0 {
-            pages.push(Arc::new(RowPage {
-                rows: vec![value].into_boxed_slice(),
-            }));
-        } else if let Some(tail) = pages.last_mut() {
-            let mut rows = tail.rows.to_vec();
-            rows.push(value);
-            *tail = Arc::new(RowPage {
-                rows: rows.into_boxed_slice(),
-            });
+        let mut rows = rows.into_iter().peekable();
+        if self.span.len() % PAGE_ROWS != 0 {
+            // The private constructors guarantee a tail for a partial span.
+            if let Some(tail) = pages.last_mut() {
+                let mut copied = tail.to_vec();
+                let remaining = PAGE_ROWS - copied.len();
+                copied.extend(rows.by_ref().take(remaining));
+                *tail = Arc::from(copied);
+            }
+        }
+        while rows.peek().is_some() {
+            let page: Vec<T> = rows.by_ref().take(PAGE_ROWS).collect();
+            pages.push(Arc::from(page));
         }
         Ok(Self {
             span,
-            pages: pages.into_boxed_slice(),
+            pages: Arc::from(pages),
         })
     }
 }

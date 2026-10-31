@@ -17,14 +17,12 @@ fn visible_names_keep_heap_identity_and_never_convert_to_values() {
     .unwrap();
     match facet.probe(a, SymId(1)) {
         CacheProbe::Hit(name) => {
-            assert_eq!(name.heap(), a);
             assert_eq!(name.word, HeapNameWord(11));
         }
         CacheProbe::Miss => panic!("first heap record"),
     }
     match facet.probe(b, SymId(1)) {
         CacheProbe::Hit(name) => {
-            assert_eq!(name.heap(), b);
             assert_eq!(name.word, HeapNameWord(12));
         }
         CacheProbe::Miss => panic!("second heap record"),

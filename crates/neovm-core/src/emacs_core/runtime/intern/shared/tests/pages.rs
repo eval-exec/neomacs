@@ -53,3 +53,67 @@ fn empty_and_full_page_append_use_exact_coverage() {
         Err(SnapshotError::SpanOverflow)
     );
 }
+
+struct CountedRow {
+    value: u32,
+    clones: std::rc::Rc<std::cell::Cell<usize>>,
+}
+impl Clone for CountedRow {
+    fn clone(&self) -> Self {
+        self.clones.set(self.clones.get() + 1);
+        Self {
+            value: self.value,
+            clones: std::rc::Rc::clone(&self.clones),
+        }
+    }
+}
+
+#[test]
+fn batch_extension_copies_the_existing_partial_tail_only_once() {
+    let copies = std::rc::Rc::new(std::cell::Cell::new(0));
+    let prefix_len = 3 * PAGE_ROWS + 17;
+    let make = |value| CountedRow {
+        value: value as u32,
+        clones: std::rc::Rc::clone(&copies),
+    };
+    let old = PagedRows::<_, SymId>::from_rows((0..prefix_len).map(make).collect()).unwrap();
+    let count = 3 * PAGE_ROWS + 5;
+    let new = old
+        .extending((prefix_len..prefix_len + count).map(make))
+        .unwrap();
+    assert_eq!(copies.get(), 17, "only the old partial page is row-cloned");
+    for page in 0..3 {
+        assert!(Arc::ptr_eq(&old.pages[page], &new.pages[page]));
+    }
+    assert!(!Arc::ptr_eq(&old.pages[3], &new.pages[3]));
+    assert_eq!(old.span().len(), prefix_len);
+    assert_eq!(new.span().len(), prefix_len + count);
+    match new.probe(SymId((prefix_len + count - 1) as u32)) {
+        CacheProbe::Hit(row) => assert_eq!(row.value, (prefix_len + count - 1) as u32),
+        CacheProbe::Miss => panic!("last batch row missing"),
+    }
+    assert!(matches!(
+        old.probe(SymId(prefix_len as u32)),
+        CacheProbe::Miss
+    ));
+}
+
+#[test]
+fn aligned_and_empty_batches_do_not_copy_any_existing_rows() {
+    let copies = std::rc::Rc::new(std::cell::Cell::new(0));
+    let make = |value| CountedRow {
+        value: value as u32,
+        clones: std::rc::Rc::clone(&copies),
+    };
+    let old = PagedRows::<_, NameId>::from_rows((0..512).map(make).collect()).unwrap();
+    let same = old.extending([]).unwrap();
+    assert!(
+        Arc::ptr_eq(&old.pages, &same.pages),
+        "empty batch shares its whole directory"
+    );
+    let new = old.extending((512..1024).map(make)).unwrap();
+    assert_eq!(copies.get(), 0);
+    assert!(Arc::ptr_eq(&old.pages[0], &new.pages[0]));
+    assert!(Arc::ptr_eq(&old.pages[1], &new.pages[1]));
+    assert_eq!(new.span().len(), 1024);
+}

@@ -3,6 +3,7 @@
 use super::super::{NameAtomRef, NameId, SymId, SymbolNameOrigin};
 use super::facets::{HeapVisibleNames, ReaderTemplates};
 use super::pages::{CacheProbe, CanonicalSlot, PagedRows, SnapshotError};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -113,6 +114,14 @@ pub(crate) trait NativeIndexShape {
     fn entry_count(&self) -> NativeSlotCount;
 }
 
+/// Three independent clocks, supplied together at structural construction.
+#[derive(Clone, Copy)]
+pub(crate) struct SnapshotEpochs {
+    pub(super) registry: RegistryEpoch,
+    pub(super) materialization: MaterializationEpoch,
+    pub(super) generation: DescriptorGeneration,
+}
+
 #[repr(transparent)]
 struct HeapCount(u32);
 
@@ -122,18 +131,19 @@ pub(crate) struct InternSnapshot<N> {
     name_span: super::pages::TableSpan<NameId>,
     native_slots: NativeSlotCount,
     heap_count: HeapCount,
-    symbols: Box<PagedRows<SymbolRow, SymId>>,
-    names: Box<PagedRows<CanonicalSlot, NameId>>,
-    native: Box<N>,
-    templates: Box<ReaderTemplates>,
-    visible: Box<HeapVisibleNames>,
+    symbols: PagedRows<SymbolRow, SymId>,
+    names: PagedRows<CanonicalSlot, NameId>,
+    native: Arc<N>,
+    templates: Arc<ReaderTemplates>,
+    visible: Arc<HeapVisibleNames>,
     registry_epoch: RegistryEpoch,
     materialization_epoch: MaterializationEpoch,
     generation: DescriptorGeneration,
 }
 impl<N: NativeIndexShape> InternSnapshot<N> {
-    /// Structural completeness only. The producer's authority/semantic
-    /// coverage proof and retained-ledger publication are later stages.
+    /// From-scratch bootstrap/restore construction, with a full structural
+    /// scan. Incremental updates use extending/invalidating instead. The
+    /// producer's semantic coverage proof and retained ledger are later stages.
     pub(super) fn try_new(
         symbols: PagedRows<SymbolRow, SymId>,
         names: PagedRows<CanonicalSlot, NameId>,
@@ -148,23 +158,41 @@ impl<N: NativeIndexShape> InternSnapshot<N> {
         let name_span = names.span();
         for id in 0..symbol_span.len() {
             if let CacheProbe::Hit(row) = symbols.probe(SymId(id as u32)) {
-                if !name_span.contains(row.name()) {
-                    return Err(SnapshotError::NameOutsideSpan);
-                }
+                Self::validate_symbol(row, name_span)?;
             }
         }
         for id in 0..name_span.len() {
             if let CacheProbe::Hit(slot) = names.probe(NameId(id as u32)) {
-                if let CacheProbe::Hit(symbol) = slot.probe() {
-                    if !symbol_span.contains(symbol) {
-                        return Err(SnapshotError::OutsideSpan);
-                    }
-                }
+                Self::validate_canonical(*slot, symbol_span)?;
             }
         }
         if !templates.fits(symbol_span) || !visible.fits(symbol_span) {
             return Err(SnapshotError::OutsideSpan);
         }
+        Self::assemble(
+            symbols,
+            names,
+            Arc::new(native),
+            Arc::new(templates),
+            Arc::new(visible),
+            SnapshotEpochs {
+                registry: registry_epoch,
+                materialization: materialization_epoch,
+                generation,
+            },
+        )
+    }
+
+    fn assemble(
+        symbols: PagedRows<SymbolRow, SymId>,
+        names: PagedRows<CanonicalSlot, NameId>,
+        native: Arc<N>,
+        templates: Arc<ReaderTemplates>,
+        visible: Arc<HeapVisibleNames>,
+        epochs: SnapshotEpochs,
+    ) -> Result<Self, SnapshotError> {
+        let symbol_span = symbols.span();
+        let name_span = names.span();
         let native_slots = native.entry_count();
         let heap_count = HeapCount(
             visible
@@ -177,16 +205,113 @@ impl<N: NativeIndexShape> InternSnapshot<N> {
             name_span,
             native_slots,
             heap_count,
-            symbols: Box::new(symbols),
-            names: Box::new(names),
-            native: Box::new(native),
-            templates: Box::new(templates),
-            visible: Box::new(visible),
-            registry_epoch,
-            materialization_epoch,
-            generation,
+            symbols,
+            names,
+            native,
+            templates,
+            visible,
+            registry_epoch: epochs.registry,
+            materialization_epoch: epochs.materialization,
+            generation: epochs.generation,
         })
     }
+
+    fn validate_symbol(
+        row: &SymbolRow,
+        names: super::pages::TableSpan<NameId>,
+    ) -> Result<(), SnapshotError> {
+        if !names.contains(row.name()) {
+            return Err(SnapshotError::NameOutsideSpan);
+        }
+        Ok(())
+    }
+
+    fn validate_canonical(
+        slot: CanonicalSlot,
+        symbols: super::pages::TableSpan<SymId>,
+    ) -> Result<(), SnapshotError> {
+        match slot.probe() {
+            CacheProbe::Hit(id) if !symbols.contains(id) => Err(SnapshotError::OutsideSpan),
+            CacheProbe::Hit(_) | CacheProbe::Miss => Ok(()),
+        }
+    }
+
+    fn check_successor(&self, epochs: SnapshotEpochs) -> Result<(), SnapshotError> {
+        if epochs.registry.0 < self.registry_epoch.0
+            || epochs.materialization.0 < self.materialization_epoch.0
+            || epochs.generation.0 <= self.generation.0
+        {
+            return Err(SnapshotError::NonMonotonicEpoch);
+        }
+        Ok(())
+    }
+
+    /// From-scratch try_new is reserved for bootstrap/restore. This path checks
+    /// only the added rows: existing spans only grow, so the validated prefix
+    /// and unchanged sparse facets stay valid. Native entries for new names
+    /// can safely miss; authoritative native/facet producer coverage is still
+    /// required before ReadySnapshot can be constructed in P9.2.
+    pub(super) fn extending(
+        &self,
+        symbols: impl IntoIterator<Item = SymbolRow>,
+        names: impl IntoIterator<Item = CanonicalSlot>,
+        epochs: SnapshotEpochs,
+    ) -> Result<Self, SnapshotError> {
+        self.check_successor(epochs)?;
+        let symbols: Vec<_> = symbols.into_iter().collect();
+        let names: Vec<_> = names.into_iter().collect();
+        let symbol_span = self.symbol_span.extending(symbols.len())?;
+        let name_span = self.name_span.extending(names.len())?;
+        for row in &symbols {
+            Self::validate_symbol(row, name_span)?;
+        }
+        for slot in &names {
+            Self::validate_canonical(*slot, symbol_span)?;
+        }
+        Self::assemble(
+            self.symbols.extending(symbols)?,
+            self.names.extending(names)?,
+            Arc::clone(&self.native),
+            Arc::clone(&self.templates),
+            Arc::clone(&self.visible),
+            epochs,
+        )
+    }
+
+    /// Invalidation preserves all row identity facts and only weakens the old
+    /// canonical facts. The caller supplies the corresponding prepared native
+    /// index; this structural builder cannot yet mint a ReadySnapshot proof.
+    pub(super) fn invalidating(
+        &self,
+        id: SymId,
+        native_without_symbol: N,
+        epochs: SnapshotEpochs,
+    ) -> Result<Self, SnapshotError> {
+        self.check_successor(epochs)?;
+        if epochs.registry.0 == self.registry_epoch.0 {
+            return Err(SnapshotError::NonMonotonicEpoch);
+        }
+        let mut row = match self.symbols.probe(id) {
+            CacheProbe::Hit(row) => *row,
+            CacheProbe::Miss => return Err(SnapshotError::OutsideSpan),
+        };
+        row.canonical = CanonicalClass::Uninterned;
+        let names = match self.canonical(row.name()) {
+            CacheProbe::Hit(canonical) if canonical == id => self
+                .names
+                .replacing(row.name(), CanonicalSlot::from_symbol(SymId(0)))?,
+            CacheProbe::Hit(_) | CacheProbe::Miss => self.names.clone(),
+        };
+        Self::assemble(
+            self.symbols.replacing(id, row)?,
+            names,
+            Arc::new(native_without_symbol),
+            Arc::clone(&self.templates),
+            Arc::clone(&self.visible),
+            epochs,
+        )
+    }
+
     pub(crate) fn symbol(&self, id: SymId) -> CacheProbe<&SymbolRow> {
         self.symbols.probe(id)
     }
@@ -229,8 +354,12 @@ const _: () = {
     assert!(std::mem::offset_of!(SymbolRow, keyword) == 13);
     assert!(std::mem::offset_of!(SymbolRow, origin) == 14);
     assert!(std::mem::offset_of!(SymbolRow, native) == 15);
-    assert!(std::mem::size_of::<InternSnapshot<()>>() == 80);
+    assert!(std::mem::size_of::<InternSnapshot<()>>() == 112);
     assert!(std::mem::align_of::<InternSnapshot<()>>() == 8);
+    assert!(std::mem::offset_of!(InternSnapshot<()>, symbols) == 16);
+    assert!(std::mem::offset_of!(InternSnapshot<()>, names) == 40);
+    assert!(std::mem::size_of::<PagedRows<SymbolRow, SymId>>() == 24);
+    assert!(std::mem::align_of::<PagedRows<SymbolRow, SymId>>() == 8);
 };
 static_assertions::assert_impl_all!(SymbolRow: Send, Sync, Copy);
 

@@ -14,5 +14,5 @@ pub(crate) use pages::{CacheProbe, CanonicalSlot, PagedRows, SnapshotError, Tabl
 pub(crate) use snapshot::{
     AtomKeyword, CanonicalClass, DeferredPublication, DescriptorGeneration, InternSnapshot,
     MaterializationEpoch, NativeIndexShape, NativeQueryClass, NativeSlotCount, PreparedSnapshot,
-    ReadySnapshot, RegistryEpoch, SymbolRow,
+    ReadySnapshot, RegistryEpoch, SnapshotEpochs, SymbolRow,
 };
