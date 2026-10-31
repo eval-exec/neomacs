@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use neomacs_gui_tests::{
-    CommandSpec, DisplayHarness, GuiBackend, GuiCommandRunner, GuiRunOptions, GuiRunStatus,
-    GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
+    Capability, CommandSpec, DisplayHarness, GuiBackend, GuiCommandRunner, GuiRunOptions,
+    GuiRunStatus, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
 
 #[path = "real_gui_smoke/scrolling.rs"]
@@ -34,8 +34,10 @@ fn real_gui_smoke_generates_surface_readback_png() {
         "real-startup-smoke",
         workspace_root.join("crates/neomacs-gui-tests/fixtures/startup-smoke.el"),
     );
-    let mut plan =
-        GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario).with_program(binary);
+    let mut plan = GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario)
+        .with_program(binary)
+        .require(Capability::Display)
+        .require(Capability::ScenarioDriver);
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
     }

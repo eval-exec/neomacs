@@ -69,6 +69,145 @@ impl RunnerKind {
     }
 }
 
+/// A capability a GUI test can require from its host.
+///
+/// Tests state what they need, not which platform they were written on. A
+/// backend advertises what it can provide; the harness either runs the test
+/// or reports exactly what is missing, so a platform gap is never a silent
+/// pass and never a bare `#![cfg(target_os = ...)]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[repr(u32)]
+pub enum Capability {
+    /// A window-server session in which a real frame can be shown.
+    Display,
+    /// Fixture, Elisp, and control-socket driving plus snapshot/readback
+    /// observation. This is the portable tier.
+    ScenarioDriver,
+    /// Real OS input injection (xdotool/wtype, Quartz events, SendInput).
+    /// Available in principle on every desktop backend; the native driver's
+    /// own preflight decides whether this host can use it.
+    NativeInput,
+    /// Real desktop pixel capture (ScreenCaptureKit, compositor capture).
+    ScreenCapture,
+    /// A harness-owned compositor (Xvfb, Weston) that the test may start.
+    CompositorControl,
+    /// A pinned GNU Emacs oracle is configured for comparisons.
+    GnuOracle,
+}
+
+impl Capability {
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Display => "display",
+            Self::ScenarioDriver => "scenario-driver",
+            Self::NativeInput => "native-input",
+            Self::ScreenCapture => "screen-capture",
+            Self::CompositorControl => "compositor-control",
+            Self::GnuOracle => "gnu-oracle",
+        }
+    }
+
+    pub const fn all() -> [Capability; 6] {
+        [
+            Self::Display,
+            Self::ScenarioDriver,
+            Self::NativeInput,
+            Self::ScreenCapture,
+            Self::CompositorControl,
+            Self::GnuOracle,
+        ]
+    }
+
+    const fn bit(self) -> u32 {
+        1 << (self as u32)
+    }
+}
+
+/// A set of capabilities advertised by, or required from, a host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CapabilitySet(u32);
+
+impl CapabilitySet {
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    pub fn from_capabilities(capabilities: &[Capability]) -> Self {
+        let mut set = Self::empty();
+        for capability in capabilities {
+            set.insert(*capability);
+        }
+        set
+    }
+
+    pub fn insert(&mut self, capability: Capability) {
+        self.0 |= capability.bit();
+    }
+
+    pub const fn contains(self, capability: Capability) -> bool {
+        self.0 & capability.bit() != 0
+    }
+
+    /// Required capabilities this set does not provide, in requirement order.
+    pub fn missing(self, required: &[Capability]) -> Vec<Capability> {
+        required
+            .iter()
+            .copied()
+            .filter(|capability| !self.contains(*capability))
+            .collect()
+    }
+
+    pub fn names(self) -> Vec<&'static str> {
+        Capability::all()
+            .into_iter()
+            .filter(|capability| self.contains(*capability))
+            .map(Capability::slug)
+            .collect()
+    }
+}
+
+impl GuiBackend {
+    /// What this backend can provide on a correctly provisioned host.
+    ///
+    /// Native input and capture are advertised on every desktop backend; the
+    /// out-of-process driver still reports `Blocked` when the host has not
+    /// granted the permissions it needs. A backend-level capability says
+    /// "this platform can", not "this host is provisioned".
+    pub fn capabilities(self) -> CapabilitySet {
+        match self {
+            Self::LinuxX11 | Self::LinuxWayland => CapabilitySet::from_capabilities(&[
+                Capability::Display,
+                Capability::ScenarioDriver,
+                Capability::NativeInput,
+                Capability::ScreenCapture,
+                Capability::CompositorControl,
+            ]),
+            Self::Macos => CapabilitySet::from_capabilities(&[
+                Capability::Display,
+                Capability::ScenarioDriver,
+                Capability::NativeInput,
+                Capability::ScreenCapture,
+            ]),
+            Self::Windows => CapabilitySet::from_capabilities(&[
+                Capability::Display,
+                Capability::ScenarioDriver,
+                Capability::NativeInput,
+                Capability::ScreenCapture,
+            ]),
+        }
+    }
+}
+
+/// Capabilities of the host running the test, beyond the backend's own.
+fn host_capabilities(backend: GuiBackend) -> CapabilitySet {
+    let mut capabilities = backend.capabilities();
+    if std::env::var_os("NEOMACS_GUI_TEST_GNU_EMACS").is_some_and(|value| !value.is_empty()) {
+        capabilities.insert(Capability::GnuOracle);
+    }
+    capabilities
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisplayHarness {
     Xvfb,
@@ -172,6 +311,7 @@ pub struct GuiTestPlan {
     program: Option<PathBuf>,
     args: Option<Vec<String>>,
     extra_env: Vec<(String, String)>,
+    required_capabilities: Vec<Capability>,
 }
 
 impl GuiTestPlan {
@@ -189,7 +329,33 @@ impl GuiTestPlan {
             program: None,
             args: None,
             extra_env: Vec::new(),
+            required_capabilities: Vec::new(),
         }
+    }
+
+    /// Declare a capability this scenario needs from its host.
+    ///
+    /// When the host lacks it, `run_with` does not launch the editor and
+    /// returns `GuiRunStatus::Unsupported` with the missing capability named
+    /// in the manifest, instead of a failure that looks like a product bug.
+    pub fn require(mut self, capability: Capability) -> Self {
+        if !self.required_capabilities.contains(&capability) {
+            self.required_capabilities.push(capability);
+        }
+        self
+    }
+
+    pub fn backend(&self) -> GuiBackend {
+        self.backend
+    }
+
+    pub fn required_capabilities(&self) -> &[Capability] {
+        &self.required_capabilities
+    }
+
+    /// Declared requirements the host does not provide.
+    pub fn missing_capabilities(&self) -> Vec<Capability> {
+        host_capabilities(self.backend).missing(&self.required_capabilities)
     }
 
     pub fn with_program(mut self, program: impl Into<PathBuf>) -> Self {
@@ -315,6 +481,41 @@ impl GuiTestPlan {
     ) -> io::Result<GuiRunResult> {
         let artifacts = self.write_manifest()?;
         let command = self.command_spec();
+        let missing = self.missing_capabilities();
+        if !missing.is_empty() {
+            let reason = format!(
+                "backend {} lacks required capabilities: {}",
+                self.backend.slug(),
+                missing
+                    .iter()
+                    .map(|capability| capability.slug())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            if let Some(parent) = artifacts.stderr.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&artifacts.stderr, format!("{reason}\n"))?;
+            let result = GuiRunResult {
+                artifacts: artifacts.clone(),
+                status: GuiRunStatus::Unsupported,
+                exit_code: None,
+                timed_out: false,
+                png_bytes: None,
+                gui_state_bytes: None,
+                frame_snapshot_json_bytes: None,
+                frame_snapshot_txt_bytes: None,
+                neomacs_font_result_bytes: None,
+                neomacs_log_bytes: None,
+                stderr_bytes: reason.len() as u64 + 1,
+                stdout_bytes: 0,
+                gui_state: None,
+                readback_diagnostics: Vec::new(),
+                failure_reason: Some(reason),
+            };
+            self.write_manifest_json(&artifacts, result_manifest(self, &command, &result))?;
+            return Ok(result);
+        }
         let output = runner.run(&command, &artifacts, &options)?;
 
         if let Some(parent) = artifacts.stderr.parent() {
@@ -432,6 +633,9 @@ pub enum GuiRunStatus {
     Passed,
     Failed,
     TimedOut,
+    /// The host lacks a capability the scenario declared it needs. The
+    /// editor was never launched; the manifest names what is missing.
+    Unsupported,
 }
 
 impl GuiRunStatus {
@@ -440,6 +644,7 @@ impl GuiRunStatus {
             Self::Passed => "passed",
             Self::Failed => "failed",
             Self::TimedOut => "timed-out",
+            Self::Unsupported => "unsupported",
         }
     }
 }
@@ -597,9 +802,28 @@ fn planned_manifest(
         "scenario": plan.scenario.name,
         "backend": plan.backend.slug(),
         "runner": plan.backend.runner_kind().slug(),
+        "capabilities": capabilities_json(plan),
         "command": command_json(command),
         "expected_artifacts": artifacts_json(artifacts),
         "ai_agent_note": "Read this JSON and the stderr log first. Open the PNG only when visual inspection is needed.",
+    })
+}
+
+/// The capability contract of one scenario: what the backend provides, what
+/// the scenario declared it needs, and what is missing.
+fn capabilities_json(plan: &GuiTestPlan) -> serde_json::Value {
+    serde_json::json!({
+        "available": host_capabilities(plan.backend).names(),
+        "required": plan
+            .required_capabilities
+            .iter()
+            .map(|capability| capability.slug())
+            .collect::<Vec<_>>(),
+        "missing": plan
+            .missing_capabilities()
+            .iter()
+            .map(|capability| capability.slug())
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -613,6 +837,7 @@ fn result_manifest(
         "scenario": plan.scenario.name,
         "backend": plan.backend.slug(),
         "runner": plan.backend.runner_kind().slug(),
+        "capabilities": capabilities_json(plan),
         "command": command_json(command),
         "expected_artifacts": artifacts_json(&result.artifacts),
         "observed_artifacts": {
@@ -695,6 +920,9 @@ fn failure_reason(
     match (status, exit_code, png_bytes) {
         (GuiRunStatus::Passed, _, _) => None,
         (GuiRunStatus::TimedOut, _, _) => Some("GUI command timed out".to_string()),
+        (GuiRunStatus::Unsupported, _, _) => {
+            Some("host lacks a capability the scenario requires".to_string())
+        }
         (GuiRunStatus::Failed, Some(0), None) => Some("PNG artifact was not generated".to_string()),
         (GuiRunStatus::Failed, Some(code), _) => {
             Some(format!("GUI command exited with status {code}"))
