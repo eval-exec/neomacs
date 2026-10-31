@@ -100,6 +100,7 @@ clock!(DescriptorGeneration);
 #[repr(transparent)]
 pub(crate) struct NativeSlotCount(u32);
 impl NativeSlotCount {
+    pub(super) const EMPTY: Self = Self(0);
     pub(crate) fn try_from_len(len: usize) -> Result<Self, SnapshotError> {
         Ok(Self(
             len.try_into().map_err(|_| SnapshotError::SpanOverflow)?,
