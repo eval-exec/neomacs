@@ -315,8 +315,9 @@ jobs:
       # (41eaff923a moved them off #[ignore]). Without it the four test
       # targets build empty and `cargo test` reports 0 passed, so the job
       # also counts the runners that actually ran: p0s3 1, p1rv 3,
-      # thread_safety 5 (its own, the sole-owner phase, p2ht, pentry and the
-      # nmjit N1 sketch driver) and chartable_write 1. Every runner lives in
+      # thread_safety 9 (its own, sole-owner, p2ht, pentry, nmjit N1,
+      # three host-effect tests and intern-shared) and chartable_write 1,
+      # plus one nested nmjit runner: 15 passed in the summary. Every runner lives in
       # these test targets: the job never builds the opt-level-2 lib unit-test
       # binary, and no runner hides in the `core` binary, which no contract
       # job builds with the feature.
@@ -333,7 +334,7 @@ jobs:
           ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
             | awk '{s += $4} END {print s + 0}')
           echo "compile-fail contract runners passed: $ran"
-          test "$ran" -ge 10
+          test "$ran" -ge 15
 
   # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
   # orders and caps its E0277/E0599 notes differently, so the suite keeps
@@ -377,7 +378,7 @@ jobs:
           ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
             | awk '{s += $4} END {print s + 0}')
           echo "compile-fail contract runners passed: $ran"
-          test "$ran" -ge 10
+          test "$ran" -ge 15
 
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
