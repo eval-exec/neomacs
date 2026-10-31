@@ -6,8 +6,9 @@
 //! native code before their sealed, rooted semantic epilogue.
 use crate::tagged::gc::symbol_table::publication::PublicationView;
 use crate::tagged::gc::{
-    CellRead, CellReadError, Gen1Admission, ImmediateResult, ImmediateResultError, OwnerRootSlot,
-    ParallelExecutionAdmission, RegistrationError, RunAccess, SymbolHandle,
+    CellRead, CellReadError, FunctionActivation, FunctionError, FunctionSelection, Gen1Admission,
+    ImmediateResult, ImmediateResultError, OwnerRootSlot, ParallelExecutionAdmission,
+    RegistrationError, RunAccess, SymbolHandle,
 };
 use std::ffi::c_void;
 
@@ -40,6 +41,7 @@ pub(crate) enum ParallelEntryError {
     MalformedStatus,
     NonImmediateResult,
     CellRead(CellReadError),
+    Function(FunctionError),
     NoSlotBacking,
     UnexpectedEntryKind,
 }
@@ -98,6 +100,7 @@ type ParallelEntry = unsafe extern "C" fn(
 ) -> u32;
 
 mod cell;
+mod identity;
 
 #[cfg(feature = "jit")]
 enum EntryPlan {
@@ -195,6 +198,68 @@ impl ParallelCompiledCellCode {
         }
     }
 }
+/// A named guard selects only the existing bounded constant-lambda activation.
+/// Its rooted operand is never authority to enter an unrelated compiled body.
+#[must_use = "retain the compiled guard until selection returns"]
+pub(crate) struct ParallelCompiledNamedCode {
+    #[cfg(feature = "jit")]
+    native: native::NativeCompiledCode,
+    #[cfg(not(feature = "jit"))]
+    unavailable: std::convert::Infallible,
+}
+impl ParallelCompiledNamedCode {
+    pub(crate) fn compile(_quiescent: &Gen1Admission<'_>) -> Result<Self, ParallelCompileError> {
+        #[cfg(feature = "jit")]
+        {
+            native::NativeCompiledCode::compile(EntryPlan::Cell).map(|native| Self { native })
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            Err(ParallelCompileError::BackendUnavailable)
+        }
+    }
+
+    pub(crate) fn select<'era>(
+        &self,
+        admission: &ParallelExecutionAdmission<'era>,
+        run: &mut RunAccess<'_, 'era>,
+        destination: &OwnerRootSlot<'era>,
+        target: &SymbolHandle,
+        designator: &SymbolHandle,
+        expected: &OwnerRootSlot<'era>,
+        selected: &mut FunctionActivation<'era>,
+    ) -> Result<FunctionSelection, ParallelEntryError> {
+        #[cfg(feature = "jit")]
+        {
+            self.native.run_named(
+                admission,
+                run,
+                destination,
+                target,
+                designator,
+                expected,
+                selected,
+            )
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            let _ = (
+                admission,
+                run,
+                destination,
+                target,
+                designator,
+                expected,
+                selected,
+            );
+            match self.unavailable {}
+        }
+    }
+}
+static_assertions::assert_not_impl_any!(ParallelCompiledNamedCode: Clone, Copy);
+#[cfg(feature = "jit")]
+static_assertions::assert_not_impl_any!(ParallelCompiledNamedCode: Sync);
+
 static_assertions::assert_not_impl_any!(ParallelCompiledCellCode: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(ParallelCompiledCellCode: Sync);
@@ -221,3 +286,9 @@ pub(crate) use cell_tests::varref_manifest as varref_manifest_for_test;
 mod fboundp_tests;
 #[cfg(test)]
 pub(crate) use fboundp_tests::fboundp_manifest as fboundp_manifest_for_test;
+
+#[cfg(test)]
+#[path = "parallel/tests/identity_test.rs"]
+mod identity_tests;
+#[cfg(test)]
+pub(crate) use identity_tests::named_manifest as named_manifest_for_test;

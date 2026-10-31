@@ -19,7 +19,9 @@ mod functions;
 pub use functions::FunctionOpKind;
 #[cfg(test)]
 pub(super) use functions::PreparedNameFunction;
-pub use functions::{FunctionActivation, FunctionCallCache, FunctionError, FunctionStep};
+pub use functions::{
+    FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
+};
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod closed_graph;
 mod word;

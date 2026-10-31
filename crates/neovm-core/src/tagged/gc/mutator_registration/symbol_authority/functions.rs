@@ -11,7 +11,7 @@ use super::*;
 use crate::emacs_core::symbol::FunctionCellSnapshot;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue as Value;
-pub use call::{FunctionActivation, FunctionCallCache, FunctionStep};
+pub use call::{FunctionActivation, FunctionCallCache, FunctionSelection, FunctionStep};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FunctionError {

@@ -1,6 +1,8 @@
 //! Closed cell-to-root transfers for a bounded production activation.
 //! This boundary exports no loaded word, cell address or mutable root bank.
-use super::super::{FunctionError, GlobalError, SymbolHandle};
+use super::super::{
+    FunctionActivation, FunctionError, FunctionSelection, GlobalError, OwnerRootSlot, SymbolHandle,
+};
 use super::ExecutionActivation;
 use crate::tagged::gc::RegistrationError;
 use crate::tagged::gc::symbol_table::SymbolSlotIndex;
@@ -20,13 +22,24 @@ pub(crate) enum CellReadError {
     Function(FunctionError),
 }
 
-impl ExecutionActivation<'_, '_, '_> {
+impl<'era> ExecutionActivation<'_, '_, 'era> {
     /// Return checked handle metadata without loading a symbol cell or backing.
     pub(crate) fn symbol_slot(
         &self,
         symbol: &SymbolHandle,
     ) -> Result<SymbolSlotIndex, RegistrationError> {
         self.run.checked_symbol_slot(symbol)
+    }
+
+    /// A matching named definition is installed in the private bounded-call
+    /// activation under the reader. No boolean can authorize a separate callee.
+    pub(crate) fn select_named_function(
+        &mut self,
+        symbol: &SymbolHandle,
+        expected: &OwnerRootSlot<'era>,
+        selected: &mut FunctionActivation<'era>,
+    ) -> Result<FunctionSelection, FunctionError> {
+        self.run.sym_named_call_begin(symbol, expected, selected)
     }
 
     /// Reuse the identity-bound counted reader and canonical resident home.

@@ -69,8 +69,9 @@ mod symbol_intern;
 #[cfg(test)]
 pub use symbol_authority::FunctionOpKind;
 pub use symbol_authority::{
-    FunctionActivation, FunctionCallCache, FunctionError, FunctionStep, GlobalError,
-    InitialInternError, KeeperSymbols, PlainSymbolBacking, SymbolHandle, SymbolMut, SymbolRef,
+    FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
+    GlobalError, InitialInternError, KeeperSymbols, PlainSymbolBacking, SymbolHandle, SymbolMut,
+    SymbolRef,
 };
 pub(crate) use symbol_authority::{SymbolReadToken, SymbolWriteToken};
 mod token;

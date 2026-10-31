@@ -110,6 +110,13 @@ pub enum FunctionStep {
     Returned,
 }
 
+/// A named guard either rooted its exact supported target or changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunctionSelection {
+    Selected,
+    Changed,
+}
+
 fn check_run(run: &RunAccess<'_, '_>) -> Result<(), RegistrationError> {
     run.owner.check_thread()?;
     if run.owner.registry.symbols.poisoned.load(Ordering::Acquire) {
@@ -122,6 +129,28 @@ fn check_run(run: &RunAccess<'_, '_>) -> Result<(), RegistrationError> {
 }
 
 impl<'era> RunAccess<'_, 'era> {
+    /// Select only the supported constant-lambda whose identity is expected.
+    /// The private activation home retains a successful selection even after
+    /// redefinition; every subsequent call performs a fresh guarded selection.
+    pub fn sym_named_call_begin(
+        &mut self,
+        symbol: &SymbolHandle,
+        expected: &OwnerRootSlot<'era>,
+        activation: &mut FunctionActivation<'era>,
+    ) -> Result<FunctionSelection, FunctionError> {
+        check_run(self)?;
+        globals::check_home(self, expected)?;
+        globals::check_home(self, &activation.home)?;
+        if expected.index == activation.home.index {
+            return Err(RegistrationError::Publication.into());
+        }
+        if matches!(activation.state, ActivationState::Selected { .. }) {
+            return Err(FunctionError::ActiveActivation);
+        }
+        self.symbol_ref(symbol)?
+            .select_named(OwnerRootIndex::from(expected), activation)
+    }
+
     pub fn sym_call_begin(
         &mut self,
         symbol: &SymbolHandle,
@@ -230,6 +259,80 @@ impl<'era> RunAccess<'_, 'era> {
 }
 
 impl SymbolRef<'_, '_, '_> {
+    fn select_named(
+        &mut self,
+        expected: OwnerRootIndex,
+        activation: &mut FunctionActivation<'_>,
+    ) -> Result<FunctionSelection, FunctionError> {
+        let symbols = &self.run.owner.registry.symbols;
+        // Match select_call's single-reader rule, without its cached branch:
+        // the original clock, prepared parser metadata and fresh definition
+        // belong to this one selection, never to a later version reload.
+        let (clock, lambda, definition) = {
+            let token = self.read_token();
+            // SAFETY: this matching identity-checked reader retains the World
+            // and excludes writers throughout the complete version snapshot.
+            let (clock, _) = unsafe {
+                symbols
+                    .backing
+                    .function_version(self.key.symbol, None, &token)
+            }
+            .ok_or(RegistrationError::Publication)?;
+            if clock == u64::MAX {
+                return Err(FunctionError::EpochExhausted);
+            }
+            // SAFETY: prepared records stay immutable under this same reader.
+            let lambda = unsafe { symbols.functions.lambda_for(self.key.symbol, &token) };
+            // SAFETY: the same live reader protects the complete function-cell
+            // state and retained backing until the selected value is rooted.
+            let definition = match unsafe { symbols.backing.read_function(self.key.symbol, &token) }
+                .ok_or(RegistrationError::Publication)?
+            {
+                FunctionCellSnapshot::Bound(value) => value,
+                FunctionCellSnapshot::Empty | FunctionCellSnapshot::ExplicitlyUnbound => {
+                    return Err(FunctionError::VoidFunction);
+                }
+            };
+            if definition.is_nil() {
+                return Err(FunctionError::VoidFunction);
+            }
+            // Only admission-prepared metadata authorizes a supported shape.
+            // Defer this refusal so an empty cell still reports VoidFunction.
+            let lambda = lambda.ok_or(FunctionError::UnsupportedDefinition)?;
+            constant::decode(definition, lambda, ReturnSubset::Scalar)?;
+            (clock, lambda, definition)
+        };
+        let local = self
+            .run
+            .owner
+            .local
+            .as_mut()
+            .ok_or(RegistrationError::StaleRegistration)?;
+        let expected_value = local
+            .root_scratch
+            .get(usize::from(expected))
+            .ok_or(RegistrationError::StaleRegistration)?
+            .value();
+        if expected_value.bits() != definition.bits() {
+            return Ok(FunctionSelection::Changed);
+        }
+        let selected = OwnerRootIndex::from(&activation.home);
+        let selected_home = local
+            .root_scratch
+            .get_mut(usize::from(selected))
+            .ok_or(RegistrationError::StaleRegistration)?;
+        // Install the selected census root before releasing this SymbolRef.
+        // No fallible operation follows installation or activation mutation.
+        *selected_home = MarkWord::of(definition);
+        activation.state = ActivationState::Selected {
+            epoch: clock,
+            lambda,
+            subset: ReturnSubset::Scalar,
+            instruction: Instruction::Validate,
+        };
+        Ok(FunctionSelection::Selected)
+    }
+
     fn select_call(
         &mut self,
         cache: &mut FunctionCallCache<'_>,

@@ -75,6 +75,8 @@ pub(crate) enum FixtureSeed {
     Scalar,
     FunctionDefinition,
     WritableFunctionDefinition,
+    WritableFunctionTwin,
+    UnsupportedFunction,
 }
 
 pub(crate) fn prepared_cell_fixture<P>(
@@ -96,13 +98,28 @@ pub(crate) fn prepared_cell_fixture<P>(
         backing,
         |obarray, id| match seed {
             FixtureSeed::Scalar => {}
-            FixtureSeed::FunctionDefinition | FixtureSeed::WritableFunctionDefinition => {
+            FixtureSeed::FunctionDefinition
+            | FixtureSeed::WritableFunctionDefinition
+            | FixtureSeed::WritableFunctionTwin => {
                 let lambda = TaggedValue::from_sym_id(crate::emacs_core::intern::intern("lambda"));
                 let body = TaggedValue::cons(TaggedValue::fixnum(73), TaggedValue::NIL);
                 let args = TaggedValue::cons(TaggedValue::NIL, body);
                 let definition = TaggedValue::cons(lambda, args);
                 obarray.seed_value_id(id, definition);
                 obarray.set_symbol_function_id(id, definition);
+                match seed {
+                    FixtureSeed::WritableFunctionTwin => {
+                        let body = TaggedValue::cons(TaggedValue::fixnum(73), TaggedValue::NIL);
+                        let args = TaggedValue::cons(TaggedValue::NIL, body);
+                        let twin = TaggedValue::cons(lambda, args);
+                        obarray.seed_value_id(id, twin);
+                    }
+                    FixtureSeed::FunctionDefinition | FixtureSeed::WritableFunctionDefinition => {}
+                    FixtureSeed::Scalar | FixtureSeed::UnsupportedFunction => {}
+                }
+            }
+            FixtureSeed::UnsupportedFunction => {
+                obarray.set_symbol_function_id(id, TaggedValue::fixnum(73));
             }
         },
         |mut proof, id| {
@@ -138,8 +155,10 @@ pub(crate) fn prepared_cell_fixture<P>(
                 .expect("real rooted GEN1 era");
             let symbol = era.admit_plain_symbol(id).expect("activation Plain handle");
             match seed {
-                FixtureSeed::Scalar | FixtureSeed::FunctionDefinition => {}
-                FixtureSeed::WritableFunctionDefinition => {
+                FixtureSeed::Scalar
+                | FixtureSeed::FunctionDefinition
+                | FixtureSeed::UnsupportedFunction => {}
+                FixtureSeed::WritableFunctionDefinition | FixtureSeed::WritableFunctionTwin => {
                     era.prepare_function_symbol(&symbol)
                         .expect("prepared function journal");
                 }
@@ -175,8 +194,10 @@ pub(crate) fn prepared_cell_fixture<P>(
             })();
             drop(admission);
             match seed {
-                FixtureSeed::Scalar | FixtureSeed::FunctionDefinition => {}
-                FixtureSeed::WritableFunctionDefinition => {
+                FixtureSeed::Scalar
+                | FixtureSeed::FunctionDefinition
+                | FixtureSeed::UnsupportedFunction => {}
+                FixtureSeed::WritableFunctionDefinition | FixtureSeed::WritableFunctionTwin => {
                     let mut stopped = era.stop().expect("function fixture stop");
                     stopped
                         .symbols()

@@ -5,6 +5,9 @@ use crate::tagged::gc::{
     ExecutionTestHomes, ExecutionTestSeed, PlainSymbolBacking, with_test_prepared_cell_execution,
 };
 
+/// # Safety
+/// Pointers identify initialized ParallelRuntime and CellInput objects retained
+/// through return. The publication borrow belongs to the live activation.
 unsafe extern "C" fn lookup(
     runtime: *const ParallelRuntime<'_>,
     _activation: *mut c_void,
@@ -32,6 +35,9 @@ unsafe extern "C" fn lookup(
 }
 macro_rules! refused_entry {
     ($name:ident, $status:expr) => {
+        /// # Safety
+        /// Called only at the declared four-pointer ABI while the supplying
+        /// closed-kernel owner and initialized stack arguments remain live.
         unsafe extern "C" fn $name(
             _runtime: *const ParallelRuntime<'_>,
             _activation: *mut c_void,
@@ -149,4 +155,118 @@ fn nmjit_n4_fboundp_abi_matches_gnu_after_function_writes() {
             },
         );
     }
+}
+
+#[test]
+fn nmjit_n4_named_abi_roots_old_selection_after_lookup_returns() {
+    for backing in [
+        PlainSymbolBacking::Unprojected,
+        PlainSymbolBacking::Projected,
+    ] {
+        with_test_prepared_cell_execution(
+            backing,
+            ExecutionTestSeed::WritableFunctionTwin,
+            |_| (),
+            |(), admission, run, home, symbol| {
+                super::super::identity_tests::assert_history(
+                    run,
+                    home,
+                    symbol,
+                    |run, expected, selected| {
+                        // SAFETY: lookup is the retained closed Rust descriptor kernel;
+                        // all native-like temporaries die before the rooted selection.
+                        unsafe {
+                            super::super::identity::execute(
+                                lookup, admission, run, home, symbol, symbol, expected, selected,
+                            )
+                        }
+                    },
+                );
+            },
+        );
+    }
+}
+
+#[test]
+fn nmjit_n4_named_abi_refusals_preserve_activation_and_home() {
+    with_test_prepared_cell_execution(
+        PlainSymbolBacking::Unprojected,
+        ExecutionTestSeed::UnsupportedFunction,
+        |_| (),
+        |(), admission, run, home, symbol| {
+            let expected = ExecutionTestHomes::nil(run).unwrap();
+            let mut selected = FunctionActivation::new(run).unwrap();
+            // SAFETY: static lookup implements the retained closed descriptor ABI.
+            let result = unsafe {
+                super::super::identity::execute(
+                    lookup,
+                    admission,
+                    run,
+                    home,
+                    symbol,
+                    symbol,
+                    &expected,
+                    &mut selected,
+                )
+            };
+            assert_eq!(
+                result,
+                Err(ParallelEntryError::Function(
+                    FunctionError::UnsupportedDefinition
+                ))
+            );
+            assert_eq!(selected.selected_epoch(), None);
+            assert_eq!(ExecutionTestHomes::read(home, run), ImmediateResult::Nil);
+            // SAFETY: absent is a static status-only entry with the same ABI.
+            let result = unsafe {
+                super::super::identity::execute(
+                    absent,
+                    admission,
+                    run,
+                    home,
+                    symbol,
+                    symbol,
+                    &expected,
+                    &mut selected,
+                )
+            };
+            assert_eq!(result, Err(ParallelEntryError::NoSlotBacking));
+            assert_eq!(selected.selected_epoch(), None);
+            assert_eq!(ExecutionTestHomes::read(home, run), ImmediateResult::Nil);
+            selected.clear(run).unwrap();
+        },
+    );
+    with_test_prepared_cell_execution(
+        PlainSymbolBacking::Unprojected,
+        ExecutionTestSeed::WritableFunctionTwin,
+        |_| (),
+        |(), admission, run, _home, symbol| {
+            let stale = ExecutionTestHomes::nil(run).unwrap();
+            run.clear_root_slots().unwrap();
+            let fresh = ExecutionTestHomes::nil(run).unwrap();
+            let mut selected = FunctionActivation::new(run).unwrap();
+            // SAFETY: this static closed lookup retains no borrowed pointer.
+            let result = unsafe {
+                super::super::identity::execute(
+                    lookup,
+                    admission,
+                    run,
+                    &fresh,
+                    symbol,
+                    symbol,
+                    &stale,
+                    &mut selected,
+                )
+            };
+            assert_eq!(
+                result,
+                Err(ParallelEntryError::Function(FunctionError::Authority(
+                    RegistrationError::StaleRegistration
+                )))
+            );
+            assert_eq!(selected.selected_epoch(), None);
+            assert_eq!(ExecutionTestHomes::read(&fresh, run), ImmediateResult::Nil);
+            selected.clear(run).unwrap();
+        },
+    );
 }

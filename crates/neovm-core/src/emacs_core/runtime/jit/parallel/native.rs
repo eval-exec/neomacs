@@ -244,6 +244,31 @@ impl NativeCompiledCode {
         // self retains its executable mappings through the complete epilogue.
         unsafe { super::cell::execute(self.entry, operation, admission, run, destination, symbol) }
     }
+    pub(super) fn run_named<'era>(
+        &self,
+        admission: &ParallelExecutionAdmission<'era>,
+        run: &mut RunAccess<'_, 'era>,
+        destination: &OwnerRootSlot<'era>,
+        target: &SymbolHandle,
+        designator: &SymbolHandle,
+        expected: &OwnerRootSlot<'era>,
+        selected: &mut FunctionActivation<'era>,
+    ) -> Result<FunctionSelection, ParallelEntryError> {
+        // SAFETY: the private compiler emits the closed descriptor kernel;
+        // this borrow retains its unique mappings through rooted selection.
+        unsafe {
+            super::identity::execute(
+                self.entry,
+                admission,
+                run,
+                destination,
+                target,
+                designator,
+                expected,
+                selected,
+            )
+        }
+    }
 }
 
 /// One atomic descriptor identity supplies every bound and pointer. This
