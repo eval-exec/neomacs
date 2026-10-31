@@ -44,10 +44,10 @@
         (face-attribute 'probe-dual :foreground frame t)))
 
 (defun neo-face-background-mode-oracle--record (name thunk)
-  (push (cons name
-              (condition-case error-data
-                  (funcall thunk)
-                (error error-data)))
+  ;; Errors propagate: a fixture that cannot reach the state under test must
+  ;; fail the oracle instead of recording two identical error values that
+  ;; would compare equal.
+  (push (cons name (funcall thunk))
         neo-face-background-mode-oracle-results))
 
 ;; Control: the opening GUI frame uses the toolkit default (light).
