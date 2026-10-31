@@ -11,7 +11,7 @@ use crate::display_row::walk_state::row_next_window_start_charpos;
 use crate::scroll_policy::{ForwardScroll, ScrollPolicy, last_usable_row};
 use crate::types::LayoutCharPos0;
 use neovm_core::buffer::LispCharPos1;
-use neovm_core::window::DisplayRowSnapshot;
+use neovm_core::window::{DisplayRowSnapshot, ScrollMargin};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ViewportDecision {
@@ -118,7 +118,7 @@ pub(crate) struct ForwardViewportMeasurement {
     /// represent (for example an overlay-string-only row).
     scroll_starts: Vec<Option<LayoutCharPos0>>,
     scroll_policy: ScrollPolicy,
-    scroll_margin: i64,
+    scroll_margin: ScrollMargin,
 }
 
 impl ForwardViewportMeasurement {
@@ -126,7 +126,7 @@ impl ForwardViewportMeasurement {
         rows: &[DisplayRowSnapshot],
         origin_window_start: ResolvedWindowStart,
         scroll_policy: ScrollPolicy,
-        scroll_margin: i64,
+        scroll_margin: ScrollMargin,
     ) -> ViewportDecision {
         let mut scroll_starts = scroll_starts_after(rows, origin_window_start.get());
         let viewport_rows = rows.len();
@@ -285,7 +285,7 @@ impl ForwardViewportMeasurement {
 fn relative_point_placement(
     policy: ScrollPolicy,
     viewport_rows: usize,
-    scroll_margin: i64,
+    scroll_margin: ScrollMargin,
     fallback_window_start: ResolvedWindowStart,
 ) -> ViewportDecision {
     let ForwardScroll::Recenter { lines_above_point } =

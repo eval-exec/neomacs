@@ -23,7 +23,7 @@ fn read_with_properties(properties: &str) -> Vec<u8> {
         3,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     );
     let mut bytes = Vec::new();
     request.read_exact_into(&access, &mut bytes);
@@ -120,7 +120,7 @@ fn sync_source_budget_preserves_semantic_end_point_and_window_start() {
         38,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     )
     .with_sync_stop(crate::types::LayoutCharPos0::new(20));
     let mut bytes = Vec::new();
@@ -165,7 +165,7 @@ fn sync_source_budget_keeps_real_eob_when_lookahead_runs_out() {
         38,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     )
     .with_sync_stop(crate::types::LayoutCharPos0::new(4));
     let mut bytes = Vec::new();
@@ -209,7 +209,7 @@ fn sync_read_with_properties(properties: &str) -> (Vec<u8>, BufferWindowSource) 
         38,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     )
     .with_sync_stop(crate::types::LayoutCharPos0::new(8));
     let mut bytes = Vec::new();
@@ -278,7 +278,7 @@ fn window_character_budget_bounds_long_lines_and_preserves_semantic_metadata() {
                 38,
                 WindowKind::Main,
                 ScrollPolicy::Recenter,
-                0,
+                neovm_core::window::ScrollMargin::default(),
             )
             .with_window_chars(CharLen::new(1024));
             let mut bytes = Vec::new();
@@ -345,7 +345,7 @@ fn window_character_budget_distinguishes_horizon_from_real_accessible_end() {
             38,
             WindowKind::Main,
             ScrollPolicy::Recenter,
-            0,
+            neovm_core::window::ScrollMargin::default(),
         )
         .with_window_chars(CharLen::new(budget));
         let mut bytes = Vec::new();
@@ -402,7 +402,7 @@ fn window_character_budget_remains_progressive_with_hidden_or_selective_source()
             38,
             WindowKind::Main,
             ScrollPolicy::Recenter,
-            0,
+            neovm_core::window::ScrollMargin::default(),
         )
         .with_window_chars(CharLen::new(1024));
         let mut bytes = Vec::new();
@@ -447,7 +447,7 @@ fn window_rows_budget_stops_a_newline_less_tail_at_the_allowance() {
         38,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     )
     .with_window_rows_within(CharLen::new(1024));
     let mut bytes = Vec::new();
@@ -513,7 +513,7 @@ fn window_rows_budget_keeps_the_newline_bound_when_the_rows_fit() {
             38,
             WindowKind::Main,
             ScrollPolicy::Recenter,
-            0,
+            neovm_core::window::ScrollMargin::default(),
         )
         .with_window_rows_within(CharLen::new(1024));
         let mut bytes = Vec::new();

@@ -1797,7 +1797,7 @@ fn test_window_params() -> WindowParams {
         scroll_conservatively: 0,
         scroll_step: 0,
         scroll_minibuffer_conservatively: true,
-        scroll_margin: 0,
+        scroll_margin: neovm_core::window::ScrollMargin::default(),
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
         frame_foreground: 0xFFFFFF,

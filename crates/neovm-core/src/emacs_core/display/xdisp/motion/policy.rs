@@ -1,6 +1,7 @@
 //! GNU window_scroll_pixel_based's viewport policy, independent of row production.
 
 use super::{BufferId, Context, FrameId, Value, WindowId};
+use crate::window::ScrollMargin;
 
 /// Transient VM-owned goal, retained across consecutive scroll commands.
 /// Not a Lisp object or persisted window configuration.
@@ -26,8 +27,7 @@ pub(super) struct ScrollPolicy {
     pub auto_vscroll: bool,
     pub preserve: PreservePoint,
     pub continues_scroll: bool,
-    margin_lines: i64,
-    maximum_margin: f64,
+    scroll_margin: ScrollMargin,
 }
 
 impl ScrollPolicy {
@@ -46,7 +46,13 @@ impl ScrollPolicy {
     }
 
     fn from_values(eval: &Context, value: impl Fn(&str) -> Value) -> Self {
-        let maximum_margin = value("maximum-scroll-margin").as_float().unwrap_or(0.25);
+        // GNU reads both values through `window_scroll_margin`
+        // (src/window.c:6207): `scroll-margin` in lines and
+        // `maximum-scroll-margin` only when it is a float.
+        let scroll_margin = ScrollMargin::from_lisp_values(
+            value("scroll-margin").as_fixnum().unwrap_or(0),
+            value("maximum-scroll-margin").as_float(),
+        );
         let continues_scroll = crate::emacs_core::builtins::symbol_property_get(
             eval,
             value("last-command"),
@@ -67,20 +73,11 @@ impl ScrollPolicy {
                 _ => PreservePoint::Always,
             },
             continues_scroll,
-            margin_lines: value("scroll-margin").as_fixnum().unwrap_or(0).max(0),
-            maximum_margin: if maximum_margin.is_finite() {
-                maximum_margin.clamp(0.0, 0.5)
-            } else {
-                0.25
-            },
+            scroll_margin,
         }
     }
 
     pub fn margin_pixels(self, height: i64, line_height: i64) -> i64 {
-        let lines = height / line_height.max(1);
-        self.margin_lines
-            .min(((lines - 1) / 2).max(0))
-            .min((lines as f64 * self.maximum_margin) as i64)
-            .saturating_mul(line_height)
+        self.scroll_margin.pixels(height, line_height)
     }
 }

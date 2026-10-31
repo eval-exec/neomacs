@@ -217,6 +217,12 @@ pub struct RetainedWindowKey {
     pub selective_display: i32,
     /// Whether this is the frame's Lisp-selected window.
     pub selected: bool,
+    /// `scroll-margin` resolved through `maximum-scroll-margin` (GNU
+    /// `window_scroll_margin`). A point move into either margin forces a full
+    /// layout so redisplay can scroll; the cursor-only path never re-derives
+    /// `window_start`. Kept in the key so changing either variable also
+    /// invalidates the retained body.
+    pub scroll_margin: neovm_core::window::ScrollMargin,
     /// Physical cursor ownership and active-vs-inactive cursor presentation.
     /// This can differ from `selected` while the cursor is in the echo area.
     pub cursor_role: crate::types::WindowCursorRole,
@@ -349,6 +355,7 @@ impl RetainedWindowKey {
             extra_line_spacing: p.extra_line_spacing,
             selective_display: p.selective_display,
             selected: p.selected,
+            scroll_margin: p.scroll_margin,
             cursor_role: p.cursor_role,
             show_trailing_whitespace: p.show_trailing_whitespace,
             trailing_ws_bg: p.trailing_ws_bg,
@@ -562,11 +569,12 @@ pub enum CursorOnlyDecline {
     LineNumberedCursorRowChanged,
     /// The cursor's row cannot carry a re-decorated cursor.
     CursorRowNotReDecoratable,
-    /// Point moved onto the last visible row with buffer left below, which a
-    /// full layout might answer by scrolling.
+    /// Point moved into the bottom `scroll-margin` with buffer left below,
+    /// which a full layout must answer by scrolling (GNU
+    /// `try_window`'s margin check, src/xdisp.c:21702).
     PointMoveMayScrollDown,
-    /// Point moved onto the first visible row while scrolled off the buffer
-    /// start, which a full layout might answer by scrolling.
+    /// Point moved into the top `scroll-margin` while scrolled off the buffer
+    /// start, which a full layout must answer by scrolling.
     PointMoveMayScrollUp,
 }
 
@@ -1490,16 +1498,28 @@ impl RetainedWindowMatrix {
         {
             return Err(CursorOnlyDecline::CursorRowNotReDecoratable);
         }
-        // Scroll-safety (GNU `try_cursor_movement` / `make_cursor_line_fully_visible`):
-        // a point move onto the top or bottom visible row can trigger a window
-        // scroll to keep point visible, which the cursor-only path does NOT
-        // perform (it never re-derives window_start). Bail on a boundary row
-        // unless the window is already pinned to that buffer edge:
-        //   * bottom row with more buffer below (`!ends_at_zv`) → may scroll down,
-        //   * top row while the window is scrolled off the buffer start → may scroll up.
+        // Scroll-safety (GNU `try_window`'s margin check, src/xdisp.c:21702, and
+        // `try_cursor_movement`): point inside either `scroll-margin` makes the
+        // cursor row fail the fully-visible test even though it is on screen,
+        // and redisplay responds by scrolling. The cursor-only path never
+        // re-derives `window_start`, so it must decline and let the full pass
+        // run:
+        //   * a row below `last_usable_row` with more buffer below
+        //     (`!ends_at_zv`) → scroll down,
+        //   * a row above the top margin while the window is scrolled off the
+        //     buffer start → scroll up.
+        // GNU's own top check also requires `CHARPOS (start) > BEGV`
+        // (xdisp.c:21710), which is `window_at_buffer_top` here.
         let first_body_index = body_rows.first().map(|(idx, _)| *idx);
         let last_body_index = body_rows.last().map(|(idx, _)| *idx);
         let window_at_buffer_top = curr.window_start <= curr.buffer_begv + 1;
+        let scroll_margin = curr.scroll_margin.lines(body_rows.len() as i64);
+        let last_usable_row =
+            crate::scroll_policy::last_usable_row(body_rows.len(), curr.scroll_margin);
+        let cursor_body_row = body_rows
+            .iter()
+            .position(|(idx, _)| *idx == new_cursor_row_index)
+            .map(|ordinal| ordinal as i64);
         // Both bails are about a point MOVE onto an edge row, which is why they
         // are gated on `point_moved`. With point unchanged there is no motion
         // to keep visible: the retained matrix IS the layout a full pass
@@ -1515,11 +1535,27 @@ impl RetainedWindowMatrix {
             && cursor_top >= body.y
             && cursor_top + cursor_row.height_px <= body.y + body.height;
         if point_moved && !forced_visible {
+            // The body's boundary rows keep their original, more
+            // conservative treatment: a move onto the last row may expose a
+            // clipped cursor row that a full pass would scroll into view even
+            // with no margin at all.
             if Some(new_cursor_row_index) == last_body_index && !cursor_row.ends_at_zv {
                 return Err(CursorOnlyDecline::PointMoveMayScrollDown);
             }
             if Some(new_cursor_row_index) == first_body_index && !window_at_buffer_top {
                 return Err(CursorOnlyDecline::PointMoveMayScrollUp);
+            }
+            // Inside the window, GNU still scrolls when point enters the
+            // margin even though the row is on screen (try_window's
+            // `w->cursor.y > last_visible_y - margin - 1` test,
+            // src/xdisp.c:21702).
+            if let Some(cursor_body_row) = cursor_body_row {
+                if cursor_body_row > last_usable_row && !cursor_row.ends_at_zv {
+                    return Err(CursorOnlyDecline::PointMoveMayScrollDown);
+                }
+                if cursor_body_row < scroll_margin && !window_at_buffer_top {
+                    return Err(CursorOnlyDecline::PointMoveMayScrollUp);
+                }
             }
         }
         let body_row_snapshots = self

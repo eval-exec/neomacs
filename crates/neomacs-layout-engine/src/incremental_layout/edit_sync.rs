@@ -62,7 +62,7 @@ use neomacs_display_protocol::glyph_matrix::{
     GlyphPointerOccurrenceIdentity, GlyphPointerSourceKind, GlyphRow, MatrixRow,
 };
 use neovm_core::buffer::position::LispCharPos1;
-use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
+use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot, ScrollMargin};
 
 /// Pure process-selector parser: absence selects ON; explicit empty, invalid
 /// and nonUnicode values select OFF. It reads no Lisp state and does not
@@ -790,7 +790,7 @@ pub(crate) fn row_has_boxed_glyph(row: &GlyphRow) -> bool {
 /// scroll, which a replay never does.
 pub(crate) fn sync_allowed(
     curr: &super::RetainedWindowKey,
-    scroll_margin: i64,
+    scroll_margin: ScrollMargin,
     buffer: &neovm_core::buffer::Buffer,
 ) -> bool {
     // An edit can rewrite the rest of a paragraph, changing its automatic
@@ -806,12 +806,15 @@ pub(crate) fn sync_allowed(
 /// prefixes, trailing whitespace adds buffer-dependent glyphs, and a
 /// horizontal scroll or scroll margin would make the full layout shift rows
 /// that a replay leaves in place.
-pub(crate) fn sync_layout_conditions(curr: &super::RetainedWindowKey, scroll_margin: i64) -> bool {
+pub(crate) fn sync_layout_conditions(
+    curr: &super::RetainedWindowKey,
+    scroll_margin: ScrollMargin,
+) -> bool {
     !curr.word_wrap
         && !curr.display_line_numbers.enabled()
         && !curr.show_trailing_whitespace
         && curr.hscroll == 0
-        && scroll_margin <= 0
+        && scroll_margin.is_zero()
 }
 
 /// Build the synchronization plan for an edit, or `None` when no old row

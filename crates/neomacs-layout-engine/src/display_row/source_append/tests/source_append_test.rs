@@ -8671,7 +8671,7 @@ fn string_only_display_rows_do_not_shrink_the_visible_viewport() {
         0,
         48,
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
         None,
         &access,
     )
@@ -8713,7 +8713,7 @@ fn buffer_text_window_visibility_retry_request_scrolls_down_from_visible_rows() 
         0,
         48,
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
         None,
         &access,
     )
@@ -8761,7 +8761,7 @@ fn buffer_text_window_visibility_retry_request_detects_partially_visible_point_r
         0,
         60,
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
         None,
         &access,
     )
@@ -8804,7 +8804,7 @@ fn buffer_text_window_visibility_retry_keeps_a_fully_visible_continued_point_row
         0,
         48,
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
         None,
         &access,
     )
@@ -11302,7 +11302,7 @@ fn test_display_space_window_params() -> WindowParams {
         scroll_conservatively: 0,
         scroll_step: 0,
         scroll_minibuffer_conservatively: true,
-        scroll_margin: 0,
+        scroll_margin: neovm_core::window::ScrollMargin::default(),
         tab_stop_list: vec![],
         default_fg: 0xFFFFFF,
         frame_foreground: 0xFFFFFF,

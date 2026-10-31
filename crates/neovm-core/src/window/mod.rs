@@ -52,6 +52,8 @@ pub use point_rows::{
 pub(crate) use posn_object_extent::force_posn_object_extent_for_test;
 pub use posn_object_extent::{PosnObjectExtentMode, posn_object_extent_mode, retained_posn_extent};
 mod scroll_bar;
+mod scroll_margin;
+pub use scroll_margin::ScrollMargin;
 mod sibling_layout;
 mod size;
 pub(crate) use size::{
@@ -845,6 +847,7 @@ pub enum WindowLayoutVariable {
     LinePrefix,
     LineSpacing,
     MaxMiniWindowHeight,
+    MaximumScrollMargin,
     MenuBarFinalItems,
     ModeLineFormat,
     NeomacsCursorEffect,

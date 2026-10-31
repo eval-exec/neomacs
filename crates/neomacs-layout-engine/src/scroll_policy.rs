@@ -13,6 +13,8 @@
 //! that sets them gets [`ScrollPolicy::Recenter`] here instead of the
 //! fractional placement GNU would use.
 
+use neovm_core::window::ScrollMargin;
+
 /// GNU `SCROLL_LIMIT` (src/xdisp.c:19349): a `scroll-conservatively` above this
 /// never recenters — redisplay then always scrolls minimally.
 pub(crate) const SCROLL_CONSERVATIVELY_LIMIT: i64 = 100;
@@ -105,7 +107,7 @@ impl ScrollPolicy {
         dy: i64,
         dy_is_bounded: bool,
         window_rows: usize,
-        scroll_margin: i64,
+        scroll_margin: ScrollMargin,
     ) -> ForwardScroll {
         let recenter = || ForwardScroll::Recenter {
             lines_above_point: self.recenter_lines_above_point(window_rows, scroll_margin),
@@ -145,7 +147,7 @@ impl ScrollPolicy {
         lines_back: i64,
         bounded: bool,
         window_rows: usize,
-        scroll_margin: i64,
+        scroll_margin: ScrollMargin,
     ) -> i64 {
         let margin = top_margin(window_rows, scroll_margin);
         let within_budget = bounded && lines_back <= self.search_limit_lines();
@@ -166,7 +168,7 @@ impl ScrollPolicy {
 
     /// GNU `recenter:`'s `centering_position` expressed in display lines above
     /// point (xdisp.c:21169-21188).
-    fn recenter_lines_above_point(self, window_rows: usize, scroll_margin: i64) -> i64 {
+    fn recenter_lines_above_point(self, window_rows: usize, scroll_margin: ScrollMargin) -> i64 {
         let rows = window_rows as i64;
         match self {
             // scroll-conservatively > 100 never centres: the window start goes
@@ -179,16 +181,16 @@ impl ScrollPolicy {
     }
 }
 
-/// Effective `scroll-margin` in rows. GNU `window_scroll_margin` caps it at a
-/// quarter of the window so the two margins can never meet (window.c:5117).
-pub(crate) fn top_margin(window_rows: usize, scroll_margin: i64) -> i64 {
-    scroll_margin.clamp(0, (window_rows as i64 / 4).max(0))
+/// Effective `scroll-margin` in rows for a window `window_rows` display rows
+/// tall (GNU `window_scroll_margin`, src/window.c:6207).
+pub(crate) fn top_margin(window_rows: usize, scroll_margin: ScrollMargin) -> i64 {
+    scroll_margin.lines(window_rows as i64)
 }
 
 /// Index of the lowest row point may occupy given the bottom `scroll-margin`
 /// (GNU `scroll_margin_y`, xdisp.c:19420). Rows are 0-based, so a margin-free
 /// window of `window_rows` rows allows `window_rows - 1`.
-pub(crate) fn last_usable_row(window_rows: usize, scroll_margin: i64) -> i64 {
+pub(crate) fn last_usable_row(window_rows: usize, scroll_margin: ScrollMargin) -> i64 {
     (window_rows as i64 - 1 - top_margin(window_rows, scroll_margin)).max(0)
 }
 

@@ -1714,7 +1714,14 @@ pub fn window_params_from_neovm_with_font_sizing(
     let scroll_minibuffer_conservatively = vars
         .value(SCROLL_MINIBUFFER_CONSERVATIVELY.id())
         .is_none_or(|value| !value.is_nil());
-    let scroll_margin = effective_buffer_int(buffer, vars, LayoutVar::ScrollMargin, 0);
+    // GNU `window_scroll_margin` (src/window.c:6207) caps `scroll-margin` by
+    // `maximum-scroll-margin`, which only counts when it is a float. Resolve
+    // both here so every layout consumer sees the same effective margin.
+    let scroll_margin = neovm_core::window::ScrollMargin::from_lisp_values(
+        effective_buffer_int(buffer, vars, LayoutVar::ScrollMargin, 0),
+        effective_buffer_value(buffer, vars, LayoutVar::MaximumScrollMargin)
+            .and_then(Value::as_float),
+    );
 
     // GNU window.c gates chrome reservation through window_wants_*:
     // a mode/header/tab line is shown only for leaf non-minibuffer
