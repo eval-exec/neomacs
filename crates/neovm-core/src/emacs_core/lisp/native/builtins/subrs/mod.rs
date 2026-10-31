@@ -5829,7 +5829,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "internal--hash-table-buckets",
         NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::hashtab::builtin_internal_hash_table_buckets(args)
+            crate::emacs_core::hashtab::builtin_internal_hash_table_buckets(
+                args,
+                crate::emacs_core::print::print_value,
+            )
         }),
         SubrArity::new(1, Some(1)),
     )));

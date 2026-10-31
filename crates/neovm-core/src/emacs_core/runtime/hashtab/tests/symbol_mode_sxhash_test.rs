@@ -1,6 +1,7 @@
 //! Positioned symbols hash as their underlying symbol only in the owning
 //! Context's transparent mode (GNU fns.c sxhash_obj / maybe_remove_pos).
 use super::*;
+use crate::emacs_core::print::print_value;
 
 fn positioned(symbol: Value, pos: i64) -> Value {
     with_tagged_heap(|heap| heap.alloc_symbol_with_pos(symbol, Value::fixnum(pos)))

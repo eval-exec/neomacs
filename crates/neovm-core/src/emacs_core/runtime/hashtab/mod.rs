@@ -9,7 +9,6 @@
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{SymId, resolve_sym};
-use super::print::print_value;
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
@@ -647,7 +646,13 @@ fn internal_hash_table_diagnostic_hash(key: &HashKey, test: HashTableTest) -> u3
     }
 }
 
-fn internal_hash_table_nonempty_buckets(table: &LispHashTable) -> Vec<Vec<(Value, i64)>> {
+fn internal_hash_table_nonempty_buckets<K>(
+    table: &LispHashTable,
+    sort_key: K,
+) -> Vec<Vec<(Value, i64)>>
+where
+    K: Fn(&Value) -> String,
+{
     if table.data.is_empty() {
         return Vec::new();
     }
@@ -661,7 +666,7 @@ fn internal_hash_table_nonempty_buckets(table: &LispHashTable) -> Vec<Vec<(Value
         buckets[index].push((entry.key, hash as i64));
     }
     for bucket in &mut buckets {
-        bucket.sort_by_key(|(key, hash)| (print_value(key), *hash));
+        bucket.sort_by_key(|(key, hash)| (sort_key(key), *hash));
     }
     buckets
         .into_iter()
@@ -909,12 +914,18 @@ pub(crate) fn builtin_internal_hash_table_index_size(args: Vec<Value>) -> EvalRe
 }
 
 /// `(internal--hash-table-buckets TABLE)` -- return non-empty bucket alists.
-pub(crate) fn builtin_internal_hash_table_buckets(args: Vec<Value>) -> EvalResult {
+///
+/// `sort_key` orders a bucket by a caller-provided stable key: the Lisp
+/// builtin passes the printer, so this value-layer module never names it.
+pub(crate) fn builtin_internal_hash_table_buckets<K>(args: Vec<Value>, sort_key: K) -> EvalResult
+where
+    K: Fn(&Value) -> String,
+{
     expect_args("internal--hash-table-buckets", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             let table = args[0].as_hash_table().unwrap().clone();
-            let buckets = internal_hash_table_nonempty_buckets(&table);
+            let buckets = internal_hash_table_nonempty_buckets(&table, sort_key);
             if buckets.is_empty() {
                 return Ok(Value::NIL);
             }
@@ -944,7 +955,9 @@ pub(crate) fn builtin_internal_hash_table_histogram(args: Vec<Value>) -> EvalRes
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             let table = args[0].as_hash_table().unwrap().clone();
-            let buckets = internal_hash_table_nonempty_buckets(&table);
+            // Only bucket SIZES are rendered; the within-bucket order never
+            // reaches the result, so the value layer needs no printer here.
+            let buckets = internal_hash_table_nonempty_buckets(&table, |_key| String::new());
             if buckets.is_empty() {
                 return Ok(Value::NIL);
             }

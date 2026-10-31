@@ -473,7 +473,9 @@ fn hash_table_nan_payloads_remain_distinct_for_eql_and_equal() {
             Value::symbol("b")
         );
 
-        let buckets = builtin_internal_hash_table_buckets(vec![table]).expect("bucket diagnostics");
+        let buckets =
+            builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+                .expect("bucket diagnostics");
         let outer = list_to_vec(&buckets).expect("outer list");
         let mut hashes = Vec::new();
         for bucket in outer {
@@ -498,7 +500,8 @@ fn internal_hash_table_introspection_empty_defaults() {
     crate::test_utils::init_test_tracing();
     let table = builtin_make_hash_table(vec![]).unwrap();
     assert_eq!(
-        builtin_internal_hash_table_buckets(vec![table]).unwrap(),
+        builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+            .unwrap(),
         Value::NIL
     );
     assert_eq!(
@@ -669,7 +672,9 @@ fn internal_hash_table_buckets_report_hash_diagnostics() {
         panic!("expected hash table");
     }
 
-    let buckets = builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists");
+    let buckets =
+        builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+            .expect("bucket alists");
     let outer = list_to_vec(&buckets).expect("outer list");
     let mut seen = std::collections::BTreeMap::new();
     for bucket in outer {
@@ -705,7 +710,8 @@ fn internal_hash_table_buckets_match_oracle_small_string_hashes() {
     let _ = builtin_puthash(vec![Value::string("b"), Value::fixnum(2), table]).expect("puthash b");
 
     assert_eq!(
-        builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists"),
+        builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+            .expect("bucket alists"),
         Value::list(vec![
             Value::list(vec![Value::cons(Value::string("b"), Value::fixnum(114))]),
             Value::list(vec![Value::cons(Value::string("a"), Value::fixnum(113))]),
@@ -737,7 +743,8 @@ fn internal_hash_table_buckets_match_oracle_eq_eql_fixnum_hashes() {
             Value::symbol("char")
         );
         assert_eq!(
-            builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists"),
+            builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+                .expect("bucket alists"),
             Value::list(vec![Value::list(vec![Value::cons(
                 Value::fixnum(65),
                 Value::fixnum(71)
@@ -755,7 +762,8 @@ fn internal_hash_table_buckets_match_oracle_eq_eql_fixnum_hashes() {
     let _ = builtin_puthash(vec![Value::char('A'), Value::symbol("char"), table])
         .expect("puthash char");
     assert_eq!(
-        builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists"),
+        builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+            .expect("bucket alists"),
         Value::list(vec![Value::list(vec![Value::cons(
             Value::fixnum(65),
             Value::fixnum(65)
@@ -790,7 +798,9 @@ fn internal_hash_table_buckets_eq_pointer_keys_keep_distinct_hashes() {
         Value::symbol("b")
     );
 
-    let buckets = builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists");
+    let buckets =
+        builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+            .expect("bucket alists");
     let outer = list_to_vec(&buckets).expect("outer list");
     let mut hashes = Vec::new();
     let mut keys = Vec::new();
@@ -837,7 +847,9 @@ fn internal_hash_table_buckets_equal_preserve_first_key_identity_on_overwrite() 
         Value::symbol("b")
     );
 
-    let buckets = builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists");
+    let buckets =
+        builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+            .expect("bucket alists");
     let outer = list_to_vec(&buckets).expect("outer list");
     assert_eq!(outer.len(), 1);
     let entries = list_to_vec(&outer[0]).expect("bucket alist");
@@ -855,7 +867,9 @@ fn internal_hash_table_buckets_equal_preserve_first_key_identity_on_overwrite() 
 fn internal_hash_table_buckets_match_oracle_small_float_hashes() {
     crate::test_utils::init_test_tracing();
     fn collect_float_hashes(table: Value) -> std::collections::BTreeMap<u64, i64> {
-        let buckets = builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists");
+        let buckets =
+            builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+                .expect("bucket alists");
         let outer = list_to_vec(&buckets).expect("outer list");
         let mut seen = std::collections::BTreeMap::new();
         for bucket in outer {
@@ -900,7 +914,9 @@ fn internal_hash_table_buckets_match_oracle_small_float_hashes() {
 fn internal_hash_table_buckets_match_oracle_float_special_hashes() {
     crate::test_utils::init_test_tracing();
     fn collect_hashes(table: Value) -> Vec<i64> {
-        let buckets = builtin_internal_hash_table_buckets(vec![table]).expect("bucket alists");
+        let buckets =
+            builtin_internal_hash_table_buckets(vec![table], crate::emacs_core::print::print_value)
+                .expect("bucket alists");
         let outer = list_to_vec(&buckets).expect("outer list");
         let mut seen = Vec::new();
         for bucket in outer {
@@ -945,7 +961,13 @@ fn internal_hash_table_buckets_match_oracle_float_special_hashes() {
 #[test]
 fn internal_hash_table_introspection_type_errors() {
     crate::test_utils::init_test_tracing();
-    assert!(builtin_internal_hash_table_buckets(vec![Value::NIL]).is_err());
+    assert!(
+        builtin_internal_hash_table_buckets(
+            vec![Value::NIL],
+            crate::emacs_core::print::print_value
+        )
+        .is_err()
+    );
     assert!(builtin_internal_hash_table_histogram(vec![Value::NIL]).is_err());
     assert!(builtin_internal_hash_table_index_size(vec![Value::NIL]).is_err());
 }
