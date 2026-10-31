@@ -10,6 +10,136 @@ fn abbrev_runtime(text: &LispString) -> String {
 }
 
 #[test]
+fn abbrev_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+    use crate::emacs_core::Context;
+
+    struct Probe(usize);
+    fn text(probes: &mut Vec<Probe>, property: Value, mut text: LispString) -> LispString {
+        let payload = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(Probe(payload.bits()));
+        text.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 1),
+            property,
+            payload,
+        );
+        text
+    }
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let property = Value::symbol("abbrev-owner-only");
+    let table_sym = abbrev_table_sym("owned-abbrev-root-table");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        let name = text(
+            &mut probes,
+            property,
+            LispString::from_utf8("owned-abbrev-root-table"),
+        );
+        let parent = text(
+            &mut probes,
+            property,
+            LispString::from_unibyte(b"global-abbrev-table".to_vec()),
+        );
+        let key = text(&mut probes, property, LispString::from_utf8("btw"));
+        let expansion = text(&mut probes, property, LispString::from_utf8("by the way-é"));
+        let hook = text(&mut probes, property, LispString::from_unibyte(vec![0x80]));
+        let table = AbbrevTable {
+            name,
+            abbrevs: HashMap::from([(
+                key,
+                Abbrev {
+                    expansion,
+                    hook: Some(hook),
+                    count: 0,
+                    system: false,
+                },
+            )]),
+            parent: Some(parent),
+            case_fixed: false,
+            enable_quoting: false,
+        };
+        // The pdump compatibility manager remains a real World owner even
+        // though live Lisp abbrev builtins now use obarray-backed tables.
+        *eval.abbrevs =
+            AbbrevManager::from_dump(HashMap::from([(table_sym, table)]), table_sym, false);
+        assert_eq!(probes.len(), 5);
+        probes
+    });
+    let check_live = |eval: &Context| {
+        for Probe(bits) in &probes {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "abbrev-only property vector was reclaimed"
+            );
+        }
+        for (index, Probe(bits)) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live abbrev property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+        let table = eval
+            .abbrevs
+            .get_table("owned-abbrev-root-table")
+            .expect("retained abbrev table");
+        let entry = table
+            .abbrevs
+            .get(&LispString::from_utf8("btw"))
+            .expect("retained abbrev");
+        assert_eq!(
+            entry
+                .expansion
+                .intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, property)
+                .expect("retained expansion property")
+                .bits(),
+            probes[3].0
+        );
+    };
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    *eval.abbrevs = AbbrevManager::new();
+    eval.gc_collect_exact();
+    for Probe(bits) in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired abbrev graph remained permanently rooted"
+        );
+    }
+}
+
+#[test]
 fn define_and_expand() {
     crate::test_utils::init_test_tracing();
     let mut mgr = AbbrevManager::new();

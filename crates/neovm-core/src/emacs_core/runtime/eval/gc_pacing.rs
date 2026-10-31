@@ -496,6 +496,8 @@ impl Context {
         if WORLD {
             group("autoloads");
             self.autoloads.trace_roots_with(visit);
+            group("abbrevs");
+            self.abbrevs.trace_roots_with(visit);
             group("interactive");
             self.interactive.trace_roots_with(visit);
             group("buffers");

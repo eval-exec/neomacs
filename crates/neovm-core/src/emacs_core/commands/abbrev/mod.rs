@@ -21,6 +21,7 @@ use super::error::{EvalResult, Flow, signal};
 use super::intern::{SymId, intern, intern_uninterned, resolve_sym};
 use super::value::{Value, ValueKind, list_to_vec};
 use crate::buffer::{EmacsBytePos, TextExtent};
+use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
 use strum::EnumString;
 
@@ -286,6 +287,48 @@ impl AbbrevManager {
             tables,
             global_table_sym,
             abbrev_mode,
+        }
+    }
+}
+
+impl GcTrace for AbbrevManager {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        let Self {
+            tables,
+            global_table_sym: _,
+            abbrev_mode: _,
+        } = self;
+        for table in tables.values() {
+            let AbbrevTable {
+                name,
+                abbrevs,
+                parent,
+                case_fixed: _,
+                enable_quoting: _,
+            } = table;
+            // Restoration admits property-bearing names as well as payloads.
+            // GNU's intern/make-symbol also retains its supplied name string.
+            name.trace_roots_with(visit);
+            if let Some(parent) = parent {
+                parent.trace_roots_with(visit);
+            }
+            for (key, abbrev) in abbrevs {
+                let Abbrev {
+                    expansion,
+                    hook,
+                    count: _,
+                    system: _,
+                } = abbrev;
+                key.trace_roots_with(visit);
+                expansion.trace_roots_with(visit);
+                if let Some(hook) = hook {
+                    hook.trace_roots_with(visit);
+                }
+            }
         }
     }
 }
