@@ -7827,28 +7827,49 @@ impl ProcessManager {
                 Ok(ProcessWriteAttempt::WouldBlock)
             }
             Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => {
-                // GNU `send_process`'s EPIPE arm on master
-                // (src/process.c:6941-6947, since e381cf1fc97, 2025-08-15):
+                // GNU `send_process` has two EPIPE arms in this lineage.
                 //
-                //   close_process_fd (&p->open_fd[WRITE_TO_SUBPROCESS]);
-                //   p->outfd = -1;
-                //   error ("Process %s no longer connected to pipe; closed it", ...);
-                //
-                // and NOTHING else -- the status is not touched, so the child
-                // stays sweepable and the next wait's `status_notify` hands
-                // the sentinel the child's REAL exit status.  The emacs-31.1
-                // release still has the older arm (:6923-6931): GNU commit
-                // 4d7e6e51dd4 (2012) made it synthesize `(exit . 256)` and
-                // bump the tick, and e381cf1fc97 removed that on master.
-                // This port follows master.  Writing `(exit . 256)` here made
-                // the status terminal before the reap, which no later sweep
-                // may overwrite
+                // GNU master (e381cf1fc97, since 2025-08-15;
+                // src/process.c:6941-6947) closes the write fd, sets
+                // `p->outfd = -1`, and signals -- NOTHING else.  A child's
+                // status is untouched, so it remains sweepable and the next
+                // wait's `status_notify` hands the sentinel the child's REAL
+                // exit status.  This port follows that arm for a real child:
+                // writing `(exit . 256)` here made the status terminal before
+                // the reap, which no later sweep may overwrite
                 // (`SweepableChild::of` admits only `run`/`stop`) and which
-                // set no `status_notify_pending` -- so the sentinel never
-                // ran.  Measured with lsp-mode against a crashing nixd:
-                // `lsp--handle-process-exit` never fired, the dead
-                // workspace stayed in the session, and every later send
-                // reported "not running: exited abnormally with code 256".
+                // set no `status_notify_pending` -- so the sentinel never ran.
+                // Measured with lsp-mode against a crashing nixd:
+                // `lsp--handle-process-exit` never fired, the dead workspace
+                // stayed in the session, and every later send reported "not
+                // running: exited abnormally with code 256".
+                //
+                // The emacs-31.1 release (the parity reference) has the older
+                // arm (src/process.c:6923-6931, tick at :6927): it also
+                // settles `(exit . 256)`, bumps `p->tick`, and calls
+                // `deactivate_process` BEFORE signalling.  A network
+                // connection has no child to reap, and Lisp clients test
+                // `process-live-p` in the send-error handler: dsh-emacs
+                // reports a still-live sender as an unexpected WebSocket frame
+                // error on every peer close, and a process left listed after
+                // the failure leaks one socket per reconnect.  Keep the
+                // release arm for sockets: publish the terminal status and its
+                // notification, retire the I/O, then signal.  The tick is what
+                // lets the next wait run the "connection broken by remote
+                // peer" sentinel even while the consumer has suspended reads
+                // with a filter of `t`.
+                let network_epipe = matches!(
+                    endpoint,
+                    ProcessInputEndpoint::Network | ProcessInputEndpoint::Tls
+                ) && (process_status_is_run(&proc.status)
+                    || ProcessStatusSymbol::from_status_value(proc.status)
+                        == Some(ProcessStatusSymbol::Open));
+                if network_epipe {
+                    let terminal = process_status_exit_value(256);
+                    proc.status = terminal;
+                    proc.pending_status = terminal;
+                    proc.status_notify_pending = true;
+                }
                 let name = process_name_runtime(proc.name);
                 endpoint.disconnect(self.wait_backend.poller(), proc);
                 let error = signal(
@@ -7857,7 +7878,12 @@ impl ProcessManager {
                         "Process {name} no longer connected to pipe; closed it"
                     ))],
                 );
-                self.update_process_write_interest(id, ProcessWriteInterest::Readable);
+                if network_epipe {
+                    self.record_status_change(StatusChangeSite::SendProcessEpipe, id);
+                    self.deactivate_network_process_io(id);
+                } else {
+                    self.update_process_write_interest(id, ProcessWriteInterest::Readable);
+                }
                 Err(error)
             }
             Err(err) => Err(signal_process_io("Writing to process", None, err)),
