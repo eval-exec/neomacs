@@ -172,6 +172,11 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
   there and run locally or on a self-hosted macOS runner.
 - Window activation is not guaranteed; assertions must not depend on
   frontmost status, and tests that do need it run one at a time.
+- A Unix-socket control channel must fit macOS's 104-byte `sun_path`
+  (the same limit the GUI driver documents). Derive it from a short
+  per-run directory, not from an artifact path below a deep checkout:
+  the scrolling fixtures' `NEOMACS_GUI_SCROLL_CONTROL` path is short on
+  CI but over the limit in a long local worktree.
 
 ## Migration plan
 
