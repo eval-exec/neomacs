@@ -2176,3 +2176,16 @@ impl TaggedHeap {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/weak_key_gc_test.rs"]
+mod weak_key_gc_tests;
+
+/// The header's generation byte, collection-scope predicate and first-partition promotion.
+#[cfg(test)]
+#[path = "tests/generation_test.rs"]
+mod generation_tests;
+
+#[cfg(test)]
+#[path = "tests/permanent_box_chain_test.rs"]
+mod permanent_box_chain_tests;

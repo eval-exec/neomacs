@@ -2901,15 +2901,6 @@ mod cons_alloc_tests;
 #[cfg(test)]
 #[path = "gc/tests/fake_image.rs"]
 pub(crate) mod fake_image;
-/// The header's generation byte, THE generation predicate per collection
-/// scope, the byte map, and the first cycle's promotion to permanent.
-#[cfg(test)]
-#[cfg(test)]
-#[path = "gc/tests/weak_key_gc_test.rs"]
-mod weak_key_gc_tests;
-
-#[path = "gc/tests/generation_test.rs"]
-mod generation_tests;
 #[cfg(test)]
 #[path = "gc/tests/generational_verifier_test.rs"]
 mod generational_verifier_tests;
@@ -3004,7 +2995,3 @@ mod cons_young_shared_tests;
 #[cfg(test)]
 #[path = "gc/tests/cons_sweep_accounting_test.rs"]
 mod cons_sweep_accounting_tests;
-
-#[cfg(test)]
-#[path = "gc/tests/permanent_box_chain_test.rs"]
-mod permanent_box_chain_tests;
