@@ -15774,7 +15774,7 @@ fn gnus_eight_update_status_sites_are_enumerated_and_four_are_the_asynchronous_o
 /// failure -- and applies the ninth site only to a network connection's
 /// EPIPE, where there is no child status to preserve and clients such as
 /// dsh-emacs depend on the reference build's closed status, tick, and
-/// `deactivate_process`.  **Seven of the nine are not
+/// `deactivate_process`.  **Eight of the nine are not
 /// `handle_child_signal`'s**, which is the whole point of
 /// [`StatusChangeSite`].  The citations are spelled out here so a renumbered
 /// line is a failing test rather than a stale comment, and the count is

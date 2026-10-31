@@ -7861,9 +7861,7 @@ impl ProcessManager {
                 let network_epipe = matches!(
                     endpoint,
                     ProcessInputEndpoint::Network | ProcessInputEndpoint::Tls
-                ) && (process_status_is_run(&proc.status)
-                    || ProcessStatusSymbol::from_status_value(proc.status)
-                        == Some(ProcessStatusSymbol::Open));
+                ) && process_status_allows_send(&proc.status);
                 if network_epipe {
                     let terminal = process_status_exit_value(256);
                     proc.status = terminal;
