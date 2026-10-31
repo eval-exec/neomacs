@@ -2,11 +2,11 @@
 #![cfg(unix)]
 use crate::common;
 use common::return_if_neovm_enable_oracle_proptest_not_set;
-use std::os::unix::process::CommandExt;
+use neomacs_test_env::{CanonicalEnvironment, CanonicalPin, CanonicalProfile};
 use std::{
     fs,
     path::Path,
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 #[path = "../src/tty_test_terminal.rs"]
@@ -106,28 +106,34 @@ fn run_editor(binary: &Path, script: &Path, result: &Path) {
         .write(true)
         .open(&terminal.name)
         .unwrap();
-    let mut command = Command::new(binary);
+    // The live editor runs under the same recorded identity as the batch
+    // oracle probes, with its own per-case HOME and TMPDIR. It draws on the
+    // PTY, so TERM is an explicit override of the profile's batch "dumb"
+    // value rather than a raw environment assignment.
+    let case_root = result.parent().unwrap();
+    let home = case_root.join("home");
+    let tmpdir = case_root.join("tmp");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&tmpdir).unwrap();
+    let environment = CanonicalEnvironment::new(
+        CanonicalProfile::Tui,
+        home,
+        tmpdir,
+        common::oracle_sandbox::project_root(),
+    )
+    .expect("a canonical environment for the live terminal editor");
+    let mut command = environment.command(binary);
     command
         .args(["-nw", "-Q", "--load"])
         .arg(script)
-        .env("TERM", "screen-256color")
-        .env("HOME", result.parent().unwrap())
+        .override_pin(CanonicalPin::Term, "screen-256color")
         .env("CATEGORY_WRAP_RESULT", result)
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::from(slave.try_clone().unwrap()))
-        .stderr(Stdio::from(slave));
-    // SAFETY: the child only performs session/TTY syscalls before exec; no
-    // allocation, shared lock or Rust runtime state is accessed in the hook.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+        .stderr(Stdio::from(slave))
+        .new_session_with_controlling_tty();
     let mut child = command.spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     let status = loop {

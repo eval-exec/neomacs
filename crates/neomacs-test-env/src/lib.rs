@@ -798,6 +798,33 @@ impl PinnedCommand {
         self
     }
 
+    /// Start the child in a new session whose controlling terminal is stdin.
+    ///
+    /// This is the PTY harness's session wiring: `setsid(2)` detaches the
+    /// child from the caller's session and `TIOCSCTTY` on fd 0 makes the PTY
+    /// slave the controlling terminal that an interactive `-nw` editor draws
+    /// on. The caller must already have attached the slave as stdin.
+    ///
+    /// The child-side hook is fixed here rather than exposed as a general
+    /// `pre_exec` hatch: both calls are async-signal-safe and the closure
+    /// captures nothing, so the test process's allocator and locks are
+    /// unreachable between fork and exec.
+    #[cfg(unix)]
+    pub fn new_session_with_controlling_tty(&mut self) -> &mut Self {
+        use std::os::unix::process::CommandExt;
+        // Safety: the closure runs between fork and exec; `setsid` and
+        // `ioctl` are async-signal-safe and it captures no state.
+        unsafe {
+            self.command.pre_exec(|| {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        self
+    }
+
     /// Windows creation flags (suspended start), for the same reason.
     #[cfg(windows)]
     pub fn creation_flags(&mut self, flags: u32) -> &mut Self {
