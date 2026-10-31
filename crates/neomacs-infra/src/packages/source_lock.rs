@@ -427,6 +427,164 @@ fn run_command(
         .map_err(|error| format!("{label} emitted non-UTF-8 output: {error}"))
 }
 
+/// How many times one `git fetch` is attempted before preparation fails.
+const FETCH_MAX_ATTEMPTS: usize = 4;
+
+/// Delay before the next fetch attempt after a transient failure
+/// (2 s, 5 s, 15 s). The upstream being briefly unavailable is exactly the
+/// case this tolerates (Savannah answered HTTP 500 to the CI MELPA jobs).
+const FETCH_RETRY_BACKOFF: [std::time::Duration; FETCH_MAX_ATTEMPTS - 1] = [
+    std::time::Duration::from_secs(2),
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(15),
+];
+
+/// Whether repeating a failed `git fetch` can succeed without changing it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FetchFailureClass {
+    /// The remote or the network was temporarily unavailable: HTTP 5xx (and
+    /// the retryable 408/429), DNS failure, timeout, connection reset, or a
+    /// truncated transfer. The same request can succeed later.
+    Transient,
+    /// The request itself is wrong -- HTTP 4xx, authentication, or an unknown
+    /// ref. Repeating it reproduces the same failure.
+    Permanent,
+}
+
+impl FetchFailureClass {
+    /// Classify a failed fetch from `run_command`'s error text, which carries
+    /// git's stderr.
+    fn classify(error: &str) -> Self {
+        let error = error.to_ascii_lowercase();
+        const PERMANENT: &[&str] = &[
+            "couldn't find remote ref",
+            "could not find remote ref",
+            "unknown revision",
+            "not our ref",
+            "no such ref",
+            "authentication failed",
+            "could not read username",
+            "could not read password",
+            "permission denied",
+            "access denied",
+            "invalid username or password",
+            "repository not found",
+            "does not appear to be a git repository",
+            "host key verification failed",
+            "returned error: 401",
+            "returned error: 403",
+            "returned error: 404",
+        ];
+        if PERMANENT.iter().any(|marker| error.contains(marker)) {
+            return Self::Permanent;
+        }
+        if let Some(status) = fetch_http_status(&error)
+            && ((500..600).contains(&status) || status == 408 || status == 429)
+        {
+            return Self::Transient;
+        }
+        const TRANSIENT: &[&str] = &[
+            "could not resolve host",
+            "temporary failure in name resolution",
+            "timed out",
+            "connection reset",
+            "connection refused",
+            "couldn't connect to server",
+            "network is unreachable",
+            "no route to host",
+            "early eof",
+            "the remote end hung up unexpectedly",
+            "unexpected disconnect while reading sideband packet",
+            "empty reply from server",
+            "not closed cleanly",
+            "rpc failed; curl 56",
+            "rpc failed; curl 92",
+            "gnutls_handshake() failed",
+            "ssl_error_syscall",
+            "transfer closed with outstanding read data remaining",
+        ];
+        if TRANSIENT.iter().any(|marker| error.contains(marker)) {
+            return Self::Transient;
+        }
+        // An unrecognized failure is not evidence of a transient outage; the
+        // bounded retry budget is spent only where a retry is justified.
+        Self::Permanent
+    }
+}
+
+/// The HTTP status in git's `The requested URL returned error: NNN` stderr.
+fn fetch_http_status(error: &str) -> Option<u16> {
+    const MARKER: &str = "returned error: ";
+    let start = error.find(MARKER)? + MARKER.len();
+    let digits: String = error[start..]
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
+}
+
+/// Run one fetch attempt until it succeeds, a permanent failure occurs, or the
+/// bounded attempt budget is exhausted.
+///
+/// `attempt` builds and executes a fresh command for each attempt (a
+/// `Command` cannot be reused). Its error text must carry the attempt's
+/// stderr so both the classifier and the final report can read it.
+fn run_fetch_with_retry(
+    backoff: &[std::time::Duration],
+    mut attempt: impl FnMut(usize) -> Result<String, String>,
+) -> Result<String, String> {
+    let mut failures: Vec<(FetchFailureClass, String)> = Vec::new();
+    for index in 0..FETCH_MAX_ATTEMPTS {
+        match attempt(index) {
+            Ok(output) => return Ok(output),
+            Err(error) => {
+                let class = FetchFailureClass::classify(&error);
+                failures.push((class, error));
+                if class == FetchFailureClass::Permanent || index + 1 == FETCH_MAX_ATTEMPTS {
+                    break;
+                }
+                if let Some(delay) = backoff.get(index) {
+                    std::thread::sleep(*delay);
+                }
+            }
+        }
+    }
+    let mut message = format!(
+        "shallow Git fetch failed after {} attempt{}",
+        failures.len(),
+        if failures.len() == 1 { "" } else { "s" }
+    );
+    for (index, (class, error)) in failures.iter().enumerate() {
+        let class = match class {
+            FetchFailureClass::Transient => "transient",
+            FetchFailureClass::Permanent => "permanent",
+        };
+        message.push_str(&format!("\nattempt {} ({class}):\n{error}", index + 1));
+    }
+    Err(message)
+}
+
+/// Fetch one exact revision, tolerating a transient upstream failure.
+fn fetch_git_revision(
+    directory: &Path,
+    revision: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    run_fetch_with_retry(&FETCH_RETRY_BACKOFF, |_| {
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(directory)
+            .args(SHALLOW_GIT_FETCH_ARGS)
+            .args(["origin", revision]);
+        run_command(&mut command, timeout, "shallow Git fetch")
+    })
+}
+
 fn prepare_git_checkout(
     directory: &Path,
     repository: &str,
@@ -452,15 +610,7 @@ fn prepare_git_checkout(
         timeout,
         "Git remote setup",
     )?;
-    run_command(
-        Command::new("git")
-            .arg("-C")
-            .arg(directory)
-            .args(SHALLOW_GIT_FETCH_ARGS)
-            .args(["origin", revision]),
-        timeout,
-        "shallow Git fetch",
-    )?;
+    fetch_git_revision(directory, revision, timeout)?;
     run_command(
         Command::new("git").arg("-C").arg(directory).args([
             "checkout",

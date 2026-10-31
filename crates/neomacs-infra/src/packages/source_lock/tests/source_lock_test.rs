@@ -4,9 +4,10 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{
-    AUCTEX_RUNTIME_EXCLUDED_PATHS, AUCTEX_RUNTIME_REQUIRED_FILES, LockedPackageCatalog,
-    LockedPackageSource, SourceBuild, SourceBuildTools, extract_docstrip_source,
-    prepare_cached_source_artifact_with_tools, prepare_source_checkout, prune_auctex_elpa_ignored,
+    AUCTEX_RUNTIME_EXCLUDED_PATHS, AUCTEX_RUNTIME_REQUIRED_FILES, FETCH_MAX_ATTEMPTS,
+    FETCH_RETRY_BACKOFF, FetchFailureClass, LockedPackageCatalog, LockedPackageSource, SourceBuild,
+    SourceBuildTools, extract_docstrip_source, prepare_cached_source_artifact_with_tools,
+    prepare_source_checkout, prune_auctex_elpa_ignored, run_fetch_with_retry,
     runtime_tree_file_spec, verify_auctex_runtime_tree,
 };
 use crate::packages::test_support::{TestRuntime, TestSandbox};
@@ -366,6 +367,112 @@ fn source_checkout_uses_the_mirror_when_the_primary_commit_is_unavailable() {
             .trim(),
         revision
     );
+}
+
+/// The exact git stderr from the CI red on main ea687401ee: Savannah answered
+/// HTTP 500 while the MELPA package jobs prepared their source checkouts, and
+/// the fetch had no tolerance for a transient upstream failure.
+const TRANSIENT_HTTP_500: &str = "fatal: unable to access 'https://git.savannah.gnu.org/git/emacs/elpa.git/': The requested URL returned error: 500";
+
+#[test]
+fn fetch_failure_classifier_separates_transient_upstream_failures() {
+    for transient in [
+        TRANSIENT_HTTP_500,
+        "fatal: unable to access 'https://example.invalid/repo/': Could not resolve host: example.invalid",
+        "fatal: unable to access 'https://example.invalid/repo/': Failed to connect to example.invalid port 443 after 30001 ms: Connection timed out",
+        "fatal: unable to access 'https://example.invalid/repo/': Failed to connect to example.invalid port 443 after 30001 ms: Couldn't connect to server",
+        "shallow Git fetch timed out after 30s: `git -C /tmp/checkout fetch --depth=1 --no-tags origin 0123456789abcdef0123456789abcdef01234567`",
+        "error: RPC failed; curl 56 GnuTLS recv error (-9): Error decoding the received TLS packet.",
+        "fatal: the remote end hung up unexpectedly",
+        "fatal: early EOF",
+        "fatal: unable to access 'https://example.invalid/repo/': The requested URL returned error: 503",
+        "fatal: unable to access 'https://example.invalid/repo/': The requested URL returned error: 429",
+    ] {
+        assert_eq!(
+            FetchFailureClass::classify(transient),
+            FetchFailureClass::Transient,
+            "expected a transient classification for: {transient}"
+        );
+    }
+}
+
+#[test]
+fn fetch_failure_classifier_keeps_request_errors_permanent() {
+    for permanent in [
+        "fatal: couldn't find remote ref 0123456789abcdef0123456789abcdef01234567",
+        "fatal: unable to access 'https://example.invalid/repo/': The requested URL returned error: 404",
+        "fatal: Authentication failed for 'https://github.com/example/repo/'",
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        "remote: Repository not found.\nfatal: repository 'https://github.com/example/missing/' not found",
+        "fatal: some unexpected git failure with no retryable marker",
+    ] {
+        assert_eq!(
+            FetchFailureClass::classify(permanent),
+            FetchFailureClass::Permanent,
+            "expected a permanent classification for: {permanent}"
+        );
+    }
+}
+
+#[test]
+fn fetch_retry_retries_transient_failures_before_succeeding() {
+    assert_eq!(
+        FETCH_RETRY_BACKOFF,
+        [
+            Duration::from_secs(2),
+            Duration::from_secs(5),
+            Duration::from_secs(15),
+        ],
+        "the bounded retry policy is part of the contract"
+    );
+    let no_backoff = [Duration::ZERO; FETCH_MAX_ATTEMPTS - 1];
+    let mut attempts = 0;
+    let result = run_fetch_with_retry(&no_backoff, |_| {
+        attempts += 1;
+        if attempts < 3 {
+            Err(TRANSIENT_HTTP_500.to_string())
+        } else {
+            Ok("fetched".to_string())
+        }
+    });
+    assert_eq!(
+        result.expect("two transient failures followed by success"),
+        "fetched"
+    );
+    assert_eq!(attempts, 3, "the transient failure is retried");
+}
+
+#[test]
+fn fetch_retry_does_not_repeat_a_permanent_failure() {
+    let no_backoff = [Duration::ZERO; FETCH_MAX_ATTEMPTS - 1];
+    let mut attempts = 0;
+    let error = run_fetch_with_retry(&no_backoff, |_| {
+        attempts += 1;
+        Err("fatal: couldn't find remote ref 0123456789abcdef0123456789abcdef01234567".to_string())
+    })
+    .expect_err("a permanent request error must not be retried");
+    assert_eq!(attempts, 1, "a permanent failure is attempted exactly once");
+    assert!(error.contains("after 1 attempt"), "{error}");
+    assert!(error.contains("couldn't find remote ref"), "{error}");
+}
+
+#[test]
+fn fetch_retry_bounds_transient_attempts_and_keeps_every_attempt() {
+    let no_backoff = [Duration::ZERO; FETCH_MAX_ATTEMPTS - 1];
+    let mut attempts = 0;
+    let error = run_fetch_with_retry(&no_backoff, |index| {
+        attempts += 1;
+        Err(format!("attempt marker {index}: {TRANSIENT_HTTP_500}"))
+    })
+    .expect_err("the bounded attempt budget is exhausted");
+    assert_eq!(attempts, FETCH_MAX_ATTEMPTS);
+    assert!(error.contains("after 4 attempts"), "{error}");
+    for index in 0..FETCH_MAX_ATTEMPTS {
+        assert!(
+            error.contains(&format!("attempt marker {index}:")),
+            "the final report must keep attempt {index}: {error}"
+        );
+    }
 }
 
 #[cfg(unix)]
