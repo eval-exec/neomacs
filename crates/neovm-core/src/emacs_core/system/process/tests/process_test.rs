@@ -15759,30 +15759,33 @@ fn gnus_eight_update_status_sites_are_enumerated_and_four_are_the_asynchronous_o
     );
 }
 
-/// GNU's EIGHT `p->tick = ++process_tick;` sites, as a table.
+/// The release lineage's NINE `p->tick = ++process_tick;` sites, as a table.
 ///
 /// The citations pinned below are the release lineage's line numbers, which
 /// the rest of `child_status.rs` uses: `grep -n '++process_tick'
 /// src/process.c` on emacs-31.0.90 and emacs-31.1 (a360712c9d, 2026-08-24;
 /// identical numbering) gives 1128, 1148, 6058, 6075, 6084, 6141, 7178,
 /// 7746 -- and a ninth, 6927, in `send_process`'s EPIPE arm, which is the
-/// `(exit . 256)` behavior GNU commit 4d7e6e51dd4 introduced in 2012.  That
-/// ninth line is deliberately NOT in the table: master commit e381cf1fc97
-/// (2025-08-15) removed it, leaving exactly eight sites (master snapshot
-/// 98165ff73e8, 2026-08-30: 1169, 1189, 6075, 6092, 6101, 6158, 7193, 7752,
-/// the same eight sites renumbered), and master's arm -- close the write fd,
-/// touch neither status nor tick -- is the one this port follows.  **Seven
-/// of the eight are not `handle_child_signal`'s**, which is the whole point
-/// of [`StatusChangeSite`].  The citations are spelled out here so a
-/// renumbered line is a failing test rather than a stale comment, and the
-/// count is asserted so a ninth site cannot appear without one.
+/// `(exit . 256)` behavior GNU commit 4d7e6e51dd4 introduced in 2012.  GNU
+/// master commit e381cf1fc97 (2025-08-15) removed that bump, leaving eight
+/// sites (master snapshot 98165ff73e8, 2026-08-30: 1169, 1189, 6075, 6092,
+/// 6101, 6158, 7193, 7752, the same sites renumbered).  This port follows
+/// master for real children -- their own exit status must survive the write
+/// failure -- and applies the ninth site only to a network connection's
+/// EPIPE, where there is no child status to preserve and clients such as
+/// dsh-emacs depend on the reference build's closed status, tick, and
+/// `deactivate_process`.  **Seven of the nine are not
+/// `handle_child_signal`'s**, which is the whole point of
+/// [`StatusChangeSite`].  The citations are spelled out here so a renumbered
+/// line is a failing test rather than a stale comment, and the count is
+/// asserted so a tenth site cannot appear without one.
 #[test]
-fn the_status_change_sites_are_gnus_eight_tick_bumps() {
+fn the_status_change_sites_are_the_release_lineages_tick_bumps() {
     use crate::emacs_core::process::StatusChangeSite;
     use crate::emacs_core::process::child_status::{StatusChangeNotifier, StatusChangeRecorder};
 
-    assert_eq!(StatusChangeSite::COUNT, 8);
-    assert_eq!(StatusChangeSite::ALL.len(), 8);
+    assert_eq!(StatusChangeSite::COUNT, 9);
+    assert_eq!(StatusChangeSite::ALL.len(), 9);
 
     let cited: Vec<&'static str> = StatusChangeSite::ALL.iter().map(|s| s.gnu()).collect();
     assert_eq!(
@@ -15794,6 +15797,7 @@ fn the_status_change_sites_are_gnus_eight_tick_bumps() {
             "src/process.c:6075",
             "src/process.c:6084",
             "src/process.c:6141",
+            "src/process.c:6927",
             "src/process.c:7178",
             "src/process.c:7746",
         ]
@@ -15807,7 +15811,7 @@ fn the_status_change_sites_are_gnus_eight_tick_bumps() {
         assert!(!site.what().is_empty(), "{site:?} needs a status");
     }
 
-    // GNU consumes four of the eight on the spot -- `status_notify` is called
+    // GNU consumes four of the nine on the spot -- `status_notify` is called
     // within a few lines of the bump -- and leaves the rest for the wait's own
     // `status_notify` at :5554 / :5854.
     let synchronous: Vec<StatusChangeSite> = StatusChangeSite::ALL
@@ -15829,7 +15833,7 @@ fn the_status_change_sites_are_gnus_eight_tick_bumps() {
         ]
     );
 
-    // And exactly one of the eight has no analogue in this port, with a reason.
+    // And exactly one of the nine has no analogue in this port, with a reason.
     let without: Vec<StatusChangeSite> = StatusChangeSite::ALL
         .into_iter()
         .filter(|site| matches!(site.recorder(), StatusChangeRecorder::NoAnalogue { .. }))
@@ -16972,6 +16976,77 @@ fn epipe_on_send_leaves_the_real_child_status_for_the_next_wait_to_reap() {
 " exit 7)) nil deleted)"#,
         "the sentinel runs once with the child's real status, and \
          `delete-exited-processes' removes the process afterwards"
+    );
+}
+
+/// GNU emacs-31.1's EPIPE arm settles a connection's status, bumps its tick,
+/// and deactivates it before signalling (src/process.c:6923-6931), so Lisp
+/// sees the peer as closed while handling the send error AND the next wait
+/// runs the "connection broken by remote peer" sentinel even though the
+/// consumer suspended reads with a filter of `t`.  Send-error handlers in
+/// clients such as dsh-emacs test `process-live-p`: a still-live sender is
+/// reported as an unexpected WebSocket frame error on every peer close, and
+/// a process left listed after the failure leaks one socket per reconnect.
+/// GNU master (e381cf1fc97) leaves a real child's status for the reaper --
+/// this port follows that for children -- but a network connection has no
+/// child, so it keeps the reference build's complete EPIPE arm.
+#[test]
+fn epipe_on_network_send_closes_notifies_and_retires_the_connection() {
+    crate::test_utils::init_test_tracing();
+    let result = eval_one(
+        r#"(let (conn err sentinel-events)
+             (let* ((srv (make-network-process
+                          :name "epipe-net-srv" :server t
+                          :host "127.0.0.1" :service 0
+                          :log (lambda (_s proc _m) (setq conn proc))))
+                    (port (process-contact srv :service))
+                    (cli (make-network-process
+                          :name "epipe-net-cli"
+                          :host "127.0.0.1" :service port
+                          :coding 'no-conversion
+                          :sentinel (lambda (_p event)
+                                      (push (string-trim event)
+                                            sentinel-events)))))
+               (unwind-protect
+                   (progn
+                     (let ((deadline (+ (float-time) 3)))
+                       (while (and (not conn) (< (float-time) deadline))
+                         (accept-process-output nil 0.01)))
+                     ;; The peer leaves client bytes unread and closes, which
+                     ;; makes the kernel answer the next write with EPIPE.
+                     (set-process-filter conn t)
+                     (process-send-string cli "unread-at-peer")
+                     (sleep-for 0.2)
+                     (delete-process conn)
+                     ;; dsh-emacs suspends reads with a filter of `t` and never
+                     ;; restores it after the frame error: the EPIPE arm alone
+                     ;; has to schedule the sentinel.
+                     (set-process-filter cli t)
+                     (let ((i 0))
+                       (while (and (< i 200) (not err))
+                         (condition-case e
+                             (progn
+                               (process-send-string cli (make-string 4096 ?q))
+                               (setq i (1+ i)))
+                           (error (setq err e)))))
+                     (let ((at-error
+                            (list (and err (error-message-string err))
+                                  (process-live-p cli)
+                                  (process-status cli))))
+                       (accept-process-output nil 0.3)
+                       (list at-error
+                             (nreverse sentinel-events)
+                             (process-live-p cli)
+                             (process-status cli)
+                             (and (memq cli (process-list)) t))))
+                 (ignore-errors (delete-process cli))
+                 (ignore-errors (delete-process srv)))))"#,
+    );
+    assert_eq!(
+        result,
+        r#"OK (("Process epipe-net-cli no longer connected to pipe; closed it" nil closed) ("connection broken by remote peer") nil closed nil)"#,
+        "GNU 31.1 publishes closed, notifies the sentinel once, and retires the \
+         connection even while its filter is `t`"
     );
 }
 

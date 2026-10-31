@@ -653,6 +653,12 @@ pub(crate) enum StatusChangeSite {
     /// `connect_network_socket`'s failed non-blocking connect (:6141), which
     /// becomes `(failed . ERRNO)`.
     NonBlockingConnectFailed,
+    /// `send_process`'s EPIPE arm on the release lineage (:6927), which
+    /// becomes `(exit . 256)` and deactivates the connection.  GNU master
+    /// (e381cf1fc97) removed this bump; this port applies it only to network
+    /// connections, which have no child whose real status must survive the
+    /// write failure.  See `ProcessManager::write_process_input_once`.
+    SendProcessEpipe,
     /// `process_send_signal` sent `SIGCONT` (:7178), which becomes `Qrun`.
     ProcessSendSignalSigcont,
     /// `handle_child_signal`'s `child_status_changed` (:7746) -- the only one
@@ -719,6 +725,7 @@ impl StatusChangeSite {
         Self::PipeConnectionReadEof,
         Self::SubprocessReadFailure,
         Self::NonBlockingConnectFailed,
+        Self::SendProcessEpipe,
         Self::ProcessSendSignalSigcont,
         Self::HandleChildSignal,
     ];
@@ -732,6 +739,7 @@ impl StatusChangeSite {
             Self::PipeConnectionReadEof => "src/process.c:6075",
             Self::SubprocessReadFailure => "src/process.c:6084",
             Self::NonBlockingConnectFailed => "src/process.c:6141",
+            Self::SendProcessEpipe => "src/process.c:6927",
             Self::ProcessSendSignalSigcont => "src/process.c:7178",
             Self::HandleChildSignal => "src/process.c:7746",
         }
@@ -746,6 +754,7 @@ impl StatusChangeSite {
             Self::PipeConnectionReadEof => "(exit . 0) on a pipe connection's EOF",
             Self::SubprocessReadFailure => "(exit . 256) on a subprocess read failure",
             Self::NonBlockingConnectFailed => "(failed . ERRNO) on a failed connect",
+            Self::SendProcessEpipe => "(exit . 256) on a network connection's EPIPE",
             Self::ProcessSendSignalSigcont => "run, on SIGCONT",
             Self::HandleChildSignal => "the raw wait status of a changed child",
         }
@@ -766,6 +775,9 @@ impl StatusChangeSite {
             }
             Self::NonBlockingConnectFailed => {
                 StatusChangeRecorder::Here("ProcessManager::complete_pending_network_connect")
+            }
+            Self::SendProcessEpipe => {
+                StatusChangeRecorder::Here("ProcessManager::write_process_input_once")
             }
             Self::ProcessSendSignalSigcont => {
                 StatusChangeRecorder::Here("builtin_continue_process_impl")
@@ -816,6 +828,7 @@ impl StatusChangeSite {
             Self::PtyEioBeforeFork
             | Self::PipeConnectionReadEof
             | Self::SubprocessReadFailure
+            | Self::SendProcessEpipe
             | Self::HandleChildSignal => StatusChangeNotifier::TheWaitsStatusNotify,
         }
     }
