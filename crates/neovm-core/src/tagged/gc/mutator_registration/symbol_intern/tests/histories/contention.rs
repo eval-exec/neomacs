@@ -1,7 +1,36 @@
-//! Native scheduling is not bounded by a count of yield calls. Keep a finite
-//! shared elapsed-time deadline and name the stalled op.
+//! Held-registry scheduling follows channel events. Dropping the release
+//! sender wakes the holder on an early retrying-actor error.
 use super::*;
-use std::time::Duration;
+
+enum RegistryPhase {
+    Held,
+    Released,
+}
+
+fn attempt_until_registry_released<'era, T>(
+    owner: &mut Mutator<'era>,
+    operation: &str,
+    mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, Failure>,
+    mut refused: impl FnMut(&Mutator<'era>, &Failure) -> Result<RegistryPhase, String>,
+) -> Result<T, String> {
+    let mut phase = RegistryPhase::Held;
+    while let RegistryPhase::Held = phase {
+        let result = attempt_once_observed(owner, &mut body, &mut |owner, error| {
+            phase = refused(owner, error)?;
+            Ok(())
+        });
+        match result {
+            Ok(value) => return Ok(value),
+            Err(failure) => match failure.retry() {
+                Retry::Busy => std::thread::yield_now(),
+                Retry::Refuse => return Err(failure.explanation(owner, operation)),
+            },
+        }
+    }
+    attempt_observed(owner, operation, body, |owner, error| {
+        refused(owner, error).map(|_phase| ())
+    })
+}
 
 pub(super) fn diagnostics(owner: &Mutator<'_>) -> String {
     format!(
@@ -19,8 +48,11 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
         PlainSymbolBacking::VoidProjection,
     ] {
         fixture_owner(kind, Query::Fresh, |_, owner, homes| {
-            // Readiness must never hold the registry while waiting for a
-            // receiver that may already have reached its bounded deadline.
+            // The holder waits for the release event or sender disconnect.
+            // Drop the sender on every outcome before joining the holder.
+            // Refusals drive the held phase: a wall-clock bound is meaningless
+            // while this actor deliberately keeps the registry held. Nextest
+            // is its watchdog; the normal retry deadline starts after release.
             let (ready_tx, ready_rx) = std::sync::mpsc::channel();
             let (release_tx, release_rx) = std::sync::mpsc::channel();
             let mut release = Some(release_tx);
@@ -31,18 +63,16 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
                     let mut result = Ok(());
                     crate::emacs_core::intern::parallel::with_registry_writer_for_test(|| {
                         result = ready_tx.send(()).map_err(|e| e.to_string()).and_then(|()| {
-                            release_rx
-                                .recv_timeout(Duration::from_secs(10))
-                                .map_err(|e| e.to_string())
+                            release_rx.recv().map_err(|e| e.to_string())
                         });
                     });
                     result
                 });
                 let result = ready_rx
-                    .recv_timeout(Duration::from_secs(10))
+                    .recv()
                     .map_err(|e| format!("C5 held-registry setup: {e}"))
                     .and_then(|()| {
-                        attempt_observed(
+                        attempt_until_registry_released(
                             owner,
                             "intern after held registry",
                             |run| {
@@ -70,7 +100,11 @@ fn p3sym_c5_native_retry_waits_for_a_held_registry_then_observes_one_winner() {
                                             "C5 registry holder ended early".to_owned()
                                         })?;
                                 }
-                                Ok(())
+                                Ok(if refusals >= 10_001 {
+                                    RegistryPhase::Released
+                                } else {
+                                    RegistryPhase::Held
+                                })
                             },
                         )
                     });

@@ -1,5 +1,6 @@
-//! Real deadline-bounded contention histories. Every actor uses its own rooted operands;
-//! no Value, cell reference or Context view crosses an actor boundary.
+//! Real contention histories, with deadline-bounded retries after deliberate holds.
+//! Every actor uses its own rooted operands; no Value, cell reference or Context
+//! view crosses an actor boundary.
 use super::contention as retry_protocol;
 use super::*;
 use crate::emacs_core::intern::{SymId, parallel::name_publication_for_test};
@@ -81,39 +82,53 @@ fn attempt_observed<'era, T>(
 ) -> Result<T, String> {
     retry_protocol::retry(
         Deadline::contention(),
-        || {
-            let result = match owner.run_access() {
-                Ok(mut run) => body(&mut run),
-                Err(error) => Err(error.into()),
-            };
-            // The failed RunAccess has ended before observation or yielding.
-            if let Err(error) = &result {
-                if let Retry::Busy = error.retry() {
-                    if let Err(message) = refused(owner, error) {
-                        return Err(AttemptFailure::Observation(message));
-                    }
-                }
-            }
-            result.map_err(AttemptFailure::Operation)
-        },
-        |failure| match failure {
-            AttemptFailure::Operation(error) => error.retry(),
-            AttemptFailure::Observation(_) => Retry::Refuse,
-        },
+        || attempt_once_observed(owner, &mut body, &mut refused),
+        AttemptFailure::retry,
     )
-    .map_err(|failure| match failure {
-        AttemptFailure::Operation(error) => format!(
-            "C5 history {operation}: {}; {}",
-            error.explanation(),
-            contention::diagnostics(owner),
-        ),
-        AttemptFailure::Observation(message) => message,
-    })
+    .map_err(|failure| failure.explanation(owner, operation))
+}
+
+fn attempt_once_observed<'era, T>(
+    owner: &mut Mutator<'era>,
+    body: &mut impl FnMut(&mut RunAccess<'_, 'era>) -> Result<T, Failure>,
+    refused: &mut impl FnMut(&Mutator<'era>, &Failure) -> Result<(), String>,
+) -> Result<T, AttemptFailure> {
+    let result = match owner.run_access() {
+        Ok(mut run) => body(&mut run),
+        Err(error) => Err(error.into()),
+    };
+    // The failed RunAccess has ended before observation or yielding.
+    if let Err(error) = &result {
+        if let Retry::Busy = error.retry() {
+            refused(owner, error).map_err(AttemptFailure::Observation)?;
+        }
+    }
+    result.map_err(AttemptFailure::Operation)
 }
 
 enum AttemptFailure {
     Operation(Failure),
     Observation(String),
+}
+
+impl AttemptFailure {
+    fn retry(&self) -> Retry {
+        match self {
+            Self::Operation(error) => error.retry(),
+            Self::Observation(_) => Retry::Refuse,
+        }
+    }
+
+    fn explanation(self, owner: &Mutator<'_>, operation: &str) -> String {
+        match self {
+            Self::Operation(error) => format!(
+                "C5 history {operation}: {}; {}",
+                error.explanation(),
+                contention::diagnostics(owner),
+            ),
+            Self::Observation(message) => message,
+        }
+    }
 }
 
 fn activate<'era>(
