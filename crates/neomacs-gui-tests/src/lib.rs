@@ -587,7 +587,23 @@ impl GuiTestPlan {
             .ok()
             .map(|metadata| metadata.len())
             .filter(|len| *len > 0);
-        let status = if png_bytes.is_some() && (output.exit_code == Some(0) || output.timed_out) {
+        // The PNG is the scenario's paint proof only when the scenario asked
+        // for a presentable surface. A semantic scenario (snapshot/geometry)
+        // can succeed on a host whose windows cannot be presented - a locked
+        // macOS console, for instance - and its missing PNG is evidence the
+        // paint tier did not run, not a failure of the test's own contract.
+        let paint_required = self
+            .required_capabilities
+            .contains(&Capability::SurfacePresent);
+        let status = if paint_required {
+            if png_bytes.is_some() && (output.exit_code == Some(0) || output.timed_out) {
+                GuiRunStatus::Passed
+            } else if output.timed_out {
+                GuiRunStatus::TimedOut
+            } else {
+                GuiRunStatus::Failed
+            }
+        } else if output.exit_code == Some(0) {
             GuiRunStatus::Passed
         } else if output.timed_out {
             GuiRunStatus::TimedOut

@@ -986,9 +986,15 @@ jobs:
           ioreg -n Root -d1 -a | grep -A1 -E 'IOConsoleLocked|CGSSessionScreenIsLocked' || true
           system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Display Asleep|Online' || true
 
+      # Two tiers in one run: the snapshot/geometry scenarios need only the
+      # scenario driver and pass on a locked console, while the paint canary
+      # declares surface-present and reports `unsupported` (with the reason
+      # printed above) when the runner's desktop cannot present.
       - name: Run the scenario-tier GUI tests
         run: |
-          cargo nextest run -p neomacs-gui-tests --test gui             -E 'test(~real_gui_smoke_generates_surface_readback_png)'             --test-threads 1 --no-fail-fast
+          cargo nextest run -p neomacs-gui-tests --test gui \
+            -E 'test(~real_gui_smoke_generates_surface_readback_png) | test(~child_frame_position) | test(~child_frame_sizing) | test(~compact_frame_geometry) | test(~display_window_geometry::pixelwise_window_resize) | test(~integer_width)' \
+            --test-threads 1 --no-fail-fast
 
       - name: Upload GUI artifacts
         if: always()

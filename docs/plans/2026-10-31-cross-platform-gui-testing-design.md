@@ -209,6 +209,24 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
    to `DesktopDriver` and run them on a self-hosted macOS runner.
 5. **Windows scenario tier.**
 
+## Implementation status (2026-10-31, branch `gui-tests-cross-platform`)
+
+- Capability contract, `Unsupported` reporting, and the manifest fields are
+  in (`875510d0da`, `d7da72eb09`).
+- A scenario's status no longer requires a PNG unless it declared
+  `surface-present`; semantic scenarios pass on a host whose windows cannot
+  be presented.
+- Verified on this Mac with the console locked: five semantic scenarios pass
+  (`child_frame_position`, `child_frame_sizing`, `compact_frame_geometry`,
+  `display_window_geometry::pixelwise_window_resize`, `integer_width`), and
+  the paint canary reports
+  `backend macos lacks required capabilities: surface-present`. The
+  `neomacs-gui-tests-macos` CI job runs that same set.
+- Not yet verified: an actual paint readback on macOS (needs an unlocked,
+  awake console), the macOS CI runner's session state, Doom/Spacemacs GUI
+  boot (needs a macOS GUI GNU oracle profile), and the broader port of the
+  47 Linux-gated files.
+
 ## What stays platform-specific
 
 X11 and Wayland protocol contracts, Linux process/proc semantics, and font

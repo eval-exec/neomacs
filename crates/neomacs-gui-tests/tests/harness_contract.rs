@@ -696,7 +696,8 @@ fn run_with_runner_reports_missing_png_as_failed_text_result() {
         &workspace_root,
         &artifact_root,
         GuiScenario::new("runner-no-png", "test/neomacs/neomacs-face-test.el"),
-    );
+    )
+    .require(Capability::SurfacePresent);
     let mut runner = FakeRunner {
         output: GuiCommandOutput {
             exit_code: Some(0),
@@ -725,6 +726,50 @@ fn run_with_runner_reports_missing_png_as_failed_text_result() {
 }
 
 #[test]
+fn a_semantic_plan_succeeds_without_a_paint_readback() {
+    let workspace_root = workspace_root();
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let scenario = "semantic-no-png";
+    let artifacts = GuiArtifactSet::new(&artifact_root, GuiBackend::Macos, scenario);
+    let _ = std::fs::remove_file(&artifacts.json);
+    let _ = std::fs::remove_file(&artifacts.png);
+    let _ = std::fs::remove_file(&artifacts.stderr);
+
+    let plan = GuiTestPlan::new(
+        GuiBackend::Macos,
+        &workspace_root,
+        &artifact_root,
+        GuiScenario::new(scenario, "fixture.el"),
+    );
+    let mut runner = FakeRunner {
+        output: GuiCommandOutput {
+            exit_code: Some(0),
+            timed_out: false,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        create_png: false,
+        gui_state: None,
+        frame_snapshot: Some((
+            r#"{"frames":[{"frame_id":1}]}"#.to_string(),
+            "=== frame 1 ===\n".to_string(),
+        )),
+    };
+
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+        )
+        .expect("a semantic run writes its artifacts");
+
+    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    assert_eq!(result.png_bytes, None);
+    assert!(result.frame_snapshot_json_bytes.is_some());
+    assert!(result.failure_reason.is_none());
+}
+
+#[test]
 fn run_with_runner_treats_timeout_after_png_as_successful_capture() {
     let workspace_root = workspace_root();
     let artifact_root = workspace_root.join("target/neomacs-gui-tests");
@@ -742,7 +787,8 @@ fn run_with_runner_treats_timeout_after_png_as_successful_capture() {
         &workspace_root,
         &artifact_root,
         GuiScenario::new("runner-timeout-png", "test/neomacs/neomacs-face-test.el"),
-    );
+    )
+    .require(Capability::SurfacePresent);
     let mut runner = FakeRunner {
         output: GuiCommandOutput {
             exit_code: None,
