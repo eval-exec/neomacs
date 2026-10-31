@@ -467,6 +467,7 @@ fn fixture_key(window_start: i64, point: i64) -> RetainedWindowKey {
         extra_line_spacing: 0.0,
         selective_display: 0,
         selected: true,
+        scroll_margin: Default::default(),
         cursor_role: crate::types::WindowCursorRole::Active,
         show_trailing_whitespace: false,
         trailing_ws_bg: 0,

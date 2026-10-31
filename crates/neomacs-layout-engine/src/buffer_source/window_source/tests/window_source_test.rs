@@ -41,7 +41,7 @@ fn window_params() -> WindowParams {
         scroll_conservatively: 0,
         scroll_step: 0,
         scroll_minibuffer_conservatively: true,
-        scroll_margin: 0,
+        scroll_margin: neovm_core::window::ScrollMargin::default(),
         tab_stop_list: vec![],
         default_fg: 0x00ff_ffff,
         frame_foreground: 0x00ff_ffff,
@@ -107,7 +107,7 @@ fn request(
         max_rows,
         kind,
         scroll_policy,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     )
 }
 
@@ -179,7 +179,7 @@ fn source_request_defers_folded_row_visibility_to_the_display_walk() {
         4,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     );
     let buffer = eval
         .buffer_manager()
@@ -229,7 +229,7 @@ fn source_request_defers_replacing_display_spans_to_the_display_walk() {
         4,
         WindowKind::Main,
         ScrollPolicy::Recenter,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     );
     let buffer = eval
         .buffer_manager()

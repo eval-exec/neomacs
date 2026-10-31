@@ -89,6 +89,8 @@ mod issue_445_ibuffer_filter_groups;
 mod issue_446_align_to_hscroll;
 #[path = "issue_470.rs"]
 mod issue_470;
+#[path = "issue_654_centered_cursor.rs"]
+mod issue_654_centered_cursor;
 #[path = "mark_region_fill.rs"]
 mod mark_region_fill;
 #[path = "menu_bar.rs"]

@@ -42,6 +42,7 @@ use neomacs_display_protocol::effect_config::EffectsConfig;
 use neomacs_display_protocol::types::FaceId;
 use neovm_core::buffer::LispCharPos1;
 use neovm_core::emacs_core::Context;
+use neovm_core::window::ScrollMargin;
 use neovm_core::window::{
     DisplayRowSnapshot, FrameId, PresentedWindowRegions, WindowDisplaySnapshot, WindowId,
     geometry::CellOrigin,
@@ -375,7 +376,7 @@ pub(crate) struct TextWindowVisibilityRetryRequest<'a, 'buf, B: LayoutBufferView
     text_area_top: i64,
     text_area_bottom: i64,
     scroll_policy: ScrollPolicy,
-    scroll_margin: i64,
+    scroll_margin: ScrollMargin,
     forward_viewport_measurement: Option<&'a ForwardViewportMeasurement>,
     buf_access: &'a RustBufferAccess<'buf, B>,
 }
@@ -904,7 +905,7 @@ impl<'a, 'buf, B: LayoutBufferView> TextWindowVisibilityRetryRequest<'a, 'buf, B
         text_area_top: i64,
         text_area_bottom: i64,
         scroll_policy: ScrollPolicy,
-        scroll_margin: i64,
+        scroll_margin: ScrollMargin,
         forward_viewport_measurement: Option<&'a ForwardViewportMeasurement>,
         buf_access: &'a RustBufferAccess<'buf, B>,
     ) -> Self {

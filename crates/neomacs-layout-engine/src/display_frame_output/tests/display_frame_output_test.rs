@@ -72,7 +72,7 @@ fn window_params() -> WindowParams {
         scroll_conservatively: 0,
         scroll_step: 0,
         scroll_minibuffer_conservatively: true,
-        scroll_margin: 0,
+        scroll_margin: neovm_core::window::ScrollMargin::default(),
         tab_stop_list: Vec::new(),
         default_fg: 0,
         frame_foreground: 0,

@@ -3511,3 +3511,98 @@ fn pixel_only_queries_reuse_rows_when_point_is_outside_the_viewport() {
         }
     }
 }
+
+/// Drive `forward-line` one line at a time through a window whose scroll
+/// margin asks to keep point centred, returning `(point line, window-start
+/// line)` after every redisplay.
+///
+/// `maximum-scroll-margin` is set explicitly so the test pins GNU's cap
+/// (`window_scroll_margin`, src/window.c:6207) rather than the default.
+fn centered_cursor_samples(maximum_scroll_margin: f64) -> Vec<(i64, i64)> {
+    let mut eval = Context::new();
+    let buffer = eval.buffer_manager().current_buffer().unwrap().id();
+    let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .unwrap()
+        .insert(&text);
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("centered-cursor", 320, 500, buffer);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .unwrap()
+        .window_system = Some(Value::symbol("neomacs"));
+    eval.eval_str(&format!(
+        "(setq scroll-conservatively 1 scroll-margin 999 maximum-scroll-margin {maximum_scroll_margin}) (goto-char (point-min)) (set-window-start nil 1 t)"
+    ))
+    .unwrap();
+    let mut engine = LayoutEngine::new_without_font_metrics();
+    engine.layout_frame_rust(&mut eval, frame);
+    let mut samples = Vec::new();
+    for _ in 0..40 {
+        eval.eval_str("(forward-line 1)").unwrap();
+        engine.layout_frame_rust(&mut eval, frame);
+        let sample = eval
+            .eval_str("(list (line-number-at-pos (point)) (line-number-at-pos (window-start)))")
+            .unwrap();
+        let printed = neovm_core::emacs_core::print::print_value(&sample);
+        let inner = printed
+            .strip_prefix('(')
+            .and_then(|rest| rest.strip_suffix(')'))
+            .expect("two-integer sample list");
+        let (point, start) = inner.split_once(' ').expect("point and start");
+        samples.push((
+            point.parse::<i64>().expect("point line"),
+            start.parse::<i64>().expect("window-start line"),
+        ));
+    }
+    samples
+}
+
+/// The constant screen row point occupies while the window follows it.
+fn steady_centered_row(samples: &[(i64, i64)]) -> i64 {
+    let initial_start = samples[0].1;
+    let first_scroll = samples
+        .iter()
+        .position(|(_, start)| *start != initial_start)
+        .expect("the window must eventually scroll");
+    let offset = samples[first_scroll].0 - samples[first_scroll].1;
+    for window in samples[first_scroll..].windows(2) {
+        let (prev_point, prev_start) = window[0];
+        let (point, start) = window[1];
+        assert_eq!(
+            start,
+            prev_start + 1,
+            "one line of point motion past the margin must scroll exactly one line \
+             (GNU try_scrolling dy = 1); got {prev_point}->{point} with start \
+             {prev_start}->{start} in {samples:?}"
+        );
+        assert_eq!(
+            point - start,
+            offset,
+            "point must keep the same screen row while scrolling one line at a time"
+        );
+    }
+    offset
+}
+
+/// Issue #654: `scroll-conservatively 1` with a large `scroll-margin` capped by
+/// `maximum-scroll-margin 0.5` behaves like GNU's centred cursor — every line
+/// of motion past the margin scrolls exactly one line and point holds its row.
+///
+/// Before the fix the layout engine capped the margin at `rows / 4`, ignored
+/// `maximum-scroll-margin`, and the cursor-only fast path never declined for a
+/// point inside the margin, so the start stayed pinned until a far-jump
+/// recenter moved point in chunks.
+#[test]
+fn scroll_margin_follows_point_one_line_at_a_time() {
+    let half = centered_cursor_samples(0.5);
+    let quarter = centered_cursor_samples(0.25);
+    let half_row = steady_centered_row(&half);
+    let quarter_row = steady_centered_row(&quarter);
+    assert!(
+        half_row < quarter_row,
+        "maximum-scroll-margin 0.5 must keep point on a higher row ({half_row}) than 0.25 ({quarter_row})"
+    );
+}

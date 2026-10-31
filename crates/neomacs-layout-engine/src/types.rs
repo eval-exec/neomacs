@@ -331,9 +331,10 @@ pub struct WindowParams {
     /// mini-window scrolls minimally whatever `scroll-conservatively` says
     /// (GNU passes `SCROLL_LIMIT + 1` for it, src/xdisp.c:21083).
     pub scroll_minibuffer_conservatively: bool,
-    /// `scroll-margin`: minimum lines of context kept between point and the top
-    /// or bottom window edge on a minimal scroll (GNU `window_scroll_margin`).
-    pub scroll_margin: i64,
+    /// `scroll-margin` resolved through `maximum-scroll-margin`: the minimum
+    /// number of lines of context kept between point and the top or bottom
+    /// window edge on a minimal scroll (GNU `window_scroll_margin`).
+    pub scroll_margin: neovm_core::window::ScrollMargin,
 
     /// Default face foreground/background for this window
     pub default_fg: u32,

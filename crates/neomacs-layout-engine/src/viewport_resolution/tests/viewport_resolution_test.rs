@@ -16,7 +16,7 @@ fn measurement_probe_is_not_itself_a_viewport_commit() {
         &initial,
         ResolvedWindowStart::from_layout_charpos(1),
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     ) else {
         panic!("display uncertainty should request measurement")
     };
@@ -40,7 +40,7 @@ fn default_policy_places_point_relative_without_a_forward_probe() {
             &initial,
             ResolvedWindowStart::from_layout_charpos(1),
             ScrollPolicy::Recenter,
-            0,
+            neovm_core::window::ScrollMargin::default(),
         ),
         ViewportDecision::PlaceRelativeToPoint {
             lines_above_point: 1,
@@ -59,7 +59,7 @@ fn trailing_non_buffer_row_does_not_hide_the_last_probe_boundary() {
         &initial,
         ResolvedWindowStart::from_layout_charpos(1),
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     ) else {
         panic!("an EOB/filler row must not discard the preceding measured boundary")
     };
@@ -76,7 +76,7 @@ fn bounded_forward_probe_switches_to_point_relative_placement() {
         &initial,
         ResolvedWindowStart::from_layout_charpos(1),
         ScrollPolicy::Conservative { max_lines: 2 },
-        0,
+        neovm_core::window::ScrollMargin::default(),
     ) else {
         panic!("bounded conservative scrolling should measure nearby rows")
     };
@@ -98,7 +98,7 @@ fn measured_point_without_enough_progress_never_accepts_the_probe() {
         &initial,
         ResolvedWindowStart::from_layout_charpos(1),
         ScrollPolicy::Unlimited,
-        0,
+        neovm_core::window::ScrollMargin::default(),
     ) else {
         panic!("display uncertainty should request measurement")
     };
@@ -126,7 +126,7 @@ fn probe_measurement() -> ForwardViewportMeasurement {
         &initial,
         ResolvedWindowStart::from_layout_charpos(1),
         ScrollPolicy::Conservative { max_lines: 30 },
-        0,
+        neovm_core::window::ScrollMargin::default(),
     ) else {
         panic!("a bounded conservative policy measures forward first")
     };

@@ -11,6 +11,7 @@ use crate::scroll_policy::{
 };
 use crate::types::{PartialBodyWalkStart, WindowKind, WindowParams};
 use neovm_core::buffer::{CharLen, CharPos0, EmacsBytePos, TextPositionAnchor};
+use neovm_core::window::ScrollMargin;
 
 #[cfg(test)]
 #[path = "tests/window_source_test.rs"]
@@ -216,7 +217,7 @@ pub(crate) struct BufferWindowSourceRequest {
     read_budget: BufferWindowReadBudget,
     kind: WindowKind,
     scroll_policy: ScrollPolicy,
-    scroll_margin: i64,
+    scroll_margin: ScrollMargin,
 }
 
 /// A viewport start after GNU's scrolling/recentering policy has selected it.
@@ -305,7 +306,7 @@ impl BufferWindowSourceRequest {
         max_rows: usize,
         kind: WindowKind,
         scroll_policy: ScrollPolicy,
-        scroll_margin: i64,
+        scroll_margin: ScrollMargin,
     ) -> Self {
         Self {
             requested_window_start,
