@@ -17,11 +17,23 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `BufferManager: Send`
           `NonNull<neovm_core::buffer::Buffer>: Send`
           which is required by `BufferManager: Send`
+          `RefCell<eval::owner_bindings::OwnerSlabRegistry>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<ThreadProjectionTable>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<eval::admission::ThreadingMode>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<Option<ThreadId>>: Sync`
+          which is required by `BufferManager: Send`
+          `NonNull<TaggedHeap>: Sync`
+          which is required by `BufferManager: Send`
           `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
           which is required by `BufferManager: Send`
-          `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
+          `*mut (): Sync`
           which is required by `BufferManager: Send`
-          `UnsafeCell<TaggedHeap>: Sync`
+          `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
           which is required by `BufferManager: Send`
           `UnsafeCell<neovm_core::emacs_core::Obarray>: Sync`
           which is required by `BufferManager: Send`
@@ -39,25 +51,21 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `BufferManager: Send`
           `UnsafeCell<CodingSystemManager>: Sync`
           which is required by `BufferManager: Send`
-          `UnsafeCell<vm::InterpreterStackPool>: Sync`
-          which is required by `BufferManager: Send`
           `UnsafeCell<eval::MacroPerfStats>: Sync`
           which is required by `BufferManager: Send`
           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
           which is required by `BufferManager: Send`
-          `*const (): Send`
+          `UnsafeCell<eval::global_state::GlobalState>: Sync`
+          which is required by `BufferManager: Send`
+          `*mut (): Send`
           which is required by `BufferManager: Send`
           `*mut GcHeader: Send`
           which is required by `BufferManager: Send`
-          `*mut ConsCell: Send`
+          `*const (): Send`
           which is required by `BufferManager: Send`
-          `*mut MarkerObj: Send`
+          `*mut GcHeader: Sync`
           which is required by `BufferManager: Send`
-          `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
-          which is required by `BufferManager: Send`
-          `Rc<Cell<VisitedFileModtime>>: Send`
-          which is required by `BufferManager: Send`
-          `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
+          `Cell<u8>: Sync`
           which is required by `BufferManager: Send`
           `*mut HashTableObj: Send`
           which is required by `BufferManager: Send`
@@ -65,9 +73,25 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `BufferManager: Send`
           `*mut *mut MarkerObj: Send`
           which is required by `BufferManager: Send`
-          `std::rc::Weak<[TaggedValue]>: Send`
+          `Rc<face::FaceStorage>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<HashMap<LispFaceId, TaggedValue>>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<xdisp::mode_line_output::OutputState>: Send`
+          which is required by `BufferManager: Send`
+          `NonNull<eval::owner_bindings::OwnerSlab>: Send`
+          which is required by `BufferManager: Send`
+          `Cell<CanonicalArm>: Sync`
+          which is required by `BufferManager: Send`
+          `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<usize>: Sync`
           which is required by `BufferManager: Send`
           `*mut u8: Send`
+          which is required by `BufferManager: Send`
+          `*mut ConsCell: Send`
           which is required by `BufferManager: Send`
           `*mut FloatObj: Send`
           which is required by `BufferManager: Send`
@@ -75,17 +99,35 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `BufferManager: Send`
           `*mut StringObj: Send`
           which is required by `BufferManager: Send`
-          `NonNull<LispBufferLocalValue>: Send`
-          which is required by `BufferManager: Send`
           `*const u8: Send`
           which is required by `BufferManager: Send`
-          `Rc<Vec<AutomaticCompositionSpan>>: Send`
+          `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
           which is required by `BufferManager: Send`
-          `*const c_void: Send`
+          `Rc<Cell<VisitedFileModtime>>: Send`
           which is required by `BufferManager: Send`
-          `*const tree_sitter::ffi::TSTree: Send`
+          `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
           which is required by `BufferManager: Send`
-          `Rc<OverlayList>: Send`
+          `Rc<Cell<Vec<TaggedValue>>>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<Cell<*const ()>>: Send`
+          which is required by `BufferManager: Send`
+          `*mut TaggedHeap: Send`
+          which is required by `BufferManager: Send`
+          `*const (): Sync`
+          which is required by `BufferManager: Send`
+          `NonNull<MarkerObj>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
+          which is required by `BufferManager: Send`
+          `*mut HashTableObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut FinalizerObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut *mut MarkerObj: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<()>: Sync`
+          which is required by `BufferManager: Send`
+          `std::rc::Weak<[TaggedValue]>: Send`
           which is required by `BufferManager: Send`
           `*mut VectorObj: Send`
           which is required by `BufferManager: Send`
@@ -99,11 +141,107 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
           which is required by `BufferManager: Send`
           `*mut SymbolWithPosObj: Send`
           which is required by `BufferManager: Send`
+          `*mut MarkerObj: Send`
+          which is required by `BufferManager: Send`
           `*mut BignumObj: Send`
           which is required by `BufferManager: Send`
-          `*const (): Sync`
+          `NonNull<[Cell<usize>; 8192]>: Send`
           which is required by `BufferManager: Send`
-          `NonNull<ByteCodeFunction>: Send`
+          `NonNull<LispBufferLocalValue>: Send`
           which is required by `BufferManager: Send`
-          `NonNull<[Op]>: Send`
+          `NonNull<LispFwd>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<Vec<AutomaticCompositionSpan>>: Send`
+          which is required by `BufferManager: Send`
+          `*mut u8: Sync`
+          which is required by `BufferManager: Send`
+          `*mut ConsCell: Sync`
+          which is required by `BufferManager: Send`
+          `*mut FloatObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut VecLikeHeader: Sync`
+          which is required by `BufferManager: Send`
+          `*mut StringObj: Sync`
+          which is required by `BufferManager: Send`
+          `OnceCell<collection_reads::store_state::ObservationWorld>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<*mut TaggedHeap>: Sync`
+          which is required by `BufferManager: Send`
+          `Rc<()>: Send`
+          which is required by `BufferManager: Send`
+          `*const c_void: Send`
+          which is required by `BufferManager: Send`
+          `*const tree_sitter::ffi::TSTree: Send`
+          which is required by `BufferManager: Send`
+          `RefCell<ccl::CclRegistry>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<charset::CharsetRegistry>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<xfaces::FaceAttrState>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<neovm_core::emacs_core::terminal::pure::TerminalLispRegistry>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<builtins::collections::HashTableTestRegistry>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<builtins::file_notify::FileNotifyState>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<HashMap<i64, builtins::hooks::WindowConfigurationSnapshot>>: Sync`
+          which is required by `BufferManager: Send`
+          `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
+          which is required by `BufferManager: Send`
+          `Rc<OverlayList>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<Cell<Vec<TaggedValue>>>: Sync`
+          which is required by `BufferManager: Send`
+          `Rc<Cell<*const ()>>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<u64>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<NonNull<[Cell<usize>; 8192]>>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<collection_reads::JournalPolicy>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<bool>: Sync`
+          which is required by `BufferManager: Send`
+          `Cell<gc::barrier_window::BarrierWindow>: Sync`
+          which is required by `BufferManager: Send`
+          `Rc<collection_reads::store_state::WorldObservations>: Send`
+          which is required by `BufferManager: Send`
+          `*mut VectorObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut ByteCodeObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut LambdaObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut MacroObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut RecordObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut SymbolWithPosObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut MarkerObj: Sync`
+          which is required by `BufferManager: Send`
+          `*mut BignumObj: Sync`
+          which is required by `BufferManager: Send`
+          `*const LispSymbol: Sync`
+          which is required by `BufferManager: Send`
+          `*const Atomic<u32>: Sync`
+          which is required by `BufferManager: Send`
+          `NonNull<()>: Send`
+          which is required by `BufferManager: Send`
+          `Rc<()>: Sync`
+          which is required by `BufferManager: Send`
+          `(dyn std::any::Any + 'static): Send`
+          which is required by `BufferManager: Send`
+          `UnsafeCell<TaggedValue>: Sync`
+          which is required by `BufferManager: Send`
+          `*const AtomicTaggedValue: Sync`
+          which is required by `BufferManager: Send`
+          `*const TaggedValue: Sync`
+          which is required by `BufferManager: Send`
+          `*const CharTableObj: Sync`
+          which is required by `BufferManager: Send`
+          `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
+          which is required by `BufferManager: Send`
+          `*mut emacs_value_tag: Send`
           which is required by `BufferManager: Send`

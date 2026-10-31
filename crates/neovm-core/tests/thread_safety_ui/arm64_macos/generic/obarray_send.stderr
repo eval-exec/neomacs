@@ -1,0 +1,31 @@
+error[E0599]: the associated function or constant `check` exists for struct `ThreadTransfer<neovm_core::emacs_core::Obarray>`, but its trait bounds were not satisfied
+ --> tests/thread_safety_ui/arm64_macos/generic/../../obarray_send.rs
+  |
+  |     ThreadTransfer::<Obarray>::check();
+  |                                ^^^^^ associated function or constant cannot be called on `ThreadTransfer<neovm_core::emacs_core::Obarray>` due to unsatisfied trait bounds
+  |
+ ::: src/emacs_core/runtime/symbol/mod.rs
+  |
+  | pub struct Obarray {
+  | ------------------ doesn't satisfy `neovm_core::emacs_core::Obarray: Send`
+  |
+ ::: tests/thread_safety_ui/arm64_macos/generic/../../support/thread_bounds.rs
+  |
+  | pub struct ThreadTransfer<T>(PhantomData<T>);
+  | ---------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `NonNull<LispBufferLocalValue>: Send`
+          which is required by `neovm_core::emacs_core::Obarray: Send`
+          `NonNull<LispFwd>: Send`
+          which is required by `neovm_core::emacs_core::Obarray: Send`
+          `*const (): Send`
+          which is required by `neovm_core::emacs_core::Obarray: Send`
+  = help: items from traits can only be used if the trait is in scope
+help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
+ --> tests/thread_safety_ui/arm64_macos/generic/obarray_send.rs:1:1
+  |
+1 + use objc2::__macro_helpers::class::DoesNotImplDrop;
+  |
+1 + use objc2::__macro_helpers::class::MainThreadOnlyDoesNotImplSendSync;
+  |
