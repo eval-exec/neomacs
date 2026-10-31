@@ -1683,6 +1683,37 @@ fn bootstrap_gui_display_defaults_to_gnu_light_background_mode() {
     assert_eq!(gui_display().background_mode, "light");
 }
 
+/// GNU runs early-init while only the initial terminal frame exists; the
+/// graphical frame is created afterwards and must inherit the customized
+/// default face's colors. xfaces.c's `internal_merge_in_global_face` publishes
+/// the global default face's string colors to every window-system frame's
+/// parameters, and assigning `background-color` recomputes `background-mode`
+/// (xfaces.c:3896-3906, 4398-4412).
+#[test]
+fn early_init_default_face_colors_reach_the_created_gui_frame() {
+    let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
+        .expect("bootstrap evaluator");
+    eval.eval_str(r#"(set-face-attribute 'default nil :foreground "white" :background "black")"#)
+        .expect("early-init default face");
+
+    let _frame_id = bootstrap_runtime_gui_startup(&mut eval);
+
+    let result = eval
+        .eval_str(
+            r#"(list
+                 (frame-parameter nil 'background-mode)
+                 (frame-parameter nil 'foreground-color)
+                 (frame-parameter nil 'background-color)
+                 (face-attribute 'default :foreground nil t)
+                 (face-attribute 'default :background nil t))"#,
+        )
+        .expect("frame color probe should evaluate");
+    assert_eq!(
+        print_value_with_eval(&eval, &result),
+        "(dark \"white\" \"black\" \"white\" \"black\")"
+    );
+}
+
 #[test]
 fn bootstrap_gui_frame_uses_gnu_cursor_and_pointer_color_defaults() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)

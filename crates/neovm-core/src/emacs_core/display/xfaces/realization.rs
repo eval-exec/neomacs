@@ -396,6 +396,21 @@ impl super::super::eval::Context {
             .is_some_and(crate::face::realization::frame_is_tty_target)
     }
 
+    /// GNU's frame output class for the face subsystem (frame.h:932-933).
+    ///
+    /// The default-face global merge takes a different path per class: termcap
+    /// frames refresh their realized cache, window-system frames publish the
+    /// global string colors to the frame parameters, and initial/batch frames
+    /// do neither.
+    pub(crate) fn frame_face_class(
+        &self,
+        frame: FrameId,
+    ) -> Option<crate::face::realization::FrameFaceClass> {
+        self.frames
+            .get(frame)
+            .and_then(crate::face::realization::frame_face_class)
+    }
+
     /// Initialize the frame cache and basic faces at the creation boundary.
     pub fn initialize_display_faces_for_frame(&mut self, frame: FrameId) {
         initialize_frame_faces(self, frame);
@@ -890,21 +905,7 @@ pub(crate) fn realize_default_after_global_merge(
 
         // Read the rooted global vector after callbacks, as GNU does. Only its
         // string fg/bg attributes enter the existing primitive parameter seam.
-        for (attr, parameter) in [
-            (LFaceAttr::Foreground, FrameParam::ForegroundColor),
-            (LFaceAttr::Background, FrameParam::BackgroundColor),
-        ] {
-            if let Some(value) =
-                lisp_face_vector_attr(global, attr).filter(|value| value.is_string())
-            {
-                publish_face_attribute_to_frame_parameter(
-                    scope.context(),
-                    frame,
-                    parameter,
-                    value,
-                )?;
-            }
-        }
+        publish_default_face_colors(scope.context(), frame, global)?;
         Ok(())
     })();
     let result = scope.finish(result);
@@ -916,6 +917,32 @@ pub(crate) fn realize_default_after_global_merge(
         owner.face_realization.invalidate();
     }
     result
+}
+
+/// Publish the global default face's explicit string colors to a frame.
+///
+/// GNU `internal_merge_in_global_face` writes the global default lface's
+/// foreground and background strings back through `Fmodify_frame_parameters`
+/// for every frame with a realized default face (xfaces.c:4398-4412). The
+/// parameter handler then recomputes `background-mode` from the new
+/// `background-color` (xfaces.c:3896-3906), which is what lets a graphical
+/// frame created after early-init pick the dark `(background dark)` defface
+/// variants instead of keeping the toolkit's white/light defaults.
+pub(crate) fn publish_default_face_colors(
+    eval: &mut super::super::eval::Context,
+    frame: FrameId,
+    global: Value,
+) -> Result<(), Flow> {
+    let _roots = RealizationRoots::from_values([global]);
+    for (attr, parameter) in [
+        (LFaceAttr::Foreground, FrameParam::ForegroundColor),
+        (LFaceAttr::Background, FrameParam::BackgroundColor),
+    ] {
+        if let Some(value) = lisp_face_vector_attr(global, attr).filter(|value| value.is_string()) {
+            publish_face_attribute_to_frame_parameter(eval, frame, parameter, value)?;
+        }
+    }
+    Ok(())
 }
 
 /// Eager frame-creation boundary (GNU init_frame_faces). Batch creation leaves

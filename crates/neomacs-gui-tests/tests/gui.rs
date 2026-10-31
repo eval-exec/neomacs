@@ -61,6 +61,9 @@ mod eob_overlay_motion;
 #[path = "extended_keysyms.rs"]
 mod extended_keysyms;
 
+#[path = "face_background_mode_gui_oracle.rs"]
+mod face_background_mode_gui_oracle;
+
 #[path = "fill_column_stipple.rs"]
 mod fill_column_stipple;
 
