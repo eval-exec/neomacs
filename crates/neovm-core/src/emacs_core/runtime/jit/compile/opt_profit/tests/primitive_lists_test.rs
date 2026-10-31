@@ -291,7 +291,8 @@ fn opt_profit_primitive_lists_calling_osr_keeps_actual_baseline_and_list_mutatio
     let snapshot = [pair, Value::make_int(6), Value::make_int(2)];
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(6).bits()))
     );
     let leaf = cache::osr_leaf_ptr_for_test(&source, 1).unwrap();

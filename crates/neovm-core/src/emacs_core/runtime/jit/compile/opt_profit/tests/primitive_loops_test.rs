@@ -79,7 +79,8 @@ fn opt_profit_primitive_loops_numeric_osr_runs_opt_and_deopts_at_entry() {
     let snapshot = [Value::make_int(2000), Value::make_int(42)];
     context.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(2000).bits()))
     );
     let leaf = cache::osr_leaf_ptr_for_test(&f, 1).expect("installed numeric OSR leaf");
@@ -87,7 +88,9 @@ fn opt_profit_primitive_loops_numeric_osr_runs_opt_and_deopts_at_entry() {
     let bad = [Value::make_int(2000), Value::NIL];
     context.bc_buf.clear();
     context.bc_buf.extend_from_slice(&bad);
-    let Some(NativeRun::DeoptAt(frame)) = cache::try_run_osr(&mut context, &f, 1, &bad, &[]) else {
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let run = unsafe { cache::try_run_osr(&mut context, &f, 1, &bad, &[]) };
+    let Some(NativeRun::DeoptAt(frame)) = run else {
         panic!("a nil counter deoptimizes at the entry");
     };
     assert_eq!(frame.pc, 1);

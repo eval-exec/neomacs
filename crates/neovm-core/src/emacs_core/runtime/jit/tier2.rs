@@ -356,13 +356,13 @@ pub(crate) fn decide(leaf: &CompiledLeaf) -> T2Decision {
 /// prologue and poll block, and directly by a profiling shim; returns to the leaf, which
 /// continues in T1.
 ///
-/// SAFETY: `obs` is the calling leaf's own `LeafObs`, alive as long as the
+/// # Safety
+/// `obs` is the calling leaf's own `LeafObs`, alive as long as the
 /// leaf.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: only ever called from generated code.
 #[unsafe(no_mangle)]
 #[cold]
 #[inline(never)]
-pub(crate) extern "C" fn neovm_jit_tier_request(obs: *const LeafObs) {
+pub(crate) unsafe extern "C" fn neovm_jit_tier_request(obs: *const LeafObs) {
     // SAFETY: see the function docs.
     request(unsafe { &*obs });
 }
@@ -372,10 +372,11 @@ pub(crate) extern "C" fn neovm_jit_tier_request(obs: *const LeafObs) {
 /// counted only as far as the countdown needs, so the walk is bounded by
 /// what the request would cost the loop it stands for.
 ///
-/// SAFETY: as [`neovm_jit_tier_request`]; `seq` is a tagged value the
+/// # Safety
+/// `obs` points to the live leaf-observation record for the current leaf execution.
+/// as [`neovm_jit_tier_request`]; `seq` is a tagged value the
 /// caller holds (read only, never retained).
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_t2_hof_credit(obs: *const LeafObs, seq: i64) {
+pub(crate) unsafe extern "C" fn neovm_jit_t2_hof_credit(obs: *const LeafObs, seq: i64) {
     // SAFETY: see the function docs.
     let obs = unsafe { &*obs };
     let t2 = &obs.t2;

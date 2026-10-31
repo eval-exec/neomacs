@@ -72,7 +72,9 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
     let args = [name, Value::fixnum(0)];
     assert_eq!(
         Value::from_bits(
-            neovm_jit_aref(context_ptr, args[0].bits() as i64, args[1].bits() as i64) as usize
+            // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+            unsafe { neovm_jit_aref(context_ptr, args[0].bits() as i64, args[1].bits() as i64) }
+                as usize
         ),
         Value::fixnum(0xaaa9),
     );
@@ -82,12 +84,15 @@ fn declared_multibyte_high_bytes_miss_jit_raw_byte_aref_and_aset_guards() {
     }
     let replacement = Value::fixnum(65);
     let args = [name, Value::fixnum(0), replacement];
-    let status = neovm_jit_aset(
-        context_ptr,
-        name.bits() as i64,
-        args[1].bits() as i64,
-        replacement.bits() as i64,
-    );
+    // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+    let status = unsafe {
+        neovm_jit_aset(
+            context_ptr,
+            name.bits() as i64,
+            args[1].bits() as i64,
+            replacement.bits() as i64,
+        )
+    };
     assert_eq!(status, VALUE_SHIM_SIGNAL);
     assert!(matches!(
         take_pending_flow().unwrap().kind(),

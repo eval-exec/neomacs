@@ -925,13 +925,17 @@ pub(crate) fn emit_direct_bytecode_call(
 /// arming covers only a call as laid out, the only shape it can check
 /// without the site's.
 ///
-/// SAFETY: `neovm_jit_call_spec`'s contract; `slot` is the executing
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args` points to a live value owned by the caller for the duration of the call.
+/// `neovm_jit_call_spec`'s contract; `slot` is the executing
 /// leaf's spec slot of this site.
-#[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+#[allow(clippy::too_many_arguments)]
 #[cold]
 #[inline(never)]
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_direct_slow(
+pub(crate) unsafe extern "C" fn neovm_jit_direct_slow(
     ctx: *mut u8,
     sym_bits: i64,
     expected: i64,
@@ -941,8 +945,10 @@ pub(crate) extern "C" fn neovm_jit_direct_slow(
     out: *mut i64,
     shape: i64,
 ) -> i64 {
-    let status =
-        super::dispatch::neovm_jit_call_spec(ctx, sym_bits, expected, slot, args, nargs, out);
+    // SAFETY: this shim's contract above covers ctx, args and out.
+    let status = unsafe {
+        super::dispatch::neovm_jit_call_spec(ctx, sym_bits, expected, slot, args, nargs, out)
+    };
     // SAFETY: the executing leaf's slot (the contract above).
     let slot = unsafe { &*(slot as *const SpecSlot) };
     if slot.direct_entry.load(Ordering::Relaxed) == 0 && !slot.leaf_ptr().is_null() {
@@ -985,12 +991,14 @@ fn finish_signature(call_conv: cranelift_codegen::isa::CallConv, ptr_ty: types::
 /// null when the frame holds them inline (one or two arguments), and they
 /// are read from the frame.
 ///
-/// SAFETY: called only by a direct site's cold block, with the vmctx
+/// # Safety
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// called only by a direct site's cold block, with the vmctx
 /// contract of every shim and a live `leaf`.
-#[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+#[allow(clippy::too_many_arguments)]
 #[cold]
 #[inline(never)]
-pub(crate) extern "C" fn neovm_jit_direct_finish(
+pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     ctx: *mut u8,
     expected: i64,
     leaf: i64,

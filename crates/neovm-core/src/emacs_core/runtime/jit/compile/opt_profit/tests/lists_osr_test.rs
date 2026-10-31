@@ -27,7 +27,8 @@ fn opt_profit_lists_numeric_osr_retains_legacy_baseline_clif_and_result() {
         context.bc_buf.extend_from_slice(&snapshot);
         let emitted = captured_clif(|| {
             assert_eq!(
-                cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]),
+                // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+                unsafe { cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]) },
                 Some(NativeRun::Ok(Value::make_int(2000).bits()))
             );
         });
@@ -52,7 +53,8 @@ fn opt_profit_lists_list_osr_preserves_snapshot_guards_result_and_mutation() {
     let snapshot = [pair, Value::make_int(4), Value::make_int(2)];
     context.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     let leaf = cache::osr_leaf_ptr_for_test(&f, 1).expect("installed list OSR leaf");
@@ -61,7 +63,9 @@ fn opt_profit_lists_list_osr_preserves_snapshot_guards_result_and_mutation() {
     let bad = [pair, Value::make_int(4), Value::NIL];
     context.bc_buf.clear();
     context.bc_buf.extend_from_slice(&bad);
-    let Some(NativeRun::DeoptAt(frame)) = cache::try_run_osr(&mut context, &f, 1, &bad, &[]) else {
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let run = unsafe { cache::try_run_osr(&mut context, &f, 1, &bad, &[]) };
+    let Some(NativeRun::DeoptAt(frame)) = run else {
         panic!("OSR must preserve the invalid counter snapshot");
     };
     assert_eq!(frame.pc, 1);

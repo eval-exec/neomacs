@@ -30,7 +30,8 @@ fn add1() -> ByteCodeFunction {
 }
 
 fn run(ctx: *mut Context, f: &ByteCodeFunction, arg: i64) -> Option<usize> {
-    try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(arg)]).expect("no signal")
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    unsafe { try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(arg)]) }.expect("no signal")
 }
 
 fn kind(f: &ByteCodeFunction) -> &'static str {
@@ -257,7 +258,8 @@ fn jit_bg_pending_leaf_roots_its_constants_across_gc() {
         .expect("list");
     let f = function(vec![Op::Constant(0), Op::Return], vec![list], 0);
     assert_eq!(
-        try_run_compiled(ctx, &f, Value::NIL, &[]).expect("no signal"),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_compiled(ctx, &f, Value::NIL, &[]) }.expect("no signal"),
         None
     );
     assert_eq!(kind(&f), "pending");
@@ -266,7 +268,8 @@ fn jit_bg_pending_leaf_roots_its_constants_across_gc() {
         ev.eval_str("(make-list 20000 (cons 7 (make-string 3 ?y)))")
             .expect("churn");
     }
-    let bits = try_run_compiled(ctx, &f, Value::NIL, &[])
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let bits = unsafe { try_run_compiled(ctx, &f, Value::NIL, &[]) }
         .expect("no signal")
         .expect("installed and run");
     assert_eq!(bits, list.bits(), "the same object");
@@ -291,7 +294,8 @@ fn jit_bg_root_walk_includes_pending_constants() {
     let f = function(vec![Op::Constant(0), Op::Return], vec![list], 0);
     let (_, slots_before) = cache::compiled_cache_probe();
     assert_eq!(
-        try_run_compiled(ctx, &f, Value::NIL, &[]).expect("no signal"),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_compiled(ctx, &f, Value::NIL, &[]) }.expect("no signal"),
         None
     );
     assert_eq!(kind(&f), "pending");

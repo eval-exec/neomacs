@@ -99,15 +99,20 @@ fn jit_bg_sync_split_runs_the_corpus() {
     assert!(ops.iter().any(|op| matches!(op, Op::Goto(_))));
     let f = function(ops, constants, arity);
     let f_val = Value::make_bytecode(f.clone());
-    let got = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(1000)])
-        .expect("no signal");
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let got = unsafe {
+        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(1000)])
+    }
+    .expect("no signal");
     assert_eq!(got, Some(Value::make_int(1000).bits()));
     // (lambda (x) (car (cons x x)))
     let (ops, constants, arity) = corpus().swap_remove(1);
     let g = function(ops, constants, arity);
     let g_val = Value::make_bytecode(g.clone());
-    let got = crate::emacs_core::jit::try_run_compiled(ctx, &g, g_val, &[Value::make_int(7)])
-        .expect("no signal");
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let got =
+        unsafe { crate::emacs_core::jit::try_run_compiled(ctx, &g, g_val, &[Value::make_int(7)]) }
+            .expect("no signal");
     assert_eq!(got, Some(Value::make_int(7).bits()));
     force_mode_for_test(None);
 }

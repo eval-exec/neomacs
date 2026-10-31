@@ -36,7 +36,8 @@ pub(crate) fn run_compiled(
     args: &[crate::emacs_core::value::Value],
 ) -> Result<Option<usize>, crate::emacs_core::error::Flow> {
     let before = native_dispatch_count();
-    let result = super::cache::try_run_compiled(ctx, f, value, args);
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let result = unsafe { super::cache::try_run_compiled(ctx, f, value, args) };
     if before == native_dispatch_count()
         && matches!(result, Ok(None))
         && f.jit_runtime()
@@ -44,7 +45,8 @@ pub(crate) fn run_compiled(
             .is_some_and(|id| super::cache::cache_entry_kind_for_test(id) == "pending")
     {
         prepare_entry(ctx, f);
-        super::cache::try_run_compiled(ctx, f, value, args)
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { super::cache::try_run_compiled(ctx, f, value, args) }
     } else {
         result
     }
@@ -60,7 +62,8 @@ pub(crate) fn run_osr(
     binds: &[usize],
 ) -> Option<super::compile::NativeRun> {
     prepare_osr(ctx, f, pc);
-    super::cache::try_run_osr(ctx, f, pc, stack, binds)
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    unsafe { super::cache::try_run_osr(ctx, f, pc, stack, binds) }
 }
 
 /// Stage named fixture functions without calling them. The owner retains each

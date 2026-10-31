@@ -5,7 +5,8 @@ use super::*;
 fn run_installed(ctx: &mut Context, source: Value) -> usize {
     let f = source.get_bytecode_data().expect("retained native source");
     // Direct observation: no pending-result preparation or compilation helper.
-    match cache::try_run_compiled(ctx, f, source, &[]) {
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    match unsafe { cache::try_run_compiled(ctx, f, source, &[]) } {
         Ok(Some(bits)) => bits,
         result => panic!("existing installed C5 native entry required: {result:?}"),
     }

@@ -14,12 +14,16 @@ use super::*;
 /// framed entry also increments the numerator, including AOT-sidecar-only
 /// leaves. Revalidation, attention, debugger and depth misses do not count.
 ///
-/// SAFETY: the identical seven-argument ABI and live slot/context contract
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// the identical seven-argument ABI and live slot/context contract
 /// of [`neovm_jit_call_spec`]. The shared macro preserves all existing
 /// containment, frame, marshal, deopt and exit behavior.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw pointers follow the documented caller contract.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_call_spec_census(
+pub(crate) unsafe extern "C" fn neovm_jit_call_spec_census(
     ctx: *mut u8,
     sym_bits: i64,
     expected: i64,

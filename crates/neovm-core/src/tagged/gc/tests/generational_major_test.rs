@@ -785,17 +785,23 @@ fn claimed_old_cons_symbol_insertion_case(fresh: bool, table_old: bool, car: boo
             // accessing ctx. The valid owned cons guarantees that fast arm.
             // This tests the JIT slow-store adapter, not generated machine code.
             let result = if car {
-                neovm_jit_setcar(
-                    std::ptr::null_mut(),
-                    owner.bits() as i64,
-                    symbol.bits() as i64,
-                )
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                unsafe {
+                    neovm_jit_setcar(
+                        std::ptr::null_mut(),
+                        owner.bits() as i64,
+                        symbol.bits() as i64,
+                    )
+                }
             } else {
-                neovm_jit_setcdr(
-                    std::ptr::null_mut(),
-                    owner.bits() as i64,
-                    symbol.bits() as i64,
-                )
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                unsafe {
+                    neovm_jit_setcdr(
+                        std::ptr::null_mut(),
+                        owner.bits() as i64,
+                        symbol.bits() as i64,
+                    )
+                }
             };
             assert_eq!(result, symbol.bits() as i64);
         }
@@ -1007,17 +1013,23 @@ fn claimed_old_cons_heap_insertion_case(
             // Valid-cons adapters return before touching ctx. This checks their
             // ordinary slow-store hook, not generated machine-code execution.
             let result = if car {
-                neovm_jit_setcar(
-                    std::ptr::null_mut(),
-                    owner.bits() as i64,
-                    inserted.bits() as i64,
-                )
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                unsafe {
+                    neovm_jit_setcar(
+                        std::ptr::null_mut(),
+                        owner.bits() as i64,
+                        inserted.bits() as i64,
+                    )
+                }
             } else {
-                neovm_jit_setcdr(
-                    std::ptr::null_mut(),
-                    owner.bits() as i64,
-                    inserted.bits() as i64,
-                )
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                unsafe {
+                    neovm_jit_setcdr(
+                        std::ptr::null_mut(),
+                        owner.bits() as i64,
+                        inserted.bits() as i64,
+                    )
+                }
             };
             assert_eq!(result, inserted.bits() as i64);
         }

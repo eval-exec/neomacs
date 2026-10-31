@@ -64,13 +64,16 @@ fn jit_bg_osr_uses_full_feedback_backend_without_a_countdown() {
             .expect("callback feedback")
             .observe(callback);
         let before = cache::OSR_TRANSFER_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-        let result = cache::try_run_osr_probe(
-            &mut ctx,
-            &f,
-            1,
-            &[callback, Value::make_int(1024), Value::make_int(0)],
-            &[],
-        );
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let result = unsafe {
+            cache::try_run_osr_probe(
+                &mut ctx,
+                &f,
+                1,
+                &[callback, Value::make_int(1024), Value::make_int(0)],
+                &[],
+            )
+        };
         assert!(
             matches!(result, OsrProbe::Ran(crate::emacs_core::jit::compile::NativeRun::Ok(bits)) if bits == Value::make_int(1024).bits())
         );

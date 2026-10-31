@@ -219,8 +219,10 @@ fn jit_bg_worker_installs_under_a_collection_per_allocation() {
                 .symbol_function_id(*name)
                 .and_then(|f| f.get_bytecode_data())
                 .expect("bound");
-            let bits = crate::emacs_core::jit::try_run_compiled(ctx, bc, Value::NIL, &[])
-                .expect("no signal");
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            let bits =
+                unsafe { crate::emacs_core::jit::try_run_compiled(ctx, bc, Value::NIL, &[]) }
+                    .expect("no signal");
             let value = match bits {
                 Some(bits) => Value::from_bits(bits),
                 // Interpreted this call (cold, or pending).

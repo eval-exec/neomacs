@@ -541,7 +541,9 @@ fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
         .set_reopt_level_for_test(ReoptLevel::Interpreter);
     let snapshot = [Value::make_int(10), Value::make_int(0)];
     assert!(
-        crate::emacs_core::jit::cache::try_run_osr(ctx, &lp, 1, &snapshot, &[]).is_none(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { crate::emacs_core::jit::cache::try_run_osr(ctx, &lp, 1, &snapshot, &[]) }
+            .is_none(),
         "no OSR leaf at Interpreter"
     );
     lp.jit_runtime()
@@ -551,7 +553,9 @@ fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
     // positive control, without transferring before its original observation.
     crate::emacs_core::jit::test_support::prepare_osr(ctx, &lp2, 1);
     assert!(
-        crate::emacs_core::jit::cache::try_run_osr(ctx, &lp2, 1, &snapshot, &[]).is_some(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { crate::emacs_core::jit::cache::try_run_osr(ctx, &lp2, 1, &snapshot, &[]) }
+            .is_some(),
         "the same loop transfers below Interpreter"
     );
 }

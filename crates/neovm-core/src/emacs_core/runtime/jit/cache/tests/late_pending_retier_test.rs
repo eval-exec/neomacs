@@ -112,7 +112,9 @@ impl Fixture {
         match class {
             JobClass::FirstSight => assert!(resolve_compiled_leaf_ptr(ctx, &self.proto).is_none()),
             JobClass::Entry => assert_eq!(
-                try_run_compiled(ctx, &self.proto, self.one, &[Value::make_int(8)]).unwrap(),
+                // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+                unsafe { try_run_compiled(ctx, &self.proto, self.one, &[Value::make_int(8)]) }
+                    .unwrap(),
                 None,
             ),
             JobClass::Osr | JobClass::Upgrade => panic!("fixture requests only entry sources"),

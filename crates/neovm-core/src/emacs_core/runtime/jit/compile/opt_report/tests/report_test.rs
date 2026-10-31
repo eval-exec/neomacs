@@ -248,7 +248,8 @@ fn opt_report_counts_normal_osr_refusal_and_transient_native_construction() {
     context.bc_buf.clear();
     context.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut context, &source, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut context, &source, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(2000).bits()))
     );
     let osr = cache::osr_leaf_ptr_for_test(&source, 1).unwrap();

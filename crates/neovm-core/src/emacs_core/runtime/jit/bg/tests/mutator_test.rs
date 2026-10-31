@@ -56,7 +56,8 @@ fn mutator(role: usize, commands: Receiver<Command>, reports: Sender<Report>) {
     let expected_bits = payload.bits();
     let f = function(vec![Op::Constant(0), Op::Return], vec![payload], 0);
     assert_eq!(
-        try_run_compiled(&mut ctx, &f, Value::NIL, &[]).unwrap(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_compiled(&mut ctx, &f, Value::NIL, &[]) }.unwrap(),
         None
     );
     let id = f.jit_runtime().compiled_id().expect("pending id");
@@ -127,7 +128,8 @@ fn mutator(role: usize, commands: Receiver<Command>, reports: Sender<Report>) {
         Ok(Command::Install) => {
             assert_eq!(cache::cache_entry_kind_for_test(id), "pending");
             ctx.gc_collect_exact();
-            let bits = try_run_compiled(&mut ctx, &f, Value::NIL, &[])
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            let bits = unsafe { try_run_compiled(&mut ctx, &f, Value::NIL, &[]) }
                 .expect("no Lisp signal")
                 .expect("ready private leaf installs");
             assert_eq!(bits, expected_bits);

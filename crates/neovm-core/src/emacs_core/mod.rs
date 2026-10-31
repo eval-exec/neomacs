@@ -498,3 +498,7 @@ mod architecture_inline_boundary_test;
 #[cfg(test)]
 #[path = "tests/architecture/host_effect_guard_test.rs"]
 mod architecture_host_effect_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/unsafe_shim_guard_test.rs"]
+mod architecture_unsafe_shim_guard_test;

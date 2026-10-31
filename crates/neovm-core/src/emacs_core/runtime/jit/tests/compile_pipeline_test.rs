@@ -53,8 +53,10 @@ fn jit_pipeline_dispatch_compile_is_split_by_phase() {
     let ctx = &mut ev as *mut Context;
     let f = add1();
     let f_val = Value::make_bytecode(f.clone());
-    let got = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(41)])
-        .expect("no signal");
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let got =
+        unsafe { crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(41)]) }
+            .expect("no signal");
     assert_eq!(got, Some(Value::make_int(42).bits()));
     let s = stats::compile_stats_snapshot();
     assert_eq!(s.total_compiles, 1);

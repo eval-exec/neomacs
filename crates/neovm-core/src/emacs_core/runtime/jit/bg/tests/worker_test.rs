@@ -31,7 +31,8 @@ fn add1() -> ByteCodeFunction {
 }
 
 fn run(ctx: *mut Context, f: &ByteCodeFunction, arg: i64) -> Option<usize> {
-    try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(arg)]).expect("no signal")
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    unsafe { try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(arg)]) }.expect("no signal")
 }
 
 fn kind(f: &ByteCodeFunction) -> &'static str {
@@ -127,7 +128,8 @@ fn corpus_by_dispatch(mode: BgMode) -> (Vec<String>, Vec<String>) {
             for (ops, constants, arity) in corpus() {
                 assert!(arity < wrong.len());
                 let f = function(ops, constants, arity);
-                let _ = try_run_compiled(ctx, &f, Value::NIL, &wrong);
+                // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+                let _ = unsafe { try_run_compiled(ctx, &f, Value::NIL, &wrong) };
             }
             assert!(quiesce_for_test(QUIET));
             cache::drain_ready_pending(None);

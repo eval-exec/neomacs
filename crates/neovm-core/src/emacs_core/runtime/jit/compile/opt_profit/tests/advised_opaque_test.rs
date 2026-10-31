@@ -328,7 +328,8 @@ fn opt_profit_lists48_osr_aset_ignores_collecting_advice_and_preserves_retained_
     snapshot.push(Value::make_int(2));
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(alias.bits()))
     );
     let osr = cache::osr_leaf_ptr_for_test(&source, 1).expect("installed actual OSR leaf");
@@ -339,7 +340,8 @@ fn opt_profit_lists48_osr_aset_ignores_collecting_advice_and_preserves_retained_
     let function_value = Value::make_bytecode(source.clone());
     crate::emacs_core::eval::push_scratch_gc_root(function_value);
     assert_eq!(
-        cache::try_run_compiled(&mut ctx, &source, function_value, &args).unwrap(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_compiled(&mut ctx, &source, function_value, &args) }.unwrap(),
         Some(alias.bits())
     );
     let normal = cache::resolve_compiled_leaf_ptr(&mut ctx, &source).unwrap();

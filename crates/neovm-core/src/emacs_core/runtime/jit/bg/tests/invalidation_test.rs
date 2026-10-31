@@ -85,7 +85,8 @@ fn calls_g(g: Value) -> ByteCodeFunction {
 }
 
 fn call(ctx: *mut Context, f: &ByteCodeFunction, x: i64) -> Option<i64> {
-    try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(x)])
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    unsafe { try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(x)]) }
         .expect("no signal")
         .map(|bits| Value::from_bits(bits).as_fixnum().expect("fixnum"))
 }

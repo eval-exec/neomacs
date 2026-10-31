@@ -283,7 +283,8 @@ fn opt_tier2_seam_keeps_rooted_t1_fallback_and_reverts() {
     let mut ctx = Context::new();
     let run = |ctx: &mut Context| {
         assert_eq!(
-            cache::try_run_compiled(ctx, f, value, &[]).unwrap(),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe { cache::try_run_compiled(ctx, f, value, &[]) }.unwrap(),
             Some(Value::make_int(7).bits())
         );
     };

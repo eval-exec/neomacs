@@ -73,7 +73,8 @@ fn tier2_recursive_spec_reached_leaf_serves_over_ninety_percent() {
     ctx.obarray.set_symbol_function_id(name, value);
     let f = value.get_bytecode_data().expect("recursive byte-code");
     assert_eq!(
-        cache::try_run_compiled(&mut ctx, f, value, &[Value::make_int(3)]).unwrap(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_compiled(&mut ctx, f, value, &[Value::make_int(3)]) }.unwrap(),
         Some(Value::make_int(2).bits())
     );
     let id = f.jit_runtime().compiled_id().expect("compiled");
@@ -89,7 +90,8 @@ fn tier2_recursive_spec_reached_leaf_serves_over_ninety_percent() {
     );
     // GNU 31.1 oracle: fib(18) is 2584 (tmp/t21-fib-gnu.txt).
     assert_eq!(
-        cache::try_run_compiled(&mut ctx, f, value, &[Value::make_int(18)]).unwrap(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_compiled(&mut ctx, f, value, &[Value::make_int(18)]) }.unwrap(),
         Some(Value::make_int(2584).bits())
     );
     let upgraded = cache::compiled_leaf_ptr_for_test(id).expect("upgrade");

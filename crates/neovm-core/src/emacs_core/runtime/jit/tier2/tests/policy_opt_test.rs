@@ -215,7 +215,8 @@ fn tier2_opt_compact_builtin_helper_serves_native_spec_calls() {
     let caller_data = caller.get_bytecode_data().unwrap();
     for _ in 0..CALLS {
         assert_eq!(
-            cache::try_run_compiled(&mut ctx, caller_data, caller, &[arg]).unwrap(),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe { cache::try_run_compiled(&mut ctx, caller_data, caller, &[arg]) }.unwrap(),
             Some(expected.bits())
         );
     }
@@ -285,7 +286,8 @@ fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
     let caller_data = caller.get_bytecode_data().unwrap();
     let call = |ctx: &mut Context| {
         assert_eq!(
-            cache::try_run_compiled(ctx, caller_data, caller, &[arg]).unwrap(),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe { cache::try_run_compiled(ctx, caller_data, caller, &[arg]) }.unwrap(),
             Some(expected.bits())
         );
     };
@@ -435,7 +437,8 @@ fn tier2_opt_budget_wait_freezes_use_feedback_and_reopens_a_fresh_window() {
     let caller_data = caller.get_bytecode_data().unwrap();
     let call = |ctx: &mut Context, callback: Value| {
         assert_eq!(
-            cache::try_run_compiled(ctx, caller_data, caller, &[callback, arg]).unwrap(),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe { cache::try_run_compiled(ctx, caller_data, caller, &[callback, arg]) }.unwrap(),
             Some(expected.bits())
         );
     };

@@ -74,7 +74,8 @@ fn rooted_cons_triplet(context: &mut Context) -> [TaggedValue; 3] {
 fn native_setcar(context: &mut Context, owner: TaggedValue, value: TaggedValue) {
     let vmctx = (context as *mut Context).cast::<u8>();
     assert_eq!(
-        neovm_jit_setcar(vmctx, owner.bits() as i64, value.bits() as i64),
+        // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+        unsafe { neovm_jit_setcar(vmctx, owner.bits() as i64, value.bits() as i64) },
         value.bits() as i64,
     );
 }
@@ -546,7 +547,8 @@ fn observed_alternating_interior_and_growth_cons_stores_do_not_expand_hull_gate(
         // Calling the completed-store shim also exercises a stale refusal
         // already in flight; such a refusal cannot expand the native hull.
         assert_eq!(
-            neovm_jit_setcdr(vmctx, growth.bits() as i64, value.bits() as i64),
+            // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+            unsafe { neovm_jit_setcdr(vmctx, growth.bits() as i64, value.bits() as i64) },
             value.bits() as i64
         );
         assert_eq!(

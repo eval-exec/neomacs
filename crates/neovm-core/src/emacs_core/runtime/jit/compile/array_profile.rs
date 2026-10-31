@@ -49,9 +49,13 @@ pub(super) fn when_open(open: bool, record: impl FnOnce()) {
 /// no Value::from_bits/kind/header access at all. Open observation touches only
 /// immutable physical tag/header and relaxed scalar atomics: no roots, Lisp,
 /// allocation, GC, quit counter, Rust lazy initialization, or error status.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `site` points to the calling leaf's live site record.
+/// `obs` points to the live leaf-observation record for the current leaf execution.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_record_array_use(
+pub unsafe extern "C" fn neovm_jit_t2_record_array_use(
     site: *const ArraySiteFeedback,
     array: i64,
     obs: *const LeafObs,

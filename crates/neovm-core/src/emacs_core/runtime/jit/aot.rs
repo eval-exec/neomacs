@@ -2492,7 +2492,9 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
 
     // (1) NON-deopt path: F(5) = 1+(bump 5) = 6; bump ran once. Served from AOT.
     cell.set_car(Value::make_int(0));
-    let got = super::cache::try_run_compiled(ctx, &f, Value::NIL, &[Value::make_int(5)])
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let got = unsafe { super::cache::try_run_compiled(ctx, &f, Value::NIL, &[Value::make_int(5)]) }
         .map_err(|_| "F(5) unexpectedly signalled")?;
     if got != Some(Value::make_int(6).bits()) {
         return Err(format!("F(5) = 1+(bump 5) expected 6, got {got:?}"));
@@ -2510,7 +2512,9 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
     // start) → 1+ of a non-number signals. CRITICAL: bump ran EXACTLY ONCE.
     let arg = Value::symbol("aot-cb-not-a-number");
     cell.set_car(Value::make_int(0));
-    let aot_res = super::cache::try_run_compiled(ctx, &f, Value::NIL, &[arg]);
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let aot_res = unsafe { super::cache::try_run_compiled(ctx, &f, Value::NIL, &[arg]) };
     let aot_count = count(cell);
     if aot_count != 1 {
         return Err(format!(
@@ -2548,8 +2552,11 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
     let g = mk_fn(g_ops.clone(), g_consts.clone(), 1);
     testkit_emit_and_place_so(&g_ops, &g_consts, 1, dir)
         .ok_or("G (reloc-returning) not AOT-runnable")?;
-    let g_got = super::cache::try_run_compiled(ctx, &g, Value::NIL, &[Value::make_int(0)])
-        .map_err(|_| "G signalled")?;
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let g_got =
+        unsafe { super::cache::try_run_compiled(ctx, &g, Value::NIL, &[Value::make_int(0)]) }
+            .map_err(|_| "G signalled")?;
     if g_got != Some(lit.bits()) {
         return Err(format!(
             "#A eq-identity: G must return the SOURCE const object (bits {:#x}), got {g_got:?}",
@@ -2622,7 +2629,9 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
             let f = mk_fn(arity);
             let f_val = Value::make_bytecode(f.clone());
             // AOT serve (try_run_compiled consults AOT first under force).
-            let aot = super::cache::try_run_compiled(ctx, &f, f_val, &[x])
+            // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+            // runs in this thread under the dormant-Context contract.
+            let aot = unsafe { super::cache::try_run_compiled(ctx, &f, f_val, &[x]) }
                 .map_err(|_| "aot run raised".to_string())?
                 .ok_or("aot run returned None (not served)".to_string())?;
             // Confirm it was actually AOT-backed (not JIT'd).
@@ -2768,7 +2777,9 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Re
      -> Result<(Value, Value), String> {
         let f = mk_fn();
         let f_val = Value::make_bytecode(f.clone());
-        let bits = super::cache::try_run_compiled(ctx, &f, f_val, &[a, b])
+        // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+        // runs in this thread under the dormant-Context contract.
+        let bits = unsafe { super::cache::try_run_compiled(ctx, &f, f_val, &[a, b]) }
             .map_err(|_| "baseline leaf call raised".to_string())?
             .ok_or("aot run returned None (not served)".to_string())?;
         if super::cache::cached_leaf_is_aot_for_func(&f) != Some(true) {
@@ -2911,7 +2922,9 @@ pub fn testkit_callbuiltinsym_aot_selftest(dir: &std::path::Path) -> Result<(), 
 
     let f = mk_fn();
     let f_val = Value::make_bytecode(f.clone());
-    let aot = super::cache::try_run_compiled(ctx, &f, f_val, &[arg])
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let aot = unsafe { super::cache::try_run_compiled(ctx, &f, f_val, &[arg]) }
         .map_err(|_| "aot run raised".to_string())?
         .ok_or("aot run returned None".to_string())?;
     if super::cache::cached_leaf_is_aot_for_func(&f) != Some(true) {
@@ -3022,7 +3035,9 @@ fn cbsym_aot_serve_and_check(
     let f = mk();
     let f_val = Value::make_bytecode(f.clone());
     let ctx: *mut crate::emacs_core::eval::Context = &mut *ev;
-    let aot = super::cache::try_run_compiled(ctx, &f, f_val, args)
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let aot = unsafe { super::cache::try_run_compiled(ctx, &f, f_val, args) }
         .map_err(|_| format!("{label}: aot run raised"))?
         .ok_or_else(|| format!("{label}: aot run returned None"))?;
     if super::cache::cached_leaf_is_aot_for_func(&f) != Some(true) {
@@ -3298,7 +3313,9 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
         let ctx = &mut ev as *mut Context;
         let f = mk_fn();
         let f_val = Value::make_bytecode(f.clone());
-        let aot = super::cache::try_run_compiled(ctx, &f, f_val, &b.args)
+        // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+        // runs in this thread under the dormant-Context contract.
+        let aot = unsafe { super::cache::try_run_compiled(ctx, &f, f_val, &b.args) }
             .map_err(|_| format!("{}: aot run raised", b.label))?
             .ok_or(format!(
                 "{}: aot run returned None (reloc/tier mismatch?)",
@@ -3563,7 +3580,9 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
         let g_val = Value::make_bytecode(g.clone());
 
         let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
-        let aot = super::cache::try_run_compiled(ctx, &g, g_val, &c.args)
+        // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+        // runs in this thread under the dormant-Context contract.
+        let aot = unsafe { super::cache::try_run_compiled(ctx, &g, g_val, &c.args) }
             .map_err(|_| format!("{}: aot run raised", c.label))?
             .ok_or_else(|| format!("{}: aot run None (spec .so did not serve?)", c.label))?;
         if super::cache::cached_leaf_is_aot_for_func(&g) != Some(true) {
@@ -3689,7 +3708,9 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
 
         let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
         let gen0 = SUBR_SPEC_GENERIC_COUNT.load(Ordering::Relaxed);
-        let aot = super::cache::try_run_compiled(ctx, &g, g_val, &[arg])
+        // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+        // runs in this thread under the dormant-Context contract.
+        let aot = unsafe { super::cache::try_run_compiled(ctx, &g, g_val, &[arg]) }
             .map_err(|_| "crux: aot run raised".to_string())?
             .ok_or("crux: aot run None")?;
         if super::cache::cached_leaf_is_aot_for_func(&g) != Some(true) {
@@ -3727,12 +3748,16 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
         // SPEC_EPOCH_DISARMED short-circuit — a merely epoch-stale slot would
         // re-validate + re-arm and FAST would move).
         for _ in 0..5 {
-            let _ = super::cache::try_run_compiled(
-                ctx,
-                &g,
-                Value::make_bytecode(g.clone()),
-                &[Value::string("s")],
-            )
+            // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+            // runs in this thread under the dormant-Context contract.
+            let _ = unsafe {
+                super::cache::try_run_compiled(
+                    ctx,
+                    &g,
+                    Value::make_bytecode(g.clone()),
+                    &[Value::string("s")],
+                )
+            }
             .map_err(|_| "crux: repeated disarmed run raised".to_string())?
             .ok_or("crux: repeated disarmed run None")?;
         }
@@ -3851,7 +3876,9 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
     let args = vec![Value::make_int(5)];
 
     let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
-    let aot = super::cache::try_run_compiled(ctx, &g, g_val, &args)
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let aot = unsafe { super::cache::try_run_compiled(ctx, &g, g_val, &args) }
         .map_err(|_| "pgo-roundtrip: aot run raised".to_string())?
         .ok_or("pgo-roundtrip: aot run None (round-trip .so did not serve?)")?;
     if super::cache::cached_leaf_is_aot_for_func(&g) != Some(true) {
@@ -3986,7 +4013,9 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
     let args = vec![Value::make_int(5)];
 
     let fast0 = SUBR_SPEC_FAST_COUNT.load(Ordering::Relaxed);
-    let aot = super::cache::try_run_compiled(ctx2, &g, g_val, &args)
+    // SAFETY: `ctx` points to the live `Context` borrowed above; the call
+    // runs in this thread under the dormant-Context contract.
+    let aot = unsafe { super::cache::try_run_compiled(ctx2, &g, g_val, &args) }
         .map_err(|_| "pgo-drain: aot run raised".to_string())?
         .ok_or("pgo-drain: aot run None (drained .so did not serve?)")?;
     if super::cache::cached_leaf_is_aot_for_func(&g) != Some(true) {

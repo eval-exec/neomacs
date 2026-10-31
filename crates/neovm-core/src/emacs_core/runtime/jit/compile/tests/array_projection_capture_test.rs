@@ -28,11 +28,14 @@ impl ArrayShape {
 }
 
 fn shim_aref(ctx: &mut Context, array: Value, index: Value) -> i64 {
-    neovm_jit_aref(
-        ctx as *mut Context as *mut u8,
-        array.bits() as i64,
-        index.bits() as i64,
-    )
+    // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+    unsafe {
+        neovm_jit_aref(
+            ctx as *mut Context as *mut u8,
+            array.bits() as i64,
+            index.bits() as i64,
+        )
+    }
 }
 
 fn assert_signal(result: i64) {

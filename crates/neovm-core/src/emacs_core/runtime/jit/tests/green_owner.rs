@@ -205,8 +205,11 @@ fn green_inline_retirement_keeps_native_leaf_allocation_alive() {
     let caller_value = Value::make_bytecode(caller.clone());
     let frame = FrameScope::enter(&mut context, caller_value);
     assert_eq!(
-        cache::try_run_compiled(frame.context, &caller, caller_value, &[Value::make_int(4)])
-            .expect("compiled caller returns normally"),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe {
+            cache::try_run_compiled(frame.context, &caller, caller_value, &[Value::make_int(4)])
+        }
+        .expect("compiled caller returns normally"),
         Some(Value::make_int(16).bits())
     );
     let id = caller.jit_runtime().compiled_id_or_assign();
@@ -399,13 +402,16 @@ fn green_park_accepts_entry_and_unregistered_osr_arithmetic() {
         let frame = FrameScope::enter(&mut context, source);
         let function = source.get_bytecode_data().expect("bytecode fixture");
         assert_eq!(
-            cache::try_run_osr(
-                frame.context,
-                function,
-                1,
-                &[Value::make_int(8), Value::make_int(0)],
-                &[]
-            ),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe {
+                cache::try_run_osr(
+                    frame.context,
+                    function,
+                    1,
+                    &[Value::make_int(8), Value::make_int(0)],
+                    &[],
+                )
+            },
             Some(NativeRun::Ok(Value::make_int(8).bits()))
         );
         let id = function.jit_runtime().compiled_id_or_assign();
@@ -531,7 +537,9 @@ fn green_background_fixture(redefine: bool) {
         .lock()
         .unwrap_or_else(|p| p.into_inner()) = Some(bg::hold_workers_for_test());
     assert_eq!(
-        cache::try_run_compiled(&mut context, source_data, source, &[Value::fixnum(4)]).unwrap(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_compiled(&mut context, source_data, source, &[Value::fixnum(4)]) }
+            .unwrap(),
         None
     );
     let id = source_data.jit_runtime().compiled_id().unwrap();
@@ -564,7 +572,8 @@ fn green_background_fixture(redefine: bool) {
     }
     assert_eq!(cache::cache_entry_kind_for_test(id), "compiled");
     let result =
-        cache::try_run_compiled(&mut context, source_data, source, &[Value::fixnum(4)]).unwrap();
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_compiled(&mut context, source_data, source, &[Value::fixnum(4)]) }.unwrap();
     assert_eq!(
         result,
         Some(Value::fixnum(if redefine { 37 } else { 16 }).bits())
@@ -607,13 +616,16 @@ fn green_osr_retirement_preserves_relocation_roots_after_publication_retires() {
         vec![Value::fixnum(0), literal],
     );
     assert_eq!(
-        cache::try_run_osr(
-            &mut context,
-            &source,
-            1,
-            &[Value::fixnum(2), Value::fixnum(0)],
-            &[],
-        ),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe {
+            cache::try_run_osr(
+                &mut context,
+                &source,
+                1,
+                &[Value::fixnum(2), Value::fixnum(0)],
+                &[],
+            )
+        },
         Some(NativeRun::Ok(literal.bits()))
     );
     assert!(cache::osr_leaf_ptr_for_test(&source, 1).is_some());
@@ -739,13 +751,16 @@ fn green_evicted_active_osr_retains_code_relocations_and_exact_source_through_pa
     cache::prepare_osr_for_test(&mut context, source_data, 1);
     let leaf = cache::osr_leaf_ptr_for_test(source_data, 1).unwrap();
     let frame = FrameScope::enter(&mut context, Value::symbol("green-evicted-osr-source"));
-    let result = cache::try_run_osr(
-        frame.context,
-        source_data,
-        1,
-        &[Value::fixnum(1), Value::fixnum(0)],
-        &[],
-    );
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let result = unsafe {
+        cache::try_run_osr(
+            frame.context,
+            source_data,
+            1,
+            &[Value::fixnum(1), Value::fixnum(0)],
+            &[],
+        )
+    };
     assert_eq!(result, Some(NativeRun::Ok(literal.bits())));
     // SAFETY: the original owner's retirement store retains this exact leaf.
     assert!(unsafe { &*leaf }.retired.get());

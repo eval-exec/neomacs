@@ -68,7 +68,8 @@ fn callback(tag: i64, arity: usize) -> Value {
 }
 
 fn run(ctx: &mut Context, f: &ByteCodeFunction, args: &[Value]) -> Value {
-    let bits = cache::try_run_compiled(ctx, f, Value::NIL, args)
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let bits = unsafe { cache::try_run_compiled(ctx, f, Value::NIL, args) }
         .expect("no signal")
         .expect("the caller ran natively");
     Value::from_bits(bits)
@@ -362,13 +363,16 @@ fn tier2_native_use_off_osr_and_upgrade_leave_native_recording_absent() {
         window: 100,
         loop_credit: 64,
     }));
-    let result = cache::try_run_osr_probe(
-        &mut ctx,
-        &f,
-        1,
-        &[b, Value::make_int(4), Value::make_int(0)],
-        &[],
-    );
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let result = unsafe {
+        cache::try_run_osr_probe(
+            &mut ctx,
+            &f,
+            1,
+            &[b, Value::make_int(4), Value::make_int(0)],
+            &[],
+        )
+    };
     assert!(
         matches!(result, OsrProbe::Ran(NativeRun::Ok(bits)) if bits == Value::make_int(4).bits())
     );

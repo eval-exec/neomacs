@@ -13,7 +13,6 @@ use super::*;
 /// linked `-rdynamic`). The JIT path is unaffected — it binds shims by ADDRESS
 /// through [`register_shims`], so the only effect of `no_mangle` is an exported
 /// symbol name. All shims the MIR tier can emit ([`MIR_SHIM_NAMES`]) carry it.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_gc_save() -> i64 {
     save_scratch_gc_roots() as i64
@@ -28,7 +27,6 @@ pub extern "C" fn neovm_jit_gc_save() -> i64 {
 /// them anyway — and avoids the thread-local push for the many symbol/fixnum
 /// operands the JIT roots before calls. `gc_restore` truncates to the saved
 /// depth, so a variable push count is fine.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_gc_push(bits: i64) {
     let v = Value::from_bits(bits as usize);
@@ -46,11 +44,11 @@ pub extern "C" fn neovm_jit_gc_push(bits: i64) {
 /// the heap ones. Byte-compile profiles showed `neovm_jit_gc_push` as the #1 hot
 /// symbol (7.35%): heap-dense residuals paid a full function call each.
 ///
-/// SAFETY: `ptr` addresses exactly `count` tagged-bits words the generated code
+/// # Safety
+/// `ptr` addresses exactly `count` tagged-bits words the generated code
 /// wrote immediately before this call (its residual buffer); `count >= 0`.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
+pub unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
     for i in 0..count {
         // SAFETY: the generated code wrote `count` tagged words at `ptr`.
         let v = Value::from_bits(unsafe { *ptr.add(i as usize) } as usize);
@@ -61,7 +59,6 @@ pub extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
 }
 
 /// Pop the scratch roots back to a saved depth.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_gc_restore(saved: i64) {
     restore_scratch_gc_roots(saved as usize);
@@ -69,7 +66,6 @@ pub extern "C" fn neovm_jit_gc_restore(saved: i64) {
 
 /// Allocate `(cons car cdr)`. Roots car+cdr across the allocation itself; the
 /// caller roots any *other* live values first.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
     // No rooting: `Value::cons` is pure allocation (`alloc_cons` — free-list
@@ -97,11 +93,11 @@ pub extern "C" fn neovm_jit_make_float(value: f64) -> i64 {
 /// Cold overflow path of the JIT residual-root window (see
 /// `emit_root_window_stores`): grow the ctx root stack to hold `need` slots
 /// and republish the ptr/cap mirrors baked field-offset loads read.
-/// SAFETY: vmctx contract (see `neovm_jit_call`); pure Vec growth — no lisp,
+/// # Safety
+/// The vmctx contract (see `neovm_jit_call`); pure Vec growth — no lisp,
 /// no GC, no safe point.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
+pub unsafe extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     ctx.jit_root_stack_grow(need as usize);
@@ -119,11 +115,11 @@ pub extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
 /// Runs no Lisp and no compiled code: only a heap string and a signal are
 /// allocated, which cannot collect.
 ///
-/// SAFETY: vmctx contract (see `neovm_jit_call`).
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// The vmctx contract (see `neovm_jit_call`).
 #[unsafe(no_mangle)]
 #[cold]
-pub extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
+pub unsafe extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
     if !crate::emacs_core::eval::native_stack::native_stack_exhausted() {
         return ctx as i64;
     }
@@ -560,9 +556,15 @@ pub(crate) use jit_shim_contain;
 /// - The generated code rooted every *other* live `Value` of its frame before
 ///   this call; the callee + args are rooted here, so a GC inside the callee
 ///   traces everything that survives the call.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_call(
+pub unsafe extern "C" fn neovm_jit_call(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -744,9 +746,15 @@ fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
 /// semantics (quit poll first, last argument spread as a list, writeback, NO
 /// nesting-depth guard — see `Vm::apply_for_jit`). Same SAFETY contract as
 /// [`neovm_jit_call`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_apply(
+pub unsafe extern "C" fn neovm_jit_apply(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -1143,10 +1151,10 @@ thread_local! {
 /// veclike tag (a symbol-with-pos is a veclike); AOT objects built before
 /// that prefilter call it for every mismatch, which answers the same.
 ///
-/// SAFETY: same vmctx contract as [`neovm_jit_call`], but only a shared read.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// Same vmctx contract as [`neovm_jit_call`], but only a shared read.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
     #[cfg(test)]
     EQ_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let a = Value::from_bits(a as usize);
@@ -1171,10 +1179,10 @@ pub extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
 /// symbol-with-pos (a veclike) can still count, and only while
 /// `symbols-with-pos-enabled`. Read-only; never allocates, GCs, or signals.
 ///
-/// SAFETY: same read-only vmctx contract as [`neovm_jit_eq_slow`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// Same read-only vmctx contract as [`neovm_jit_eq_slow`].
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
     #[cfg(test)]
     SYMBOLP_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let v = Value::from_bits(v as usize);
@@ -1204,9 +1212,14 @@ thread_local! {
 /// `Vm::varref_for_jit`). Writes the value through `out` and returns
 /// [`STATUS_OK`], or stashes the `Flow` (e.g. `void-variable`) and returns
 /// [`STATUS_SIGNAL`]. SAFETY: same vmctx contract as [`neovm_jit_call`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64 {
     #[cfg(test)]
     VARREF_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1256,9 +1269,13 @@ pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64
 /// `Vm::varset_for_jit`; may run variable watchers — arbitrary lisp). Roots the
 /// value across the assignment. SAFETY: same vmctx contract as
 /// [`neovm_jit_call`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(test)]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1295,9 +1312,13 @@ pub extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val: i64) 
 
 // The original host entry remains the direct knob-off call path. The
 // collection-aware export is selected during lowering, never by this body.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(test)]
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1335,10 +1356,10 @@ pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
 /// Dynamically bind a variable (`Op::VarBind` semantics: GNU `Bvarbind`,
 /// `specbind(sym, POP)`). Records the pre-bind specpdl depth for the matching
 /// `unbind`, or stashes the predicate signal and returns [`STATUS_SIGNAL`].
-/// SAFETY: same vmctx contract as [`neovm_jit_call`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// Same vmctx contract as [`neovm_jit_call`].
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(test)]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1379,9 +1400,13 @@ pub extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, val: i64)
 
 // The original host entry remains the direct knob-off call path. The
 // collection-aware export is selected during lowering, never by this body.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
     #[cfg(test)]
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
@@ -1425,9 +1450,13 @@ pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
 /// frame's outstanding binds; the `min` is defensive only.
 /// Returns `STATUS_SIGNAL` with the cleanup flow stashed when unwinding exits
 /// nonlocally. SAFETY: same vmctx contract as [`neovm_jit_call`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(test)]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
@@ -1469,9 +1498,13 @@ pub extern "C" fn neovm_jit_unbind_collection(ctx: *mut u8, n: i64) -> i64 {
 
 // The original host entry remains the direct knob-off call path. The
 // collection-aware export is selected during lowering, never by this body.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
+pub unsafe extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
     #[cfg(test)]
     UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.

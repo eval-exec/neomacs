@@ -321,10 +321,13 @@ fn source_call_signature(call_conv: CallConv, ptr_ty: types::Type) -> Signature 
 /// every non-OK exit take the contained halves `call_spec_framed_run` and
 /// `call_spec_finish`, the spec shim's own.
 ///
-/// SAFETY: the call-shim contract of `neovm_jit_call`; `slot` points into
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// the call-shim contract of `neovm_jit_call`; `slot` points into
 /// the executing leaf's spec slots.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_call_source_spec(
+pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     ctx: *mut u8,
     callee_bits: i64,
     slot: i64,

@@ -128,7 +128,8 @@ fn opt_require_osr_ready_list_osr_then_normal_cache_selects_opt_and_runs_mutatio
     let snapshot = [pair, Value::make_int(4), Value::make_int(2)];
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));
@@ -139,12 +140,15 @@ fn opt_require_osr_ready_list_osr_then_normal_cache_selects_opt_and_runs_mutatio
     let function_value = Value::make_bytecode(source.clone());
     crate::emacs_core::eval::push_scratch_gc_root(function_value);
     assert_eq!(
-        cache::try_run_compiled(
-            &mut ctx,
-            &source,
-            function_value,
-            &[pair, Value::make_int(6)]
-        )
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe {
+            cache::try_run_compiled(
+                &mut ctx,
+                &source,
+                function_value,
+                &[pair, Value::make_int(6)],
+            )
+        }
         .unwrap(),
         Some(Value::make_int(6).bits())
     );
@@ -200,7 +204,9 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
     // MIR source; this source's entry remains absent until its OSR evidence.
     let numeric = count_loop(0);
     assert_eq!(
-        cache::try_run_compiled(&mut ctx, &numeric, Value::NIL, &[Value::make_int(0)]).unwrap(),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_compiled(&mut ctx, &numeric, Value::NIL, &[Value::make_int(0)]) }
+            .unwrap(),
         Some(Value::make_int(0).bits())
     );
     let source = numeric_then_list();
@@ -210,7 +216,8 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
     ctx.bc_buf.clear();
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut ctx, &source, 1, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     let osr = cache::osr_leaf_ptr_for_test(&source, 1).unwrap();
@@ -227,7 +234,8 @@ fn opt_require_osr_numeric_header_cannot_qualify_separate_list_backedge() {
     ctx.bc_buf.clear();
     ctx.bc_buf.extend_from_slice(&snapshot);
     assert_eq!(
-        cache::try_run_osr(&mut ctx, &source, 11, &snapshot, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { cache::try_run_osr(&mut ctx, &source, 11, &snapshot, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     assert_eq!(

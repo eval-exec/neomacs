@@ -862,15 +862,15 @@ fn compile_osr_leaf_timed(
 ///
 /// # Safety
 /// `ctx` follows the same dormant-Context contract as [`try_run_compiled`].
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub(crate) fn try_run_osr(
+pub(crate) unsafe fn try_run_osr(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     osr_pc: usize,
     stack: &[Value],
     binds: &[usize],
 ) -> Option<NativeRun> {
-    match try_run_osr_probe(ctx, func, osr_pc, stack, binds) {
+    // SAFETY: `ctx` follows the dormant-Context contract documented above.
+    match unsafe { try_run_osr_probe(ctx, func, osr_pc, stack, binds) } {
         OsrProbe::Ran(run) => Some(run),
         OsrProbe::NoTransfer | OsrProbe::Pending => None,
     }
@@ -878,8 +878,12 @@ pub(crate) fn try_run_osr(
 
 /// [`try_run_osr`], telling a background compile still in flight
 /// ([`OsrProbe::Pending`]: the caller must not latch) from no transfer.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub(crate) fn try_run_osr_probe(
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the dispatch seam is executing in and
+/// stays valid for the whole call; the caller holds the dormant-Context
+/// contract described on [`try_run_compiled`].
+pub(crate) unsafe fn try_run_osr_probe(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     osr_pc: usize,
@@ -2747,13 +2751,16 @@ fn max_compiled_id() -> u64 {
     })
 }
 
-// C-ABI dispatch seam: `ctx` is a raw `*mut Context` from the native-call shim
-// path; the documented dormant-Context contract (see the `unsafe` deref inside)
-// makes the read sound. The lint fires on the `pub` + raw-ptr-deref shape, same
-// as the 35 `neovm_jit_*` shims, which carry the same allow.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+// Dispatch seam: `ctx` is a raw `*mut Context` from the native-call shim
+// path; the documented dormant-Context contract (see the `unsafe` deref
+// inside) makes the read sound.
+//
+/// # Safety
+/// `ctx` is the live owner `Context` the dispatch seam is executing in and
+/// stays valid for the whole call; the caller holds the dormant-Context
+/// contract described above.
 #[inline(never)]
-pub fn try_run_compiled(
+pub unsafe fn try_run_compiled(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,

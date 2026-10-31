@@ -735,13 +735,16 @@ fn the_bcall_guard_declines_every_observable_protocol_step() {
     let slot = SpecSlot::at_epoch(ev.obarray.function_epoch());
     slot.bind_subr(sym.0, expected);
     let call = |ev: &mut Context, slot: &SpecSlot| {
-        tramp(
-            ev as *const Context,
-            slot as *const SpecSlot,
-            Value::fixnum(1).bits() as i64,
-            table.bits() as i64,
-            Value::NIL.bits() as i64,
-        )
+        // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+        unsafe {
+            tramp(
+                ev as *const Context,
+                slot as *const SpecSlot,
+                Value::fixnum(1).bits() as i64,
+                table.bits() as i64,
+                Value::NIL.bits() as i64,
+            )
+        }
     };
     let one = Value::symbol("one").bits() as i64;
     let generic = super::leaf_abi::LEAF_NEED_GENERIC;

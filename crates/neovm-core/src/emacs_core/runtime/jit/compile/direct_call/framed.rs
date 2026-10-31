@@ -31,15 +31,17 @@ pub(crate) static DIRECT_FRAMED_CALLS: std::sync::atomic::AtomicU64 =
 /// trampoline. A contained panic leaves the reference path's counted
 /// depth and frame residue for the caller's healing boundary.
 ///
-/// SAFETY: the shim vmctx contract; `leaf_bits` names the live entered
+/// # Safety
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// the shim vmctx contract; `leaf_bits` names the live entered
 /// leaf, `args_ptr` addresses `nargs` original call words for this extent,
 /// `bt_count` is its frame's specpdl index, and `const_base` belongs to the
 /// executing callee object. The slot's framed tag proves the memory ABI,
 /// exact required-only argument shape, and absence of an AOT sidecar.
-#[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+#[allow(clippy::too_many_arguments)]
 #[inline(never)]
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_direct_framed(
+pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
     ctx: *mut u8,
     callee_bits: i64,
     leaf_bits: i64,

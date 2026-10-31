@@ -283,12 +283,15 @@ fn worker_deopt(context: &mut Context) -> EvalResult {
         .expect("worker arithmetic source");
     let before = crate::emacs_core::jit::stats::compile_stats_snapshot().deopts();
     let precise_before = cache::native_run_counters().2;
-    let answer = cache::try_run_compiled(
-        context,
-        source,
-        function,
-        &[Value::fixnum(Value::MOST_POSITIVE_FIXNUM)],
-    )?;
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let answer = unsafe {
+        cache::try_run_compiled(
+            context,
+            source,
+            function,
+            &[Value::fixnum(Value::MOST_POSITIVE_FIXNUM)],
+        )
+    }?;
     let Some(bits) = answer else {
         return Err(signal(
             LispCondition::Error,
@@ -822,13 +825,16 @@ fn green_jit_switch_osr_entry_yields_with_its_own_native_roots() {
             .eval_str("(setq f5-jit-worker (make-thread (lambda () (garbage-collect) 'worker)))")
             .unwrap();
         let source = function.get_bytecode_data().unwrap();
-        let run = cache::try_run_osr(
-            context,
-            source,
-            1,
-            &[Value::fixnum(3), Value::fixnum(0)],
-            &[],
-        )
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let run = unsafe {
+            cache::try_run_osr(
+                context,
+                source,
+                1,
+                &[Value::fixnum(3), Value::fixnum(0)],
+                &[],
+            )
+        }
         .expect("the exact header snapshot enters a real OSR leaf");
         match run {
             NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits), Value::fixnum(3)),

@@ -172,8 +172,15 @@ pub(crate) fn recorded_target_at(pc: usize) -> Option<(CallTarget, SiteShape)> {
 /// call-site table (kept alive by the leaf). `WINDOWED` (every mode but
 /// `census`): only inside the site's profiling window; after it the shim
 /// is a count test and a tail call.
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_call_prof<const WINDOWED: bool>(
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// `site` points to the calling leaf's live site record.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
+pub(crate) unsafe extern "C" fn neovm_jit_call_prof<const WINDOWED: bool>(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -185,14 +192,22 @@ pub(crate) extern "C" fn neovm_jit_call_prof<const WINDOWED: bool>(
     // frame: a load, a compare and a jump.
     // SAFETY: the calling leaf keeps its source's table alive.
     if !WINDOWED || unsafe { &*site }.window_open() {
-        return neovm_jit_call_recording(ctx, func_bits, args_ptr, nargs, out, site);
+        // SAFETY: the recording arm upholds this shim's contract.
+        return unsafe { neovm_jit_call_recording(ctx, func_bits, args_ptr, nargs, out, site) };
     }
-    neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// [`neovm_jit_call_prof`]'s recording arm.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `site`
+/// points into the calling leaf's live site record. The caller is the profiling
+/// shim above, which holds the frame.
 #[inline(never)]
-extern "C" fn neovm_jit_call_recording(
+unsafe extern "C" fn neovm_jit_call_recording(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -201,12 +216,20 @@ extern "C" fn neovm_jit_call_recording(
     site: *const CallSiteFeedback,
 ) -> i64 {
     record_at(site, func_bits, args_ptr, nargs);
-    neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// [`neovm_jit_apply`] at a recording site (see [`neovm_jit_call_prof`]).
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_apply_prof<const WINDOWED: bool>(
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// `site` points to the calling leaf's live site record.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
+pub(crate) unsafe extern "C" fn neovm_jit_apply_prof<const WINDOWED: bool>(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -216,14 +239,22 @@ pub(crate) extern "C" fn neovm_jit_apply_prof<const WINDOWED: bool>(
 ) -> i64 {
     // SAFETY: as above.
     if !WINDOWED || unsafe { &*site }.window_open() {
-        return neovm_jit_apply_recording(ctx, func_bits, args_ptr, nargs, out, site);
+        // SAFETY: the recording arm upholds this shim's contract.
+        return unsafe { neovm_jit_apply_recording(ctx, func_bits, args_ptr, nargs, out, site) };
     }
-    neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// [`neovm_jit_apply_prof`]'s recording arm.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `site`
+/// points into the calling leaf's live site record. The caller is the profiling
+/// shim above, which holds the frame.
 #[inline(never)]
-extern "C" fn neovm_jit_apply_recording(
+unsafe extern "C" fn neovm_jit_apply_recording(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -232,14 +263,18 @@ extern "C" fn neovm_jit_apply_recording(
     site: *const CallSiteFeedback,
 ) -> i64 {
     record_at(site, func_bits, args_ptr, nargs);
-    neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: the recording shim's contract covers ctx, args_ptr and out.
+    unsafe { neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// Record `target` at `site` (a speculated mapping-builtin call, whose
 /// callback is its argument 0), counting the execution (see
 /// [`neovm_jit_call_prof`] for `WINDOWED`).
-#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_record_call_target<const WINDOWED: bool>(
+/// # Safety
+/// `site` points to the calling leaf's live site record.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
+pub(crate) unsafe extern "C" fn neovm_jit_record_call_target<const WINDOWED: bool>(
     site: *const CallSiteFeedback,
     target: i64,
 ) {

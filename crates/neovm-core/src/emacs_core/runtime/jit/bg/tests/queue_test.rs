@@ -24,7 +24,8 @@ fn add1() -> ByteCodeFunction {
 }
 
 fn entry(ctx: *mut Context, f: &ByteCodeFunction) -> Option<usize> {
-    try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(1)]).expect("no signal")
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    unsafe { try_run_compiled(ctx, f, Value::NIL, &[Value::make_int(1)]) }.expect("no signal")
 }
 
 fn kind(f: &ByteCodeFunction) -> &'static str {
@@ -52,13 +53,16 @@ fn jit_bg_queue_serves_classes_in_priority_order() {
         assert!(cache::resolve_compiled_leaf_ptr(ctx, &s1).is_none());
         assert_eq!(entry(ctx, &e2), None);
         assert!(matches!(
-            cache::try_run_osr_probe(
-                ctx,
-                &looping,
-                1,
-                &[Value::make_int(10), Value::make_int(0)],
-                &[]
-            ),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe {
+                cache::try_run_osr_probe(
+                    ctx,
+                    &looping,
+                    1,
+                    &[Value::make_int(10), Value::make_int(0)],
+                    &[],
+                )
+            },
             cache::OsrProbe::Pending
         ));
         assert!(cache::resolve_compiled_leaf_ptr(ctx, &s2).is_none());

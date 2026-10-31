@@ -247,12 +247,15 @@ fn observed_string_keeps_exact_mark_and_compiled_invalidation_without_window_geo
     let value = TaggedValue::make_int(i64::from(b'z'));
     let vmctx = (&mut context as *mut crate::emacs_core::eval::Context).cast::<u8>();
     assert_eq!(
-        crate::emacs_core::jit::compile::neovm_jit_aset_collection(
-            vmctx,
-            owner.bits() as i64,
-            TaggedValue::make_int(0).bits() as i64,
-            value.bits() as i64,
-        ),
+        // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+        unsafe {
+            crate::emacs_core::jit::compile::neovm_jit_aset_collection(
+                vmctx,
+                owner.bits() as i64,
+                TaggedValue::make_int(0).bits() as i64,
+                value.bits() as i64,
+            )
+        },
         value.bits() as i64,
     );
     assert_eq!(owner.as_str_owned().unwrap(), "zbc");

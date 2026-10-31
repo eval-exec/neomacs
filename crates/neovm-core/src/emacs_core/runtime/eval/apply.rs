@@ -2627,8 +2627,11 @@ impl Context {
                 let saved_roots = save_scratch_gc_roots();
                 push_scratch_gc_root(func_value);
                 let ctx_ptr = self as *mut Context;
-                let native =
-                    crate::emacs_core::jit::try_run_compiled(ctx_ptr, bc_data, func_value, &args);
+                // SAFETY: `ctx_ptr` is this live `Context`; the call runs in
+                // this thread under the dormant-Context contract.
+                let native = unsafe {
+                    crate::emacs_core::jit::try_run_compiled(ctx_ptr, bc_data, func_value, &args)
+                };
                 // Arm the direct entry once its leaf actually ran, so the
                 // next call of this arity skips the dispatcher and the
                 // cache probe above — the same hand-off
@@ -3215,9 +3218,13 @@ impl Context {
                     let saved_roots = save_scratch_gc_roots();
                     push_scratch_gc_root(func_value);
                     let args = LispArgVec::from_slice(&self.bc_buf[args_start..args_start + nargs]);
-                    let native = crate::emacs_core::jit::try_run_compiled(
-                        ctx_ptr, bc_data, func_value, &args,
-                    );
+                    // SAFETY: `ctx_ptr` is this live `Context`; the call runs
+                    // in this thread under the dormant-Context contract.
+                    let native = unsafe {
+                        crate::emacs_core::jit::try_run_compiled(
+                            ctx_ptr, bc_data, func_value, &args,
+                        )
+                    };
                     if matches!(native, Ok(Some(_))) {
                         cache::arm_leaf_slot(ctx_ptr, bc_data);
                     }

@@ -94,15 +94,15 @@ pub(super) fn binding_valid(
 /// error, and uses no RefCell/collection observer/profile hooks which could
 /// panic or allocate. No saved Context/Subr pointer, global cache or new TLS.
 ///
-/// SAFETY: generated code passes its currently running, dormant Context as
+/// # Safety
+/// Generated code passes its currently running, dormant Context as
 /// vmctx, under the same exclusive mutator contract as the existing read-only
 /// dispatch shims. Null conservatively misses; arbitrary host pointers are
 /// outside that existing ABI contract. Function cells and static object entry
 /// metadata follow the paired registration/read lock; current function-cell
 /// ownership and Release epoch publication follow existing dispatch contracts.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_sqrt_binding_valid(
+pub unsafe extern "C" fn neovm_jit_sqrt_binding_valid(
     ctx: *mut u8,
     symbol_bits: i64,
     expected_subr_bits: i64,

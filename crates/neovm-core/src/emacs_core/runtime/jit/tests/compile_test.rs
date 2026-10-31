@@ -1111,7 +1111,9 @@ fn inlined_callee_redefinition_rejits() {
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
     let f_val = Value::make_bytecode(f.clone());
     prepare_entry(ctx, &f);
-    let r1 = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let r1 =
+        unsafe { crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]) };
     assert!(
         matches!(r1, Ok(Some(b)) if b == Value::make_int(25).bits()),
         "inlined (* 5 5) should be 25, got {r1:?}"
@@ -1123,7 +1125,9 @@ fn inlined_callee_redefinition_rejits() {
         crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite,
     );
     prepare_entry(ctx, &f);
-    let r2 = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let r2 =
+        unsafe { crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]) };
     assert!(
         matches!(r2, Ok(Some(b)) if b == Value::make_int(6).bits()),
         "after redefinition + epoch bump, re-JIT inlines the new C: (1+ 5) = 6, got {r2:?}"
@@ -5241,7 +5245,8 @@ fn cleanup_flow_does_not_pop_an_outer_callers_handler() {
     stash_pending_flow(Flow::throw(inner_tag, Value::make_int(1)));
     let mut out = 0i64;
     let ctx_ptr = &mut ctx as *mut crate::emacs_core::eval::Context as *mut u8;
-    assert_eq!(neovm_jit_match_handler(ctx_ptr, 2, &mut out), -1);
+    // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+    assert_eq!(unsafe { neovm_jit_match_handler(ctx_ptr, 2, &mut out) }, -1);
     assert_eq!(ctx.condition_stack.len(), 1, "caller handler survives");
     assert_eq!(ctx.specpdl.len(), 0, "cleanup extent fully unwound");
     let flow = take_pending_flow().expect("cleanup throw propagated to caller");
@@ -9948,7 +9953,8 @@ fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
     );
     let f_val = Value::make_bytecode(f.clone());
     let run = |ctx: *mut Context| {
-        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(4)])
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(4)]) }
     };
     prepare_entry(ctx, &f);
     let first = run(ctx);
@@ -10025,12 +10031,10 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
     let f_val = Value::make_bytecode(f.clone());
     // `None` when F ran interpreted: once C is only called, a call-only
     // body may stay below the JIT's profit gate.
-    let run = |ctx: *mut Context| match crate::emacs_core::jit::try_run_compiled(
-        ctx,
-        &f,
-        f_val,
-        &[Value::make_int(4)],
-    ) {
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let run = |ctx: *mut Context| match unsafe {
+        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(4)])
+    } {
         Ok(bits) => bits,
         Err(flow) => panic!("F signalled: {flow:?}"),
     };

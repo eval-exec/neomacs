@@ -227,7 +227,8 @@ fn opt_profit_osr_cache_matches_interpreter_and_legacy_entry_guards() {
         context.bc_buf.clear();
         context.bc_buf.extend_from_slice(&snapshot);
         assert_eq!(
-            cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]),
+            // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+            unsafe { cache::try_run_osr(&mut context, &f, 1, &snapshot, &[]) },
             Some(NativeRun::Ok(expected.bits())),
         );
         let leaf = cache::osr_leaf_ptr_for_test(&f, 1).expect("installed OSR leaf");
@@ -236,8 +237,9 @@ fn opt_profit_osr_cache_matches_interpreter_and_legacy_entry_guards() {
         let bad = [Value::make_int(2000), Value::NIL];
         context.bc_buf.clear();
         context.bc_buf.extend_from_slice(&bad);
-        let Some(NativeRun::DeoptAt(frame)) = cache::try_run_osr(&mut context, &f, 1, &bad, &[])
-        else {
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let run = unsafe { cache::try_run_osr(&mut context, &f, 1, &bad, &[]) };
+        let Some(NativeRun::DeoptAt(frame)) = run else {
             panic!("OSR must preserve the invalid entry snapshot");
         };
         assert_eq!(frame.pc, 1);

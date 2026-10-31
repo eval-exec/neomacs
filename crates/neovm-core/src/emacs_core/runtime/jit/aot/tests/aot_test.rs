@@ -773,12 +773,15 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
     // Drive try_run_compiled so the AOT leaf is cached.
     let id = f.jit_runtime().compiled_id_or_assign();
     super::super::stats::reset_compile_stats();
-    let _ = super::super::cache::try_run_compiled(
-        std::ptr::null_mut(),
-        &f,
-        Value::NIL,
-        &[Value::make_int(0)],
-    )
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let _ = unsafe {
+        super::super::cache::try_run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[Value::make_int(0)],
+        )
+    }
     .unwrap();
     // Sanity: it must have been served FROM AOT (else the test proves nothing).
     assert_eq!(
@@ -878,12 +881,15 @@ fn aot_hit_serves_without_jitting_through_cache() {
     f.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(16);
 
     let id = f.jit_runtime().compiled_id_or_assign();
-    let got = super::super::cache::try_run_compiled(
-        std::ptr::null_mut(),
-        &f,
-        Value::NIL,
-        &[Value::make_int(37)],
-    )
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let got = unsafe {
+        super::super::cache::try_run_compiled(
+            std::ptr::null_mut(),
+            &f,
+            Value::NIL,
+            &[Value::make_int(37)],
+        )
+    }
     .unwrap();
     // (+ 37 5) = 42.
     assert_eq!(got, Some(Value::make_int(42).bits()), "AOT result");

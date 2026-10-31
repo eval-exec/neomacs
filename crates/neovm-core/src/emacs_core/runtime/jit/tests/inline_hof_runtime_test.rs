@@ -122,14 +122,17 @@ fn active(
         sequence.bits() as i64,
     ];
     let len = neovm_jit_hof_length(sequence.bits() as i64);
-    let bt = neovm_jit_hof_start(
-        ctx as *mut Context as *mut u8,
-        map.bits() as i64,
-        words.as_ptr(),
-        3,
-        len,
-        kind as i64,
-    );
+    // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+    let bt = unsafe {
+        neovm_jit_hof_start(
+            ctx as *mut Context as *mut u8,
+            map.bits() as i64,
+            words.as_ptr(),
+            3,
+            len,
+            kind as i64,
+        )
+    };
     assert!(bt >= 0);
     let mut tail = sequence;
     for _ in 0..index {
@@ -225,7 +228,10 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
         let flow = if native_abort {
             stash_pending_flow(flow);
             assert_eq!(
-                neovm_jit_hof_abort(&mut ctx as *mut Context as *mut u8, state.bt as i64),
+                // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+                unsafe {
+                    neovm_jit_hof_abort(&mut ctx as *mut Context as *mut u8, state.bt as i64)
+                },
                 Value::NIL.bits() as i64
             );
             take_pending_flow().expect("abort preserves quit")

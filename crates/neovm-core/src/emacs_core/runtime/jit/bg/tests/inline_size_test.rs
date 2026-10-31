@@ -77,7 +77,8 @@ fn jit_bg_small_entry_backend_runs_in_line() {
     let mut ctx = Context::new();
     let f = add1();
     let before = stats_snapshot();
-    let got = try_run_compiled(&mut ctx, &f, Value::NIL, &[Value::make_int(41)]);
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let got = unsafe { try_run_compiled(&mut ctx, &f, Value::NIL, &[Value::make_int(41)]) };
     assert_eq!(got.expect("no signal"), Some(Value::make_int(42).bits()));
     assert_eq!(
         stats_snapshot().enqueued[JobClass::Entry as usize],
@@ -94,7 +95,8 @@ fn jit_bg_large_entry_backend_goes_to_a_worker() {
     let mut ctx = Context::new();
     let f = add1();
     let before = stats_snapshot();
-    let got = try_run_compiled(&mut ctx, &f, Value::NIL, &[Value::make_int(41)]);
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let got = unsafe { try_run_compiled(&mut ctx, &f, Value::NIL, &[Value::make_int(41)]) };
     assert_eq!(got.expect("no signal"), None, "the tier-up interprets");
     assert_eq!(
         stats_snapshot().enqueued[JobClass::Entry as usize],

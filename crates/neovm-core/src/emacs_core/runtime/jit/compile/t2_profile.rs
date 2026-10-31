@@ -256,8 +256,8 @@ fn credit_generic(
     if !native.is_some_and(is_mapping_builtin) {
         return;
     }
-    // SAFETY: the generated call buffer contains nargs argument words.
-    neovm_jit_t2_hof_credit(obs, unsafe { *args_ptr.add(1) });
+    // SAFETY: generated code supplies `obs` and the call buffer.
+    unsafe { neovm_jit_t2_hof_credit(obs, *args_ptr.add(1)) };
 }
 
 /// The profiling shims receive a live, mutator-owned leaf observation.
@@ -272,8 +272,14 @@ pub(super) fn credit_window_open(obs: *const LeafObs) -> bool {
 
 /// The generic `_prof` call: HOF credit, then the complete existing call
 /// protocol. Generated code supplies a live leaf-owned obs and call buffer.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `obs`
+/// points to the live leaf-observation record. The call comes from generated
+/// code holding the frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_call_prof(
+pub unsafe extern "C" fn neovm_jit_t2_call_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -282,15 +288,23 @@ pub extern "C" fn neovm_jit_t2_call_prof(
     obs: *const LeafObs,
 ) -> i64 {
     credit_generic(ctx, func_bits, args_ptr, nargs, obs);
-    neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// The subr `_prof` call: credit only an already-armed common path. A declined
 /// site receives its credit in the generic fallback instead. Every other
 /// state executes the original quit/arming/debugger/error protocol unchanged.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// `args_ptr` points to readable words owned by the caller for the duration of the call.
+/// `out` points to a writable `i64` slot owned by the calling frame.
+/// `obs` points to the live leaf-observation record for the current leaf execution.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_call_subr_prof(
+pub unsafe extern "C" fn neovm_jit_t2_call_subr_prof(
     ctx: *mut u8,
     sym: i64,
     expected: i64,
@@ -301,7 +315,8 @@ pub extern "C" fn neovm_jit_t2_call_subr_prof(
     obs: *const LeafObs,
 ) -> i64 {
     if nargs < 2 || !credit_window_open(obs) {
-        return neovm_jit_call_subr_spec(ctx, sym, expected, slot, args_ptr, nargs, out);
+        // SAFETY: this shim's contract covers ctx, args_ptr and out.
+        return unsafe { neovm_jit_call_subr_spec(ctx, sym, expected, slot, args_ptr, nargs, out) };
     }
     // SAFETY: the caller owns live Context, leaf spec slot and call args.
     let common = unsafe {
@@ -312,17 +327,25 @@ pub extern "C" fn neovm_jit_t2_call_subr_prof(
             && !ctx.debug_on_next_call_is_armed()
     };
     if common {
-        // SAFETY: the generated call buffer contains nargs argument words.
-        neovm_jit_t2_hof_credit(obs, unsafe { *args_ptr.add(1) });
+        // SAFETY: generated code supplies obs and the call buffer.
+        unsafe { neovm_jit_t2_hof_credit(obs, *args_ptr.add(1)) };
     }
-    neovm_jit_call_subr_spec(ctx, sym, expected, slot, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_call_subr_spec(ctx, sym, expected, slot, args_ptr, nargs, out) }
 }
 
 /// Target recording and HOF credit share one profiling shim. The site's
 /// atomics retain the existing record-mode window; tier credit has its own
 /// leaf window, so neither operation extends the other's lifetime.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `site`
+/// points into the calling leaf's live site record; `obs` points to the live
+/// leaf-observation record. The call comes from generated code holding the
+/// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_call_feedback_prof(
+pub unsafe extern "C" fn neovm_jit_t2_call_feedback_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -332,13 +355,25 @@ pub extern "C" fn neovm_jit_t2_call_feedback_prof(
     obs: *const LeafObs,
 ) -> i64 {
     credit_generic(ctx, func_bits, args_ptr, nargs, obs);
-    super::call_feedback::neovm_jit_call_prof::<true>(ctx, func_bits, args_ptr, nargs, out, site)
+    // SAFETY: this shim's contract covers ctx, args_ptr, out and site.
+    unsafe {
+        super::call_feedback::neovm_jit_call_prof::<true>(
+            ctx, func_bits, args_ptr, nargs, out, site,
+        )
+    }
 }
 
 /// Census variant of [`neovm_jit_t2_call_feedback_prof`]. HOF credit still
 /// stops at the tier window even when the call-target census runs forever.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `site`
+/// points into the calling leaf's live site record; `obs` points to the live
+/// leaf-observation record. The call comes from generated code holding the
+/// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_call_feedback_census(
+pub unsafe extern "C" fn neovm_jit_t2_call_feedback_census(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -348,7 +383,12 @@ pub extern "C" fn neovm_jit_t2_call_feedback_census(
     obs: *const LeafObs,
 ) -> i64 {
     credit_generic(ctx, func_bits, args_ptr, nargs, obs);
-    super::call_feedback::neovm_jit_call_prof::<false>(ctx, func_bits, args_ptr, nargs, out, site)
+    // SAFETY: this shim's contract covers ctx, args_ptr, out and site.
+    unsafe {
+        super::call_feedback::neovm_jit_call_prof::<false>(
+            ctx, func_bits, args_ptr, nargs, out, site,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -360,8 +400,15 @@ mod tests;
 /// calls, and a reverted T1 reopens its own window against widened feedback.
 /// Generated callers hold both the leaf and its source table; recording only
 /// joins existing atomics/Weak identities and cannot allocate Lisp or collect.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `site`
+/// points into the calling leaf's live site record; `obs` points to the live
+/// leaf-observation record. The call comes from generated code holding the
+/// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_call_use_prof(
+pub unsafe extern "C" fn neovm_jit_t2_call_use_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -379,13 +426,21 @@ pub extern "C" fn neovm_jit_t2_call_use_prof(
             credit_generic(ctx, func_bits, args_ptr, nargs, obs);
         }
     }
-    neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_call(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// The same leaf window for Op::Apply, retaining its tail-spreading protocol.
 /// It receives no HOF credit, as with the existing apply profiler.
+///
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with; `args_ptr`
+/// points to readable argument words; `out` is a writable result slot; `site`
+/// points into the calling leaf's live site record; `obs` points to the live
+/// leaf-observation record. The call comes from generated code holding the
+/// frame, or from a Rust caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_apply_use_prof(
+pub unsafe extern "C" fn neovm_jit_t2_apply_use_prof(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -397,16 +452,21 @@ pub extern "C" fn neovm_jit_t2_apply_use_prof(
     if credit_window_open(obs) {
         super::call_feedback::record_at(site, func_bits, args_ptr, nargs);
     }
-    neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
+    // SAFETY: this shim's contract above covers ctx, args_ptr and out.
+    unsafe { neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out) }
 }
 
 /// A statically speculated mapping call records its callback through this
 /// leaf-gated helper before the existing subr protocol, just as Record/Census
 /// record the attempted callback before that protocol. It is a separate lazy
 /// import because the original site-only recorder cannot know the T1 window.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `site` points to the calling leaf's live site record.
+/// `obs` points to the live leaf-observation record for the current leaf execution.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn neovm_jit_t2_record_call_use_target(
+pub unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
     site: *const CallSiteFeedback,
     target: i64,
     obs: *const LeafObs,

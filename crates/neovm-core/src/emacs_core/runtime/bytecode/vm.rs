@@ -4158,13 +4158,17 @@ impl<'a> Vm<'a> {
         let bind_stack = &mut aux_stack.current_mut().bind_stack;
         let entry_spec_depth = self.ctx.specpdl.len();
         let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
-        let resume = match crate::emacs_core::jit::cache::try_run_osr_probe(
-            ctx_ptr,
-            func,
-            target,
-            &snapshot,
-            bind_stack.as_slice(),
-        ) {
+        // SAFETY: `ctx_ptr` is this live `Context`; the probe runs in this
+        // thread under the dormant-Context contract.
+        let resume = match unsafe {
+            crate::emacs_core::jit::cache::try_run_osr_probe(
+                ctx_ptr,
+                func,
+                target,
+                &snapshot,
+                bind_stack.as_slice(),
+            )
+        } {
             OsrProbe::Ran(NativeRun::Ok(bits)) => {
                 return OsrOutcome::Returned(Value::from_bits(bits));
             }

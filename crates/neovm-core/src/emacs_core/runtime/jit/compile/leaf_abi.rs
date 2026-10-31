@@ -229,9 +229,13 @@ fn word_outcome(word: i64) -> LeafOutcome {
 /// contained body for whatever `F` declines.
 macro_rules! bare_trampoline {
     ($bare:ident, $spec:path, $body:path, 1) => {
-        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
         #[unsafe(no_mangle)]
-        pub extern "C" fn $bare(ctx: *const Context, a: i64) -> i64 {
+        pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64) -> i64 {
             let a = Value::from_bits(a as usize);
             let (c, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |c| $body(c, a));
@@ -239,9 +243,13 @@ macro_rules! bare_trampoline {
         }
     };
     ($bare:ident, $spec:path, $body:path, 2) => {
-        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
         #[unsafe(no_mangle)]
-        pub extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
+        pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
             let (a, b) = (Value::from_bits(a as usize), Value::from_bits(b as usize));
             let (c, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |c| $body(c, a, b));
@@ -249,9 +257,13 @@ macro_rules! bare_trampoline {
         }
     };
     ($bare:ident, $spec:path, $body:path, 2, fast = $fast:path, rest = $rest:ident) => {
-        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
         #[unsafe(no_mangle)]
-        pub extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
+        pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
             let (a, b) = (Value::from_bits(a as usize), Value::from_bits(b as usize));
             let (c, active) = leaf_enter(ctx, &$spec);
             let word = match $fast(c, &[a, b, Value::NIL, Value::NIL]) {
@@ -404,9 +416,14 @@ fn bcall_declined(id: LeafId) -> i64 {
 /// has slots passes nil for the rest, as the fixed-arity dispatcher does.
 macro_rules! bcall_trampoline {
     ($bcall:ident, $spec:path, $body:path, 1) => {
-        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// `slot` points into the executing leaf's spec slots, alive while its code runs.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
         #[unsafe(no_mangle)]
-        pub extern "C" fn $bcall(ctx: *const Context, slot: *const SpecSlot, a: i64) -> i64 {
+        pub unsafe extern "C" fn $bcall(ctx: *const Context, slot: *const SpecSlot, a: i64) -> i64 {
             // SAFETY: the seam's dormant Context; `slot` points into the
             // executing leaf's spec slots (alive while its code runs).
             let (cx, slot) = unsafe { (&*ctx, &*slot) };
@@ -420,9 +437,14 @@ macro_rules! bcall_trampoline {
         }
     };
     ($bcall:ident, $spec:path, $body:path, 2) => {
-        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// `slot` points into the executing leaf's spec slots, alive while its code runs.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
         #[unsafe(no_mangle)]
-        pub extern "C" fn $bcall(
+        pub unsafe extern "C" fn $bcall(
             ctx: *const Context,
             slot: *const SpecSlot,
             a: i64,
@@ -441,9 +463,14 @@ macro_rules! bcall_trampoline {
         }
     };
     ($bcall:ident, $spec:path, $body:path, 3) => {
-        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        /// # Safety
+        /// `ctx` is the live owner `Context` the JIT frame was entered with and stays
+        /// valid for the whole call.
+        /// `slot` points into the executing leaf's spec slots, alive while its code runs.
+        /// The call comes from generated code holding the frame, or from a Rust
+        /// caller that upholds this contract.
         #[unsafe(no_mangle)]
-        pub extern "C" fn $bcall(
+        pub unsafe extern "C" fn $bcall(
             ctx: *const Context,
             slot: *const SpecSlot,
             a: i64,

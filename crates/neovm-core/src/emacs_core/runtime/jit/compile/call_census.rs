@@ -258,13 +258,15 @@ fn applied_shape(function: Value) -> CallShape {
 /// call's first argument (nil when it has none); `nargs` the call's
 /// argument count. A called symbol is classified by its function cell.
 ///
-/// SAFETY: called only by generated code, with its leaf's dormant Context
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// called only by generated code, with its leaf's dormant Context
 /// and a `Named` site's own live spec slot.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[cold]
 #[inline(never)]
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_call_census(
+pub(crate) unsafe extern "C" fn neovm_jit_call_census(
     ctx: *mut u8,
     site: i64,
     word: i64,

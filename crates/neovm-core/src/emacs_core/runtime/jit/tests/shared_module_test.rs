@@ -376,8 +376,11 @@ fn jit_shared_force_deopt_harness() {
     let f = add_k(1);
     let f_val = Value::make_bytecode(f.clone());
     for i in 0..4 {
-        let got = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(i)])
-            .expect("no signal");
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let got = unsafe {
+            crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(i)])
+        }
+        .expect("no signal");
         assert!(
             got.is_none_or(|bits| bits == Value::make_int(i + 1).bits()),
             "a precise resume is exact; a rerun falls back to the caller"

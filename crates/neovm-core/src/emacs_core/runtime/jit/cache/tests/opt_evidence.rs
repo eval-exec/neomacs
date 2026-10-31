@@ -113,7 +113,8 @@ fn install(ctx: &mut Context, f: &ByteCodeFunction, pair: Value) {
     let values = snapshot(pair);
     prepare(ctx, &values);
     assert_eq!(
-        try_run_osr(ctx, f, 1, &values, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_osr(ctx, f, 1, &values, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));
@@ -149,7 +150,8 @@ fn opt_osr_evidence_actual_negative_and_baseline_entries_do_not_qualify() {
     let values = snapshot(pair());
     prepare(&mut ctx, &values);
     assert!(matches!(
-        try_run_osr_probe(&mut ctx, &refused, 1, &values, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_osr_probe(&mut ctx, &refused, 1, &values, &[]) },
         OsrProbe::NoTransfer
     ));
     let id = refused.jit_runtime().compiled_id().unwrap();
@@ -186,7 +188,8 @@ fn opt_osr_evidence_pending_opt_requires_real_install_before_admission() {
     let values = snapshot(pair);
     prepare(&mut ctx, &values);
     assert!(matches!(
-        try_run_osr_probe(&mut ctx, &source, 1, &values, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_osr_probe(&mut ctx, &source, 1, &values, &[]) },
         OsrProbe::Pending
     ));
     let id = source.jit_runtime().compiled_id().unwrap();
@@ -198,7 +201,8 @@ fn opt_osr_evidence_pending_opt_requires_real_install_before_admission() {
     assert!(!ready(&ctx, &source, 1));
     assert!(OSR_PENDING.with(|cache| cache.borrow().contains_key(&(id, 1))));
     assert_eq!(
-        try_run_osr(&mut ctx, &source, 1, &values, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_osr(&mut ctx, &source, 1, &values, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));

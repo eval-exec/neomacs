@@ -262,7 +262,8 @@ fn opt_array_native_kind_transition_rearms_stable_version_but_samples_do_not() {
     let a = expected(&mut ctx, &f, &[vector]);
     let b = expected(&mut ctx, &f, &[record]);
     let run = |ctx: &mut Context, arg: Value, answer: &str| {
-        let bits = cache::try_run_compiled(ctx, &f, Value::NIL, &[arg])
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let bits = unsafe { cache::try_run_compiled(ctx, &f, Value::NIL, &[arg]) }
             .unwrap()
             .unwrap();
         assert_eq!(print_value(&Value::from_bits(bits)), answer);
@@ -348,7 +349,8 @@ fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
     );
     let answer = expected(&mut ctx, &f, &[arg]);
     for _ in 0..CALLS {
-        let bits = cache::try_run_compiled(&mut ctx, &f, Value::NIL, &[arg])
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let bits = unsafe { cache::try_run_compiled(&mut ctx, &f, Value::NIL, &[arg]) }
             .unwrap()
             .expect("ordinary cache entry ran natively");
         assert_eq!(print_value(&Value::from_bits(bits)), answer);
@@ -386,7 +388,8 @@ fn opt_array_native_observed_dynamic_arefs_upgrade_and_serve_normal_entries() {
     );
     let frozen = sites.site_at(2).unwrap().samples();
     for _ in 0..20 {
-        let bits = cache::try_run_compiled(&mut ctx, &f, Value::NIL, &[arg])
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let bits = unsafe { cache::try_run_compiled(&mut ctx, &f, Value::NIL, &[arg]) }
             .unwrap()
             .unwrap();
         assert_eq!(print_value(&Value::from_bits(bits)), answer);

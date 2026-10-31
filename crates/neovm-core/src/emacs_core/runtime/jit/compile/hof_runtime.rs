@@ -64,11 +64,13 @@ pub(crate) extern "C" fn neovm_jit_hof_length(sequence: i64) -> i64 {
 /// index, or -1 with pending flow. The parent stack and list cursor precede
 /// the result slots in one dedicated VM root frame. Only the cold depth-limit
 /// signal can run callback Lisp; it keeps those parent roots live.
-/// SAFETY: generated code supplies the active mutator and count live tagged
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// generated code supplies the active mutator and count live tagged
 /// parent words, ending in [mapping designator, callback, sequence].
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_hof_start(
+pub(crate) unsafe extern "C" fn neovm_jit_hof_start(
     ctx: *mut u8,
     map: i64,
     parent: *const i64,
@@ -111,10 +113,12 @@ pub(crate) extern "C" fn neovm_jit_hof_start(
 
 /// Store a tagged callback result in an absolute slot of the active HOF
 /// root frame. This is GC-free and cannot enter Lisp.
-/// SAFETY: generated code supplies the mutator and a reserved result slot.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// generated code supplies the mutator and a reserved result slot.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_hof_store(ctx: *mut u8, index: i64, value: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_hof_store(ctx: *mut u8, index: i64, value: i64) -> i64 {
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         ctx.set_vm_frame_root_slot(
@@ -127,9 +131,13 @@ pub(crate) extern "C" fn neovm_jit_hof_store(ctx: *mut u8, index: i64, value: i6
 
 /// Keep the current tail rooted even after a callback disconnects it from
 /// the original list. SAFETY: SLOT names this activation's cursor slot.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_hof_cursor(ctx: *mut u8, slot: i64, tail: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_hof_cursor(ctx: *mut u8, slot: i64, tail: i64) -> i64 {
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         ctx.set_vm_frame_root_slot(
@@ -166,11 +174,13 @@ pub(crate) fn finish_mapping(
     result
 }
 
-/// SAFETY: the supplied state belongs to the active HOF frame. A signal is
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// the supplied state belongs to the active HOF frame. A signal is
 /// stashed only after that frame and its roots have been completed.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_hof_finish(
+pub(crate) unsafe extern "C" fn neovm_jit_hof_finish(
     ctx: *mut u8,
     sequence: i64,
     mapped: i64,
@@ -201,9 +211,13 @@ pub(crate) extern "C" fn neovm_jit_hof_finish(
 /// Dispatch a native signal with the map backtrace still visible, then
 /// unwind its frame and restash the flow. SAFETY: BT identifies this map;
 /// contained-panic residue is healed by the existing native leaf boundary.
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
+/// # Safety
+/// `ctx` is the live owner `Context` the JIT frame was entered with and stays valid for
+/// the whole call.
+/// The call comes from generated code holding the frame, or from a Rust
+/// caller that upholds this contract.
 #[unsafe(no_mangle)]
-pub(crate) extern "C" fn neovm_jit_hof_abort(ctx: *mut u8, bt: i64) -> i64 {
+pub(crate) unsafe extern "C" fn neovm_jit_hof_abort(ctx: *mut u8, bt: i64) -> i64 {
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let flow = take_pending_flow().expect("HOF abort pending flow");

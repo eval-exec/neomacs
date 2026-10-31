@@ -87,9 +87,11 @@ fn native(
 /// One direct call of the dispatch shim, decoded like [`native`].
 fn shim(op: bool, ctx_ptr: *mut u8, target: Value, list: Value) -> Result<Value, Flow> {
     let word = if op {
-        neovm_jit_assq(ctx_ptr, target.bits() as i64, list.bits() as i64)
+        // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+        unsafe { neovm_jit_assq(ctx_ptr, target.bits() as i64, list.bits() as i64) }
     } else {
-        neovm_jit_memq(ctx_ptr, target.bits() as i64, list.bits() as i64)
+        // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+        unsafe { neovm_jit_memq(ctx_ptr, target.bits() as i64, list.bits() as i64) }
     };
     if word == VALUE_SHIM_SIGNAL {
         Err(take_pending_flow().expect("flow stashed"))

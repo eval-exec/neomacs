@@ -95,7 +95,8 @@ fn pend_osr(ctx: &mut Context, f: &ByteCodeFunction) -> u64 {
     ctx.bc_buf.clear();
     ctx.bc_buf.extend_from_slice(&values);
     assert!(matches!(
-        try_run_osr_probe(ctx, f, 1, &values, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_osr_probe(ctx, f, 1, &values, &[]) },
         OsrProbe::Pending
     ));
     let id = f.jit_runtime().compiled_id().unwrap();
@@ -111,7 +112,8 @@ fn install_osr(ctx: &mut Context, f: &ByteCodeFunction) {
     ctx.bc_buf.clear();
     ctx.bc_buf.extend_from_slice(&values);
     assert_eq!(
-        try_run_osr(ctx, f, 1, &values, &[]),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_osr(ctx, f, 1, &values, &[]) },
         Some(NativeRun::Ok(Value::make_int(4).bits()))
     );
     assert_eq!(pair.cons_car(), Value::make_int(3));
@@ -122,7 +124,8 @@ fn call(ctx: &mut Context, f: &ByteCodeFunction) -> Option<usize> {
     let function = Value::make_bytecode(f.clone());
     crate::emacs_core::eval::push_scratch_gc_root(function);
     let pair = pair();
-    let ran = try_run_compiled(ctx, f, function, &[pair, Value::make_int(6)]).unwrap();
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    let ran = unsafe { try_run_compiled(ctx, f, function, &[pair, Value::make_int(6)]) }.unwrap();
     if ran.is_some() {
         assert_eq!(pair.cons_car(), Value::make_int(5));
     } else {

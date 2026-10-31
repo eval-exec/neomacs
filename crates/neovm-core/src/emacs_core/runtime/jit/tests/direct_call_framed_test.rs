@@ -560,10 +560,11 @@ fn a_contained_framed_panic_detaches_three_args_before_gc_and_caller_healing() {
             unsafe { ev.push_backtrace_frame_from_native_args(Value::symbol("neovm--fp-target"), args.as_ptr(), args.len()) };
             ev.depth += 1;
             let mut output = i64::MIN;
-            let status = super::super::direct_call::neovm_jit_direct_framed(
+            // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+            let status = unsafe { super::super::direct_call::neovm_jit_direct_framed(
                 &mut ev as *mut Context as *mut u8, callee.bits() as i64,
                 leaf as *const CompiledLeaf as usize as i64, constants as usize as i64,
-                args.as_ptr(), args.len() as i64, spec0 as i64, &mut output);
+                args.as_ptr(), args.len() as i64, spec0 as i64, &mut output) };
             assert_eq!(status, STATUS_SIGNAL);
             assert_eq!(output, i64::MIN, "signal leaves the output slot unreadable");
         }

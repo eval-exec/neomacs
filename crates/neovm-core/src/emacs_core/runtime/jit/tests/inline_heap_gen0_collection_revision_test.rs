@@ -294,24 +294,30 @@ fn gen0_aset_vector_shim_invalidates_collection_read_certificates() {
     context.push_specpdl_root(owner);
     let (_, reads) = capture(|| owner.as_vector_data().map(|items| items[0]));
     let value = Value::make_int(7);
-    let result = super::super::dispatch::neovm_jit_aset_collection(
-        &mut context as *mut Context as *mut u8,
-        owner.bits() as i64,
-        Value::make_int(0).bits() as i64,
-        value.bits() as i64,
-    );
-    assert_eq!(result, value.bits() as i64);
-    assert!(
-        !reads.expect("vector shim certificate").unchanged(),
-        "the owned-vector shim fast path must journal its store"
-    );
-    let mut store = || {
+    // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+    let result = unsafe {
         super::super::dispatch::neovm_jit_aset_collection(
             &mut context as *mut Context as *mut u8,
             owner.bits() as i64,
             Value::make_int(0).bits() as i64,
             value.bits() as i64,
         )
+    };
+    assert_eq!(result, value.bits() as i64);
+    assert!(
+        !reads.expect("vector shim certificate").unchanged(),
+        "the owned-vector shim fast path must journal its store"
+    );
+    let mut store = || {
+        // SAFETY: the test frame supplies the live `ctx` and argument words; the shim contract holds.
+        unsafe {
+            super::super::dispatch::neovm_jit_aset_collection(
+                &mut context as *mut Context as *mut u8,
+                owner.bits() as i64,
+                Value::make_int(0).bits() as i64,
+                value.bits() as i64,
+            )
+        }
     };
     let (_, projected) = capture(&mut store);
     assert!(owner.set_vector_slot(0, Value::NIL));

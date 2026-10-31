@@ -182,8 +182,10 @@ fn exercise(preadmitted: bool, osr: bool) {
     let result = if osr {
         cache::prepare_osr_for_test(&mut context, source_data, 1);
         let leaf = cache::osr_leaf_ptr_for_test(source_data, 1).expect("baseline OSR leaf");
-        let run = cache::try_run_osr(&mut context, source_data, 1, &[Value::fixnum(0)], &[])
-            .expect("the exact snapshot enters native OSR");
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        let run =
+            unsafe { cache::try_run_osr(&mut context, source_data, 1, &[Value::fixnum(0)], &[]) }
+                .expect("the exact snapshot enters native OSR");
         assert!(
             cache::osr_leaf_ptr_for_test(source_data, 1).is_none(),
             "epoch move retires OSR admission"

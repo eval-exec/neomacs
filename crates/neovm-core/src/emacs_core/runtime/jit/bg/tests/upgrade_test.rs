@@ -56,7 +56,8 @@ fn constant(value: Value) -> ByteCodeFunction {
 }
 
 fn run(ctx: &mut Context, f: &ByteCodeFunction) -> Option<usize> {
-    try_run_compiled(ctx, f, Value::NIL, &[]).expect("no signal")
+    // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+    unsafe { try_run_compiled(ctx, f, Value::NIL, &[]) }.expect("no signal")
 }
 
 fn current(f: &ByteCodeFunction) -> &'static CompiledLeaf {
@@ -272,7 +273,9 @@ fn jit_bg_feedback_upgrade_retains_and_reverts_to_its_t1() {
     let (ops, constants, arity) = corpus().swap_remove(3);
     let f = function(ops, constants, arity);
     let run_loop = |ctx: &mut Context| {
-        try_run_compiled(ctx, &f, Value::NIL, &[Value::make_int(1024)]).expect("no signal")
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_compiled(ctx, &f, Value::NIL, &[Value::make_int(1024)]) }
+            .expect("no signal")
     };
     assert_eq!(run_loop(&mut ctx), Some(Value::make_int(1024).bits()));
     let old = current(&f);

@@ -49,7 +49,8 @@ fn jit_bg_osr_waits_on_the_pending_entry_compile_of_its_body() {
     let f = counting_loop();
     // The entry tier-up goes to the background and its call interprets.
     assert_eq!(
-        try_run_compiled(ptr, &f, Value::NIL, &[Value::make_int(3)]).expect("no signal"),
+        // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
+        unsafe { try_run_compiled(ptr, &f, Value::NIL, &[Value::make_int(3)]) }.expect("no signal"),
         None
     );
     assert_eq!(kind(&f), "pending");
