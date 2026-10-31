@@ -19,6 +19,7 @@ mod cons_allocation;
 mod cons_catalog;
 mod construction;
 mod execution;
+pub(super) mod facade;
 pub use execution::ParallelExecutionAdmission;
 pub(crate) use execution::{
     CellRead, CellReadError, ExecutionActivation, ImmediateResult, ImmediateResultError,

@@ -1,0 +1,13 @@
+//! Crate-local registration vocabulary, reexported by the heap facade.
+//! Keep this list with its domain so new bounded operations do not expand gc.rs.
+pub(crate) use super::{
+    CellRead, CellReadError, EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation,
+    FrozenFunctionRoots, FrozenLegacyRoots, ImmediateResult, ImmediateResultError,
+    OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
+};
+
+#[cfg(test)]
+pub(crate) use super::{
+    ExecutionTestHomes, ExecutionTestSeed, GenericProofEra, GenericProofEraFinishFailure, ProofEra,
+    with_test_prepared_cell_execution, with_test_prepared_execution,
+};

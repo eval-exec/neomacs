@@ -73,14 +73,14 @@ keyboard wait 1
 keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
-tagged bytecode 8
+tagged bytecode 7
 tagged error 12
 tagged eval 13
 tagged intern 21
-tagged jit 4
+tagged jit 1
 tagged pdump 2
 tagged process 5
-tagged symbol 10
+tagged symbol 9
 tagged value 21
 window category 2
 window chartable 1

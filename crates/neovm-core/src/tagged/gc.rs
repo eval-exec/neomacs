@@ -2807,19 +2807,7 @@ pub use mutator_registration::{
     SymbolRef, TableMut, TableRef, YoungWorkerLoan,
 };
 
-#[cfg(test)]
-pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
-#[cfg(test)]
-pub(crate) use mutator_registration::{
-    ExecutionTestHomes, ExecutionTestSeed, GenericProofEra, GenericProofEraFinishFailure,
-    with_test_prepared_cell_execution, with_test_prepared_execution,
-};
-
-pub(crate) use mutator_registration::{
-    CellRead, CellReadError, EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation,
-    FrozenFunctionRoots, FrozenLegacyRoots, ImmediateResult, ImmediateResultError,
-    OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
-};
+pub(crate) use mutator_registration::facade::*;
 
 mod alloc_region;
 #[cfg(test)]
