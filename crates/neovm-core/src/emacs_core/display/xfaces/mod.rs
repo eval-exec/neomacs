@@ -358,6 +358,7 @@ use super::font::{
 use super::intern::intern;
 use crate::emacs_core::SymId;
 use crate::emacs_core::intern::WellKnown;
+use crate::face::realization::FrameFaceClass;
 use crate::face::{
     BoxStyle, Face as RuntimeFace, FontSlant, FontWeight, FontWidth, LFACE_ATTRS, UnderlineStyle,
 };
@@ -4009,17 +4010,28 @@ pub(crate) fn builtin_internal_merge_in_global_face(
             }
         }
         sync_face_overrides_from_lisp_face_vector(&face_name, local_vector, false);
-        if crate::face::realization::enabled()
-            && face_name == "default"
-            && eval.frame_is_tty_face_target(frame_id)
-        {
-            realization::realize_default_after_global_merge(
-                eval,
-                frame_id,
-                global_vector,
-                local_vector,
-            )?;
-            return Ok(Value::NIL);
+        if face_name == "default" {
+            match eval.frame_face_class(frame_id) {
+                Some(FrameFaceClass::Termcap) => {
+                    if crate::face::realization::enabled() {
+                        realization::realize_default_after_global_merge(
+                            eval,
+                            frame_id,
+                            global_vector,
+                            local_vector,
+                        )?;
+                        return Ok(Value::NIL);
+                    }
+                }
+                Some(FrameFaceClass::WindowSystem) => {
+                    // GNU xfaces.c publishes the global default face's string
+                    // colors to every window-system frame here, even without a
+                    // termcap realization cache to refresh. The parameter
+                    // handler derives background-mode from the new color.
+                    realization::publish_default_face_colors(eval, frame_id, global_vector)?;
+                }
+                Some(FrameFaceClass::Initial) | None => {}
+            }
         }
     }
 

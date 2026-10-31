@@ -2525,6 +2525,56 @@ fn internal_merge_in_global_face_updates_frame_spec_without_runtime_realization(
     assert_eq!(value, Value::string("grey85"));
 }
 
+/// GNU `internal_merge_in_global_face` publishes the default face's string
+/// colors back to a window-system frame's parameters (xfaces.c:4398-4412).
+/// That is how a graphical frame created after early-init inherits the dark
+/// default face instead of keeping the toolkit's white/light seed.
+#[test]
+fn internal_merge_in_global_face_publishes_default_colors_to_a_gui_frame() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let frame_id = ensure_selected_gui_frame(&mut eval);
+    {
+        let frame = eval
+            .frame_manager_mut()
+            .get_mut(frame_id)
+            .expect("selected frame");
+        frame.install_gnu_gui_default_parameters();
+    }
+
+    // Early-init runs while only the terminal frame exists, so its default
+    // face colors live in the new-frame defaults. FRAME=t keeps them out of
+    // live-frame publication and isolates the merge under test.
+    for (attribute, value) in [(":foreground", "white"), (":background", "black")] {
+        builtin_internal_set_lisp_face_attribute(
+            &mut eval,
+            vec![
+                Value::symbol("default"),
+                Value::keyword(attribute),
+                Value::string(value),
+                Value::T,
+            ],
+        )
+        .expect("set default new-frame attribute");
+    }
+
+    builtin_internal_merge_in_global_face(
+        &mut eval,
+        vec![Value::symbol("default"), Value::make_frame(frame_id.0)],
+    )
+    .expect("merge default face into gui frame");
+
+    let frame = eval.frame_manager().get(frame_id).expect("live frame");
+    assert_eq!(
+        frame.known_parameter(FrameParam::ForegroundColor),
+        Some(Value::string("white"))
+    );
+    assert_eq!(
+        frame.known_parameter(FrameParam::BackgroundColor),
+        Some(Value::string("black"))
+    );
+}
+
 #[test]
 fn runtime_face_sync_uses_frame_lisp_face_vector_as_source_of_truth() {
     crate::test_utils::init_test_tracing();
