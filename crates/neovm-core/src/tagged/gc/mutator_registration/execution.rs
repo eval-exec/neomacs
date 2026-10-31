@@ -156,4 +156,8 @@ static_assertions::assert_impl_all!(ImmediateResult: Send, Sync, Copy);
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::{ExecutionTestHomes, prepared_fixture as with_test_prepared_execution};
+pub(crate) use tests::{
+    ExecutionTestHomes, FixtureSeed as ExecutionTestSeed,
+    prepared_cell_fixture as with_test_prepared_cell_execution,
+    prepared_fixture as with_test_prepared_execution,
+};

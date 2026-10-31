@@ -2811,7 +2811,8 @@ pub use mutator_registration::{
 pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
 #[cfg(test)]
 pub(crate) use mutator_registration::{
-    ExecutionTestHomes, GenericProofEra, GenericProofEraFinishFailure, with_test_prepared_execution,
+    ExecutionTestHomes, ExecutionTestSeed, GenericProofEra, GenericProofEraFinishFailure,
+    with_test_prepared_cell_execution, with_test_prepared_execution,
 };
 
 pub(crate) use mutator_registration::{

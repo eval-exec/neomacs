@@ -139,7 +139,15 @@ fn nmjit_n4_scalar_status_decode_is_total() {
         NativeStatus::checked(1),
         Ok(NativeStatus::UnsupportedAbi)
     ));
-    for bits in [2, 17, u32::MAX] {
+    assert!(matches!(
+        NativeStatus::checked(2),
+        Ok(NativeStatus::CellReadReady)
+    ));
+    assert!(matches!(
+        NativeStatus::checked(3),
+        Ok(NativeStatus::SlotAbsent)
+    ));
+    for bits in [4, 17, u32::MAX] {
         assert!(matches!(
             NativeStatus::checked(bits),
             Err(ParallelEntryError::MalformedStatus)

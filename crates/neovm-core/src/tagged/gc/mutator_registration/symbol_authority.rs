@@ -27,6 +27,7 @@ use super::*;
 use crate::emacs_core::intern::SymId;
 pub use crate::emacs_core::symbol::parallel::PlainSymbolBacking;
 pub(super) use crate::emacs_core::symbol::parallel::{KeeperWorldDesignator, SymbolBacking};
+use crate::tagged::gc::symbol_table::SymbolSlotIndex;
 
 #[cfg(test)]
 #[derive(Clone, Copy)]
@@ -201,6 +202,16 @@ pub struct KeeperSymbols<'stop> {
 }
 
 impl<'owner, 'era> RunAccess<'owner, 'era> {
+    /// Validate handle identity before returning its immutable slot metadata.
+    pub(super) fn checked_symbol_slot(
+        &self,
+        key: &SymbolHandle,
+    ) -> Result<SymbolSlotIndex, RegistrationError> {
+        self.check_symbol(key)?;
+        let index = usize::try_from(key.symbol.0).map_err(|_| RegistrationError::Capacity)?;
+        Ok(SymbolSlotIndex::new(index))
+    }
+
     fn check_symbol(&self, key: &SymbolHandle) -> Result<(), RegistrationError> {
         self.owner.check_thread()?;
         if self.symbol_loan {

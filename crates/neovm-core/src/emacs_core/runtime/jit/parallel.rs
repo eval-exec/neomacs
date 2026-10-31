@@ -2,26 +2,16 @@
 //!
 //! GEN1 construction witnesses confine compilation to the exclusive phase.
 //! Backend absence is a typed compile refusal, not a serial fallback. The
-//! first admitted plan returns an immediate without a call or back edge.
+//! native plans have no helper call or back edge. Cell plans return from
+//! native code before their sealed, rooted semantic epilogue.
 use crate::tagged::gc::symbol_table::publication::PublicationView;
 use crate::tagged::gc::{
-    Gen1Admission, ImmediateResult, ImmediateResultError, OwnerRootSlot,
-    ParallelExecutionAdmission, RegistrationError, RunAccess,
+    CellRead, CellReadError, Gen1Admission, ImmediateResult, ImmediateResultError, OwnerRootSlot,
+    ParallelExecutionAdmission, RegistrationError, RunAccess, SymbolHandle,
 };
 use std::ffi::c_void;
 
-/// A structural slot request, distinct from counts and from a live symbol
-/// handle. Coverage does not prove membership or permit a cell read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TableSlotIndex(usize);
-impl TableSlotIndex {
-    pub(crate) const fn new(index: usize) -> Self {
-        Self(index)
-    }
-    pub(crate) const fn get(self) -> usize {
-        self.0
-    }
-}
+pub(crate) use crate::tagged::gc::symbol_table::SymbolSlotIndex as TableSlotIndex;
 
 /// This closed plan cannot contain a pointer, allocation, call or loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +39,9 @@ pub(crate) enum ParallelEntryError {
     UnsupportedAbi,
     MalformedStatus,
     NonImmediateResult,
+    CellRead(CellReadError),
+    NoSlotBacking,
+    UnexpectedEntryKind,
 }
 
 #[repr(transparent)]
@@ -68,6 +61,10 @@ struct ScalarInput {
     word: usize,
 }
 #[repr(C)]
+struct CellInput {
+    slot: TableSlotIndex,
+}
+#[repr(C)]
 struct ScalarOutput {
     word: usize,
 }
@@ -76,12 +73,16 @@ struct ScalarOutput {
 enum NativeStatus {
     Returned = 0,
     UnsupportedAbi = 1,
+    CellReadReady = 2,
+    SlotAbsent = 3,
 }
 impl NativeStatus {
     fn checked(bits: u32) -> Result<Self, ParallelEntryError> {
         match bits {
             0 => Ok(Self::Returned),
             1 => Ok(Self::UnsupportedAbi),
+            2 => Ok(Self::CellReadReady),
+            3 => Ok(Self::SlotAbsent),
             _ => Err(ParallelEntryError::MalformedStatus),
         }
     }
@@ -92,10 +93,17 @@ impl NativeStatus {
 type ParallelEntry = unsafe extern "C" fn(
     *const ParallelRuntime<'_>,
     *mut c_void,
-    *const ScalarInput,
+    *const c_void,
     *mut ScalarOutput,
 ) -> u32;
 
+mod cell;
+
+#[cfg(feature = "jit")]
+enum EntryPlan {
+    Scalar(ScalarProgram),
+    Cell,
+}
 #[cfg(feature = "jit")]
 mod native;
 
@@ -113,7 +121,8 @@ impl ParallelCompiledCode {
     ) -> Result<Self, ParallelCompileError> {
         #[cfg(feature = "jit")]
         {
-            native::NativeCompiledCode::compile(program).map(|native| Self { native })
+            native::NativeCompiledCode::compile(EntryPlan::Scalar(program))
+                .map(|native| Self { native })
         }
         #[cfg(not(feature = "jit"))]
         {
@@ -141,6 +150,55 @@ impl ParallelCompiledCode {
     }
 }
 
+/// A cell kernel cannot be entered as an immediate-return kernel. Its closed
+/// read operation is fixed while the real exclusive GEN1 witness is borrowed.
+#[must_use = "retain the compiled cell kernel until its entry returns"]
+pub(crate) struct ParallelCompiledCellCode {
+    #[cfg(feature = "jit")]
+    native: native::NativeCompiledCode,
+    read: CellRead,
+    #[cfg(not(feature = "jit"))]
+    unavailable: std::convert::Infallible,
+}
+impl ParallelCompiledCellCode {
+    pub(crate) fn compile(
+        _quiescent: &Gen1Admission<'_>,
+        read: CellRead,
+    ) -> Result<Self, ParallelCompileError> {
+        #[cfg(feature = "jit")]
+        {
+            native::NativeCompiledCode::compile(EntryPlan::Cell).map(|native| Self { native, read })
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            let _ = read;
+            Err(ParallelCompileError::BackendUnavailable)
+        }
+    }
+
+    pub(crate) fn run<'era>(
+        &self,
+        admission: &ParallelExecutionAdmission<'era>,
+        run: &mut RunAccess<'_, 'era>,
+        destination: &OwnerRootSlot<'era>,
+        symbol: &SymbolHandle,
+    ) -> Result<(), ParallelEntryError> {
+        #[cfg(feature = "jit")]
+        {
+            self.native
+                .run_cell(self.read, admission, run, destination, symbol)
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            let _ = (admission, run, destination, symbol);
+            match self.unavailable {}
+        }
+    }
+}
+static_assertions::assert_not_impl_any!(ParallelCompiledCellCode: Clone, Copy);
+#[cfg(feature = "jit")]
+static_assertions::assert_not_impl_any!(ParallelCompiledCellCode: Sync);
+
 static_assertions::assert_not_impl_any!(ParallelCompiledCode: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(ParallelCompiledCode: Sync);
@@ -151,3 +209,9 @@ static_assertions::assert_impl_all!(ScalarProgram: Send, Sync, Copy);
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::compiled_entry_manifest as compiled_entry_manifest_for_test;
+
+#[cfg(test)]
+#[path = "parallel/tests/cell_test.rs"]
+mod cell_tests;
+#[cfg(test)]
+pub(crate) use cell_tests::varref_manifest as varref_manifest_for_test;

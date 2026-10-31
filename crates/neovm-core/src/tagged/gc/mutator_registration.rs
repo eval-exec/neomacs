@@ -24,7 +24,10 @@ pub(crate) use execution::{
     CellRead, CellReadError, ExecutionActivation, ImmediateResult, ImmediateResultError,
 };
 #[cfg(test)]
-pub(crate) use execution::{ExecutionTestHomes, with_test_prepared_execution};
+pub(crate) use execution::{
+    ExecutionTestHomes, ExecutionTestSeed, with_test_prepared_cell_execution,
+    with_test_prepared_execution,
+};
 mod wrappers;
 #[cfg(test)]
 use crate::emacs_core::eval::world::{

@@ -15,6 +15,41 @@ fn each_backing(body: impl Fn(PlainSymbolBacking)) {
 }
 
 #[test]
+fn nmjit_n4_cell_symbol_slot_is_checked_metadata() {
+    let id = crate::emacs_core::intern::intern("p3sym-c2-global");
+    let expected = SymbolSlotIndex::new(usize::try_from(id.0).unwrap());
+    let closed = std::cell::Cell::new(None);
+    each_backing(|backing| {
+        prepared_cell_fixture(
+            backing,
+            FixtureSeed::Scalar,
+            |_| (),
+            |(), admission, run, home, symbol| {
+                admission
+                    .with_activation(run, home, |activation| {
+                        let slot = activation.symbol_slot(symbol).unwrap();
+                        assert_eq!(slot, expected);
+                        let view = activation.table_view();
+                        let table = view.table();
+                        assert!(slot.get() < table.slots().get());
+                        assert!(slot.get() / table.chunk_slots().get() < table.chunk_count().get());
+                        if let Some(stale) = closed.get() {
+                            assert!(matches!(
+                                activation.symbol_slot(&stale),
+                                Err(RegistrationError::WrongHeap
+                                    | RegistrationError::StaleRegistration)
+                            ));
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(ExecutionTestHomes::read(home, run), ImmediateResult::Nil);
+                closed.set(Some(*symbol));
+            },
+        );
+    });
+}
+
+#[test]
 fn nmjit_n4_cell_read_scalar_boundp_and_empty_function() {
     each_backing(|backing| {
         prepared_cell_fixture(

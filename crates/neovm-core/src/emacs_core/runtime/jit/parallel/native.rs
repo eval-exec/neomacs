@@ -43,7 +43,7 @@ pub(super) struct NativeCompiledCode {
 impl NativeCompiledCode {
     /// Called only by the parent while it borrows the real pre-era witness.
     /// This private child has no World or shared compiler/cache side effect.
-    pub(super) fn compile(program: ScalarProgram) -> Result<Self, ParallelCompileError> {
+    pub(super) fn compile(plan: EntryPlan) -> Result<Self, ParallelCompileError> {
         let builder = JITBuilder::new(default_libcall_names())
             .map_err(|error| ParallelCompileError::Module(error.to_string()))?;
         let mut memory = ExecutableMemory {
@@ -59,6 +59,8 @@ impl NativeCompiledCode {
             .map_err(|_| ParallelCompileError::AbiLayout)?;
         let input_offset = i32::try_from(offset_of!(ScalarInput, word))
             .map_err(|_| ParallelCompileError::AbiLayout)?;
+        let cell_input_offset = i32::try_from(offset_of!(CellInput, slot))
+            .map_err(|_| ParallelCompileError::AbiLayout)?;
         let output_offset = i32::try_from(offset_of!(ScalarOutput, word))
             .map_err(|_| ParallelCompileError::AbiLayout)?;
         let publication_offset = i32::try_from(offset_of!(ParallelRuntime<'_>, publication))
@@ -68,8 +70,12 @@ impl NativeCompiledCode {
             signature.params.push(AbiParam::new(pointer));
         }
         signature.returns.push(AbiParam::new(types::I32));
+        let name = match &plan {
+            EntryPlan::Scalar(_) => "neovm_parallel_scalar_v1",
+            EntryPlan::Cell => "neovm_parallel_cell_v1",
+        };
         let id = module
-            .declare_function("neovm_parallel_scalar_v1", Linkage::Local, &signature)
+            .declare_function(name, Linkage::Local, &signature)
             .map_err(|error| ParallelCompileError::Define(error.to_string()))?;
         let mut context = module.make_context();
         context.func.signature = signature;
@@ -90,22 +96,49 @@ impl NativeCompiledCode {
                     .icmp_imm(IntCC::Equal, version, i64::from(NativeAbiVersion::V1.0));
             b.ins().brif(matches, supported, &[], refused, &[]);
             b.switch_to_block(supported);
-            let word = match program {
-                // The cast preserves this already checked immediate's machine
-                // bit pattern in an I64 iconst; it performs no pointer decode.
-                ScalarProgram::Constant(value) => b.ins().iconst(pointer, value.word() as i64),
-                ScalarProgram::Argument => {
+            match plan {
+                EntryPlan::Scalar(program) => {
+                    let word = match program {
+                        ScalarProgram::Constant(value) => {
+                            b.ins().iconst(pointer, value.word() as i64)
+                        }
+                        ScalarProgram::Argument => {
+                            b.ins()
+                                .load(pointer, MemFlagsData::trusted(), args[2], input_offset)
+                        }
+                        ScalarProgram::HasSlotBacking(slot) => {
+                            let requested = b.ins().iconst(pointer, slot.get() as i64);
+                            emit_slot_backing(
+                                &mut b,
+                                pointer,
+                                args[0],
+                                publication_offset,
+                                requested,
+                            )?
+                        }
+                    };
                     b.ins()
-                        .load(pointer, MemFlagsData::trusted(), args[2], input_offset)
+                        .store(MemFlagsData::trusted(), word, args[3], output_offset);
+                    let returned = b.ins().iconst(types::I32, NativeStatus::Returned as i64);
+                    b.ins().return_(&[returned]);
                 }
-                ScalarProgram::HasSlotBacking(slot) => {
-                    emit_slot_backing(&mut b, pointer, args[0], publication_offset, slot)?
+                EntryPlan::Cell => {
+                    let requested =
+                        b.ins()
+                            .load(pointer, MemFlagsData::trusted(), args[2], cell_input_offset);
+                    let answer =
+                        emit_slot_backing(&mut b, pointer, args[0], publication_offset, requested)?;
+                    let covered =
+                        b.ins()
+                            .icmp_imm(IntCC::Equal, answer, ImmediateResult::True.word() as i64);
+                    let ready = b
+                        .ins()
+                        .iconst(types::I32, NativeStatus::CellReadReady as i64);
+                    let absent = b.ins().iconst(types::I32, NativeStatus::SlotAbsent as i64);
+                    let status = b.ins().select(covered, ready, absent);
+                    b.ins().return_(&[status]);
                 }
-            };
-            b.ins()
-                .store(MemFlagsData::trusted(), word, args[3], output_offset);
-            let returned = b.ins().iconst(types::I32, NativeStatus::Returned as i64);
-            b.ins().return_(&[returned]);
+            }
             b.switch_to_block(refused);
             let unsupported = b
                 .ins()
@@ -165,8 +198,14 @@ impl NativeCompiledCode {
                 // It neither dereferences nor retains the opaque activation.
                 // It has no call, back edge or safepoint. self retains the finalized
                 // mapping until this call returns; no Rust unwind crosses it.
-                let status =
-                    unsafe { (self.entry)(&runtime, activation_address, &input, &mut output) };
+                let status = unsafe {
+                    (self.entry)(
+                        &runtime,
+                        activation_address,
+                        std::ptr::from_ref(&input).cast(),
+                        &mut output,
+                    )
+                };
                 drop(runtime);
                 match NativeStatus::checked(status)? {
                     NativeStatus::Returned => {
@@ -183,9 +222,27 @@ impl NativeCompiledCode {
                             .map_err(ParallelEntryError::Authority)
                     }
                     NativeStatus::UnsupportedAbi => Err(ParallelEntryError::UnsupportedAbi),
+                    NativeStatus::CellReadReady | NativeStatus::SlotAbsent => {
+                        Err(ParallelEntryError::UnexpectedEntryKind)
+                    }
                 }
             })
             .map_err(ParallelEntryError::Authority)?
+    }
+    pub(super) fn run_cell<'era>(
+        &self,
+        operation: CellRead,
+        admission: &ParallelExecutionAdmission<'era>,
+        run: &mut RunAccess<'_, 'era>,
+        destination: &OwnerRootSlot<'era>,
+        symbol: &SymbolHandle,
+    ) -> Result<(), ParallelEntryError> {
+        // This self borrow retains the unique executable mapping until both
+        // the native lookup and its sealed epilogue have returned.
+        // SAFETY: the private constructor emits only the verified closed
+        // four-pointer ABI, with no mutable cell read or helper/safepoint.
+        // self retains its executable mappings through the complete epilogue.
+        unsafe { super::cell::execute(self.entry, operation, admission, run, destination, symbol) }
     }
 }
 
@@ -196,7 +253,7 @@ fn emit_slot_backing(
     pointer: cranelift_codegen::ir::Type,
     runtime: cranelift_codegen::ir::Value,
     publication_offset: i32,
-    slot: TableSlotIndex,
+    requested: cranelift_codegen::ir::Value,
 ) -> Result<cranelift_codegen::ir::Value, ParallelCompileError> {
     let offset = |position: DescriptorOffset| {
         i32::try_from(position.get()).map_err(|_| ParallelCompileError::AbiLayout)
@@ -227,7 +284,6 @@ fn emit_slot_backing(
     let slots = b
         .ins()
         .load(pointer, MemFlagsData::trusted(), descriptor, slots_offset);
-    let requested = b.ins().iconst(pointer, slot.get() as i64);
     let covered = b.ins().icmp(IntCC::UnsignedLessThan, requested, slots);
     b.ins().brif(covered, within, &[], absent, &[]);
     b.switch_to_block(within);

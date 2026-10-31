@@ -21,6 +21,7 @@ use std::rc::Rc;
 enum MissingFeature {
     Gen1Admission,
     ParallelCompiledEntry,
+    VarRefI6,
     RetiredPublication,
 }
 
@@ -60,6 +61,11 @@ fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
                 feature
             })
         }
+        MissingFeature::VarRefI6 => crate::emacs_core::jit::parallel::varref_manifest_for_test()
+            .map_err(|reason| {
+                eprintln!("NMJIT_N4_VARREF_FAILURE {reason}");
+                feature
+            }),
     }
 }
 
@@ -252,6 +258,7 @@ missing_test!(
     nmjit_n1_missing_parallel_compiled_entry,
     ParallelCompiledEntry
 );
+missing_test!(nmjit_n1_missing_varref_i6, VarRefI6);
 missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);
 
 #[test]

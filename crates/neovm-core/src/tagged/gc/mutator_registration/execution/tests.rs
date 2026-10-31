@@ -25,6 +25,10 @@ impl ExecutionTestHomes {
             .expect("scalar result home is immediate")
     }
 
+    pub(crate) fn is_cons(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> bool {
+        TaggedValue::from_bits(home.word_for_test(run)).is_cons()
+    }
+
     pub(crate) fn nil<'era>(
         run: &mut RunAccess<'_, 'era>,
     ) -> Result<OwnerRootSlot<'era>, RegistrationError> {
@@ -67,12 +71,12 @@ pub(crate) fn prepared_fixture<P>(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum FixtureSeed {
+pub(crate) enum FixtureSeed {
     Scalar,
     FunctionDefinition,
 }
 
-pub(super) fn prepared_cell_fixture<P>(
+pub(crate) fn prepared_cell_fixture<P>(
     backing: PlainSymbolBacking,
     seed: FixtureSeed,
     prepare: impl FnOnce(&Gen1Admission<'_>) -> P,

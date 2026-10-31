@@ -2,6 +2,8 @@
 //! This boundary exports no loaded word, cell address or mutable root bank.
 use super::super::{FunctionError, GlobalError, SymbolHandle};
 use super::ExecutionActivation;
+use crate::tagged::gc::RegistrationError;
+use crate::tagged::gc::symbol_table::SymbolSlotIndex;
 
 /// Separate domains require an explicit choice; no bool selects an operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +20,14 @@ pub(crate) enum CellReadError {
 }
 
 impl ExecutionActivation<'_, '_, '_> {
+    /// Return checked handle metadata without loading a symbol cell or backing.
+    pub(crate) fn symbol_slot(
+        &self,
+        symbol: &SymbolHandle,
+    ) -> Result<SymbolSlotIndex, RegistrationError> {
+        self.run.checked_symbol_slot(symbol)
+    }
+
     /// Reuse the identity-bound counted reader and canonical resident home.
     /// The existing primitive installs even a managed answer before releasing
     /// reader authority. A refusal preserves the previous home and returns

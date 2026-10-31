@@ -18,6 +18,20 @@ pub(crate) enum TableError {
     GenerationExhausted,
 }
 
+/// A structural symbol-table position, distinct from a slot count or authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(transparent)]
+pub(crate) struct SymbolSlotIndex(usize);
+impl SymbolSlotIndex {
+    pub(crate) const fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    pub(crate) const fn get(self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
 pub(crate) struct SymbolSlotCount(usize);
