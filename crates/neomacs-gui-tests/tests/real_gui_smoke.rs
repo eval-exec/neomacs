@@ -37,7 +37,8 @@ fn real_gui_smoke_generates_surface_readback_png() {
     let mut plan = GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario)
         .with_program(binary)
         .require(Capability::Display)
-        .require(Capability::ScenarioDriver);
+        .require(Capability::ScenarioDriver)
+        .require(Capability::SurfacePresent);
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
     }
@@ -50,6 +51,16 @@ fn real_gui_smoke_generates_surface_readback_png() {
         )
         .expect("GUI run should produce text artifacts");
 
+    if result.status == GuiRunStatus::Unsupported {
+        eprintln!(
+            "skipping real GUI smoke: {}",
+            result
+                .failure_reason
+                .as_deref()
+                .unwrap_or("host lacks a required capability")
+        );
+        return;
+    }
     assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
     assert!(
         result.png_bytes.unwrap_or_default() > 0,

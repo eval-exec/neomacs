@@ -976,6 +976,16 @@ jobs:
       - name: Build the runtime under test
         run: cargo xtask fresh-build --release
 
+      # A locked console or a sleeping display makes every window occluded:
+      # the suite reports `surface-present` unsupported and the snapshot
+      # canary skips with that reason. Print the evidence once per run so a
+      # skip is diagnosable from the job log.
+      - name: Report the desktop session state
+        run: |
+          launchctl managername || true
+          ioreg -n Root -d1 -a | grep -A1 -E 'IOConsoleLocked|CGSSessionScreenIsLocked' || true
+          system_profiler SPDisplaysDataType 2>/dev/null | grep -E 'Display Asleep|Online' || true
+
       - name: Run the scenario-tier GUI tests
         run: |
           cargo nextest run -p neomacs-gui-tests --test gui             -E 'test(~real_gui_smoke_generates_surface_readback_png)'             --test-threads 1 --no-fail-fast

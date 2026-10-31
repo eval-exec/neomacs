@@ -95,9 +95,19 @@ to test the parts of the platform the Elisp channel cannot represent.
 Both tiers publish the same artifacts:
 
 - **Semantic truth**: `neomacs--frame-snapshot` JSON/text — what redisplay
-  produced, with faces, geometry, chrome, cursors. Platform-neutral.
+  produced, with faces, geometry, chrome, cursors. Platform-neutral, and
+  available even when the window cannot be presented.
 - **Paint truth**: in-process PNG readback
-  (`NEOMACS_DEBUG_SURFACE_READBACK`) — the GPU painted it. Platform-neutral.
+  (`NEOMACS_DEBUG_SURFACE_READBACK`) — the GPU painted it. Platform-neutral,
+  but it needs a drawable surface: on macOS a locked console or a sleeping
+  display makes AppKit report the window non-visible, and wgpu returns
+  `Occluded` instead of a drawable (the Mac test host is normally locked, so
+  this is a real case, not a hypothetical). The `surface-present` host
+  capability names that requirement; semantic tests do not require it, paint
+  tests do, and a host that lacks it reports `unsupported` rather than a
+  rendering failure. A future offscreen render target would remove the
+  requirement for paint proofs; it must be an explicit second proof alongside
+  surface acquisition, not a fake `AcquiredSurface`.
 - **Desktop truth**: native capture only in the native tier.
 
 Assertions default to text, geometry, and resolved colors. Pixel-exact
@@ -165,6 +175,11 @@ Isolation is the per-platform `SessionPlan`, not a Wayland assumption.
 - Tier 1 needs no TCC: a window in the logged-in desktop, snapshot and
   readback artifacts, fixtures that self-terminate. This is what a
   hosted macOS CI runner can execute.
+- Paint proofs need an unlocked console and an awake display. The host
+  probe reads `IOConsoleLocked` / `CGSSessionScreenIsLocked` from
+  `ioreg`; only a positive "locked" answer removes `surface-present`, so
+  an unreadable probe never skips a test by accident. Semantic tests
+  (snapshot/geometry assertions) keep running on a locked host.
 - Tier 2 uses the existing helper: `scripts/build-macos-gui-driver.sh`
   builds and signs it; one-time Accessibility and Screen Recording grants
   are required for that exact identity. Hosted runners cannot grant them,

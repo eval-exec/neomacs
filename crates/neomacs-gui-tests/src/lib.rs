@@ -94,6 +94,12 @@ pub enum Capability {
     CompositorControl,
     /// A pinned GNU Emacs oracle is configured for comparisons.
     GnuOracle,
+    /// The window server will actually make a window drawable: an unlocked
+    /// console, an awake display, and a window on the active Space. Without
+    /// it a frame can be composed but never presented - macOS reports
+    /// `NSWindowOcclusionStateVisible == false` and wgpu returns `Occluded` -
+    /// so a paint-proof test must not treat that as a rendering failure.
+    SurfacePresent,
 }
 
 impl Capability {
@@ -105,10 +111,11 @@ impl Capability {
             Self::ScreenCapture => "screen-capture",
             Self::CompositorControl => "compositor-control",
             Self::GnuOracle => "gnu-oracle",
+            Self::SurfacePresent => "surface-present",
         }
     }
 
-    pub const fn all() -> [Capability; 6] {
+    pub const fn all() -> [Capability; 7] {
         [
             Self::Display,
             Self::ScenarioDriver,
@@ -116,6 +123,7 @@ impl Capability {
             Self::ScreenCapture,
             Self::CompositorControl,
             Self::GnuOracle,
+            Self::SurfacePresent,
         ]
     }
 
@@ -205,7 +213,58 @@ fn host_capabilities(backend: GuiBackend) -> CapabilitySet {
     if std::env::var_os("NEOMACS_GUI_TEST_GNU_EMACS").is_some_and(|value| !value.is_empty()) {
         capabilities.insert(Capability::GnuOracle);
     }
+    if screen_presentable(backend) {
+        capabilities.insert(Capability::SurfacePresent);
+    }
     capabilities
+}
+
+/// Whether this backend's window server can make a window drawable now.
+///
+/// A harness-owned Linux compositor always can. macOS cannot while the
+/// console is locked (or the display is asleep): AppKit reports the window
+/// as non-visible and wgpu refuses the drawable. A failed probe is treated
+/// as presentable so a sandboxed or unusual host is never skipped by
+/// accident; only a positive "locked" answer removes the capability.
+fn screen_presentable(backend: GuiBackend) -> bool {
+    match backend {
+        GuiBackend::LinuxX11 | GuiBackend::LinuxWayland | GuiBackend::Windows => true,
+        GuiBackend::Macos => !macos_screen_locked(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screen_locked() -> bool {
+    let Ok(output) = std::process::Command::new("ioreg")
+        .args(["-n", "Root", "-d1", "-a"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    plist_bool_after(&text, "IOConsoleLocked")
+        .or_else(|| plist_bool_after(&text, "CGSSessionScreenIsLocked"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_screen_locked() -> bool {
+    false
+}
+
+/// The boolean that follows `key` in an XML property list, if any.
+fn plist_bool_after(text: &str, key: &str) -> Option<bool> {
+    let tag = format!("<key>{key}</key>");
+    let rest = &text[text.find(&tag)? + tag.len()..];
+    match (rest.find("<true/>"), rest.find("<false/>")) {
+        (Some(yes), Some(no)) => Some(yes < no),
+        (Some(_), None) => Some(true),
+        (None, Some(_)) => Some(false),
+        (None, None) => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -933,4 +992,31 @@ fn failure_reason(
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod capability_probe_tests {
+    use super::*;
+
+    #[test]
+    fn a_plist_boolean_follows_its_key() {
+        let locked = "<key>IOConsoleLocked</key>\n<true/>\n<key>Other</key>\n<false/>";
+        assert_eq!(plist_bool_after(locked, "IOConsoleLocked"), Some(true));
+        let unlocked = "<key>IOConsoleLocked</key>\n<false/>\n<key>Other</key>\n<true/>";
+        assert_eq!(plist_bool_after(unlocked, "IOConsoleLocked"), Some(false));
+        assert_eq!(
+            plist_bool_after("<key>Other</key><true/>", "IOConsoleLocked"),
+            None
+        );
+        assert_eq!(
+            plist_bool_after("<key>IOConsoleLocked</key>", "IOConsoleLocked"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_harness_owned_linux_compositor_is_always_presentable() {
+        assert!(screen_presentable(GuiBackend::LinuxX11));
+        assert!(screen_presentable(GuiBackend::LinuxWayland));
+    }
 }
