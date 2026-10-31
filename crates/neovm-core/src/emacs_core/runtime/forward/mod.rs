@@ -66,7 +66,7 @@
 //! a new variant cannot be added and left untraced.
 
 use super::value::Value;
-use crate::buffer::buffer::BufferSlotPredicateError;
+use crate::emacs_core::value::buffer_schema::BufferSlotPredicateError;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -864,7 +864,7 @@ pub struct LispBufferObjFwd {
     /// Closed write predicate checked for live-slot writes. Mirrors GNU
     /// `enum Lisp_Fwd_Predicate` instead of encoding this finite domain as an
     /// open-ended Lisp symbol.
-    pub predicate: crate::buffer::buffer::BufferSlotPredicate,
+    pub predicate: crate::emacs_core::value::buffer_schema::BufferSlotPredicate,
     /// Default value copied into `Buffer::slots[offset]` at buffer
     /// creation. Mirrors GNU `buffer_defaults`.
     pub default: Value,
@@ -896,8 +896,8 @@ impl LispBufferObjFwd {
     /// offset, `None` for an index no buffer has (a thread projection's
     /// marker).
     #[inline(always)]
-    pub fn buffer_slot(&self) -> Option<crate::buffer::buffer::BufferSlot> {
-        crate::buffer::buffer::BufferSlot::from_u16(self.offset)
+    pub fn buffer_slot(&self) -> Option<crate::emacs_core::value::buffer_schema::BufferSlot> {
+        crate::emacs_core::value::buffer_schema::BufferSlot::from_u16(self.offset)
     }
 
     /// The offset as a slot index, usable only through its bounds check.
@@ -1233,7 +1233,7 @@ impl LispKboardObjFwd {
 /// initialization because the per-process forwarders are constructed
 /// from runtime data (slot index assignments).
 ///
-/// `slot` is the index into [`crate::buffer::buffer::Buffer::slots`]: a
+/// `slot` is the index into the buffer slot array: a
 /// typed slot, so a real forwarder never carries the thread-projection
 /// marker.
 /// `local_flags_idx` mirrors GNU's `local-flags` index: `-1` means
@@ -1243,9 +1243,9 @@ impl LispKboardObjFwd {
 /// `predicate` is the closed predicate used by `store_symval_forwarding`.
 /// `default` is the value copied into every fresh buffer's slot.
 pub fn alloc_buffer_objfwd(
-    slot: crate::buffer::buffer::BufferSlot,
+    slot: crate::emacs_core::value::buffer_schema::BufferSlot,
     local_flags_idx: i16,
-    predicate: crate::buffer::buffer::BufferSlotPredicate,
+    predicate: crate::emacs_core::value::buffer_schema::BufferSlotPredicate,
     default: Value,
 ) -> &'static LispBufferObjFwd {
     let fwd = Box::new(LispBufferObjFwd {

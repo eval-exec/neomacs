@@ -23,10 +23,11 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::{FxHashMap, FxHasher};
 use strum::{EnumString, IntoStaticStr};
 
+use self::buffer_schema::BufferId;
+use self::positions::{CharPos0, CharRange};
 use super::error::{Flow, LispCondition, signal};
 use super::intern::{SymId, intern};
 use crate::buffer::text_props::{PropertyInterval, TextPropertyPlistRun, TextPropertyTable};
-use crate::buffer::{CharPos0, CharRange};
 use crate::heap_types::LispString;
 use crate::tagged::gc::{
     HeapWriteKind, MEMORY_USE_COUNT_LEN, MemoryUseCountSlot, note_heap_write, with_tagged_heap,
@@ -55,6 +56,9 @@ pub type Value = TaggedValue;
 pub(crate) enum FunctionSourceIdentity {
     ByteCode(u64),
 }
+
+pub mod buffer_schema;
+pub mod positions;
 
 // Re-export tagged types for downstream use.
 pub use crate::tagged::header::VecLikeType;
@@ -3152,7 +3156,7 @@ impl TaggedValue {
     }
 
     /// Allocate a buffer reference.
-    pub fn make_buffer(id: crate::buffer::BufferId) -> Self {
+    pub fn make_buffer(id: BufferId) -> Self {
         with_tagged_heap(|h| {
             if let Some(value) = h.buffer_value(id) {
                 value
@@ -3793,7 +3797,7 @@ impl TaggedValue {
     }
 
     /// Get the buffer ID from a buffer value.
-    pub fn as_buffer_id(self) -> Option<crate::buffer::BufferId> {
+    pub fn as_buffer_id(self) -> Option<BufferId> {
         if self.is_buffer() {
             let ptr = self.as_veclike_ptr().unwrap() as *const BufferObj;
             Some(unsafe { (*ptr).id })

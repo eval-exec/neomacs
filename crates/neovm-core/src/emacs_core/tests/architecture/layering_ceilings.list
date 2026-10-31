@@ -1,7 +1,7 @@
 g0 eval 21
 g0 jit 6
 g0 print 1
-g0 top:buffer 28
+g0 top:buffer 11
 g0 top:encoding 2
 buffer builtins 6
 buffer chartable 1
@@ -15,7 +15,7 @@ buffer string_escape 5
 buffer symbol 11
 buffer syntax 3
 buffer textprop 2
-buffer value 46
+buffer value 48
 code_conversion_workspace error 1
 code_conversion_workspace eval 1
 code_conversion_workspace intern 1
@@ -85,6 +85,7 @@ tagged pdump 2
 tagged process 5
 tagged symbol 10
 tagged value 21
+window category 2
 window chartable 1
 window display_spec 3
 window emacs_char 2

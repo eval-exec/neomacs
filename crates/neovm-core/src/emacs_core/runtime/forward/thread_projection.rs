@@ -49,9 +49,9 @@
 mod parallel;
 
 use super::{FwdRef, LispBufferObjFwd, LispObjFwd};
-use crate::buffer::buffer::BUFFER_SLOT_COUNT;
 use crate::emacs_core::symbol::BlvPtr;
 use crate::emacs_core::value::Value;
+use crate::emacs_core::value::buffer_schema::BUFFER_SLOT_COUNT;
 use std::num::NonZeroU32;
 
 /// The per-buffer slot index a projection's header carries: no buffer has
@@ -462,7 +462,8 @@ impl ThreadProjectionTable {
                 ty: super::LispFwdType::BufferObj,
                 offset: THREAD_PROJECTION_OFFSET,
                 local_flags_idx: -1,
-                predicate: crate::buffer::buffer::BufferSlotPredicate::Unrestricted,
+                predicate:
+                    crate::emacs_core::value::buffer_schema::BufferSlotPredicate::Unrestricted,
                 default: Value::UNBOUND,
             },
             index,

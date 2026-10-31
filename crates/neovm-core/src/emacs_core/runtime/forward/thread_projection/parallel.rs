@@ -68,7 +68,8 @@ impl ThreadProjectionTable {
                     ty: super::super::LispFwdType::BufferObj,
                     offset: THREAD_PROJECTION_OFFSET,
                     local_flags_idx: -1,
-                    predicate: crate::buffer::buffer::BufferSlotPredicate::Unrestricted,
+                    predicate:
+                        crate::emacs_core::value::buffer_schema::BufferSlotPredicate::Unrestricted,
                     default: Value::UNBOUND,
                 },
                 index: TlsIndex(next),

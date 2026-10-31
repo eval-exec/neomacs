@@ -377,7 +377,7 @@ pub struct LispBufferLocalValue {
     /// Written only through [`LispBufferLocalValue::set_where`], which keeps
     /// [`Self::where_buf_id`] in step.
     pub where_buf: AtomicTaggedValue,
-    /// The raw [`BufferId`](crate::buffer::BufferId) of `where_buf`, or
+    /// The raw [`BufferId`](crate::emacs_core::value::buffer_schema::BufferId) of `where_buf`, or
     /// [`NO_WHERE_BUF`] when it is not a buffer: the read fast path's
     /// where-buffer test as one integer compare. Comparing the object meant
     /// a tag test, a header load and a field load on every read of a
@@ -665,7 +665,10 @@ impl LispSymbol {
     /// the current epoch (see [`BlvCacheHit`]); `None` for a miss or any
     /// other redirect.
     #[inline]
-    pub(crate) fn blv_cache_hit(&self, buffer: crate::buffer::BufferId) -> Option<BlvCacheHit> {
+    pub(crate) fn blv_cache_hit(
+        &self,
+        buffer: crate::emacs_core::value::buffer_schema::BufferId,
+    ) -> Option<BlvCacheHit> {
         let blv = self.localized_blv()?;
         // SAFETY: a `Localized` cell names a record `make_symbol_localized`
         // allocated and the obarray owns for its lifetime; the evaluator
@@ -3029,7 +3032,7 @@ impl Obarray {
     pub fn read_localized_for_buffer(
         &self,
         id: SymId,
-        target_buf_id: crate::buffer::BufferId,
+        target_buf_id: crate::emacs_core::value::buffer_schema::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
         let sym = self.slot(id)?;
@@ -3044,7 +3047,7 @@ impl Obarray {
         &self,
         id: SymId,
         sym: &LispSymbol,
-        target_buf_id: crate::buffer::BufferId,
+        target_buf_id: crate::emacs_core::value::buffer_schema::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
         let blv_ptr = sym.localized_blv()?.as_ptr();
@@ -3618,7 +3621,7 @@ impl Obarray {
     pub fn find_symbol_value_in_buffer(
         &mut self,
         id: SymId,
-        _current_buffer_id: Option<crate::buffer::BufferId>,
+        _current_buffer_id: Option<crate::emacs_core::value::buffer_schema::BufferId>,
         current_buffer_value: Value,
         local_var_alist: Value,
         current_buffer_slots: Option<&[Value]>,
