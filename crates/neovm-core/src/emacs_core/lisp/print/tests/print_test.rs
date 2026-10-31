@@ -9,6 +9,25 @@ use crate::emacs_core::value::{
 };
 
 #[test]
+fn printer_delivers_quit_during_traversal_before_returning_partial_output() {
+    crate::test_utils::init_test_tracing();
+    let mut context = crate::test_utils::runtime_startup_context();
+    // GNU print.c checks maybe_quit at print_obj, including after a Lisp
+    // unreadable-object callback and before visiting the following object.
+    let result = context
+        .eval_str(
+            r#"(let ((print-circle nil)
+                     (print-unreadable-function
+                      (lambda (_object _escape) (setq quit-flag t) "Q")))
+                 (condition-case nil
+                     (prin1-to-string (vector (make-marker) '(after)))
+                   (quit 'caught)))"#,
+        )
+        .expect("quit must reach the handler surrounding the print call");
+    assert_eq!(result, Value::symbol("caught"));
+}
+
+#[test]
 fn print_basic_values() {
     crate::test_utils::init_test_tracing();
     assert_eq!(print_value(&Value::NIL), "nil");
