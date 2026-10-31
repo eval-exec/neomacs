@@ -98,3 +98,55 @@ fn nmjit_n4_cell_abi_refusal_leaves_previous_home_unchanged() {
         },
     );
 }
+
+#[test]
+fn nmjit_n4_fboundp_abi_matches_gnu_after_function_writes() {
+    use super::super::fboundp_tests::{assert_empty, assert_transitions};
+    for backing in [
+        PlainSymbolBacking::Unprojected,
+        PlainSymbolBacking::Projected,
+    ] {
+        with_test_prepared_cell_execution(
+            backing,
+            ExecutionTestSeed::Scalar,
+            |_| (),
+            |(), admission, run, home, symbol| {
+                assert_empty(run, home, |run| {
+                    // SAFETY: lookup is the same closed Rust descriptor kernel
+                    // used by the other ABI fixtures; it retains no address.
+                    unsafe {
+                        execute(
+                            lookup,
+                            CellRead::FunctionBoundp,
+                            admission,
+                            run,
+                            home,
+                            symbol,
+                        )
+                    }
+                });
+            },
+        );
+        with_test_prepared_cell_execution(
+            backing,
+            ExecutionTestSeed::WritableFunctionDefinition,
+            |_| (),
+            |(), admission, run, home, symbol| {
+                assert_transitions(run, home, symbol, |run| {
+                    // SAFETY: the static Rust lookup implements this closed
+                    // ABI and is alive throughout the call and sealed epilogue.
+                    unsafe {
+                        execute(
+                            lookup,
+                            CellRead::FunctionBoundp,
+                            admission,
+                            run,
+                            home,
+                            symbol,
+                        )
+                    }
+                });
+            },
+        );
+    }
+}

@@ -22,6 +22,7 @@ enum MissingFeature {
     Gen1Admission,
     ParallelCompiledEntry,
     VarRefI6,
+    FboundpAdmission,
     RetiredPublication,
 }
 
@@ -66,6 +67,12 @@ fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
                 eprintln!("NMJIT_N4_VARREF_FAILURE {reason}");
                 feature
             }),
+        MissingFeature::FboundpAdmission => {
+            crate::emacs_core::jit::parallel::fboundp_manifest_for_test().map_err(|reason| {
+                eprintln!("NMJIT_N4_FBOUNDP_FAILURE {reason}");
+                feature
+            })
+        }
     }
 }
 
@@ -259,6 +266,7 @@ missing_test!(
     ParallelCompiledEntry
 );
 missing_test!(nmjit_n1_missing_varref_i6, VarRefI6);
+missing_test!(nmjit_n1_missing_fboundp_admission, FboundpAdmission);
 missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);
 
 #[test]

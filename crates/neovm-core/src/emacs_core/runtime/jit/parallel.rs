@@ -215,3 +215,9 @@ pub(crate) use tests::compiled_entry_manifest as compiled_entry_manifest_for_tes
 mod cell_tests;
 #[cfg(test)]
 pub(crate) use cell_tests::varref_manifest as varref_manifest_for_test;
+
+#[cfg(test)]
+#[path = "parallel/tests/fboundp_test.rs"]
+mod fboundp_tests;
+#[cfg(test)]
+pub(crate) use fboundp_tests::fboundp_manifest as fboundp_manifest_for_test;

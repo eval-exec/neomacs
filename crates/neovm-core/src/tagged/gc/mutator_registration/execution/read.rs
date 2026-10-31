@@ -11,6 +11,7 @@ pub(crate) enum CellRead {
     GlobalValue,
     GlobalBoundp,
     Function,
+    FunctionBoundp,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +53,10 @@ impl ExecutionActivation<'_, '_, '_> {
             CellRead::Function => self
                 .run
                 .sym_function_into(symbol, &mut destination)
+                .map_err(CellReadError::Function),
+            CellRead::FunctionBoundp => self
+                .run
+                .sym_fboundp_into(symbol, &mut destination)
                 .map_err(CellReadError::Function),
         }
     }

@@ -74,6 +74,7 @@ pub(crate) fn prepared_fixture<P>(
 pub(crate) enum FixtureSeed {
     Scalar,
     FunctionDefinition,
+    WritableFunctionDefinition,
 }
 
 pub(crate) fn prepared_cell_fixture<P>(
@@ -95,7 +96,7 @@ pub(crate) fn prepared_cell_fixture<P>(
         backing,
         |obarray, id| match seed {
             FixtureSeed::Scalar => {}
-            FixtureSeed::FunctionDefinition => {
+            FixtureSeed::FunctionDefinition | FixtureSeed::WritableFunctionDefinition => {
                 let lambda = TaggedValue::from_sym_id(crate::emacs_core::intern::intern("lambda"));
                 let body = TaggedValue::cons(TaggedValue::fixnum(73), TaggedValue::NIL);
                 let args = TaggedValue::cons(TaggedValue::NIL, body);
@@ -104,7 +105,15 @@ pub(crate) fn prepared_cell_fixture<P>(
                 obarray.set_symbol_function_id(id, definition);
             }
         },
-        |proof, id| {
+        |mut proof, id| {
+            // Preserve the actual sealed census made by this minimal World;
+            // finishing setup does not authorize fabricating a new census.
+            // No Lisp or collection occurs between finish and re-admission.
+            let frozen = proof
+                .core
+                .legacy_roots
+                .take()
+                .expect("rooted setup evidence");
             let (mut collector, keeper) = proof.finish().expect("small setup return");
             let mode = if collector.registration_heap_mut().generational_enabled() {
                 ActualMode::Gen1
@@ -116,6 +125,7 @@ pub(crate) fn prepared_cell_fixture<P>(
                 Err(failure) => {
                     let reason = failure.reason;
                     drop(failure.collector);
+                    drop(frozen);
                     drop(keeper);
                     assert_eq!(reason, Gen1AdmissionError::GenerationalRequired);
                     assert_eq!(mode, ActualMode::Gen0);
@@ -124,8 +134,16 @@ pub(crate) fn prepared_cell_fixture<P>(
                 }
             };
             let prepared = prepare(&admitted);
-            let era = ParallelHeapEra::admit(admitted, keeper).expect("real GEN1 era");
+            let era = ParallelHeapEra::admit_rooted(admitted, keeper, frozen)
+                .expect("real rooted GEN1 era");
             let symbol = era.admit_plain_symbol(id).expect("activation Plain handle");
+            match seed {
+                FixtureSeed::Scalar | FixtureSeed::FunctionDefinition => {}
+                FixtureSeed::WritableFunctionDefinition => {
+                    era.prepare_function_symbol(&symbol)
+                        .expect("prepared function journal");
+                }
+            }
             let admission = era.execution_admission();
             let mut owner = era
                 .register(1, 4)
@@ -156,6 +174,21 @@ pub(crate) fn prepared_cell_fixture<P>(
                 .map_err(|failure| format!("activation fixture retirement: {failure:?}"))
             })();
             drop(admission);
+            match seed {
+                FixtureSeed::Scalar | FixtureSeed::FunctionDefinition => {}
+                FixtureSeed::WritableFunctionDefinition => {
+                    let mut stopped = era.stop().expect("function fixture stop");
+                    stopped
+                        .symbols()
+                        .expect("stopped symbol authority")
+                        .reconcile_functions()
+                        .expect("function fixture reconciliation");
+                    stopped
+                        .trace(|_, _| Ok(()))
+                        .expect("function fixture stopped trace");
+                    stopped.complete().expect("function fixture resume");
+                }
+            }
             let (collector, keeper) = era.finish().expect("activation fixture finish");
             drop(collector);
             drop(keeper);

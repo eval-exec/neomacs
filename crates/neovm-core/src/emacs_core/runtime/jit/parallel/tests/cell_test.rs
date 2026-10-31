@@ -3,7 +3,7 @@ use crate::tagged::gc::{
     ExecutionTestHomes, ExecutionTestSeed, PlainSymbolBacking, with_test_prepared_cell_execution,
 };
 
-fn with_cell(
+pub(super) fn with_cell(
     read: CellRead,
     backing: PlainSymbolBacking,
     seed: ExecutionTestSeed,
