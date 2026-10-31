@@ -233,6 +233,7 @@ impl Baton {
             );
             global.processes.trace_roots_with(&mut visit);
             global.registers.trace_roots_with(&mut visit);
+            global.minibuffers.trace_roots_with(&mut visit);
             global.interactive.trace_roots_with(&mut visit);
             global.xwidgets.trace_roots_with(&mut visit);
             global.face_table.trace_roots_with(&mut visit);

@@ -461,6 +461,8 @@ impl Context {
             self.watchers.trace_roots_with(visit);
             group("registers");
             self.registers.trace_roots_with(visit);
+            group("minibuffers");
+            self.minibuffers.trace_roots_with(visit);
         }
         group("custom");
         self.custom.trace_roots_with(visit);

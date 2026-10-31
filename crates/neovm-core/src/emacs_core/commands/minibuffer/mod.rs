@@ -9,6 +9,7 @@
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableView;
+use crate::gc_trace::GcTrace;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use strum::IntoStaticStr;
@@ -195,7 +196,7 @@ pub enum CompletionTable {
     // callable is the public dynamic-completion representation
     Function(Box<dyn Fn(&LispString) -> Vec<LispString>>),
     /// File name completion rooted at a directory.
-    FileNames { directory: LispString },
+    FileNames { directory: CompletionDirectory },
     /// Buffer name completion (candidates supplied externally).
     BufferNames,
     /// Symbol name completion (candidates supplied externally).
@@ -203,6 +204,27 @@ pub enum CompletionTable {
     /// Association list: each entry is (key, value).
     Alist(Vec<(LispString, Value)>),
 }
+
+/// Native directory spelling: filesystem lookup cannot retain text properties.
+/// The private payload and shared-only view preserve this constructor invariant.
+#[derive(Clone, Debug)]
+#[repr(transparent)]
+pub struct CompletionDirectory(LispString);
+
+impl From<&LispString> for CompletionDirectory {
+    fn from(directory: &LispString) -> Self {
+        Self(directory.without_properties())
+    }
+}
+
+impl AsRef<LispString> for CompletionDirectory {
+    fn as_ref(&self) -> &LispString {
+        &self.0
+    }
+}
+
+static_assertions::assert_eq_size!(CompletionDirectory, LispString);
+static_assertions::assert_not_impl_any!(CompletionDirectory: Send, Sync);
 
 impl CompletionTable {
     /// Extract the raw string candidates from the table.
@@ -213,7 +235,7 @@ impl CompletionTable {
         match self {
             CompletionTable::List(v) => v.clone(),
             CompletionTable::Function(f) => f(input),
-            CompletionTable::FileNames { directory } => list_files_in_dir(directory),
+            CompletionTable::FileNames { directory } => list_files_in_dir(directory.as_ref()),
             CompletionTable::BufferNames => Vec::new(),
             CompletionTable::SymbolNames => Vec::new(),
             CompletionTable::Alist(pairs) => pairs.iter().map(|(k, _)| k.clone()).collect(),
@@ -619,6 +641,77 @@ pub struct MinibufferManager {
     completion_style: CompletionStyle,
     #[cfg(test)]
     max_depth: usize,
+}
+
+impl GcTrace for MinibufferManager {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        let Self {
+            state_stack,
+            history,
+            completion_style: _,
+            #[cfg(test)]
+                max_depth: _,
+        } = self;
+        for state in state_stack {
+            // No rest pattern: a newly retained field needs a tracing decision.
+            let MinibufferState {
+                buffer_id: _,
+                prompt,
+                prompt_end: _,
+                initial_input,
+                history,
+                history_position: _,
+                content,
+                cursor_pos: _,
+                completion_table,
+                require_match,
+                default_value,
+                active: _,
+                depth: _,
+                command_loop_depth: _,
+            } = state;
+            for text in [prompt, initial_input, content]
+                .into_iter()
+                .chain(history)
+                .chain(default_value)
+            {
+                text.trace_roots_with(visit);
+            }
+            visit(*require_match);
+            if let Some(table) = completion_table {
+                match table {
+                    CompletionTable::List(candidates) => {
+                        for candidate in candidates {
+                            candidate.trace_roots_with(visit);
+                        }
+                    }
+                    CompletionTable::Alist(entries) => {
+                        for (key, value) in entries {
+                            key.trace_roots_with(visit);
+                            visit(*value);
+                        }
+                    }
+                    // The native directory type cannot carry interval edges.
+                    CompletionTable::FileNames { directory: _ }
+                    | CompletionTable::BufferNames
+                    | CompletionTable::SymbolNames => {}
+                    // An opaque native callback has no enumerable capture
+                    // record; this walk covers the manager's declared fields.
+                    CompletionTable::Function(_) => {}
+                }
+            }
+        }
+        let MinibufferHistory { histories } = history;
+        for entries in histories.values() {
+            for text in entries {
+                text.trace_roots_with(visit);
+            }
+        }
+    }
 }
 
 impl MinibufferManager {

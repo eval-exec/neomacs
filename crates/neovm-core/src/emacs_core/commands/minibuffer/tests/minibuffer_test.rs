@@ -8,6 +8,165 @@ fn ls(text: &str) -> LispString {
     LispString::from_utf8(text)
 }
 
+#[test]
+fn completion_directory_preserves_spelling_without_properties() {
+    crate::test_utils::init_test_tracing();
+    let _eval = crate::emacs_core::eval::Context::new();
+    for mut text in [
+        LispString::from_utf8("dir-字-é"),
+        LispString::from_unibyte(vec![0xff, b'A']),
+    ] {
+        text.intervals_mut().put_property_in_char_range(
+            crate::buffer::CharRange::from_usize(0, 1),
+            Value::symbol("directory-property"),
+            Value::vector(vec![Value::fixnum(41)]),
+        );
+        let directory = CompletionDirectory::from(&text);
+        assert_eq!(directory.as_ref().as_bytes(), text.as_bytes());
+        assert_eq!(directory.as_ref().is_multibyte(), text.is_multibyte());
+        assert!(!directory.as_ref().has_intervals());
+    }
+}
+
+#[test]
+fn minibuffer_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+    use crate::emacs_core::eval::Context;
+
+    fn payload(probes: &mut Vec<usize>) -> Value {
+        let value = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(value.bits());
+        value
+    }
+    fn text(probes: &mut Vec<usize>, key: Value) -> LispString {
+        let mut text = LispString::from_utf8("owned");
+        text.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 5),
+            key,
+            payload(probes),
+        );
+        text
+    }
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let key = Value::symbol("minibuffer-owned-property");
+    let history = intern("minibuffer-owned-history");
+    let (probes, discarded_directory_property) = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        eval.minibuffers
+            .add_to_history_lisp(history, text(&mut probes, key), 8);
+        let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+        let state = eval
+            .minibuffers
+            .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
+            .expect("outer minibuffer");
+        // Distinct payloads prevent one copied field from hiding another's
+        // missing visitor. No buffer or Lisp variable gets these properties.
+        state.initial_input = text(&mut probes, key);
+        state.content = text(&mut probes, key);
+        state.history.push(text(&mut probes, key));
+        state.default_value = Some(text(&mut probes, key));
+        state.require_match = payload(&mut probes);
+        state.completion_table = Some(CompletionTable::List(vec![text(&mut probes, key)]));
+
+        let state = eval
+            .minibuffers
+            .read_from_minibuffer_lisp(buffer, &text(&mut probes, key), None, None)
+            .expect("inner minibuffer");
+        state.completion_table = Some(CompletionTable::Alist(vec![(
+            text(&mut probes, key),
+            payload(&mut probes),
+        )]));
+
+        let state = eval
+            .minibuffers
+            .read_from_minibuffer_lisp(buffer, &ls("Files: "), None, None)
+            .expect("directory minibuffer");
+        let discarded = Value::vector(vec![Value::fixnum(999)]);
+        let mut directory = ls("/tmp");
+        directory.intervals_mut().put_property_in_char_range(
+            CharRange::from_usize(0, 4),
+            key,
+            discarded,
+        );
+        state.completion_table = Some(CompletionTable::FileNames {
+            directory: CompletionDirectory::from(&directory),
+        });
+        (probes, discarded.bits())
+    });
+    // Only integer snapshots escape setup; the World manager is the sole
+    // owner of each property graph, including the suspended outer session.
+    let check_live = |eval: &Context| {
+        for bits in &probes {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "minibuffer-only property vector was reclaimed"
+            );
+        }
+        assert!(
+            !eval
+                .tagged_heap
+                .retains_veclike(Value::from_bits(discarded_directory_property)),
+            "native directory retained a discarded property"
+        );
+        for (index, bits) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+        assert_eq!(
+            eval.minibuffers.history.get(history)[0]
+                .intervals()
+                .get_property_at_char_pos(CharPos0::ZERO, key)
+                .expect("history property")
+                .bits(),
+            probes[0]
+        );
+    };
+
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    *eval.minibuffers = MinibufferManager::new();
+    eval.gc_collect_exact();
+    for bits in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired minibuffer graph remained permanently rooted"
+        );
+    }
+}
+
 // -- completion--flex-cost-gotoh (GNU 31.0.90 parity) ---------------------
 
 /// Flatten `(COST . MATCHES)` (or nil) into a `Vec<i64>` for comparison.
