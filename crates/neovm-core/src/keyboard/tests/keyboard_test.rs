@@ -2743,6 +2743,140 @@ fn timed_read_preserves_idle_epoch_during_preliminary_redisplay_service() {
     );
     assert_eq!(eval.command_loop.idle_start_time, epoch);
 }
+/// GNU `keyboard.c:6610-6710`: a button release whose frame-relative pointer
+/// position moved outside `double-click-fuzz` is a drag (`drag-mouse-1`), not a
+/// click. `[drag-mouse-1]` is bound to `mouse-set-region`; delivering the drag
+/// as `mouse-1` instead runs `mouse-set-point` and lets the transient map pop
+/// the mark (issue 621).
+#[test]
+fn a_release_after_pointer_movement_is_a_drag_event_like_gnu() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    let press = eval
+        .handle_read_char_input_event(
+            InputEvent::MousePress {
+                button: MouseButton::Left,
+                x: 22.0,
+                y: 12.0,
+                modifiers: Modifiers::none(),
+                target_frame_id: frame_id.0,
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .unwrap()
+        .expect("press is a Lisp event");
+    assert_eq!(press.cons_car(), Value::symbol("down-mouse-1"));
+    let release = eval
+        .handle_read_char_input_event(
+            InputEvent::MouseRelease {
+                button: MouseButton::Left,
+                x: 100.0,
+                y: 12.0,
+                target_frame_id: frame_id.0,
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .unwrap()
+        .expect("release is a Lisp event");
+    assert_eq!(
+        release.cons_car(),
+        Value::symbol("drag-mouse-1"),
+        "a moved release must be a drag, not a click"
+    );
+}
+
+#[test]
+fn a_release_at_the_press_point_is_a_click_event_like_gnu() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    eval.handle_read_char_input_event(
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x: 22.0,
+            y: 12.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+    .expect("press is a Lisp event");
+    let release = eval
+        .handle_read_char_input_event(
+            InputEvent::MouseRelease {
+                button: MouseButton::Left,
+                x: 23.0,
+                y: 13.0,
+                target_frame_id: frame_id.0,
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .unwrap()
+        .expect("release is a Lisp event");
+    assert_eq!(
+        release.cons_car(),
+        Value::symbol("mouse-1"),
+        "a release inside double-click-fuzz stays a click"
+    );
+}
+
+#[test]
+fn a_moved_double_click_release_keeps_gnu_modifier_order() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    eval.handle_read_char_input_event(
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x: 22.0,
+            y: 12.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+    .expect("first press is a Lisp event");
+    eval.handle_read_char_input_event(
+        InputEvent::MouseRelease {
+            button: MouseButton::Left,
+            x: 22.0,
+            y: 12.0,
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+    .expect("first click release is a Lisp event");
+    eval.handle_read_char_input_event(
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x: 22.0,
+            y: 12.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+    .expect("second press is a Lisp event");
+    let release = eval
+        .handle_read_char_input_event(
+            InputEvent::MouseRelease {
+                button: MouseButton::Left,
+                x: 100.0,
+                y: 12.0,
+                target_frame_id: frame_id.0,
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .unwrap()
+        .expect("moved release is a Lisp event");
+    // GNU `event-convert-list` canonicalizes `(drag double mouse-1)` to
+    // `double-drag-mouse-1`.
+    assert_eq!(
+        release.cons_car(),
+        Value::symbol("double-drag-mouse-1"),
+        "the double-click modifier precedes the drag modifier"
+    );
+}
+
 #[cfg(test)]
 #[path = "help_echo_substitution.rs"]
 mod help_echo_substitution;

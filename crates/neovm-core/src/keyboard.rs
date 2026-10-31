@@ -5835,15 +5835,27 @@ impl crate::emacs_core::eval::Context {
                 // Use the click count recorded on the matching
                 // press so the release event carries the same
                 // double/triple modifier. Keyboard audit F12.
-                let click_count = self
+                let press = self
                     .command_loop
                     .keyboard
                     .kboard
                     .last_mouse_click
-                    .filter(|state| state.button == button)
-                    .map(|state| state.click_count)
-                    .unwrap_or(1);
-                let prefix = Self::mouse_event_prefix_for_click_count("mouse", click_count);
+                    .filter(|state| state.button == button);
+                let click_count = press.map(|state| state.click_count).unwrap_or(1);
+                // GNU `keyboard.c:6610-6710`: an up event is a drag, not a
+                // click, when the frame-relative pointer moved outside
+                // `double-click-fuzz` (`0 < fuzz`) or landed in another
+                // window. `[drag-mouse-1]` is bound to `mouse-set-region`,
+                // which keeps the dragged region active; a plain `mouse-1`
+                // runs `mouse-set-point`, and the drag transient map then
+                // deactivates and pops the mark.
+                let fuzz = self.double_click_fuzz();
+                let drag = press.is_some_and(|state| {
+                    state.frame_id != target_frame_id
+                        || !(fuzz > 0.0 && (x - state.x).abs() < fuzz && (y - state.y).abs() < fuzz)
+                });
+                let base = if drag { "drag-mouse" } else { "mouse" };
+                let prefix = Self::mouse_event_prefix_for_click_count(base, click_count);
                 let event = Self::make_mouse_event(
                     &button,
                     x,
@@ -6809,6 +6821,19 @@ impl crate::emacs_core::eval::Context {
     /// 3 = triple). Subsequent clicks beyond triple saturate at
     /// 3, matching GNU `keyboard.c:6120-6128` where the count
     /// wraps via `min (3, ...)`. Keyboard audit Finding 12.
+    /// GNU `double-click-fuzz` as a frame-relative pixel tolerance.
+    /// `keyboard.c` uses the same value for click counts and for deciding
+    /// whether a button release is a drag (`0 < fuzz` and both deltas inside
+    /// it).
+    fn double_click_fuzz(&self) -> f32 {
+        self.eval_symbol("double-click-fuzz")
+            .ok()
+            .and_then(|v| v.as_fixnum())
+            .filter(|&n| n >= 0)
+            .map(|n| n as f32)
+            .unwrap_or(3.0)
+    }
+
     fn classify_mouse_click_on_press(
         &mut self,
         button: MouseButton,
@@ -6824,20 +6849,14 @@ impl crate::emacs_core::eval::Context {
             .filter(|&n| n > 0)
             .map(|n| n as u64)
             .unwrap_or(500);
-        let double_click_fuzz = self
-            .eval_symbol("double-click-fuzz")
-            .ok()
-            .and_then(|v| v.as_fixnum())
-            .filter(|&n| n >= 0)
-            .map(|n| n as f32)
-            .unwrap_or(3.0);
+        let fuzz = self.double_click_fuzz();
 
         let count = match self.command_loop.keyboard.kboard.last_mouse_click {
             Some(prev)
                 if prev.button == button
                     && prev.frame_id == frame_id
-                    && (prev.x - x).abs() <= double_click_fuzz
-                    && (prev.y - y).abs() <= double_click_fuzz
+                    && (prev.x - x).abs() <= fuzz
+                    && (prev.y - y).abs() <= fuzz
                     && now.saturating_duration_since(prev.timestamp).as_millis()
                         <= double_click_time_ms as u128 =>
             {
