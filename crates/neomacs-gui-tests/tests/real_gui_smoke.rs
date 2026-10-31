@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use neomacs_gui_tests::{
-    CommandSpec, DisplayHarness, GuiBackend, GuiCommandRunner, GuiRunOptions, GuiRunStatus,
-    GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
+    Capability, CommandSpec, DisplayHarness, GuiBackend, GuiCommandRunner, GuiRunOptions,
+    GuiRunStatus, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
 
 #[path = "real_gui_smoke/scrolling.rs"]
@@ -34,8 +34,11 @@ fn real_gui_smoke_generates_surface_readback_png() {
         "real-startup-smoke",
         workspace_root.join("crates/neomacs-gui-tests/fixtures/startup-smoke.el"),
     );
-    let mut plan =
-        GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario).with_program(binary);
+    let mut plan = GuiTestPlan::new(backend, &workspace_root, &artifact_root, scenario)
+        .with_program(binary)
+        .require(Capability::Display)
+        .require(Capability::ScenarioDriver)
+        .require(Capability::SurfacePresent);
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
     }
@@ -48,6 +51,16 @@ fn real_gui_smoke_generates_surface_readback_png() {
         )
         .expect("GUI run should produce text artifacts");
 
+    if result.status == GuiRunStatus::Unsupported {
+        eprintln!(
+            "skipping real GUI smoke: {}",
+            result
+                .failure_reason
+                .as_deref()
+                .unwrap_or("host lacks a required capability")
+        );
+        return;
+    }
     assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
     assert!(
         result.png_bytes.unwrap_or_default() > 0,
@@ -600,20 +613,7 @@ fn gnu_image_oracle_command(
 }
 
 fn requested_backend() -> Option<GuiBackend> {
-    let configured = std::env::var("NEOMACS_GUI_TEST_BACKEND").unwrap_or_else(|_| {
-        cfg_select! {
-            target_os = "macos" => { "macos".to_string() }
-            windows => { "windows".to_string() }
-            _ => { "x11".to_string() }
-        }
-    });
-    match configured.as_str() {
-        "wayland" | "linux-wayland" => Some(GuiBackend::LinuxWayland),
-        "x11" | "linux-x11" => Some(GuiBackend::LinuxX11),
-        "macos" => Some(GuiBackend::Macos),
-        "windows" => Some(GuiBackend::Windows),
-        other => panic!("unsupported NEOMACS_GUI_TEST_BACKEND={other:?}"),
-    }
+    neomacs_gui_tests::requested_backend()
 }
 
 fn workspace_root() -> PathBuf {

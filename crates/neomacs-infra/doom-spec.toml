@@ -6,12 +6,19 @@
 # Re-pin by editing this file; materialization keys its cache on the
 # revision, so a new revision rebuilds rather than reuses.
 #
-# `packages` pins the identity of the package builds the GNU bootstrap
+# Package pins record the identity of the package builds the GNU bootstrap
 # produced (the SHA-256 of the sealed fixture's PACKAGES record).  The
 # packages come from live archives and are only reproducible as a record,
 # so this digest is what `open` checks: a rebuild that silently pulled
 # different versions refuses to mount, and re-pinning is its own
 # ceremony — never a side effect of a materialization.
+#
+# The pin is host-scoped because the package set is: Doom's recipes install
+# OS-specific packages, so a macOS bootstrap cannot match a Linux digest.
+# `packages =` is the Linux pin (the historical key); other hosts use
+# `packages_<os>` (`packages_macos`, `packages_windows`).  A host with no
+# line of its own is unpinned — `infra status` reports it, and
+# `infra pin-packages doom` records the host it ran on.
 #
 # RE-BASELINING LOG
 #   2026-09-24  Pin the straight package builds: 17 repos, anchored by

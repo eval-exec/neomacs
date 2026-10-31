@@ -1,11 +1,159 @@
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 use std::time::Duration;
 
 use neomacs_gui_tests::{
-    DisplayHarness, GuiArtifactSet, GuiBackend, GuiCommandOutput, GuiCommandRunner, GuiRunOptions,
-    GuiRunStatus, GuiScenario, GuiTestPlan, RunnerKind,
+    Capability, CapabilitySet, DisplayHarness, GuiArtifactSet, GuiBackend, GuiCommandOutput,
+    GuiCommandRunner, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan, RunnerKind,
 };
+
+#[test]
+fn a_full_capability_set_names_every_capability() {
+    let set = CapabilitySet::from_capabilities(&Capability::all());
+    assert_eq!(
+        set.names(),
+        Capability::all()
+            .into_iter()
+            .map(Capability::slug)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn capability_requirements_are_deduplicated_in_declaration_order() {
+    let plan = GuiTestPlan::new(
+        GuiBackend::Macos,
+        "checkout",
+        "artifacts",
+        GuiScenario::new("dedupe", "fixture.el"),
+    )
+    .require(Capability::Display)
+    .require(Capability::ScenarioDriver)
+    .require(Capability::Display);
+    assert_eq!(
+        plan.required_capabilities(),
+        &[Capability::Display, Capability::ScenarioDriver]
+    );
+}
+
+#[test]
+fn every_backend_has_the_scenario_tier() {
+    for backend in [
+        GuiBackend::LinuxX11,
+        GuiBackend::LinuxWayland,
+        GuiBackend::Macos,
+        GuiBackend::Windows,
+    ] {
+        let capabilities = backend.capabilities();
+        assert!(
+            capabilities.contains(Capability::Display),
+            "{backend:?} must provide a display"
+        );
+        assert!(
+            capabilities.contains(Capability::ScenarioDriver),
+            "{backend:?} must support fixture-driven scenarios"
+        );
+    }
+}
+
+#[test]
+fn compositor_control_is_a_harness_owned_linux_capability() {
+    assert!(
+        GuiBackend::LinuxX11
+            .capabilities()
+            .contains(Capability::CompositorControl)
+    );
+    assert!(
+        GuiBackend::LinuxWayland
+            .capabilities()
+            .contains(Capability::CompositorControl)
+    );
+    assert!(
+        !GuiBackend::Macos
+            .capabilities()
+            .contains(Capability::CompositorControl),
+        "macOS runs in the logged-in desktop session, not a harness-owned compositor"
+    );
+    assert!(
+        !GuiBackend::Windows
+            .capabilities()
+            .contains(Capability::CompositorControl)
+    );
+}
+
+#[test]
+fn missing_capabilities_are_reported_in_requirement_order() {
+    let required = [
+        Capability::GnuOracle,
+        Capability::Display,
+        Capability::CompositorControl,
+    ];
+    assert_eq!(
+        GuiBackend::Macos.capabilities().missing(&required),
+        vec![Capability::GnuOracle, Capability::CompositorControl]
+    );
+}
+
+#[test]
+fn a_missing_required_capability_skips_the_launch_and_names_itself() {
+    let workspace_root = workspace_root();
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let scenario = "unsupported-capability";
+    let artifacts = GuiArtifactSet::new(&artifact_root, GuiBackend::Macos, scenario);
+    let _ = std::fs::remove_file(&artifacts.json);
+    let _ = std::fs::remove_file(&artifacts.stderr);
+
+    let plan = GuiTestPlan::new(
+        GuiBackend::Macos,
+        &workspace_root,
+        &artifact_root,
+        GuiScenario::new(scenario, "fixture.el"),
+    )
+    .require(Capability::CompositorControl);
+    let mut runner = FakeRunner {
+        output: GuiCommandOutput {
+            exit_code: Some(0),
+            timed_out: false,
+            stdout: "the runner must not be called\n".to_string(),
+            stderr: String::new(),
+        },
+        create_png: true,
+        gui_state: None,
+        frame_snapshot: None,
+    };
+
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+        )
+        .expect("an unsupported host still writes plan artifacts");
+
+    assert_eq!(result.status, GuiRunStatus::Unsupported);
+    assert_eq!(
+        result.png_bytes, None,
+        "an unsupported host must not run the editor"
+    );
+    assert!(
+        result
+            .failure_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("compositor-control")),
+        "{result:#?}"
+    );
+    let manifest = std::fs::read_to_string(&artifacts.json).expect("manifest");
+    assert!(
+        manifest.contains(r##""status":"unsupported""##),
+        "{manifest}"
+    );
+    assert!(
+        manifest.contains(r##""missing":["compositor-control"]"##),
+        "{manifest}"
+    );
+    let stderr = std::fs::read_to_string(&artifacts.stderr).expect("stderr reason");
+    assert!(stderr.contains("compositor-control"), "{stderr}");
+}
 
 #[test]
 fn all_supported_backends_have_explicit_runner_kind() {
@@ -548,7 +696,8 @@ fn run_with_runner_reports_missing_png_as_failed_text_result() {
         &workspace_root,
         &artifact_root,
         GuiScenario::new("runner-no-png", "test/neomacs/neomacs-face-test.el"),
-    );
+    )
+    .require(Capability::SurfacePresent);
     let mut runner = FakeRunner {
         output: GuiCommandOutput {
             exit_code: Some(0),
@@ -577,6 +726,50 @@ fn run_with_runner_reports_missing_png_as_failed_text_result() {
 }
 
 #[test]
+fn a_semantic_plan_succeeds_without_a_paint_readback() {
+    let workspace_root = workspace_root();
+    let artifact_root = workspace_root.join("target/neomacs-gui-tests");
+    let scenario = "semantic-no-png";
+    let artifacts = GuiArtifactSet::new(&artifact_root, GuiBackend::Macos, scenario);
+    let _ = std::fs::remove_file(&artifacts.json);
+    let _ = std::fs::remove_file(&artifacts.png);
+    let _ = std::fs::remove_file(&artifacts.stderr);
+
+    let plan = GuiTestPlan::new(
+        GuiBackend::Macos,
+        &workspace_root,
+        &artifact_root,
+        GuiScenario::new(scenario, "fixture.el"),
+    );
+    let mut runner = FakeRunner {
+        output: GuiCommandOutput {
+            exit_code: Some(0),
+            timed_out: false,
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        create_png: false,
+        gui_state: None,
+        frame_snapshot: Some((
+            r#"{"frames":[{"frame_id":1}]}"#.to_string(),
+            "=== frame 1 ===\n".to_string(),
+        )),
+    };
+
+    let result = plan
+        .run_with(
+            &mut runner,
+            GuiRunOptions::with_timeout(Duration::from_secs(1)),
+        )
+        .expect("a semantic run writes its artifacts");
+
+    assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    assert_eq!(result.png_bytes, None);
+    assert!(result.frame_snapshot_json_bytes.is_some());
+    assert!(result.failure_reason.is_none());
+}
+
+#[test]
 fn run_with_runner_treats_timeout_after_png_as_successful_capture() {
     let workspace_root = workspace_root();
     let artifact_root = workspace_root.join("target/neomacs-gui-tests");
@@ -594,7 +787,8 @@ fn run_with_runner_treats_timeout_after_png_as_successful_capture() {
         &workspace_root,
         &artifact_root,
         GuiScenario::new("runner-timeout-png", "test/neomacs/neomacs-face-test.el"),
-    );
+    )
+    .require(Capability::SurfacePresent);
     let mut runner = FakeRunner {
         output: GuiCommandOutput {
             exit_code: None,
