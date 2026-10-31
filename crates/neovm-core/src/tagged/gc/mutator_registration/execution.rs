@@ -4,11 +4,13 @@
 //! wrapper alone supplies its sealed GEN1 construction witness. A callback
 //! borrows its activation, so it cannot forget an owned guard or release the
 //! enclosing IN_SLICE admission before all borrowed table addresses are dead.
+mod read;
 use super::construction::Gen1Construction;
 use super::*;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::gc::symbol_table::publication::{PublicationView, TableView};
 use crate::tagged::value::{Fixnum, TaggedValue};
+pub(crate) use read::{CellRead, CellReadError};
 
 /// A checked immediate, never a managed pointer smuggled through native ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -20,6 +20,20 @@ impl Context {
         )
     }
 
+    /// Typed-refusal variant for one serially seeded Plain/projected symbol.
+    /// Initialization ends before the proof era; no mutable World escapes.
+    pub(crate) fn try_with_test_symbol_backing_init_era<R>(
+        kind: crate::tagged::gc::PlainSymbolBacking,
+        init: impl FnOnce(&mut Obarray, SymId),
+        body: impl for<'heap> FnOnce(crate::tagged::gc::ProofEra<'heap>, SymId) -> R,
+    ) -> Result<R, crate::tagged::gc::RegistrationError> {
+        Self::try_with_test_symbol_backings_init_era(
+            &[kind],
+            |obarray, ids| init(obarray, ids[0]),
+            |era, ids| body(era, ids[0]),
+        )
+    }
+
     /// C3 setup only: the same small World, optionally projected before the
     /// era exists. No production cell accessor changes and no setup collection.
     pub(crate) fn with_test_symbol_backing_era<R>(

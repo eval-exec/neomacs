@@ -20,7 +20,9 @@ mod cons_catalog;
 mod construction;
 mod execution;
 pub use execution::ParallelExecutionAdmission;
-pub(crate) use execution::{ExecutionActivation, ImmediateResult, ImmediateResultError};
+pub(crate) use execution::{
+    CellRead, CellReadError, ExecutionActivation, ImmediateResult, ImmediateResultError,
+};
 #[cfg(test)]
 pub(crate) use execution::{ExecutionTestHomes, with_test_prepared_execution};
 mod wrappers;

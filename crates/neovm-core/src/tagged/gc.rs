@@ -2815,9 +2815,9 @@ pub(crate) use mutator_registration::{
 };
 
 pub(crate) use mutator_registration::{
-    EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation, FrozenFunctionRoots,
-    FrozenLegacyRoots, ImmediateResult, ImmediateResultError, OwnerRootAdmission,
-    StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
+    CellRead, CellReadError, EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation,
+    FrozenFunctionRoots, FrozenLegacyRoots, ImmediateResult, ImmediateResultError,
+    OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
 };
 
 mod alloc_region;

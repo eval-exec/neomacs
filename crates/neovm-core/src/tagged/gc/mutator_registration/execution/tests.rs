@@ -56,72 +56,115 @@ pub(crate) fn prepared_fixture<P>(
         &OwnerRootSlot<'era>,
     ),
 ) -> FixtureReceipt {
+    prepared_cell_fixture(
+        PlainSymbolBacking::Unprojected,
+        FixtureSeed::Scalar,
+        prepare,
+        |prepared, admission, run, destination, _symbol| {
+            body(prepared, admission, run, destination);
+        },
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum FixtureSeed {
+    Scalar,
+    FunctionDefinition,
+}
+
+pub(super) fn prepared_cell_fixture<P>(
+    backing: PlainSymbolBacking,
+    seed: FixtureSeed,
+    prepare: impl FnOnce(&Gen1Admission<'_>) -> P,
+    body: impl for<'era, 'owner> FnOnce(
+        &P,
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+        &SymbolHandle,
+    ),
+) -> FixtureReceipt {
     // The small proof era is setup only. Its complete finish returns the
     // actual collector/keeper; a fresh production check then controls entry.
     // There is no ProofEra -> execution admission conversion or GEN0 bypass.
-    let outcome = Context::try_with_test_symbol_era(|proof, _| {
-        let (mut collector, keeper) = proof.finish().expect("small setup return");
-        let mode = if collector.registration_heap_mut().generational_enabled() {
-            ActualMode::Gen1
-        } else {
-            ActualMode::Gen0
-        };
-        let admitted = match Gen1Admission::check(collector) {
-            Ok(admitted) => admitted,
-            Err(failure) => {
-                let reason = failure.reason;
-                drop(failure.collector);
-                drop(keeper);
-                assert_eq!(reason, Gen1AdmissionError::GenerationalRequired);
-                assert_eq!(mode, ActualMode::Gen0);
-                eprintln!("NMJIT_N4_GEN0_EXECUTION_ADMISSION_REFUSED_CLEAN");
-                return FixtureReceipt::Gen0Refused;
+    let outcome = Context::try_with_test_symbol_backing_init_era(
+        backing,
+        |obarray, id| match seed {
+            FixtureSeed::Scalar => {}
+            FixtureSeed::FunctionDefinition => {
+                let lambda = TaggedValue::from_sym_id(crate::emacs_core::intern::intern("lambda"));
+                let body = TaggedValue::cons(TaggedValue::fixnum(73), TaggedValue::NIL);
+                let args = TaggedValue::cons(TaggedValue::NIL, body);
+                let definition = TaggedValue::cons(lambda, args);
+                obarray.seed_value_id(id, definition);
+                obarray.set_symbol_function_id(id, definition);
             }
-        };
-        let prepared = prepare(&admitted);
-        let era = ParallelHeapEra::admit(admitted, keeper).expect("real GEN1 era");
-        let admission = era.execution_admission();
-        let mut owner = era
-            .register(1, 4)
-            .expect("activation fixture registration")
-            .activate(era.heap_identity(), 1)
-            .expect("activation fixture owner");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut run = owner.run_access().expect("activation fixture run");
-            let destination = run.private_nil_root().expect("resident result home");
-            body(&prepared, &admission, &mut run, &destination);
-        }));
-        // Body locals and all borrowed activations have already unwound.
-        // Clear resident homes and retire before inspecting its assertion.
-        let cleanup = (|| {
-            owner
-                .run_access()
-                .and_then(|mut run| run.clear_root_slots())
-                .map_err(|reason| format!("activation fixture roots: {reason:?}"))?;
-            retry_owned(
-                Deadline::contention(),
-                owner,
-                |owner| owner.retire_rooted(&[]),
-                |failure| match contention::rendezvous(&failure.reason) {
-                    Retry::Busy => ControlFlow::Continue(failure.into_owner()),
-                    Retry::Refuse => ControlFlow::Break(failure),
-                },
-            )
-            .map_err(|failure| format!("activation fixture retirement: {failure:?}"))
-        })();
-        drop(admission);
-        let (collector, keeper) = era.finish().expect("activation fixture finish");
-        drop(collector);
-        drop(keeper);
-        drop(prepared);
-        eprintln!("NMJIT_N4_ACTIVATION_TEARDOWN_OK");
-        assert_eq!(cleanup, Ok(()));
-        assert_eq!(mode, ActualMode::Gen1);
-        if let Err(assertion) = result {
-            std::panic::resume_unwind(assertion);
-        }
-        FixtureReceipt::Gen1Completed
-    });
+        },
+        |proof, id| {
+            let (mut collector, keeper) = proof.finish().expect("small setup return");
+            let mode = if collector.registration_heap_mut().generational_enabled() {
+                ActualMode::Gen1
+            } else {
+                ActualMode::Gen0
+            };
+            let admitted = match Gen1Admission::check(collector) {
+                Ok(admitted) => admitted,
+                Err(failure) => {
+                    let reason = failure.reason;
+                    drop(failure.collector);
+                    drop(keeper);
+                    assert_eq!(reason, Gen1AdmissionError::GenerationalRequired);
+                    assert_eq!(mode, ActualMode::Gen0);
+                    eprintln!("NMJIT_N4_GEN0_EXECUTION_ADMISSION_REFUSED_CLEAN");
+                    return FixtureReceipt::Gen0Refused;
+                }
+            };
+            let prepared = prepare(&admitted);
+            let era = ParallelHeapEra::admit(admitted, keeper).expect("real GEN1 era");
+            let symbol = era.admit_plain_symbol(id).expect("activation Plain handle");
+            let admission = era.execution_admission();
+            let mut owner = era
+                .register(1, 4)
+                .expect("activation fixture registration")
+                .activate(era.heap_identity(), 1)
+                .expect("activation fixture owner");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut run = owner.run_access().expect("activation fixture run");
+                let destination = run.private_nil_root().expect("resident result home");
+                body(&prepared, &admission, &mut run, &destination, &symbol);
+            }));
+            // Body locals and all borrowed activations have already unwound.
+            // Clear resident homes and retire before inspecting its assertion.
+            let cleanup = (|| {
+                owner
+                    .run_access()
+                    .and_then(|mut run| run.clear_root_slots())
+                    .map_err(|reason| format!("activation fixture roots: {reason:?}"))?;
+                retry_owned(
+                    Deadline::contention(),
+                    owner,
+                    |owner| owner.retire_rooted(&[]),
+                    |failure| match contention::rendezvous(&failure.reason) {
+                        Retry::Busy => ControlFlow::Continue(failure.into_owner()),
+                        Retry::Refuse => ControlFlow::Break(failure),
+                    },
+                )
+                .map_err(|failure| format!("activation fixture retirement: {failure:?}"))
+            })();
+            drop(admission);
+            let (collector, keeper) = era.finish().expect("activation fixture finish");
+            drop(collector);
+            drop(keeper);
+            drop(prepared);
+            eprintln!("NMJIT_N4_ACTIVATION_TEARDOWN_OK");
+            assert_eq!(cleanup, Ok(()));
+            assert_eq!(mode, ActualMode::Gen1);
+            if let Err(assertion) = result {
+                std::panic::resume_unwind(assertion);
+            }
+            FixtureReceipt::Gen1Completed
+        },
+    );
     match outcome {
         Ok(receipt) => {
             assert!(!cfg!(feature = "gc-memory-telemetry"));
