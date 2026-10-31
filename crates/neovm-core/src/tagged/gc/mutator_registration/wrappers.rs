@@ -37,6 +37,12 @@ pub(crate) struct ProofEraFinishFailure<'heap, K: EraKeeper> {
 }
 
 impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
+    /// Only a production GEN1 era can authorize bounded parallel execution.
+    /// The test-only proof wrapper intentionally has no matching operation.
+    pub fn execution_admission(&self) -> ParallelExecutionAdmission<'_> {
+        self.core.execution_admission(&self.witness)
+    }
+
     /// # Safety
     /// prepare must return the original retained keeper's epoch and backing,
     /// without executing Lisp, resuming owners, or leaking a manager reference.

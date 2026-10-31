@@ -72,6 +72,16 @@ impl SymbolSidecar {
         }
         Ok(())
     }
+    /// Descriptor-only execution may overlap symbol readers/writers, but may
+    /// never enter a backing retained after a terminal symbol transaction.
+    pub(super) fn execution_ready(&self) -> Result<(), RegistrationError> {
+        if self.poisoned.load(Ordering::Acquire) {
+            Err(RegistrationError::Poisoned)
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn poison(&self) {
         self.poisoned.store(true, Ordering::Release);
     }

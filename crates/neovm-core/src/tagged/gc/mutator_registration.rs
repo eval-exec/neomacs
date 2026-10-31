@@ -18,6 +18,9 @@ mod collection;
 mod cons_allocation;
 mod cons_catalog;
 mod construction;
+mod execution;
+pub use execution::ParallelExecutionAdmission;
+pub(crate) use execution::{ExecutionActivation, ImmediateResult, ImmediateResultError};
 mod wrappers;
 #[cfg(test)]
 use crate::emacs_core::eval::world::{

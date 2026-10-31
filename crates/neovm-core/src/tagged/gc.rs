@@ -2800,10 +2800,11 @@ pub use mutator_registration::{
     FunctionCallCache, FunctionError, FunctionStep, GlobalError, InitialInternError, KeeperSymbols,
     KeeperTableMut, MinorCollectionError, Mode, Mutator, MutatorEntry, MutatorFinishFailure,
     MutatorKey, MutatorPermit, MutatorStartFailure, NativeReturn, NativeRoots, OwnerPublication,
-    OwnerRootSlot, ParallelHeapEra, Phase, PlainSymbolBacking, RegistrationCensus,
-    RegistrationError, Rendezvous, RendezvousError, Request, ResumeGcImage, ResumeGcImageFailure,
-    RootedRetireFailure, RunAccess, RunSlice, SealedTableAccess, SliceRoot, Snapshot,
-    StoppedSummaries, SymbolHandle, SymbolMut, SymbolRef, TableMut, TableRef, YoungWorkerLoan,
+    OwnerRootSlot, ParallelExecutionAdmission, ParallelHeapEra, Phase, PlainSymbolBacking,
+    RegistrationCensus, RegistrationError, Rendezvous, RendezvousError, Request, ResumeGcImage,
+    ResumeGcImageFailure, RootedRetireFailure, RunAccess, RunSlice, SealedTableAccess, SliceRoot,
+    Snapshot, StoppedSummaries, SymbolHandle, SymbolMut, SymbolRef, TableMut, TableRef,
+    YoungWorkerLoan,
 };
 
 #[cfg(test)]
@@ -2812,8 +2813,9 @@ pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
 pub(crate) use mutator_registration::{GenericProofEra, GenericProofEraFinishFailure};
 
 pub(crate) use mutator_registration::{
-    EraAdmissionFailure, EraFinishFailure, EraKeeper, FrozenFunctionRoots, FrozenLegacyRoots,
-    OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
+    EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation, FrozenFunctionRoots,
+    FrozenLegacyRoots, ImmediateResult, ImmediateResultError, OwnerRootAdmission,
+    StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
 };
 
 mod alloc_region;
