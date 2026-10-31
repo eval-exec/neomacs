@@ -2,6 +2,54 @@ use super::*;
 use crate::tagged::gc::{ExecutionTestHomes, with_test_prepared_execution};
 use crate::tagged::value::{Fixnum, TaggedValue};
 
+fn with_scalar(
+    program: ScalarProgram,
+    body: impl for<'era, 'owner> FnOnce(
+        &ParallelCompiledCode,
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+    ),
+) -> Result<(), String> {
+    let outcome = std::cell::RefCell::new(Ok(()));
+    with_test_prepared_execution(
+        |quiescent| ParallelCompiledCode::compile(quiescent, program),
+        |compiled, admission, run, destination| match compiled {
+            Ok(code) => {
+                assert!(cfg!(feature = "jit"));
+                body(code, admission, run, destination);
+            }
+            Err(ParallelCompileError::BackendUnavailable) => {
+                assert!(!cfg!(feature = "jit"));
+                eprintln!("NMJIT_N4_BACKEND_UNAVAILABLE_REFUSED_CLEAN");
+            }
+            Err(
+                error @ (ParallelCompileError::Module(_)
+                | ParallelCompileError::Define(_)
+                | ParallelCompileError::Finalize(_)
+                | ParallelCompileError::UnsupportedPointerWidth
+                | ParallelCompileError::AbiLayout),
+            ) => {
+                *outcome.borrow_mut() = Err(format!("native compilation: {error:?}"));
+            }
+        },
+    );
+    outcome.into_inner()
+}
+
+pub(crate) fn compiled_entry_manifest() -> Result<(), String> {
+    let expected = ImmediateResult::Fixnum(Fixnum::try_from(73).map_err(|e| e.to_string())?);
+    with_scalar(
+        ScalarProgram::Argument,
+        |code, admission, run, destination| {
+            code.run(admission, run, destination, expected)
+                .expect("real compiled entry");
+            assert_eq!(ExecutionTestHomes::read(destination, run), expected);
+            eprintln!("NMJIT_N4_COMPILED_ENTRY_NATIVE_RETURN_OK");
+        },
+    )
+}
+
 fn samples() -> [ImmediateResult; 6] {
     [
         ImmediateResult::Nil,
@@ -16,39 +64,36 @@ fn samples() -> [ImmediateResult; 6] {
 #[test]
 fn nmjit_n4_scalar_constant_returns_in_resident_home() {
     for expected in samples() {
-        with_test_prepared_execution(
-            |quiescent| {
-                ParallelCompiledCode::compile(quiescent, ScalarProgram::Constant(expected)).unwrap()
-            },
+        with_scalar(
+            ScalarProgram::Constant(expected),
             |code, admission, run, destination| {
                 code.run(admission, run, destination, ImmediateResult::Nil)
                     .unwrap();
                 assert_eq!(ExecutionTestHomes::read(destination, run), expected);
             },
-        );
+        )
+        .unwrap();
     }
 }
 
 #[test]
 fn nmjit_n4_scalar_argument_returns_in_resident_home() {
-    with_test_prepared_execution(
-        |quiescent| ParallelCompiledCode::compile(quiescent, ScalarProgram::Argument).unwrap(),
+    with_scalar(
+        ScalarProgram::Argument,
         |code, admission, run, destination| {
             for expected in samples() {
                 code.run(admission, run, destination, expected).unwrap();
                 assert_eq!(ExecutionTestHomes::read(destination, run), expected);
             }
         },
-    );
+    )
+    .unwrap();
 }
 
 #[test]
 fn nmjit_n4_scalar_stale_home_refuses_before_native_entry() {
-    with_test_prepared_execution(
-        |quiescent| {
-            ParallelCompiledCode::compile(quiescent, ScalarProgram::Constant(ImmediateResult::True))
-                .unwrap()
-        },
+    with_scalar(
+        ScalarProgram::Constant(ImmediateResult::True),
         |code, admission, run, destination| {
             run.clear_root_slots().unwrap();
             let fresh = ExecutionTestHomes::nil(run).unwrap();
@@ -63,13 +108,14 @@ fn nmjit_n4_scalar_stale_home_refuses_before_native_entry() {
                 .unwrap();
             assert_eq!(ExecutionTestHomes::read(&fresh, run), ImmediateResult::True);
         },
-    );
+    )
+    .unwrap();
 }
 
 #[test]
 fn nmjit_n4_scalar_code_uses_fresh_activations() {
-    with_test_prepared_execution(
-        |quiescent| ParallelCompiledCode::compile(quiescent, ScalarProgram::Argument).unwrap(),
+    with_scalar(
+        ScalarProgram::Argument,
         |code, admission, run, destination| {
             code.run(admission, run, destination, ImmediateResult::True)
                 .unwrap();
@@ -79,7 +125,8 @@ fn nmjit_n4_scalar_code_uses_fresh_activations() {
                 .unwrap();
             assert_eq!(ExecutionTestHomes::read(&fresh, run), ImmediateResult::Nil);
         },
-    );
+    )
+    .unwrap();
 }
 
 #[test]
@@ -104,19 +151,22 @@ fn nmjit_n4_scalar_status_decode_is_total() {
 fn nmjit_n4_scalar_compile_drop_without_entry() {
     // Code prepared with the real exclusive witness, never entered, then freed
     // only after the fixture returns its collector/keeper and finishes the era.
-    with_test_prepared_execution(
-        |quiescent| ParallelCompiledCode::compile(quiescent, ScalarProgram::Argument).unwrap(),
+    with_scalar(
+        ScalarProgram::Argument,
         |_code, _admission, _run, _destination| (),
-    );
+    )
+    .unwrap();
 }
 
 #[test]
 fn nmjit_n4_scalar_abi_owner_source_guard_test() {
-    let source = include_str!("../../parallel.rs");
+    let facade = include_str!("../../parallel.rs");
+    let source = include_str!("../native.rs");
     assert!(source.contains(".with_activation("));
     assert!(source.contains("ManuallyDrop::take(&mut self.module).free_memory()"));
     assert!(source.contains("&ParallelExecutionAdmission<'era>"));
-    assert!(source.contains("_quiescent: &Gen1Admission<'_>"));
+    assert!(facade.contains("_quiescent: &Gen1Admission<'_>"));
+    assert!(facade.contains("Err(ParallelCompileError::BackendUnavailable)"));
     for forbidden in [
         "crate::emacs_core::eval",
         "cache::",

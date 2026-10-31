@@ -1,11 +1,12 @@
 //! N1 missing-entry witnesses, not a substitute parallel JIT implementation.
 //!
-//! The only executed operations are existing symbol authority/root operations.
-//! Completed manifest arms exercise their real boundary before entering the
+//! Completed arms exercise their real production boundary, including a native
+//! scalar return, before entering the
 //! lease fixture. Every remaining red reaches its named assertion, releases
 //! its real lease and root homes, finishes the era, and only then resumes the
 //! original assertion. The retired-publication arm exercises the actual era
-//! descriptor boundary. No machine code or grace receipt is minted here.
+//! descriptor boundary. Native code is owned by the separate compiler; the
+//! stopped-grace receipt remains a later-stage missing boundary.
 
 use super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::{Mutator, OwnerRootSlot, RegistrationError, RunAccess, SymbolHandle};
@@ -19,6 +20,7 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MissingFeature {
     Gen1Admission,
+    ParallelCompiledEntry,
     RetiredPublication,
 }
 
@@ -49,6 +51,12 @@ fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
             }
             super::symbol_intern::nmjit_n3_retired_publication_manifest().map_err(|reason| {
                 eprintln!("NMJIT_N3_RETIRED_PUBLICATION_FAILURE {reason}");
+                feature
+            })
+        }
+        MissingFeature::ParallelCompiledEntry => {
+            crate::emacs_core::jit::parallel::compiled_entry_manifest_for_test().map_err(|reason| {
+                eprintln!("NMJIT_N4_COMPILED_ENTRY_FAILURE {reason}");
                 feature
             })
         }
@@ -240,7 +248,10 @@ macro_rules! missing_test {
 }
 
 missing_test!(nmjit_n1_missing_gen1_admission, Gen1Admission);
-
+missing_test!(
+    nmjit_n1_missing_parallel_compiled_entry,
+    ParallelCompiledEntry
+);
 missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);
 
 #[test]

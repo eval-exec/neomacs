@@ -172,8 +172,7 @@ use crate::emacs_core::intern::SymId;
 #[cfg(feature = "jit")]
 pub mod backend;
 
-/// Separate bounded parallel ABI; never a serial cache or Context entry.
-#[cfg(feature = "jit")]
+/// Separate bounded parallel ABI; backend absence is a typed refusal.
 pub(crate) mod parallel;
 
 /// Baseline bytecode → native lowering (Phase 3b+). Compiles the leaf,
