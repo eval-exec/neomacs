@@ -51,6 +51,16 @@ fn pixel_margin_uses_whole_window_lines_like_gnu() {
 }
 
 #[test]
+fn last_usable_line_is_the_bottom_margin_row() {
+    let half = ScrollMargin::from_lisp_values(999, Some(0.5));
+    assert_eq!(half.lines(28), 13);
+    assert_eq!(half.last_usable_line(28), 14);
+    assert_eq!(ScrollMargin::default().last_usable_line(28), 27);
+    assert_eq!(half.last_usable_line(1), 0);
+    assert_eq!(half.last_usable_line(0), 0);
+}
+
+#[test]
 fn zero_request_skips_the_margin_entirely() {
     let none = ScrollMargin::default();
     assert!(none.is_zero());

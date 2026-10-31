@@ -223,6 +223,11 @@ pub struct RetainedWindowKey {
     /// `window_start`. Kept in the key so changing either variable also
     /// invalidates the retained body.
     pub scroll_margin: neovm_core::window::ScrollMargin,
+    /// Row capacity of the physical viewport (GNU
+    /// `window_box_height / frame_line_height`), independent of how many rows
+    /// a near-end-of-buffer walk actually emitted. The scroll margins are
+    /// computed from this capacity, never from the emitted row count.
+    pub viewport_rows: usize,
     /// Physical cursor ownership and active-vs-inactive cursor presentation.
     /// This can differ from `selected` while the cursor is in the echo area.
     pub cursor_role: crate::types::WindowCursorRole,
@@ -356,6 +361,11 @@ impl RetainedWindowKey {
             selective_display: p.selective_display,
             selected: p.selected,
             scroll_margin: p.scroll_margin,
+            viewport_rows:
+                crate::buffer_source::window_geometry::BufferWindowGeometryRequest::viewport_rows(
+                    p,
+                    &layout_box,
+                ),
             cursor_role: p.cursor_role,
             show_trailing_whitespace: p.show_trailing_whitespace,
             trailing_ws_bg: p.trailing_ws_bg,
@@ -1513,9 +1523,13 @@ impl RetainedWindowMatrix {
         let first_body_index = body_rows.first().map(|(idx, _)| *idx);
         let last_body_index = body_rows.last().map(|(idx, _)| *idx);
         let window_at_buffer_top = curr.window_start <= curr.buffer_begv + 1;
-        let scroll_margin = curr.scroll_margin.lines(body_rows.len() as i64);
-        let last_usable_row =
-            crate::scroll_policy::last_usable_row(body_rows.len(), curr.scroll_margin);
+        // GNU derives the margin from the window's own height
+        // (window_scroll_margin, src/window.c:6216), not from the rows a walk
+        // emitted: a window near end-of-buffer may hold fewer rows than its
+        // viewport capacity, and the margin must not shrink with them.
+        let viewport_rows = i64::try_from(curr.viewport_rows).unwrap_or(i64::MAX);
+        let scroll_margin = curr.scroll_margin.lines(viewport_rows);
+        let last_usable_row = curr.scroll_margin.last_usable_line(viewport_rows);
         let cursor_body_row = body_rows
             .iter()
             .position(|(idx, _)| *idx == new_cursor_row_index)

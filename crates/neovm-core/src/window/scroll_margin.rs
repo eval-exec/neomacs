@@ -86,6 +86,14 @@ impl ScrollMargin {
         let line_height = line_height.max(1);
         self.lines(window_height / line_height) * line_height
     }
+
+    /// Index of the last display line point may occupy in a window
+    /// `window_lines` lines tall (GNU `scroll_margin_y`, src/xdisp.c:19420).
+    /// Lines are 0-based, so a margin-free window of `window_lines` allows
+    /// `window_lines - 1`.
+    pub fn last_usable_line(self, window_lines: i64) -> i64 {
+        (window_lines - 1 - self.lines(window_lines)).max(0)
+    }
 }
 
 #[cfg(test)]

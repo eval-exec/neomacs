@@ -127,15 +127,17 @@ impl FrameBufferState {
             .is_some_and(|slot| slot.bits() == lambda().bits())
     }
 
-    /// GNU reuses the existing vector when it is large enough and not
-    /// substantially oversized. `required_without_headroom == size` would
-    /// leave no room for the terminating `lambda`, so reallocate instead;
-    /// GNU's `n > ASIZE` test slips through that case into an out-of-bounds
-    /// store, which must not be reproduced.
+    /// GNU reallocates when `n > ASIZE (state)` or
+    /// `n + 20 < ASIZE (state) / 2` (src/dispnew.c:7123-7127); otherwise it
+    /// rewrites the existing vector in place. `n` counts the terminating
+    /// `lambda` and every live buffer, so entries never fill more than
+    /// `n - 1` slots and `n == size` still leaves room for the terminator:
+    /// GNU reuses that exact-size vector and so must this implementation.
     fn reusable(&self, state: Value) -> bool {
         state.as_vector_data().is_some_and(|slots| {
             let size = slots.len();
-            self.required_without_headroom < size && self.required_without_headroom + 20 >= size / 2
+            self.required_without_headroom <= size
+                && self.required_without_headroom + 20 >= size / 2
         })
     }
 

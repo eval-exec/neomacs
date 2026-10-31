@@ -1,4 +1,4 @@
-use super::builtin_frame_or_buffer_changed_p;
+use super::{FrameBufferState, builtin_frame_or_buffer_changed_p};
 use crate::emacs_core::builtins::symbols::{builtin_set_2, builtin_symbol_value_1};
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::{Context, Value};
@@ -182,6 +182,65 @@ fn unchanged_state_keeps_the_same_vector_object() {
         after.bits(),
         "GNU rewrites the existing state vector in place when the size fits"
     );
+}
+
+/// GNU reallocates when `n > ASIZE` or `n + 20 < ASIZE / 2`
+/// (src/dispnew.c:7123-7127); otherwise it rewrites the vector in place. The
+/// vector length and identity are observable through VARIABLE, so each
+/// boundary must match.
+#[test]
+fn state_vector_reuse_follows_gnu_reallocation_boundaries() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let _frame = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    let var = Value::symbol("neb-unit-realloc-boundary");
+    builtin_set_2(&mut eval, var, Value::NIL).unwrap();
+    let n = FrameBufferState::capture(&eval).required_without_headroom;
+
+    // Exactly the required size: GNU keeps the vector (n > ASIZE is false) and
+    // has room for the terminating lambda because n counts it.
+    let exact = Value::vector(vec![lambda(); n]);
+    builtin_set_2(&mut eval, var, exact).unwrap();
+    assert_eq!(
+        builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
+        Value::T
+    );
+    let after_exact = builtin_symbol_value_1(&mut eval, var).unwrap();
+    assert_eq!(
+        after_exact.bits(),
+        exact.bits(),
+        "exact-size vector is reused"
+    );
+    assert_eq!(after_exact.as_vector_data().unwrap().len(), n);
+
+    // Less than half the vector as slack: still reused.
+    let mild = Value::vector(vec![lambda(); n + 10]);
+    builtin_set_2(&mut eval, var, mild).unwrap();
+    assert_eq!(
+        builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        builtin_symbol_value_1(&mut eval, var).unwrap().bits(),
+        mild.bits(),
+        "a mildly oversized vector is rewritten in place"
+    );
+
+    // Far oversized: GNU allocates a fresh n + 20 vector.
+    let oversized_len = (n + 20) * 2 + 2;
+    let oversized = Value::vector(vec![lambda(); oversized_len]);
+    builtin_set_2(&mut eval, var, oversized).unwrap();
+    assert_eq!(
+        builtin_frame_or_buffer_changed_p(&mut eval, vec![var]).unwrap(),
+        Value::T
+    );
+    let replaced = builtin_symbol_value_1(&mut eval, var).unwrap();
+    assert_ne!(
+        replaced.bits(),
+        oversized.bits(),
+        "far-oversized vector reallocates"
+    );
+    assert_eq!(replaced.as_vector_data().unwrap().len(), n + 20);
 }
 
 #[test]
