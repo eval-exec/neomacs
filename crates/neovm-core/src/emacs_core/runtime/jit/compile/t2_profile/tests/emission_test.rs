@@ -57,6 +57,7 @@ fn countdown_clif(site: Site) -> String {
                         count: None,
                         t2: Some(t2),
                     },
+                    release_epoch: None,
                 };
                 emit_poll_extras(&mut fb, &rt);
             }

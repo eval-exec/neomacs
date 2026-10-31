@@ -164,20 +164,6 @@ impl CompileEnvScope {
     }
 }
 
-/// Green's stable World choice predates the first make-thread. All cache entry,
-/// retier and OSR compiles lend this scope; the backend worker only sees CLIF.
-/// Frontend classification and lowering run without Lisp, a callback, GC or a
-/// Baton handoff, so the current epoch cannot change between the arithmetic
-/// binding proof and this guard emission. Sim and context-free/AOT compiles
-/// retain the original arithmetic emission.
-pub(super) fn green_function_epoch() -> Option<u64> {
-    let CompileEnvState::Green(env) = ENV.with(Cell::get) else {
-        return None;
-    };
-    // SAFETY: the scope retains the original dormant, unmoved obarray.
-    Some(unsafe { &*env.obarray }.function_epoch())
-}
-
 fn with_env<R>(f: impl FnOnce(&Obarray, &[u64]) -> Option<R>) -> Option<R> {
     let env = match ENV.with(Cell::get) {
         CompileEnvState::Absent => return None,

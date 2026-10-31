@@ -666,16 +666,51 @@ fn inline_arith_callee_syms(
     constants: &[Value],
 ) -> Vec<crate::emacs_core::intern::SymId> {
     // A site a deopt barred from inlining keeps the shim (the LEVEL-B
-    // lowering reads the same predicate), so it is not a dependency.
+    // lowering reads the same predicate), so it is not a dependency; nor is
+    // a name the effect vocabulary does not classify call-free (the lowering
+    // keeps its armed shim — one classification source for both).
     let mut syms: Vec<crate::emacs_core::intern::SymId> =
         arith_intrinsic_call_sites(ops, constants)
             .into_iter()
-            .filter(|&(pc, _, op)| arith_op_inlines(op) && call_site_inlinable_at(pc))
+            .filter(|&(pc, sym, op)| {
+                arith_op_inlines(op)
+                    && call_site_inlinable_at(pc)
+                    && lowering::intrinsic_fast_path_is_call_free(resolve_sym(sym))
+            })
             .map(|(_, sym, _)| sym)
             .collect();
     syms.sort_by_key(|s| s.0);
     syms.dedup();
     syms
+}
+
+/// Whether the baseline leaf BAKED a redefinable definition it keeps
+/// executing across release points — the green-guard emission scope
+/// (`RtCtx::release_epoch`): an inlinable arith callee lowered to machine
+/// ops, or a fused named-callee region's body. Deliberately NARROWER than
+/// `inline_deps`: a fused mapping site is recorded as a dependency (eviction
+/// on `fset mapc`) but arms NO epoch, because an in-flight map activation
+/// has nothing stale in it — the cursor shims read the live list per step,
+/// the callback object was resolved once at entry (exactly like GNU's own
+/// `mapc`), and a callback is CALL-FREE by admission (`v2_depths` refuses
+/// `Op::Call`, so the per-element body is machine ops over values in
+/// registers). The frame's remaining calls (spec sites, make-closure,
+/// helpers) resolve through the live cell and never USE a baked definition.
+/// So a mapping-only leaf emits no release-point check anywhere, while a
+/// leaf that also bakes an arith callee or a named region still arms — and
+/// then the map site-exit check re-establishes those other dependencies
+/// before the frame uses them again.
+fn body_bakes_redefinable_definition(ops: &[Op], constants: &[Value]) -> bool {
+    if !inline_arith_callee_syms(ops, constants).is_empty() {
+        return true;
+    }
+    crate::emacs_core::jit::inline::active_fused().is_some_and(|fused| {
+        fused.v2.as_ref().is_some_and(|side| {
+            side.region_kind
+                .iter()
+                .any(|kind| matches!(kind, inline::RegionKind::Named { .. }))
+        })
+    })
 }
 
 /// Decide whether a bytecode body is worth compiling.
@@ -3069,6 +3104,42 @@ fn write_edge_stack_to_vars(
     }
 }
 
+/// The back-edge poll's shared precise-deopt queue users. The release-point
+/// revalidation (a stale epoch resumes the interpreter at the LOOP HEAD —
+/// the completed iteration's effects stay done, exactly the state the jump
+/// itself would have produced) and the physical inline entry re-admission
+/// both append to the caller's one deopt vec, so they share a single borrow.
+/// `pc` is the loop-head block entry for both emitters.
+struct BackedgeExtras<'a> {
+    pc: usize,
+    /// Physical inline frames to re-admit after the poll (baseline only).
+    frames: Option<&'a inline_frames::Frames>,
+    deopts: &'a mut Vec<lowering::PendingDeopt>,
+}
+
+/// Release-point revalidation after the back-edge service poll: the poll is
+/// a Baton release (GC safepoint + `maybe_quit` may run this-thread Lisp
+/// through quit/error hooks), so the leaf's baked definitions must be
+/// re-established before the physical frame uses them again. Emission scope
+/// is `RtCtx::release_epoch` — leaves that baked nothing redefinable emit
+/// nothing. `handlers` is the count active at the back-edge, which equals the
+/// loop head's by the interpreter's own push/pop balance along one iteration.
+fn emit_backedge_release_check(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    extras: &mut Option<BackedgeExtras<'_>>,
+    handlers_len: usize,
+    vals: &[ClifValue],
+) {
+    let Some(extras) = extras else { return };
+    let Some(epoch) = rt.release_epoch else {
+        return;
+    };
+    let reps = vec![SlotRep::Tagged; vals.len()];
+    let dsite = lowering::deopt_site(fb, extras.pc, handlers_len, vals, &reps, extras.deopts);
+    lowering::emit_release_revalidation(fb, rt, epoch, dsite);
+}
+
 /// Emit a backward jump with the interpreter's `branch_to!` parity: bump the
 /// u8 quit counter; on every wrap (each 255th backward jump — counter resets to
 /// 1, exactly like the interpreter) root the live operand stack and call the
@@ -3087,7 +3158,7 @@ fn emit_backedge_jump(
     target_block: Block,
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
-    physical: Option<inline_physical::PollAdmission<'_>>,
+    extras: Option<BackedgeExtras<'_>>,
 ) {
     let vals: Vec<ClifValue> = (0..target_depth).map(|k| fb.use_var(vars[k])).collect();
     emit_backedge_jump_with_args(
@@ -3101,7 +3172,7 @@ fn emit_backedge_jump(
         &[],
         handlers,
         pending,
-        physical,
+        extras,
     );
 }
 
@@ -3120,7 +3191,7 @@ fn emit_backedge_jump_with_args(
     target_args: &[BlockArg],
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
-    physical: Option<inline_physical::PollAdmission<'_>>,
+    mut extras: Option<BackedgeExtras<'_>>,
 ) {
     let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
     let c1 = lowering::iadd_imm_p(fb, c, 1);
@@ -3182,17 +3253,28 @@ fn emit_backedge_jump_with_args(
         fb.ins().brif(ok, refreshed, &[], se, &[]);
         fb.switch_to_block(refreshed);
         fb.seal_block(refreshed);
+        // Release-point revalidation FIRST: a stale dependency deopts before
+        // the cache/physical re-admission below touches any state (the deopt
+        // resume owns none of it).
+        emit_backedge_release_check(fb, rt, &mut extras, handlers.len(), vals);
         cache.invalidate(fb);
-        if let Some(admission) = physical {
-            inline_physical::emit(
-                fb,
-                rt,
-                admission.frames,
-                admission.pc,
-                vals,
-                admission.pending,
-            );
+        if let Some(extras) = &mut extras
+            && let Some(frames) = extras.frames
+            && cache.physical_protocol_admitted()
+        {
+            inline_physical::emit(fb, rt, frames, extras.pc, vals, extras.deopts);
         }
+        fb.ins().jump(target_block, target_args);
+    } else if rt.release_epoch.is_some() && extras.is_some() {
+        // The serviced edge revalidates its release epoch through one check
+        // block before rejoining the loop (a leaf that baked nothing
+        // redefinable — `release_epoch` None — keeps the direct jump: zero
+        // cost).
+        let checked = fb.create_block();
+        fb.ins().brif(ok, checked, &[], se, &[]);
+        fb.switch_to_block(checked);
+        fb.seal_block(checked);
+        emit_backedge_release_check(fb, rt, &mut extras, handlers.len(), vals);
         fb.ins().jump(target_block, target_args);
     } else {
         fb.ins().brif(ok, target_block, target_args, se, &[]);
@@ -3214,7 +3296,7 @@ fn emit_backedge_jump_with_representations(
     target_args: &[BlockArg],
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
-    physical: Option<inline_physical::PollAdmission<'_>>,
+    mut extras: Option<BackedgeExtras<'_>>,
     serviced: Option<Block>,
 ) {
     if bool_slots.is_none() && serviced.is_none() {
@@ -3229,7 +3311,7 @@ fn emit_backedge_jump_with_representations(
             target_args,
             handlers,
             pending,
-            physical,
+            extras,
         );
         return;
     }
@@ -3310,17 +3392,22 @@ fn emit_backedge_jump_with_representations(
         fb.ins().brif(ok, refreshed, &[], se, &[]);
         fb.switch_to_block(refreshed);
         fb.seal_block(refreshed);
+        // Release-point revalidation FIRST (see emit_backedge_jump_with_args).
+        emit_backedge_release_check(fb, rt, &mut extras, handlers.len(), vals);
         cache.invalidate(fb);
-        if let Some(admission) = physical {
-            inline_physical::emit(
-                fb,
-                rt,
-                admission.frames,
-                admission.pc,
-                vals,
-                admission.pending,
-            );
+        if let Some(extras) = &mut extras
+            && let Some(frames) = extras.frames
+            && cache.physical_protocol_admitted()
+        {
+            inline_physical::emit(fb, rt, frames, extras.pc, vals, extras.deopts);
         }
+        fb.ins().jump(serviced_target, serviced_args);
+    } else if rt.release_epoch.is_some() && extras.is_some() {
+        let checked = fb.create_block();
+        fb.ins().brif(ok, checked, &[], se, &[]);
+        fb.switch_to_block(checked);
+        fb.seal_block(checked);
+        emit_backedge_release_check(fb, rt, &mut extras, handlers.len(), vals);
         fb.ins().jump(serviced_target, serviced_args);
     } else {
         fb.ins().brif(ok, serviced_target, serviced_args, se, &[]);
@@ -3829,8 +3916,17 @@ fn lower_leaf_body_with_plan(
         .as_ref()
         .zip(opt_request)
         .and_then(|(plan, request)| opt_backend::quality_scope(plan, osr_pc, request));
+    // Green-guard emission scope: only a leaf that BAKED a redefinable
+    // definition (machine-op intrinsics, fused named regions) bakes the
+    // canonical epoch its release-point revalidations compare against.
+    // `None` (nothing baked, HOF-only leaves, or AOT's `LeafEmit::NONE`)
+    // emits no check anywhere.
+    let emit = obs.emit().with_release_epoch(match obarray {
+        Some(ob) if body_bakes_redefinable_definition(ops, constants) => Some(ob.function_epoch()),
+        _ => None,
+    });
     // BEGIN T35 SELECTED CALLER
-    let selection = leaf_builder_selected::requirements(false, obs.emit().t2, ops, opt.as_ref());
+    let selection = leaf_builder_selected::requirements(false, emit.t2, ops, opt.as_ref());
     let defined = if selection.is_selected() {
         shared::define_jit_leaf_selected(
             /*per_leaf_shims=*/ true,
@@ -3858,7 +3954,7 @@ fn lower_leaf_body_with_plan(
                     Linkage::Local,
                     osr_pc,
                     dynamic_prefix,
-                    obs.emit(),
+                    emit,
                     abi,
                     opt.as_ref(),
                     &sqrt_witnesses,
@@ -3889,7 +3985,7 @@ fn lower_leaf_body_with_plan(
                 Linkage::Local,
                 osr_pc,
                 dynamic_prefix,
-                obs.emit(),
+                emit,
                 abi,
                 opt.as_ref(),
                 &mut chains,
@@ -4201,6 +4297,9 @@ pub(crate) mod compile_pipeline_tests;
 #[cfg(test)]
 #[path = "tests/declared_string_guards.rs"]
 mod declared_string_guard_tests;
+#[cfg(test)]
+#[path = "tests/green_inline_site_test.rs"]
+mod green_inline_site_tests;
 pub(crate) mod heap_inline;
 #[cfg(test)]
 #[path = "tests/hof_default_front_test.rs"]

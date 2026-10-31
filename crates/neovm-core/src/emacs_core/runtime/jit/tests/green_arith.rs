@@ -1,7 +1,13 @@
 //! Baseline arithmetic call boundaries survive first admission and handoff.
 //! The source initially calls a real arithmetic builtin, so compilation emits
-//! the Level-B native operation. A peer rewrites the binding while the original
-//! native caller is parked, then collects before the original precise deopt.
+//! the Level-B native operation and records the binding as an inline
+//! dependency (`RtCtx::release_epoch`). A peer rewrites the binding while the
+//! original native caller is parked inside a call, then collects. The
+//! park-returning call is a release point: its return-side revalidation sees
+//! the moved epoch and deopts with resume-AFTER semantics (the completed call
+//! is never re-executed), so the interpreter resolves `logand` through the
+//! symbol and delivers the NEW definition — GNU's observable behavior, not
+//! the baked op.
 
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
 use crate::emacs_core::error::{EvalResult, signal};
@@ -114,20 +120,22 @@ fn exercise(preadmitted: bool, osr: bool) {
             .eval_str("(thread-join (make-thread (lambda () nil)))")
             .unwrap();
     }
+    // The witness call must sit BEFORE the switch call: the switch's return is
+    // the release point where the moved epoch deopts (resume-AFTER — the
+    // completed call is never re-executed), so everything after it runs
+    // interpreted. `switch_from_native` carries its own post-join witness
+    // internally, still native inside the call.
     let ops = if osr {
         vec![
             Op::Constant(5),
             Op::StackRef(0),
             Op::Constant(6),
             Op::Lss,
-            Op::GotoIfNil(16),
+            Op::GotoIfNil(13),
             Op::Constant(3),
             Op::Call(0),
             Op::Pop,
             Op::Constant(4),
-            Op::Call(0),
-            Op::Pop,
-            Op::Constant(3),
             Op::Call(0),
             Op::Pop,
             Op::Add1,
@@ -150,9 +158,6 @@ fn exercise(preadmitted: bool, osr: bool) {
             Op::Call(0),
             Op::Pop,
             Op::Constant(4),
-            Op::Call(0),
-            Op::Pop,
-            Op::Constant(3),
             Op::Call(0),
             Op::Pop,
             Op::Constant(0),
@@ -181,7 +186,7 @@ fn exercise(preadmitted: bool, osr: bool) {
     // Compilation happens before the make-thread inside the native callback.
     let result = if osr {
         cache::prepare_osr_for_test(&mut context, source_data, 1);
-        let leaf = cache::osr_leaf_ptr_for_test(source_data, 1).expect("baseline OSR leaf");
+        let _leaf = cache::osr_leaf_ptr_for_test(source_data, 1).expect("baseline OSR leaf");
         // SAFETY: `ctx` is the live `Context` this test owns; the call runs in this thread under the dormant-Context contract.
         let run =
             unsafe { cache::try_run_osr(&mut context, source_data, 1, &[Value::fixnum(0)], &[]) }
@@ -190,17 +195,26 @@ fn exercise(preadmitted: bool, osr: bool) {
             cache::osr_leaf_ptr_for_test(source_data, 1).is_none(),
             "epoch move retires OSR admission"
         );
+        // The park happened inside the switch call, so the OSR continuation's
+        // FIRST release point after the redefinition is that call's return:
+        // the return-side revalidation deopts with resume-AFTER semantics (a
+        // completed call is never re-executed) and the interpreter delivers
+        // the NEW definition for the remaining `logand` call.
         let compile::NativeRun::DeoptAt(resume) = run else {
-            panic!("the changed arithmetic binding must cause a precise OSR exit: {run:?}");
+            panic!(
+                "the redefinition must deopt the parked OSR continuation at the release point: {run:?}"
+            );
         };
-        // SAFETY: this owner's traced retired store retains the evicted OSR
-        // leaf and its deopt boxes while the original continuation resumes.
-        compile::resumed_chain::resume_deopt(
-            &mut context,
+        let resume = *resume;
+        crate::emacs_core::bytecode::vm::Vm::from_context(&mut context).run_resumed_frame(
             source_data,
             source,
-            unsafe { &*leaf },
-            *resume,
+            resume.pc,
+            &resume.stack,
+            resume.handlers,
+            &resume.binds,
+            resume.spec_base,
+            resume.cond_base,
         )
     } else {
         cache::prepare_entry_for_test(&mut context, source_data);
@@ -216,18 +230,24 @@ fn exercise(preadmitted: bool, osr: bool) {
         );
         let precise_before = cache::native_run_counters().2;
         let result = context.apply(Value::symbol("green-arith-caller"), Vec::new());
-        assert!(
-            cache::native_run_counters().2 > precise_before,
-            "the changed epoch must deopt at the original arithmetic call"
+        // Exactly one precise deopt: the park happened inside the switch
+        // call, and its return-side revalidation is the first release point
+        // that can observe the moved epoch. Every earlier check passed with
+        // the epoch still valid, and after the deopt the frame runs
+        // interpreted to completion.
+        assert_eq!(
+            cache::native_run_counters().2,
+            precise_before + 1,
+            "the park-returning call must revalidate and deopt exactly once"
         );
         let current_pointer = cache::compiled_leaf_ptr_for_test(id);
         assert!(
             original.retired.get(),
             "the exact original arithmetic leaf must retire: original={original_pointer:p}, current={current_pointer:?}"
         );
-        // The apply seam arms a successful native result after its precise
-        // deopt continuation returns. That re-arm may compile a replacement;
-        // it must never expose the old definition's retired leaf again.
+        // The apply seam arms a successful native result. That re-arm may
+        // compile a replacement; it must never expose the old definition's
+        // retired leaf again.
         assert_ne!(
             current_pointer,
             Some(original_pointer),
@@ -235,8 +255,19 @@ fn exercise(preadmitted: bool, osr: bool) {
         );
         result
     };
-    context.green_teardown();
+    // The parked continuation delivers the NEW definition through the
+    // release-point deopt: the interpreter resolves `logand` through the
+    // symbol, GNU-exact pickup.
     assert_eq!(result.unwrap(), Value::fixnum(37));
+    let fresh = context
+        .apply(Value::symbol("green-arith-caller"), Vec::new())
+        .unwrap();
+    assert_eq!(
+        fresh,
+        Value::fixnum(37),
+        "the next admission sees the replacement"
+    );
+    context.green_teardown();
     drop(source_root);
     assert_eq!(context.jit_root_stack_top, 0);
     assert_eq!(cache::native_depth(), 0);
@@ -253,6 +284,6 @@ fn green_baseline_arithmetic_resumes_after_peer_redefinition_and_collection() {
 }
 
 #[test]
-fn green_baseline_arithmetic_osr_exits_precisely_after_peer_redefinition() {
+fn green_baseline_arithmetic_osr_completes_after_peer_redefinition() {
     exercise(true, true);
 }

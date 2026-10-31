@@ -281,6 +281,7 @@ fn cons_store_clif(
             direct_sites: std::cell::Cell::new(0),
             self_direct_source: None,
             poll: t2_profile::PollEmit::default(),
+            release_epoch: None,
             inline_entry_cache: None,
         };
         let slow = fb.create_block();

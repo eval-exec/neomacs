@@ -1766,6 +1766,10 @@ mod green_owner_tests;
 #[path = "tests/green_arith.rs"]
 mod green_arith_tests;
 
+#[cfg(all(test, feature = "jit"))]
+#[path = "tests/green_release.rs"]
+mod green_release_tests;
+
 #[cfg(all(test, feature = "jit", not(feature = "gc-memory-telemetry")))]
 #[path = "tests/p3sym_functions_test.rs"]
 mod p3sym_functions_tests;

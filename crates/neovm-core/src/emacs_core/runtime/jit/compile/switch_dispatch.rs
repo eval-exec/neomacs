@@ -22,7 +22,8 @@
 
 use super::lowering::{self, RtCtx};
 use super::{
-    HandlerStatic, JIT_SWITCH_MISS, JIT_SWITCH_STALE, PendingDispatch, Shim, emit_backedge_jump,
+    BackedgeExtras, HandlerStatic, JIT_SWITCH_MISS, JIT_SWITCH_STALE, PendingDispatch, Shim,
+    emit_backedge_jump, inline_frames,
 };
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
@@ -488,6 +489,10 @@ pub(super) struct BaselineSwitchLandings<'a> {
     pub(super) variable_raw: &'a [bool],
     pub(super) handlers: &'a [HandlerStatic],
     pub(super) pending: &'a mut Vec<PendingDispatch>,
+    /// Physical inline frames + the shared deopt queue for each backward
+    /// trampoline's poll revalidation/re-admission (loop-head resume).
+    pub(super) frames: &'a inline_frames::Frames,
+    pub(super) deopts: &'a mut Vec<lowering::PendingDeopt>,
     /// The trampoline made for each backward target, by target index.
     pub(super) trampolines: Vec<(usize, Block)>,
     /// Trampolines made but not yet filled, in the order they were made.
@@ -525,7 +530,11 @@ impl SwitchLandings for BaselineSwitchLandings<'_> {
                 self.block_for[&target],
                 self.handlers,
                 self.pending,
-                None,
+                Some(BackedgeExtras {
+                    pc: target,
+                    frames: Some(self.frames),
+                    deopts: self.deopts,
+                }),
             );
         }
     }

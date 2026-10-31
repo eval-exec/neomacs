@@ -1672,8 +1672,10 @@ fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
     assert_eq!(ev.jit_root_stack_top, 0);
 }
 
-/// A poll can run Lisp that redefines a callee. The next inlined call must
-/// deopt to its original boundary, preserving iterations already completed.
+/// A poll can run Lisp that redefines a callee. The poll's release
+/// revalidation deopts at the loop head — preserving iterations already
+/// completed — and the resumed interpreter resolves the callee through the
+/// symbol, so the new definition wins.
 #[test]
 fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
     let _backend = crate::emacs_core::jit::compile::opt_mode_scope_for_test(
@@ -1732,11 +1734,21 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
     let NativeRun::DeoptAt(frame) = &result else {
         panic!("{result:?}")
     };
-    assert_eq!(frame.pc, 6);
+    // The redefinition happened INSIDE the poll's own GC service, so the
+    // poll's release revalidation is the first release point that can see
+    // it: the deopt lands at the LOOP HEAD (pc 0, the goto's target), with
+    // the edge stack — the state the goto itself would have produced. The
+    // interpreter then resolves the next call through the symbol, so the
+    // resumed loop delivers the new definition (asserted below). Before
+    // release-point revalidation the loop instead ran on into the next
+    // iteration and deopted at the inlined call's entry guard (pc 6); that
+    // mechanism pin is superseded, the observable contract is unchanged.
+    assert_eq!(frame.pc, 0);
     assert!(
         frame.stack[0].as_fixnum().unwrap() < 1000,
         "completed iterations are retained"
     );
+    assert_eq!(frame.stack.len(), 1);
     assert_eq!(
         mir_inline_guards::resume(&mut ev, &f, result),
         Value::make_int(-7)

@@ -187,6 +187,7 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                 direct_sites: std::cell::Cell::new(0),
                 self_direct_source: direct_call::source_for_abi(abi),
                 poll: emit.poll(),
+                release_epoch: emit.release_epoch,
                 inline_entry_cache: None,
             })
         } else {
@@ -778,12 +779,11 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                                     block_for[&tu],
                                     &handlers,
                                     &mut pending,
-                                    inline_physical::poll_admission(
-                                        rt,
-                                        &frames,
-                                        tu,
-                                        &mut pending_deopt,
-                                    ),
+                                    Some(BackedgeExtras {
+                                        pc: tu,
+                                        frames: Some(&frames),
+                                        deopts: &mut pending_deopt,
+                                    }),
                                 );
                             } else {
                                 fb.ins().jump(block_for[&tu], &[]);
@@ -842,12 +842,11 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                                     block_for[&tu],
                                     &handlers,
                                     &mut pending,
-                                    inline_physical::poll_admission(
-                                        rt,
-                                        &frames,
-                                        tu,
-                                        &mut pending_deopt,
-                                    ),
+                                    Some(BackedgeExtras {
+                                        pc: tu,
+                                        frames: Some(&frames),
+                                        deopts: &mut pending_deopt,
+                                    }),
                                 );
                             }
                             terminated = true;
@@ -906,12 +905,11 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                                     block_for[&tu],
                                     &handlers,
                                     &mut pending,
-                                    inline_physical::poll_admission(
-                                        rt,
-                                        &frames,
-                                        tu,
-                                        &mut pending_deopt,
-                                    ),
+                                    Some(BackedgeExtras {
+                                        pc: tu,
+                                        frames: Some(&frames),
+                                        deopts: &mut pending_deopt,
+                                    }),
                                 );
                             }
                             terminated = true;
@@ -967,6 +965,8 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                                 variable_raw: &variable_raw,
                                 handlers: &handlers,
                                 pending: &mut pending,
+                                frames: &frames,
+                                deopts: &mut pending_deopt,
                                 trampolines: Vec::new(),
                                 unfilled: Vec::new(),
                             };
@@ -1131,21 +1131,9 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                 // path. Cranelift sinks cold blocks during final code emission;
                 // this is a layout hint, not a register-allocation weight.
                 // A snapshot holding a flonum boxes it there: cold too.
-                for site in &pending_deopt {
-                    if has_raw_slots || site.holds_flonum() {
-                        fb.set_cold_block(site.block);
-                    }
-                }
-                // Fill the precise-deopt exit blocks queued by this block's guards.
-                emit_pending_deopts(
-                    &mut fb,
-                    deopt_refs,
-                    &mut pending_deopt,
-                    rt.as_ref().map(|rt| &rt.refs),
-                    abi,
-                );
-                // Fill the handler-dispatch blocks queued by this block's signal
-                // sites (the builder can switch blocks now that it's terminated).
+                // Dispatches fill FIRST: a landing pad's release-point
+                // revalidation queues its deopt into `pending_deopt`, and the
+                // deopt fill below must see (and cold-mark) it.
                 if !pending.is_empty() {
                     let rt_ref = rt.as_ref().expect("pending dispatches imply rt");
                     emit_pending_dispatches(
@@ -1154,9 +1142,25 @@ pub(super) fn build_leaf_fn<S: LeafSink>(
                         &mut signal_exit,
                         &vars,
                         &block_for,
+                        &cfg.entry_handlers,
                         &mut pending,
+                        &mut pending_deopt,
                     )?;
                 }
+                for site in &pending_deopt {
+                    if has_raw_slots || site.holds_flonum() {
+                        fb.set_cold_block(site.block);
+                    }
+                }
+                // Fill the precise-deopt exit blocks queued by this block's
+                // guards (and by the dispatch fill above).
+                emit_pending_deopts(
+                    &mut fb,
+                    deopt_refs,
+                    &mut pending_deopt,
+                    rt.as_ref().map(|rt| &rt.refs),
+                    abi,
+                );
             }
         }
 

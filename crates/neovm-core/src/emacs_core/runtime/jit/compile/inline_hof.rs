@@ -381,6 +381,19 @@ pub(crate) fn emit(
     reps.truncate(count - 3);
     stack.push(value);
     reps.push(SlotRep::Tagged);
+    // Release-point revalidation at the map site's return: the loop's between-
+    // callback service poll may have run this-thread Lisp or serviced a
+    // collection while the activation was live (the callbacks themselves
+    // cannot — observation-free admission). Continuing the inlined map is
+    // GNU-exact for the map itself, so a HOF-only leaf bakes no epoch and
+    // this emits nothing; when the leaf ALSO baked an arith callee or a
+    // named region, this check re-establishes those dependencies before the
+    // physical frame uses them again (resume-AFTER the map call; a mapc site
+    // has no handlers by admission).
+    if let Some(epoch) = rt.release_epoch {
+        let dsite = deopt_site(fb, pc + 1, 0, stack, reps, pending);
+        lowering::emit_release_revalidation(fb, rt, epoch, dsite);
+    }
     Ok(())
 }
 

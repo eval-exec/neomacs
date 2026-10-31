@@ -1437,6 +1437,10 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                     let bools: Vec<_> = reps.iter().map(|rep| *rep == SlotRep::Bool).collect();
                     let checks = switches.after_poll(id);
                     let serviced = (!checks.is_empty()).then(|| ctx.fb.create_block());
+                    // The poll's FrameState IS the loop-head resume state (the
+                    // ir builder frames a backward edge's Poll at the target
+                    // pc), so the release revalidation resumes exactly there.
+                    let release_pc = ctx.func.frames[frame.index()].pc as usize;
                     emit_backedge_jump_with_representations(
                         ctx.fb,
                         ctx.rt
@@ -1450,7 +1454,11 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
                         args,
                         &[],
                         &mut pending,
-                        None, // v2 entry protocols retain baseline lowering.
+                        Some(super::BackedgeExtras {
+                            pc: release_pc,
+                            frames: None, // v2 entry protocols retain baseline lowering.
+                            deopts: &mut deopts,
+                        }),
                         serviced,
                     );
                     if let Some(serviced) = serviced {

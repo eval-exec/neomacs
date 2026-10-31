@@ -402,6 +402,7 @@ impl LeafObs {
             entry_counter: self.entry_counter(),
             poll_counter: self.entry_counted.then_some(&self.t2.polls),
             t2: crate::emacs_core::jit::tier2::T2Emit::of(self),
+            release_epoch: None,
         }
     }
 
@@ -515,24 +516,37 @@ impl LeafObs {
     }
 }
 
-/// What a JIT leaf's generated code writes into its [`LeafObs`]: the
-/// prologue's entry counter, the back-edge poll's tick counter (both only
-/// when entry counting was on at compile time) and a profiling leaf's
-/// countdown (`NEOVM_JIT_TIER2`). AOT leaves write none ([`Self::NONE`]).
+/// What a JIT leaf's generated code bakes from its compilation: the cells it
+/// writes into its [`LeafObs`] — the prologue's entry counter, the back-edge
+/// poll's tick counter (both only when entry counting was on at compile time)
+/// and a profiling leaf's countdown (`NEOVM_JIT_TIER2`) — plus the canonical
+/// function epoch the green-guard return-side revalidation compares against.
+/// AOT leaves bake none of these ([`Self::NONE`]).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LeafEmit<'a> {
     pub(crate) entry_counter: Option<&'a Cell<u64>>,
     pub(crate) poll_counter: Option<&'a Cell<u64>>,
     pub(crate) t2: Option<crate::emacs_core::jit::tier2::T2Emit>,
+    /// The epoch the leaf's inline dependencies were admitted at; `None` when
+    /// the leaf has none, so every release-point check emits nothing.
+    pub(crate) release_epoch: Option<u64>,
 }
 
 impl LeafEmit<'_> {
-    /// No counter and no countdown (AOT code).
+    /// No counter, no countdown, no baked epoch (AOT code).
     pub(crate) const NONE: LeafEmit<'static> = LeafEmit {
         entry_counter: None,
         poll_counter: None,
         t2: None,
+        release_epoch: None,
     };
+
+    /// Attach the green-guard epoch: the leaf's inline dependencies were
+    /// admitted at `epoch` (`None` = no dependencies, no checks emitted).
+    pub(crate) fn with_release_epoch(mut self, epoch: Option<u64>) -> Self {
+        self.release_epoch = epoch;
+        self
+    }
 
     /// What the back-edge poll block writes.
     pub(crate) fn poll(&self) -> super::t2_profile::PollEmit {
@@ -696,6 +710,11 @@ pub struct CompiledLeaf {
     /// is redefined, this leaf must re-JIT; the dispatch evicts it eagerly via the
     /// INLINE_DEPS reverse map (cache.rs), and the coarse inline_epoch backstop
     /// catches it lazily regardless. Empty unless the leaf inlined something.
+    /// Deliberately WIDER than the release-revalidation scope
+    /// (`compile::body_bakes_redefinable_definition` → `RtCtx::release_epoch`):
+    /// a fused mapping site is a cache-eviction dependency, but an in-flight
+    /// map activation is GNU-exact with a call-free callback by admission,
+    /// so HOF-only leaves arm no epoch.
     pub(crate) inline_deps: Box<[crate::emacs_core::intern::SymId]>,
     /// R1a: per-leaf heap-constant relocation vector. Generated code loads each
     /// heap-object constant from `reloc_data[idx]` through a baked base pointer

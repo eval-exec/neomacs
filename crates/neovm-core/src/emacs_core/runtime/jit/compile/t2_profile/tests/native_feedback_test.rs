@@ -481,6 +481,7 @@ fn tier2_native_use_imports_helpers_only_with_actual_t1_emission() {
                         count: None,
                         t2: profile.then(|| T2Emit::of(&obs).expect("profiling")),
                     },
+                    release_epoch: None,
                 };
                 assert_eq!(recording_site_at(1, &rt).is_some(), profile);
                 let zero = fb.ins().iconst(types::I64, 0);

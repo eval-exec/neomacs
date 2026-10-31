@@ -89,7 +89,15 @@ pub(super) fn emit_call_payload(
     // Same existing mutable entry guard as MIR inlining: current Context epoch,
     // attention + asynchronous sources, debugger cell and depth. Never hoist
     // these loads or reuse their success across an earlier callback/Poll.
-    lowering::emit_mir_inline_entry_guard(ctx.fb, rt, witness.epoch, site)?;
+    // A retained original Call is a may-reenter boundary: the skipped call
+    // would have re-resolved the callee each time.
+    if let Some(guard) = (lowering::InlineSiteReentry::MayReenter {
+        epoch: witness.epoch,
+    })
+    .entry_guard()
+    {
+        lowering::emit_mir_inline_entry_guard(ctx.fb, rt, guard, site)?;
+    }
     let (callee, callee_rep) = ctx.values.read(ctx.fb, ctx.func, local, inst.args[0]);
     let callee = match callee_rep {
         SlotRep::Tagged => callee,
