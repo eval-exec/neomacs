@@ -1,6 +1,10 @@
 use super::*;
 use tracing::debug;
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "gnu_cjk_metrics.rs"]
+mod gnu_cjk_metrics;
+
 // Every independent service borrows the same immutable fixture catalog owner.
 fn make_svc() -> FontMetricsService {
     crate::font::metrics::test_catalog::metrics_service()
@@ -3304,13 +3308,18 @@ fn resolved_font_for_face_preserves_platform_named_instance() {
 #[cfg(target_os = "linux")]
 #[test]
 fn scaled_noto_cjk_bold_ascii_advances_match_gnu_device_glyph_metrics() {
-    // GNU Emacs 31's Cairo/FreeType display of the real journal heading at
-    // 168 DPI reports these glyph widths through `posn-at-point`: its 23px
-    // Noto Sans CJK SC Bold face advances "2,Sinm" by 12, 5, 13, 6, 13,
-    // and 20 device pixels respectively.  A 1.75-scale Neomacs frame must
-    // publish those same device advances back in logical pixels.
+    // GNU31.1 opens the pinned SC Bold named instance 0x60002 at 23px.
+    // Its "2,Sinm" advances are 12,5,13,6,13,20 with FreeType2.14.3,
+    // and 14,7,14,7,15,22 with CI's FreeType2.13.2. Both were recorded
+    // through font-get-glyphs and posn-at-point with the identical file/index.
+    // Use GNU's independent Cairo glyph-extents path on the loaded backend,
+    // rather than treating one native library's metrics as universal.
     let scale = neomacs_display_protocol::geometry::DeviceScale::new(1.75)
         .expect("1.75 is a valid display scale");
+    let selection_size = crate::font_backend::FontSelectionSize::new(13.0, scale);
+    assert_eq!(selection_size.rounded_device_px(), 23);
+    let oracle = gnu_cjk_metrics::GnuCjkBoldOracle::open(selection_size)
+        .expect("the exact recorded GNU CJK face opens through Cairo");
     let catalog = crate::font::metrics::test_catalog::standard_catalog().to_native_fontconfig();
     let mut svc = catalog.metrics_service();
     svc.set_device_scale(scale);
@@ -3330,21 +3339,23 @@ fn scaled_noto_cjk_bold_ascii_advances_match_gnu_device_glyph_metrics() {
         "the exact pinned CJK collection must be selected"
     );
 
+    assert_eq!(
+        selected.font.identity.freetype_selector(),
+        oracle.identity().freetype_selector(),
+        "the complete GNU collection/named-instance selector must match"
+    );
+
     let widths = svc.fill_ascii_widths(family, 700, false, 13.0);
-    for (character, device_advance) in [
-        ('2', 12.0),
-        (',', 5.0),
-        ('S', 13.0),
-        ('i', 6.0),
-        ('n', 13.0),
-        ('m', 20.0),
-    ] {
-        let expected = device_advance / scale.get();
-        assert!(
-            (widths[character as usize] - expected).abs() < 0.001,
-            "{character:?}: GNU advance is {device_advance}px device / {} = {expected}px logical, got {}",
+    for character in ['2', ',', 'S', 'i', 'n', 'm'] {
+        let expected = oracle
+            .measure_ascii(character)
+            .expect("GNU's Cairo reference maps the pinned printable glyph")
+            .into_logical(scale);
+        assert_eq!(
+            widths[character as usize],
+            expected,
+            "{character:?}: exact GNU Cairo device advance converted at scale {}",
             scale.get(),
-            widths[character as usize]
         );
     }
 }
