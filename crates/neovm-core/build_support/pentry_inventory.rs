@@ -13,9 +13,17 @@ use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{Expr, Fields, Item, Token};
 
+#[path = "../src/emacs_core/lisp/native/subr/effect_parallel.rs"]
+mod effect_parallel;
 #[path = "../src/emacs_core/lisp/native/subr/effect_schema.rs"]
-mod schema;
-use schema::{Authority, CatalogKind, Classification, SchemaEntry, SchemaError};
+mod effect_schema;
+
+use effect_parallel::{ADMITTED, CatalogRow, canonical_parallel_error};
+use effect_schema as schema;
+use schema::{
+    ArithOperands, Authority, CatalogKind, Classification, ParallelClass, ParallelVariant,
+    PlainVarAccess, ReturnDisposition, SchemaEntry, SchemaError, SealedAuthority,
+};
 
 #[derive(Clone, Copy)]
 enum DeclarationMark {
@@ -34,6 +42,8 @@ struct Record {
     name: String,
     source: String,
     classification: Classification,
+    class: ParallelClass,
+    variant: Option<ParallelVariant>,
     target: Option<String>,
 }
 
@@ -64,6 +74,8 @@ impl Scanner<'_> {
             name,
             source: self.source.clone(),
             classification,
+            class: ParallelClass::World,
+            variant: None,
             target: None,
         });
     }
@@ -517,6 +529,94 @@ fn authority_name(classification: Classification) -> Result<&'static str, String
     }
 }
 
+fn sealed_authority_name(authority: SealedAuthority) -> &'static str {
+    match authority {
+        SealedAuthority::ConsFieldRead => "ConsFieldRead",
+        SealedAuthority::ConsFieldWrite => "ConsFieldWrite",
+        SealedAuthority::ConsAllocation => "ConsAllocation",
+        SealedAuthority::HashRead => "HashRead",
+        SealedAuthority::CanonicalSymbol => "CanonicalSymbol",
+        SealedAuthority::HeaderWord => "HeaderWord",
+    }
+}
+
+fn return_disposition_name(disposition: ReturnDisposition) -> &'static str {
+    match disposition {
+        ReturnDisposition::OwnerLocal => "OwnerLocal",
+        ReturnDisposition::NeedsSerialCleanup => "NeedsSerialCleanup",
+    }
+}
+
+fn plain_var_access_name(access: PlainVarAccess) -> &'static str {
+    match access {
+        PlainVarAccess::Ref => "Ref",
+        PlainVarAccess::Set => "Set",
+        PlainVarAccess::Bind => "Bind",
+        PlainVarAccess::Unbind => "Unbind",
+    }
+}
+
+fn arith_operands_name(operands: ArithOperands) -> &'static str {
+    match operands {
+        ArithOperands::Numeric => "Numeric",
+        ArithOperands::MarkerInvolved => "MarkerInvolved",
+    }
+}
+
+fn class_expr(class: ParallelClass) -> String {
+    match class {
+        ParallelClass::World => "ParallelClass::World".into(),
+        ParallelClass::Scalar => "ParallelClass::Scalar".into(),
+        ParallelClass::Sealed(authority) => format!(
+            "ParallelClass::Sealed(SealedAuthority::{})",
+            sealed_authority_name(authority)
+        ),
+    }
+}
+
+fn variant_expr(variant: Option<ParallelVariant>) -> String {
+    match variant {
+        None => "None".into(),
+        Some(ParallelVariant::Return(disposition)) => format!(
+            "Some(ParallelVariant::Return(ReturnDisposition::{}))",
+            return_disposition_name(disposition)
+        ),
+        Some(ParallelVariant::PlainVar(access)) => format!(
+            "Some(ParallelVariant::PlainVar(PlainVarAccess::{}))",
+            plain_var_access_name(access)
+        ),
+        Some(ParallelVariant::Arith(operands)) => format!(
+            "Some(ParallelVariant::Arith(ArithOperands::{}))",
+            arith_operands_name(operands)
+        ),
+    }
+}
+
+fn class_text(class: ParallelClass) -> String {
+    match class {
+        ParallelClass::World => "World".into(),
+        ParallelClass::Scalar => "Scalar".into(),
+        ParallelClass::Sealed(authority) => {
+            format!("Sealed({})", sealed_authority_name(authority))
+        }
+    }
+}
+
+fn variant_text(variant: Option<ParallelVariant>) -> Option<String> {
+    match variant {
+        None => None,
+        Some(ParallelVariant::Return(disposition)) => {
+            Some(format!("Return({})", return_disposition_name(disposition)))
+        }
+        Some(ParallelVariant::PlainVar(access)) => {
+            Some(format!("PlainVar({})", plain_var_access_name(access)))
+        }
+        Some(ParallelVariant::Arith(operands)) => {
+            Some(format!("Arith({})", arith_operands_name(operands)))
+        }
+    }
+}
+
 // Only top-level literal-name defalias forms are part of this shipped source
 // registry. Nonliteral target expressions stay World-only, with no claimed
 // symbol target; runtime alias resolution remains authoritative.
@@ -548,13 +648,92 @@ fn alias_records(source: &str, records: &mut Vec<Record>) -> Result<(), String> 
             name: name.into(),
             source: "lisp/subr.el".into(),
             classification: Classification::Classified(Authority::World),
+            class: ParallelClass::World,
+            variant: None,
             target,
         });
     }
     Ok(())
 }
 
+/// Apply the evidence-bearing P3 declarations to the scanned registrations,
+/// let source aliases inherit their resolved primitive target, then run the
+/// same closed-world gate the catalog tests run over the generated table.
+/// No declaration may name a missing registration, and nothing outside the
+/// canonical declarations may leave the World default.
+fn apply_parallel_catalog(records: &mut Vec<Record>) -> Result<(), String> {
+    for declaration in ADMITTED {
+        let Some(record) = records
+            .iter_mut()
+            .find(|record| record.kind == declaration.kind && record.name == declaration.name)
+        else {
+            return Err(format!(
+                "parallel catalog: {} {:?} declaration has no registration in the scanned source (evidence: {})",
+                kind_name(declaration.kind),
+                declaration.name,
+                declaration.evidence
+            ));
+        };
+        record.class = declaration.class;
+        record.variant = declaration.variant;
+    }
+    let primitives = records
+        .iter()
+        .filter(|record| record.kind == CatalogKind::Primitive)
+        .map(|record| (record.name.clone(), record.class, record.variant))
+        .collect::<Vec<_>>();
+    for record in records.iter_mut() {
+        if record.kind != CatalogKind::Alias {
+            continue;
+        }
+        let inherited = record
+            .target
+            .as_ref()
+            .and_then(|target| primitives.iter().find(|(name, _, _)| name == target))
+            .map(|(_, class, variant)| (*class, *variant))
+            .unwrap_or((ParallelClass::World, None));
+        record.class = inherited.0;
+        record.variant = inherited.1;
+    }
+    let rows = records
+        .iter()
+        .map(|record| CatalogRow {
+            kind: record.kind,
+            name: &record.name,
+            class: record.class,
+            variant: record.variant,
+            alias_target: record.target.as_deref(),
+        })
+        .collect::<Vec<_>>();
+    canonical_parallel_error(&rows, ADMITTED)
+        .map_err(|error| format!("parallel catalog architecture gate: {error}"))
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ParallelGate {
+    /// Production source: P3 declarations must match the scanned
+    /// registrations and the canonical totals exactly.
+    Canonical,
+    /// Mock syntax fixtures carry no production catalog.
+    Syntactic,
+}
+
 pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), String> {
+    generate_inner(manifest, project_root, out, ParallelGate::Canonical)
+}
+
+/// Mock-syntax fixtures validate their registration grammar only.
+#[allow(dead_code)]
+pub fn generate_fixture(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), String> {
+    generate_inner(manifest, project_root, out, ParallelGate::Syntactic)
+}
+
+fn generate_inner(
+    manifest: &Path,
+    project_root: &Path,
+    out: &Path,
+    parallel_gate: ParallelGate,
+) -> Result<(), String> {
     let mut files = Vec::new();
     source_files(&manifest.join("src"), &mut files)?;
     files.sort();
@@ -612,6 +791,8 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
                 name: variant.name.clone(),
                 source: source.into(),
                 classification,
+                class: ParallelClass::World,
+                variant: None,
                 target: None,
             });
         }
@@ -626,6 +807,8 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
             name: format!("TierI::{}", variant.name),
             source: tier_i_source.into(),
             classification: tier_i_classification,
+            class: ParallelClass::World,
+            variant: None,
             target: None,
         });
     }
@@ -633,6 +816,9 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
     let aliases_source = fs::read_to_string(&aliases_path)
         .map_err(|error| format!("{}: {error}", aliases_path.display()))?;
     alias_records(&aliases_source, &mut records)?;
+    if parallel_gate == ParallelGate::Canonical {
+        apply_parallel_catalog(&mut records)?;
+    }
 
     let schema_entries = records
         .iter()
@@ -679,12 +865,14 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
     for record in &records {
         let kind = kind_name(record.kind);
         let authority = authority_name(record.classification)?;
+        let class = class_expr(record.class);
+        let variant = variant_expr(record.variant);
         let target = match &record.target {
             Some(target) => format!("Some({target:?})"),
             None => "None".into(),
         };
         generated.push_str(&format!(
-            "    InventoryEntry {{ kind: CatalogKind::{kind}, name: {:?}, source: {:?}, authority: Authority::{authority}, target: {target} }},\n",
+            "    InventoryEntry {{ kind: CatalogKind::{kind}, name: {:?}, source: {:?}, authority: Authority::{authority}, class: {class}, variant: {variant}, target: {target} }},\n",
             record.name, record.source
         ));
         json_entries.push(serde_json::json!({
@@ -692,41 +880,81 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
             "name": record.name,
             "source": record.source,
             "authority": authority,
+            "class": class_text(record.class),
+            "variant": variant_text(record.variant),
             "target": record.target,
         }));
     }
     generated.push_str("];\n");
-    for (table, function, argument, variants) in [
+    // Dense cold P8/E4-T admission tables, indexed by the E1 registration
+    // index (the exact order of INVENTORY). No serial dispatcher reads them.
+    generated.push_str("/// Dense cold P3 admission table indexed by the E1 registration index.\n");
+    generated.push_str("/// E4-T is dormant: no serial dispatcher reads this table.\n");
+    generated.push_str("#[allow(dead_code)]\n");
+    generated.push_str("pub(crate) static PARALLEL_CLASSES: &[ParallelClass] = &[\n");
+    for record in &records {
+        generated.push_str(&format!("    {},\n", class_expr(record.class)));
+    }
+    generated.push_str("];\n");
+    generated
+        .push_str("/// Dense cold E4 typed-variant table indexed by the E1 registration index.\n");
+    generated.push_str("/// E4-T is dormant: no serial dispatcher reads this table.\n");
+    generated.push_str("#[allow(dead_code)]\n");
+    generated.push_str("pub(crate) static PARALLEL_VARIANTS: &[Option<ParallelVariant>] = &[\n");
+    for record in &records {
+        generated.push_str(&format!("    {},\n", variant_expr(record.variant)));
+    }
+    generated.push_str("];\n");
+    for (table, function, argument, variants, kind) in [
         (
             "OPCODES",
-            "opcode_authority",
+            "opcode_class",
             "crate::emacs_core::bytecode::Op",
             &opcodes,
+            CatalogKind::Opcode,
         ),
         (
             "LEAVES",
-            "leaf_authority",
+            "leaf_class",
             "crate::emacs_core::subr::leaf::LeafId",
             &leaves,
+            CatalogKind::Leaf,
         ),
     ] {
+        let classes = variants
+            .iter()
+            .map(|variant| {
+                records
+                    .iter()
+                    .find(|record| record.kind == kind && record.name == variant.name)
+                    .map(|record| record.class)
+                    .unwrap_or(ParallelClass::World)
+            })
+            .collect::<Vec<_>>();
         generated.push_str("#[allow(dead_code)] // E1 cold registry has no production consumer.\n");
         generated.push_str(&format!(
-            "pub(super) static {table}: &[(&str, Authority)] = &[\n"
+            "pub(super) static {table}: &[(&str, ParallelClass)] = &[\n"
         ));
-        for variant in variants {
-            generated.push_str(&format!("    ({:?}, Authority::World),\n", variant.name));
+        for (variant, class) in variants.iter().zip(&classes) {
+            generated.push_str(&format!(
+                "    ({:?}, {}),\n",
+                variant.name,
+                class_expr(*class)
+            ));
         }
         generated.push_str("];\n");
         let reference = if table == "OPCODES" { "&" } else { "" };
         generated.push_str(
             "#[allow(dead_code)] // E1 exhaustive projection is not installed in dispatch.\n",
         );
-        generated.push_str(&format!("pub(super) fn {function}(entry: {reference}{argument}) -> Authority {{\n    match entry {{\n"));
-        for variant in variants {
+        generated.push_str(&format!(
+            "pub(super) fn {function}(entry: {reference}{argument}) -> ParallelClass {{\n    match entry {{\n"
+        ));
+        for (variant, class) in variants.iter().zip(&classes) {
             generated.push_str(&format!(
-                "        {argument}::{} => Authority::World,\n",
-                variant.pattern
+                "        {argument}::{} => {},\n",
+                variant.pattern,
+                class_expr(*class)
             ));
         }
         generated.push_str("    }\n}\n");
@@ -735,12 +963,15 @@ pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), 
     // contributes cold labels, never an exposed type or execution entrypoint.
     generated
         .push_str("#[allow(dead_code)] // E1 cold Tier-I registry has no production consumer.\n");
-    generated.push_str("pub(super) static TIER_I_OPCODES: &[(&str, Authority)] = &[\n");
+    generated.push_str("pub(super) static TIER_I_OPCODES: &[(&str, ParallelClass)] = &[\n");
     for variant in &tier_i_opcodes {
-        generated.push_str(&format!(
-            "    ({:?}, Authority::World),\n",
-            format!("TierI::{}", variant.name)
-        ));
+        let name = format!("TierI::{}", variant.name);
+        let class = records
+            .iter()
+            .find(|record| record.kind == CatalogKind::Opcode && record.name == name)
+            .map(|record| record.class)
+            .unwrap_or(ParallelClass::World);
+        generated.push_str(&format!("    ({name:?}, {}),\n", class_expr(class)));
     }
     generated.push_str("];\n");
     let json = serde_json::json!({

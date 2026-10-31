@@ -15,6 +15,7 @@ use crate::tagged::header::{
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) mod effect_catalog;
+pub(crate) mod effect_parallel;
 pub(crate) mod effect_schema;
 pub(crate) mod leaf;
 

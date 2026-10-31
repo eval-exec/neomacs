@@ -1,9 +1,16 @@
 //! Cold production-entry inventory. No Lisp or serial dispatcher consumes it.
 //!
-//! All existing native/leaf/opcode entries are explicitly World-only in E1.
-//! Optimization leaf effects do not constitute parallel admission.
+//! `authority` remains the E1 admission (no handler is installed, so every
+//! entry is World today). `class` and `variant` are the P8/E4-T typed P3
+//! parallel classification: evidence-bearing declarations live in
+//! `effect_parallel`, aliases inherit their resolved target, and the generated
+//! dense tables are indexed by the E1 registration index. The class is data
+//! for E4; no serial dispatcher reads it.
 
-use super::effect_schema::{Authority, CatalogKind};
+use super::effect_schema::{
+    ArithOperands, Authority, CatalogKind, ParallelClass, ParallelVariant, PlainVarAccess,
+    ReturnDisposition, SealedAuthority,
+};
 use crate::emacs_core::eval::parallel_entry::capability::{
     BatonWitness, ParallelExecution, SerialContext,
 };
@@ -39,6 +46,8 @@ pub(crate) struct InventoryEntry {
     pub(crate) name: &'static str,
     pub(crate) source: &'static str,
     pub(crate) authority: Authority,
+    pub(crate) class: ParallelClass,
+    pub(crate) variant: Option<ParallelVariant>,
     pub(crate) target: Option<&'static str>,
 }
 
@@ -68,6 +77,23 @@ pub(crate) fn alias_target_authority(target: AliasTarget<'_>) -> Option<Authorit
             .find(|entry| entry.kind == CatalogKind::Primitive && entry.name == name)
             .map(|entry| entry.authority),
         AliasTarget::Interpreted | AliasTarget::Void | AliasTarget::Cycle => Some(Authority::World),
+    }
+}
+
+/// The same cold alias projection for the P3 parallel class E4 consumes.
+/// Interpretation, void cells and cycles are World, exactly as in the
+/// source-alias inheritance rule; unknown native targets stay unclassified.
+#[allow(dead_code)] // Cold E1 vocabulary; tests exercise it, dispatch does not.
+#[cold]
+pub(crate) fn alias_target_class(target: AliasTarget<'_>) -> Option<ParallelClass> {
+    match target {
+        AliasTarget::Native(name) => INVENTORY
+            .iter()
+            .find(|entry| entry.kind == CatalogKind::Primitive && entry.name == name)
+            .map(|entry| entry.class),
+        AliasTarget::Interpreted | AliasTarget::Void | AliasTarget::Cycle => {
+            Some(ParallelClass::World)
+        }
     }
 }
 

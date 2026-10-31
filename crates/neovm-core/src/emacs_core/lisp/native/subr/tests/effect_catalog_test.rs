@@ -1,3 +1,6 @@
+use super::super::effect_parallel::{
+    ADMITTED, CatalogRow, ParallelCatalogError, canonical_parallel_error,
+};
 use super::*;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::{Context, lookup_global_subr_entry};
@@ -63,13 +66,20 @@ fn pentry_catalog_covers_every_installed_subr_opcode_leaf_and_alias() {
     assert_eq!(opcode_names.len(), OPCODES.len());
     assert!(opcode_names.contains("TrapOutOfRangeConstant"));
     assert_eq!(
-        opcode_authority(&Op::TrapOutOfRangeConstant(0)),
-        Authority::World
+        opcode_class(&Op::TrapOutOfRangeConstant(0)),
+        ParallelClass::Scalar
     );
+    for (name, class) in OPCODES {
+        let row = INVENTORY
+            .iter()
+            .find(|row| row.kind == CatalogKind::Opcode && row.name == *name)
+            .expect("opcode inventory row");
+        assert_eq!(*class, row.class, "opcode class {name}");
+    }
     let tier_i_names = TIER_I_OPCODES
         .iter()
-        .map(|(name, authority)| {
-            assert_eq!(*authority, Authority::World);
+        .map(|(name, class)| {
+            assert_eq!(*class, ParallelClass::World);
             *name
         })
         .collect::<HashSet<_>>();
@@ -89,7 +99,21 @@ fn pentry_catalog_covers_every_installed_subr_opcode_leaf_and_alias() {
     assert_eq!(leaf_names.len(), leaf::LeafId::COUNT);
     for declaration in leaf::LEAVES {
         assert!(leaf_names.contains(format!("{:?}", declaration.id).as_str()));
-        assert_eq!(leaf_authority(declaration.id), Authority::World);
+        let expected = match declaration.id {
+            leaf::LeafId::Gethash => ParallelClass::Sealed(SealedAuthority::HashRead),
+            leaf::LeafId::Keywordp | leaf::LeafId::SymbolName => {
+                ParallelClass::Sealed(SealedAuthority::CanonicalSymbol)
+            }
+            _ => ParallelClass::World,
+        };
+        assert_eq!(leaf_class(declaration.id), expected);
+    }
+    for (name, class) in LEAVES {
+        let row = INVENTORY
+            .iter()
+            .find(|row| row.kind == CatalogKind::Leaf && row.name == *name)
+            .expect("leaf inventory row");
+        assert_eq!(*class, row.class, "leaf class {name}");
     }
 
     // Runtime alias names cannot grant permanent authority. The same current
@@ -268,4 +292,244 @@ fn pentry_catalog_covers_shipped_and_loaded_alias_cells() {
         loaded > 0,
         "loaded runtime must exercise actual alias cells"
     );
+}
+
+fn parallel_rows() -> Vec<CatalogRow<'static>> {
+    INVENTORY
+        .iter()
+        .map(|entry| CatalogRow {
+            kind: entry.kind,
+            name: entry.name,
+            class: entry.class,
+            variant: entry.variant,
+            alias_target: entry.target,
+        })
+        .collect()
+}
+
+fn parallel_class_of(name: &str) -> ParallelClass {
+    INVENTORY
+        .iter()
+        .find(|entry| entry.kind == CatalogKind::Primitive && entry.name == name)
+        .unwrap_or_else(|| panic!("missing primitive {name}"))
+        .class
+}
+
+fn parallel_variant_of(kind: CatalogKind, name: &str) -> Option<ParallelVariant> {
+    INVENTORY
+        .iter()
+        .find(|entry| entry.kind == kind && entry.name == name)
+        .unwrap_or_else(|| panic!("missing {kind:?} {name}"))
+        .variant
+}
+
+#[test]
+fn pentry_catalog_parallel_tables_are_dense_and_canonical() {
+    assert_eq!(PARALLEL_CLASSES.len(), INVENTORY.len());
+    assert_eq!(PARALLEL_VARIANTS.len(), INVENTORY.len());
+    for (index, entry) in INVENTORY.iter().enumerate() {
+        assert_eq!(
+            entry.class, PARALLEL_CLASSES[index],
+            "class row {}",
+            entry.name
+        );
+        assert_eq!(
+            entry.variant, PARALLEL_VARIANTS[index],
+            "variant row {}",
+            entry.name
+        );
+    }
+    let rows = parallel_rows();
+    canonical_parallel_error(&rows, ADMITTED)
+        .expect("checked-in table equals the canonical P3 classification");
+    let (mut world, mut sealed, mut scalar) = (0, 0, 0);
+    for entry in INVENTORY {
+        match entry.class {
+            ParallelClass::World => world += 1,
+            ParallelClass::Sealed(_) => sealed += 1,
+            ParallelClass::Scalar => scalar += 1,
+        }
+    }
+    assert_eq!((world, sealed, scalar), (1_664, 41, 34));
+    eprintln!(
+        "parallel catalog: entries={} world={} sealed={} scalar={} typed_variants={} declarations={}",
+        INVENTORY.len(),
+        world,
+        sealed,
+        scalar,
+        PARALLEL_VARIANTS
+            .iter()
+            .filter(|variant| variant.is_some())
+            .count(),
+        ADMITTED.len()
+    );
+}
+
+#[test]
+fn pentry_catalog_parallel_aliases_inherit_resolved_targets() {
+    let alias_class = |name: &str| {
+        INVENTORY
+            .iter()
+            .find(|entry| entry.kind == CatalogKind::Alias && entry.name == name)
+            .unwrap_or_else(|| panic!("missing alias {name}"))
+            .class
+    };
+    assert_eq!(alias_class("not"), ParallelClass::Scalar);
+    assert_eq!(
+        alias_class("error-type"),
+        ParallelClass::Sealed(SealedAuthority::ConsFieldRead)
+    );
+    assert_eq!(
+        alias_class("rplaca"),
+        ParallelClass::Sealed(SealedAuthority::ConsFieldWrite)
+    );
+    assert_eq!(
+        alias_class("rplacd"),
+        ParallelClass::Sealed(SealedAuthority::ConsFieldWrite)
+    );
+    // World targets, a missing literal target and a target that is not a
+    // primitive row all stay World, exactly as in P3.
+    assert_eq!(alias_class("sxhash"), ParallelClass::World);
+    assert_eq!(alias_class("ctl-x-4-prefix"), ParallelClass::World);
+    assert_eq!(alias_class("error-slot-value"), ParallelClass::World);
+    assert_eq!(
+        alias_target_class(AliasTarget::Native("null")),
+        Some(ParallelClass::Scalar)
+    );
+    assert_eq!(
+        alias_target_class(AliasTarget::Native("car")),
+        Some(ParallelClass::Sealed(SealedAuthority::ConsFieldRead))
+    );
+    assert_eq!(
+        alias_target_class(AliasTarget::Native("pentry-unknown-native")),
+        None
+    );
+    assert_eq!(
+        alias_target_class(AliasTarget::Interpreted),
+        Some(ParallelClass::World)
+    );
+}
+
+#[test]
+fn pentry_catalog_parallel_typed_variants_are_exactly_designated() {
+    assert_eq!(
+        parallel_variant_of(CatalogKind::Opcode, "Return"),
+        Some(ParallelVariant::Return(ReturnDisposition::OwnerLocal))
+    );
+    for (name, access) in [
+        ("VarRef", PlainVarAccess::Ref),
+        ("VarSet", PlainVarAccess::Set),
+        ("VarBind", PlainVarAccess::Bind),
+        ("Unbind", PlainVarAccess::Unbind),
+    ] {
+        assert_eq!(
+            parallel_variant_of(CatalogKind::Opcode, name),
+            Some(ParallelVariant::PlainVar(access))
+        );
+    }
+    for (kind, name) in [
+        (CatalogKind::Opcode, "Add"),
+        (CatalogKind::Opcode, "Add1"),
+        (CatalogKind::Opcode, "Eqlsign"),
+        (CatalogKind::Primitive, "+"),
+        (CatalogKind::Primitive, "mod"),
+        (CatalogKind::Primitive, "abs"),
+    ] {
+        assert_eq!(
+            parallel_variant_of(kind, name),
+            Some(ParallelVariant::Arith(ArithOperands::Numeric))
+        );
+    }
+    let typed = INVENTORY
+        .iter()
+        .filter(|entry| entry.variant.is_some())
+        .count();
+    assert_eq!(typed, 37);
+    assert_eq!(
+        ADMITTED
+            .iter()
+            .filter(|declaration| declaration.variant.is_some())
+            .count(),
+        37
+    );
+    // E4 refines the executor split; the canonical P3 class stays World.
+    for entry in INVENTORY.iter().filter(|entry| entry.variant.is_some()) {
+        assert_eq!(entry.class, ParallelClass::World, "{}", entry.name);
+    }
+    assert_eq!(
+        parallel_class_of("car"),
+        ParallelClass::Sealed(SealedAuthority::ConsFieldRead)
+    );
+}
+
+#[test]
+fn pentry_catalog_parallel_gate_rejects_a_class_flip() {
+    let rows = parallel_rows();
+
+    // One Sealed declaration flipped to Scalar no longer agrees with the
+    // generated table.
+    let mut flipped_declarations = ADMITTED.to_vec();
+    let car = flipped_declarations
+        .iter_mut()
+        .find(|declaration| declaration.kind == CatalogKind::Primitive && declaration.name == "car")
+        .expect("car declaration");
+    car.class = ParallelClass::Scalar;
+    car.variant = None;
+    assert!(matches!(
+        canonical_parallel_error(&rows, &flipped_declarations),
+        Err(ParallelCatalogError::DeclarationMismatch {
+            kind: CatalogKind::Primitive,
+            name: "car"
+        })
+    ));
+
+    // If the generator applied that flip, car and its alias leave the
+    // canonical Sealed total and the gate fails.
+    let mut flipped_rows = rows.clone();
+    for row in &mut flipped_rows {
+        if row.name == "car" || row.name == "error-type" {
+            row.class = ParallelClass::Scalar;
+        }
+    }
+    assert!(matches!(
+        canonical_parallel_error(&flipped_rows, &flipped_declarations),
+        Err(ParallelCatalogError::CountMismatch {
+            what: "canonical Sealed names",
+            expected: 41,
+            found: 39
+        })
+    ));
+
+    // A new World registration defaults in but must be reviewed into the
+    // canonical totals (POST_P3_WORLD_REGISTRATIONS) before the gate passes.
+    let mut extended = rows.clone();
+    extended.push(CatalogRow {
+        kind: CatalogKind::Primitive,
+        name: "pentry-new-registration",
+        class: ParallelClass::World,
+        variant: None,
+        alias_target: None,
+    });
+    assert!(matches!(
+        canonical_parallel_error(&extended, ADMITTED),
+        Err(ParallelCatalogError::CountMismatch {
+            what: "canonical names",
+            ..
+        })
+    ));
+
+    // A row claiming Sealed without an evidence-bearing declaration fails.
+    let mut silent = rows.clone();
+    let nconc = silent
+        .iter_mut()
+        .find(|row| row.kind == CatalogKind::Opcode && row.name == "Nconc")
+        .expect("Nconc row");
+    nconc.class = ParallelClass::Sealed(SealedAuthority::ConsFieldWrite);
+    assert!(matches!(
+        canonical_parallel_error(&silent, ADMITTED),
+        Err(ParallelCatalogError::UndeclaredClass {
+            kind: CatalogKind::Opcode,
+            name: "Nconc"
+        })
+    ));
 }

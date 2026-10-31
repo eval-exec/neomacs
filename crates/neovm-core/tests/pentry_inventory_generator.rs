@@ -73,7 +73,7 @@ impl Fixture {
     }
 
     fn generate(&self) -> Result<(), String> {
-        generator::generate(&self.manifest, &self.project, &self.output)
+        generator::generate_fixture(&self.manifest, &self.project, &self.output)
     }
 
     fn replace_input(&self, input: &str) {
