@@ -335,6 +335,50 @@ jobs:
           echo "compile-fail contract runners passed: $ran"
           test "$ran" -ge 10
 
+  # The same contracts on the arm64 macOS toolchain. rustc on aarch64-apple-darwin
+  # orders and caps its E0277/E0599 notes differently, so the suite keeps
+  # arm64_macos overlays of the context and generic goldens. Until 2026-10-31 no
+  # job compiled them: the Linux job cannot, and the macOS parity job builds
+  # without `contract-fixtures`, so the overlays drifted for weeks (the Mac
+  # bless rewrote 9 of them). This job is their gate.
+  compile-contracts-macos:
+    name: compile contracts (macos aarch64)
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - *checkout
+      - *prepare_workspace_tmp
+      - uses: ./.github/actions/install-build-deps
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-compile-contracts-macos-aarch64
+          cache-shared-key: macos-aarch64-dev
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          target: aarch64-apple-darwin
+
+      - name: Fetch locked crates for trybuild's offline builds
+        run: cargo fetch --locked
+
+      - name: Run the compile-fail contracts
+        run: |
+          set -o pipefail
+          {
+            env -u TRYBUILD cargo test -p neovm-core --features contract-fixtures --no-fail-fast \
+              --test p0s3_contracts --test p1rv_contracts \
+              --test thread_safety_contracts --test chartable_write_contracts
+          } 2>&1 | tee "$RUNNER_TEMP/contracts.log"
+          ran=$(grep -oE 'test result: ok\. [0-9]+ passed' "$RUNNER_TEMP/contracts.log" \
+            | awk '{s += $4} END {print s + 0}')
+          echo "compile-fail contract runners passed: $ran"
+          test "$ran" -ge 10
+
   gnu-emacs-oracle:
     name: GNU Emacs oracle (linux x86_64)
     runs-on: ubuntu-24.04
