@@ -14,6 +14,10 @@ use std::time::Instant;
 
 use super::contracts::ReadDeadline;
 
+pub(crate) mod native_wait;
+
+use native_wait::{InlineNativeWait, NativeWaitHandoff};
+
 /// Keep the ordinary input bit at the allocation's original address. Only cold
 /// attachment/control operations consult the sidecar. Hot forwarding methods
 /// must still pass the caller's frozen-code comparison; layout alone is no proof.
@@ -177,6 +181,8 @@ static_assertions::const_assert_eq!(std::mem::size_of::<NotificationLatch>(), 24
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ControlNudge {
+    HostAttached,
+    SchedulerReady,
     HostServiceReady,
     MainMailboxReady,
     Cancellation,
@@ -619,6 +625,14 @@ impl WaitRegistration {
     /// The same absolute deadline survives every spurious or unrelated wake.
     /// Condvar atomically releases the predicate lock on entry to the OS wait.
     pub(crate) fn wait(&self, deadline: ReadDeadline) -> ControlWakeOutcome {
+        self.wait_with(deadline, &mut InlineNativeWait)
+    }
+
+    pub(crate) fn wait_with<H: NativeWaitHandoff>(
+        &self,
+        deadline: ReadDeadline,
+        handoff: &mut H,
+    ) -> ControlWakeOutcome {
         #[cfg(test)]
         let blind = self.wake.fallback_fault.lock().unwrap().take().is_some();
         #[cfg(not(test))]
@@ -641,21 +655,24 @@ impl WaitRegistration {
                     }
                     #[cfg(test)]
                     self.report_fallback_stage(&metadata, &mut reported_epoch);
-                    let (next, _) = self
-                        .wake
-                        .changed
-                        .wait_timeout(metadata, remaining)
-                        .unwrap_or_else(|e| e.into_inner());
-                    metadata = next;
+                    native_wait::condition(
+                        &self.wake.changed,
+                        metadata,
+                        ReadDeadline::At(deadline),
+                        handoff,
+                    );
+                    metadata = self.wake.lock();
                 }
                 ReadDeadline::Unbounded => {
                     #[cfg(test)]
                     self.report_fallback_stage(&metadata, &mut reported_epoch);
-                    metadata = self
-                        .wake
-                        .changed
-                        .wait(metadata)
-                        .unwrap_or_else(|e| e.into_inner());
+                    native_wait::condition(
+                        &self.wake.changed,
+                        metadata,
+                        ReadDeadline::Unbounded,
+                        handoff,
+                    );
+                    metadata = self.wake.lock();
                 }
             }
         }
@@ -683,6 +700,16 @@ impl NativePollLease {
         events: &mut polling::Events,
         deadline: ReadDeadline,
     ) -> io::Result<ControlWakeOutcome> {
+        self.wait_with(registration, events, deadline, &mut InlineNativeWait)
+    }
+
+    pub(crate) fn wait_with<H: NativeWaitHandoff>(
+        &mut self,
+        registration: &WaitRegistration,
+        events: &mut polling::Events,
+        deadline: ReadDeadline,
+        handoff: &mut H,
+    ) -> io::Result<ControlWakeOutcome> {
         if !Arc::ptr_eq(&self.wake, &registration.wake)
             || self.owner.destination() != registration.destination
         {
@@ -704,7 +731,7 @@ impl NativePollLease {
                 // Rearm BEFORE the final epoch check. Publication between that
                 // check and wait remains durable in this registered socket.
                 if native.health.load() == NativeHealth::Failed {
-                    return Ok(registration.wait(deadline));
+                    return Ok(registration.wait_with(deadline, handoff));
                 }
                 if let Err(error) = native.rearm() {
                     native.health.fail();
@@ -721,14 +748,7 @@ impl NativePollLease {
                 // into the ordinary process wait. Derive each relative wait
                 // from the same original deadline, after rearm/final recheck;
                 // unrelated wakes never restart the requested duration.
-                let timeout = match deadline {
-                    ReadDeadline::Immediate => Some(std::time::Duration::ZERO),
-                    ReadDeadline::At(value) => {
-                        Some(value.saturating_duration_since(Instant::now()))
-                    }
-                    ReadDeadline::Unbounded => None,
-                };
-                let result = native.poller.wait(events, timeout);
+                let result = native_wait::poll(&native.poller, events, deadline, handoff);
                 if let Err(error) = result {
                     native.health.fail();
                     return Err(error);
@@ -758,7 +778,7 @@ impl NativePollLease {
                 }
             }
         }
-        Ok(registration.wait(deadline))
+        Ok(registration.wait_with(deadline, handoff))
     }
 }
 

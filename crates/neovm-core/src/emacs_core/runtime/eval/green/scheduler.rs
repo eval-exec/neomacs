@@ -239,6 +239,12 @@ enum NextOwner {
     Service(HostRequestKey),
 }
 
+enum ReadySelection {
+    NextEligible,
+    /// Main already owns the idle Baton: consume only its old ready turn.
+    NativeMainAcquire,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(
     dead_code,
@@ -366,10 +372,21 @@ impl std::fmt::Debug for SelectParkGate {
 #[cfg(test)]
 static_assertions::assert_impl_all!(SelectParkGate: Send, std::fmt::Debug);
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MainNativeWaitEvent {
+    Released,
+    PhysicalBlockEntered,
+    PhysicalBlockReturned,
+    Reacquired,
+}
+
 /// The scheduler, shared by every thread's seat.
 #[derive(Default)]
 pub(crate) struct Control {
     state: Mutex<ControlState>,
+    #[cfg(test)]
+    main_native_events: Mutex<Vec<MainNativeWaitEvent>>,
     metadata_changed: Condvar,
     #[cfg(test)]
     after_next_select_park: Mutex<Option<SelectParkGate>>,
@@ -384,6 +401,15 @@ impl std::fmt::Debug for Control {
 }
 
 impl Control {
+    #[cfg(test)]
+    pub(crate) fn record_main_native_event_for_test(&self, event: MainNativeWaitEvent) {
+        self.main_native_events.lock().unwrap().push(event);
+    }
+    #[cfg(test)]
+    pub(crate) fn main_native_events_for_test(&self) -> Vec<MainNativeWaitEvent> {
+        self.main_native_events.lock().unwrap().clone()
+    }
+
     pub(crate) fn install_select(&self, select: Option<GreenSelectHandle>) {
         assert!(
             self.select.set(select).is_ok(),
@@ -395,6 +421,18 @@ impl Control {
         self.metadata_changed.notify_all();
         if let Some(Some(select)) = self.select.get() {
             select.notify();
+            // A released native main owns a distinct registration. Its
+            // durable scheduler state may become ready before or during the
+            // OS wait; the idle-selector epoch alone cannot wake that role.
+            // Drop the metadata guard before publishing to the paired source.
+            let main_native =
+                self.state().physical.get(&ThreadKey::Main) == Some(&OwnerLocation::NativeReleased);
+            if main_native {
+                select.nudge(
+                    crate::host_effect::wake::ControlDestination::NativeMain,
+                    crate::host_effect::wake::ControlNudge::SchedulerReady,
+                );
+            }
         }
     }
 
@@ -881,6 +919,100 @@ impl Control {
             .physical
             .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
         Ok(())
+    }
+
+    /// Main has published its canonical parked roots and reached an actual
+    /// native wait. Its Select remains distinct from its physical location:
+    /// peers may run, but cannot resume main before the native observer returns.
+    pub(super) fn release_main_wait(
+        &self,
+        _permit: RealWaitPermit,
+        baton: Baton,
+        wait_end: Instant,
+    ) -> NativeRelease {
+        let mut state = self.state();
+        if state.main_os_thread != Some(std::thread::current().id())
+            || state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Running)
+        {
+            std::process::abort();
+        }
+        #[cfg(test)]
+        self.main_native_events
+            .lock()
+            .unwrap()
+            .push(MainNativeWaitEvent::Released);
+        Self::set_wait(&mut state, ThreadKey::Main, Wait::Select { wait_end });
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+        let next = match Self::pick(&mut state) {
+            Some((key, None)) => Some(key),
+            Some((_, Some(_))) | None => None,
+        };
+        drop(state);
+        #[cfg(test)]
+        self.observe_select_park_for_test(ThreadKey::Main, wait_end);
+        match next {
+            Some(key) => {
+                self.send_wake(key, Wake::Resume(baton));
+                NativeRelease::Transferred
+            }
+            None => NativeRelease::Idle(baton),
+        }
+    }
+
+    /// The physical wait has returned. Publish main's readiness before waking
+    /// an idle scheduler; owner restoration and all Lisp remain in switch.rs.
+    pub(super) fn reacquire_main_wait(
+        &self,
+        release: NativeRelease,
+        receiver: &mpsc::Receiver<Wake>,
+    ) -> Wake {
+        let mut state = self.state();
+        if state.main_os_thread != Some(std::thread::current().id())
+            || state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::NativeReleased)
+        {
+            std::process::abort();
+        }
+        #[cfg(test)]
+        self.main_native_events
+            .lock()
+            .unwrap()
+            .push(MainNativeWaitEvent::Reacquired);
+        match release {
+            NativeRelease::Idle(baton) => {
+                Self::finish_idle_main_acquire(&mut state);
+                drop(state);
+                baton.enter();
+                Wake::Resume(baton)
+            }
+            NativeRelease::Transferred => {
+                Self::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::Receiving);
+                Self::enqueue_ready(&mut state, ThreadKey::Main);
+                drop(state);
+                self.notify_select();
+                match receiver.recv() {
+                    Ok(wake) => {
+                        wake.baton().enter();
+                        wake
+                    }
+                    Err(_) => std::process::abort(),
+                }
+            }
+        }
+    }
+
+    fn finish_idle_main_acquire(state: &mut ControlState) {
+        Self::set_wait(state, ThreadKey::Main, Wait::Runnable);
+        // Readiness may have queued main while the physical wait excluded it.
+        // Returning its idle Baton consumes that turn without selecting a peer.
+        let _ = Self::pop_ready(state, ReadySelection::NativeMainAcquire);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Running);
     }
 
     /// Cancellation before dispatch must first commit a durable terminal
@@ -1487,11 +1619,6 @@ impl Control {
                         if !state.closing
                             && state.physical.get(&ThreadKey::Main)
                                 == Some(&OwnerLocation::NativeReleased)
-                            && (!state.pending_services.is_empty()
-                                || state
-                                    .services
-                                    .values()
-                                    .any(|metadata| metadata.phase == ServicePhase::RealWait))
                         {
                             // No ordinary owner can run, but main's actual
                             // native wait can still complete. Keep the Baton
@@ -1538,10 +1665,28 @@ impl Control {
         }
     }
 
-    /// The next thread to hold the Baton, if any can run; with no ready
-    /// thread but one waiting for a deadline, the earliest deadline.
-    fn pick(state: &mut ControlState) -> Option<(ThreadKey, Option<Instant>)> {
-        Self::expire_deadlines(state, Instant::now());
+    /// Maintenance seams shared with the scheduler-index implementation.
+    /// New transitions must not mutate the wait map or ready queue elsewhere.
+    fn set_wait(state: &mut ControlState, key: ThreadKey, wait: Wait) {
+        state.waits.insert(key, wait);
+    }
+
+    fn enqueue_ready(state: &mut ControlState, key: ThreadKey) {
+        // A native main can already have been woken while its physical wait
+        // still excluded it. Preserve that FIFO place without a duplicate turn.
+        if !state.ready.contains(&key) {
+            state.ready.push_back(key);
+        }
+    }
+
+    fn pop_ready(state: &mut ControlState, selection: ReadySelection) -> Option<ThreadKey> {
+        match selection {
+            ReadySelection::NativeMainAcquire => {
+                let index = state.ready.iter().position(|key| *key == ThreadKey::Main)?;
+                return state.ready.remove(index);
+            }
+            ReadySelection::NextEligible => {}
+        }
         // Keep a suspended main's exact FIFO position while selecting peers.
         // Its ordinary turn becomes eligible only after native completion.
         state
@@ -1555,8 +1700,18 @@ impl Control {
                 )
         }) {
             if let Some(key) = state.ready.remove(index) {
-                return Some((key, None));
+                return Some(key);
             }
+        }
+        None
+    }
+
+    /// The next thread to hold the Baton, if any can run; with no ready
+    /// thread but one waiting for a deadline, the earliest deadline.
+    fn pick(state: &mut ControlState) -> Option<(ThreadKey, Option<Instant>)> {
+        Self::expire_deadlines(state, Instant::now());
+        if let Some(key) = Self::pop_ready(state, ReadySelection::NextEligible) {
+            return Some((key, None));
         }
         state
             .waits
@@ -1912,6 +2067,137 @@ mod tests {
             control.state().physical.get(&ThreadKey::Main),
             Some(&OwnerLocation::Running)
         );
+    }
+
+    #[test]
+    fn native_main_readiness_retains_one_fifo_turn_until_physical_acquire() {
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let mut state = ControlState::default();
+        let deadline = Instant::now();
+        Control::set_wait(
+            &mut state,
+            ThreadKey::Main,
+            Wait::Select { wait_end: deadline },
+        );
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+        Control::expire_deadlines(&mut state, deadline);
+        assert_eq!(
+            Control::pop_ready(&mut state, ReadySelection::NextEligible),
+            None
+        );
+        Control::set_wait(&mut state, worker, Wait::Runnable);
+        Control::enqueue_ready(&mut state, worker);
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        Control::enqueue_ready(&mut state, ThreadKey::Main);
+        assert_eq!(
+            Control::pop_ready(&mut state, ReadySelection::NextEligible),
+            Some(ThreadKey::Main)
+        );
+        assert_eq!(
+            Control::pop_ready(&mut state, ReadySelection::NextEligible),
+            Some(worker)
+        );
+        assert_eq!(
+            Control::pop_ready(&mut state, ReadySelection::NextEligible),
+            None
+        );
+    }
+
+    #[test]
+    fn idle_main_acquire_consumes_its_woken_turn_before_the_next_yield() {
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let mut state = ControlState::default();
+        Control::set_wait(
+            &mut state,
+            ThreadKey::Main,
+            Wait::Select {
+                wait_end: Instant::now() + std::time::Duration::from_secs(30),
+            },
+        );
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+        Control::wake_locked(&mut state, ThreadKey::Main);
+        Control::finish_idle_main_acquire(&mut state);
+        assert_eq!(Control::intercept_ready(&mut state, ThreadKey::Main), None);
+
+        Control::set_wait(&mut state, worker, Wait::Runnable);
+        Control::enqueue_ready(&mut state, worker);
+        // The metadata prelude of main's next Runnable transfer.
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        Control::enqueue_ready(&mut state, ThreadKey::Main);
+        assert_eq!(Control::pick(&mut state), Some((worker, None)));
+        assert_eq!(Control::pick(&mut state), Some((ThreadKey::Main, None)));
+        assert_eq!(Control::pick(&mut state), None);
+    }
+
+    #[test]
+    fn idle_main_acquire_does_not_consume_an_earlier_peer_turn() {
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let mut state = ControlState::default();
+        Control::set_wait(
+            &mut state,
+            ThreadKey::Main,
+            Wait::Select {
+                wait_end: Instant::now() + std::time::Duration::from_secs(30),
+            },
+        );
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+        Control::set_wait(&mut state, worker, Wait::Runnable);
+        Control::enqueue_ready(&mut state, worker);
+        Control::wake_locked(&mut state, ThreadKey::Main);
+        Control::finish_idle_main_acquire(&mut state);
+        assert_eq!(Control::intercept_ready(&mut state, ThreadKey::Main), None);
+        assert_eq!(
+            state.ready.iter().copied().collect::<Vec<_>>(),
+            vec![worker]
+        );
+
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        Control::enqueue_ready(&mut state, ThreadKey::Main);
+        assert_eq!(Control::pick(&mut state), Some((worker, None)));
+        assert_eq!(Control::pick(&mut state), Some((ThreadKey::Main, None)));
+        assert_eq!(Control::pick(&mut state), None);
+    }
+
+    #[test]
+    fn idle_native_wait_must_use_earlier_peer_select_deadline() {
+        let control = Control::default();
+        let _main_receiver = control.register_main();
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let _worker_receiver = control.register_worker(worker);
+        let now = Instant::now();
+        let peer_deadline = now + std::time::Duration::from_secs(1);
+        let main_deadline = now + std::time::Duration::from_secs(30);
+        {
+            let mut state = control.state();
+            Control::set_wait(
+                &mut state,
+                worker,
+                Wait::Select {
+                    wait_end: peer_deadline,
+                },
+            );
+        }
+        assert_eq!(
+            control.peers(ThreadKey::Main, now),
+            Peers::Sleeping(peer_deadline),
+            "the executor must cap its physical wait while retaining main's semantic deadline"
+        );
+        assert!(peer_deadline < main_deadline);
     }
 
     #[test]

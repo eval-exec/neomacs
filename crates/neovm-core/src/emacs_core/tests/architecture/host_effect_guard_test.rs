@@ -1527,3 +1527,134 @@ fn binding_receiver_control_rejects_unrelated_read_and_shadow() {
     survey.visit_block(&legitimate.block);
     assert_eq!((survey.projected_calls, survey.unprojected_calls), (1, 0));
 }
+
+/// This source guard supplements field privacy: even other Green owner modules
+/// must obtain the linear permit through the one native physical-wait executor.
+#[derive(Default)]
+struct RealWaitPermitMints {
+    implementations: Vec<String>,
+    functions: Vec<String>,
+    found: Vec<(String, String)>,
+}
+
+impl<'ast> Visit<'ast> for RealWaitPermitMints {
+    fn visit_item(&mut self, item: &'ast Item) {
+        let attrs = match item {
+            Item::Fn(item) => &item.attrs,
+            Item::Impl(item) => &item.attrs,
+            Item::Mod(item) => &item.attrs,
+            _ => return visit::visit_item(self, item),
+        };
+        if !test_only(attrs) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let implementation = match &*item.self_ty {
+            Type::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        self.implementations.push(implementation);
+        visit::visit_item_impl(self, item);
+        self.implementations.pop();
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if test_only(&item.attrs) {
+            return;
+        }
+        self.functions.push(item.sig.ident.to_string());
+        visit::visit_impl_item_fn(self, item);
+        self.functions.pop();
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        self.functions.push(item.sig.ident.to_string());
+        visit::visit_item_fn(self, item);
+        self.functions.pop();
+    }
+
+    fn visit_expr_struct(&mut self, expression: &'ast syn::ExprStruct) {
+        if expression
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "RealWaitPermit")
+        {
+            self.found.push((
+                self.implementations.last().cloned().unwrap_or_default(),
+                self.functions.last().cloned().unwrap_or_default(),
+            ));
+        }
+        visit::visit_expr_struct(self, expression);
+    }
+}
+
+#[test]
+fn real_wait_permit_is_minted_only_inside_the_physical_native_executor() {
+    let root = neomacs_infra::crate_root!().canonicalize().unwrap();
+    let mut pending = crate_roots(&root);
+    let mut seen = BTreeSet::new();
+    let mut mints = Vec::new();
+    while let Some(file) = pending.pop() {
+        let file = file.canonicalize().expect("production module");
+        if !seen.insert(file.clone()) {
+            continue;
+        }
+        let source = std::fs::read_to_string(&file).expect("production source");
+        let syntax = syn::parse_file(&source).expect("production Rust module");
+        if test_only(&syntax.attrs) {
+            continue;
+        }
+        pending.extend(module_edges(&file, &syntax, Path::is_file));
+        let mut survey = RealWaitPermitMints::default();
+        survey.visit_file(&syntax);
+        let relative = file.strip_prefix(&root).unwrap().to_string_lossy();
+        for (implementation, function) in survey.found {
+            mints.push((relative.to_string(), implementation, function));
+        }
+    }
+    assert_eq!(
+        mints,
+        vec![(
+            "src/host_effect/wake/native_wait.rs".to_owned(),
+            "BlockingNativeWait".to_owned(),
+            "execute".to_owned(),
+        )],
+        "the only production permit mint must be immediately before the executor's OS wait"
+    );
+}
+
+#[test]
+fn real_wait_mint_survey_rejects_a_green_or_generic_wrapper_mint() {
+    for source in [
+        "fn receive_native() { let _ = RealWaitPermit { _confined: marker }; }",
+        "impl ServiceScope { fn wait() { let _ = RealWaitPermit { _confined: marker }; } }",
+        "impl BlockingNativeWait { fn prepare() { let _ = RealWaitPermit { _confined: marker }; } }",
+    ] {
+        let syntax = syn::parse_file(source).expect("negative source control");
+        let mut survey = RealWaitPermitMints::default();
+        survey.visit_file(&syntax);
+        assert_eq!(survey.found.len(), 1);
+        assert_ne!(
+            survey.found[0],
+            ("BlockingNativeWait".to_owned(), "execute".to_owned())
+        );
+    }
+    let syntax = syn::parse_file(
+        "impl BlockingNativeWait { fn execute() { let _ = RealWaitPermit { _confined: marker }; } }",
+    )
+    .expect("executor source control");
+    let mut survey = RealWaitPermitMints::default();
+    survey.visit_file(&syntax);
+    assert_eq!(
+        survey.found,
+        [("BlockingNativeWait".to_owned(), "execute".to_owned())]
+    );
+}

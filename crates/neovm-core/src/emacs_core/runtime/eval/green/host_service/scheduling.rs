@@ -17,12 +17,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
-/// A permit belongs to an actual native blocking wrapper. No deadline,
-/// HostRequestKey, generic wake or service hop can construct one.
-#[derive(Debug)]
-pub(in crate::emacs_core::eval::green) struct RealWaitPermit {
-    _confined: PhantomData<Rc<()>>,
-}
+use crate::host_effect::wake::native_wait::NativeWaitHandoff;
+pub(in crate::emacs_core::eval::green) use crate::host_effect::wake::native_wait::RealWaitPermit;
 
 #[derive(Default)]
 pub(in crate::emacs_core::eval::green) enum ServiceRuntime {
@@ -617,13 +613,7 @@ impl NativeServiceScope<'_> {
         }
     }
 
-    /// The caller's actual blocking wrapper owns the permit. Transport waits
-    /// alone cannot invoke this conversion or change scheduler eligibility.
-    pub(in crate::emacs_core::eval::green) fn release_at_real_wait<R>(
-        &mut self,
-        permit: RealWaitPermit,
-        blocking: impl FnOnce() -> R,
-    ) -> R {
+    fn begin_native_release(&mut self, permit: RealWaitPermit) {
         let authority = std::mem::replace(&mut self.authority, ServiceAuthority::Transition);
         let (baton, slice) = match authority {
             ServiceAuthority::Held { baton, slice } => (baton, slice),
@@ -642,7 +632,9 @@ impl NativeServiceScope<'_> {
             }
         };
         self.authority = ServiceAuthority::Released { release, slice };
-        let result = blocking();
+    }
+
+    fn finish_native_release(&mut self) {
         let authority = std::mem::replace(&mut self.authority, ServiceAuthority::Transition);
         let (release, slice) = match authority {
             ServiceAuthority::Released { release, slice } => (release, slice),
@@ -659,22 +651,50 @@ impl NativeServiceScope<'_> {
             }
         };
         self.authority = ServiceAuthority::Held { baton, slice };
-        result
     }
 
-    /// Test-only wrapper enters a real kernel-backed receive. Production
-    /// permit minting is deferred to the owned blocking adapters, not a knob.
+    /// Fixtures use the same private physical executor as production. The
+    /// forwarding thread owns only native data; no second permit mint exists.
     #[cfg(test)]
-    pub(in crate::emacs_core::eval::green) fn receive_native<T>(
+    pub(in crate::emacs_core::eval::green) fn receive_native<T: Send + 'static>(
         &mut self,
         receiver: Receiver<T>,
     ) -> Result<T, std::sync::mpsc::RecvError> {
-        self.release_at_real_wait(
-            RealWaitPermit {
-                _confined: PhantomData,
-            },
-            || receiver.recv(),
-        )
+        use crate::host_effect::contracts::ReadDeadline;
+        use crate::host_effect::wake::native_wait::PreparedNativeWait;
+        use crate::host_effect::wake::{
+            ControlDestination, ControlNudge, ControlWake, NativePollOwner,
+        };
+        let poller = std::sync::Arc::new(polling::Poller::new().unwrap());
+        let (wake, publisher) = ControlWake::paired_native(poller).unwrap();
+        let mut wait =
+            PreparedNativeWait::new(&wake, NativePollOwner::NativeMain, ReadDeadline::Unbounded)
+                .unwrap();
+        let (completed, completion) = std::sync::mpsc::sync_channel(1);
+        let forwarder = std::thread::spawn(move || {
+            let result = receiver.recv();
+            completed.send(result).unwrap();
+            let _ = publisher.nudge(
+                ControlDestination::NativeMain,
+                ControlNudge::HostServiceReady,
+            );
+        });
+        wait.wait_with(self).unwrap();
+        let result = completion
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        forwarder.join().unwrap();
+        result
+    }
+}
+
+impl NativeWaitHandoff for NativeServiceScope<'_> {
+    fn release(&mut self, permit: RealWaitPermit) {
+        self.begin_native_release(permit);
+    }
+
+    fn reacquire(&mut self) {
+        self.finish_native_release();
     }
 }
 

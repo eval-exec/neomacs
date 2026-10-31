@@ -274,6 +274,12 @@ impl HostInputPublisher {
     /// Replacing a connection discards its unread channel tail; already-staged
     /// Context events remain queued. Old publishers stay on the retired queue.
     pub fn install(context: &mut Context) -> Self {
+        let publisher = Self::connect(context);
+        publisher.announce_install();
+        publisher
+    }
+
+    fn connect(context: &mut Context) -> Self {
         let session = context.processes.attach_host_control_session();
         let wake = match context.wait_notifier() {
             Some(notifier) => InputWake::Native(notifier),
@@ -282,6 +288,21 @@ impl HostInputPublisher {
         let (publisher, receiver) = Self::channel_with_session(wake, Some(session));
         context.input_rx = HostInputReceiver(Some(receiver));
         publisher
+    }
+
+    fn announce_install(&self) {
+        if let Some(session) = &self.connection.disconnect_wake.1 {
+            for destination in [
+                ControlDestination::NativeMain,
+                ControlDestination::IdleScheduler,
+            ] {
+                if let ControlNudgeOutcome::WakeFailedAfterPublication(error) =
+                    session.nudge(destination, ControlNudge::HostAttached)
+                {
+                    tracing::warn!(%error, "host attachment control wake failed after publication");
+                }
+            }
+        }
     }
 
     /// A closed sink for batch auxiliary terminals, with no primary receiver.

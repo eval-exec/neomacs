@@ -156,6 +156,10 @@ fn green() -> Context {
         "s2-service-refusal",
         refused_request
     )));
+    context.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed0(
+        "s2-main-native-worker",
+        main_native_live_worker
+    )));
     context.eval_str("(defvar s2-service-binding 10)").unwrap();
     context.start_green_threads().unwrap();
     context
@@ -294,6 +298,128 @@ fn main_request_refusal_restores_owner_and_retains_no_publication() {
     assert_eq!(
         main.eval_str("s2-service-binding").unwrap(),
         Value::fixnum(10)
+    );
+    main.with_green_runtime(|runtime| assert!(runtime.parked.borrow().is_empty()));
+}
+
+/// A native Rust continuation retains its scratch graph and dynamic binding
+/// while main attaches the host. No Context moves between OS threads.
+fn main_native_live_worker(context: &mut Context) -> EvalResult {
+    use crate::emacs_core::eval::{push_scratch_gc_roots, save_scratch_gc_roots};
+    let _scratch = SavedNativeScratch(save_scratch_gc_roots());
+    let graph = Value::list(vec![Value::string("native-worker-root"), Value::fixnum(73)]);
+    push_scratch_gc_roots(&[graph]);
+    let worker = std::thread::current().id();
+    let original = binding(context);
+    context.green_park(super::super::scheduler::Wait::Runnable)?;
+    assert_eq!(std::thread::current().id(), worker);
+    assert_eq!(binding(context), original);
+    assert_eq!(print_value(&graph), "(\"native-worker-root\" 73)");
+    context.with_green_runtime(|runtime| {
+        assert!(runtime.parked.borrow().contains_key(&ThreadKey::Main));
+    });
+    context.gc_collect_exact();
+    context
+        .with_green_runtime(|runtime| runtime.parked.borrow_mut().services.finish_fixture_gc())
+        .map_err(host_error)?;
+    Ok(Value::list(vec![graph, original, binding(context)]))
+}
+
+struct SavedNativeScratch(usize);
+impl Drop for SavedNativeScratch {
+    fn drop(&mut self) {
+        crate::emacs_core::eval::restore_scratch_gc_roots(self.0);
+    }
+}
+
+#[test]
+fn late_host_input_native_wait_preserves_live_worker_bindings_cleanup_and_roots() {
+    use super::super::scheduler::MainNativeWaitEvent;
+    use crate::emacs_core::eval::{push_scratch_gc_roots, save_scratch_gc_roots};
+    use crate::host_input::HostInputPublisher;
+    use crate::keyboard::{InputEvent, KeyEvent};
+    let mut main = green();
+    let main_os = std::thread::current().id();
+    main.eval_str("(defvar s2-main-cleanup 0) (setq s2-main-worker (make-thread (lambda () (let ((s2-service-binding 37)) (unwind-protect (s2-main-native-worker) (setq s2-main-cleanup (1+ s2-main-cleanup))))))) (thread-yield)").unwrap();
+    main.with_green_runtime(|runtime| {
+        assert_eq!(
+            runtime.parked.borrow().len(),
+            1,
+            "live worker is canonically rooted, not already exited"
+        );
+    });
+    // Collect while the original worker's Rust continuation is parked.
+    main.gc_collect_exact();
+    let publisher = HostInputPublisher::install(&mut main);
+    publisher
+        .send(InputEvent::key_press(KeyEvent::char('x')))
+        .unwrap();
+    let control = main.with_green_runtime(|runtime| Arc::clone(&runtime.control));
+    let before = control.main_native_events_for_test();
+    assert_eq!(
+        main.eval_str("(read-event nil nil 10)").unwrap(),
+        Value::fixnum('x' as i64)
+    );
+    assert_eq!(
+        control.main_native_events_for_test(),
+        before,
+        "queued input cannot fabricate a physical release"
+    );
+    let _scratch = SavedNativeScratch(save_scratch_gc_roots());
+    let graph = Value::list(vec![Value::string("native-main-root"), Value::fixnum(91)]);
+    push_scratch_gc_roots(&[graph]);
+    let (completed, completion) = mpsc::channel();
+    let count = Arc::new(AtomicUsize::new(0));
+    main.with_green_runtime(|runtime| {
+        runtime
+            .parked
+            .borrow_mut()
+            .services
+            .install_fixture_completion(completed, Arc::clone(&count))
+    });
+    let producer = std::thread::spawn(move || {
+        let witness = completion
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert_ne!(witness.worker, main_os);
+        publisher
+            .send(InputEvent::key_press(KeyEvent::char('y')))
+            .unwrap();
+        publisher
+    });
+    assert_eq!(
+        main.eval_str("(read-event nil nil 10)").unwrap(),
+        Value::fixnum('y' as i64)
+    );
+    assert_eq!(std::thread::current().id(), main_os);
+    assert_eq!(print_value(&graph), "(\"native-main-root\" 91)");
+    let _publisher = producer.join().unwrap();
+    let after = control.main_native_events_for_test();
+    let blocks = &after[before.len()..];
+    assert!(
+        !blocks.is_empty(),
+        "worker GC requires an actual released main wait"
+    );
+    assert_eq!(blocks.len() % 4, 0);
+    for block in blocks.chunks_exact(4) {
+        assert_eq!(
+            block,
+            &[
+                MainNativeWaitEvent::Released,
+                MainNativeWaitEvent::PhysicalBlockEntered,
+                MainNativeWaitEvent::PhysicalBlockReturned,
+                MainNativeWaitEvent::Reacquired
+            ],
+            "exactly one release/reacquire surrounds each actual physical block"
+        );
+    }
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    let value = main
+        .eval_str("(list (thread-join s2-main-worker) s2-main-cleanup s2-service-binding)")
+        .unwrap();
+    assert_eq!(
+        print_value(&value),
+        "(((\"native-worker-root\" 73) 37 37) 1 10)"
     );
     main.with_green_runtime(|runtime| assert!(runtime.parked.borrow().is_empty()));
 }

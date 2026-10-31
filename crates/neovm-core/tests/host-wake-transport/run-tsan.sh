@@ -14,11 +14,15 @@ source_paths=(
     'src/host_effect/wake.rs'
     'src/host_effect/wake/tests/mod.rs'
     'src/host_effect/wake/tests/native.rs'
+    'src/host_effect/wake/native_wait.rs'
+    'src/host_effect/wake/tests/native_wait.rs'
 )
 source_hashes=(
-    '2b8719ede980f176ce8a660ce26e52d0918cd3dc63fa94d0d8d61fc9f3b3dad2'
+    '1e70828ff0da9055ed108d6cdb69c3f80a0462fe71ef1386b5808572238f96ed'
     '74b286788d30e9903a6b91048debfd423b13efa9c05ddef28842b76181a54233'
     '366bda39a7ef68e7f0cd9d4107e74b23fb6ce98a0ab614d733ab9a66161014e2'
+    '40da6e5f793725c91ac732f69f9b4fe03efd35e6de63c4067200d37633d85fa4'
+    '213e1fda27001164d3c6abe21b96f1797269dbcae0e8f61d2dbebec15c422109'
 )
 for index in "${!source_paths[@]}"; do
     source_file="$harness_dir/../../${source_paths[$index]}"

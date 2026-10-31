@@ -3,10 +3,18 @@
 
 use super::{Arc, Instant, Ordering, ProcessManager};
 use crate::host_effect::contracts::ReadDeadline;
+use crate::host_effect::wake::native_wait::{NativeWaitPreparationError, PreparedNativeWait};
 use crate::host_effect::wake::{
     ControlDestination, ControlNudge, ControlNudgeOutcome, ControlWake, ControlWakeOutcome,
     HostClosure, NativePollOwner, NotificationLatch, WaitRegistration,
 };
+
+#[derive(Debug)]
+pub(crate) enum MainNativePreparation {
+    Prepared(PreparedNativeWait),
+    Ready,
+    Scheduler,
+}
 
 /// An observer of the backend lifetime, not its session-retirement authority.
 /// Dropping a temporary capture must not retire the backend's shared source.
@@ -42,6 +50,47 @@ impl GreenSelectHandle {
         }
     }
 
+    fn prepare_signal_source(&self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some((poller, fd)) = &self.signal_source {
+            // SAFETY: the process signal installation owns this source longer
+            // than any wait registration; only the native lease blocks on it.
+            let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(*fd) };
+            if poller
+                .modify(source, polling::Event::readable(usize::MAX - 1))
+                .is_err()
+            {
+                return Err(std::io::Error::other("cannot rearm native signal source"));
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_main_wait(&self, deadline: Instant) -> MainNativePreparation {
+        // Claim/arm first; recheck the ordinary durable input bit afterwards.
+        let wait = match PreparedNativeWait::new(
+            &self.wake,
+            NativePollOwner::NativeMain,
+            ReadDeadline::At(deadline),
+        ) {
+            Ok(wait) => wait,
+            Err(
+                NativeWaitPreparationError::Closed(_) | NativeWaitPreparationError::PollBusy(_),
+            ) => {
+                return MainNativePreparation::Scheduler;
+            }
+        };
+        if crate::emacs_core::os_signal::pending()
+            || self.notification_pending.swap(false, Ordering::AcqRel)
+            || wait.poll().is_some()
+            || self.prepare_signal_source().is_err()
+        {
+            MainNativePreparation::Ready
+        } else {
+            MainNativePreparation::Prepared(wait)
+        }
+    }
+
     pub(crate) fn arm(&self) -> Result<WaitRegistration, HostClosure> {
         self.wake.arm(ControlDestination::IdleScheduler)
     }
@@ -65,17 +114,8 @@ impl GreenSelectHandle {
         {
             return true;
         }
-        #[cfg(unix)]
-        if let Some((poller, fd)) = &self.signal_source {
-            // SAFETY: the process signal installation owns this source longer
-            // than any wait registration; only the native lease blocks on it.
-            let source = unsafe { std::os::fd::BorrowedFd::borrow_raw(*fd) };
-            if poller
-                .modify(source, polling::Event::readable(usize::MAX - 1))
-                .is_err()
-            {
-                return true;
-            }
+        if self.prepare_signal_source().is_err() {
+            return true;
         }
         let deadline = if deadline <= Instant::now() {
             ReadDeadline::Immediate
@@ -105,6 +145,13 @@ impl GreenSelectHandle {
 }
 
 impl ProcessManager {
+    pub(crate) fn prepare_green_main_wait(&self, deadline: Instant) -> MainNativePreparation {
+        match self.green_select_handle() {
+            Some(select) => select.prepare_main_wait(deadline),
+            None => MainNativePreparation::Scheduler,
+        }
+    }
+
     pub(crate) fn attach_host_control_session(
         &self,
     ) -> crate::host_effect::wake::HostSessionControl {

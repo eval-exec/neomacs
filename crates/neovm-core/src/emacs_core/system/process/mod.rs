@@ -77,7 +77,7 @@ pub(crate) mod sys;
 use sys::ChildStatusSource;
 
 mod green_select;
-pub(crate) use green_select::GreenSelectHandle;
+pub(crate) use green_select::{GreenSelectHandle, MainNativePreparation};
 
 mod executable;
 pub(super) use executable::{ExecutableLookupMode, ExecutableSearch};

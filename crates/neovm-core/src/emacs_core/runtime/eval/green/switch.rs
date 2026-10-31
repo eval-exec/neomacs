@@ -9,11 +9,16 @@ use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
 use super::carrier::CarrierJob;
 use super::host_service::{self, NativeSettlement, PreparedHostCall, RestoredHostOwner};
-use super::scheduler::{Control, Handoff, Lifecycle, ServiceReturn, ThreadKey, Wait, Wake};
+use super::scheduler::{
+    Control, Handoff, Lifecycle, NativeRelease, ServiceReturn, ThreadKey, Wait, Wake,
+};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
 use crate::emacs_core::intern::SymId;
 use crate::host_effect::contracts::OwnedNativeData;
+use crate::host_effect::wake::native_wait::{
+    NativeWaitHandoff, PreparedNativeWait, RealWaitPermit,
+};
 use crate::tagged::gc::MarkPhase;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
@@ -39,6 +44,10 @@ enum BindingResumeError {
 )]
 enum ParkRequest {
     Ordinary(Wait),
+    MainNative {
+        wait: PreparedNativeWait,
+        wait_end: Instant,
+    },
     Host {
         call: PreparedHostCall,
         native: OwnedNativeData,
@@ -53,10 +62,76 @@ enum ParkRequest {
 )]
 enum ParkCompletion<'owner> {
     Ordinary,
+    MainNative(std::io::Result<crate::host_effect::wake::ControlWakeOutcome>),
     Host {
         owner: &'owner RestoredHostOwner<'owner>,
         settlement: &'owner NativeSettlement,
     },
+}
+
+/// Holds native/scheduler ownership only while main's Context is published.
+enum MainWaitAuthority {
+    Held(Baton),
+    Released(NativeRelease),
+    Transition,
+}
+
+struct MainNativeHandoff<'native> {
+    control: &'native Control,
+    receiver: &'native mpsc::Receiver<Wake>,
+    wait_end: Instant,
+    authority: MainWaitAuthority,
+}
+
+impl NativeWaitHandoff for MainNativeHandoff<'_> {
+    fn release(&mut self, permit: RealWaitPermit) {
+        let MainWaitAuthority::Held(baton) =
+            std::mem::replace(&mut self.authority, MainWaitAuthority::Transition)
+        else {
+            std::process::abort()
+        };
+        self.authority = MainWaitAuthority::Released(self.control.release_main_wait(
+            permit,
+            baton,
+            self.wait_end,
+        ));
+    }
+
+    fn reacquire(&mut self) {
+        let MainWaitAuthority::Released(release) =
+            std::mem::replace(&mut self.authority, MainWaitAuthority::Transition)
+        else {
+            std::process::abort()
+        };
+        let wake = self.control.reacquire_main_wait(release, self.receiver);
+        self.authority = MainWaitAuthority::Held(receive_owner_turn(
+            ThreadKey::Main,
+            wake,
+            self.control,
+            self.receiver,
+        ));
+    }
+    #[cfg(test)]
+    fn physical_block_entered(&mut self) {
+        self.control.record_main_native_event_for_test(
+            super::scheduler::MainNativeWaitEvent::PhysicalBlockEntered,
+        );
+    }
+    #[cfg(test)]
+    fn physical_block_returned(&mut self) {
+        self.control.record_main_native_event_for_test(
+            super::scheduler::MainNativeWaitEvent::PhysicalBlockReturned,
+        );
+    }
+}
+
+impl MainNativeHandoff<'_> {
+    fn into_baton(self) -> Baton {
+        match self.authority {
+            MainWaitAuthority::Held(baton) => baton,
+            MainWaitAuthority::Released(_) | MainWaitAuthority::Transition => std::process::abort(),
+        }
+    }
 }
 
 /// A Lisp thread's place in its Green runtime, kept in its owner slab.
@@ -193,7 +268,7 @@ impl Context {
     pub(crate) fn green_park(&mut self, wait: Wait) -> Result<(), Flow> {
         self.green_park_impl(ParkRequest::Ordinary(wait), |completion| match completion {
             ParkCompletion::Ordinary => Ok(()),
-            ParkCompletion::Host { .. } => std::process::abort(),
+            ParkCompletion::Host { .. } | ParkCompletion::MainNative(_) => std::process::abort(),
         })
     }
 
@@ -251,7 +326,7 @@ impl Context {
             ParkRequest::Host { call, native },
             |completion| match completion {
                 ParkCompletion::Host { owner, settlement } => consume(owner, settlement),
-                ParkCompletion::Ordinary => std::process::abort(),
+                ParkCompletion::Ordinary | ParkCompletion::MainNative(_) => std::process::abort(),
             },
         )
     }
@@ -264,7 +339,7 @@ impl Context {
         let Some(seat) = self.green_seat() else {
             return match request {
                 ParkRequest::Ordinary(_) => consume(ParkCompletion::Ordinary),
-                ParkRequest::Host { .. } => Err(signal(
+                ParkRequest::Host { .. } | ParkRequest::MainNative { .. } => Err(signal(
                     LispCondition::Error,
                     vec![Value::string("Host request requires a Green owner")],
                 )),
@@ -374,12 +449,24 @@ impl Context {
         stow_carried_state(&baton);
         self.publish_parked_roots(&baton, key, publication);
         // All World/registry borrows have ended before the unique Baton moves.
-        let (outcome, host_resume) = match request {
-            ParkRequest::Ordinary(wait) => (control.transfer(key, wait, baton, &receiver), None),
+        let (outcome, host_resume, native_resume) = match request {
+            ParkRequest::Ordinary(wait) => {
+                (control.transfer(key, wait, baton, &receiver), None, None)
+            }
+            ParkRequest::MainNative { mut wait, wait_end } => {
+                let mut handoff = MainNativeHandoff {
+                    control: &control,
+                    receiver: &receiver,
+                    wait_end,
+                    authority: MainWaitAuthority::Held(baton),
+                };
+                let result = wait.wait_with(&mut handoff);
+                (Ok(Wake::Resume(handoff.into_baton())), None, Some(result))
+            }
             ParkRequest::Host { call, native } => {
                 let (wake, resume) =
                     host_service::dispatch_host(call, native, baton, &control, &receiver);
-                (Ok(wake), Some(resume))
+                (Ok(wake), Some(resume), None)
             }
         };
         let (wake, deadlocked) = match outcome {
@@ -466,7 +553,10 @@ impl Context {
                     consume(ParkCompletion::Host { owner, settlement })
                 })
             }
-            None => consume(ParkCompletion::Ordinary),
+            None => match native_resume {
+                Some(result) => consume(ParkCompletion::MainNative(result)),
+                None => consume(ParkCompletion::Ordinary),
+            },
         };
         self.green_seat().expect("restored owner is seated").baton = Some(baton);
         let retirement = self.retire_parked_roots(key);
@@ -546,7 +636,7 @@ impl Context {
 
     /// GNU `thread_select`: how a wait of WAIT_TIME for input or a
     /// deadline shares the Baton.
-    /// Every permitted positive wait publishes and parks, even with no ready
+    /// Every permitted blocking wait publishes and parks, even with no ready
     /// peer: GNU releases its global lock before select in that case too.
     /// The idle scheduler observes owned native readiness and the deadline.
     /// Outside Green, at zero timeout, or where switching is refused, the
@@ -574,14 +664,58 @@ impl Context {
         // is ready. Publish this owner before the scheduler's native wait so
         // a later control publication can wake it without needing the Baton.
         #[cfg(test)]
-        control
-            .prepare_select_park_for_test(key, &self.processes)
-            .map_err(|error| {
-                signal(LispCondition::Error, vec![Value::string(error.to_string())])
-            })?;
+        let prepare_park = |context: &Context| {
+            control
+                .prepare_select_park_for_test(key, &context.processes)
+                .map_err(|error| {
+                    signal(LispCondition::Error, vec![Value::string(error.to_string())])
+                })
+        };
         #[cfg(test)]
         SELECT_PARKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.green_wait(Wait::Select { wait_end })?;
+        if self.green_key() == Some(ThreadKey::Main) {
+            let control = Arc::clone(&self.green_seat().expect("seated").control);
+            // When main retains an idle Baton, an earlier sleeping peer must
+            // still get its deadline. Runnable peers take the Baton themselves.
+            let physical_end = match control.peers(ThreadKey::Main, Instant::now()) {
+                super::scheduler::Peers::Sleeping(end) => end.min(wait_end),
+                super::scheduler::Peers::Ready | super::scheduler::Peers::Blocked => wait_end,
+            };
+            match self.processes.prepare_green_main_wait(physical_end) {
+                crate::emacs_core::process::MainNativePreparation::Ready => {}
+                crate::emacs_core::process::MainNativePreparation::Prepared(wait) => {
+                    #[cfg(test)]
+                    prepare_park(self)?;
+                    self.green_park_impl(
+                        ParkRequest::MainNative { wait, wait_end },
+                        |completion| match completion {
+                            ParkCompletion::MainNative(result) => {
+                                result.map(|_| ()).map_err(|error| {
+                                    signal(
+                                        LispCondition::Error,
+                                        vec![Value::string(error.to_string())],
+                                    )
+                                })
+                            }
+                            ParkCompletion::Ordinary | ParkCompletion::Host { .. } => {
+                                std::process::abort()
+                            }
+                        },
+                    )?;
+                }
+                crate::emacs_core::process::MainNativePreparation::Scheduler => {
+                    #[cfg(test)]
+                    prepare_park(self)?;
+                    self.green_wait(Wait::Select { wait_end })?;
+                    return Ok(SelectTurn::Switched);
+                }
+            }
+            self.green_raise_pending_signal(ThreadKey::Main)?;
+        } else {
+            #[cfg(test)]
+            prepare_park(self)?;
+            self.green_wait(Wait::Select { wait_end })?;
+        }
         Ok(SelectTurn::Switched)
     }
 

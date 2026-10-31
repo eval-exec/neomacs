@@ -752,3 +752,71 @@ fn final_current_connection_drop_wakes_both_destinations_and_revokes_only_its_se
         ControlNudgeOutcome::Notified
     ));
 }
+
+#[test]
+fn public_late_host_install_wakes_the_old_armed_select_before_the_first_key() {
+    use crate::host_effect::wake::ControlWakeOutcome;
+    use std::time::Instant;
+
+    let mut context = Context::new();
+    let old_select = context
+        .processes
+        .green_select_handle()
+        .expect("native Green readiness before host installation");
+    let old_registration = old_select.arm().expect("old idle wait arm");
+    assert!(old_registration.poll().is_none());
+    assert!(context.input_rx.as_ref().is_none());
+
+    let publisher = HostInputPublisher::install(&mut context);
+    assert!(context.input_rx.as_ref().is_some());
+    assert_eq!(
+        old_registration.poll(),
+        Some(ControlWakeOutcome::ControlReady(ControlNudge::HostAttached))
+    );
+    assert!(
+        old_select.wait_registered(&old_registration, Instant::now()),
+        "installation must wake the already armed old idle source before any key"
+    );
+    assert!(matches!(
+        context.receive_host_input_for_test(Duration::ZERO),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout)
+    ));
+    publisher.send(key('i')).expect("immediate first key");
+    assert_key(
+        context.receive_host_input_for_test(Duration::ZERO).unwrap(),
+        'i',
+    );
+}
+
+#[test]
+fn negative_drop_only_install_nudge_leaves_old_select_unready_until_a_key() {
+    use std::time::Instant;
+
+    let mut context = Context::new();
+    let old_select = context
+        .processes
+        .green_select_handle()
+        .expect("native Green readiness before host installation");
+    let old_registration = old_select.arm().expect("old idle wait arm");
+    // Exact source mutation: install's canonical constructor still publishes
+    // the same session and receiver; only announce_install is omitted.
+    let publisher = HostInputPublisher::connect(&mut context);
+    assert!(context.input_rx.as_ref().is_some());
+    assert!(old_registration.poll().is_none());
+    assert!(
+        !old_select.wait_registered(&old_registration, Instant::now()),
+        "without the install nudge, the original source must have no readiness"
+    );
+    assert!(matches!(
+        context.receive_host_input_for_test(Duration::ZERO),
+        Err(crossbeam_channel::RecvTimeoutError::Timeout)
+    ));
+    // Recovery uses the unchanged notifying publication path. No real waiter
+    // is stranded by this zero-time negative control.
+    publisher.send(key('r')).expect("recovery key");
+    assert!(old_select.wait_registered(&old_registration, Instant::now()));
+    assert_key(
+        context.receive_host_input_for_test(Duration::ZERO).unwrap(),
+        'r',
+    );
+}

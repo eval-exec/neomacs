@@ -535,3 +535,6 @@ fn ignore_closed_session_is_rejected() {
         close_scenario,
     );
 }
+
+#[path = "main_native.rs"]
+mod main_native;
