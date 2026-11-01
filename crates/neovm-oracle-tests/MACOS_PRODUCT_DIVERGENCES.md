@@ -14,7 +14,7 @@ Re-baseline (2026-11-01, macmini, CI-recipe fresh-build tree): the 12,225-test
 macOS oracle-parity selection passes unchanged against the NS oracle
 (12,225/12,225; no stored expectation changes).  The complete combo (6,613),
 divergence (6,742) and cus_start/defvar/fontset/image/face module families
-(985) run in `NEOVM_ORACLE_MODE=live` against GNU NS leave **116 unique tests**
+(985) run in `NEOVM_ORACLE_MODE=live` against GNU NS leave **115 unique tests**
 where Neomacs differs from GNU NS, grouped below by root cause.  No row is in
 the STOP-AND-REPORT window-system-identity class: none of the 116 forms probes
 `window-system`, `initial-window-system`, `framep` or `(featurep 'ns)`.
@@ -225,35 +225,3 @@ Fix class: per-host variable table.
 | # | test | GNU NS | Neomacs |
 |---|---|---|---|
 | 115 | `oracle_divergence::divergence::frame_font_display::divergence_pointer_shape` | OK (nil nil t t) | OK (t t t t) |
-
-## G. Process-filter delivery race (1 test; OPEN product investigation)
-
-`case_007` (and the pre-NS `case_010` from the same batch) exercises a
-process-filter setup.  Neo returned `(nil nil)` once in the 6,613-test
-concurrent Live run where GNU returns `(t nil)`: Neo's first filter did not
-observe the child's output.  The test is NOT weakened (no retry, timeout or
-expectation change); the row is an open product investigation.
-
-Evidence so far:
-- GNU contract: process output is read only from the event-loop/wait paths
-  and the filter is looked up at delivery time (`read_process_output`,
-  src/process.c:6237, called from src/process.c:5579/6016;
-  `set-process-filter`, src/process.c:1359, only stores it), and
-  `status_notify` drains the remaining output before reporting the status
-  (src/process.c around 7894/7923).
-- Neomacs implements the same contract in the same shape: the process
-  status/output code cites those GNU lines
-  (system/process/status_notify.rs), and the helper's documented
-  already-terminal drain works in a direct probe -- a child that exits
-  before the filter is installed still delivers its pending output to the
-  filter on the subsequent `accept-process-output`, identically under GNU
-  (NS) and Neomacs.
-- Reproduction attempts: 9/9 isolated runs (3 Live NS, 3 Verify NS, 3
-  Verify batch); 64/64 concurrent nextest runs (16 parallel x 4 batches);
-  the full combo family is re-run repeatedly to try to recapture.  No
-  failure yet.
-- Remaining uncertainty: a load-dependent ordering in the wait service
-  (output-fd readiness vs child-exit status) that has not been reproduced.
-  Fix class: product, but no change is made until a recurrence is captured
-  (AGENTS.md: reproduce before fixing).  If it recurs, capture the exact
-  status/fd ordering and fix the product; the test stays as is.

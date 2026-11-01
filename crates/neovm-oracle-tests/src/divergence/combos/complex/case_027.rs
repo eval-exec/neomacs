@@ -277,9 +277,16 @@ fn div_cx27_process_buffer_string_after_multiple_writes() {
     let form = r##"
 (let ((buf (get-buffer-create " *neo-cx27-pb*")))
   (with-current-buffer buf (erase-buffer))
-  (let ((p (make-process :name "neo-cx27-pb" :command '("printf" "%s" "hello\nworld")
-                         :buffer buf)))
+  (let* ((ready (make-temp-file "neo-cx27-pb-gate-"))
+         (p (make-process :name "neo-cx27-pb"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("printf" "%s" "hello\nworld"))
+                          :buffer buf)))
     (set-process-query-on-exit-flag p nil)
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p))
   (prog1 (with-current-buffer buf
            (list (buffer-string) (count-lines 1 (point-max))))

@@ -266,11 +266,18 @@ fn div_cx10_process_filter_partial_data() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (chunks)
-  (let ((p (make-process :name "neo-cx10-pd" :command '("printf" "%s" "chunk1chunk2chunk3")
-                         :buffer nil
-                         :filter (lambda (proc str) (push str chunks)))))
-    (accept-process-output p 0.1)
-    (accept-process-output p 0.1))
+  (let* ((ready (make-temp-file "neo-cx10-pd-gate-"))
+         (p (make-process :name "neo-cx10-pd"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("printf" "%s" "chunk1chunk2chunk3"))
+                          :buffer nil
+                          :filter (lambda (proc str) (push str chunks)))))
+    ;; The child writes only after READY is deleted; wait for the process to
+    ;; finish and be drained before concatenating the filter's chunks.
+    (delete-file ready)
+    (neovm--oracle-settle-process p 600))
   (apply #'concat (nreverse chunks)))
 "##,
         expect,
@@ -284,21 +291,35 @@ fn div_cx10_set_process_filter_to_nil() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
-  (let ((p (make-process :name "neo-cx10-nf" :command '("echo" "data")
-                         :buffer (current-buffer))))
+  (let* ((ready (make-temp-file "neo-cx10-nf-gate-"))
+         (p (make-process :name "neo-cx10-nf"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("echo" "data"))
+                          :buffer (current-buffer))))
     ;; Silence the default sentinel (its "Process ... finished" buffer message
     ;; is incidental noise here) and drain to completion before reading, so the
-    ;; filter-vs-buffer observable is deterministic on both engines.
+    ;; filter-vs-buffer observable is deterministic on both engines.  The child
+    ;; waits for READY, deleted below, so its output is produced while this
+    ;; form is already in its wait loop.
     (set-process-sentinel p #'ignore)
     (set-process-filter p (lambda (proc msg) (insert "FILTER:" msg)))
+    (delete-file ready)
     (while (process-live-p p) (accept-process-output p 1))
     (while (accept-process-output p 0))
     (let ((with-filter (buffer-string)))
       (erase-buffer)
       (set-process-filter p nil)
-      (let ((p2 (make-process :name "neo-cx10-nf2" :command '("echo" "nofilter")
-                              :buffer (current-buffer))))
+      (let* ((ready2 (make-temp-file "neo-cx10-nf2-gate-"))
+             (p2 (make-process :name "neo-cx10-nf2"
+                               :command (append (list "sh" "-c"
+                                                      "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                      "sh" ready2)
+                                                '("echo" "nofilter"))
+                               :buffer (current-buffer))))
         (set-process-sentinel p2 #'ignore)
+        (delete-file ready2)
         (while (process-live-p p2) (accept-process-output p2 1))
         (while (accept-process-output p2 0)))
       (list with-filter (buffer-string)))))

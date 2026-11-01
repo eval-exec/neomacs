@@ -17,11 +17,17 @@ fn div_cx423_process_send_eof() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((buf (get-buffer-create " *cx423-eof*")))
-  (let ((proc (make-process :name "neo-cx423-eof"
-                            :command '("cat")
-                            :connection-type 'pipe :buffer buf)))
+  (let* ((ready (make-temp-file "neo-cx423-eof-gate-"))
+         (proc (make-process :name "neo-cx423-eof"
+                             :command (append (list "sh" "-c"
+                                                    "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                    "sh" ready)
+                                              '("cat"))
+                             :connection-type 'pipe :buffer buf)))
     (process-send-string proc "hello\n")
     (process-send-eof proc)
+    ;; The child starts only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (while (process-live-p proc) (accept-process-output proc 1))
     (prog1 (with-current-buffer buf
              (string-trim-right (buffer-string)))

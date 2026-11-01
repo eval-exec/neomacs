@@ -244,8 +244,15 @@ fn div_cx11_process_kill_buffer_cleanup() {
         r##"
 (let ((buf (get-buffer-create " *neo-cx11-pkb*")))
   (with-current-buffer buf (insert "preexisting"))
-  (let ((p (make-process :name "neo-cx11-pkb" :command '("echo" "process-output")
-                         :buffer buf)))
+  (let* ((ready (make-temp-file "neo-cx11-pkb-gate-"))
+         (p (make-process :name "neo-cx11-pkb"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("echo" "process-output"))
+                          :buffer buf)))
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p))
   (prog1 (with-current-buffer buf (buffer-string))
     (kill-buffer buf)))

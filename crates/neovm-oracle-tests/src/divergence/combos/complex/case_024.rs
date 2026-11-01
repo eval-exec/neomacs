@@ -14,12 +14,19 @@ fn div_cx24_process_output_to_narrowed_buffer() {
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((buf (get-buffer-create " *neo-cx24-pn*")))
+(let* ((buf (get-buffer-create " *neo-cx24-pn*"))
+       (ready (make-temp-file "neo-cx24-pn-gate-")))
   (with-current-buffer buf
     (insert "PRE-")
     (narrow-to-region 1 4))
-  (let ((p (make-process :name "neo-cx24-pn" :command '("echo" "output")
+  (let ((p (make-process :name "neo-cx24-pn"
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("echo" "output"))
                          :buffer buf)))
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (let ((attempts 0))
       (while (and (process-live-p p) (< attempts 100))
         (accept-process-output p 0.05)

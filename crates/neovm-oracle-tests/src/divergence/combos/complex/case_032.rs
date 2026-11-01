@@ -198,14 +198,21 @@ fn div_cx32_process_buffer_with_invisible_text_output() {
     let expect = expect_test::expect![[r#""OK #(\"VIS1 output\\n\" 0 4 (invisible t))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((buf (get-buffer-create " *neo-cx32-it*")))
+(let* ((buf (get-buffer-create " *neo-cx32-it*"))
+       (ready (make-temp-file "neo-cx32-it-gate-")))
   (with-current-buffer buf
     (insert "VIS1 ")
     (put-text-property 1 5 'invisible t))
-  (let ((p (make-process :name "neo-cx32-it" :command '("echo" "output")
+  (let ((p (make-process :name "neo-cx32-it"
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("echo" "output"))
                          :buffer buf)))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf (buffer-string))
     (kill-buffer buf)))

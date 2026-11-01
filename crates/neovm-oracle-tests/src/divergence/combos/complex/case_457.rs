@@ -50,9 +50,16 @@ fn div_cx457_start_process_sync() {
     let expect = expect_test::expect![[r#""OK \"test\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"(with-temp-buffer
-  (let ((p (start-process "cx457" (current-buffer) "echo" "test")))
+  (let* ((ready (make-temp-file "cx457-gate-"))
+         (p (apply #'start-process "cx457" (current-buffer)
+                   (append (list "sh" "-c"
+                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                 "sh" ready)
+                           '("echo" "test")))))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p 600))
   (string-trim-right (buffer-string)))"##,
         expect,

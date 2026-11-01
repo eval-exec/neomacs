@@ -29,15 +29,23 @@ fn div_cx40_process_coding_narrow_output_mega() {
     let expect = expect_test::expect![[r#""OK (\"PRcafé\\n\" \"PRcafé\\nE\\n\")""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((buf (get-buffer-create " *neo-cx40-pc*")))
+(let* ((buf (get-buffer-create " *neo-cx40-pc*"))
+       (ready (make-temp-file "neo-cx40-pc-gate-")))
   (with-current-buffer buf
     (insert "PRE\n")
     (narrow-to-region 1 3))
-  (let ((p (make-process :name "neo-cx40-pc" :command '("echo" "café")
+  (let ((p (make-process :name "neo-cx40-pc"
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("echo" "café"))
                          :buffer buf)))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+    ;; The child writes only after READY is deleted and the coding system is
+    ;; set, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (let ((narrowed (buffer-string)))
@@ -151,12 +159,21 @@ fn div_cx40_timer_process_sentinel_filter_mega() {
     let expect = expect_test::expect![[r#""OK (:t 5 0)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let (timer-fired sentinel-ev filter-data)
+(let* ((timer-fired nil)
+       (sentinel-ev nil)
+       (filter-data nil)
+       (ready (make-temp-file "neo-cx40-tpf-gate-")))
   (run-with-timer 0 nil (lambda () (setq timer-fired :t)))
-  (let ((p (make-process :name "neo-cx40-tpf" :command '("echo" "data")
+  (let ((p (make-process :name "neo-cx40-tpf"
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("echo" "data"))
                          :buffer nil
                          :filter (lambda (proc str) (setq filter-data str))
                          :sentinel (lambda (proc event) (setq sentinel-ev event)))))
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (let ((i 0))
       (while (and (not sentinel-ev) (< i 40))
         (accept-process-output p 0.05)

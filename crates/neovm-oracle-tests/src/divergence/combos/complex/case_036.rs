@@ -245,12 +245,20 @@ fn div_cx36_process_output_buffer_with_markers() {
   (with-current-buffer buf
     (insert "header\n")
     (let ((m (set-marker (make-marker) 3)))
-      (let ((p (make-process :name "neo-cx36-pm" :command '("echo" "appended")
-                             :buffer buf)))
+      (let* ((ready (make-temp-file "neo-cx36-pm-gate-"))
+             (p (make-process :name "neo-cx36-pm"
+                              :command (append (list "sh" "-c"
+                                                     "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                     "sh" ready)
+                                               '("echo" "appended"))
+                              :buffer buf)))
         ;; GNU's accept-process-output may return after reading output but
         ;; before publishing the child exit/default sentinel.  Wait for the
         ;; process lifecycle before asserting the final buffer text; this case
-        ;; is about process output insertion before existing markers.
+        ;; is about process output insertion before existing markers.  The
+        ;; child waits for READY, deleted below, so its output is produced
+        ;; while this form is already in its wait loop.
+        (delete-file ready)
         (while (process-live-p p)
           (accept-process-output p 1))
         (while (accept-process-output p 0)))

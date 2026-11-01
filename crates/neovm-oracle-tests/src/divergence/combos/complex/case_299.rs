@@ -146,10 +146,17 @@ fn div_cx299_process_output_with_coding_system() {
     crate::common::assert_oracle_parity_expect(
         r##"
   (let* ((buf (get-buffer-create " *neo-cx299-cs*"))
+       (ready (make-temp-file "neo-cx299-cs-gate-"))
        (p (make-process :name "neo-cx299-cs"
-                        :command '("printf" "世界")
+                        :command (append (list "sh" "-c"
+                                               "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                               "sh" ready)
+                                         '("printf" "世界"))
                         :buffer buf)))
   (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+  ;; The child writes only after READY is deleted and the coding system is
+  ;; set, while this form is waiting.
+  (delete-file ready)
   (let ((attempts 0))
     (while (and (process-live-p p) (< attempts 100))
       (accept-process-output p 0.05)

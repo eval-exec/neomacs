@@ -164,9 +164,15 @@ fn div_cx247_process_mark_position_query() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx247-mark*"))
+       (ready (make-temp-file "neo-cx247-mark-gate-"))
        (p (make-process :name "neo-cx247-mark"
-                        :command '("echo" "mark")
+                        :command (append (list "sh" "-c"
+                                               "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                               "sh" ready)
+                                         '("echo" "mark"))
                         :buffer buf)))
+  ;; The child writes only after READY is deleted, while this form is waiting.
+  (delete-file ready)
   (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((mark (process-mark p)))

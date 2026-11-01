@@ -106,13 +106,20 @@ fn div_cx15_process_buffer_sentinel_combined() {
     let expect = expect_test::expect![[r#""OK (\"pre:data\\n\" (:sentinel . \"finished\\n\"))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((buf (get-buffer-create " *neo-cx15-pbs*"))
-      (sentinel-data nil))
+(let* ((buf (get-buffer-create " *neo-cx15-pbs*"))
+       (ready (make-temp-file "neo-cx15-pbs-gate-"))
+       (sentinel-data nil))
   (with-current-buffer buf (insert "pre:"))
-  (let ((p (make-process :name "neo-cx15-pbs" :command '("echo" "data")
+  (let ((p (make-process :name "neo-cx15-pbs"
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("echo" "data"))
                          :buffer buf
                          :sentinel (lambda (proc event)
                                      (push (cons :sentinel event) sentinel-data)))))
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (let ((deadline (+ (float-time) 2.0)))
       (while (and (< (float-time) deadline)
                   (not sentinel-data))

@@ -179,13 +179,21 @@ fn div_cx9_set_process_coding_then_output_multibyte() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (with-temp-buffer
-  (let ((p (make-process :name "neo-cx9-spc" :command '("printf" "%s" "café世界")
-                         :buffer (current-buffer))))
+  (let* ((ready (make-temp-file "neo-cx9-spc-gate-"))
+         (p (make-process :name "neo-cx9-spc"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("printf" "%s" "café世界"))
+                          :buffer (current-buffer))))
     ;; The default sentinel can race with the first `accept-process-output` in
     ;; GNU and nondeterministically append the process-finished message here.
     ;; This case is about explicit process decoding, so suppress sentinel text.
     (set-process-sentinel p #'ignore)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+    ;; The child writes only after READY is deleted and the coding system is
+    ;; set, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p 600)
     (list (buffer-string) (string-bytes (buffer-string)) (length (buffer-string)))))
 "##,
@@ -292,12 +300,19 @@ fn div_cx9_process_mark_relocation() {
         r##"
 (with-temp-buffer
   (insert "before")
-  (let ((p (make-process :name "neo-cx9-pm" :command '("echo" "mark")
-                         :buffer (current-buffer))))
+  (let* ((ready (make-temp-file "neo-cx9-pm-gate-"))
+         (p (make-process :name "neo-cx9-pm"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("echo" "mark"))
+                          :buffer (current-buffer))))
     ;; Silence the default sentinel (its "Process ... finished" buffer message
     ;; is incidental noise) and drain to completion before reading, so the
     ;; process-mark position and buffer text are deterministic on both engines.
     (set-process-sentinel p #'ignore)
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (let ((m (process-mark p)))
       (while (process-live-p p) (accept-process-output p 1))
       (while (accept-process-output p 0))

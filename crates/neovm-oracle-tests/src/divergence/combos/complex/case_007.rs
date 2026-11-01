@@ -70,9 +70,17 @@ fn div_cx7_process_filter_swap() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let (f1 f2)
-  (let ((p (make-process :name "neo-cx7-fs" :command '("echo" "hello")
-                         :buffer nil)))
+  (let* ((ready (make-temp-file "neo-cx7-gate-"))
+         (p (make-process :name "neo-cx7-fs"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready)
+                                           '("echo" "hello"))
+                          :buffer nil)))
+    ;; The child waits for READY, deleted below, so its output is produced
+    ;; while this form is already in its wait loop.
     (set-process-filter p (lambda (proc msg) (push msg f1)))
+    (delete-file ready)
     (neovm--oracle-settle-process p 600)
     (set-process-filter p (lambda (proc msg) (push :second-filter f2)))
     (delete-process p))

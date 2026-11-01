@@ -230,15 +230,23 @@ fn div_cx51_process_output_decode_encode_narrow_buffer_hash_mega() {
     ]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((buf (get-buffer-create " *neo-cx51-rt*")))
+(let* ((buf (get-buffer-create " *neo-cx51-rt*"))
+       (ready (make-temp-file "neo-cx51-rt-gate-")))
   (with-current-buffer buf
     (insert "PRE\n")
     (narrow-to-region 1 4))
-  (let ((p (make-process :name "neo-cx51-rt" :command '("printf" "%s" "café世界")
+  (let ((p (make-process :name "neo-cx51-rt"
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("printf" "%s" "café世界"))
                          :buffer buf)))
     (set-process-sentinel p #'ignore)
     (set-process-query-on-exit-flag p nil)
     (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+    ;; The child writes only after READY is deleted and the coding system is
+    ;; set, while this form is waiting.
+    (delete-file ready)
     (neovm--oracle-settle-process p 600))
   (prog1 (with-current-buffer buf
            (widen)

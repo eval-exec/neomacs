@@ -187,9 +187,15 @@ fn div_cx277_process_filter_default_appends_to_buffer() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx277-defflt*"))
+       (ready (make-temp-file "neo-cx277-defflt-gate-"))
        (p (make-process :name "neo-cx277-defflt"
-                        :command '("echo" "default-filter")
+                        :command (append (list "sh" "-c"
+                                               "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                               "sh" ready)
+                                         '("echo" "default-filter"))
                         :buffer buf)))
+  ;; The child writes only after READY is deleted, while this form is waiting.
+  (delete-file ready)
   (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((content (string-trim (with-current-buffer buf (buffer-string)))))

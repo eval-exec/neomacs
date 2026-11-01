@@ -78,10 +78,17 @@ fn div_cx337_process_coding_system_override() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx337-cs*"))
+       (ready (make-temp-file "neo-cx337-cs-gate-"))
        (p (make-process :name "neo-cx337-cs"
-                        :command '("printf" "世界")
+                        :command (append (list "sh" "-c"
+                                               "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                               "sh" ready)
+                                         '("printf" "世界"))
                         :buffer buf)))
   (set-process-coding-system p 'utf-8-unix 'utf-8-unix)
+  ;; The child writes only after READY is deleted and the coding system is
+  ;; set, while this form is waiting.
+  (delete-file ready)
   (let ((attempts 0))
     (while (and (process-live-p p) (< attempts 100))
       (accept-process-output p 0.05)
@@ -227,9 +234,15 @@ fn div_cx337_process_mark_position_query() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx337-mark*"))
+       (ready (make-temp-file "neo-cx337-mark-gate-"))
        (p (make-process :name "neo-cx337-mark"
-                        :command '("echo" "mark-test")
+                        :command (append (list "sh" "-c"
+                                               "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                               "sh" ready)
+                                         '("echo" "mark-test"))
                         :buffer buf)))
+  ;; The child writes only after READY is deleted, while this form is waiting.
+  (delete-file ready)
   (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (let ((mark (process-mark p)))

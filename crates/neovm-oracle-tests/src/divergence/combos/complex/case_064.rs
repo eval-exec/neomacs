@@ -14,12 +14,18 @@ fn div_cx64_process_filter_chunked_utf8_decoding() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx64-pf*"))
+       (ready (make-temp-file "neo-cx64-pf-gate-"))
        (chunks nil))
   (let ((p (make-process :name "neo-cx64-pf"
-                         :command '("printf" "hello 世界")
+                         :command (append (list "sh" "-c"
+                                                "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                "sh" ready)
+                                          '("printf" "hello 世界"))
                          :buffer buf
                          :filter (lambda (proc data) (push data chunks))
                          :coding 'utf-8-unix)))
+    ;; The child writes only after READY is deleted, while this form is waiting.
+    (delete-file ready)
     (let ((attempts 0))
       (while (and (process-live-p p) (< attempts 100))
         (accept-process-output p 0.05)
@@ -213,18 +219,34 @@ fn div_cx64_two_processes_interleaved_buffer_appends() {
     let expect = expect_test::expect![[r#""OK \"AAABBB\"""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let* ((buf (get-buffer-create " *neo-cx64-i*")))
+(let* ((buf (get-buffer-create " *neo-cx64-i*"))
+       (ready1 (make-temp-file "neo-cx64-i1-gate-"))
+       (ready2 (make-temp-file "neo-cx64-i2-gate-")))
   ;; Both processes append to the same buffer; the OS interleaving of their two
   ;; outputs is nondeterministic, as is the "Process ... finished" sentinel
   ;; noise.  Drain p1 fully (no-op its incidental sentinel) before starting and
   ;; draining p2, so the appends land in a fixed order on both engines while
-  ;; still exercising two processes writing to one shared buffer.
-  (let ((p1 (make-process :name "neo-cx64-i1" :command '("printf" "%s" "AAA") :buffer buf)))
+  ;; still exercising two processes writing to one shared buffer.  Each child
+  ;; waits for its READY file, deleted just before its drain loop, so its
+  ;; output is produced while this form is already waiting.
+  (let ((p1 (make-process :name "neo-cx64-i1"
+                          :command (append (list "sh" "-c"
+                                                 "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                 "sh" ready1)
+                                           '("printf" "%s" "AAA"))
+                          :buffer buf)))
     (set-process-sentinel p1 #'ignore)
+    (delete-file ready1)
     (while (process-live-p p1) (accept-process-output p1 1))
     (while (accept-process-output p1 0))
-    (let ((p2 (make-process :name "neo-cx64-i2" :command '("printf" "%s" "BBB") :buffer buf)))
+    (let ((p2 (make-process :name "neo-cx64-i2"
+                            :command (append (list "sh" "-c"
+                                                   "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                                   "sh" ready2)
+                                             '("printf" "%s" "BBB"))
+                            :buffer buf)))
       (set-process-sentinel p2 #'ignore)
+      (delete-file ready2)
       (while (process-live-p p2) (accept-process-output p2 1))
       (while (accept-process-output p2 0))))
   (prog1 (with-current-buffer buf (buffer-string))

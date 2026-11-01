@@ -144,9 +144,15 @@ fn div_cx389_process_plist_and_mark() {
     crate::common::assert_oracle_parity_expect(
         r##"
 (let* ((buf (get-buffer-create " *neo-cx389-pm*"))
+       (ready (make-temp-file "neo-cx389-pm-gate-"))
        (p (make-process :name "neo-cx389-pm"
-                        :command '("echo" "mark-test")
+                        :command (append (list "sh" "-c"
+                                               "while [ -e \"$1\" ]; do sleep 0.01; done; shift; exec \"$@\""
+                                               "sh" ready)
+                                         '("echo" "mark-test"))
                         :buffer buf)))
+  ;; The child writes only after READY is deleted, while this form is waiting.
+  (delete-file ready)
   (neovm--oracle-settle-process p 600)
   (sit-for 0.05)
   (process-put p 'neo-cx389-key1 :val1)
