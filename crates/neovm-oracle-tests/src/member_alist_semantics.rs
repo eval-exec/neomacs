@@ -67,11 +67,17 @@ fn oracle_member_family_float_bignum_and_equal_edges() {
    (memql 1.0 '(0 1.0 2.0))
    (memql 1000000000000000000000001
           '(1000000000000000000000000 1000000000000000000000001))
-   (memql nan-a (list nan-b))))
+   ;; GNU's memql compares the float representations, so two NaNs from the
+   ;; same operation match; the matched tail is the property.  The SIGN of
+   ;; an invalid-operation NaN is host hardware (x86-64 -0.0e+NaN, arm64
+   ;; 0.0e+NaN), so normalize the element instead of pinning the sign.
+   (let ((tail (memql nan-a (list nan-b))))
+     (and tail
+          (mapcar (lambda (x) (if (and (floatp x) (isnan x)) :nan x)) tail)))))
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK (((1 2) (3)) nil (1.0 2.0) (1.0 2.0) (1000000000000000000000001) (-0.0e+NaN))""#
+        r#""OK (((1 2) (3)) nil (1.0 2.0) (1.0 2.0) (1000000000000000000000001) (:nan))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }

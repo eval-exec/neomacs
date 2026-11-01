@@ -313,7 +313,7 @@ jobs:
           NEOVM_LIBFAKETIME_SO: ${{ steps.oracle.outputs.libfaketime }}
         run: >-
           cargo nextest run -p neovm-oracle-tests --test oracle --lib
-          -E 'test(/org_mode/) | test(/orgexport_/) | test(~process_attributes) | test(/oracle_harness/) | test(/system_info/) | test(/user_env_load_locale_state/) | test(/misc_strict_edge_semantics/) | test(/case_428/) | test(/case_444/) | test(/file_name_runtime/) | test(/file_remote_tramp/) | test(/file_ops_deep/) | test(/float_operations_comprehensive/)'
+          -E 'test(/org_mode/) | test(/orgexport_/) | test(~process_attributes) | test(/oracle_harness/) | test(/system_info/) | test(/user_env_load_locale_state/) | test(/misc_strict_edge_semantics/) | test(/case_428/) | test(/case_444/) | test(/file_name_runtime/) | test(/file_remote_tramp/) | test(/file_ops_deep/) | test(/float_operations_comprehensive/) | test(/member_alist_semantics/)'
           --no-fail-fast
 
   # The compile-fail contracts build only with the `contract-fixtures`
