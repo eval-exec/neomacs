@@ -81,18 +81,31 @@ fn div_cx428_file_backup_remote() {
 #[test]
 fn div_cx428_file_symlink() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    // /tmp is a real directory on GNU/Linux and a symlink to private/tmp on
-    // macOS.  Assert the file-truename contract instead of the host's layout:
-    // the system temp dir exists, its truename is a directory, it names the
-    // same file, and the truename is already canonical.
-    let expect = expect_test::expect![[r#""OK (t t t t)""#]];
+    // Use a private directory: `file-equal-p' compares the complete
+    // `file-attributes' lists of the two truenames (lisp/files.el:6858-6872),
+    // so a shared directory such as /tmp answers nil whenever another process
+    // changes its mtime between the two reads (the 2026-11-01 oracle shard 18
+    // failure under many nextest workers).  Nothing else writes inside the
+    // private tree between the calls, and the relative symlink keeps the
+    // printed target host-independent.
+    let expect = expect_test::expect![[r#""OK (t \"target\" t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((true (file-truename "/tmp")))
-  (list (file-exists-p "/tmp")
-        (file-directory-p true)
-        (file-equal-p "/tmp" true)
-        (equal true (file-truename true))))
+(let* ((root (make-temp-file "neo-cx428-" t))
+       (target (expand-file-name "target" root))
+       (link (expand-file-name "link" root)))
+  (unwind-protect
+      (progn
+        (make-directory target)
+        (make-symbolic-link "target" link)
+        (let ((true (file-truename link)))
+          (list (file-exists-p link)
+                (file-symlink-p link)
+                (file-directory-p link)
+                (file-equal-p link target)
+                (file-equal-p link true)
+                (equal true (file-truename true)))))
+    (ignore-errors (delete-directory root t))))
 "##,
         expect,
     );
