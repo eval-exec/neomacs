@@ -3,7 +3,7 @@
 //! `src/thread.c`). Each runs on the thread holding the Baton, whose
 //! `Context::threads` is the World's `ThreadManager`.
 
-use super::{ThreadKey, Wait};
+use super::{ConditionId, MutexId, ThreadKey, Wait};
 use crate::emacs_core::error::{EvalResult, expect_args, signal};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::threads::{
@@ -130,7 +130,7 @@ impl Context {
                 // GNU `lisp_mutex_lock_for_thread`: a signal ends the wait;
                 // `post_acquire_global_lock` raises it.
                 ctx.green_raise_pending_signal(key)?;
-                ctx.green_wait(Wait::Mutex(mutex.native_key()))?;
+                ctx.green_wait(Wait::Mutex(MutexId::new(mutex.native_key())))?;
                 match ctx.threads.mutex_lock(mutex) {
                     MutexAcquisition::Acquired => return Ok(()),
                     MutexAcquisition::Blocked => {}
@@ -148,7 +148,7 @@ impl Context {
             MutexRelease::StillLocked => {}
             MutexRelease::Released => {
                 self.green_control()
-                    .wake_waiting_for(Wait::Mutex(mutex.native_key()));
+                    .wake_waiting_for(Wait::Mutex(MutexId::new(mutex.native_key())));
             }
             MutexRelease::NotOwner => {
                 return Err(signal(
@@ -180,16 +180,18 @@ impl Context {
                 )],
             )
         })?;
-        control.wake_waiting_for(Wait::Mutex(mutex.native_key()));
+        control.wake_waiting_for(Wait::Mutex(MutexId::new(mutex.native_key())));
         if self.threads.pending_thread_signal(key.id()).is_none() {
             self.green_blocked_on(condition.value(), |ctx| {
-                ctx.green_park(Wait::Condition(condition.native_key()))
+                ctx.green_park(Wait::Condition(ConditionId::new(condition.native_key())))
             })?;
         }
         loop {
             match self.threads.mutex_relock_after_wait(mutex, count) {
                 MutexAcquisition::Acquired => break,
-                MutexAcquisition::Blocked => self.green_park(Wait::Mutex(mutex.native_key()))?,
+                MutexAcquisition::Blocked => {
+                    self.green_park(Wait::Mutex(MutexId::new(mutex.native_key())))?
+                }
                 MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
             }
         }
@@ -209,10 +211,12 @@ impl Context {
         let control = self.green_control();
         match scope {
             NotificationScope::All => {
-                control.wake_waiting_for(Wait::Condition(condition.native_key()));
+                control.wake_waiting_for(Wait::Condition(ConditionId::new(condition.native_key())));
             }
             NotificationScope::One => {
-                control.wake_one_waiting_for(Wait::Condition(condition.native_key()));
+                control.wake_one_waiting_for(Wait::Condition(ConditionId::new(
+                    condition.native_key(),
+                )));
             }
         }
         Ok(Value::NIL)

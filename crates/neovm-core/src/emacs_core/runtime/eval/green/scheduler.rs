@@ -11,7 +11,7 @@
 use super::super::world::Baton;
 use super::host_service::{HostParkRegistration, HostRequestKey, RealWaitPermit, SettledHostCall};
 use crate::emacs_core::process::GreenSelectHandle;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 use std::rc::Rc;
@@ -42,6 +42,27 @@ impl ThreadKey {
     }
 }
 
+/// A mutex object id (the Lisp handle's numeric id). Distinct from a
+/// condition id at the scheduler boundary; converted once in `api.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct MutexId(u64);
+
+impl MutexId {
+    pub(crate) fn new(id: u64) -> Self {
+        Self(id)
+    }
+}
+
+/// A condition-variable object id (the Lisp handle's numeric id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ConditionId(u64);
+
+impl ConditionId {
+    pub(crate) fn new(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// What a thread that gave the Baton up waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Wait {
@@ -50,9 +71,9 @@ pub(crate) enum Wait {
     /// Another thread's end (`thread-join`).
     Join(ThreadKey),
     /// A mutex another thread holds (`mutex-lock`).
-    Mutex(u64),
+    Mutex(MutexId),
     /// A condition variable's notification (`condition-wait`).
-    Condition(u64),
+    Condition(ConditionId),
     /// A `thread_select` wait, ready on input, a scheduler event, or its
     /// absolute deadline. The scheduler watches I/O while no owner runs.
     Select { wait_end: Instant },
@@ -60,6 +81,26 @@ pub(crate) enum Wait {
     HostRequest(HostRequestKey),
     /// It ended.
     Exited,
+}
+
+/// One Select wait in the deadline index. Field order is the observable
+/// order: earliest deadline first, `ThreadKey` for ties (the b262 pin).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct DeadlineKey {
+    wait_end: Instant,
+    key: ThreadKey,
+}
+
+/// Identity of one queued ready turn. A stale entry's ticket never matches
+/// its key's slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReadyTicket(NonZeroU64);
+
+/// Whether KEY's current ready turn is queued, and under which ticket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadySlot {
+    Queued(ReadyTicket),
+    NotQueued,
 }
 
 /// What the other threads are doing, seen by a thread about to wait.
@@ -296,14 +337,421 @@ enum CancelPlacement {
     OrdinaryCompletion,
 }
 
+/// The per-thread wait table plus every wait-derived index. One type owns the
+/// table and its indexes so a mutation can never leave them out of step; the
+/// cfg(test) module may insert directly (the pinned deadline-order tests do)
+/// and the same maintenance runs.
+#[derive(Default)]
+struct WaitMap {
+    by_key: BTreeMap<ThreadKey, Wait>,
+    /// One entry per `Wait::Select`, ordered by `(wait_end, ThreadKey)`:
+    /// expiry iterates in deadline order for free, ties in key order.
+    select_index: BTreeMap<DeadlineKey, ()>,
+    /// The same Select keys in `ThreadKey` order, for `wake_selects`'s
+    /// remaining key-ordered pass after expiry.
+    select_keys: BTreeSet<ThreadKey>,
+    join_waiters: BTreeMap<ThreadKey, BTreeSet<ThreadKey>>,
+    mutex_waiters: BTreeMap<MutexId, BTreeSet<ThreadKey>>,
+    condition_waiters: BTreeMap<ConditionId, BTreeSet<ThreadKey>>,
+    /// `Wait::Runnable` entries (peer amendment 1's `runnable_count`).
+    runnable_count: usize,
+}
+
+impl WaitMap {
+    fn insert(&mut self, key: ThreadKey, wait: Wait) -> Option<Wait> {
+        let old = self.by_key.insert(key, wait);
+        if let Some(old) = old {
+            self.unindex(key, old);
+        }
+        self.index(key, wait);
+        old
+    }
+
+    fn remove(&mut self, key: &ThreadKey) -> Option<Wait> {
+        let old = self.by_key.remove(key)?;
+        self.unindex(*key, old);
+        Some(old)
+    }
+
+    fn runnable_count(&self) -> usize {
+        self.runnable_count
+    }
+
+    fn select_len(&self) -> usize {
+        self.select_index.len()
+    }
+
+    fn index(&mut self, key: ThreadKey, wait: Wait) {
+        match wait {
+            Wait::Runnable => self.runnable_count += 1,
+            Wait::Select { wait_end } => {
+                self.select_index.insert(DeadlineKey { wait_end, key }, ());
+                self.select_keys.insert(key);
+            }
+            Wait::Join(target) => {
+                self.join_waiters.entry(target).or_default().insert(key);
+            }
+            Wait::Mutex(id) => {
+                self.mutex_waiters.entry(id).or_default().insert(key);
+            }
+            Wait::Condition(id) => {
+                self.condition_waiters.entry(id).or_default().insert(key);
+            }
+            Wait::HostRequest(_) | Wait::Exited => {}
+        }
+    }
+
+    fn unindex(&mut self, key: ThreadKey, wait: Wait) {
+        match wait {
+            Wait::Runnable => {
+                debug_assert!(self.runnable_count > 0, "runnable_count underflow");
+                self.runnable_count -= 1;
+            }
+            Wait::Select { wait_end } => {
+                debug_assert!(
+                    self.select_index
+                        .remove(&DeadlineKey { wait_end, key })
+                        .is_some(),
+                    "Select wait was not indexed"
+                );
+                debug_assert!(self.select_keys.remove(&key), "Select key was not indexed");
+            }
+            Wait::Join(target) => Self::remove_waiter(&mut self.join_waiters, target, key),
+            Wait::Mutex(id) => Self::remove_waiter(&mut self.mutex_waiters, id, key),
+            Wait::Condition(id) => Self::remove_waiter(&mut self.condition_waiters, id, key),
+            Wait::HostRequest(_) | Wait::Exited => {}
+        }
+    }
+
+    fn remove_waiter<K: Ord>(
+        waiters: &mut BTreeMap<K, BTreeSet<ThreadKey>>,
+        object: K,
+        key: ThreadKey,
+    ) {
+        let Some(set) = waiters.get_mut(&object) else {
+            debug_assert!(false, "waiter object missing from its index");
+            return;
+        };
+        debug_assert!(set.remove(&key), "waiter was not indexed under its object");
+        if set.is_empty() {
+            waiters.remove(&object);
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    fn check_invariants(&self) {
+        let mut runnable = 0usize;
+        let mut selects = 0usize;
+        let mut joiners = 0usize;
+        let mut mutexes = 0usize;
+        let mut conditions = 0usize;
+        for (key, wait) in &self.by_key {
+            match *wait {
+                Wait::Runnable => runnable += 1,
+                Wait::Select { wait_end } => {
+                    selects += 1;
+                    debug_assert!(
+                        self.select_index.contains_key(&DeadlineKey {
+                            wait_end,
+                            key: *key
+                        }),
+                        "Select wait missing from the deadline index"
+                    );
+                    debug_assert!(self.select_keys.contains(key), "Select key missing");
+                }
+                Wait::Join(target) => {
+                    joiners += 1;
+                    debug_assert!(
+                        self.join_waiters
+                            .get(&target)
+                            .is_some_and(|set| set.contains(key)),
+                        "join waiter missing from its object set"
+                    );
+                }
+                Wait::Mutex(id) => {
+                    mutexes += 1;
+                    debug_assert!(
+                        self.mutex_waiters
+                            .get(&id)
+                            .is_some_and(|set| set.contains(key)),
+                        "mutex waiter missing from its object set"
+                    );
+                }
+                Wait::Condition(id) => {
+                    conditions += 1;
+                    debug_assert!(
+                        self.condition_waiters
+                            .get(&id)
+                            .is_some_and(|set| set.contains(key)),
+                        "condition waiter missing from its object set"
+                    );
+                }
+                Wait::HostRequest(_) | Wait::Exited => {}
+            }
+        }
+        debug_assert_eq!(runnable, self.runnable_count);
+        debug_assert_eq!(selects, self.select_index.len());
+        debug_assert_eq!(selects, self.select_keys.len());
+        debug_assert_eq!(
+            joiners,
+            self.join_waiters.values().map(BTreeSet::len).sum::<usize>()
+        );
+        debug_assert_eq!(
+            mutexes,
+            self.mutex_waiters
+                .values()
+                .map(BTreeSet::len)
+                .sum::<usize>()
+        );
+        debug_assert_eq!(
+            conditions,
+            self.condition_waiters
+                .values()
+                .map(BTreeSet::len)
+                .sum::<usize>()
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn check_invariants(&self) {}
+}
+
+impl std::ops::Deref for WaitMap {
+    type Target = BTreeMap<ThreadKey, Wait>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.by_key
+    }
+}
+
+/// The ready FIFO plus its per-key invalidation state. One type owns the
+/// queue, the slots and the valid count, so a test may push/pop bare keys
+/// (the pinned regression tests do) and the pairing stays consistent.
+#[derive(Default)]
+struct ReadyQueue {
+    entries: VecDeque<(ThreadKey, ReadyTicket)>,
+    slots: BTreeMap<ThreadKey, ReadySlot>,
+    valid_count: usize,
+    next_ticket: u64,
+}
+
+impl ReadyQueue {
+    fn fresh_ticket(&mut self) -> ReadyTicket {
+        self.next_ticket += 1;
+        ReadyTicket(NonZeroU64::new(self.next_ticket).expect("ready tickets start at one"))
+    }
+
+    /// Queue KEY at the back unless it already owns a queued turn.
+    fn enqueue_back(&mut self, key: ThreadKey) -> bool {
+        if self.is_queued(&key) {
+            return false;
+        }
+        let ticket = self.fresh_ticket();
+        self.entries.push_back((key, ticket));
+        self.slots.insert(key, ReadySlot::Queued(ticket));
+        self.valid_count += 1;
+        true
+    }
+
+    /// Queue KEY at the front unless it already owns a queued turn.
+    fn enqueue_front(&mut self, key: ThreadKey) -> bool {
+        if self.is_queued(&key) {
+            return false;
+        }
+        let ticket = self.fresh_ticket();
+        self.entries.push_front((key, ticket));
+        self.slots.insert(key, ReadySlot::Queued(ticket));
+        self.valid_count += 1;
+        true
+    }
+
+    /// `prioritize`: drop every existing turn for KEY, then queue a fresh one
+    /// at the front (the old `ready.retain` + `push_front`).
+    fn move_to_front(&mut self, key: ThreadKey) {
+        self.discard(key);
+        let ticket = self.fresh_ticket();
+        self.entries.push_front((key, ticket));
+        self.slots.insert(key, ReadySlot::Queued(ticket));
+        self.valid_count += 1;
+    }
+
+    /// Remove every entry for KEY and its slot (the old `ready.retain`).
+    fn discard(&mut self, key: ThreadKey) {
+        self.entries.retain(|(entry, _)| *entry != key);
+        if matches!(self.slots.remove(&key), Some(ReadySlot::Queued(_))) {
+            self.valid_count -= 1;
+        }
+    }
+
+    /// KEY's wait stopped being `Runnable`: its queued turn is stale from now
+    /// on (lazy: the entry goes when the queue reaches it).
+    fn invalidate(&mut self, key: ThreadKey) {
+        if let Some(ReadySlot::Queued(_)) = self.slots.get(&key) {
+            self.slots.insert(key, ReadySlot::NotQueued);
+            self.valid_count -= 1;
+        }
+    }
+
+    fn is_queued(&self, key: &ThreadKey) -> bool {
+        matches!(self.slots.get(key), Some(ReadySlot::Queued(_)))
+    }
+
+    fn valid_count(&self) -> usize {
+        self.valid_count
+    }
+
+    /// The first eligible queued turn, dropping invalid entries met on the
+    /// way. An entry is valid only when its ticket still matches the slot AND
+    /// its key is `Runnable` (the old `ready.retain` rule); eligible-but-
+    /// ineligible entries (main in a native wait) keep their place, exactly
+    /// as the old position scan did.
+    fn pop_valid(
+        &mut self,
+        mut runnable: impl FnMut(ThreadKey) -> bool,
+        mut eligible: impl FnMut(ThreadKey) -> bool,
+    ) -> Option<ThreadKey> {
+        let mut index = 0;
+        while index < self.entries.len() {
+            let (key, ticket) = self.entries[index];
+            let queued = matches!(
+                self.slots.get(&key),
+                Some(ReadySlot::Queued(current)) if *current == ticket
+            );
+            if !queued {
+                self.entries.remove(index);
+                continue;
+            }
+            if !runnable(key) {
+                // The key's wait left Runnable without the slot being
+                // invalidated (a cfg(test) direct push, or a missed seam):
+                // the old ready.retain dropped exactly this entry.
+                self.entries.remove(index);
+                self.slots.insert(key, ReadySlot::NotQueued);
+                self.valid_count -= 1;
+                continue;
+            }
+            if !eligible(key) {
+                index += 1;
+                continue;
+            }
+            self.entries.remove(index);
+            self.slots.insert(key, ReadySlot::NotQueued);
+            self.valid_count -= 1;
+            return Some(key);
+        }
+        None
+    }
+
+    /// Consume main's turn only (the idle-Baton acquire path). The old code
+    /// removed the first Main entry whether or not it was still valid.
+    fn pop_main(&mut self) -> Option<ThreadKey> {
+        let index = self
+            .entries
+            .iter()
+            .position(|(key, _)| *key == ThreadKey::Main)?;
+        let (key, ticket) = self.entries.remove(index)?;
+        if matches!(
+            self.slots.get(&key),
+            Some(ReadySlot::Queued(current)) if *current == ticket
+        ) {
+            self.slots.insert(key, ReadySlot::NotQueued);
+            self.valid_count -= 1;
+        }
+        Some(key)
+    }
+
+    fn valid_excluding(&self, me: &ThreadKey) -> usize {
+        self.valid_count - usize::from(self.is_queued(me))
+    }
+
+    #[cfg(debug_assertions)]
+    fn check_invariants(&self) {
+        let queued = self
+            .slots
+            .values()
+            .filter(|slot| matches!(slot, ReadySlot::Queued(_)))
+            .count();
+        debug_assert_eq!(queued, self.valid_count, "queued slot count != valid_count");
+        for (key, slot) in &self.slots {
+            if let ReadySlot::Queued(ticket) = slot {
+                debug_assert!(
+                    self.entries
+                        .iter()
+                        .any(|(entry, entry_ticket)| entry == key && entry_ticket == ticket),
+                    "queued slot has no matching ready entry"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn check_invariants(&self) {}
+
+    // --- cfg(test) surface for the pinned scheduler tests ----------------
+    #[cfg(test)]
+    fn push_back(&mut self, key: ThreadKey) {
+        let ticket = self.fresh_ticket();
+        self.entries.push_back((key, ticket));
+        if !matches!(
+            self.slots.insert(key, ReadySlot::Queued(ticket)),
+            Some(ReadySlot::Queued(_))
+        ) {
+            self.valid_count += 1;
+        }
+    }
+
+    #[cfg(test)]
+    fn pop_front(&mut self) -> Option<ThreadKey> {
+        let (key, ticket) = self.entries.pop_front()?;
+        if matches!(
+            self.slots.get(&key),
+            Some(ReadySlot::Queued(current)) if *current == ticket
+        ) {
+            self.slots.insert(key, ReadySlot::NotQueued);
+            self.valid_count -= 1;
+        }
+        Some(key)
+    }
+
+    #[cfg(test)]
+    fn front(&self) -> Option<&ThreadKey> {
+        self.entries.front().map(|(key, _)| key)
+    }
+
+    #[cfg(test)]
+    fn iter(&self) -> impl Iterator<Item = &ThreadKey> {
+        self.entries.iter().map(|(key, _)| key)
+    }
+
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The valid queued keys in FIFO order (the differential's ready view).
+    #[cfg(test)]
+    fn valid_keys(&self) -> Vec<ThreadKey> {
+        self.entries
+            .iter()
+            .filter(|(key, ticket)| {
+                matches!(
+                    self.slots.get(key),
+                    Some(ReadySlot::Queued(current)) if current == ticket
+                )
+            })
+            .map(|(key, _)| *key)
+            .collect()
+    }
+}
+
 #[derive(Default)]
 struct ControlState {
     // There is only one Baton in the World, so a sender holding it proves
     // every recipient queue empty. A single reusable slot also allows a
     // newborn or parked recipient to receive after the sender has finished.
     senders: BTreeMap<ThreadKey, mpsc::SyncSender<Wake>>,
-    waits: BTreeMap<ThreadKey, Wait>,
-    ready: VecDeque<ThreadKey>,
+    waits: WaitMap,
+    ready: ReadyQueue,
     closing: bool,
     physical: BTreeMap<ThreadKey, OwnerLocation>,
     services: BTreeMap<HostRequestKey, ServiceMetadata>,
@@ -603,10 +1051,9 @@ impl Control {
                 baton,
             });
         }
-        state
-            .waits
-            .insert(slice.requester, Wait::HostRequest(slice.key));
-        state.ready.retain(|key| *key != slice.requester);
+        Self::set_wait(&mut state, slice.requester, Wait::HostRequest(slice.key));
+        state.ready.discard(slice.requester);
+        Self::check_invariants(&state);
         state
             .physical
             .insert(slice.requester, OwnerLocation::Receiving);
@@ -706,14 +1153,12 @@ impl Control {
             .services
             .remove(&slice.key)
             .map(|metadata| metadata.phase);
-        state.waits.insert(slice.requester, Wait::Runnable);
+        Self::set_wait(&mut state, slice.requester, Wait::Runnable);
         // An acquire may have selected main's ordinary turn before noticing
         // the queued service. Preserve that eligibility, but the reserved
         // requester still receives the Baton first.
-        if state.waits.get(&ThreadKey::Main) == Some(&Wait::Runnable)
-            && !state.ready.contains(&ThreadKey::Main)
-        {
-            state.ready.push_front(ThreadKey::Main);
+        if state.waits.get(&ThreadKey::Main) == Some(&Wait::Runnable) {
+            Self::enqueue_ready_front(&mut state, ThreadKey::Main);
         }
         state
             .physical
@@ -728,7 +1173,7 @@ impl Control {
                 Ok(ServiceReturn::Sent)
             }
             Some(ServicePhase::ServingAfterWait) => {
-                state.ready.push_back(slice.requester);
+                Self::enqueue_ready(&mut state, slice.requester);
                 drop(state);
                 let Some(next) = self.pick_next() else {
                     return Err(ServiceReturnRefusal {
@@ -1400,19 +1845,20 @@ impl Control {
                 });
             }
         };
-        state.waits.insert(slice.requester, Wait::Runnable);
+        Self::set_wait(&mut state, slice.requester, Wait::Runnable);
         match placement {
             CancelPlacement::CurrentBatonOwner => {
-                state.ready.retain(|key| *key != slice.requester);
+                state.ready.discard(slice.requester);
                 state
                     .physical
                     .insert(slice.requester, OwnerLocation::Running);
             }
             CancelPlacement::OrdinaryCompletion if was_parked => {
-                state.ready.push_back(slice.requester);
+                Self::enqueue_ready(&mut state, slice.requester);
             }
             CancelPlacement::OrdinaryCompletion => {}
         }
+        Self::check_invariants(&state);
         state.services.remove(&slice.key);
         state.pending_services.retain(|key| *key != slice.key);
         drop(state);
@@ -1573,7 +2019,7 @@ impl Control {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut state = self.state();
         state.senders.insert(ThreadKey::Main, sender);
-        state.waits.insert(ThreadKey::Main, Wait::Runnable);
+        Self::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
         state
             .physical
             .insert(ThreadKey::Main, OwnerLocation::Running);
@@ -1586,9 +2032,9 @@ impl Control {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut state = self.state();
         state.senders.insert(key, sender);
-        state.waits.insert(key, Wait::Runnable);
+        Self::set_wait(&mut state, key, Wait::Runnable);
         state.physical.insert(key, OwnerLocation::Receiving);
-        state.ready.push_back(key);
+        Self::enqueue_ready(&mut state, key);
         receiver
     }
 
@@ -1597,10 +2043,11 @@ impl Control {
     /// Baton and its Lisp handle was never returned, so no joiner, mutex,
     /// condition, host request, or service can name it.
     ///
-    /// The ready turn is invalidated through the seam: `set_wait` publishes
-    /// the typed exit and `retire_exited` removes the record, so `pop_ready`'s
-    /// retain drops the stale turn. A stale Runnable turn would be picked and
-    /// block the scheduler on a carrier that does not exist.
+    /// The ready turn is invalidated through the seams: `set_wait` publishes
+    /// the typed exit (releasing the wait's index entries and making its
+    /// queued turn stale) and `remove_key` releases the whole record, so the
+    /// stale turn is never selected. A stale Runnable turn would be picked
+    /// and block the scheduler on a carrier that does not exist.
     pub(super) fn unregister_worker(&self, key: ThreadKey) {
         let mut state = self.state();
         Self::set_wait(&mut state, key, Wait::Exited);
@@ -1631,14 +2078,42 @@ impl Control {
         matches!(self.state().waits.get(&key), Some(Wait::Exited) | None)
     }
 
+    /// `Wait::Runnable` entries other than ME's own contribution.
+    fn runnable_excluding(state: &ControlState, me: ThreadKey) -> usize {
+        state.waits.runnable_count() - usize::from(state.waits.get(&me) == Some(&Wait::Runnable))
+    }
+
+    /// Select waits other than ME's own contribution.
+    fn selects_excluding(state: &ControlState, me: ThreadKey) -> usize {
+        state.waits.select_len()
+            - usize::from(matches!(state.waits.get(&me), Some(Wait::Select { .. })))
+    }
+
+    /// The earliest Select deadline other than ME's, in `(wait_end, key)`
+    /// order. One index entry per key, so peeking at most two entries is the
+    /// old skip-`me` scan.
+    fn earliest_other_select(state: &ControlState, me: ThreadKey) -> Option<DeadlineKey> {
+        let mut index = state.waits.select_index.keys();
+        let first = index.next()?;
+        if first.key == me {
+            index.next().copied()
+        } else {
+            Some(*first)
+        }
+    }
+
+    /// Queued ready turns other than ME's own contribution.
+    fn ready_valid_excluding(state: &ControlState, me: ThreadKey) -> usize {
+        state.ready.valid_excluding(&me)
+    }
+
     /// Whether a thread other than ME is ready to run, or will be at a
     /// deadline.
     pub(crate) fn others_could_run(&self, me: ThreadKey) -> bool {
         let state = self.state();
         Self::service_ready(&state)
-            || state.waits.iter().any(|(key, wait)| {
-                *key != me && matches!(wait, Wait::Runnable | Wait::Select { .. })
-            })
+            || Self::runnable_excluding(&state, me) > 0
+            || Self::selects_excluding(&state, me) > 0
     }
 
     /// What the threads other than ME are doing at NOW.
@@ -1647,58 +2122,40 @@ impl Control {
         if Self::service_ready(&state) {
             return Peers::Ready;
         }
-        let mut earliest: Option<Instant> = None;
-        for (key, wait) in &state.waits {
-            if *key == me {
-                continue;
-            }
-            match *wait {
-                Wait::Runnable => return Peers::Ready,
-                Wait::Select { wait_end, .. } if wait_end <= now => return Peers::Ready,
-                Wait::Select {
-                    wait_end: deadline, ..
-                } => {
-                    earliest = Some(earliest.map_or(deadline, |e| e.min(deadline)));
-                }
-                Wait::Join(_)
-                | Wait::Mutex(_)
-                | Wait::Condition(_)
-                | Wait::HostRequest(_)
-                | Wait::Exited => {}
-            }
+        if Self::runnable_excluding(&state, me) > 0 {
+            return Peers::Ready;
         }
-        earliest.map_or(Peers::Blocked, Peers::Sleeping)
+        match Self::earliest_other_select(&state, me) {
+            Some(deadline) if deadline.wait_end <= now => Peers::Ready,
+            Some(deadline) => Peers::Sleeping(deadline.wait_end),
+            None => Peers::Blocked,
+        }
     }
 
     /// Poll the selectors at a yield safepoint without taking an owner
     /// off the CPU. Preserve FIFO order: only readiness changes queue state.
     pub(crate) fn yield_peer_ready(&self, me: ThreadKey) -> bool {
+        self.yield_peer_ready_at(me, Instant::now())
+    }
+
+    fn yield_peer_ready_at(&self, me: ThreadKey, now: Instant) -> bool {
         let mut state = self.state();
         if state.closing
             || Self::service_ready(&state)
-            || state
-                .ready
-                .iter()
-                .any(|key| *key != me && state.waits.get(key) == Some(&Wait::Runnable))
+            || Self::ready_valid_excluding(&state, me) > 0
         {
             // The ensuing transfer handles I/O/deadline readiness. Avoid
             // scanning sleeping owners twice on an actual handoff.
             return true;
         }
-        Self::expire_deadlines(&mut state, Instant::now());
-        if state
-            .waits
-            .values()
-            .any(|wait| matches!(wait, Wait::Select { .. }))
+        Self::expire_deadlines(&mut state, now);
+        if state.waits.select_len() > 0
             && let Some(Some(select)) = self.select.get()
-            && select.wait_until(Instant::now())
+            && select.wait_until(now)
         {
-            Self::wake_selects(&mut state);
+            Self::wake_selects_at(&mut state, now);
         }
-        state
-            .ready
-            .iter()
-            .any(|key| *key != me && state.waits.get(key) == Some(&Wait::Runnable))
+        Self::ready_valid_excluding(&state, me) > 0
     }
 
     /// Make KEY the next thread to run, whatever it waits for.
@@ -1710,9 +2167,9 @@ impl Control {
         ) {
             return;
         }
-        state.ready.retain(|ready| *ready != key);
-        state.waits.insert(key, Wait::Runnable);
-        state.ready.push_front(key);
+        Self::set_wait(&mut state, key, Wait::Runnable);
+        state.ready.move_to_front(key);
+        Self::check_invariants(&state);
     }
 
     /// What KEY waits for.
@@ -1741,26 +2198,88 @@ impl Control {
     /// notification to all, a thread's end).
     pub(crate) fn wake_waiting_for(&self, wait: Wait) -> usize {
         let mut state = self.state();
-        let keys: Vec<ThreadKey> = state
-            .waits
-            .iter()
-            .filter(|(_, w)| **w == wait)
-            .map(|(key, _)| *key)
-            .collect();
-        for key in &keys {
-            Self::wake_locked(&mut state, *key);
+        match wait {
+            Wait::Join(target) => {
+                let mut woken = 0;
+                while let Some(key) = state
+                    .waits
+                    .join_waiters
+                    .get(&target)
+                    .and_then(|set| set.first().copied())
+                {
+                    Self::wake_locked(&mut state, key);
+                    woken += 1;
+                }
+                woken
+            }
+            Wait::Mutex(id) => {
+                let mut woken = 0;
+                while let Some(key) = state
+                    .waits
+                    .mutex_waiters
+                    .get(&id)
+                    .and_then(|set| set.first().copied())
+                {
+                    Self::wake_locked(&mut state, key);
+                    woken += 1;
+                }
+                woken
+            }
+            Wait::Condition(id) => {
+                let mut woken = 0;
+                while let Some(key) = state
+                    .waits
+                    .condition_waiters
+                    .get(&id)
+                    .and_then(|set| set.first().copied())
+                {
+                    Self::wake_locked(&mut state, key);
+                    woken += 1;
+                }
+                woken
+            }
+            _ => {
+                // A wait with no object index (host requests): bounded by
+                // in-flight requests, so it stays a linear scan (cut 2 note).
+                let keys: Vec<ThreadKey> = state
+                    .waits
+                    .iter()
+                    .filter(|(_, w)| **w == wait)
+                    .map(|(key, _)| *key)
+                    .collect();
+                for key in &keys {
+                    Self::wake_locked(&mut state, *key);
+                }
+                keys.len()
+            }
         }
-        keys.len()
     }
 
     /// Make the first thread (in key order) waiting for WAIT runnable.
     pub(crate) fn wake_one_waiting_for(&self, wait: Wait) -> bool {
         let mut state = self.state();
-        let key = state
-            .waits
-            .iter()
-            .find(|(_, w)| **w == wait)
-            .map(|(key, _)| *key);
+        let key = match wait {
+            Wait::Join(target) => state
+                .waits
+                .join_waiters
+                .get(&target)
+                .and_then(|set| set.first().copied()),
+            Wait::Mutex(id) => state
+                .waits
+                .mutex_waiters
+                .get(&id)
+                .and_then(|set| set.first().copied()),
+            Wait::Condition(id) => state
+                .waits
+                .condition_waiters
+                .get(&id)
+                .and_then(|set| set.first().copied()),
+            _ => state
+                .waits
+                .iter()
+                .find(|(_, w)| **w == wait)
+                .map(|(key, _)| *key),
+        };
         match key {
             Some(key) => {
                 Self::wake_locked(&mut state, key);
@@ -1774,56 +2293,39 @@ impl Control {
         match state.waits.get(&key) {
             Some(Wait::Runnable | Wait::Exited | Wait::HostRequest(_)) | None => {}
             Some(Wait::Join(_) | Wait::Mutex(_) | Wait::Condition(_) | Wait::Select { .. }) => {
-                state.waits.insert(key, Wait::Runnable);
-                state.ready.push_back(key);
+                Self::set_wait(state, key, Wait::Runnable);
+                Self::enqueue_ready(state, key);
             }
         }
     }
 
     /// Move threads whose deadline passed into the ready queue, EARLIEST
-    /// DEADLINE FIRST. `waits` is keyed by `ThreadKey`, and `Main` orders
-    /// before every worker, so expiring in map order let a single coarse
-    /// host wakeup that left several deadlines expired together resume the
-    /// LATER deadline first — Main's `sleep-for` before the peer whose
-    /// earlier timer had already passed (macOS arm64, CI run 41283917816:
-    /// the green release-point deopt tests lost the redefinition that way).
-    /// The single-expiry wake already runs the earliest deadline
-    /// (`pick`'s `min_by_key`); this keeps that order when several expire
-    /// at once. Identical deadlines keep `ThreadKey` order: simultaneous
-    /// deadlines have no order of their own to preserve.
+    /// DEADLINE FIRST. The index is keyed by `(wait_end, ThreadKey)`, so the
+    /// expired set comes out in exactly the order the independent per-thread
+    /// timers would have produced; simultaneous deadlines keep `ThreadKey`
+    /// order (the b262 pin).
     fn expire_deadlines(state: &mut ControlState, now: Instant) {
-        let mut expired: Vec<(ThreadKey, Instant)> = state
-            .waits
-            .iter()
-            .filter_map(|(key, wait)| match wait {
-                Wait::Select { wait_end } if *wait_end <= now => Some((*key, *wait_end)),
-                _ => None,
-            })
-            .collect();
-        expired.sort_by_key(|&(_, wait_end)| wait_end);
-        for (key, _) in expired {
-            Self::wake_locked(state, key);
+        while let Some(deadline) = state.waits.select_index.keys().next().copied() {
+            if deadline.wait_end > now {
+                break;
+            }
+            Self::wake_locked(state, deadline.key);
         }
     }
 
-    /// Readiness wakes all selecting owners. They inspect their own wait
-    /// policy and poll live descriptors only after reacquiring the Baton.
-    /// Both readiness call sites run BEFORE `pick` (the next-owner scan and
-    /// the post-wait activity wake), so a readiness event arriving while
-    /// several deadlines have already passed must admit those in deadline
-    /// order too — key order here would resume Main before a worker whose
-    /// earlier timer had expired, the same inversion `expire_deadlines`
-    /// fixes on the pure timer path. The still-waiting selectors follow in
-    /// key order. A monotonic `Instant::now()` never expires a deadline
-    /// early, so this stays a readiness-gated wake, not a clock one.
+    /// Readiness wakes every selecting owner. Expired deadlines admit first
+    /// in deadline order — the next-owner scan and the post-wait path run
+    /// before `pick`'s own expiry — and the remaining selectors then wake in
+    /// `ThreadKey` order, as the independent host waits would. They inspect
+    /// their own wait policy and poll live descriptors only after
+    /// reacquiring the Baton.
     fn wake_selects(state: &mut ControlState) {
-        Self::expire_deadlines(state, Instant::now());
-        let selecting: Vec<_> = state
-            .waits
-            .iter()
-            .filter_map(|(key, wait)| matches!(wait, Wait::Select { .. }).then_some(*key))
-            .collect();
-        for key in selecting {
+        Self::wake_selects_at(state, Instant::now());
+    }
+
+    fn wake_selects_at(state: &mut ControlState, now: Instant) {
+        Self::expire_deadlines(state, now);
+        while let Some(key) = state.waits.select_keys.first().copied() {
             Self::wake_locked(state, key);
         }
     }
@@ -1972,10 +2474,10 @@ impl Control {
         if let Some(turn) = Self::pick_queued_service(state) {
             if me != ThreadKey::Main {
                 state.physical.insert(me, OwnerLocation::Receiving);
-                if state.waits.get(&me) == Some(&Wait::Runnable) && !state.ready.contains(&me) {
+                if state.waits.get(&me) == Some(&Wait::Runnable) {
                     // Its selected turn was already removed from FIFO. A
                     // native-only interception must not forfeit that turn.
-                    state.ready.push_front(me);
+                    Self::enqueue_ready_front(state, me);
                 }
             }
             Some(turn)
@@ -2049,10 +2551,7 @@ impl Control {
                 .map(GreenSelectHandle::arm);
             let deadline = {
                 let mut state = self.state();
-                if state
-                    .waits
-                    .values()
-                    .any(|wait| matches!(wait, Wait::Select { .. }))
+                if state.waits.select_len() > 0
                     && let Some(Some(select)) = self.select.get()
                     && select.wait_until(Instant::now())
                 {
@@ -2120,18 +2619,25 @@ impl Control {
 
     /// Maintenance seams shared with the scheduler-index implementation.
     /// New transitions must not mutate the wait map or ready queue elsewhere.
+    ///
+    /// `set_wait` moves KEY's wait and every wait-derived index together. A
+    /// transition away from `Runnable` also makes KEY's queued turn stale;
+    /// a later `Runnable` transition queues a fresh turn via `enqueue_ready`.
     fn set_wait(state: &mut ControlState, key: ThreadKey, wait: Wait) {
         state.waits.insert(key, wait);
+        if !matches!(wait, Wait::Runnable) {
+            state.ready.invalidate(key);
+        }
+        Self::check_invariants(state);
     }
 
     /// Remove every scheduler record that names an ended thread. This is the
     /// single whole-key removal seam: `unregister_worker` and `finish` call it
     /// only after publishing `Wait::Exited` through [`Self::set_wait`], so the
     /// ended fact stays typed (`exited` reads an absent wait as ended) and
-    /// joiners keep observing it. Whole-key removal must stay here, never as
-    /// direct map writes beside `set_wait`: when the scheduler scan indexes
-    /// land, this is where their counts and per-object waiter sets are
-    /// released after the `Exited` transition.
+    /// joiners keep observing it. No production code removes a key piecemeal
+    /// beside `set_wait`: this seam releases the wait, its index entries and
+    /// counts, the sender and the physical location together.
     fn remove_key(state: &mut ControlState, key: ThreadKey) {
         debug_assert!(
             matches!(state.waits.get(&key), Some(Wait::Exited) | None),
@@ -2140,81 +2646,98 @@ impl Control {
         state.waits.remove(&key);
         state.senders.remove(&key);
         state.physical.remove(&key);
-        // No ready-queue edit is needed: `pop_ready` drops a stale turn whose
-        // wait is not `Runnable` (or whose key no longer has one).
+        state.ready.invalidate(key);
+        Self::check_invariants(state);
     }
 
+    /// Queue KEY's ready turn at the back if it has none. The caller already
+    /// made KEY `Runnable` through [`Self::set_wait`].
     fn enqueue_ready(state: &mut ControlState, key: ThreadKey) {
-        // A native main can already have been woken while its physical wait
-        // still excluded it. Preserve that FIFO place without a duplicate turn.
-        if !state.ready.contains(&key) {
-            state.ready.push_back(key);
-        }
+        state.ready.enqueue_back(key);
+        Self::check_invariants(state);
+    }
+
+    /// Queue KEY's ready turn at the front if it has none (the native
+    /// interception requeue preserves the turn it is about to use).
+    fn enqueue_ready_front(state: &mut ControlState, key: ThreadKey) {
+        state.ready.enqueue_front(key);
+        Self::check_invariants(state);
     }
 
     fn pop_ready(state: &mut ControlState, selection: ReadySelection) -> Option<ThreadKey> {
         match selection {
-            ReadySelection::NativeMainAcquire => {
-                let index = state.ready.iter().position(|key| *key == ThreadKey::Main)?;
-                return state.ready.remove(index);
-            }
+            ReadySelection::NativeMainAcquire => return state.ready.pop_main(),
             ReadySelection::NextEligible => {}
         }
         // Keep a suspended main's exact FIFO position while selecting peers.
         // Its ordinary turn becomes eligible only after native completion.
-        state
-            .ready
-            .retain(|key| state.waits.get(key) == Some(&Wait::Runnable));
-        if let Some(index) = state.ready.iter().position(|key| {
-            *key != ThreadKey::Main
-                || !matches!(
-                    state.physical.get(key),
-                    Some(
-                        OwnerLocation::NativeReleased
-                            | OwnerLocation::NativeDriving
-                            | OwnerLocation::Serving(_)
-                    )
-                )
-        }) {
-            if let Some(key) = state.ready.remove(index) {
-                return Some(key);
-            }
-        }
-        None
+        let main_excluded = Self::main_excluded(state);
+        let ControlState { waits, ready, .. } = state;
+        let waits = &*waits;
+        let key = ready.pop_valid(
+            |key| waits.get(&key) == Some(&Wait::Runnable),
+            |key| key != ThreadKey::Main || !main_excluded,
+        );
+        Self::check_invariants(state);
+        key
+    }
+
+    /// Whether main's ordinary ready turn is ineligible: its physical wait
+    /// owns the Baton until native completion.
+    fn main_excluded(state: &ControlState) -> bool {
+        matches!(
+            state.physical.get(&ThreadKey::Main),
+            Some(
+                OwnerLocation::NativeReleased
+                    | OwnerLocation::NativeDriving
+                    | OwnerLocation::Serving(_)
+            )
+        )
     }
 
     /// The next thread to hold the Baton, if any can run; with no ready
     /// thread but one waiting for a deadline, the earliest deadline.
     fn pick(state: &mut ControlState) -> Option<(ThreadKey, Option<Instant>)> {
-        Self::expire_deadlines(state, Instant::now());
+        Self::pick_at(state, Instant::now())
+    }
+
+    /// `pick` at an explicit clock instant (the differential harness drives
+    /// the same instants through both the reference scans and this code).
+    fn pick_at(state: &mut ControlState, now: Instant) -> Option<(ThreadKey, Option<Instant>)> {
+        Self::expire_deadlines(state, now);
         if let Some(key) = Self::pop_ready(state, ReadySelection::NextEligible) {
             return Some((key, None));
         }
-        state
-            .waits
-            .iter()
-            .filter(|(key, _)| {
-                **key != ThreadKey::Main
-                    || !matches!(
-                        state.physical.get(key),
-                        Some(
-                            OwnerLocation::NativeReleased
-                                | OwnerLocation::NativeDriving
-                                | OwnerLocation::Serving(_)
-                        )
-                    )
-            })
-            .filter_map(|(key, wait)| match wait {
-                Wait::Select { wait_end } => Some((*key, *wait_end)),
-                Wait::Runnable
-                | Wait::Join(_)
-                | Wait::Mutex(_)
-                | Wait::Condition(_)
-                | Wait::HostRequest(_)
-                | Wait::Exited => None,
-            })
-            .min_by_key(|(_, deadline)| *deadline)
-            .map(|(key, deadline)| (key, Some(deadline)))
+        let main_excluded = Self::main_excluded(state);
+        for deadline in state.waits.select_index.keys() {
+            if deadline.key == ThreadKey::Main && main_excluded {
+                continue;
+            }
+            return Some((deadline.key, Some(deadline.wait_end)));
+        }
+        None
+    }
+
+    /// Debug cross-structure contract: every wait is indexed under exactly
+    /// one bucket and every queued ready turn belongs to a Runnable key.
+    #[cfg(debug_assertions)]
+    fn check_invariants(state: &ControlState) {
+        state.waits.check_invariants();
+        state.ready.check_invariants();
+        for (key, slot) in &state.ready.slots {
+            if matches!(slot, ReadySlot::Queued(_)) {
+                debug_assert_eq!(
+                    state.waits.get(key),
+                    Some(&Wait::Runnable),
+                    "queued turn for a non-Runnable key"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn check_invariants(state: &ControlState) {
+        let _ = state;
     }
 
     /// Hand the Baton on from ME, which waits for WAIT, and block until it
@@ -2233,10 +2756,10 @@ impl Control {
         }
         {
             let mut state = self.state();
-            state.waits.insert(me, wait);
+            Self::set_wait(&mut state, me, wait);
             state.physical.insert(me, OwnerLocation::Receiving);
             if wait == Wait::Runnable {
-                state.ready.push_back(me);
+                Self::enqueue_ready(&mut state, me);
             }
         }
         #[cfg(test)]
@@ -2245,7 +2768,7 @@ impl Control {
         }
         let Some(next) = self.pick_next() else {
             let mut state = self.state();
-            state.waits.insert(me, Wait::Runnable);
+            Self::set_wait(&mut state, me, Wait::Runnable);
             state.physical.insert(me, OwnerLocation::Running);
             return Err(Handoff::NoRunnable(baton));
         };
@@ -2253,7 +2776,7 @@ impl Control {
         if target == me {
             if matches!(&wake, Wake::Resume(_)) {
                 let mut state = self.state();
-                state.waits.insert(me, Wait::Runnable);
+                Self::set_wait(&mut state, me, Wait::Runnable);
                 state.physical.insert(me, OwnerLocation::Running);
             }
             return Ok(wake);
@@ -2280,10 +2803,10 @@ impl Control {
             state.physical.remove(&me);
             let joiners: Vec<ThreadKey> = state
                 .waits
-                .iter()
-                .filter(|(_, wait)| **wait == Wait::Join(me))
-                .map(|(key, _)| *key)
-                .collect();
+                .join_waiters
+                .get(&me)
+                .map(|set| set.iter().copied().collect())
+                .unwrap_or_default();
             for key in joiners {
                 Self::wake_locked(&mut state, key);
             }
@@ -2348,6 +2871,10 @@ impl Control {
         self.notify_select();
     }
 }
+
+#[cfg(test)]
+#[path = "scheduler_index_tests.rs"]
+mod index_tests;
 
 #[cfg(test)]
 mod tests {
