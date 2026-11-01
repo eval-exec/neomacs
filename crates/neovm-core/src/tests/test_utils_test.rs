@@ -746,39 +746,20 @@ pub fn runtime_startup_context() -> Context {
     }
 }
 
-/// Format a bootstrap failure with its Lisp error data.  The bare `Debug`
-/// of a signal prints heap strings as `String@0x…`, hiding the message that
-/// names the failing load/autoload; print the string contents and the extra
-/// data values instead.
+/// Format a bootstrap failure without walking a payload that may have died
+/// with the failed evaluator.
+///
+/// The bootstrap paths render the error while their heap is alive and hand
+/// that rendering over; a `Signal`'s data values are heap strings, so reading
+/// them here (after the evaluator was dropped) is a use-after-free. The
+/// captured rendering names the failing load/autoload; the fallback is the
+/// address-safe `Debug` shape.
 fn format_bootstrap_error(error: &crate::emacs_core::error::EvalError) -> String {
-    use crate::emacs_core::error::EvalError;
-    match error {
-        EvalError::Signal {
-            symbol,
-            data,
-            raw_data,
-            ..
-        } => {
-            let data = data
-                .iter()
-                .map(format_bootstrap_value)
-                .collect::<Vec<_>>()
-                .join(" ");
-            let raw = raw_data
-                .as_ref()
-                .map(format_bootstrap_value)
-                .unwrap_or_else(|| "nil".to_string());
-            format!("signal {symbol:?} data [{data}] raw_data {raw}")
-        }
-        other => format!("{other:?}"),
+    #[cfg(test)]
+    if let Some(rendered) = crate::emacs_core::load::take_bootstrap_failure_rendering() {
+        return format!("{rendered} | error={error:?}");
     }
-}
-
-fn format_bootstrap_value(value: &Value) -> String {
-    match value.as_str_owned() {
-        Some(text) => format!("{text:?}"),
-        None => format!("{value:?}"),
-    }
+    format!("{error:?}")
 }
 
 /// Evaluate FORMS in a cached runtime-startup evaluator and return formatted

@@ -20,6 +20,32 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
+/// The last bootstrap failure rendered while its evaluator heap was alive.
+///
+/// A bootstrap `EvalError::Signal` names heap strings that die with the failed
+/// evaluator, so a caller must not walk its payload afterwards. Diagnostic
+/// callers (the test bootstrap helper) take this pre-teardown rendering
+/// instead. Test-only: production callers render at the failure site into
+/// their own log.
+#[cfg(test)]
+static BOOTSTRAP_FAILURE_RENDERING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn record_bootstrap_failure_rendering(rendered: &str) {
+    if let Ok(mut slot) = BOOTSTRAP_FAILURE_RENDERING.lock() {
+        *slot = Some(rendered.to_string());
+    }
+}
+
+/// Take the last pre-teardown bootstrap failure rendering (test support).
+#[cfg(test)]
+pub(crate) fn take_bootstrap_failure_rendering() -> Option<String> {
+    BOOTSTRAP_FAILURE_RENDERING
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+}
+
 fn load_string_text(value: &Value) -> Option<String> {
     // Used for error display, loaddefs file-name filtering and symbol-name
     // collection — all ASCII/Unicode, for which to_utf8_lossy is exact.
@@ -6428,6 +6454,8 @@ pub fn create_bootstrap_evaluator_for_loadup(
                     tracing::info!("loadup.el completed (kill-emacs after dump)");
                 } else {
                     let rendered = format_eval_error_in_state(&eval, &e);
+                    #[cfg(test)]
+                    record_bootstrap_failure_rendering(&rendered);
                     tracing::error!("loadup.el failed: {rendered}");
                     maybe_trace_bootstrap_step(format!(
                         "create_bootstrap_evaluator_with_features: loadup-failed={rendered}"
@@ -6510,6 +6538,8 @@ pub(crate) fn create_runtime_startup_evaluator_at_path(
         // Render while the evaluator heap is still alive: the caller's
         // cleanup purges the heap, leaving the signal payload unprintable.
         let rendered = format_eval_error_in_state(&eval, &err);
+        #[cfg(test)]
+        record_bootstrap_failure_rendering(&rendered);
         tracing::error!("runtime startup after bootstrap failed: {rendered}");
         return Err(err);
     }
@@ -6728,6 +6758,8 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
             Ok(()) => Ok(()),
             Err(err) => {
                 let rendered = format_eval_error_in_state(eval, &err);
+                #[cfg(test)]
+                record_bootstrap_failure_rendering(&rendered);
                 tracing::error!("{context}: {rendered}");
                 Err(err)
             }
