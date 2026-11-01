@@ -21,8 +21,15 @@
 (set-window-start (selected-window) (point-min))
 (setq issue621-state nil)
 (defun issue621-finish ()
-  (with-temp-file (getenv "NEOMACS_ISSUE621_RESULT")
-    (prin1 issue621-state (current-buffer)))
+  (let ((state (copy-sequence issue621-state))
+        (buffer (get-buffer "issue621")))
+    ;; The command loop may run active-region cleanup after the hook, so
+    ;; report the state the user observes when the timer fires.
+    (when (and state buffer)
+      (with-current-buffer buffer
+        (setf (nth 1 state) (region-active-p))))
+    (with-temp-file (getenv "NEOMACS_ISSUE621_RESULT")
+      (prin1 state (current-buffer))))
   (kill-emacs 0))
 (add-hook 'post-command-hook
           (lambda ()
