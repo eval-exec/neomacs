@@ -1604,7 +1604,8 @@ impl VectorScanSnapshot {
     /// Acquire loads; immutable mapped words use plain loads.
     ///
     /// # Safety
-    /// Must run on the GC thread for a snapshot captured at the world-stopped start
+    /// Must run on the cycle's sole marker (collector thread or synchronous
+    /// requester fallback) for a snapshot captured at the world-stopped start
     /// handshake of the CURRENTLY-RUNNING concurrent mark; each entry's `base`/`len`
     /// must still address a live, immutable backing (guaranteed: Mapped = immutable
     /// dump; Owned = retired-before-replace by `with_vector_data_mut`).

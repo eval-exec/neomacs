@@ -375,14 +375,70 @@ impl Collector {
     /// Spawn `heap`'s collector. Like the process collector it replaces, it
     /// is spawned by the heap's first GC request, so it inherits that
     /// mutator's CPU affinity mask and default thread settings.
-    fn spawn(heap: HeapIdentity) -> Self {
+    #[cold]
+    #[inline(never)]
+    fn spawn(heap: HeapIdentity) -> CollectorStart {
+        #[cfg(test)]
+        if let Some(error) = collector_test_support::injected_start_failure(heap) {
+            return CollectorStart::Unavailable(error);
+        }
         let (requests, rx) = std::sync::mpsc::channel::<GcRequest>();
-        let thread = std::thread::Builder::new()
+        let thread = match std::thread::Builder::new()
             .name(COLLECTOR_THREAD_NAME.to_owned())
             .spawn(move || serve_gc_requests(rx))
-            .expect("spawn neovm-gc thread");
+        {
+            Ok(thread) => thread,
+            Err(error) => return CollectorStart::Unavailable(error),
+        };
         tracing::debug!(target: "neovm::gc", heap = heap.get(), "collector spawned");
-        Self { requests, thread }
+        CollectorStart::Thread(Self { requests, thread })
+    }
+}
+
+/// Resource refusal is recoverable; a collector that started and then died is
+/// still an invariant failure handled by the request send below.
+enum CollectorStart {
+    Thread(Collector),
+    Unavailable(std::io::Error),
+}
+
+enum CollectorHandle {
+    Thread(Collector),
+    Inline,
+}
+
+enum StartAttempt {
+    First,
+    Retry,
+}
+
+/// Process-wide diagnostic count, not a heap field or a TLS word. Incremented
+/// once per refused start, including retries; logging occurs only on transition
+/// from an absent handle to Inline.
+static COLLECTOR_START_FAILURES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn collector_start_failures() -> u64 {
+    COLLECTOR_START_FAILURES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+impl CollectorHandle {
+    #[cold]
+    fn start(heap: HeapIdentity, attempt: StartAttempt) -> Self {
+        match Collector::spawn(heap) {
+            CollectorStart::Thread(collector) => Self::Thread(collector),
+            CollectorStart::Unavailable(error) => {
+                COLLECTOR_START_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                match attempt {
+                    StartAttempt::First => {
+                        tracing::warn!(target: "neovm::gc", heap = heap.get(), %error,
+                            "collector thread unavailable; collecting on the requester");
+                    }
+                    StartAttempt::Retry => {}
+                }
+                Self::Inline
+            }
+        }
     }
 }
 
@@ -390,55 +446,109 @@ impl Collector {
 /// is dropped).
 fn serve_gc_requests(rx: std::sync::mpsc::Receiver<GcRequest>) {
     while let Ok(req) = rx.recv() {
-        match req {
-            GcRequest::MarkAll(HeapPtr(p), done) => {
-                // Exclusive access: the mutator is blocked on
-                // `done` until we signal.
-                unsafe { (*p).mark_all() };
-                let _ = done.send(());
-            }
-            GcRequest::ConcurrentMark(job) => {
-                run_concurrent_mark(job);
-            }
-            GcRequest::ConcurrentMarkEnabled(job) => {
-                run_concurrent_mark_enabled(*job);
-            }
+        run_gc_request(req);
+    }
+}
+
+/// One implementation of the request protocol for both possible executors.
+fn run_gc_request(req: GcRequest) {
+    match req {
+        GcRequest::MarkAll(HeapPtr(p), done) => {
+            // SAFETY: the requester either executes this directly with
+            // its exclusive heap loan or blocks on done until the sole
+            // worker signals. No other heap access overlaps marking.
+            unsafe { (*p).mark_all() };
+            let _ = done.send(());
+        }
+        GcRequest::ConcurrentMark(job) => {
+            run_concurrent_mark(job);
+        }
+        GcRequest::ConcurrentMarkEnabled(job) => {
+            run_concurrent_mark_enabled(*job);
         }
     }
+}
+
+/// The requester is the cycle's sole marker when no worker can start. Request
+/// stop before entry: mandatory scans still run, residual gray is handed off,
+/// and the normal loop cannot wait for a stop that only this requester can set.
+/// WorkerMarkLogs and snapshots are job-owned; marking needs no collector TLS
+/// or dedicated-thread identity. Keep the active SATB window until normal join.
+#[cold]
+#[inline(never)]
+fn run_gc_request_inline(request: GcRequest) {
+    let done = match &request {
+        GcRequest::MarkAll(_, _) => None,
+        GcRequest::ConcurrentMark(job) => Some(prepare_inline_mark(job)),
+        GcRequest::ConcurrentMarkEnabled(job) => Some(prepare_inline_mark(&job.job)),
+    };
+    run_gc_request(request);
+    if let Some(done) = done {
+        // A quantum-stop bypasses the worker's drained store. Its owned result
+        // is now queued, so safe-point polling must allow termination to join
+        // and trace residual work rather than wait for an absent worker.
+        done.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn prepare_inline_mark(job: &ConcurrentMarkJob) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    job.stop.store(true, std::sync::atomic::Ordering::Release);
+    job.done.clone()
 }
 
 /// The live collectors, keyed by the heap each serves. Cold: touched once per
 /// GC request and at heap teardown, never by allocation. A side table rather
 /// than a `TaggedHeap` field, so the allocation fast paths keep their field
 /// displacements.
-static COLLECTORS: std::sync::Mutex<FxHashMap<HeapIdentity, Collector>> =
+static COLLECTORS: std::sync::Mutex<FxHashMap<HeapIdentity, CollectorHandle>> =
     std::sync::Mutex::new(FxHashMap::with_hasher(rustc_hash::FxBuildHasher));
 
-/// Lock the registry. An entry is inserted only after its thread spawned, so
-/// a panic under the lock leaves the map consistent and a poisoned lock is
-/// still usable (heap teardown must not panic).
-fn collectors() -> std::sync::MutexGuard<'static, FxHashMap<HeapIdentity, Collector>> {
+/// Lock the cold handle registry. A refused start leaves an Inline entry;
+/// a poisoned lock remains usable for heap teardown.
+fn collectors() -> std::sync::MutexGuard<'static, FxHashMap<HeapIdentity, CollectorHandle>> {
     COLLECTORS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Hand `request` to `heap`'s collector, spawning the collector on the heap's
-/// first request.
+/// first request and retrying each later request while its handle is Inline.
 pub(super) fn send_to_collector(heap: HeapIdentity, request: GcRequest) {
-    collectors()
-        .entry(heap)
-        .or_insert_with(|| Collector::spawn(heap))
-        .requests
-        .send(request)
-        .unwrap_or_else(|_| panic!("the neovm-gc thread of heap {} is gone", heap.get()));
+    {
+        use std::collections::hash_map::Entry;
+        let mut registry = collectors();
+        let handle = match registry.entry(heap) {
+            Entry::Vacant(entry) => entry.insert(CollectorHandle::start(heap, StartAttempt::First)),
+            Entry::Occupied(entry) => {
+                let handle = entry.into_mut();
+                if let CollectorHandle::Inline = handle {
+                    *handle = CollectorHandle::start(heap, StartAttempt::Retry);
+                }
+                handle
+            }
+        };
+        match handle {
+            CollectorHandle::Thread(collector) => {
+                collector.requests.send(request).unwrap_or_else(|_| {
+                    panic!("the neovm-gc thread of heap {} is gone", heap.get())
+                });
+                return;
+            }
+            CollectorHandle::Inline => {}
+        }
+    }
+    // No registry lock spans heap marking, callbacks, or completion sends.
+    run_gc_request_inline(request);
 }
 
 /// Remove `heap`'s collector at heap teardown and close its request channel:
 /// the thread exits once its current job returns. `None` when the heap never
-/// sent a GC request.
+/// sent a GC request or only used Inline marking.
 pub(super) fn retire_collector(heap: HeapIdentity) -> Option<RetiredCollector> {
-    let Collector { requests, thread } = collectors().remove(&heap)?;
+    let Collector { requests, thread } = match collectors().remove(&heap)? {
+        CollectorHandle::Thread(collector) => collector,
+        CollectorHandle::Inline => return None,
+    };
     drop(requests);
     Some(RetiredCollector { heap, thread })
 }
@@ -446,7 +556,7 @@ pub(super) fn retire_collector(heap: HeapIdentity) -> Option<RetiredCollector> {
 /// Whether `heap` has a live collector.
 #[cfg(test)]
 pub(crate) fn collector_is_registered(heap: HeapIdentity) -> bool {
-    collectors().contains_key(&heap)
+    matches!(collectors().get(&heap), Some(CollectorHandle::Thread(_)))
 }
 
 /// A collector whose heap retired: `join` it, or `detach` it when the heap
@@ -1264,9 +1374,10 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
     // the claim dispatcher / `deferred`, exactly like the cons-drain branch
     // below; the drain then walks the transitive children to a fixpoint.
     if let Some(snap) = job.obarray.take() {
-        // Safety: `snap` was captured at this cycle's world-stopped start
+        // SAFETY: this cycle's sole marker (worker or inline requester) owns
+        // the scan; `snap` was captured at its world-stopped start
         // handshake; its chunk + seq pointers address the live, non-moving
-        // obarray storage, and we are on the GC thread.
+        // obarray storage, retained through this job's completion.
         unsafe {
             if SYMBOLS {
                 // This API only widens the child filter to include Symbols;
@@ -1288,10 +1399,10 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
     // Stage 2 Tier B CONCURRENT VECTOR SCAN: trace the snapshotted vector
     // backings ONCE per cycle, routing children exactly as above.
     if let Some(snap) = job.vectors.take() {
-        // Safety: `snap` was captured at this cycle's world-stopped start
+        // SAFETY: this cycle's sole marker (worker or inline requester) owns
+        // the scan; `snap` was captured at its world-stopped start
         // handshake; each entry's base/len addresses a live, immutable backing
-        // (Mapped dump or retired-on-write Owned buffer), and we are on the GC
-        // thread.
+        // (Mapped dump or retired-on-write Owned buffer) retained until join.
         unsafe {
             if SYMBOLS {
                 snap.scan_for_major(|child| {
@@ -2553,3 +2664,11 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     );
     cold_gc::carrier_tls_fingerprint(h);
 }
+
+#[cfg(test)]
+#[path = "tests/collector_test_support.rs"]
+mod collector_test_support;
+
+#[cfg(test)]
+#[path = "tests/collector_start_test.rs"]
+mod collector_start_tests;

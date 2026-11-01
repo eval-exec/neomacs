@@ -291,6 +291,12 @@ mod switch_tests;
 #[path = "../tests/carrier_pool_test.rs"]
 mod carrier_pool_tests;
 
+// This child bounds its virtual address space through Linux /proc and
+// setrlimit; portable refusal injection lives in the GC unit-test family.
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../tests/collector_spawn_failure_test.rs"]
+mod collector_spawn_failure_tests;
+
 #[cfg(test)]
 #[path = "../tests/green_parked_root_equivalence_test.rs"]
 mod parked_root_equivalence_tests;

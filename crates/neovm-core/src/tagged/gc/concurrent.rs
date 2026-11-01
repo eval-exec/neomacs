@@ -203,8 +203,9 @@ impl TaggedHeap {
         self.concurrent_mark_running
     }
 
-    /// The GC thread has tentatively drained gray + SATB (Acquire pairs with the
-    /// thread's Release). The mutator polls this at safe points to terminate.
+    /// The marker has tentatively drained gray + SATB, or the inline fallback
+    /// has already handed off its residual work (Acquire pairs with Release).
+    /// The mutator polls this at safe points to terminate and finish tracing.
     pub fn concurrent_mark_done(&self) -> bool {
         self.gc_done.load(std::sync::atomic::Ordering::Acquire)
     }

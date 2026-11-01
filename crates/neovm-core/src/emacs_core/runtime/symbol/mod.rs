@@ -1482,7 +1482,8 @@ impl ObarrayScanSnapshot {
     /// slot index `n_slots`.
     ///
     /// # Safety
-    /// Must run on the GC thread for a snapshot captured at the world-stopped start
+    /// Must run on the cycle's sole marker (collector thread or synchronous
+    /// requester fallback) for a snapshot captured at the world-stopped start
     /// handshake of the CURRENTLY-RUNNING concurrent mark; the chunk + seq pointers
     /// must still address live, non-moving storage. The entry's retention lease
     /// keeps chunk and side allocations valid even if their owner is dropped.
