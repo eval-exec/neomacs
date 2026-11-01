@@ -25,9 +25,9 @@ use strum::{EnumString, IntoStaticStr};
 
 use self::buffer_vocab::BufferId;
 use self::positions::{CharPos0, CharRange};
+use self::text_props::{PropertyInterval, TextPropertyPlistRun, TextPropertyTable};
 use super::error::{Flow, LispCondition, signal};
 use super::intern::{SymId, intern};
-use crate::buffer::text_props::{PropertyInterval, TextPropertyPlistRun, TextPropertyTable};
 use crate::heap_types::LispString;
 use crate::tagged::gc::{
     HeapWriteKind, MEMORY_USE_COUNT_LEN, MemoryUseCountSlot, note_heap_write, with_tagged_heap,
@@ -60,6 +60,8 @@ pub(crate) enum FunctionSourceIdentity {
 pub mod buffer_vocab;
 pub mod flow_vocab;
 pub mod positions;
+pub(crate) mod scratch_bridge;
+pub mod text_props;
 
 // Re-export tagged types for downstream use.
 pub use crate::tagged::header::VecLikeType;

@@ -7,7 +7,7 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 11 |     ThreadTransfer::<TextPropertiesRef<'static>>::transfer();
    |                                                   ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<TextPropertiesRef<'static>>` due to unsatisfied trait bounds
    |
-  ::: src/buffer/text_props.rs
+  ::: src/emacs_core/runtime/value/text_props.rs
    |
    | pub struct TextPropertiesRef<'a> {
    | -------------------------------- doesn't satisfy `TextPropertiesRef<'static>: Sync`

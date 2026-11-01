@@ -49,6 +49,16 @@ impl Context {
         // inline eviction in every image-restored process.
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::install_function_cell_observer();
+        // The text-property storage in the value layer roots its intermediate
+        // conses through the evaluator's scratch-root stack; hand it the
+        // stack operations here, at the same one-time hooks.
+        crate::emacs_core::value::scratch_bridge::install_scratch_root_hooks(
+            crate::emacs_core::value::scratch_bridge::ScratchRootHooks {
+                save: super::save_scratch_gc_roots,
+                push: super::push_scratch_gc_root,
+                restore: super::restore_scratch_gc_roots,
+            },
+        );
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
