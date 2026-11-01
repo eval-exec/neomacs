@@ -680,8 +680,9 @@ fn oracle_prop_sigproc_adv_energy_rms_windowed() {
     (fmakunbound 'neovm--erms-windowed-rms)
     (fmakunbound 'neovm--erms-zero-crossing-rate)
     (makunbound 'neovm--erms-state)))"#;
-    let expect = expect_test::expect![[
-        r#""OK (:win-energy (0.0 0.0 400.0 400.0000000000002 0.0 0.0 1600.0 1600.000000000001) :win-rms (0.0 0.0 7.0710678118654755 7.071067811865477 0.0 0.0 14.142135623730951 14.142135623730955) :energy-count 8 :silence-1-energy 0.0 :silence-2-energy 0.0 :loud-vs-quiet t :zcr-sine 0.22580645161290322 :zcr-dc 0.0 :zcr-alt 1.0 :dc-no-crossings t)""#
-    ]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (:win-energy (0.0 0.0 400.0 400.0000000000002 0.0 0.0 1600.0 1600.000000000001) :win-rms (0.0 0.0 7.0710678118654755 7.071067811865477 0.0 0.0 14.142135623730951 14.142135623730955) :energy-count 8 :silence-1-energy 0.0 :silence-2-energy 0.0 :loud-vs-quiet t :zcr-sine 0.22580645161290322 :zcr-dc 0.0 :zcr-alt 1.0 :dc-no-crossings t)""#,
+        MacosDarwin => r#""OK (:win-energy (0.0 0.0 400.0 400.0000000000003 0.0 0.0 1600.0 1600.0000000000011) :win-rms (0.0 0.0 7.0710678118654755 7.071067811865478 0.0 0.0 14.142135623730951 14.142135623730956) :energy-count 8 :silence-1-energy 0.0 :silence-2-energy 0.0 :loud-vs-quiet t :zcr-sine 0.22580645161290322 :zcr-dc 0.0 :zcr-alt 1.0 :dc-no-crossings t)""#,
+    );
     crate::common::assert_oracle_parity_expect(form, expect);
 }
