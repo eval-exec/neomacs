@@ -69,11 +69,17 @@ impl Default for KmacroManager {
 
 impl GcTrace for KmacroManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
-        for macro_entry in &self.macro_ring {
+        let Self {
+            macro_ring,
+            counter: _,
+            counter_format,
+        } = self;
+        for macro_entry in macro_ring {
             for value in macro_entry {
                 roots.push(*value);
             }
         }
+        counter_format.trace_roots(roots);
     }
 }
 

@@ -20,6 +20,111 @@ fn kmacro_string(text: &str) -> crate::heap_types::LispString {
 // -----------------------------------------------------------------------
 
 #[test]
+fn kmacro_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+
+    struct Probe(usize);
+    fn payload(probes: &mut Vec<Probe>) -> Value {
+        let value = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+        probes.push(Probe(value.bits()));
+        value
+    }
+
+    crate::test_utils::init_test_tracing();
+    for mut format in [
+        LispString::from_utf8("é %d"),
+        LispString::from_unibyte(vec![0x80, b' ', b'%', b'd']),
+    ] {
+        let mut eval = Context::new();
+        eval.gc_stress = false;
+        eval.gc_collect_exact();
+        eval.tagged_heap.set_gc_threshold(usize::MAX);
+        let property = Value::symbol("kmacro-format-owner-only");
+        let probes = eval.with_gc_inhibited(|eval| {
+            let mut probes = Vec::new();
+            let ring = vec![
+                vec![payload(&mut probes), payload(&mut probes)],
+                vec![payload(&mut probes)],
+            ];
+            format.intervals_mut().put_property_in_char_range(
+                CharRange::from_usize(0, 1),
+                property,
+                payload(&mut probes),
+            );
+            // Use the real World's retained metadata independently of Lisp
+            // counter variables and the live keyboard recording/playback.
+            *eval.kmacro = KmacroManager {
+                macro_ring: ring,
+                counter: 17,
+                counter_format: format,
+            };
+            probes
+        });
+        let check_live = |eval: &Context| {
+            // Existing ring controls come first, so omitting the new format
+            // visit cannot hide a regression in the pre-existing root walk.
+            for Probe(bits) in &probes {
+                assert!(
+                    eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                    "kmacro-only property vector was reclaimed"
+                );
+            }
+            for (index, Probe(bits)) in probes.iter().enumerate() {
+                assert_eq!(
+                    Value::from_bits(*bits)
+                        .as_vector_data()
+                        .expect("live kmacro vector")
+                        .as_slice(),
+                    &[Value::fixnum(index as i64)]
+                );
+            }
+            assert_eq!(
+                eval.kmacro
+                    .counter_format
+                    .intervals()
+                    .get_property_at_char_pos(CharPos0::ZERO, property)
+                    .expect("retained counter-format property")
+                    .bits(),
+                probes[3].0
+            );
+        };
+        let completed = eval.gc_count;
+        if eval.tagged_heap.generational_enabled() {
+            assert!(eval.tagged_heap.should_run_minor(false, false));
+            eval.gc_pending = true;
+            eval.gc_safe_point_exact();
+            assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+            assert!(!eval.tagged_heap.concurrent_mark_running());
+            for _ in 0..10_000 {
+                if !eval.tagged_heap.sweep_in_progress() {
+                    break;
+                }
+                eval.gc_safe_point_exact();
+            }
+            assert!(!eval.tagged_heap.sweep_in_progress());
+            assert!(!eval.tagged_heap.mark_in_progress());
+        } else {
+            eval.gc_collect_exact();
+        }
+        assert_eq!(eval.gc_count, completed + 1);
+        check_live(&eval);
+        let completed = eval.gc_count;
+        eval.gc_collect_exact();
+        assert_eq!(eval.gc_count, completed + 1);
+        check_live(&eval);
+
+        *eval.kmacro = KmacroManager::new();
+        eval.gc_collect_exact();
+        for Probe(bits) in probes {
+            assert!(
+                !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+                "retired kmacro graph remained permanently rooted"
+            );
+        }
+    }
+}
+
+#[test]
 fn new_manager_defaults() {
     crate::test_utils::init_test_tracing();
     let mgr = KmacroManager::new();
