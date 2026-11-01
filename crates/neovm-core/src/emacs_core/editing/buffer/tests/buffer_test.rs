@@ -487,3 +487,53 @@ fn kill_buffer_refuses_the_buffer_shown_in_the_minibuffer_window() {
         "minibuffer window must keep its buffer"
     );
 }
+
+/// GNU runs the minibuffer guard after the query functions and
+/// `kill-buffer-hook` (buffer.c:1994-2000): a hook that displays the victim in
+/// the minibuffer window must still make the kill return nil. A guard placed
+/// before the hooks would pass the display-only test above but fail this one.
+#[test]
+fn kill_buffer_minibuffer_guard_runs_after_the_kill_buffer_hook() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let scratch = eval
+        .buffers
+        .find_buffer_by_name("*scratch*")
+        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
+    let victim = eval.buffers.create_buffer("victim-hooked");
+    eval.buffers.set_current(scratch);
+
+    let fid = eval.frames.create_frame("F1", 800, 600, scratch);
+    assert!(eval.frames.select_frame(fid));
+
+    // The victim is not displayed in the minibuffer before the call; only the
+    // hook puts it there.
+    eval.eval_str(
+        r#"(setq kill-buffer-hook
+                 (list (lambda ()
+                         (set-window-buffer (minibuffer-window)
+                                            "victim-hooked"))))"#,
+    )
+    .expect("install kill-buffer-hook");
+
+    let result = eval
+        .eval_str(r#"(kill-buffer "victim-hooked")"#)
+        .expect("kill-buffer");
+    assert!(
+        result.is_nil(),
+        "the post-hook minibuffer guard must refuse the kill, got {result:?}"
+    );
+    assert!(eval.buffers.get(victim).is_some(), "victim must stay live");
+    let shown = eval
+        .frames
+        .get(fid)
+        .expect("frame")
+        .minibuffer_leaf
+        .as_ref()
+        .and_then(|leaf| leaf.buffer_id());
+    assert_eq!(
+        shown,
+        Some(victim),
+        "the hook's minibuffer display must remain"
+    );
+}
