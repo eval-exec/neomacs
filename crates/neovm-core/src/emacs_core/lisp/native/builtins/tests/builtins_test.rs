@@ -11676,6 +11676,41 @@ fn display_update_for_mouse_movement_updates_shared_mouse_state() {
 }
 
 #[test]
+fn mouse_position_in_root_frame_adds_frame_offsets_to_mouse_position() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let frame = dispatch_builtin(&mut eval, "selected-frame", vec![])
+        .expect("selected-frame should resolve")
+        .expect("selected-frame should evaluate");
+    let frame_id = frame.as_frame_id().unwrap();
+
+    // No mouse position yet: GNU answers nil when X/Y are not known.
+    let none = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(none, Value::NIL);
+
+    if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(frame_id)) {
+        frame.char_width = 1.0;
+        frame.char_height = 1.0;
+        frame.left_pos = 3;
+        frame.top_pos = 4;
+    }
+    dispatch_builtin(
+        &mut eval,
+        "display--update-for-mouse-movement",
+        vec![frame, Value::fixnum(19), Value::fixnum(45)],
+    )
+    .expect("display--update-for-mouse-movement should resolve")
+    .expect("display--update-for-mouse-movement should evaluate");
+
+    let pos = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(pos, Value::cons(Value::fixnum(22), Value::fixnum(49)));
+}
+
+#[test]
 fn set_mouse_position_builtins_update_shared_mouse_state() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();

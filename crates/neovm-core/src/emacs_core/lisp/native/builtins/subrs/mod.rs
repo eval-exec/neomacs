@@ -4280,7 +4280,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "mouse-position-in-root-frame",
-        NativeFn::ContextVec(|_ctx, args| builtin_mouse_position_in_root_frame(args)),
+        NativeFn::ContextVec(builtin_mouse_position_in_root_frame),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
