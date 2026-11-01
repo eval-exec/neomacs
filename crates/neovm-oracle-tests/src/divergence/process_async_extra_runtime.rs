@@ -41,9 +41,7 @@ fn datagram_udp() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn local_seqpacket_roundtrip() {
+crate::common::platform_twin_test!(TwinHost::Linux, local_seqpacket_roundtrip, {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""OK (listen open t \"ping-seqpacket\")""#]];
@@ -103,7 +101,7 @@ fn local_seqpacket_roundtrip() {
       (delete-file path))))"##,
         expect,
     );
-}
+});
 
 #[test]
 fn proc_buffer_reassign() {
@@ -196,3 +194,34 @@ fn proc_waiting_input() {
         expect,
     );
 }
+
+// Darwin does not support AF_UNIX SOCK_SEQPACKET: GNU's make-network-process
+// fails with (file-error "make server process failed" "Protocol not
+// supported").  Neo matches (measured live).  The Linux roundtrip test is
+// cfg(linux).
+crate::common::platform_twin_test!(TwinHost::Macos, local_seqpacket_unsupported_on_macos, {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r##"
+(let* ((dir (or (getenv "NEOVM_ORACLE_TEST_TMPDIR") temporary-file-directory))
+       (default-directory (file-name-as-directory dir))
+       (path "neo-b3-seqpacket.sock"))
+  (when (file-exists-p path)
+    (delete-file path))
+  (condition-case err
+      (progn
+        (make-network-process
+         :name "neo-b3-seqp"
+         :family 'local
+         :service path
+         :server t
+         :type 'seqpacket
+         :noquery t)
+        'unexpected-success)
+    (error (list (car err) (cadr err) (caddr err)))))
+"##;
+    let expect = expect_test::expect![[
+        r#""OK (file-error \"make server process failed\" \"Protocol not supported\")""#
+    ]];
+    crate::common::assert_oracle_parity_with_case_workdir_expect(form, expect);
+});
