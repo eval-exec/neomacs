@@ -38,8 +38,17 @@ slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 # not for constraining a spawned production GUI stack. Both files are now
 # modules of the gui binary, so match their module prefixes instead of the
 # former per-file binary IDs.
+#
+# The thread soak is the same case one level deeper: it drives a spawned
+# production editor with up to 300 Lisp threads, and their stacks are virtual
+# address-space reservations. Under the 8GB RLIMIT_AS the editor's baseline VA
+# plus 300 thread stacks crosses the cap and pthread_create fails with EAGAIN
+# (measured: RLIMIT_AS 8589934592, RLIMIT_NPROC 384632, child RSS ~7MB, cgroup
+# max/oom events 0 — P11 soak finding). The editor also needs the real
+# environment a shipped editor has, so the soak runs outside this guardrail;
+# its own per-scenario SANDBOX_MEM_GB budget bounds RSS instead.
 [[profile.default.scripts]]
-filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::)))'
+filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::))) and not (package(neovm-core) and test(=soak))'
 # `prlimit` is a Linux util-linux executable, not a generic Unix interface.
 # macOS is cfg(unix) too, but has no `prlimit`; selecting by the actual host OS
 # keeps hosted native tests executable instead of failing before test startup.

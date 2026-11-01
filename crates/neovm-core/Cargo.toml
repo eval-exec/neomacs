@@ -225,6 +225,10 @@ name = "main_thread_stack"
 path = "tests/main_thread_stack.rs"
 harness = false
 
+[[test]]
+name = "thread_soak"
+path = "tests/thread_soak.rs"
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false
