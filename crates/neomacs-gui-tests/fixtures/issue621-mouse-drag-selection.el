@@ -20,6 +20,10 @@
 (goto-char (point-min))
 (set-window-start (selected-window) (point-min))
 (setq issue621-state nil)
+(defun issue621-finish ()
+  (with-temp-file (getenv "NEOMACS_ISSUE621_RESULT")
+    (prin1 issue621-state (current-buffer)))
+  (kill-emacs 0))
 (add-hook 'post-command-hook
           (lambda ()
             (when (memq this-command
@@ -37,12 +41,12 @@
                                    (posn-point (event-start event))))
                             (and (consp event)
                                  (ignore-errors
-                                   (posn-point (event-end event))))))))))
+                                   (posn-point (event-end event)))))))
+              ;; The drag release runs mouse-set-region; report promptly so
+              ;; the test does not wait for the watchdog.
+              (when (eq this-command 'mouse-set-region)
+                (run-with-timer 0.5 nil #'issue621-finish)))))
 (with-temp-file (getenv "NEOMACS_ISSUE621_READY")
   (insert "ready"))
-(run-with-timer
- 10 nil
- (lambda ()
-   (with-temp-file (getenv "NEOMACS_ISSUE621_RESULT")
-     (prin1 issue621-state (current-buffer)))
-   (kill-emacs 0)))
+;; Fallback: slow window mapping must not record nil before the drag.
+(run-with-timer 30 nil #'issue621-finish)
