@@ -52,24 +52,29 @@ fn the_backend_builds_the_documented_url() -> ParityBatchCase {
 }
 
 /// The selection-insert flow: the entry at point is converted to
-/// BibTeX and inserted into the source buffer.
+/// BibTeX and inserted into the source buffer.  The CrossRef search and
+/// the doi.org BibTeX retrieval both go through the recorded transport,
+/// so the flow is fixture-fed end to end; the request log is part of the
+/// snapshot so a live fetch cannot silently replace a recorded one.
 fn the_selection_inserts_the_bibtex_into_the_source_buffer() -> ParityBatchCase {
     ParityBatchCase::value(
         "the_selection_inserts_the_bibtex_into_the_source_buffer",
         r####"(let ((source-buffer (current-buffer)))
-  (setq biblio-synchronous t)
+  (setq biblio-synchronous t
+        biblio--test-http-requests nil)
   (cl-letf (((symbol-function 'url-retrieve-synchronously)
              #'biblio--test-http-mock))
-    (biblio-lookup #'biblio-crossref-backend "compiler design"))
-  (with-current-buffer "*CrossRef search*"
-    (biblio--selection-first)
-    (biblio--test-with-ui-capture
-     (biblio--selection-insert)
-     (list :source-text
-           (with-current-buffer source-buffer
-             (buffer-substring-no-properties (point-min) (point-max)))))))"####,
+    (biblio-lookup #'biblio-crossref-backend "compiler design")
+    (with-current-buffer "*CrossRef search*"
+      (biblio--selection-first)
+      (biblio--test-with-ui-capture
+       (biblio--selection-insert)
+       (list :source-text
+             (with-current-buffer source-buffer
+               (buffer-substring-no-properties (point-min) (point-max)))
+             :requests (nreverse biblio--test-http-requests))))))"####,
         expect![[
-            r#"OK (:source-text "@InBook{1,\n  booktitle    = {Advanced ASIC Chip Synthesis Using Synopsys® Design\n                  Compiler™ Physical Compiler™ and PrimeTime®},\n  publisher    = {Kluwer Academic Publishers},\n  isbn\11       = 0792376447,\n  pages\11       = {151–173},\n  doi\11       = {10.1007/0-306-47507-3_8},\n  url\11       = {http://dx.doi.org/10.1007/0-306-47507-3_8}\n}\n\n")"#
+            r#"OK (:source-text "@InBook{1,\n  booktitle    = {Advanced ASIC Chip Synthesis Using Synopsys® Design\n                  Compiler™ Physical Compiler™ and PrimeTime®},\n  publisher    = {Kluwer Academic Publishers},\n  isbn\11       = 0792376447,\n  pages\11       = {151–173},\n  doi\11       = {10.1007/0-306-47507-3_8},\n  url\11       = {http://dx.doi.org/10.1007/0-306-47507-3_8}\n}\n\n" :requests ("https://api.crossref.org/works?query=compiler%20design" "https://doi.org/10.1007/0-306-47507-3_8"))"#
         ]],
     )
 }

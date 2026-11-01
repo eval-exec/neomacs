@@ -1,9 +1,11 @@
 //! Practical parity for biblio / biblio-core.  The package queries
 //! bibliographic backends (crossref here) and renders the parsed results
 //! into a tabulated buffer, from which entries can be inserted as
-//! BibTeX into the source buffer.  The HTTP layer is stubbed with a
-//! recorded real crossref API response; the package runs its real
-//! parsing, rendering, and selection-insert flows.
+//! BibTeX into the source buffer.  The HTTP layer is stubbed with
+//! recorded real CrossRef search and doi.org BibTeX responses covering
+//! the whole lookup and selection-insert flow; the package runs its real
+//! parsing, rendering, DOI retrieval, and insertion paths without
+//! network access.
 
 use std::time::Duration;
 
@@ -39,6 +41,18 @@ const TEST_PRELUDE: &str = r####"(require 'cl-lib)
 `https://api.crossref.org/works?query=compiler design&rows=3'
 payload, frozen so the HTTP layer can be stubbed).")
 
+(defconst biblio--test-doi-bibtex-b64
+  "IEBpbmJvb2t7MSwgSVNCTj17MDc5MjM3NjQ0N30sIHVybD17aHR0cDovL2R4LmRvaS5vcmcvMTAuMTAwNy8wLTMwNi00NzUwNy0zXzh9LCBET0k9ezEwLjEwMDcvMC0zMDYtNDc1MDctM184fSwgYm9va3RpdGxlPXtBZHZhbmNlZCBBU0lDIENoaXAgU3ludGhlc2lzIFVzaW5nIFN5bm9wc3lzwq4gRGVzaWduIENvbXBpbGVy4oSiIFBoeXNpY2FsIENvbXBpbGVy4oSiIGFuZCBQcmltZVRpbWXCrn0sIHB1Ymxpc2hlcj17S2x1d2VyIEFjYWRlbWljIFB1Ymxpc2hlcnN9LCBwYWdlcz17MTUx4oCTMTczfSB9Cg=="
+  "Base64 of the recorded doi.org response for 10.1007/0-306-47507-3_8.
+Captured from `https://doi.org/10.1007/0-306-47507-3_8' with the
+package's own Accept header (`text/bibliography;style=bibtex,
+application/x-bibtex'), status 200.  The selection-insert flow
+fetches this URL, so the recorded transport must serve it too;
+otherwise the probe would depend on live network access.")
+
+(defvar biblio--test-http-requests nil
+  "URLs the recorded HTTP transport served during one case.")
+
 (defun biblio--test-source-state ()
   "Verify the installed payload is the pinned upstream build."
   (dolist (entry biblio--test-manifest)
@@ -60,13 +74,23 @@ payload, frozen so the HTTP layer can be stubbed).")
                    (cadr (assq 'biblio package-alist)))))))
 
 (defun biblio--test-http-mock (url)
-  "Return a buffer holding the recorded HTTP response for URL."
-  (let ((buf (generate-new-buffer " *biblio-http*")))
+  "Return a buffer holding the recorded HTTP response for URL.
+The CrossRef search endpoint and the doi.org BibTeX endpoint are
+both served from recorded payloads, so the lookup and the
+selection-insert flow never touch the network."
+  (push url biblio--test-http-requests)
+  (let ((bibtex (string-match-p "\\`https://\\(doi\\.org\\|crosscite\\.org\\)/" url))
+        (buf (generate-new-buffer " *biblio-http*")))
     (with-current-buffer buf
       (insert "HTTP/1.1 200 OK\n")
-      (insert "Content-Type: application/json; charset=utf-8\n\n")
+      (insert (if bibtex
+                  "Content-Type: text/bibliography\n\n"
+                "Content-Type: application/json; charset=utf-8\n\n"))
       (insert (decode-coding-string
-               (base64-decode-string biblio--test-crossref-json-b64)
+               (base64-decode-string
+                (if bibtex
+                    biblio--test-doi-bibtex-b64
+                  biblio--test-crossref-json-b64))
                'utf-8))
       (goto-char (point-min)))
     buf))
