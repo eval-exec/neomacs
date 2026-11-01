@@ -85,8 +85,8 @@ impl BytecodeErrorBacktrace {
         })
     }
 
-    pub(crate) fn record(self, ctx: &mut crate::emacs_core::eval::Context) {
-        ctx.push_backtrace_frame(self.function, &self.args);
+    pub(crate) fn record(self, push: &mut dyn FnMut(Value, &[Value])) {
+        push(self.function, &self.args);
     }
 }
 

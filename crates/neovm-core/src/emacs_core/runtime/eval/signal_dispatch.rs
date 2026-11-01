@@ -203,7 +203,9 @@ impl Context {
         // Native leaves defer this specpdl mutation until their witness is gone.
         // The selected handler/function unwinder owns the frame from here on.
         if let Some(frame) = sig.bytecode_error_backtrace.take() {
-            frame.record(self);
+            frame.record(&mut |function: Value, args: &[Value]| {
+                self.push_backtrace_frame(function, args)
+            });
         }
         self.run_signal_hook(&sig)?;
         let original_delivery = sig.delivery();
