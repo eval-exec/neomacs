@@ -134,15 +134,21 @@ fn thread_lifecycle_created_running_finished() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
     let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
-    assert_eq!(mgr.get_thread(id).unwrap().status, ThreadStatus::Created);
+    assert_eq!(mgr.get_thread(id).unwrap().phase, ThreadPhase::New);
     assert!(mgr.thread_alive_p(id));
 
     mgr.start_thread(id);
-    assert_eq!(mgr.get_thread(id).unwrap().status, ThreadStatus::Running);
+    assert_eq!(
+        mgr.get_thread(id).unwrap().phase,
+        ThreadPhase::Active(RunState::Running)
+    );
     assert!(mgr.thread_alive_p(id));
 
     mgr.finish_thread(id, Value::fixnum(42));
-    assert_eq!(mgr.get_thread(id).unwrap().status, ThreadStatus::Finished);
+    assert_eq!(
+        mgr.get_thread(id).unwrap().phase,
+        ThreadPhase::Completing(ThreadOutcome::Returned)
+    );
     assert!(mgr.thread_alive_p(id));
     assert_eq!(mgr.thread_result(id).as_int(), Some(42));
 
@@ -157,7 +163,10 @@ fn thread_signal_records_error() {
     let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     mgr.start_thread(id);
     mgr.signal_thread(id, Value::symbol("test-error"));
-    assert_eq!(mgr.get_thread(id).unwrap().status, ThreadStatus::Signaled);
+    assert_eq!(
+        mgr.get_thread(id).unwrap().phase,
+        ThreadPhase::Completing(ThreadOutcome::Signaled)
+    );
     assert!(!mgr.thread_alive_p(id));
 }
 
@@ -239,59 +248,80 @@ fn last_error_get_and_cleanup() {
 fn mutex_create_and_lookup() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_mutex(Some(LispString::from_unibyte(b"my-lock".to_vec())));
+    let id = mgr
+        .create_mutex(Some(LispString::from_unibyte(b"my-lock".to_vec())))
+        .expect("mutex creation");
     assert!(mgr.is_mutex(id));
     assert_eq!(
         mgr.mutex_name(id).and_then(|s| s.as_utf8_str()),
         Some("my-lock")
     );
-    assert!(!mgr.is_mutex(999));
+    assert!(mgr.mutex_id_from_handle(&Value::fixnum(999)).is_none());
+    let main = mgr.thread_handle(0).expect("main thread handle");
+    assert!(mgr.mutex_id_from_handle(&main).is_none());
 }
 
 #[test]
 fn mutex_lock_unlock_cycle() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_mutex(None);
-    assert!(mgr.mutex_lock(id));
-    assert!(mgr.mutex_unlock(id));
-    assert!(!mgr.mutex_unlock(id));
+    let id = mgr.create_mutex(None).expect("mutex creation");
+    assert_eq!(mgr.mutex_lock(id), MutexAcquisition::Acquired);
+    assert_eq!(mgr.mutex_unlock(id), MutexRelease::Released);
+    assert_eq!(mgr.mutex_unlock(id), MutexRelease::NotOwner);
 }
 
 #[test]
 fn mutex_recursive_lock() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_mutex(None);
-    assert!(mgr.mutex_lock(id));
-    assert!(mgr.mutex_lock(id));
+    let id = mgr.create_mutex(None).expect("mutex creation");
+    assert_eq!(mgr.mutex_lock(id), MutexAcquisition::Acquired);
+    assert_eq!(mgr.mutex_lock(id), MutexAcquisition::Acquired);
     // lock_count is 2
-    assert!(mgr.mutex_unlock(id));
+    assert_eq!(mgr.mutex_unlock(id), MutexRelease::StillLocked);
     // Still locked (count=1)
-    let m = mgr.mutexes.get(&id).unwrap();
-    assert!(m.owner.is_some());
-    assert!(mgr.mutex_unlock(id));
+    assert!(mgr.mutex_owned_by_current_thread(id));
+    assert!(!mgr.mutex_free(id));
+    assert_eq!(mgr.mutex_unlock_for_wait(id), Some(RecursionDepth::ONE));
+    assert_eq!(
+        mgr.mutex_relock_after_wait(id, RecursionDepth::ONE),
+        MutexAcquisition::Acquired
+    );
+    assert_eq!(mgr.mutex_unlock(id), MutexRelease::Released);
     // Now fully unlocked
-    let m = mgr.mutexes.get(&id).unwrap();
-    assert!(m.owner.is_none());
+    assert!(mgr.mutex_free(id));
+    assert!(!mgr.mutex_owned_by_current_thread(id));
 }
 
 #[test]
 fn mutex_contended_lock_preserves_existing_owner() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let id = mgr.create_mutex(None);
-    assert!(mgr.mutex_lock(id));
+    let id = mgr.create_mutex(None).expect("mutex creation");
+    assert_eq!(mgr.mutex_lock(id), MutexAcquisition::Acquired);
 
     let worker = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
     let saved = mgr.enter_thread(worker);
-    assert!(!mgr.mutex_lock(id));
+    assert_eq!(mgr.mutex_lock(id), MutexAcquisition::Blocked);
     mgr.restore_thread(saved);
 
-    let m = mgr.mutexes.get(&id).unwrap();
-    assert_eq!(m.owner, Some(0));
-    assert_eq!(m.lock_count, 1);
-    assert!(mgr.mutex_unlock(id));
+    assert!(mgr.mutex_owned_by_current_thread(id));
+    assert_eq!(mgr.mutex_unlock_for_wait(id), Some(RecursionDepth::ONE));
+    assert_eq!(
+        mgr.mutex_relock_after_wait(id, RecursionDepth::ONE),
+        MutexAcquisition::Acquired
+    );
+    assert_eq!(mgr.mutex_unlock(id), MutexRelease::Released);
+}
+
+#[test]
+fn mutex_recursion_depth_rejects_zero_and_overflow() {
+    assert!(RecursionDepth::new(0).is_none());
+    assert_eq!(RecursionDepth::ONE.get(), 1);
+    assert_eq!(RecursionDepth::ONE.checked_increment().unwrap().get(), 2);
+    let maximum = RecursionDepth::new(u32::MAX).expect("positive depth");
+    assert!(maximum.checked_increment().is_none());
 }
 
 // -- Condition variable unit tests --------------------------------------
@@ -300,9 +330,9 @@ fn mutex_contended_lock_preserves_existing_owner() {
 fn condition_variable_create() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let mx = mgr.create_mutex(None);
+    let mx = mgr.create_mutex(None).expect("mutex creation");
     let cv = mgr.create_condition_variable(mx, Some(LispString::from_unibyte(b"cv1".to_vec())));
-    assert!(cv.is_some());
+    assert!(cv.is_ok());
     let cv_id = cv.unwrap();
     assert!(mgr.is_condition_variable(cv_id));
     assert_eq!(
@@ -310,15 +340,23 @@ fn condition_variable_create() {
             .and_then(|s| s.as_utf8_str()),
         Some("cv1")
     );
-    assert_eq!(mgr.condition_variable_mutex(cv_id), Some(mx));
+    assert_eq!(mgr.condition_variable_mutex(cv_id), mx);
 }
 
 #[test]
 fn condition_variable_requires_valid_mutex() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
-    let cv = mgr.create_condition_variable(999, None);
-    assert!(cv.is_none());
+    let mutex = mgr.create_mutex(None).expect("mutex creation");
+    let condition = mgr
+        .create_condition_variable(mutex, None)
+        .expect("condition creation");
+    let main = mgr.thread_handle(0).expect("main thread handle");
+    // Typed construction cannot accept a raw ID. The dynamic Lisp boundary
+    // must additionally reject real objects with another pseudovector tag.
+    for wrong_kind in [Value::fixnum(999), main, condition.value()] {
+        assert!(mgr.mutex_id_from_handle(&wrong_kind).is_none());
+    }
 }
 
 // -- Builtin-level tests -----------------------------------------------
@@ -644,7 +682,7 @@ fn failed_blocked_thread_entry_preserves_continuation() {
         .threads
         .get_thread(thread_id)
         .expect("blocked thread remains registered");
-    assert_eq!(thread.status, ThreadStatus::Blocked);
+    assert_eq!(thread.phase, ThreadPhase::Active(RunState::Blocked));
     assert_eq!(thread.blocked_remaining_forms, continuation);
 
     super::super::eval::set_default_toplevel_value(
@@ -1067,13 +1105,12 @@ fn test_builtin_make_thread_preserves_caller_current_buffer() {
 
     let thread = builtin_make_thread(&mut eval, vec![Value::symbol("thread-switch-buffer")])
         .expect("make-thread");
-    let thread_id = tagged_object_id(&thread, ThreadingKind::Thread).expect("thread id");
     let joined = builtin_thread_join(&mut eval, vec![thread]).expect("thread-join");
 
     assert_eq!(joined, Value::make_buffer(worker_buffer));
     assert_eq!(eval.buffers.current_buffer_id(), Some(main_buffer));
     assert_eq!(
-        eval.threads.thread_current_buffer(thread_id),
+        eval.threads.thread_current_buffer_for_value(thread),
         Some(worker_buffer)
     );
     assert_eq!(eval.threads.thread_current_buffer(0), Some(main_buffer));
@@ -1314,7 +1351,7 @@ fn test_sf_with_mutex_executes_body() {
 
     let mut eval = Context::new();
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
-    let mx_id = tagged_object_id(&mx, ThreadingKind::Mutex).unwrap();
+    let mx_id = eval.threads.mutex_id_from_handle(&mx).unwrap();
 
     // Store the mutex id in a variable so the special form can look it up
     eval.set_variable("test-mx", mx);
@@ -1326,8 +1363,8 @@ fn test_sf_with_mutex_executes_body() {
     assert_eq!(result.unwrap().as_int(), Some(42));
 
     // Mutex should be unlocked after with-mutex completes
-    let m = eval.threads.mutexes.get(&mx_id).unwrap();
-    assert!(m.owner.is_none());
+    assert!(eval.threads.mutex_free(mx_id));
+    assert!(!eval.threads.mutex_owned_by_current_thread(mx_id));
 }
 
 #[test]
@@ -1336,7 +1373,7 @@ fn test_sf_with_mutex_unlocks_on_error() {
 
     let mut eval = Context::new();
     let mx = builtin_make_mutex(&mut eval, vec![]).unwrap();
-    let mx_id = tagged_object_id(&mx, ThreadingKind::Mutex).unwrap();
+    let mx_id = eval.threads.mutex_id_from_handle(&mx).unwrap();
     eval.set_variable("test-mx2", mx);
 
     // (with-mutex test-mx2 (/ 1 0))  -- will signal arith-error
@@ -1349,8 +1386,8 @@ fn test_sf_with_mutex_unlocks_on_error() {
     assert!(result.is_err());
 
     // But the mutex should still be unlocked
-    let m = eval.threads.mutexes.get(&mx_id).unwrap();
-    assert!(m.owner.is_none());
+    assert!(eval.threads.mutex_free(mx_id));
+    assert!(!eval.threads.mutex_owned_by_current_thread(mx_id));
 }
 
 #[test]
@@ -1775,6 +1812,7 @@ fn finished_threads_are_removed_from_the_registry() {
     }
     eval.gc_collect_exact();
     let after = eval.threads.threads.len();
+    eprintln!("P15_RETAINED live_registry before={before} after={after} cycles=200");
     assert!(
         after <= before + 4,
         "finished threads accumulate in the live registry: {before} -> {after} after 200 \
@@ -1782,4 +1820,341 @@ fn finished_threads_are_removed_from_the_registry() {
          (src/thread.c:853-859) and collects it once unreachable (thread_live_p, \
          src/thread.c:1153-1160)"
     );
+}
+
+/// GNU unlinks finished threads at src/thread.c:853-859 and sweeps
+/// unreachable pseudovectors at src/alloc.c:3125-3132,3270-3285. Registry
+/// retirement alone is insufficient: the heap-visible objects must die too.
+#[test]
+fn p15_gc_finished_thread_objects_are_reclaimed() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let cycle = "(progn (thread-join (make-thread (lambda () nil))) nil)";
+    for _ in 0..20 {
+        eval.eval_str(cycle)
+            .expect("warmup make-thread/thread-join");
+    }
+    eval.gc_collect_exact();
+    let before = threading_object_count(&mut eval, ThreadingKind::Thread);
+    for _ in 0..200 {
+        eval.eval_str(cycle).expect("make-thread/thread-join");
+    }
+    eval.gc_collect_exact();
+    let after = threading_object_count(&mut eval, ThreadingKind::Thread);
+    eprintln!(
+        "P15_RETAINED thread_objects before={} after={} cycles=200",
+        before.0, after.0
+    );
+    assert_eq!(
+        after, before,
+        "finished unreachable thread objects remain after full GC"
+    );
+}
+
+/// Exact object telemetry, not allocator RSS or the manager's own registry.
+/// This is the same boxed census exposed by `neomacs--heap-layout-stats`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ThreadingObjectCount(usize);
+
+fn threading_object_count(eval: &mut Context, kind: ThreadingKind) -> ThreadingObjectCount {
+    // Post-GC accounting may allocate; the telemetry API requires closed regions.
+    eval.tagged_heap.close_alloc_regions();
+    let class = match kind {
+        ThreadingKind::Thread => "thread",
+        ThreadingKind::Mutex => "mutex",
+        ThreadingKind::CondVar => "condvar",
+    };
+    let count = eval
+        .tagged_heap
+        .layout_stats()
+        .boxed
+        .into_iter()
+        .find(|entry| entry.class == class)
+        .map_or(0, |entry| entry.objects);
+    ThreadingObjectCount(count)
+}
+
+/// GNU mutexes are ordinary collectible pseudovectors: src/thread.c:319-322,
+/// src/alloc.c:3127-3129,3270-3285; src/thread.c:410-413 destroys dead payloads.
+/// The existing P11 soak reuses mutexes, so it cannot detect this leak.
+#[test]
+fn p15_gc_dropped_mutex_objects_are_reclaimed() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    eval.gc_collect_exact();
+    let before = threading_object_count(&mut eval, ThreadingKind::Mutex);
+    for _ in 0..64 {
+        eval.eval_str("(progn (make-mutex) nil)")
+            .expect("allocate and drop a fresh mutex");
+    }
+    eval.gc_collect_exact();
+    let after = threading_object_count(&mut eval, ThreadingKind::Mutex);
+    eprintln!(
+        "P15_RETAINED mutex_objects before={} after={} cycles=64",
+        before.0, after.0
+    );
+    assert_eq!(after, before, "dropped mutexes survive a forced full GC");
+}
+
+/// GNU condvars retain their mutex (src/thread.h:293-297), but neither is a
+/// permanent registry root: src/thread.c:434-438,592-595 and
+/// src/alloc.c:3127-3132,3270-3285. No thread is created in this churn row.
+#[test]
+fn p15_gc_dropped_condvar_and_mutex_objects_are_reclaimed() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    eval.gc_collect_exact();
+    let before = (
+        threading_object_count(&mut eval, ThreadingKind::CondVar),
+        threading_object_count(&mut eval, ThreadingKind::Mutex),
+    );
+    for _ in 0..64 {
+        eval.eval_str("(progn (make-condition-variable (make-mutex)) nil)")
+            .expect("allocate and drop a fresh condvar/mutex pair");
+    }
+    eval.gc_collect_exact();
+    let after = (
+        threading_object_count(&mut eval, ThreadingKind::CondVar),
+        threading_object_count(&mut eval, ThreadingKind::Mutex),
+    );
+    eprintln!(
+        "P15_RETAINED condvar_mutex_pairs before={:?} after={:?} cycles=64",
+        before, after
+    );
+    assert_eq!(after, before, "dropped condvar/mutex pairs survive full GC");
+}
+
+/// GNU's ordinary thread pseudovector retains its name/result after unlinking
+/// from all_threads (src/thread.c:853-859; src/thread.h:75-86). A reachable
+/// finished object must not depend on a permanent native registry entry.
+#[test]
+fn p15_gc_reachable_finished_thread_preserves_name_and_result() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let result = eval.eval_str(
+        "(progn (setq p15-retained-thread (make-thread (lambda () (vector 17 23)) (copy-sequence \"retained\"))) (thread-join p15-retained-thread))",
+    ).expect("join a retained thread");
+    let thread = eval.eval_str("p15-retained-thread").unwrap();
+    let name = builtin_thread_name(&mut eval, vec![thread]).unwrap();
+    let native = tagged_object_id(&thread, ThreadingKind::Thread).unwrap();
+    assert!(eval.threads.thread_handle(native).is_none());
+
+    for _ in 0..2 {
+        eval.gc_collect_exact();
+        for object in [thread, name, result] {
+            assert!(eval.tagged_heap.owns_heap_value_for_test(object));
+        }
+        assert_eq!(
+            builtin_thread_name(&mut eval, vec![thread]).unwrap().bits(),
+            name.bits()
+        );
+        assert_eq!(
+            builtin_thread_join(&mut eval, vec![thread]).unwrap().bits(),
+            result.bits()
+        );
+        assert!(
+            builtin_thread_live_p(&mut eval, vec![thread])
+                .unwrap()
+                .is_nil()
+        );
+        assert!(
+            builtin_threadp(&mut eval, vec![thread])
+                .unwrap()
+                .is_truthy()
+        );
+    }
+    eval.eval_str("(setq p15-retained-thread nil)").unwrap();
+    eval.gc_collect_exact();
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(thread));
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(name));
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(result));
+}
+
+/// GNU condition variables retain their mutex through a Lisp-object field
+/// (src/thread.h:293-297), even when no separate mutex variable remains.
+#[test]
+fn p15_gc_condition_variable_is_the_only_mutex_edge() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let condition = eval
+        .eval_str("(setq p15-retained-condition (make-condition-variable (make-mutex)))")
+        .expect("retain only the condition variable");
+    let mutex = builtin_condition_mutex(&mut eval, vec![condition]).unwrap();
+    for _ in 0..2 {
+        eval.gc_collect_exact();
+        assert!(eval.tagged_heap.owns_heap_value_for_test(condition));
+        assert!(eval.tagged_heap.owns_heap_value_for_test(mutex));
+        assert_eq!(
+            builtin_condition_mutex(&mut eval, vec![condition])
+                .unwrap()
+                .bits(),
+            mutex.bits()
+        );
+    }
+    eval.eval_str("(setq p15-retained-condition nil)").unwrap();
+    eval.gc_collect_exact();
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(condition));
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(mutex));
+}
+
+/// These are seven distinct sole edges, so omitting one field cannot be hidden
+/// by another payload field or an evaluator temporary. GNU's native thread
+/// fields are traced pseudovector words (src/thread.h:75-94); the suspended
+/// continuation is Neo's equivalent of GNU's retained execution stack.
+#[test]
+fn p15_gc_thread_payload_fields_have_only_object_edges() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let (native, thread, probes) = eval.with_gc_inhibited(|eval| {
+        let native = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
+        let thread = eval.threads.thread_handle(native).unwrap();
+        let probes: [Value; 7] =
+            std::array::from_fn(|index| Value::vector(vec![Value::fixnum(index as i64)]));
+        crate::tagged::gc::with_tagged_heap(|heap| {
+            // SAFETY: the live registration roots this same-World ThreadObj.
+            // The test retains exclusive World authority; this closure only
+            // copies prepared words, without allocating, collecting or yielding.
+            unsafe {
+                heap.with_thread_payload_mut(thread, |payload| {
+                    payload.function = probes[0];
+                    payload.result = probes[1];
+                    payload.last_error = Some(probes[2]);
+                    payload.buffer_disposition = probes[3];
+                    payload.event_object = probes[4];
+                    payload.blocked_remaining_forms = probes[5];
+                    payload.error_data = probes[6];
+                })
+            }
+            .expect("same-World thread payload")
+        });
+        (native, thread, probes)
+    });
+    let check = |eval: &Context| {
+        assert!(eval.tagged_heap.owns_heap_value_for_test(thread));
+        for probe in probes {
+            assert!(
+                eval.tagged_heap.owns_heap_value_for_test(probe),
+                "a thread-only payload vector was reclaimed"
+            );
+        }
+        // Check membership for every vector before decoding any payload.
+        for (index, probe) in probes.into_iter().enumerate() {
+            assert_eq!(
+                probe.as_vector_data().unwrap().as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+        }
+    };
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check(&eval);
+    eval.gc_collect_exact();
+    check(&eval);
+    eval.threads.discard_unstarted_thread(native);
+    eval.gc_collect_exact();
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(thread));
+    for probe in probes {
+        assert!(
+            !eval.tagged_heap.owns_heap_value_for_test(probe),
+            "a discarded thread payload stayed rooted"
+        );
+    }
+}
+
+/// Insert the sole young edge only after the thread owner has survived a full
+/// collection. A birth-only tracer cannot satisfy this old-to-young case:
+/// ordinary old roots are black during a minor, so the mutation barrier must
+/// remember the thread owner. GEN0 exercises the same payload through full GC.
+#[test]
+fn p15_gc_old_thread_payload_remembers_young_children() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let (native, thread) = eval.with_gc_inhibited(|eval| {
+        let native = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
+        (native, eval.threads.thread_handle(native).unwrap())
+    });
+    eval.gc_collect_exact();
+    assert!(eval.tagged_heap.owns_heap_value_for_test(thread));
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.value_is_old_for_test(thread));
+    }
+
+    let child = eval.with_gc_inhibited(|_eval| {
+        let child = Value::vector(vec![Value::fixnum(1515)]);
+        crate::tagged::gc::with_tagged_heap(|heap| {
+            assert!(heap.owns_heap_value_for_test(child));
+            assert!(!heap.value_is_old_for_test(child));
+            // SAFETY: this ordinary World Context owns the installed heap,
+            // and its live registration roots the already-promoted ThreadObj.
+            // The prepared child is copied before any further collection;
+            // the barrier closure does not allocate, collect, or yield.
+            unsafe {
+                heap.with_thread_payload_mut(thread, |payload| {
+                    payload.result = child;
+                })
+            }
+            .expect("same-World old thread payload");
+        });
+        child
+    });
+    let check = |eval: &Context| {
+        assert!(eval.tagged_heap.owns_heap_value_for_test(thread));
+        assert!(
+            eval.tagged_heap.owns_heap_value_for_test(child),
+            "the sole young child of an old thread was reclaimed"
+        );
+        // Membership precedes both the payload projection and vector decoding.
+        assert_eq!(eval.threads.thread_result(native).bits(), child.bits());
+        assert_eq!(
+            child.as_vector_data().unwrap().as_slice(),
+            &[Value::fixnum(1515)]
+        );
+    };
+
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        // Only one young vector was added after the full collection. One
+        // ordinary continuation slice must sweep this bounded fixture fully;
+        // do not replace the minor with an explicit full collection.
+        eval.gc_safe_point_exact();
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check(&eval);
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.value_is_old_for_test(child));
+    }
+    eval.gc_collect_exact();
+    check(&eval);
+
+    eval.threads.discard_unstarted_thread(native);
+    eval.gc_collect_exact();
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(thread));
+    assert!(!eval.tagged_heap.owns_heap_value_for_test(child));
 }

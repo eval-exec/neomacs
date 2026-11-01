@@ -1129,6 +1129,28 @@ impl TaggedHeap {
                     self.mark_or_push_child(value, label);
                 }
             }
+            VecLikeType::Thread => {
+                // SAFETY: the tag selects an initialized ThreadObj; this
+                // termination-side scan excludes all payload writers.
+                let payload = unsafe { &(*(ptr as *const ThreadObj)).payload };
+                payload.visit_children(&mut |child| {
+                    self.mark_or_push_child(child, "thread-payload");
+                });
+            }
+            VecLikeType::Mutex => {
+                // SAFETY: the tag selects an initialized MutexObj, with writers excluded.
+                let payload = unsafe { &(*(ptr as *const MutexObj)).payload };
+                payload.visit_children(&mut |child| {
+                    self.mark_or_push_child(child, "mutex-payload");
+                });
+            }
+            VecLikeType::CondVar => {
+                // SAFETY: the tag selects an initialized CondVarObj, with writers excluded.
+                let payload = unsafe { &(*(ptr as *const CondVarObj)).payload };
+                payload.visit_children(&mut |child| {
+                    self.mark_or_push_child(child, "condvar-payload");
+                });
+            }
             VecLikeType::Buffer
             | VecLikeType::Window
             | VecLikeType::Frame
@@ -1142,10 +1164,7 @@ impl TaggedHeap {
             | VecLikeType::Sqlite
             | VecLikeType::UserPtr
             | VecLikeType::SurfaceHandle
-            | VecLikeType::VideoHandle
-            | VecLikeType::Thread
-            | VecLikeType::Mutex
-            | VecLikeType::CondVar => {
+            | VecLikeType::VideoHandle => {
                 // These have no Value children to trace.
                 //
                 // Bignums own a `malachite::Integer`, which manages
@@ -1155,9 +1174,7 @@ impl TaggedHeap {
                 // UserPtr has only a raw C pointer and finalizer, no
                 // Lisp children.
                 //
-                // SurfaceHandle, VideoHandle and the threading handles
-                // contain only typed ids; the state they name lives in the
-                // ThreadManager, which roots its own canonical handles.
+                // SurfaceHandle and VideoHandle contain only native ids.
             }
         }
     }
@@ -1962,9 +1979,19 @@ impl TaggedHeap {
                         // registries and runs native teardown. Retain its Box
                         // during automatic Drop instead of invoking it.
                     }
-                    VecLikeType::Thread | VecLikeType::Mutex | VecLikeType::CondVar => unsafe {
-                        drop(Box::from_raw(ptr as *mut ThreadingHandleObj))
-                    },
+                    VecLikeType::Thread => {
+                        // SAFETY: the detached allocation has this concrete tag;
+                        // its owned payload has no scheduler/TLS/callback Drop.
+                        unsafe { drop(Box::from_raw(ptr as *mut ThreadObj)) };
+                    }
+                    VecLikeType::Mutex => {
+                        // SAFETY: the detached MutexObj only owns ordinary Rust storage.
+                        unsafe { drop(Box::from_raw(ptr as *mut MutexObj)) };
+                    }
+                    VecLikeType::CondVar => {
+                        // SAFETY: the detached CondVarObj only owns ordinary Rust storage.
+                        unsafe { drop(Box::from_raw(ptr as *mut CondVarObj)) };
+                    }
                     VecLikeType::UserPtr => {
                         let up = ptr as *mut UserPtrObj;
                         if mode == ReclamationMode::Explicit {

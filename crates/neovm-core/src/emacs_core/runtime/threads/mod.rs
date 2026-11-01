@@ -1,10 +1,8 @@
 //! Emacs-compatible threading primitives for the Elisp VM.
 //!
-//! Emacs threading is cooperative: only one thread runs at a time, yielding at
-//! certain well-defined points.  Since our VM is single-threaded, threads are
-//! *simulated* — `make-thread` stores the function and runs it immediately.
-//! The key goal is API compatibility so that Elisp packages using threads,
-//! mutexes, and condition variables continue to work without error.
+//! Default Elisp threads cooperate through the World's Baton. The Sim harness
+//! runs stored functions on its caller; the Green runtime schedules carriers.
+//! Both use the same heap-owned logical objects and live registrations.
 //!
 //! Provided primitives:
 //! - Threads: `make-thread`, `thread-join`, `thread-yield`, `thread-name`,
@@ -79,24 +77,6 @@ fn sleep_duration_from_blocker(value: Value) -> Option<Duration> {
 // Thread state
 // ---------------------------------------------------------------------------
 
-/// Status of a simulated thread.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ThreadStatus {
-    /// Thread has been created but not yet run.
-    Created,
-    /// Thread is currently running (in our model, at most one can be Running).
-    Running,
-    /// Thread is suspended at a cooperative blocking primitive.
-    Blocked,
-    /// Thread has finished successfully.
-    Finished,
-    /// Thread was terminated by an error / signal.
-    Signaled,
-    /// A Green thread's function returned: GNU's thread is dead from then
-    /// on, joined or not (`thread_live_p`).
-    Exited,
-}
-
 /// A thread's stored NAME object (GNU `struct thread_state.name`).
 ///
 /// GNU validates NAME at `make-thread` (`CHECK_STRING` unless nil,
@@ -106,31 +86,30 @@ pub enum ThreadStatus {
 /// invariant at the one construction site and makes the identity contract
 /// explicit: readers hand back the stored object, never a copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ThreadName(Value);
+pub struct ThreadName(crate::heap_types::threading::ThreadName);
 
 impl ThreadName {
     /// No NAME was supplied (GNU stores nil).
-    pub const UNNAMED: Self = Self(Value::NIL);
+    pub const UNNAMED: Self = Self(crate::heap_types::threading::ThreadName::UNNAMED);
 
     /// GNU `make-thread`'s `if (!NILP (name)) CHECK_STRING (name)`.
     pub fn from_lisp(name: Value) -> Result<Self, Flow> {
-        if name.is_nil() || matches!(name.kind(), ValueKind::String) {
-            Ok(Self(name))
-        } else {
-            Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), name],
-            ))
-        }
+        crate::heap_types::threading::ThreadName::from_value(name)
+            .map(Self)
+            .map_err(|_| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), name],
+                )
+            })
     }
 
     pub fn is_unnamed(self) -> bool {
-        self.0.is_nil()
+        self.0.is_unnamed()
     }
 
-    /// The stored Lisp object itself, identity preserved.
     pub fn stored(self) -> Value {
-        self.0
+        self.0.stored()
     }
 }
 
@@ -141,13 +120,11 @@ impl ThreadName {
 /// `(thread-event SENDER ERROR-SYMBOL DATA)` (`src/thread.c:1007-1013`), and
 /// the main thread's reader delivers it through `special-event-map`
 /// (`src/keyboard.c`, THREAD_EVENT; `lisp/thread.el:thread-handle-event`).
-/// The events live in the TARGET thread's own record (thread 0 is the main
-/// thread), i.e. in the heap-allocated thread registry: DESIGN §3 keeps
-/// per-target pending signals in independent durable state, and an inline
-/// `Vec` in `ThreadManager`/`World` would move every later World field and
-/// shift hot displacement immediates.  The main Context drains thread 0's
-/// record into its own keyboard queue in `keyboard.rs`
-/// (`stage_pending_thread_events`).
+/// The native transport mailbox belongs to the target's live registration
+/// (thread 0 is main). It is separate from the heap object's ordinary traced
+/// children, so durable transport roots cannot create an object self-cycle.
+/// The main Context drains this mailbox into its keyboard queue in
+/// `keyboard.rs` (`stage_pending_thread_events`).
 ///
 /// The fields are [`SharedRoot`]s, not raw values: a Green worker queues the
 /// event on its own mutator thread and the main mutator consumes it later, so
@@ -216,744 +193,107 @@ fn thread_event_transport_error(error: crate::tagged::transport::SharedRootError
     )
 }
 
-/// Per-thread bookkeeping.
-#[derive(Clone, Debug)]
-pub struct ThreadState {
-    /// Unique thread id.  0 is always the main thread.
-    pub id: u64,
-    /// The NAME object `make-thread` received (GNU stores the object).
-    pub name: ThreadName,
-    /// The function to invoke (value passed to `make-thread`).
-    pub function: Value,
-    /// Current status.
-    pub status: ThreadStatus,
-    /// Return value after the thread finishes (or nil).
-    pub result: Value,
-    /// Last error that occurred in this thread, if any.
-    pub last_error: Option<Value>,
-    /// Whether this thread has already been joined at least once.
-    pub joined: bool,
-    /// What should happen if this thread's current buffer is killed.
-    pub buffer_disposition: Value,
-    /// Current buffer owned by this thread.
-    pub current_buffer: Option<crate::buffer::BufferId>,
-    /// Object this thread is currently blocked on.
-    pub event_object: Value,
-    /// Pending or terminal signal symbol for this thread.
-    pub error_symbol: Value,
-    /// Pending or terminal signal data for this thread.
-    pub error_data: Value,
-    /// Resume thunk or remaining top-level forms for a cooperative block.
-    pub blocked_remaining_forms: Value,
-    /// GNU `THREAD_EVENT`s queued for THIS thread's reader
-    /// (`src/thread.c:1007-1013`), FIFO.  This record lives in the
-    /// heap-allocated thread registry, so the durable per-target mailbox
-    /// costs no inline `ThreadManager`/`World` bytes.
-    pub pending_thread_events: Vec<PendingThreadEvent>,
+mod layout;
+mod manager;
+
+pub(crate) use crate::heap_types::threading::{
+    CondVarId, CondVarPayload, JoinObservation, MutexId, MutexOwnership, MutexPayload,
+    MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadId, ThreadIds,
+    ThreadOutcome, ThreadPayload, ThreadPhase,
+};
+
+/// A validated object identity. This word is not a GC root by itself: Lisp
+/// arguments or a published execution record must retain it across a safepoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MutexHandle {
+    value: Value,
+    id: MutexId,
 }
 
-// ---------------------------------------------------------------------------
-// Mutex state
-// ---------------------------------------------------------------------------
-
-/// A cooperative mutex.
-///
-/// GNU's Lisp mutex ownership is maintained above the platform thread backend:
-/// a contended `mutex-lock` waits without changing the owner, then acquires
-/// only after the owning thread unlocks.  The simulated VM does not yet have a
-/// resumable wait frame for every blocking primitive, but the ownership state
-/// must still follow GNU's invariant.
-#[derive(Clone, Debug)]
-pub struct MutexState {
-    pub id: u64,
-    pub name: Option<LispString>,
-    /// Id of the thread that currently holds the lock, or `None`.
-    pub owner: Option<u64>,
-    /// Recursive lock count.
-    pub lock_count: u32,
-}
-
-// ---------------------------------------------------------------------------
-// Condition variable state
-// ---------------------------------------------------------------------------
-
-/// A condition variable bound to a particular mutex.
-#[derive(Clone, Debug)]
-pub struct ConditionVarState {
-    pub id: u64,
-    pub name: Option<LispString>,
-    /// The mutex id this condition variable is associated with.
-    pub mutex_id: u64,
-}
-
-// ---------------------------------------------------------------------------
-// ThreadManager
-// ---------------------------------------------------------------------------
-
-/// Central registry for threads, mutexes, and condition variables.
-pub struct ThreadManager {
-    threads: HashMap<u64, ThreadState>,
-    next_id: u64,
-    current_thread: u64, // ID of currently running thread (0 = main)
-    thread_handles: HashMap<u64, Value>,
-    mutexes: HashMap<u64, MutexState>,
-    next_mutex_id: u64,
-    mutex_handles: HashMap<u64, Value>,
-    condition_vars: HashMap<u64, ConditionVarState>,
-    next_cv_id: u64,
-    condition_var_handles: HashMap<u64, Value>,
-    /// Global last-error value (returned by `thread-last-error`).
-    last_error: Option<Value>,
-}
-
-impl ThreadManager {
-    /// Create a new manager with the main thread pre-registered.
-    pub fn new() -> Self {
-        let mut threads = HashMap::new();
-        threads.insert(
-            0,
-            ThreadState {
-                id: 0,
-                name: ThreadName::UNNAMED,
-                function: Value::NIL,
-                status: ThreadStatus::Running,
-                result: Value::NIL,
-                last_error: None,
-                joined: false,
-                buffer_disposition: Value::NIL,
-                current_buffer: None,
-                event_object: Value::NIL,
-                error_symbol: Value::NIL,
-                error_data: Value::NIL,
-                blocked_remaining_forms: Value::NIL,
-                pending_thread_events: Vec::new(),
-            },
-        );
-        let mut thread_handles = HashMap::new();
-        thread_handles.insert(0, tagged_object_value(ThreadingKind::Thread, 0));
-        Self {
-            threads,
-            next_id: 1,
-            current_thread: 0,
-            thread_handles,
-            mutexes: HashMap::new(),
-            next_mutex_id: 1,
-            mutex_handles: HashMap::new(),
-            condition_vars: HashMap::new(),
-            next_cv_id: 1,
-            condition_var_handles: HashMap::new(),
-            last_error: None,
-        }
+impl MutexHandle {
+    pub(crate) fn value(self) -> Value {
+        self.value
     }
-
-    // -- Thread operations --------------------------------------------------
-
-    /// Create a new thread.  Returns the id.
-    pub fn create_thread(&mut self, function: Value, name: ThreadName) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.threads.insert(
-            id,
-            ThreadState {
-                id,
-                name,
-                function,
-                status: ThreadStatus::Created,
-                result: Value::NIL,
-                last_error: None,
-                joined: false,
-                buffer_disposition: Value::NIL,
-                current_buffer: None,
-                event_object: Value::NIL,
-                error_symbol: Value::NIL,
-                error_data: Value::NIL,
-                blocked_remaining_forms: Value::NIL,
-                pending_thread_events: Vec::new(),
-            },
-        );
-        self.thread_handles
-            .insert(id, tagged_object_value(ThreadingKind::Thread, id));
-        id
+    pub(crate) fn native_key(self) -> u64 {
+        self.id.native_key()
     }
+}
 
-    /// Whether any thread besides the main one was ever created.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CondVarHandle {
+    value: Value,
+    id: CondVarId,
+    mutex: MutexHandle,
+}
+
+impl CondVarHandle {
+    pub(crate) fn value(self) -> Value {
+        self.value
+    }
+    pub(crate) fn native_key(self) -> u64 {
+        self.id.native_key()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MutexAcquisition {
+    Acquired,
+    Blocked,
+    DepthExhausted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MutexRelease {
+    StillLocked,
+    Released,
+    NotOwner,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NotificationScope {
+    One,
+    All,
+}
+
+/// World-owned live registrations. Concrete heap objects own logical state;
+/// these reservations preserve the established WorldSlot and hot field offsets.
+#[repr(transparent)]
+struct CurrentThreadOrdinal(u64);
+
+impl CurrentThreadOrdinal {
+    const MAIN: Self = Self(0);
+
     #[inline]
-    pub fn any_thread_created(&self) -> bool {
-        self.next_id > 1
-    }
-
-    /// Mark a thread as Running.
-    pub fn start_thread(&mut self, id: u64) {
-        if let Some(t) = self.threads.get_mut(&id) {
-            t.status = ThreadStatus::Running;
-        }
-    }
-
-    /// Remove a newly created thread whose runtime entry failed before its
-    /// handle could be returned to Lisp.
-    pub fn discard_unstarted_thread(&mut self, id: u64) {
-        debug_assert_ne!(id, self.current_thread);
-        self.threads.remove(&id);
-        self.thread_handles.remove(&id);
-    }
-
-    /// Set the currently running thread and return the previous thread id.
-    pub fn enter_thread(&mut self, id: u64) -> u64 {
-        let saved = self.current_thread;
-        self.current_thread = id;
-        saved
-    }
-
-    /// Restore the previously running thread id.
-    pub fn restore_thread(&mut self, id: u64) {
-        self.current_thread = id;
-    }
-
-    /// Mark a thread as Finished with the given result.
-    pub fn finish_thread(&mut self, id: u64, result: Value) {
-        if let Some(t) = self.threads.get_mut(&id) {
-            t.status = ThreadStatus::Finished;
-            t.result = result;
-        }
-    }
-
-    /// Mark a thread as Signaled by an *external* `thread-signal`.
-    ///
-    /// GNU `thread_set_error` (thread.c:984-991) records the error in the
-    /// thread's `error_symbol`/`error_data`, which is what a blocked
-    /// `thread-join` re-raises. Only `thread-signal` reaches this path.
-    pub fn signal_thread(&mut self, id: u64, error: Value) {
-        if let Some(t) = self.threads.get_mut(&id) {
-            t.last_error = Some(error);
-            if let Some((symbol, data)) = split_signal_binding_value(error) {
-                t.error_symbol = symbol;
-                t.error_data = data;
-            } else {
-                t.error_symbol = Value::NIL;
-                t.error_data = Value::NIL;
-            }
-            if t.status == ThreadStatus::Blocked {
-                t.event_object = Value::NIL;
-            } else {
-                t.status = ThreadStatus::Signaled;
-            }
-        }
-    }
-
-    /// Record a thread's terminal *internal* error (one signalled inside the
-    /// thread function itself).
-    ///
-    /// GNU `record_thread_error` (thread.c:753-758) stores such an error only
-    /// for `thread-last-error`; unlike an external `thread-signal` it leaves
-    /// the thread's `error_symbol` nil, so `thread-join` returns the thread's
-    /// (nil) result rather than re-raising the error.
-    pub fn record_thread_internal_error(&mut self, id: u64, error: Value) {
-        if let Some(t) = self.threads.get_mut(&id) {
-            t.status = ThreadStatus::Signaled;
-            t.last_error = Some(error);
-            t.error_symbol = Value::NIL;
-            t.error_data = Value::NIL;
-        }
-    }
-
-    /// The pending re-raise for `thread-join`: GNU re-signals only an error
-    /// injected by `thread-signal` (recorded in `error_symbol`), never an
-    /// internal one. Returns the `Flow` to re-raise, or `None`.
-    pub fn pending_thread_signal(&self, id: u64) -> Option<Flow> {
-        let thread = self.threads.get(&id)?;
-        if thread.error_symbol.is_nil() {
-            return None;
-        }
-        thread.last_error.and_then(signal_from_binding_value)
-    }
-
-    pub fn take_pending_thread_signal(&mut self, id: u64) -> Option<Flow> {
-        let thread = self.threads.get_mut(&id)?;
-        if thread.error_symbol.is_nil() {
-            return None;
-        }
-        let symbol = thread.error_symbol;
-        let data = thread.error_data;
-        thread.error_symbol = Value::NIL;
-        thread.error_data = Value::NIL;
-        let sym_id = symbol.as_bare_symbol_id()?;
-        Some(signal_with_data_id(sym_id, data))
-    }
-
-    /// Publish an error value for `thread-last-error`.
-    pub fn record_last_error(&mut self, error: Value) {
-        self.last_error = Some(error);
-    }
-
-    /// Get the id of the currently running thread.
-    pub fn current_thread_id(&self) -> u64 {
-        self.current_thread
-    }
-
-    /// Look up a thread by id.
-    pub fn get_thread(&self, id: u64) -> Option<&ThreadState> {
-        self.threads.get(&id)
-    }
-
-    /// Check if a thread is alive from Elisp's point of view.
-    pub fn thread_alive_p(&self, id: u64) -> bool {
-        self.threads.get(&id).is_some_and(|t| match t.status {
-            ThreadStatus::Created | ThreadStatus::Running | ThreadStatus::Blocked => true,
-            ThreadStatus::Finished => !t.joined,
-            ThreadStatus::Signaled | ThreadStatus::Exited => false,
-        })
-    }
-
-    /// The thread's stored NAME object, or `None` when the id is unknown.
-    ///
-    /// GNU `Fthread_name` (`src/thread.c:941-953`) returns the object
-    /// `make-thread` stored; the caller returns it unchanged so identity
-    /// (`eq`) survives the round trip.
-    pub fn thread_name(&self, id: u64) -> Option<ThreadName> {
-        self.threads.get(&id).map(|t| t.name)
-    }
-
-    /// Queue GNU's `THREAD_EVENT` for TARGET's reader
-    /// (`src/thread.c:1007-1013`).
-    ///
-    /// The event is appended to TARGET's own durable record, i.e. the
-    /// heap-allocated thread registry: no inline `ThreadManager`/`World`
-    /// field grows.  Non-main targets store an ordinary error instead
-    /// (`builtin_thread_signal`); only the main thread (id 0) has a command
-    /// loop, and its reader turns the event into a Lisp
-    /// `(thread-event SENDER ERROR-SYMBOL DATA)` dispatched through
-    /// `special-event-map`.
-    pub fn queue_thread_event(&mut self, target: u64, event: PendingThreadEvent) {
-        if let Some(thread) = self.threads.get_mut(&target) {
-            thread.pending_thread_events.push(event);
-        }
-    }
-
-    /// Take every `THREAD_EVENT` queued for TARGET's reader, FIFO.
-    pub fn take_thread_events(&mut self, target: u64) -> Vec<PendingThreadEvent> {
-        self.threads
-            .get_mut(&target)
-            .map(|thread| std::mem::take(&mut thread.pending_thread_events))
-            .unwrap_or_default()
-    }
-
-    /// Check if a value represents a known thread id.
-    pub fn is_thread(&self, id: u64) -> bool {
-        self.threads.contains_key(&id)
-    }
-
-    /// Return canonical handle object for thread id.
-    pub fn thread_handle(&self, id: u64) -> Option<Value> {
-        self.thread_handles.get(&id).cloned()
-    }
-
-    /// Return the thread id iff VALUE is the canonical thread handle object.
-    pub fn thread_id_from_handle(&self, value: &Value) -> Option<u64> {
-        canonical_handle_id(&self.thread_handles, value, ThreadingKind::Thread)
-    }
-
-    /// Return all thread ids.
-    pub fn all_thread_ids(&self) -> Vec<u64> {
-        self.threads
-            .keys()
-            .filter_map(|id| self.thread_alive_p(*id).then_some(*id))
-            .collect()
-    }
-
-    /// Return thread result (for join).
-    pub fn thread_result(&self, id: u64) -> Value {
-        self.threads
-            .get(&id)
-            .map(|t| t.result)
-            .unwrap_or(Value::NIL)
-    }
-
-    /// Mark a thread as joined and return its terminal error, if any.
-    pub fn join_thread(&mut self, id: u64) -> Option<Value> {
-        let thread = self.threads.get_mut(&id)?;
-        thread.joined = true;
-        thread.last_error
-    }
-
-    pub fn block_thread(&mut self, id: u64, blocker: Value, remaining_forms: Value) {
-        if let Some(thread) = self.threads.get_mut(&id) {
-            thread.status = ThreadStatus::Blocked;
-            thread.event_object = blocker;
-            thread.blocked_remaining_forms = remaining_forms;
-        }
-    }
-
-    pub fn wake_threads_blocked_on(&mut self, blocker: Value) {
-        for thread in self.threads.values_mut() {
-            if thread.status == ThreadStatus::Blocked && eq_value(&thread.event_object, &blocker) {
-                thread.event_object = Value::NIL;
-            }
-        }
-    }
-
-    pub fn thread_ready_to_resume(&self, id: u64) -> bool {
-        self.threads.get(&id).is_some_and(|thread| {
-            thread.status == ThreadStatus::Blocked && thread.event_object.is_nil()
-        })
-    }
-
-    pub fn blocked_sleep_duration(&self, id: u64) -> Option<Duration> {
-        let thread = self.threads.get(&id)?;
-        if thread.status != ThreadStatus::Blocked || thread.event_object.is_nil() {
-            return None;
-        }
-        sleep_duration_from_blocker(thread.event_object)
-    }
-
-    pub fn wake_thread(&mut self, id: u64) {
-        if let Some(thread) = self.threads.get_mut(&id)
-            && thread.status == ThreadStatus::Blocked
-        {
-            thread.event_object = Value::NIL;
-        }
-    }
-
-    pub fn take_blocked_remaining_forms(&mut self, id: u64) -> Option<Value> {
-        let thread = self.threads.get_mut(&id)?;
-        if thread.status != ThreadStatus::Blocked || !thread.event_object.is_nil() {
-            return None;
-        }
-        let remaining = thread.blocked_remaining_forms;
-        thread.blocked_remaining_forms = Value::NIL;
-        thread.status = ThreadStatus::Running;
-        Some(remaining)
-    }
-
-    pub fn blocked_remaining_forms_if_ready(&self, id: u64) -> Option<Value> {
-        let thread = self.threads.get(&id)?;
-        (thread.status == ThreadStatus::Blocked && thread.event_object.is_nil())
-            .then_some(thread.blocked_remaining_forms)
-    }
-
-    /// Get and optionally clear the global last-error.
-    pub fn last_error(&mut self, cleanup: bool) -> Value {
-        let val = self.last_error.unwrap_or(Value::NIL);
-        if cleanup {
-            self.last_error = None;
-        }
-        val
-    }
-
-    pub fn thread_buffer_disposition(&self, id: u64) -> Option<Value> {
-        self.threads
-            .get(&id)
-            .map(|thread| thread.buffer_disposition)
-    }
-
-    pub fn set_thread_buffer_disposition(&mut self, id: u64, value: Value) -> bool {
-        let Some(thread) = self.threads.get_mut(&id) else {
-            return false;
-        };
-        thread.buffer_disposition = value;
-        true
-    }
-
-    pub fn thread_current_buffer(&self, id: u64) -> Option<crate::buffer::BufferId> {
-        self.threads
-            .get(&id)
-            .and_then(|thread| thread.current_buffer)
-    }
-
-    pub fn set_thread_current_buffer(
-        &mut self,
-        id: u64,
-        buffer_id: Option<crate::buffer::BufferId>,
-    ) -> bool {
-        let Some(thread) = self.threads.get_mut(&id) else {
-            return false;
-        };
-        thread.current_buffer = buffer_id;
-        true
-    }
-
-    pub fn thread_blocker(&self, id: u64) -> Option<Value> {
-        self.threads.get(&id).map(|thread| thread.event_object)
-    }
-
-    pub fn set_thread_blocker(&mut self, id: u64, blocker: Value) -> bool {
-        let Some(thread) = self.threads.get_mut(&id) else {
-            return false;
-        };
-        thread.event_object = blocker;
-        true
-    }
-
-    pub fn clear_thread_blocker(&mut self, id: u64) -> bool {
-        self.set_thread_blocker(id, Value::NIL)
-    }
-
-    // -- Green threads (GNU's thread.c rules, threads really running) ------
-
-    /// Green thread ID's function returned (GNU's `run_thread` end).
-    pub fn mark_thread_exited(&mut self, id: u64) {
-        if let Some(thread) = self.threads.get_mut(&id) {
-            thread.status = ThreadStatus::Exited;
-        }
-    }
-
-    /// GNU `thread_set_error`: record SYMBOL and DATA for thread ID to raise
-    /// when it next runs (and for `thread-join` to re-raise), leaving its
-    /// status alone.
-    pub fn set_thread_error(&mut self, id: u64, symbol: Value, data: Value) {
-        if let Some(thread) = self.threads.get_mut(&id) {
-            thread.error_symbol = symbol;
-            thread.error_data = data;
-            thread.last_error = Some(Value::cons(symbol, data));
-        }
-    }
-
-    /// Take thread ID's pending error, as `(SYMBOL, DATA)`, leaving none.
-    pub fn take_thread_error(&mut self, id: u64) -> Option<(Value, Value)> {
-        let thread = self.threads.get_mut(&id)?;
-        if thread.error_symbol.is_nil() {
-            return None;
-        }
-        let symbol = std::mem::replace(&mut thread.error_symbol, Value::NIL);
-        let data = std::mem::replace(&mut thread.error_data, Value::NIL);
-        Some((symbol, data))
-    }
-
-    /// Make SYMBOL and DATA thread ID's pending error again, unless a newer
-    /// one is pending.
-    pub fn restore_thread_error(&mut self, id: u64, symbol: Value, data: Value) {
-        if let Some(thread) = self.threads.get_mut(&id)
-            && thread.error_symbol.is_nil()
-        {
-            thread.error_symbol = symbol;
-            thread.error_data = data;
-        }
-    }
-
-    /// Whether a live Green thread has not ended.
-    fn green_thread_live(thread: &ThreadState) -> bool {
-        matches!(
-            thread.status,
-            ThreadStatus::Created | ThreadStatus::Running | ThreadStatus::Blocked
-        )
-    }
-
-    /// GNU `thread_check_current_buffer`: whether a live thread other than
-    /// the current one has BUFFER current and keeps it alive (its buffer
-    /// disposition is t).
-    pub fn buffer_held_by_other_thread(&self, buffer: crate::buffer::BufferId) -> bool {
-        self.threads.values().any(|thread| {
-            thread.id != self.current_thread
-                && Self::green_thread_live(thread)
-                && thread.current_buffer == Some(buffer)
-                && thread.buffer_disposition.is_t()
-        })
-    }
-
-    /// Whether a live thread other than the current one has BUFFER current.
-    pub fn buffer_current_in_other_thread(&self, buffer: crate::buffer::BufferId) -> bool {
-        self.threads.values().any(|thread| {
-            thread.id != self.current_thread
-                && Self::green_thread_live(thread)
-                && thread.current_buffer == Some(buffer)
-        })
-    }
-
-    /// GNU `thread_all_before_buffer_killed`: every live thread other than
-    /// the current one whose current buffer is BUFFER moves to OTHER and is
-    /// signalled `thread-buffer-killed`, unless its buffer disposition is
-    /// `silently`.
-    pub fn move_threads_off_killed_buffer(
-        &mut self,
-        buffer: crate::buffer::BufferId,
-        other: crate::buffer::BufferId,
-    ) {
-        let current = self.current_thread;
-        for thread in self.threads.values_mut() {
-            if thread.id == current
-                || !Self::green_thread_live(thread)
-                || thread.current_buffer != Some(buffer)
-            {
-                continue;
-            }
-            if !thread.buffer_disposition.is_bare_symbol_named("silently") {
-                let symbol = Value::symbol("thread-buffer-killed");
-                thread.error_symbol = symbol;
-                thread.error_data = Value::NIL;
-                thread.last_error = Some(Value::cons(symbol, Value::NIL));
-            }
-            thread.current_buffer = Some(other);
-        }
-    }
-
-    /// GNU `lisp_mutex_unlock_for_wait`: release MUTEX-ID whatever its
-    /// count, returning the count.
-    pub fn mutex_unlock_for_wait(&mut self, mutex_id: u64) -> u32 {
-        let Some(mutex) = self.mutexes.get_mut(&mutex_id) else {
-            return 0;
-        };
-        debug_assert_eq!(mutex.owner, Some(self.current_thread));
-        mutex.owner = None;
-        std::mem::replace(&mut mutex.lock_count, 0)
-    }
-
-    /// GNU `lisp_mutex_lock_for_thread` with a saved count: take MUTEX-ID
-    /// with COUNT for the current thread if no thread holds it.
-    pub fn mutex_relock_after_wait(&mut self, mutex_id: u64, count: u32) -> bool {
-        let current = self.current_thread;
-        match self.mutexes.get_mut(&mutex_id) {
-            Some(mutex) if mutex.owner.is_none() => {
-                mutex.owner = Some(current);
-                mutex.lock_count = count.max(1);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// Whether no thread holds MUTEX-ID.
-    pub fn mutex_free(&self, mutex_id: u64) -> bool {
-        self.mutexes
-            .get(&mutex_id)
-            .is_some_and(|mutex| mutex.owner.is_none())
-    }
-
-    // -- Mutex operations ---------------------------------------------------
-
-    /// Create a new mutex.  Returns the id.
-    pub fn create_mutex(&mut self, name: Option<LispString>) -> u64 {
-        let id = self.next_mutex_id;
-        self.next_mutex_id += 1;
-        self.mutexes.insert(
-            id,
-            MutexState {
-                id,
-                name,
-                owner: None,
-                lock_count: 0,
-            },
-        );
-        self.mutex_handles
-            .insert(id, tagged_object_value(ThreadingKind::Mutex, id));
-        id
-    }
-
-    /// Lock a mutex on behalf of the current thread.
-    ///
-    /// Returns true if the current thread owns the mutex after this call.
-    /// Returns false when another thread owns it; callers that can suspend
-    /// should wait and retry after unlock, mirroring GNU `thread.c`.
-    pub fn mutex_lock(&mut self, mutex_id: u64) -> bool {
-        let current = self.current_thread;
-        if let Some(m) = self.mutexes.get_mut(&mutex_id) {
-            match m.owner {
-                None => {
-                    m.owner = Some(current);
-                    m.lock_count = 1;
-                    true
-                }
-                Some(owner) if owner == current => {
-                    // Recursive lock.
-                    m.lock_count += 1;
-                    true
-                }
-                Some(_) => false,
-            }
-        } else {
-            false
-        }
-    }
-
-    /// Unlock a mutex.  Returns false if the mutex doesn't exist or is
-    /// not held by the current thread.
-    pub fn mutex_unlock(&mut self, mutex_id: u64) -> bool {
-        let current = self.current_thread;
-        if let Some(m) = self.mutexes.get_mut(&mutex_id) {
-            if m.owner == Some(current) {
-                m.lock_count = m.lock_count.saturating_sub(1);
-                if m.lock_count == 0 {
-                    m.owner = None;
-                }
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-
-    /// Check if a value represents a known mutex id.
-    pub fn is_mutex(&self, id: u64) -> bool {
-        self.mutexes.contains_key(&id)
-    }
-
-    /// Return canonical handle object for mutex id.
-    pub fn mutex_handle(&self, id: u64) -> Option<Value> {
-        self.mutex_handles.get(&id).cloned()
-    }
-
-    /// Return the mutex id iff VALUE is the canonical mutex handle object.
-    pub fn mutex_id_from_handle(&self, value: &Value) -> Option<u64> {
-        canonical_handle_id(&self.mutex_handles, value, ThreadingKind::Mutex)
-    }
-
-    /// Get mutex name.
-    pub fn mutex_name(&self, id: u64) -> Option<&LispString> {
-        self.mutexes.get(&id).and_then(|m| m.name.as_ref())
-    }
-
-    /// Return true when MUTEX-ID is owned by the current thread.
-    pub fn mutex_owned_by_current_thread(&self, mutex_id: u64) -> bool {
-        self.mutexes
-            .get(&mutex_id)
-            .is_some_and(|m| m.owner == Some(self.current_thread))
-    }
-
-    // -- Condition variable operations --------------------------------------
-
-    /// Create a condition variable associated with the given mutex.
-    pub fn create_condition_variable(
-        &mut self,
-        mutex_id: u64,
-        name: Option<LispString>,
-    ) -> Option<u64> {
-        if !self.mutexes.contains_key(&mutex_id) {
-            return None;
-        }
-        let id = self.next_cv_id;
-        self.next_cv_id += 1;
-        self.condition_vars
-            .insert(id, ConditionVarState { id, name, mutex_id });
-        self.condition_var_handles
-            .insert(id, tagged_object_value(ThreadingKind::CondVar, id));
-        Some(id)
-    }
-
-    /// Check if a value represents a known condition variable id.
-    pub fn is_condition_variable(&self, id: u64) -> bool {
-        self.condition_vars.contains_key(&id)
-    }
-
-    /// Return canonical handle object for condition variable id.
-    pub fn condition_variable_handle(&self, id: u64) -> Option<Value> {
-        self.condition_var_handles.get(&id).cloned()
-    }
-
-    /// Return the condition variable id iff VALUE is the canonical handle.
-    pub fn condition_variable_id_from_handle(&self, value: &Value) -> Option<u64> {
-        canonical_handle_id(&self.condition_var_handles, value, ThreadingKind::CondVar)
-    }
-
-    /// Get condition variable name.
-    pub fn condition_variable_name(&self, id: u64) -> Option<&LispString> {
-        self.condition_vars.get(&id).and_then(|cv| cv.name.as_ref())
-    }
-
-    /// Get the mutex associated with a condition variable.
-    pub fn condition_variable_mutex(&self, cv_id: u64) -> Option<u64> {
-        self.condition_vars.get(&cv_id).map(|cv| cv.mutex_id)
+    fn native_key(&self) -> u64 {
+        self.0
     }
 }
+
+#[repr(C)]
+pub struct ThreadManager {
+    last_error: Option<Value>,
+    threads: HashMap<ThreadId, Value>,
+    transport_mailboxes: HashMap<ThreadId, Vec<PendingThreadEvent>>,
+    before_issuer: layout::BeforeIssuerReservation,
+    ids: ThreadIds,
+    current_thread: CurrentThreadOrdinal,
+    tail: layout::TailReservation,
+}
+
+static_assertions::const_assert_eq!(size_of::<ThreadManager>(), layout::OLD_SIZE);
+static_assertions::const_assert_eq!(align_of::<ThreadManager>(), layout::OLD_ALIGN);
+static_assertions::const_assert_eq!(
+    std::mem::offset_of!(ThreadManager, last_error),
+    layout::OLD_LAST_ERROR
+);
+static_assertions::const_assert_eq!(
+    std::mem::offset_of!(ThreadManager, ids) + ThreadIds::NEXT_THREAD_OFFSET,
+    layout::OLD_NEXT
+);
+static_assertions::const_assert_eq!(
+    std::mem::offset_of!(ThreadManager, current_thread),
+    layout::OLD_CURRENT
+);
 
 impl Default for ThreadManager {
     fn default() -> Self {
@@ -963,72 +303,26 @@ impl Default for ThreadManager {
 
 impl GcTrace for ThreadManager {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
-        for thread in self.threads.values() {
-            // The stored NAME object is a Lisp object now (identity is part
-            // of `thread-name`), so it is a heap edge like every other field.
-            roots.push(thread.name.stored());
-            roots.push(thread.function);
-            roots.push(thread.result);
-            roots.push(thread.buffer_disposition);
-            roots.push(thread.event_object);
-            roots.push(thread.error_symbol);
-            roots.push(thread.error_data);
-            roots.push(thread.blocked_remaining_forms);
-            // `current_buffer` is a buffer id, not a heap edge. The canonical
-            // Lisp object is `TaggedHeap::buffer_registry`, and
-            // `seed_internal_runtime_roots` seeds every registry value on
-            // every collection. `Value::make_buffer` returns that object or
-            // allocates and registers one when the id is absent, so pushing
-            // it from here is redundant when the object exists and wrong
-            // when it does not.
-            if let Some(ref err) = thread.last_error {
-                roots.push(*err);
-            }
+        let Self {
+            last_error,
+            threads,
+            transport_mailboxes: _,
+            before_issuer: _,
+            ids: _,
+            current_thread: _,
+            tail: _,
+        } = self;
+        roots.extend(threads.values().copied());
+        if let Some(error) = last_error {
+            roots.push(*error);
         }
-        for value in self.thread_handles.values() {
-            roots.push(*value);
-        }
-        // Queued `THREAD_EVENT`s hold `SharedRoot` leases, so the collector
-        // keeps their sender, error symbol and data alive through the heap's
-        // shared-root table; re-rooting their words here would also be unsound
-        // on a non-owning mutator.
-        // These Rust-owned names preserve Lisp text-property plists, just as
-        // GNU's scanned mutex/condition pseudovector name fields do.
-        for name in self
-            .mutexes
-            .values()
-            .filter_map(|mutex| mutex.name.as_ref())
-            .chain(
-                self.condition_vars
-                    .values()
-                    .filter_map(|condition| condition.name.as_ref()),
-            )
-        {
-            name.trace_roots(roots);
-        }
-        for value in self.mutex_handles.values() {
-            roots.push(*value);
-        }
-        for value in self.condition_var_handles.values() {
-            roots.push(*value);
-        }
-        if let Some(ref err) = self.last_error {
-            roots.push(*err);
-        }
+        // In-flight events remain external transport roots until S2 transfers
+        // them to stored object edges. No SharedRoot is inside a heap payload.
     }
 }
 
-// ===========================================================================
-// Argument helpers
-// ===========================================================================
-
-/// Which concurrency object a handle names.
-///
-/// GNU gives each of the three its own pseudovector tag -- `PVEC_THREAD`,
-/// `PVEC_MUTEX`, `PVEC_CONDVAR` (`src/lisp.h`) -- so spelling the choice as a
-/// type here makes a handle with a tag no decoder accepts unrepresentable.
-/// The `&str` tag this replaces did not: `tagged_object_value("thraed", id)`
-/// compiled, and produced a handle every predicate silently rejected.
+/// The concrete pseudovector kind inspected by the native-key test helper.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThreadingKind {
     Thread,
@@ -1036,6 +330,7 @@ pub(crate) enum ThreadingKind {
     CondVar,
 }
 
+#[cfg(test)]
 impl ThreadingKind {
     /// The heap tag that makes this object opaque to Lisp.
     fn veclike(self) -> crate::tagged::header::VecLikeType {
@@ -1047,16 +342,8 @@ impl ThreadingKind {
     }
 }
 
-/// Allocate a fresh handle naming `id`.
-///
-/// Each call allocates a DISTINCT object, which is what makes the canonical
-/// check below meaningful: identity is the heap object, as it is in GNU, not
-/// the id printed inside it.
-fn tagged_object_value(kind: ThreadingKind, id: u64) -> Value {
-    Value::make_threading_handle(kind.veclike(), id)
-}
-
 /// The id inside `value`, if it is a handle of exactly `expected`'s kind.
+#[cfg(test)]
 fn tagged_object_id(value: &Value, expected: ThreadingKind) -> Option<u64> {
     if value.veclike_type() != Some(expected.veclike()) {
         return None;
@@ -1064,23 +351,11 @@ fn tagged_object_id(value: &Value, expected: ThreadingKind) -> Option<u64> {
     value.threading_handle_id()
 }
 
-/// The id inside `value`, if it is THE handle the manager holds for that id.
-///
-/// A handle built for an id the manager has since forgotten still carries the
-/// right tag, so the tag alone is not enough: the object must also be the one
-/// registered, which is `eq` identity.
-fn canonical_handle_id(
-    handles: &HashMap<u64, Value>,
-    value: &Value,
-    kind: ThreadingKind,
-) -> Option<u64> {
-    let id = tagged_object_id(value, kind)?;
-    let canonical = handles.get(&id)?;
-    if eq_value(canonical, value) {
-        Some(id)
-    } else {
-        None
-    }
+fn missing_live_thread_registration() -> Flow {
+    signal(
+        LispCondition::Error,
+        vec![Value::string("Live thread registration is missing")],
+    )
 }
 
 fn split_signal_binding_value(value: Value) -> Option<(Value, Value)> {
@@ -1093,7 +368,7 @@ fn split_signal_binding_value(value: Value) -> Option<(Value, Value)> {
     Some((pair_car, pair_cdr))
 }
 
-/// Extract a thread id from a canonical thread handle object.
+/// Extract the scheduler key from a validated owned thread object.
 pub(crate) fn expect_thread_id(manager: &ThreadManager, value: &Value) -> Result<u64, Flow> {
     match manager.thread_id_from_handle(value) {
         Some(id) => Ok(id),
@@ -1104,8 +379,8 @@ pub(crate) fn expect_thread_id(manager: &ThreadManager, value: &Value) -> Result
     }
 }
 
-/// Extract a mutex id from a canonical mutex handle object.
-fn expect_mutex_id(manager: &ThreadManager, value: &Value) -> Result<u64, Flow> {
+/// Validate a mutex object and retain its typed native identity with its value.
+fn expect_mutex_id(manager: &ThreadManager, value: &Value) -> Result<MutexHandle, Flow> {
     match manager.mutex_id_from_handle(value) {
         Some(id) => Ok(id),
         None => Err(signal(
@@ -1115,8 +390,8 @@ fn expect_mutex_id(manager: &ThreadManager, value: &Value) -> Result<u64, Flow> 
     }
 }
 
-/// Extract a condition variable id from a canonical handle object.
-fn expect_cv_id(manager: &ThreadManager, value: &Value) -> Result<u64, Flow> {
+/// Validate a condition variable and retain its typed identity with its value.
+fn expect_cv_id(manager: &ThreadManager, value: &Value) -> Result<CondVarHandle, Flow> {
     match manager.condition_variable_id_from_handle(value) {
         Some(id) => Ok(id),
         None => Err(signal(
@@ -1133,7 +408,7 @@ fn expect_cv_id(manager: &ThreadManager, value: &Value) -> Result<u64, Flow> {
 /// `(make-thread FUNCTION &optional NAME)` -- create a thread.
 ///
 /// In our single-threaded simulation the function is executed immediately.
-/// Returns a `(thread . ID)` object.
+/// Returns the opaque heap object that owns the thread's state.
 pub(crate) fn builtin_make_thread(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     // A Green World runs threads as owners on their own OS threads; the
     // simulated exchange never runs beside admission.
@@ -1171,7 +446,7 @@ pub(crate) fn prepare_make_thread(
     let name = ThreadName::from_lisp(args.get(1).copied().unwrap_or(Value::NIL))?;
     let buffer_disposition = args.get(2).copied().unwrap_or(Value::NIL);
 
-    let thread_id = threads.create_thread(function, name);
+    let thread_id = threads.try_create_thread(function, name)?.native_key();
     threads.set_thread_buffer_disposition(thread_id, buffer_disposition);
     threads.start_thread(thread_id);
     Ok((thread_id, function))
@@ -1241,6 +516,12 @@ pub(crate) fn finish_make_thread_result(
     thread_id: u64,
     result: EvalResult,
 ) -> EvalResult {
+    // Capture the identity while its live registration still roots it. The
+    // completion transition can unlink that registration; neither completion
+    // nor returning this value reaches a collector safe point.
+    let thread = threads
+        .thread_handle(thread_id)
+        .ok_or_else(missing_live_thread_registration)?;
     let result = result.kinded();
     match result {
         Ok(val) => {
@@ -1270,9 +551,7 @@ pub(crate) fn finish_make_thread_result(
         Err(flow @ FlowKind::Shutdown(_)) => return Err(Flow::from_kind(flow)),
     }
 
-    Ok(threads
-        .thread_handle(thread_id)
-        .unwrap_or_else(|| tagged_object_value(ThreadingKind::Thread, thread_id)))
+    Ok(thread)
 }
 
 /// `(thread-join THREAD)` -- wait for thread completion.
@@ -1288,12 +567,6 @@ pub(crate) fn builtin_thread_join(
     }
     expect_args("thread-join", &args, 1)?;
     let id = expect_thread_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_thread(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("threadp"), args[0]],
-        ));
-    }
     if id == ctx.threads.current_thread_id() {
         return Err(signal(
             "error",
@@ -1303,7 +576,7 @@ pub(crate) fn builtin_thread_join(
     // GNU snapshots the target thread's injected error before waiting, then
     // re-signals that snapshot even if the target catches and clears it while
     // join is waiting.
-    let pending_join_signal = ctx.threads.pending_thread_signal(id);
+    let pending_join_signal = ctx.threads.pending_thread_signal_for_value(args[0]);
     if ctx.threads.thread_ready_to_resume(id) {
         resume_blocked_thread(ctx, id)?;
     } else if let Some(duration) = ctx.threads.blocked_sleep_duration(id) {
@@ -1315,11 +588,11 @@ pub(crate) fn builtin_thread_join(
     // into this thread by `thread-signal` (recorded in `error_symbol`); an
     // error signalled *inside* the thread function is surfaced via
     // `thread-last-error`, and join just returns the thread's result.
-    ctx.threads.join_thread(id);
+    let _ = ctx.threads.join_thread_for_value(args[0]);
     if let Some(flow) = pending_join_signal {
         return Err(flow);
     }
-    Ok(ctx.threads.thread_result(id))
+    Ok(ctx.threads.thread_result_for_value(args[0]))
 }
 
 fn resume_blocked_thread(ctx: &mut crate::emacs_core::eval::Context, thread_id: u64) -> EvalResult {
@@ -1375,16 +648,10 @@ pub(crate) fn builtin_thread_name(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("thread-name", &args, 1)?;
-    let id = expect_thread_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_thread(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("threadp"), args[0]],
-        ));
-    }
+    expect_thread_id(&ctx.threads, &args[0])?;
     // GNU returns the stored object itself (identity preserved); a copy
     // would fail `(eq name (thread-name th))`.
-    match ctx.threads.thread_name(id) {
+    match ctx.threads.thread_name_for_value(args[0]) {
         Some(name) => Ok(name.stored()),
         None => Ok(Value::NIL),
     }
@@ -1396,14 +663,8 @@ pub(crate) fn builtin_thread_live_p(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("thread-live-p", &args, 1)?;
-    let id = expect_thread_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_thread(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("threadp"), args[0]],
-        ));
-    }
-    Ok(Value::bool_val(ctx.threads.thread_alive_p(id)))
+    expect_thread_id(&ctx.threads, &args[0])?;
+    Ok(Value::bool_val(ctx.threads.thread_alive_for_value(args[0])))
 }
 
 /// `(threadp OBJ)` -- type predicate.
@@ -1429,12 +690,6 @@ pub(crate) fn builtin_thread_signal(
     let symbol_mode = ctx.symbol_mode();
     expect_args("thread-signal", &args, 3)?;
     let id = expect_thread_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_thread(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("threadp"), args[0]],
-        ));
-    }
     let error_symbol = args[1];
     let Some(error_symbol_id) = error_symbol.as_symbol_id(symbol_mode) else {
         return Err(signal(
@@ -1455,7 +710,7 @@ pub(crate) fn builtin_thread_signal(
         let sender = ctx
             .threads
             .thread_handle(ctx.threads.current_thread_id())
-            .unwrap_or(Value::NIL);
+            .ok_or_else(missing_live_thread_registration)?;
         // SAFETY: SENDER is the canonical handle kept in the manager, and
         // ERROR-SYMBOL and DATA are this call's live arguments (rooted on the
         // signalling mutator's stack); the signalling thread is the installed
@@ -1483,10 +738,9 @@ pub(crate) fn builtin_current_thread(
 ) -> EvalResult {
     expect_args("current-thread", &args, 0)?;
     let id = ctx.threads.current_thread_id();
-    Ok(ctx
-        .threads
+    ctx.threads
         .thread_handle(id)
-        .unwrap_or_else(|| tagged_object_value(ThreadingKind::Thread, id)))
+        .ok_or_else(missing_live_thread_registration)
 }
 
 /// `(all-threads)` -- return a list of all thread objects.
@@ -1502,9 +756,9 @@ pub(crate) fn builtin_all_threads(
         .map(|id| {
             ctx.threads
                 .thread_handle(id)
-                .unwrap_or_else(|| tagged_object_value(ThreadingKind::Thread, id))
+                .ok_or_else(missing_live_thread_registration)
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     Ok(Value::list(objects))
 }
 
@@ -1534,8 +788,11 @@ pub(crate) fn builtin_thread_blocker(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("thread--blocker", &args, 1)?;
-    let id = expect_thread_id(&ctx.threads, &args[0])?;
-    Ok(ctx.threads.thread_blocker(id).unwrap_or(Value::NIL))
+    expect_thread_id(&ctx.threads, &args[0])?;
+    Ok(ctx
+        .threads
+        .thread_blocker_for_value(args[0])
+        .unwrap_or(Value::NIL))
 }
 
 /// `(thread-buffer-disposition THREAD)` -- return THREAD's buffer disposition.
@@ -1544,10 +801,10 @@ pub(crate) fn builtin_thread_buffer_disposition(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("thread-buffer-disposition", &args, 1)?;
-    let id = expect_thread_id(&ctx.threads, &args[0])?;
+    expect_thread_id(&ctx.threads, &args[0])?;
     Ok(ctx
         .threads
-        .thread_buffer_disposition(id)
+        .thread_buffer_disposition_for_value(args[0])
         .unwrap_or(Value::NIL))
 }
 
@@ -1565,7 +822,8 @@ pub(crate) fn builtin_thread_set_buffer_disposition(
             vec![Value::symbol("null"), value],
         ));
     }
-    ctx.threads.set_thread_buffer_disposition(id, value);
+    ctx.threads
+        .set_thread_buffer_disposition_for_value(args[0], value);
     Ok(value)
 }
 
@@ -1588,24 +846,16 @@ pub(crate) fn builtin_make_mutex(
         ));
     }
     let name = if let Some(v) = args.first() {
-        match v.kind() {
-            ValueKind::String => Some(v.as_lisp_string().expect("string").clone()),
-            ValueKind::Nil => None,
-            _other => {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("stringp"), *v],
-                ));
-            }
+        if v.is_nil() {
+            None
+        } else {
+            Some(ctx.expect_lisp_string(*v)?.clone())
         }
     } else {
         None
     };
-    let id = ctx.threads.create_mutex(name);
-    Ok(ctx
-        .threads
-        .mutex_handle(id)
-        .unwrap_or_else(|| tagged_object_value(ThreadingKind::Mutex, id)))
+    let mutex = ctx.threads.create_mutex(name)?;
+    Ok(mutex.value())
 }
 
 /// `(mutexp OBJ)` -- type predicate for mutexes.
@@ -1626,12 +876,6 @@ pub(crate) fn builtin_mutex_name(
 ) -> EvalResult {
     expect_args("mutex-name", &args, 1)?;
     let id = expect_mutex_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_mutex(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("mutexp"), args[0]],
-        ));
-    }
     match ctx.threads.mutex_name(id) {
         Some(name) => Ok(Value::heap_string(name.clone())),
         None => Ok(Value::NIL),
@@ -1647,19 +891,17 @@ pub(crate) fn builtin_mutex_lock(
 ) -> EvalResult {
     expect_args("mutex-lock", &args, 1)?;
     let id = expect_mutex_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_mutex(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("mutexp"), args[0]],
-        ));
-    }
     if ctx.green_threads_running() {
-        return ctx.green_mutex_lock(id, args[0]);
+        return ctx.green_mutex_lock(id);
     }
-    if !ctx.threads.mutex_lock(id) {
-        return Err(Flow::thread_blocked(args[0], Value::NIL));
+    match ctx.threads.mutex_lock(id) {
+        MutexAcquisition::Acquired => Ok(Value::NIL),
+        MutexAcquisition::Blocked => Err(Flow::thread_blocked(args[0], Value::NIL)),
+        MutexAcquisition::DepthExhausted => Err(signal(
+            LispCondition::Error,
+            vec![Value::string("Mutex recursion depth limit exceeded")],
+        )),
     }
-    Ok(Value::NIL)
 }
 
 /// `(mutex-unlock MUTEX)` -- unlock a mutex.
@@ -1669,12 +911,6 @@ pub(crate) fn builtin_mutex_unlock(
 ) -> EvalResult {
     expect_args("mutex-unlock", &args, 1)?;
     let id = expect_mutex_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_mutex(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("mutexp"), args[0]],
-        ));
-    }
     // GNU `lisp_mutex_unlock` (thread.c:259-263) signals an error when the
     // current thread does not own the mutex (including a never-locked mutex,
     // whose owner is NULL). Match that instead of silently succeeding.
@@ -1687,9 +923,17 @@ pub(crate) fn builtin_mutex_unlock(
     if ctx.green_threads_running() {
         return ctx.green_mutex_unlock(id);
     }
-    ctx.threads.mutex_unlock(id);
-    ctx.threads.wake_threads_blocked_on(args[0]);
-    Ok(Value::NIL)
+    match ctx.threads.mutex_unlock(id) {
+        MutexRelease::Released => {
+            ctx.threads.wake_threads_blocked_on(args[0]);
+            Ok(Value::NIL)
+        }
+        MutexRelease::StillLocked => Ok(Value::NIL),
+        MutexRelease::NotOwner => Err(signal(
+            LispCondition::Error,
+            vec![Value::string("Cannot unlock mutex owned by another thread")],
+        )),
+    }
 }
 
 // ===========================================================================
@@ -1712,36 +956,17 @@ pub(crate) fn builtin_make_condition_variable(
         ));
     }
     let mutex_id = expect_mutex_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_mutex(mutex_id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("mutexp"), args[0]],
-        ));
-    }
-    let name = if args.len() > 1 {
-        match args[1].kind() {
-            ValueKind::String => Some(args[1].as_lisp_string().expect("string").clone()),
-            ValueKind::Nil => None,
-            _other => {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("stringp"), args[1]],
-                ));
-            }
+    let name = if let Some(value) = args.get(1) {
+        if value.is_nil() {
+            None
+        } else {
+            Some(ctx.expect_lisp_string(*value)?.clone())
         }
     } else {
         None
     };
-    match ctx.threads.create_condition_variable(mutex_id, name) {
-        Some(id) => Ok(ctx
-            .threads
-            .condition_variable_handle(id)
-            .unwrap_or_else(|| tagged_object_value(ThreadingKind::CondVar, id))),
-        None => Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("mutexp"), args[0]],
-        )),
-    }
+    let condition = ctx.threads.create_condition_variable(mutex_id, name)?;
+    Ok(condition.value())
 }
 
 /// `(condition-variable-p OBJ)` -- type predicate.
@@ -1764,12 +989,6 @@ pub(crate) fn builtin_condition_name(
 ) -> EvalResult {
     expect_args("condition-name", &args, 1)?;
     let id = expect_cv_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_condition_variable(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    }
     match ctx.threads.condition_variable_name(id) {
         Some(name) => Ok(Value::heap_string(name.clone())),
         None => Ok(Value::NIL),
@@ -1783,24 +1002,7 @@ pub(crate) fn builtin_condition_mutex(
 ) -> EvalResult {
     expect_args("condition-mutex", &args, 1)?;
     let id = expect_cv_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_condition_variable(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    }
-    let Some(mutex_id) = ctx.threads.condition_variable_mutex(id) else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    };
-    ctx.threads.mutex_handle(mutex_id).ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        )
-    })
+    Ok(ctx.threads.condition_variable_mutex(id).value())
 }
 
 /// `(condition-wait COND)` -- wait on a condition variable.
@@ -1812,18 +1014,7 @@ pub(crate) fn builtin_condition_wait(
 ) -> EvalResult {
     expect_args("condition-wait", &args, 1)?;
     let id = expect_cv_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_condition_variable(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    }
-    let Some(mutex_id) = ctx.threads.condition_variable_mutex(id) else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    };
+    let mutex_id = ctx.threads.condition_variable_mutex(id);
     if !ctx.threads.mutex_owned_by_current_thread(mutex_id) {
         return Err(signal(
             "error",
@@ -1833,7 +1024,7 @@ pub(crate) fn builtin_condition_wait(
         ));
     }
     if ctx.green_threads_running() {
-        return ctx.green_condition_wait(id, mutex_id, args[0]);
+        return ctx.green_condition_wait(id, mutex_id);
     }
     Ok(Value::NIL)
 }
@@ -1856,18 +1047,7 @@ pub(crate) fn builtin_condition_notify(
         ));
     }
     let id = expect_cv_id(&ctx.threads, &args[0])?;
-    if !ctx.threads.is_condition_variable(id) {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    }
-    let Some(mutex_id) = ctx.threads.condition_variable_mutex(id) else {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("condition-variable-p"), args[0]],
-        ));
-    };
+    let mutex_id = ctx.threads.condition_variable_mutex(id);
     if !ctx.threads.mutex_owned_by_current_thread(mutex_id) {
         return Err(signal(
             "error",
@@ -1877,7 +1057,11 @@ pub(crate) fn builtin_condition_notify(
         ));
     }
     if ctx.green_threads_running() {
-        return ctx.green_condition_notify(id, args.get(1).is_some_and(|all| all.is_truthy()));
+        let scope = match args.get(1) {
+            Some(all) if all.is_truthy() => NotificationScope::All,
+            Some(_) | None => NotificationScope::One,
+        };
+        return ctx.green_condition_notify(id, scope);
     }
     Ok(Value::NIL)
 }

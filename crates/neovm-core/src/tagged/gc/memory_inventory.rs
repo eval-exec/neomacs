@@ -510,9 +510,9 @@ fn object_struct_bytes(header: *const GcHeader) -> usize {
                 VecLikeType::SymbolWithPos => size_of::<SymbolWithPosObj>(),
                 VecLikeType::Finalizer => size_of::<FinalizerObj>(),
                 VecLikeType::Sqlite => size_of::<SqliteObj>(),
-                VecLikeType::Thread | VecLikeType::Mutex | VecLikeType::CondVar => {
-                    size_of::<ThreadingHandleObj>()
-                }
+                VecLikeType::Thread => size_of::<ThreadObj>(),
+                VecLikeType::Mutex => size_of::<MutexObj>(),
+                VecLikeType::CondVar => size_of::<CondVarObj>(),
                 VecLikeType::UserPtr => size_of::<UserPtrObj>(),
                 VecLikeType::ModuleFunction => size_of::<ModuleFunctionObj>(),
             },

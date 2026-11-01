@@ -533,29 +533,51 @@ impl TaggedHeap {
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
-    /// Allocate a thread, mutex or condition-variable handle.
-    ///
-    /// `kind` must be one of `VecLikeType::{Thread, Mutex, CondVar}`; the id
-    /// names the entry the `ThreadManager` holds.  Not registry-rooted: the
-    /// manager owns the canonical handle and roots it, so a copy Lisp drops is
-    /// just a reference going away.
-    pub fn alloc_threading_handle(&mut self, kind: VecLikeType, id: u64) -> TaggedValue {
-        debug_assert!(
-            matches!(
-                kind,
-                VecLikeType::Thread | VecLikeType::Mutex | VecLikeType::CondVar
-            ),
-            "threading handles carry one of the three concurrency tags"
-        );
-        let obj = Box::new(ThreadingHandleObj {
-            header: VecLikeHeader::new(kind),
-            id,
-        });
-        let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
+    /// Move a fully initialized thread payload onto the existing Thread tag.
+    /// Allocation cannot collect; the caller roots the returned identity before
+    /// its next safe point. Linking publishes the complete child schema.
+    pub(crate) fn alloc_thread(
+        &mut self,
+        payload: crate::heap_types::threading::ThreadPayload,
+    ) -> TaggedValue {
+        let object = Box::new(ThreadObj::new(payload));
+        let bytes = object.owned_bytes();
+        let ptr = Box::into_raw(object);
+        self.link_veclike(ptr.cast());
         self.current_mutator_gc_mut().allocated_count += 1;
-        self.note_allocation_bytes(size_of::<ThreadingHandleObj>());
-        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+        self.note_allocation_bytes(bytes);
+        // SAFETY: the linked, fully initialized ThreadObj owns this header.
+        unsafe { TaggedValue::from_veclike_ptr(ptr.cast()) }
+    }
+
+    /// Allocate a mutex with its owned state and name storage charged together.
+    pub(crate) fn alloc_mutex(
+        &mut self,
+        payload: crate::heap_types::threading::MutexPayload,
+    ) -> TaggedValue {
+        let object = Box::new(MutexObj::new(payload));
+        let bytes = object.owned_bytes();
+        let ptr = Box::into_raw(object);
+        self.link_veclike(ptr.cast());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(bytes);
+        // SAFETY: the linked, fully initialized MutexObj owns this header.
+        unsafe { TaggedValue::from_veclike_ptr(ptr.cast()) }
+    }
+
+    /// Allocate a condition variable, including its strong mutex child.
+    pub(crate) fn alloc_condvar(
+        &mut self,
+        payload: crate::heap_types::threading::CondVarPayload,
+    ) -> TaggedValue {
+        let object = Box::new(CondVarObj::new(payload));
+        let bytes = object.owned_bytes();
+        let ptr = Box::into_raw(object);
+        self.link_veclike(ptr.cast());
+        self.current_mutator_gc_mut().allocated_count += 1;
+        self.note_allocation_bytes(bytes);
+        // SAFETY: the linked, fully initialized CondVarObj owns this header.
+        unsafe { TaggedValue::from_veclike_ptr(ptr.cast()) }
     }
 
     /// Allocate a GC-managed video-session handle.
@@ -1067,5 +1089,94 @@ impl TaggedHeap {
         self.current_mutator_gc_mut().allocated_count += 1;
         self.note_allocation_bytes(size_of::<ModuleFunctionObj>());
         unsafe { TaggedValue::from_veclike_ptr(raw as *const VecLikeHeader) }
+    }
+}
+
+impl TaggedHeap {
+    pub(super) fn veclike_payload_layout(header: *const VecLikeHeader) -> PayloadLayout {
+        unsafe {
+            match (*header).type_tag {
+                VecLikeType::Vector => {
+                    Self::value_vec_payload_layout(&(*(header as *const VectorObj)).data)
+                }
+                VecLikeType::Lambda => {
+                    let object = &*(header as *const LambdaObj);
+                    Self::closure_payload_layout(&object.data, object.parsed_params.get())
+                }
+                VecLikeType::Macro => {
+                    let object = &*(header as *const MacroObj);
+                    Self::closure_payload_layout(&object.data, object.parsed_params.get())
+                }
+                VecLikeType::ByteCode => {
+                    Self::bytecode_payload_layout(&*(header as *const ByteCodeObj))
+                }
+                VecLikeType::Record | VecLikeType::WindowConfiguration => {
+                    Self::value_vec_payload_layout(&(*(header as *const RecordObj)).data)
+                }
+                VecLikeType::Font => {
+                    Self::value_vec_payload_layout(&(*(header as *const FontObj)).data.fields)
+                }
+                VecLikeType::CharTable => {
+                    Self::value_vec_payload_layout(&(*(header as *const CharTableObj)).extras)
+                }
+                VecLikeType::SubCharTable => {
+                    Self::value_vec_payload_layout(&(*(header as *const SubCharTableObj)).contents)
+                }
+                VecLikeType::Obarray => {
+                    Self::value_vec_payload_layout(&(*(header as *const ObarrayObj)).buckets)
+                }
+                VecLikeType::Thread => {
+                    let payload = &(*(header as *const ThreadObj)).payload;
+                    Self::threading_payload_layout(
+                        payload.logical_backing_bytes(),
+                        payload.backing_bytes(),
+                    )
+                }
+                VecLikeType::Mutex => {
+                    let payload = &(*(header as *const MutexObj)).payload;
+                    Self::threading_payload_layout(
+                        payload.logical_backing_bytes(),
+                        payload.backing_bytes(),
+                    )
+                }
+                VecLikeType::CondVar => {
+                    let payload = &(*(header as *const CondVarObj)).payload;
+                    Self::threading_payload_layout(
+                        payload.logical_backing_bytes(),
+                        payload.backing_bytes(),
+                    )
+                }
+                VecLikeType::Bignum
+                | VecLikeType::Marker
+                | VecLikeType::Overlay
+                | VecLikeType::Finalizer
+                | VecLikeType::SymbolWithPos
+                | VecLikeType::UserPtr
+                | VecLikeType::Process
+                | VecLikeType::Frame
+                | VecLikeType::Window
+                | VecLikeType::BoolVector
+                | VecLikeType::Buffer
+                | VecLikeType::HashTable
+                | VecLikeType::Terminal
+                | VecLikeType::Subr
+                | VecLikeType::Xwidget
+                | VecLikeType::XwidgetView
+                | VecLikeType::ModuleFunction
+                | VecLikeType::Sqlite
+                | VecLikeType::Timer
+                | VecLikeType::SurfaceHandle
+                | VecLikeType::VideoHandle => PayloadLayout::default(),
+            }
+        }
+    }
+
+    fn threading_payload_layout(logical_bytes: usize, capacity_bytes: usize) -> PayloadLayout {
+        PayloadLayout {
+            logical_bytes,
+            capacity_bytes,
+            owned: capacity_bytes != 0,
+            mapped: false,
+        }
     }
 }

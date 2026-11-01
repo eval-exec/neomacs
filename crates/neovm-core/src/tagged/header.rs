@@ -2198,18 +2198,64 @@ impl BoolVectorObj {
     }
 }
 
-/// Heap-allocated handle for one thread, mutex or condition variable.
-///
-/// GNU gives each of the three its own struct; here they differ only in the
-/// header tag, because all three are an identity -- the state itself lives in
-/// the `ThreadManager`, keyed by `id`.  What matters, and what a tagged cons
-/// could not give, is that the tag makes them OPAQUE: `consp`, `listp`, `car`
-/// and `cdr` refuse them and `type-of` names them, exactly as GNU's
-/// `PVEC_THREAD` / `PVEC_MUTEX` / `PVEC_CONDVAR` do.
+/// A thread owns its state independently of the live-thread registry.
 #[repr(C)]
-pub struct ThreadingHandleObj {
-    pub header: VecLikeHeader,
-    pub id: u64,
+pub(crate) struct ThreadObj {
+    pub(crate) header: VecLikeHeader,
+    pub(crate) payload: crate::heap_types::threading::ThreadPayload,
+}
+
+impl ThreadObj {
+    pub(crate) fn new(payload: crate::heap_types::threading::ThreadPayload) -> Self {
+        Self {
+            header: VecLikeHeader::new(VecLikeType::Thread),
+            payload,
+        }
+    }
+
+    pub(crate) fn owned_bytes(&self) -> usize {
+        size_of::<Self>().saturating_add(self.payload.backing_bytes())
+    }
+}
+
+/// A mutex owns its name and recursive native ownership state.
+#[repr(C)]
+pub(crate) struct MutexObj {
+    pub(crate) header: VecLikeHeader,
+    pub(crate) payload: crate::heap_types::threading::MutexPayload,
+}
+
+impl MutexObj {
+    pub(crate) fn new(payload: crate::heap_types::threading::MutexPayload) -> Self {
+        Self {
+            header: VecLikeHeader::new(VecLikeType::Mutex),
+            payload,
+        }
+    }
+
+    pub(crate) fn owned_bytes(&self) -> usize {
+        size_of::<Self>().saturating_add(self.payload.backing_bytes())
+    }
+}
+
+/// A condition owns an ordinary traced edge to its associated mutex.
+#[repr(C)]
+pub(crate) struct CondVarObj {
+    pub(crate) header: VecLikeHeader,
+    pub(crate) payload: crate::heap_types::threading::CondVarPayload,
+}
+
+impl CondVarObj {
+    pub(crate) fn new(payload: crate::heap_types::threading::CondVarPayload) -> Self {
+        Self {
+            header: VecLikeHeader::new(VecLikeType::CondVar),
+            payload,
+        }
+    }
+
+    pub(crate) fn owned_bytes(&self) -> usize {
+        size_of::<Self>().saturating_add(self.payload.backing_bytes())
+    }
 }
 
 /// Heap-allocated handle for one host-owned video session.

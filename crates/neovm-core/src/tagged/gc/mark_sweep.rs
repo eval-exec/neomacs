@@ -1556,10 +1556,24 @@ impl TaggedHeap {
                     let o = &*(ptr as *const XwidgetViewObj);
                     sink.children([o.model, o.window]);
                 }
+                VecLikeType::Thread => {
+                    (*(ptr as *const ThreadObj))
+                        .payload
+                        .visit_children(&mut |child| sink.child(child));
+                }
+                VecLikeType::Mutex => {
+                    (*(ptr as *const MutexObj))
+                        .payload
+                        .visit_children(&mut |child| sink.child(child));
+                }
+                VecLikeType::CondVar => {
+                    (*(ptr as *const CondVarObj))
+                        .payload
+                        .visit_children(&mut |child| sink.child(child));
+                }
                 // Buffer/Window/Frame/Timer/Process/Terminal/Marker/Subr/
-                // Bignum/BoolVector/Sqlite/UserPtr/SurfaceHandle/VideoHandle and
-                // the three threading handles have no Value children to trace
-                // (mirrors trace_veclike).
+                // Bignum/BoolVector/Sqlite/UserPtr/SurfaceHandle/VideoHandle
+                // have no Value children to trace (mirrors trace_veclike).
                 VecLikeType::BoolVector
                 | VecLikeType::Buffer
                 | VecLikeType::Window
@@ -1573,10 +1587,7 @@ impl TaggedHeap {
                 | VecLikeType::Sqlite
                 | VecLikeType::UserPtr
                 | VecLikeType::SurfaceHandle
-                | VecLikeType::VideoHandle
-                | VecLikeType::Thread
-                | VecLikeType::Mutex
-                | VecLikeType::CondVar => {}
+                | VecLikeType::VideoHandle => {}
             }
         }
     }

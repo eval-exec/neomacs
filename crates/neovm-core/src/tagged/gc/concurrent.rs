@@ -1165,3 +1165,117 @@ pub(crate) fn prepare_concurrent_hash_write(
         state.written_hash_owners.push(owner);
     });
 }
+
+impl TaggedHeap {
+    fn record_threading_payload_write(&mut self, owner: TaggedValue) {
+        let record = HeapWriteRecord::bulk(owner, HeapWriteKind::ThreadingPayload);
+        if census_remset_probe_on() {
+            self.census_note_write(record);
+        }
+        self.record_heap_write(record);
+    }
+
+    /// Mutate an owned thread under the caller's serial authority. The closure
+    /// must not collect, yield, run Lisp, or retain a reference to the payload.
+    /// Pre-store SATB and persistent remembered-owner logging use exactly the
+    /// same child schema as marking; later capacity growth is charged once.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    pub(crate) unsafe fn with_thread_payload_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::ThreadPayload) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::Thread {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut ThreadObj;
+        // SAFETY: the rooted live value has the Thread tag; serial authority
+        // excludes writers, and workers defer all reads of this mutable payload.
+        if unsafe { (*ptr).payload.id.heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        self.record_threading_payload_write(value);
+        // SAFETY: preimage enumeration has ended; exclusive payload access is
+        // retained by the caller until this non-yielding closure returns.
+        let object = unsafe { &mut *ptr };
+        let before = object.owned_bytes();
+        #[cfg(debug_assertions)]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let result = update(&mut object.payload);
+        self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
+        Some(result)
+    }
+
+    /// Mutex counterpart of `with_thread_payload_mut`, with identical authority
+    /// and no-safe-point requirements. Lock ownership creates no extra GC edge.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    pub(crate) unsafe fn with_mutex_payload_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::MutexPayload) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::Mutex {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut MutexObj;
+        // SAFETY: the rooted live value has the Mutex tag; serial authority
+        // excludes writers and the concurrent worker defers this payload.
+        if unsafe { (*ptr).payload.id.heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        self.record_threading_payload_write(value);
+        // SAFETY: preimage enumeration has ended; exclusive payload access is
+        // retained by the caller until this non-yielding closure returns.
+        let object = unsafe { &mut *ptr };
+        let before = object.owned_bytes();
+        #[cfg(debug_assertions)]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let result = update(&mut object.payload);
+        self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
+        Some(result)
+    }
+
+    /// Condition-variable counterpart of `with_thread_payload_mut`. In
+    /// particular, replacing the mutex child is covered by the pre-store scan.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    pub(crate) unsafe fn with_condvar_payload_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::CondVarPayload) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::CondVar {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut CondVarObj;
+        // SAFETY: the rooted live value has the CondVar tag; serial authority
+        // excludes writers and the concurrent worker defers this payload.
+        if unsafe { (*ptr).payload.id.heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        self.record_threading_payload_write(value);
+        // SAFETY: preimage enumeration has ended; exclusive payload access is
+        // retained by the caller until this non-yielding closure returns.
+        let object = unsafe { &mut *ptr };
+        let before = object.owned_bytes();
+        #[cfg(debug_assertions)]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        let result = update(&mut object.payload);
+        self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
+        Some(result)
+    }
+}

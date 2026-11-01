@@ -138,10 +138,10 @@ pub(crate) fn format_opaque_handle_in_state(
         return Some(format!("#<thread {id}>"));
     }
     if let Some(id) = threads.mutex_id_from_handle(value) {
-        return Some(format!("#<mutex {id}>"));
+        return Some(format!("#<mutex {}>", id.native_key()));
     }
     if let Some(id) = threads.condition_variable_id_from_handle(value) {
-        return Some(format!("#<condvar {id}>"));
+        return Some(format!("#<condvar {}>", id.native_key()));
     }
     if let Some(buf_id) = value.as_buffer_id() {
         if let Some(buf) = buffers.get(buf_id) {

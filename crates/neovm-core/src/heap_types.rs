@@ -4,6 +4,8 @@
 //! dump/load code share the same payload structs without reviving old heap
 //! module boundaries.
 
+pub(crate) mod threading;
+
 use crate::buffer::text_props::{EmptyTextProperties, TextPropertiesRef};
 use crate::buffer::{BufferId, CharLen, CharPos0, CharRange, EmacsBytePos, TextPropertyTable};
 use crate::emacs_core::emacs_char;

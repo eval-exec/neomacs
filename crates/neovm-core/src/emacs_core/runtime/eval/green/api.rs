@@ -6,7 +6,18 @@
 use super::{ThreadKey, Wait};
 use crate::emacs_core::error::{EvalResult, expect_args, signal};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::threads::{
+    CondVarHandle, MutexAcquisition, MutexHandle, MutexRelease, NotificationScope,
+};
 use crate::emacs_core::value::Value;
+use crate::heap_types::threading::RecursionDepth;
+
+fn mutex_depth_exhausted() -> crate::emacs_core::error::Flow {
+    signal(
+        "error",
+        vec![Value::string("Mutex recursion depth exhausted")],
+    )
+}
 
 impl Context {
     /// Whether thread primitives take the Green path: this owner runs in a
@@ -42,7 +53,7 @@ impl Context {
                 vec![Value::string("Cannot join current thread")],
             ));
         }
-        let pending = self.threads.pending_thread_signal(id);
+        let pending = self.threads.pending_thread_signal_for_value(args[0]);
         let key = ThreadKey::from_id(id);
         let control = self.green_control();
         if !control.exited(key) {
@@ -53,14 +64,14 @@ impl Context {
                 Ok(())
             })?;
         }
-        self.threads.join_thread(id);
+        self.threads.join_thread_for_value(args[0]);
         // Join is about the Lisp thread, not the OS carrier: the carrier stays
         // in the pool for the next Lisp thread. `exited(key)` is published
         // after owner retirement; the TLS reset is deferred to that next job.
         if let Some(flow) = pending {
             return Err(flow);
         }
-        Ok(self.threads.thread_result(id))
+        Ok(self.threads.thread_result_for_value(args[0]))
     }
 
     /// `(thread-signal THREAD ERROR-SYMBOL DATA)` for a worker thread (GNU
@@ -103,21 +114,25 @@ impl Context {
         control.nudge_main_mailbox();
     }
 
-    /// `(mutex-lock MUTEX)` (GNU `Fmutex_lock`): take mutex ID, waiting
+    /// `(mutex-lock MUTEX)` (GNU `Fmutex_lock`): take MUTEX, waiting
     /// while another thread holds it, until this thread is signalled.
-    pub(crate) fn green_mutex_lock(&mut self, id: u64, mutex: Value) -> EvalResult {
-        if self.threads.mutex_lock(id) {
-            return Ok(Value::NIL);
+    pub(crate) fn green_mutex_lock(&mut self, mutex: MutexHandle) -> EvalResult {
+        match self.threads.mutex_lock(mutex) {
+            MutexAcquisition::Acquired => return Ok(Value::NIL),
+            MutexAcquisition::Blocked => {}
+            MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
         }
         let key = self.green_key().expect("a Green thread");
-        self.green_blocked_on(mutex, |ctx| {
+        self.green_blocked_on(mutex.value(), |ctx| {
             loop {
                 // GNU `lisp_mutex_lock_for_thread`: a signal ends the wait;
                 // `post_acquire_global_lock` raises it.
                 ctx.green_raise_pending_signal(key)?;
-                ctx.green_wait(Wait::Mutex(id))?;
-                if ctx.threads.mutex_lock(id) {
-                    return Ok(());
+                ctx.green_wait(Wait::Mutex(mutex.native_key()))?;
+                match ctx.threads.mutex_lock(mutex) {
+                    MutexAcquisition::Acquired => return Ok(()),
+                    MutexAcquisition::Blocked => {}
+                    MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
                 }
             }
         })?;
@@ -126,34 +141,55 @@ impl Context {
 
     /// `(mutex-unlock MUTEX)` once its owner is checked: a release wakes
     /// every thread waiting for the mutex. This thread keeps running.
-    pub(crate) fn green_mutex_unlock(&mut self, id: u64) -> EvalResult {
-        self.threads.mutex_unlock(id);
-        if self.threads.mutex_free(id) {
-            self.green_control().wake_waiting_for(Wait::Mutex(id));
+    pub(crate) fn green_mutex_unlock(&mut self, mutex: MutexHandle) -> EvalResult {
+        match self.threads.mutex_unlock(mutex) {
+            MutexRelease::StillLocked => {}
+            MutexRelease::Released => {
+                self.green_control()
+                    .wake_waiting_for(Wait::Mutex(mutex.native_key()));
+            }
+            MutexRelease::NotOwner => {
+                return Err(signal(
+                    "error",
+                    vec![Value::string("Cannot unlock mutex owned by another thread")],
+                ));
+            }
         }
         Ok(Value::NIL)
     }
 
     /// `(condition-wait COND)` once this thread is checked to hold COND's
-    /// mutex MUTEX-ID (GNU `condition_wait_callback`): release the mutex
+    /// mutex MUTEX (GNU `condition_wait_callback`): release the mutex
     /// whatever its count, wait for a notification unless already
     /// signalled, take the mutex back with its count (even when signalled),
     /// then raise a pending signal.
     pub(crate) fn green_condition_wait(
         &mut self,
-        id: u64,
-        mutex_id: u64,
-        cond: Value,
+        condition: CondVarHandle,
+        mutex: MutexHandle,
     ) -> EvalResult {
         let key = self.green_key().expect("a Green thread");
         let control = self.green_control();
-        let count = self.threads.mutex_unlock_for_wait(mutex_id);
-        control.wake_waiting_for(Wait::Mutex(mutex_id));
+        let count: RecursionDepth = self.threads.mutex_unlock_for_wait(mutex).ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string(
+                    "Condition variable's mutex is not held by current thread",
+                )],
+            )
+        })?;
+        control.wake_waiting_for(Wait::Mutex(mutex.native_key()));
         if self.threads.pending_thread_signal(key.id()).is_none() {
-            self.green_blocked_on(cond, |ctx| ctx.green_park(Wait::Condition(id)))?;
+            self.green_blocked_on(condition.value(), |ctx| {
+                ctx.green_park(Wait::Condition(condition.native_key()))
+            })?;
         }
-        while !self.threads.mutex_relock_after_wait(mutex_id, count) {
-            self.green_park(Wait::Mutex(mutex_id))?;
+        loop {
+            match self.threads.mutex_relock_after_wait(mutex, count) {
+                MutexAcquisition::Acquired => break,
+                MutexAcquisition::Blocked => self.green_park(Wait::Mutex(mutex.native_key()))?,
+                MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
+            }
         }
         self.green_raise_pending_signal(key)?;
         Ok(Value::NIL)
@@ -163,12 +199,19 @@ impl Context {
     /// COND's mutex: wake one waiting thread, or all of them. GNU releases
     /// and retakes the mutex around the notification without letting
     /// another thread run, so nothing else changes.
-    pub(crate) fn green_condition_notify(&mut self, id: u64, all: bool) -> EvalResult {
+    pub(crate) fn green_condition_notify(
+        &mut self,
+        condition: CondVarHandle,
+        scope: NotificationScope,
+    ) -> EvalResult {
         let control = self.green_control();
-        if all {
-            control.wake_waiting_for(Wait::Condition(id));
-        } else {
-            control.wake_one_waiting_for(Wait::Condition(id));
+        match scope {
+            NotificationScope::All => {
+                control.wake_waiting_for(Wait::Condition(condition.native_key()));
+            }
+            NotificationScope::One => {
+                control.wake_one_waiting_for(Wait::Condition(condition.native_key()));
+            }
         }
         Ok(Value::NIL)
     }

@@ -103,6 +103,8 @@ pub enum HeapWriteKind {
     /// names its kind like every other traced veclike, and the barrier logs the
     /// pre-overwrite `interactive_form` (covered by `collect_veclike_children`).
     ModuleFunction,
+    /// Owned thread/mutex/condition payload before any of its children change.
+    ThreadingPayload,
 }
 
 /// A single heap mutation event.
@@ -2110,9 +2112,9 @@ impl TaggedHeap {
                         VecLikeType::SymbolWithPos => size_of::<SymbolWithPosObj>(),
                         VecLikeType::Finalizer => size_of::<FinalizerObj>(),
                         VecLikeType::Sqlite => size_of::<SqliteObj>(),
-                        VecLikeType::Thread | VecLikeType::Mutex | VecLikeType::CondVar => {
-                            size_of::<ThreadingHandleObj>()
-                        }
+                        VecLikeType::Thread => (&*(ptr as *const ThreadObj)).owned_bytes(),
+                        VecLikeType::Mutex => (&*(ptr as *const MutexObj)).owned_bytes(),
+                        VecLikeType::CondVar => (&*(ptr as *const CondVarObj)).owned_bytes(),
                         VecLikeType::UserPtr => size_of::<UserPtrObj>(),
                         VecLikeType::ModuleFunction => size_of::<ModuleFunctionObj>(),
                     }
@@ -2241,43 +2243,6 @@ impl TaggedHeap {
             stats = stats.add(Self::lambda_params_payload_layout(params));
         }
         stats
-    }
-
-    fn veclike_payload_layout(header: *const VecLikeHeader) -> PayloadLayout {
-        unsafe {
-            match (*header).type_tag {
-                VecLikeType::Vector => {
-                    Self::value_vec_payload_layout(&(*(header as *const VectorObj)).data)
-                }
-                VecLikeType::Lambda => {
-                    let object = &*(header as *const LambdaObj);
-                    Self::closure_payload_layout(&object.data, object.parsed_params.get())
-                }
-                VecLikeType::Macro => {
-                    let object = &*(header as *const MacroObj);
-                    Self::closure_payload_layout(&object.data, object.parsed_params.get())
-                }
-                VecLikeType::ByteCode => {
-                    Self::bytecode_payload_layout(&*(header as *const ByteCodeObj))
-                }
-                VecLikeType::Record | VecLikeType::WindowConfiguration => {
-                    Self::value_vec_payload_layout(&(*(header as *const RecordObj)).data)
-                }
-                VecLikeType::Font => {
-                    Self::value_vec_payload_layout(&(*(header as *const FontObj)).data.fields)
-                }
-                VecLikeType::CharTable => {
-                    Self::value_vec_payload_layout(&(*(header as *const CharTableObj)).extras)
-                }
-                VecLikeType::SubCharTable => {
-                    Self::value_vec_payload_layout(&(*(header as *const SubCharTableObj)).contents)
-                }
-                VecLikeType::Obarray => {
-                    Self::value_vec_payload_layout(&(*(header as *const ObarrayObj)).buckets)
-                }
-                _ => PayloadLayout::default(),
-            }
-        }
     }
 
     fn boxed_class(header: *const GcHeader) -> &'static str {
