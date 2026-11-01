@@ -1,9 +1,12 @@
 //! P11 SOAK: bounded, seeded, checked thread-runtime soak.
 //!
 //! The harness is an orchestrator, not a Lisp evaluator: every scenario is a
-//! row file run by the *built* editor binary inside `tmp/v10x/sandbox-run.sh`
-//! (never in-process), so the same sandbox wraps neomacs and the GNU 31.1
-//! oracle. One child process = one scenario = one receipt line.
+//! row file run by the *built* editor binary inside a sandbox launcher (never
+//! in-process), so the same sandbox wraps neomacs and the GNU 31.1 oracle.
+//! The launcher is tracked (`crates/neovm-core/tests/soak/sandbox-run.sh`,
+//! capability-detected: systemd scope -> user/PID namespace -> direct exec) and
+//! can be replaced with the soak lane's own wrapper via `SOAK_SANDBOX`. One
+//! child process = one scenario = one receipt line.
 //!
 //! Arms (chosen by `SOAK_ARM`, one arm per invocation):
 //!   sim          `NEOVM_THREADS` unset, GEN1 default, JIT on (the reference;
@@ -24,18 +27,20 @@
 //!
 //! Duration: `SOAK_SECONDS` is the per-arm budget across all scenarios
 //! (default 1800; `SOAK_MODE=smoke` uses `SOAK_SMOKE_SECS` per scenario,
-//! default 2, and is the <= 2 min gate). The long arms are run by
+//! default 1, and is the <= 2 min gate). The long arms are run by
 //! executing the built `core` test binary directly
 //! (`--exact thread_soak::soak --nocapture`), which is a plain run of a
 //! built target and has no nextest timeout.
 //!
-//! Selection: this module lives in the single `core` integration binary (the
-//! one-binary-per-crate lint) and `.config/nextest.toml` excludes
-//! `thread_soak::soak` from the default filter, because every default here
-//! (`SOAK_BIN`, `SOAK_ROWS`, `SOAK_SANDBOX`, `SOAK_CPUS`) names the soak
-//! driver's own staged binary, row directory, sandbox wrapper and CPU set,
-//! none of which exist on a CI runner or another developer's checkout. Run it
-//! on purpose with `--ignore-default-filter -E 'test(=thread_soak::soak)'`.
+//! Portability: this module lives in the single `core` integration binary (the
+//! one-binary-per-crate lint). The rows and the launcher are tracked under
+//! `crates/neovm-core/tests/soak/`, and the editor is resolved from
+//! `NEOVM_BINARY_PATH` / `NEOMACS_BIN` (both exported by CI for the runtime
+//! artifact) or the workspace's `target/release/neomacs`; a missing editor
+//! fails with the actionable build message. `SOAK_CPUS` is empty by default
+//! (no `taskset`) because CI runners have no CPUs 14-31; the soak lane sets
+//! `0-3,14-31`. Default runs therefore execute the smoke; long arms and the
+//! reference file stay explicit lane settings.
 //!
 //! RSS: `SOAK_RSS_LIMIT_KIB_PER_MIN` (default 2048) bounds the growth of the
 //! *editor process's* VmRSS. The gate has a minimum-window rule (only runs of
@@ -281,6 +286,23 @@ struct Config {
     row_env: Vec<(String, String)>,
 }
 
+/// Editor directory for the sandboxed run: `NEOVM_BINARY_PATH` (the path CI
+/// exports for the runtime artifact) or `NEOMACS_BIN`, else the workspace's
+/// release build. Accepts either the binary itself or its directory.
+fn resolve_editor_dir(repo: &Path) -> PathBuf {
+    for var in ["NEOVM_BINARY_PATH", "NEOMACS_BIN"] {
+        if let Some(value) = env::var_os(var) {
+            let path = PathBuf::from(value);
+            return if path.is_dir() {
+                path
+            } else {
+                path.parent().map(Path::to_path_buf).unwrap_or(path)
+            };
+        }
+    }
+    repo.join("target/release")
+}
+
 impl Config {
     fn from_env() -> Config {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -339,14 +361,14 @@ impl Config {
             scenario_secs,
             bin: env::var_os("SOAK_BIN")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| repo.join("tmp/v10x/soak-a814-bin")),
+                .unwrap_or_else(|| resolve_editor_dir(&repo)),
             rows: env::var_os("SOAK_ROWS")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| repo.join("tmp/v10x/threads-bench/soak-rows")),
+                .unwrap_or_else(|| repo.join("crates/neovm-core/tests/soak/rows")),
             sandbox: env::var_os("SOAK_SANDBOX")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| repo.join("tmp/v10x/sandbox-run.sh")),
-            cpus: env::var("SOAK_CPUS").unwrap_or_else(|_| "0-3,14-31".to_owned()),
+                .unwrap_or_else(|| repo.join("crates/neovm-core/tests/soak/sandbox-run.sh")),
+            cpus: env::var("SOAK_CPUS").unwrap_or_default(),
             receipt,
             reference: env::var_os("SOAK_REFERENCE")
                 .map(PathBuf::from)
@@ -452,6 +474,10 @@ struct Run {
     host_available_kib: u64,
     host_committed_kib: u64,
     scope_sample_ms: u128,
+    /// The launcher's capability line (`soak-sandbox: mode=...`), so portable
+    /// runs record whether they got the memory-capped scope, a bare namespace
+    /// or a direct exec.
+    sandbox_mode: String,
     /// Row-reported GC marks: `SOAK-GC t=start|end gcs=.. heap=.. use=..`.
     gc_start: Option<i64>,
     gc_end: Option<i64>,
@@ -543,7 +569,10 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
     let stderr_path = out_dir.join(format!("{tag}.err"));
 
     let mut command = Command::new(&config.sandbox);
-    command.arg("taskset").arg("-c").arg(&config.cpus);
+    // Pinning is a soak-lane setting; portable runs (CI) have no 14-31 CPUs.
+    if !config.cpus.is_empty() {
+        command.arg("taskset").arg("-c").arg(&config.cpus);
+    }
     command
         .arg("perf")
         .arg("stat")
@@ -565,6 +594,8 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         .env("SOAK_SEED", config.seed.to_string())
         .env("SOAK_SECS", config.scenario_secs.to_string())
         .env("SANDBOX_MEM_GB", config.mem_gb_for(scenario).to_string())
+        // The launcher refuses SOAK_MODE=arm without a memory-capped scope.
+        .env("SOAK_MODE", &config.mode)
         .stdout(Stdio::from(
             fs::File::create(&stdout_path).expect("stdout file"),
         ))
@@ -645,8 +676,13 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
     let (gc_start, gc_end) = parse_gc_marks(&stdout);
     let progress = parse_progress(&stdout);
     write_curve(&out_dir, &tag, samples, &progress);
-    let stderr_tail = fs::read_to_string(&stderr_path)
-        .unwrap_or_default()
+    let stderr_text = fs::read_to_string(&stderr_path).unwrap_or_default();
+    let sandbox_mode = stderr_text
+        .lines()
+        .find_map(|line| line.strip_prefix("soak-sandbox: "))
+        .map(str::to_owned)
+        .unwrap_or_default();
+    let stderr_tail = stderr_text
         .lines()
         .rev()
         .take(5)
@@ -682,6 +718,7 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         host_available_kib: sampled.scope.host_available_kib,
         host_committed_kib: sampled.scope.host_committed_kib,
         scope_sample_ms: sampled.scope.at_ms,
+        sandbox_mode,
         gc_start: gc_start.get("gcs").and_then(|v| v.parse().ok()),
         gc_end: gc_end.get("gcs").and_then(|v| v.parse().ok()),
         heap_start_kib: gc_start.get("heap").and_then(|v| v.parse().ok()),
@@ -835,6 +872,7 @@ fn read_instructions(path: &Path) -> Option<u128> {
 }
 
 #[derive(Default, Clone)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct ScopeStats {
     /// The editor's own transient scope (systemd `run-*.scope`), not a parent.
     peak_kib: u64,
@@ -861,6 +899,7 @@ struct Sampled {
     quarters: [Option<(f64, f64)>; 4],
 }
 
+#[cfg(target_os = "linux")]
 fn read_vm_rss(pid: u32) -> Option<u64> {
     let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
     for line in status.lines() {
@@ -878,6 +917,24 @@ fn read_vm_rss(pid: u32) -> Option<u64> {
 /// subtree sum only while the editor has not been identified yet, plus the
 /// editor's scope accounting, rlimits and host memory pressure. The last tick
 /// before the child disappears is the failure instant recorded in the receipt.
+#[cfg(not(target_os = "linux"))]
+fn sample_rss(_root_pid: u32, _needle: &str) -> Sampled {
+    // The sampler reads /proc (RSS, scope accounting, rlimits); on macOS and
+    // other hosts the smoke still checks every row's state digest, it just
+    // records no RSS columns.
+    Sampled {
+        samples: Vec::new(),
+        scope: ScopeStats::default(),
+        quarters: [None; 4],
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_tree(_root: u32) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(target_os = "linux")]
 fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
     let started = Instant::now();
     let mut samples = Vec::new();
@@ -967,6 +1024,7 @@ fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn quarter_means(samples: &[(u128, u64)]) -> [Option<(f64, f64)>; 4] {
     let mut out = [None; 4];
     if samples.len() < 8 {
@@ -994,6 +1052,7 @@ fn quarter_means(samples: &[(u128, u64)]) -> [Option<(f64, f64)>; 4] {
 
 /// The editor is the only process in the sandbox whose executable is
 /// `neomacs` or `emacs`; its cgroup is the transient scope we must read.
+#[cfg(target_os = "linux")]
 fn is_editor_process(pid: u32) -> bool {
     let Ok(exe) = fs::read_link(format!("/proc/{pid}/exe")) else {
         return false;
@@ -1005,6 +1064,7 @@ fn is_editor_process(pid: u32) -> bool {
 }
 
 /// The systemd scope path from a process's cgroup v2 membership.
+#[cfg(target_os = "linux")]
 fn scope_of(pid: u32) -> Option<PathBuf> {
     let text = fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
     for line in text.lines() {
@@ -1018,6 +1078,7 @@ fn scope_of(pid: u32) -> Option<PathBuf> {
 /// `scope_of`, restricted to a transient systemd `run-*.scope` -- the
 /// sandbox's own scope. Anything else (the user manager's app.slice, a
 /// session scope) mixes unrelated accounting into the receipt.
+#[cfg(target_os = "linux")]
 fn transient_scope_of(pid: u32) -> Option<PathBuf> {
     let path = scope_of(pid)?;
     let name = path.file_name()?.to_str()?;
@@ -1028,6 +1089,7 @@ fn transient_scope_of(pid: u32) -> Option<PathBuf> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_scope(path: &Path, scope: &mut ScopeStats) {
     if let Ok(text) = fs::read_to_string(path.join("memory.peak")) {
         if let Ok(bytes) = text.trim().parse::<u64>() {
@@ -1061,6 +1123,7 @@ fn read_scope(path: &Path, scope: &mut ScopeStats) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_limits(pid: u32, scope: &mut ScopeStats) {
     let Ok(text) = fs::read_to_string(format!("/proc/{pid}/limits")) else {
         return;
@@ -1075,6 +1138,7 @@ fn read_limits(pid: u32, scope: &mut ScopeStats) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_host_memory(scope: &mut ScopeStats) {
     let Ok(text) = fs::read_to_string("/proc/meminfo") else {
         return;
@@ -1093,6 +1157,7 @@ fn read_host_memory(scope: &mut ScopeStats) {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn cmdline_matches(needle: &str) -> Vec<u32> {
     let mut out = Vec::new();
     if let Ok(entries) = fs::read_dir("/proc") {
@@ -1112,6 +1177,7 @@ fn cmdline_matches(needle: &str) -> Vec<u32> {
 }
 
 /// Row-name cmdline matches restricted to the run's own sandbox scope.
+#[cfg(target_os = "linux")]
 fn scoped_cmdline_matches(needle: &str, root_scope: Option<&Path>) -> Vec<u32> {
     let Some(root_scope) = root_scope else {
         return Vec::new();
@@ -1123,6 +1189,7 @@ fn scoped_cmdline_matches(needle: &str, root_scope: Option<&Path>) -> Vec<u32> {
 }
 
 /// Descendants of `root` (inclusive) by walking /proc ppid links.
+#[cfg(target_os = "linux")]
 fn process_tree(root: u32) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     if let Ok(entries) = fs::read_dir("/proc") {
@@ -1194,7 +1261,7 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
     let mut file = fs::File::create(&config.receipt)?;
     writeln!(
         file,
-        "arm\tscenario\tseed\tmode\tsandbox_mem_gb\titers\twall_ms\tinstructions\trss_start_kib\trss_end_kib\trss_slope_kib_per_min\trss_q1_kib\trss_q2_kib\trss_q3_kib\trss_q4_kib\trss_slope_prev_kib_min\trss_slope_last_kib_min\tgc_start\tgc_end\theap_start_kib\theap_end_kib\tuse_start\tuse_end\tlive_start_bytes\tlive_end_bytes\tbacking_start_bytes\tbacking_end_bytes\tobjects_start\tobjects_end\tthread_objs_start\tthread_objs_end\tscope_peak_kib\tscope_mem_max\tscope_pids_current\tscope_pids_max\tscope_max_events\tscope_oom_events\trlimit_nproc\trlimit_as\thost_memavail_kib\thost_committed_as_kib\tscope_sample_ms\trc\tresult\tfailure"
+        "arm\tscenario\tseed\tmode\tsandbox_mem_gb\titers\twall_ms\tinstructions\trss_start_kib\trss_end_kib\trss_slope_kib_per_min\trss_q1_kib\trss_q2_kib\trss_q3_kib\trss_q4_kib\trss_slope_prev_kib_min\trss_slope_last_kib_min\tgc_start\tgc_end\theap_start_kib\theap_end_kib\tuse_start\tuse_end\tlive_start_bytes\tlive_end_bytes\tbacking_start_bytes\tbacking_end_bytes\tobjects_start\tobjects_end\tthread_objs_start\tthread_objs_end\tscope_peak_kib\tscope_mem_max\tscope_pids_current\tscope_pids_max\tscope_max_events\tscope_oom_events\trlimit_nproc\trlimit_as\thost_memavail_kib\thost_committed_as_kib\tscope_sample_ms\tsandbox_mode\trc\tresult\tfailure"
     )?;
     for run in runs {
         let iters = run.diag.get("iters").cloned().unwrap_or_default();
@@ -1204,7 +1271,7 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
             .unwrap_or_default();
         writeln!(
             file,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             run.arm,
             run.scenario,
             config.seed,
@@ -1273,6 +1340,7 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
             run.host_available_kib,
             run.host_committed_kib,
             run.scope_sample_ms,
+            run.sandbox_mode,
             run.rc
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "signal".to_owned()),
@@ -1344,7 +1412,8 @@ fn soak() {
     );
     assert!(
         config.bin.join("neomacs").is_file(),
-        "editor binary missing at {} (SOAK_BIN); build it with the P11 build step",
+        "editor binary missing at {}; build it with `cargo xtask fresh-build --release` \
+         or point SOAK_BIN (or NEOVM_BINARY_PATH/NEOMACS_BIN) at a built editor",
         config.bin.display()
     );
 

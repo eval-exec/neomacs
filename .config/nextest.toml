@@ -19,16 +19,15 @@ capture-stdout = true
 capture-stderr = true
 
 [profile.default]
-# The P11 thread soak (tests/core.rs -> thread_soak.rs, test `thread_soak::soak`) is a driver, not a
-# unit test: it spawns the soak's staged editor binary on scenario rows inside a sandbox wrapper, pinned
-# to a CPU set, and every one of those defaults (SOAK_BIN, SOAK_ROWS, SOAK_SANDBOX, SOAK_CPUS) names
-# the soak machine's own untracked paths. It is run on purpose with --ignore-default-filter (see the
-# module docs), never by a default `cargo nextest run`. The filter below belongs here: the
-# [[profile.default.scripts]] filter further down only chooses which tests get the memory-limit
-# wrapper and does not exclude anything from the run, which is how the soak ran in CI core shard 06
-# and the macOS core job on 2026-11-01 and failed at once with "sandbox wrapper missing at
-# tmp/v10x/sandbox-run.sh (SOAK_SANDBOX)".
-default-filter = 'not (package(neovm-core) and test(=thread_soak::soak))'
+# The P11 thread soak (tests/core.rs -> thread_soak.rs, test `thread_soak::soak`) is a driver: it
+# spawns a built editor on the tracked rows under crates/neovm-core/tests/soak/ through the tracked
+# portable launcher. Its default mode is a smoke (14 scenarios x Sim + green at 1 s, <= 2 min), so it
+# runs in default `cargo nextest run`; the editor is resolved from NEOVM_BINARY_PATH / NEOMACS_BIN
+# (both exported by CI for the runtime artifact) or the workspace's target/release/neomacs, and a
+# missing editor fails with the actionable build message rather than silently skipping.
+# The [[profile.default.scripts]] filter further down still excludes this test from the memory-limit
+# wrapper: the wrapper's RLIMIT_AS cap makes pthread_create fail with EAGAIN at a few hundred green
+# threads (SOAK-FINDING #1), and the launcher applies its own per-row sandbox budget instead.
 test-threads = 24
 
 # Many tests use the bootstrap evaluator (which loads 122 .el files)
