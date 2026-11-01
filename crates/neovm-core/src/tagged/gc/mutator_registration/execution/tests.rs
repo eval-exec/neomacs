@@ -1,8 +1,11 @@
 //! Real collector admission, resident owner roots and activation cleanup.
+#[path = "tests/hof.rs"]
+mod hof;
 use super::super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
+pub(crate) use hof::{HofTestInputs, prepared_hof_fixture};
 use std::ops::ControlFlow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

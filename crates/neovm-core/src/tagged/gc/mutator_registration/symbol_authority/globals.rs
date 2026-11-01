@@ -32,7 +32,7 @@ pub(crate) struct SymbolWriteToken<'lease> {
     _thread: PhantomData<Rc<()>>,
 }
 
-pub(super) fn check_home(
+pub(in crate::tagged::gc::mutator_registration) fn check_home(
     run: &RunAccess<'_, '_>,
     home: &OwnerRootSlot<'_>,
 ) -> Result<(), RegistrationError> {

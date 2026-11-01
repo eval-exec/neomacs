@@ -61,6 +61,10 @@ impl NativeCompiledCode {
             .map_err(|_| ParallelCompileError::AbiLayout)?;
         let cell_input_offset = i32::try_from(offset_of!(CellInput, slot))
             .map_err(|_| ParallelCompileError::AbiLayout)?;
+        let hof_mapper_offset = i32::try_from(offset_of!(HofInput, mapper))
+            .map_err(|_| ParallelCompileError::AbiLayout)?;
+        let hof_callback_offset = i32::try_from(offset_of!(HofInput, callback))
+            .map_err(|_| ParallelCompileError::AbiLayout)?;
         let output_offset = i32::try_from(offset_of!(ScalarOutput, word))
             .map_err(|_| ParallelCompileError::AbiLayout)?;
         let publication_offset = i32::try_from(offset_of!(ParallelRuntime<'_>, publication))
@@ -73,6 +77,7 @@ impl NativeCompiledCode {
         let name = match &plan {
             EntryPlan::Scalar(_) => "neovm_parallel_scalar_v1",
             EntryPlan::Cell => "neovm_parallel_cell_v1",
+            EntryPlan::Hof => "neovm_parallel_hof_v1",
         };
         let id = module
             .declare_function(name, Linkage::Local, &signature)
@@ -131,6 +136,42 @@ impl NativeCompiledCode {
                     let covered =
                         b.ins()
                             .icmp_imm(IntCC::Equal, answer, ImmediateResult::True.word() as i64);
+                    let ready = b
+                        .ins()
+                        .iconst(types::I32, NativeStatus::CellReadReady as i64);
+                    let absent = b.ins().iconst(types::I32, NativeStatus::SlotAbsent as i64);
+                    let status = b.ins().select(covered, ready, absent);
+                    b.ins().return_(&[status]);
+                }
+                EntryPlan::Hof => {
+                    let mapper =
+                        b.ins()
+                            .load(pointer, MemFlagsData::trusted(), args[2], hof_mapper_offset);
+                    let callback = b.ins().load(
+                        pointer,
+                        MemFlagsData::trusted(),
+                        args[2],
+                        hof_callback_offset,
+                    );
+                    // A single publication observation supplies both walks.
+                    // Their bounds and addresses cannot mix descriptor eras.
+                    let descriptor =
+                        acquire_descriptor(&mut b, pointer, args[0], publication_offset);
+                    let mapper_backing =
+                        slot_backing_from_descriptor(&mut b, pointer, descriptor, mapper)?;
+                    let callback_backing =
+                        slot_backing_from_descriptor(&mut b, pointer, descriptor, callback)?;
+                    let mapper_covered = b.ins().icmp_imm(
+                        IntCC::Equal,
+                        mapper_backing,
+                        ImmediateResult::True.word() as i64,
+                    );
+                    let callback_covered = b.ins().icmp_imm(
+                        IntCC::Equal,
+                        callback_backing,
+                        ImmediateResult::True.word() as i64,
+                    );
+                    let covered = b.ins().band(mapper_covered, callback_covered);
                     let ready = b
                         .ins()
                         .iconst(types::I32, NativeStatus::CellReadReady as i64);
@@ -269,6 +310,18 @@ impl NativeCompiledCode {
             )
         }
     }
+    pub(super) fn lookup_hof(
+        &self,
+        activation: &mut crate::tagged::gc::ExecutionActivation<'_, '_, '_>,
+        mapper: &SymbolHandle,
+        callback: &SymbolHandle,
+    ) -> Result<(), ParallelEntryError> {
+        // SAFETY: the private compiler emits only the closed four-pointer ABI.
+        // This borrow retains its unique executable mappings through the
+        // bounded paired descriptor lookup, and the activation retains the
+        // matching publication and its predecessors until the call returns.
+        unsafe { super::hof::lookup(self.entry, activation, mapper, callback) }
+    }
 }
 
 /// One atomic descriptor identity supplies every bound and pointer. This
@@ -278,6 +331,34 @@ fn emit_slot_backing(
     pointer: cranelift_codegen::ir::Type,
     runtime: cranelift_codegen::ir::Value,
     publication_offset: i32,
+    requested: cranelift_codegen::ir::Value,
+) -> Result<cranelift_codegen::ir::Value, ParallelCompileError> {
+    let descriptor = acquire_descriptor(b, pointer, runtime, publication_offset);
+    slot_backing_from_descriptor(b, pointer, descriptor, requested)
+}
+
+fn acquire_descriptor(
+    b: &mut FunctionBuilder<'_>,
+    pointer: cranelift_codegen::ir::Type,
+    runtime: cranelift_codegen::ir::Value,
+    publication_offset: i32,
+) -> cranelift_codegen::ir::Value {
+    let slot_address = b.ins().load(
+        pointer,
+        MemFlagsData::trusted(),
+        runtime,
+        publication_offset,
+    );
+    // Cranelift 0.134's atomic_load is SeqCst, hence at least Acquire:
+    // x86 TSO mov, aarch64 load_acquire. MemFlags alone supply no ordering.
+    b.ins()
+        .atomic_load(pointer, MemFlagsData::trusted(), slot_address)
+}
+
+fn slot_backing_from_descriptor(
+    b: &mut FunctionBuilder<'_>,
+    pointer: cranelift_codegen::ir::Type,
+    descriptor: cranelift_codegen::ir::Value,
     requested: cranelift_codegen::ir::Value,
 ) -> Result<cranelift_codegen::ir::Value, ParallelCompileError> {
     let offset = |position: DescriptorOffset| {
@@ -295,17 +376,6 @@ fn emit_slot_backing(
     let absent = b.create_block();
     let joined = b.create_block();
     b.append_block_param(joined, pointer);
-    let slot_address = b.ins().load(
-        pointer,
-        MemFlagsData::trusted(),
-        runtime,
-        publication_offset,
-    );
-    // Cranelift 0.134's atomic_load is SeqCst, hence at least Acquire:
-    // x86 TSO mov, aarch64 load_acquire. MemFlags alone supply no ordering.
-    let descriptor = b
-        .ins()
-        .atomic_load(pointer, MemFlagsData::trusted(), slot_address);
     let slots = b
         .ins()
         .load(pointer, MemFlagsData::trusted(), descriptor, slots_offset);

@@ -3,12 +3,14 @@
 pub(crate) use super::symbol_authority::{PreparedHofBuiltin, PreparedUnaryFunction};
 pub(crate) use super::{
     CellRead, CellReadError, EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation,
-    FrozenFunctionRoots, FrozenLegacyRoots, ImmediateResult, ImmediateResultError,
-    OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
+    FrozenFunctionRoots, FrozenLegacyRoots, HofError, HofScratch, HofSingleton, ImmediateResult,
+    ImmediateResultError, OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken,
+    SymbolWriteToken,
 };
 
 #[cfg(test)]
 pub(crate) use super::{
-    ExecutionTestHomes, ExecutionTestSeed, GenericProofEra, GenericProofEraFinishFailure, ProofEra,
-    with_test_prepared_cell_execution, with_test_prepared_execution,
+    ExecutionFixtureReceipt, ExecutionTestHomes, ExecutionTestSeed, GenericProofEra,
+    GenericProofEraFinishFailure, HofTestInputs, ProofEra, with_test_prepared_cell_execution,
+    with_test_prepared_execution, with_test_prepared_hof_execution,
 };

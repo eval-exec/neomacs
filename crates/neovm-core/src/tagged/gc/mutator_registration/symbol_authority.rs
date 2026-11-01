@@ -9,6 +9,7 @@ pub(super) fn check_owner_home_for_test(
     globals::check_home(run, home)
 }
 mod globals;
+pub(super) use globals::check_home as check_symbol_home;
 mod intern;
 mod roots;
 pub use globals::GlobalError;

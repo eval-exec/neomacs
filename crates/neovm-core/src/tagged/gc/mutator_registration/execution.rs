@@ -4,12 +4,14 @@
 //! wrapper alone supplies its sealed GEN1 construction witness. A callback
 //! borrows its activation, so it cannot forget an owned guard or release the
 //! enclosing IN_SLICE admission before all borrowed table addresses are dead.
+mod hof;
 mod read;
 use super::construction::Gen1Construction;
 use super::*;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::gc::symbol_table::publication::{PublicationView, TableView};
 use crate::tagged::value::{Fixnum, TaggedValue};
+pub(crate) use hof::{HofError, HofScratch, HofSingleton};
 pub(crate) use read::{CellRead, CellReadError};
 
 /// A checked immediate, never a managed pointer smuggled through native ABI.
@@ -157,7 +159,9 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use tests::{
-    ExecutionTestHomes, FixtureSeed as ExecutionTestSeed,
+    ExecutionTestHomes, FixtureReceipt as ExecutionFixtureReceipt,
+    FixtureSeed as ExecutionTestSeed, HofTestInputs,
     prepared_cell_fixture as with_test_prepared_cell_execution,
     prepared_fixture as with_test_prepared_execution,
+    prepared_hof_fixture as with_test_prepared_hof_execution,
 };

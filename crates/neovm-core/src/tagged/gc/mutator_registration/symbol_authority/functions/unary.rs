@@ -12,6 +12,9 @@ pub(crate) struct PreparedUnaryFunction {
 }
 
 impl PreparedUnaryFunction {
+    pub(crate) fn symbol(&self) -> &SymbolHandle {
+        &self.key
+    }
     pub(super) fn key(&self) -> &SymbolHandle {
         &self.key
     }

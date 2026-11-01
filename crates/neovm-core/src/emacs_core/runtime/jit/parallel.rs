@@ -7,8 +7,9 @@
 use crate::tagged::gc::symbol_table::publication::PublicationView;
 use crate::tagged::gc::{
     CellRead, CellReadError, FunctionActivation, FunctionError, FunctionSelection, Gen1Admission,
-    ImmediateResult, ImmediateResultError, OwnerRootSlot, ParallelExecutionAdmission,
-    RegistrationError, RunAccess, SymbolHandle,
+    HofError, HofScratch, HofSingleton, ImmediateResult, ImmediateResultError, OwnerRootSlot,
+    ParallelExecutionAdmission, PreparedHofBuiltin, PreparedUnaryFunction, RegistrationError,
+    RunAccess, SymbolHandle,
 };
 use std::ffi::c_void;
 
@@ -42,6 +43,7 @@ pub(crate) enum ParallelEntryError {
     NonImmediateResult,
     CellRead(CellReadError),
     Function(FunctionError),
+    Hof(HofError),
     NoSlotBacking,
     UnexpectedEntryKind,
 }
@@ -100,12 +102,16 @@ type ParallelEntry = unsafe extern "C" fn(
 ) -> u32;
 
 mod cell;
+mod hof;
 mod identity;
+use hof::HofInput;
+pub(crate) use hof::ParallelCompiledHofCode;
 
 #[cfg(feature = "jit")]
 enum EntryPlan {
     Scalar(ScalarProgram),
     Cell,
+    Hof,
 }
 #[cfg(feature = "jit")]
 mod native;
@@ -292,3 +298,6 @@ pub(crate) use fboundp_tests::fboundp_manifest as fboundp_manifest_for_test;
 mod identity_tests;
 #[cfg(test)]
 pub(crate) use identity_tests::named_manifest as named_manifest_for_test;
+
+#[cfg(test)]
+pub(crate) use hof::manifest_for_test as hof_manifest_for_test;

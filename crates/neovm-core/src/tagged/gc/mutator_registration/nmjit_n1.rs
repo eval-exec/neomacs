@@ -22,6 +22,7 @@ enum MissingFeature {
     Gen1Admission,
     ParallelCompiledEntry,
     NamedIdentityGuard,
+    InlineHofGuard,
     VarRefI6,
     FboundpAdmission,
     RetiredPublication,
@@ -80,6 +81,11 @@ fn missing_entry(feature: MissingFeature) -> Result<(), MissingFeature> {
                 feature
             })
         }
+        MissingFeature::InlineHofGuard => crate::emacs_core::jit::parallel::hof_manifest_for_test()
+            .map_err(|reason| {
+                eprintln!("NMJIT_N4_HOF_GUARD_FAILURE {reason}");
+                feature
+            }),
     }
 }
 
@@ -273,6 +279,7 @@ missing_test!(
     ParallelCompiledEntry
 );
 missing_test!(nmjit_n1_missing_named_identity_guard, NamedIdentityGuard);
+missing_test!(nmjit_n1_missing_inline_hof_guard, InlineHofGuard);
 missing_test!(nmjit_n1_missing_varref_i6, VarRefI6);
 missing_test!(nmjit_n1_missing_fboundp_admission, FboundpAdmission);
 missing_test!(nmjit_n1_missing_retired_publication, RetiredPublication);

@@ -22,12 +22,14 @@ mod execution;
 pub(super) mod facade;
 pub use execution::ParallelExecutionAdmission;
 pub(crate) use execution::{
-    CellRead, CellReadError, ExecutionActivation, ImmediateResult, ImmediateResultError,
+    CellRead, CellReadError, ExecutionActivation, HofError, HofScratch, HofSingleton,
+    ImmediateResult, ImmediateResultError,
 };
 #[cfg(test)]
 pub(crate) use execution::{
-    ExecutionTestHomes, ExecutionTestSeed, with_test_prepared_cell_execution,
-    with_test_prepared_execution,
+    ExecutionFixtureReceipt, ExecutionTestHomes, ExecutionTestSeed, HofTestInputs,
+    with_test_prepared_cell_execution, with_test_prepared_execution,
+    with_test_prepared_hof_execution,
 };
 mod wrappers;
 #[cfg(test)]
