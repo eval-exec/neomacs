@@ -1772,22 +1772,44 @@ impl Control {
         }
     }
 
-    /// Move threads whose deadline passed into the ready queue.
+    /// Move threads whose deadline passed into the ready queue, EARLIEST
+    /// DEADLINE FIRST. `waits` is keyed by `ThreadKey`, and `Main` orders
+    /// before every worker, so expiring in map order let a single coarse
+    /// host wakeup that left several deadlines expired together resume the
+    /// LATER deadline first — Main's `sleep-for` before the peer whose
+    /// earlier timer had already passed (macOS arm64, CI run 41283917816:
+    /// the green release-point deopt tests lost the redefinition that way).
+    /// The single-expiry wake already runs the earliest deadline
+    /// (`pick`'s `min_by_key`); this keeps that order when several expire
+    /// at once. Identical deadlines keep `ThreadKey` order: simultaneous
+    /// deadlines have no order of their own to preserve.
     fn expire_deadlines(state: &mut ControlState, now: Instant) {
-        let expired: Vec<ThreadKey> = state
+        let mut expired: Vec<(ThreadKey, Instant)> = state
             .waits
             .iter()
-            .filter(|(_, wait)| matches!(wait, Wait::Select { wait_end } if *wait_end <= now))
-            .map(|(key, _)| *key)
+            .filter_map(|(key, wait)| match wait {
+                Wait::Select { wait_end } if *wait_end <= now => Some((*key, *wait_end)),
+                _ => None,
+            })
             .collect();
-        for key in expired {
+        expired.sort_by_key(|&(_, wait_end)| wait_end);
+        for (key, _) in expired {
             Self::wake_locked(state, key);
         }
     }
 
     /// Readiness wakes all selecting owners. They inspect their own wait
     /// policy and poll live descriptors only after reacquiring the Baton.
+    /// Both readiness call sites run BEFORE `pick` (the next-owner scan and
+    /// the post-wait activity wake), so a readiness event arriving while
+    /// several deadlines have already passed must admit those in deadline
+    /// order too — key order here would resume Main before a worker whose
+    /// earlier timer had expired, the same inversion `expire_deadlines`
+    /// fixes on the pure timer path. The still-waiting selectors follow in
+    /// key order. A monotonic `Instant::now()` never expires a deadline
+    /// early, so this stays a readiness-gated wake, not a clock one.
     fn wake_selects(state: &mut ControlState) {
+        Self::expire_deadlines(state, Instant::now());
         let selecting: Vec<_> = state
             .waits
             .iter()
@@ -2082,7 +2104,9 @@ impl Control {
                 Self::wake_selects(&mut self.state());
             }
             // An eventless/spurious return never expires a deadline early.
-            // pick's monotonic check is the sole clock-based wake.
+            // Activity wakes may expire deadlines (`wake_selects`), but only
+            // ones a monotonic now shows already passed; pick's monotonic
+            // check remains the sole clock-based wake.
         }
     }
 
@@ -2945,5 +2969,118 @@ mod tests {
         Control::expire_deadlines(&mut state, deadline);
         assert_eq!(state.waits.get(&ThreadKey::Main), Some(&Wait::Runnable));
         assert_eq!(state.ready.pop_front(), Some(ThreadKey::Main));
+    }
+
+    /// Several deadlines expired by one coarse host wakeup admit in
+    /// DEADLINE order, not `ThreadKey` order: `waits` is a BTreeMap and
+    /// `Main` orders before every worker, so map order resumed Main's
+    /// later `sleep-for` before a peer whose earlier timer had already
+    /// passed (macOS arm64, CI run 41283917816: the green release-point
+    /// tests lost the redefinition that way). `pick` runs the earliest
+    /// deadline while exactly one is expired; expiry must not invert
+    /// that order when several expire together.
+    #[test]
+    fn expired_select_waits_admit_in_deadline_order_not_key_order() {
+        let now = Instant::now();
+        let early = now + std::time::Duration::from_micros(5);
+        let middle = now + std::time::Duration::from_micros(20);
+        let late = now + std::time::Duration::from_micros(30);
+        // Key order is Main, Worker(2), Worker(5); deadline order is the
+        // opposite, so a key-ordered expiry and a deadline-ordered one
+        // differ at every position.
+        let worker2 = ThreadKey::Worker(NonZeroU64::new(2).expect("nonzero"));
+        let worker5 = ThreadKey::Worker(NonZeroU64::new(5).expect("nonzero"));
+        let mut state = ControlState::default();
+        state
+            .waits
+            .insert(ThreadKey::Main, Wait::Select { wait_end: late });
+        state
+            .waits
+            .insert(worker2, Wait::Select { wait_end: middle });
+        state
+            .waits
+            .insert(worker5, Wait::Select { wait_end: early });
+        Control::expire_deadlines(&mut state, late);
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(worker5),
+            "the earliest deadline admits first"
+        );
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(worker2),
+            "the middle deadline admits second"
+        );
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(ThreadKey::Main),
+            "the latest deadline admits last, key order notwithstanding"
+        );
+        assert!(state.ready.is_empty());
+    }
+
+    /// The readiness path admits expired timers in deadline order too.
+    /// `wake_selects` runs before `pick` both in the next-owner scan and
+    /// after a physical wait with activity, so fd/loopback readiness
+    /// arriving while several deadlines have already passed must not let
+    /// key order (Main first) resume the later deadline first: the
+    /// readiness twin of the timer regression above.
+    #[test]
+    fn readiness_wake_admits_expired_selects_in_deadline_order() {
+        // `wake_selects` samples its own `Instant::now()`, so the expired
+        // three are PAST offsets — however many microseconds the prologue
+        // takes, every sample expires them, and only the order can vary.
+        // (Future microsecond offsets made the test racy on slower hosts:
+        // a sample between `early` and `middle` expired one deadline and
+        // let key order in behind it.)
+        let now = Instant::now();
+        let early = now - std::time::Duration::from_micros(30);
+        let middle = now - std::time::Duration::from_micros(20);
+        let late = now - std::time::Duration::from_micros(5);
+        let unexpired = now + std::time::Duration::from_secs(3600);
+        // Key order is Main, Worker(2), Worker(5), Worker(7); deadline
+        // order is the opposite for the expired three, and Worker(7) has
+        // not expired at all.
+        let worker2 = ThreadKey::Worker(NonZeroU64::new(2).expect("nonzero"));
+        let worker5 = ThreadKey::Worker(NonZeroU64::new(5).expect("nonzero"));
+        let worker7 = ThreadKey::Worker(NonZeroU64::new(7).expect("nonzero"));
+        let mut state = ControlState::default();
+        state
+            .waits
+            .insert(ThreadKey::Main, Wait::Select { wait_end: late });
+        state
+            .waits
+            .insert(worker2, Wait::Select { wait_end: middle });
+        state
+            .waits
+            .insert(worker5, Wait::Select { wait_end: early });
+        state.waits.insert(
+            worker7,
+            Wait::Select {
+                wait_end: unexpired,
+            },
+        );
+        Control::wake_selects(&mut state);
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(worker5),
+            "the earliest expired deadline admits first"
+        );
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(worker2),
+            "the middle expired deadline admits second"
+        );
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(ThreadKey::Main),
+            "the latest expired deadline admits after the earlier ones"
+        );
+        assert_eq!(
+            state.ready.pop_front(),
+            Some(worker7),
+            "the unexpired selector admits last, key order among the waiting"
+        );
+        assert!(state.ready.is_empty());
     }
 }
