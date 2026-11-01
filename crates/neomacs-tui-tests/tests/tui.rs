@@ -91,6 +91,8 @@ mod issue_446_align_to_hscroll;
 mod issue_470;
 #[path = "issue_654_centered_cursor.rs"]
 mod issue_654_centered_cursor;
+#[path = "issue_656_kill_minibuffer.rs"]
+mod issue_656_kill_minibuffer;
 #[path = "mark_region_fill.rs"]
 mod mark_region_fill;
 #[path = "menu_bar.rs"]

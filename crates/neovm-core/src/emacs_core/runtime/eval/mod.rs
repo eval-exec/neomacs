@@ -5248,6 +5248,30 @@ impl Context {
         self.active_minibuffer_window_id() == Some(window_id)
     }
 
+    /// GNU's `minibuf_window` (`src/window.c:103`): the window that displays
+    /// minibuffer contents.
+    ///
+    /// GNU keeps this as one global slot. `choose_minibuf_frame` points it at
+    /// the selected frame's minibuffer window when a minibuffer starts or
+    /// exits (`src/minibuf.c:115-131`), `move_minibuffers_onto_frame` follows
+    /// frame switches, and `set-minibuffer-window` can point it at any live
+    /// minibuffer window (`src/minibuf.c:240-252`). Neomacs has no such slot:
+    /// while a minibuffer session is active its display window is the active
+    /// minibuffer window, and otherwise the target is the selected frame's
+    /// minibuffer window.
+    ///
+    /// Known gaps, both pre-existing: an explicit `set-minibuffer-window`
+    /// target is not remembered (that builtin notes the missing slot), and a
+    /// selected frame without a minibuffer window (a child or tooltip frame)
+    /// does not inherit the previous target the way GNU's global does.
+    pub(crate) fn minibuf_window_id(&self) -> Option<WindowId> {
+        self.active_minibuffer_window_id().or_else(|| {
+            self.frames
+                .selected_frame()
+                .and_then(|frame| frame.minibuffer_window)
+        })
+    }
+
     /// Window that invoked the currently active minibuffer.
     ///
     /// GNU keeps this window's mode/header line active while the minibuffer

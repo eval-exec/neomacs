@@ -106,6 +106,9 @@ mod issue_417_startup;
 #[path = "issue_582_fullscreen.rs"]
 mod issue_582_fullscreen;
 
+#[path = "kill_minibuffer_window_gui_oracle.rs"]
+mod kill_minibuffer_window_gui_oracle;
+
 #[path = "ligature_compose.rs"]
 mod ligature_compose;
 

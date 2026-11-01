@@ -637,16 +637,14 @@ pub(crate) fn builtin_kill_buffer(eval: &mut super::eval::Context, args: Vec<Val
         return Ok(Value::T);
     }
 
-    // GNU buffer.c:1981: "Don't kill the minibuffer now current."  GNU's
-    // `minibuf_window` is the active minibuffer window, else the selected
-    // frame's (`choose_minibuf_frame`).  Killing its buffer would leave an
-    // ordinary buffer displayed in the minibuffer window.
-    let minibuf_window = eval.active_minibuffer_window_id().or_else(|| {
-        eval.frames
-            .selected_frame()
-            .and_then(|frame| frame.minibuffer_window)
-    });
-    if minibuf_window.and_then(|window| eval.frames.window_buffer_id(window)) == Some(id) {
+    // GNU buffer.c:1998-2000: "Don't kill the minibuffer now current."
+    // Killing the buffer displayed in `minibuf_window` would leave an
+    // ordinary buffer there; GNU refuses after the hooks have run.
+    if eval
+        .minibuf_window_id()
+        .and_then(|window| eval.frames.window_buffer_id(window))
+        == Some(id)
+    {
         return Ok(Value::NIL);
     }
 
