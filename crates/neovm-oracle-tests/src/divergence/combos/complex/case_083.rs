@@ -138,9 +138,10 @@ fn div_cx83_current_time_structure() {
 #[test]
 fn div_cx83_format_time_string_with_zone() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""OK (\"12:00 GMT\" \"12:00 +0000\" \"07:00 -05\" \"13:00 +0100\")""#
-    ]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (\"12:00 GMT\" \"12:00 +0000\" \"07:00 -05\" \"13:00 +0100\")""#,
+        MacosDarwin => r#""OK (\"12:00 UTC\" \"12:00 +0000\" \"07:00 -05\" \"13:00 +0100\")""#,
+    );
     crate::common::assert_oracle_parity_expect(
         r##"
 (let ((t0 (encode-time 0 0 12 15 6 2024 nil 0)))
