@@ -17,7 +17,10 @@ fn oracle_prop_tan_basic() {
     crate::common::assert_oracle_parity_expect("(tan 0)", expect);
     let expect = expect_test::expect![[r#""OK 0.0""#]];
     crate::common::assert_oracle_parity_expect("(tan 0.0)", expect);
-    let expect = expect_test::expect![[r#""OK 1.5574077246549023""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK 1.5574077246549023""#,
+        MacosDarwin => r#""OK 1.557407724654902""#,
+    );
     crate::common::assert_oracle_parity_expect("(tan 1.0)", expect);
 }
 
@@ -51,7 +54,10 @@ fn oracle_prop_asin_basic() {
     crate::common::assert_oracle_parity_expect("(asin 1.0)", expect);
     let expect = expect_test::expect![[r#""OK -1.5707963267948966""#]];
     crate::common::assert_oracle_parity_expect("(asin -1.0)", expect);
-    let expect = expect_test::expect![[r#""OK 0.5235987755982989""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK 0.5235987755982989""#,
+        MacosDarwin => r#""OK 0.5235987755982988""#,
+    );
     crate::common::assert_oracle_parity_expect("(asin 0.5)", expect);
 }
 
@@ -67,7 +73,10 @@ fn oracle_prop_acos_basic() {
     crate::common::assert_oracle_parity_expect("(acos 1.0)", expect);
     let expect = expect_test::expect![[r#""OK 3.141592653589793""#]];
     crate::common::assert_oracle_parity_expect("(acos -1.0)", expect);
-    let expect = expect_test::expect![[r#""OK 1.0471975511965979""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK 1.0471975511965979""#,
+        MacosDarwin => r#""OK 1.0471975511965976""#,
+    );
     crate::common::assert_oracle_parity_expect("(acos 0.5)", expect);
 }
 
@@ -121,7 +130,10 @@ fn oracle_prop_atan_one_arg() {
     crate::common::assert_oracle_parity_expect("(atan 1.0)", expect);
     let expect = expect_test::expect![[r#""OK -0.7853981633974483""#]];
     crate::common::assert_oracle_parity_expect("(atan -1.0)", expect);
-    let expect = expect_test::expect![[r#""OK 0.4636476090008061""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK 0.4636476090008061""#,
+        MacosDarwin => r#""OK 0.46364760900080615""#,
+    );
     crate::common::assert_oracle_parity_expect("(atan 0.5)", expect);
 }
 
