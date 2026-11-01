@@ -2751,7 +2751,19 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
 fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
     crate::test_utils::init_test_tracing();
     const PATTERN: &str = "..?*\\B\0.\0";
-    const TEXT: &[u8] = &[142, 17, 0, 46, 117, 0, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 0, 255, 0, 39, 39, 39, 39, 39, 39, 39, 39, 39, 122, 241, 0, 149, 249, 0, 0, 42, 39, 39, 0, 13, 33, 192, 1, 255, 255, 254, 255, 255, 44, 137, 0, 254, 255, 255, 255, 46, 46, 63, 42, 92, 66, 0, 46, 0, 142, 17, 0, 46, 117, 0, 0, 255, 39, 0, 125, 39, 125, 39, 121, 39, 241, 0, 149, 249, 0, 0, 42, 0, 254, 255, 255, 255, 0, 0, 0, 47, 39, 39, 39, 39, 39, 39, 39, 0, 13, 33, 245, 245, 245, 245, 245, 245, 245, 255, 255, 255, 127, 245, 245, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 245, 245, 245, 245, 245, 245, 245, 255, 255, 255, 103, 57, 50, 227, 42, 255, 255, 255, 255, 0, 251, 0, 0, 10, 255, 196, 122, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 254, 255, 255, 255, 255, 196, 255, 255, 255, 247, 255, 49, 0, 0, 0];
+    const TEXT: &[u8] = &[
+        142, 17, 0, 46, 117, 0, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133,
+        133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 0, 255, 0, 39,
+        39, 39, 39, 39, 39, 39, 39, 39, 122, 241, 0, 149, 249, 0, 0, 42, 39, 39, 0, 13, 33, 192, 1,
+        255, 255, 254, 255, 255, 44, 137, 0, 254, 255, 255, 255, 46, 46, 63, 42, 92, 66, 0, 46, 0,
+        142, 17, 0, 46, 117, 0, 0, 255, 39, 0, 125, 39, 125, 39, 121, 39, 241, 0, 149, 249, 0, 0,
+        42, 0, 254, 255, 255, 255, 0, 0, 0, 47, 39, 39, 39, 39, 39, 39, 39, 0, 13, 33, 245, 245,
+        245, 245, 245, 245, 245, 255, 255, 255, 127, 245, 245, 180, 180, 180, 180, 180, 180, 180,
+        180, 180, 180, 180, 180, 180, 245, 245, 245, 245, 245, 245, 245, 255, 255, 255, 103, 57,
+        50, 227, 42, 255, 255, 255, 255, 0, 251, 0, 0, 10, 255, 196, 122, 255, 255, 255, 255, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 254, 255, 255, 255,
+        255, 196, 255, 255, 255, 247, 255, 49, 0, 0, 0,
+    ];
     let syntax = DefaultSyntaxLookup;
     use crate::emacs_core::regex_emacs::with_anchor_alt;
     let mut compiled = with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
@@ -2759,7 +2771,9 @@ fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
     prime(&compiled, &syntax).unwrap();
     let verdict = |p: usize| {
         let mut slot = compiled.dfa.slot.borrow_mut();
-        let DfaSlot::Live(live) = &mut *slot else { panic!("slot not live") };
+        let DfaSlot::Live(live) = &mut *slot else {
+            panic!("slot not live")
+        };
         live.dfa
             .anchored_exists(&compiled, TEXT, p, 44, 45, &syntax)
     };
@@ -2780,7 +2794,10 @@ fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
     use crate::emacs_core::regex_emacs::{RegexEngineOverride, with_regex_engine_override};
     let mut cold = with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
     cold.target_multibyte = true;
-    for engine in [RegexEngineOverride::Backtracker, RegexEngineOverride::PikeVm] {
+    for engine in [
+        RegexEngineOverride::Backtracker,
+        RegexEngineOverride::PikeVm,
+    ] {
         let found =
             with_regex_engine_override(engine, || re_search(&cold, TEXT, 44, -44, &syntax, 45));
         let (start, registers) =

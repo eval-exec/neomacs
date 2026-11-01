@@ -1567,9 +1567,7 @@ impl ExistenceDfa {
                 // `!CHAR_HEAD_P`), so the facts carried here do not decide
                 // what a closure reads.  Mark the state, keeping every
                 // transition out of it out of the cache.
-                if self.prev_reads_syntax()
-                    && at.target_multibyte
-                    && (at.text[at.d] & 0xC0) == 0x80
+                if self.prev_reads_syntax() && at.target_multibyte && (at.text[at.d] & 0xC0) == 0x80
                 {
                     facts = facts | Facts::NON_HEAD_PREV;
                 }
@@ -1579,8 +1577,7 @@ impl ExistenceDfa {
             result
         };
         self.positions = positions;
-        let slow =
-            self.pair_dependent(prev, class) || prev.contains(Facts::NON_HEAD_PREV);
+        let slow = self.pair_dependent(prev, class) || prev.contains(Facts::NON_HEAD_PREV);
         if slow {
             self.counters.slow_transitions += 1;
         }
