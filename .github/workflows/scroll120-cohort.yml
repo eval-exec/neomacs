@@ -116,7 +116,7 @@ jobs:
         run: |
           scripts/ci/setup-linux.sh ecosystem
           if ! sudo apt-get install -y --no-install-recommends \
-            linux-tools-common linux-tools-generic strace binutils; then
+            linux-tools-common linux-tools-generic binutils; then
             echo '::warning::Optional capture package provisioning failed; measurements will still run'
           fi
           # The hosted Azure kernel may not have a matching -tools package in APT.
@@ -143,6 +143,10 @@ jobs:
           fi
           if ! "$perf_bin" stat -e task-clock -- true; then
             echo '::warning::Optional perf stat probe failed; measurements will still run'
+          fi
+          # Shallow FP chains only; never copy/unwind 16 KiB user stacks per switch.
+          if ! sudo sysctl kernel.perf_event_max_stack=16; then
+            echo '::warning::Cannot cap scheduler callchain depth; captured cells will refuse capture'
           fi
           echo "SCROLL120_PERF=$perf_bin" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
@@ -204,8 +208,8 @@ jobs:
               'harness_sha256': hashlib.sha256(H.read_bytes()).hexdigest(),
               'affinity': sorted(os.sched_getaffinity(0)),
               'protocol': 'Exactly five alternating plain/rich pairs, no retries; existing assertions unchanged. '
-                          'Acknowledged pre-spawn system-wide 199Hz CPU capture; scheduler user callchains/wakeups '
-                          'or explicit strace fallback; timestamped descendant thread/maps inventories. '
+                          'Editor-PID-tree scheduler capture with shallow frame-pointer callchains on pairs 2 and 4; '
+                          'pairs 1, 3 and 5 have capture OFF; no CPU sampling or DWARF. '
                           'Existing presentation logs; diagnostic timings, not a renderer budget.',
               'cells': [],
           }
@@ -271,15 +275,15 @@ jobs:
               # CPU data is system-wide: restrict sample ownership using the recorded process identity.
               samples = [s for s in samples if s['pid'] == row.get('editor_pid')]
               names = {tid: thread['comm'] for tid, thread in tids.items()}
-              # Derive on-CPU intervals from explicit tracepoint prev/next payloads, not CPU-wide
-              # switch metadata headers. The strace fallback cannot supply these intervals.
+              # PID-scoped context metadata covers IN/OUT without sampling unrelated tasks.
+              # Tracepoint-only prev/next events are incomplete for a PID attachment.
               switches.clear()
               for event in scheduler:
-                  if event['payload'].startswith('sched:sched_switch:'):
-                      prev = int(re.search(r'prev_pid=(\d+)', event['payload'])[1])
-                      nxt = int(re.search(r'next_pid=(\d+)', event['payload'])[1])
-                      switches[prev].append((event['time_ns'], False))
-                      switches[nxt].append((event['time_ns'], True))
+                  names[event['tid']] = event['comm']
+                  if event['payload'].startswith('capture:context_'):
+                      tid = int(re.search(r'pid=(\d+)', event['payload'])[1])
+                      switches[tid].append((event['time_ns'],
+                                            event['payload'].startswith('capture:context_in:')))
               receipts = report['samples']
               def first(s):
                   return min(s[k] for k in ['projected_presented_ns', 'presented_ns']
@@ -375,47 +379,6 @@ jobs:
               row['capture_error'] = '; '.join(f"{e['component']}: {e['error']}" for e in row['capture_errors'])
 
 
-          class AttachedStrace:
-              """Optional UI-only observer; never wraps or owns the measurement harness."""
-              def __init__(self, directory, row):
-                  self.directory, self.row = directory, row
-                  self.process, self.log = None, None
-
-              def __enter__(self):
-                  self.log = (self.directory / 'strace-attach.out').open('w')
-                  try:
-                      self.process = subprocess.Popen(['sudo', '-n', 'strace', '-ttt', '-T', '-k', '-s', '128',
-                          '-e', 'trace=ioctl,futex,poll,ppoll,epoll_wait,epoll_pwait,'
-                          'epoll_pwait2,pselect6,nanosleep,clock_nanosleep',
-                          '-o', str(self.directory / 'ui-strace'), '-p', str(self.row['editor_pid'])],
-                          stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
-                      self.row['strace_attach_started_ns'] = time.monotonic_ns()
-                      return self
-                  except BaseException:
-                      self.log.close()
-                      raise
-
-              def __exit__(self, *_):
-                  try:
-                      if self.process.poll() is None:
-                          subprocess.run(['sudo', '-n', 'kill', '-INT', '--', f'-{self.process.pid}'], check=False)
-                      try:
-                          code = self.process.wait(timeout=10)
-                      except subprocess.TimeoutExpired:
-                          subprocess.run(['sudo', '-n', 'kill', '-KILL', '--', f'-{self.process.pid}'], check=False)
-                          code = self.process.wait(timeout=10)
-                      self.row['strace_exit'] = code
-                      if code not in [0, 130, -2]:
-                          capture_error(self.row, 'strace exit', code)
-                      path = self.directory / 'ui-strace'
-                      if path.exists():
-                          subprocess.run(['sudo', '-n', 'chmod', 'a+r', str(path)], check=True)
-                  except Exception as error:
-                      capture_error(self.row, 'strace finalization', error)
-                  finally:
-                      self.log.close()
-
-
           def has_measurement(row):
               return isinstance(row.get('report', {}).get('p95_response_ms'), (int, float))
 
@@ -482,8 +445,9 @@ jobs:
 
           class Recorder:
               """Own one bounded recorder and its readiness/cleanup resources."""
-              def __init__(self, directory, name, events):
+              def __init__(self, directory, name, events, editor_pid):
                   self.directory, self.name, self.events = directory, name, events
+                  self.editor_pid = editor_pid
                   self.process = None
                   self.fds = []
                   self.log = None
@@ -498,9 +462,9 @@ jobs:
                           os.mkfifo(path)
                       self.fds = [os.open(path, os.O_RDWR | os.O_NONBLOCK) for path in [control, ack]]
                       self.log = (self.directory / f'{self.name}-record.out').open('w')
-                      command = ['sudo', '-n', PERF, 'record', '-a', '-C', CPU_LIST,
-                                 '--clockid', 'mono', '--sample-cpu', '-m', '8M',
-                                 '--call-graph', 'dwarf,16384', '--delay=-1',
+                      command = ['sudo', '-n', PERF, 'record', '--pid', str(self.editor_pid),
+                                 '--clockid', 'mono', '--switch-events', '-m', '256K',
+                                 '--call-graph', 'fp', '--user-callchains', '--delay=-1',
                                  '--control', f'fifo:{control},{ack}',
                                  '-o', str(self.directory / f'{self.name}.data'), *self.events]
                       self.log.write(json.dumps(command) + '\n')
@@ -557,10 +521,8 @@ jobs:
                           self.log = None
 
 
-          CPU_EVENTS = ['-e', 'cpu-clock:u', '-F', '199', '--switch-events']
           SCHED_EVENTS = ['-e', 'sched:sched_switch', '-e', 'sched:sched_wakeup',
                           '-e', 'sched:sched_wakeup_new', '-c', '1']
-          CPU_LIST = ','.join(map(str, sorted(os.sched_getaffinity(0))))
           DSO_PATHS = {str(B)}
 
 
@@ -571,7 +533,7 @@ jobs:
               with (directory / f'{name}-script.out').open('w') as log, \
                       (directory / f'{name}-decode.out').open('w') as errors:
                   subprocess.run(['sudo', '-n', PERF, 'script', '-i',
-                                  str(directory / f'{name}.data'), '--ns', '--max-stack', '128',
+                                  str(directory / f'{name}.data'), '--ns', '--max-stack', '16',
                                   '--show-switch-events', '--show-task-events', '-F', fields],
                                  stdout=log, stderr=errors, check=True)
               # The typed binary record headers expose loss/throttle directly. Avoid the
@@ -643,12 +605,16 @@ jobs:
                   if match:
                       current = None
                       comm, pid, tid, sec, frac, event = match.groups()
-                      if not event.startswith('sched:'):
+                      if event.startswith('sched:'):
+                          payload = normalize_scheduler_payload(event)
+                      elif event.startswith('PERF_RECORD_SWITCH '):
+                          direction = 'in' if event.split()[1] == 'IN' else 'out'
+                          payload = f'capture:context_{direction}: pid={tid}'
+                      else:
                           continue
                       current = {'comm': comm, 'pid': int(pid), 'tid': int(tid),
                                  'time_ns': int(sec) * 10**9 + int(frac.ljust(9, '0')),
-                                 'printed_payload': event,
-                                 'payload': normalize_scheduler_payload(event), 'stack': []}
+                                 'printed_payload': event, 'payload': payload, 'stack': []}
                       events.append(current)
                   elif current is not None:
                       frame = FRAME.match(line)
@@ -661,65 +627,51 @@ jobs:
               P = O / 'readiness'
               P.mkdir()
               status = {'perf_event_paranoid': Path('/proc/sys/kernel/perf_event_paranoid').read_text().strip(),
-                        'stack_method': 'dwarf,16384; release CFI + symbols, no forced frame pointers',
-                        'scheduler_mode': 'not-tested'}
-              with (P / 'tools.out').open('w') as log:
-                  for command in [[PERF, 'version', '--build-options'], ['strace', '-V'],
-                                  ['readelf', '--wide', '--sections', str(B)], ['readelf', '-n', str(B)]]:
-                      subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
-              sections = subprocess.check_output(['readelf', '--wide', '--sections', str(B)], text=True)
-              assert '.eh_frame' in sections and '.symtab' in sections, 'Release CFI/symbol table missing'
-              # Tracefs may exist but not be mounted in the hosted VM. Preserve both outcomes.
+                        'stack_method': 'fp; kernel.perf_event_max_stack=16; no DWARF/CPU sampling',
+                        'scheduler_mode': 'capture-unavailable'}
               with (P / 'tracefs.out').open('w') as log:
                   subprocess.run(['sudo', '-n', 'bash', '-c',
                                   'if ! test -r /sys/kernel/tracing/events/sched/sched_switch/id; then '
                                   'mount -t tracefs tracefs /sys/kernel/tracing; fi; '
-                                  'ls -ld /sys/kernel/tracing /sys/kernel/debug/tracing; '
-                                  'cat /sys/kernel/tracing/events/sched/sched_{switch,wakeup,wakeup_new}/id'],
-                                 stdout=log, stderr=subprocess.STDOUT, check=False)
-              with Recorder(P, 'cpu', CPU_EVENTS) as cpu:
-                  try:
-                      with Recorder(P, 'sched', SCHED_EVENTS) as sched:
-                          # One capability probe, not a scenario retry: force a real user-space sleep/wakeup.
-                          subprocess.run(['python3', '-c', 'import time; time.sleep(.15)'], check=True)
-                      assert sched.exit in [0, 130, -2], sched.exit
-                      loss = decode(P, 'sched')
-                      events = scheduler_events(P / 'sched-script.out')
-                      outgoing = [e for e in events if e['payload'].startswith('sched:sched_switch:')]
-                      wakes = [e for e in events if e['payload'].startswith('sched:sched_wakeup:')]
-                      user_chains = [e for e in outgoing if any(dso.startswith('/') and
-                                     '[kernel' not in dso for _, dso in e['stack'])]
-                      assert outgoing and wakes and user_chains and not loss, \
-                          ('Scheduler trace unusable', len(outgoing), len(wakes), len(user_chains), loss)
-                      status.update(scheduler_mode='sched-tracepoints', switch_events=len(outgoing),
-                                    wakeup_events=len(wakes), user_switch_chains=len(user_chains))
-                  except (RuntimeError, TimeoutError, AssertionError, subprocess.SubprocessError) as error:
-                      if isinstance(error, CleanupFailure):
-                          raise
-                      status.update(scheduler_mode='strace-fallback', scheduler_error=repr(error))
-                      # Prove this strace supports user stack unwinding before any scenario starts.
-                      subprocess.run(['strace', '-f', '-k', '-o', str(P / 'strace-probe.out'),
-                                      '--', 'true'], check=True)
-              assert cpu.exit in [0, 130, -2], cpu.exit
-              assert not decode(P, 'cpu'), 'CPU capture lost/throttled events during readiness'
-              for path in P.glob('*.data'):
-                  subprocess.run(['sudo', '-n', 'chmod', 'a+r', str(path)], check=True)
-              with OwnedProcesses() as owner, (P / 'inventory-probe.jsonl').open('w') as stream:
-                  probe = subprocess.Popen(['python3', '-c', 'import time; time.sleep(10)'])
-                  try:
-                      owner.add(probe.pid, probe.pid)
-                      inventory(probe.pid, {}, P, stream, owner)
-                      stream.flush()
-                      rows = [json.loads(line) for line in (P / 'inventory-probe.jsonl').read_text().splitlines()]
-                      assert any(proc['pid'] == probe.pid and proc['threads'] and
-                                 (P / proc['maps']).is_file() for row in rows for proc in row['processes']), \
-                          'Real child inventory/maps canary failed'
-                  finally:
-                      probe.terminate()
-                      probe.wait(timeout=10)
+                                  'cat /sys/kernel/tracing/events/sched/sched_{switch,wakeup,wakeup_new}/id; '
+                                  'sysctl kernel.perf_event_max_stack'],
+                                 stdout=log, stderr=subprocess.STDOUT, check=True)
+              status['recorded_max_stack'] = int(Path('/proc/sys/kernel/perf_event_max_stack').read_text())
+              assert status['recorded_max_stack'] <= 16, 'Refuse uncapped scheduler capture'
+              probe = subprocess.Popen(['python3', '-c',
+                                        'import time; [time.sleep(.01) for _ in range(500)]'])
+              try:
+                  with Recorder(P, 'sched', SCHED_EVENTS, probe.pid) as sched:
+                      time.sleep(.2)
+                  assert sched.exit in [0, 130, -2], sched.exit
+                  loss = decode(P, 'sched')
+                  events = scheduler_events(P / 'sched-script.out')
+                  assert events and not loss, ('PID-scoped scheduler probe unusable', loss)
+                  status.update(scheduler_mode='editor-pid-tree-fp',
+                                context_events=sum(e['payload'].startswith('capture:context_') for e in events),
+                                user_switch_chains=sum(any(dso.startswith('/') for _, dso in e['stack'])
+                                                       for e in events))
+              finally:
+                  probe.terminate()
+                  probe.wait(timeout=10)
               (O / 'capture-capabilities.json').write_text(json.dumps(status, indent=2) + '\n')
               print('Capture capabilities:', json.dumps(status), flush=True)
               return status
+
+
+          def discover_editor(test_pid, row):
+              # Only until the editor is found, before W100/input. No per-frame maps polling.
+              for proc in Path('/proc').iterdir():
+                  if not proc.name.isdigit() or not descendant(int(proc.name), test_pid):
+                      continue
+                  try:
+                      argv = (proc / 'cmdline').read_bytes().split(b'\0')
+                      if argv and argv[0] == os.fsencode(B):
+                          row['editor_pid'] = int(proc.name)
+                          return True
+                  except (FileNotFoundError, ProcessLookupError, PermissionError):
+                      pass
+              return False
 
 
           def inventory(test_pid, row, output_directory, stream, owner):
@@ -770,7 +722,14 @@ jobs:
               pending, spans = None, []
               for event in events:
                   payload, ns = event['payload'], event['time_ns']
-                  if payload.startswith('sched:sched_switch:'):
+                  if payload.startswith('capture:context_in:'):
+                      target = int(re.search(r'pid=(\d+)', payload)[1])
+                      if target == ui and pending is not None:
+                          pending['resumed_ns'] = ns
+                          pending['off_cpu_ms'] = (ns - pending['switched_out_ns']) / 1e6
+                          spans.append(pending)
+                          pending = None
+                  elif payload.startswith('sched:sched_switch:'):
                       prev = int(re.search(r'prev_pid=(\d+)', payload)[1])
                       nxt = int(re.search(r'next_pid=(\d+)', payload)[1])
                       if nxt == ui and pending is not None:
@@ -843,10 +802,12 @@ jobs:
               for key in ['RUST_LOG', 'NEOMACS_GUI_SCROLL_TIMING_ONLY', 'NEOMACS_GUI_SCROLL_STREAM_INPUTS',
                           'WAYLAND_DEBUG', 'NEOMACS_LAYOUT_STATS_FILE']:
                   env.pop(key, None)
+              capture_requested = rep in [2, 4]
               row = {'scene': scene, 'rep': rep, 'clock_pair_start': clock_pair(),
-                     'scheduler_mode': capabilities['scheduler_mode']}
+                     'capture': 'ON' if capture_requested else 'OFF', 'cpu_sampling': 'disabled',
+                     'scheduler_mode': capabilities['scheduler_mode'] if capture_requested else 'control-off'}
               result['cells'].append(row)
-              if 'capture_error' in capabilities:
+              if capture_requested and 'capture_error' in capabilities:
                   capture_error(row, 'readiness', capabilities['capture_error'])
               test = None
               recorders = []
@@ -859,14 +820,6 @@ jobs:
                       except Exception as error:
                           capture_error(row, 'inventory file', error)
                           disabled.add('inventory')
-                      # Capture is optional; its failures must never unwind the measurement owner.
-                      for name, events in [('cpu', CPU_EVENTS), ('sched', SCHED_EVENTS)]:
-                          if name == 'sched' and row['scheduler_mode'] != 'sched-tracepoints':
-                              continue
-                          try:
-                              recorders.append(cleanup.enter_context(Recorder(C, name, events)))
-                          except Exception as error:
-                              capture_error(row, f'{name} startup', error)
                       command = [str(H), '--exact',
                                  f'native_scrolling::continuous_120hz_scroll_in_large_{scene}_buffer',
                                  '--nocapture', '--test-threads', '1']
@@ -879,27 +832,29 @@ jobs:
                       owner.add(test.pid, test.pid)
                       deadline = time.monotonic() + 180
                       while test.poll() is None:
-                          if 'inventory' not in disabled:
-                              try:
-                                  inventory(test.pid, row, C, threads, owner)
-                              except Exception as error:
-                                  capture_error(row, 'inventory', error)
-                                  disabled.add('inventory')
-                          if row['scheduler_mode'] == 'strace-fallback' and 'strace' not in disabled \
-                                  and 'editor_pid' in row:
-                              disabled.add('strace')
-                              try:
-                                  cleanup.enter_context(AttachedStrace(C, row))
-                              except Exception as error:
-                                  capture_error(row, 'strace attach', error)
+                          if 'editor_pid' not in row and discover_editor(test.pid, row):
+                              if 'inventory' not in disabled:
+                                  try:
+                                      inventory(test.pid, row, C, threads, owner)
+                                  except Exception as error:
+                                      capture_error(row, 'inventory snapshot', error)
+                              if capture_requested and row['scheduler_mode'] == 'editor-pid-tree-fp':
+                                  try:
+                                      recorder = cleanup.enter_context(Recorder(C, 'sched', SCHED_EVENTS,
+                                                                                row['editor_pid']))
+                                      recorders.append(recorder)
+                                      row['capture_enabled_ns']['sched'] = recorder.started_ns
+                                  except Exception as error:
+                                      capture_error(row, 'PID scheduler attach', error)
                           for recorder in recorders:
                               if recorder.process.poll() is not None and recorder.name not in disabled:
                                   capture_error(row, f'{recorder.name} recorder exited', recorder.process.returncode)
                                   disabled.add(recorder.name)
                           if time.monotonic() >= deadline:
                               raise TimeoutError('Scenario exceeded 180 seconds')
-                          time.sleep(.05)
+                          time.sleep(.1)
                       row['test_exit'] = test.wait()
+                  row['capture_active'] = bool(recorders)
                   row['recorder_exits'] = {r.name: r.exit for r in recorders}
                   for name, code in row['recorder_exits'].items():
                       if code not in [0, 130, -2]:
@@ -926,6 +881,12 @@ jobs:
                                    if not isinstance(value, list)}
                   row['adapter'] = report['editor_adapter']
                   row['compositor'] = report['sway_renderer_request']
+                  if capture_requested:
+                      enabled = row['capture_enabled_ns'].get('sched')
+                      first_input = min(s['received_ns'] for s in report['samples'])
+                      row['capture_before_first_input'] = enabled is not None and enabled < first_input
+                      if not row['capture_before_first_input']:
+                          capture_error(row, 'PID scheduler coverage', 'not enabled before first input')
                   assert 'type=Cpu, backend=Vulkan' in row['adapter'] and 'llvmpipe' in row['adapter'], row
                   assert row['compositor'].strip() == 'pixman', row
                   assert row['report']['received_receipts'] == 480 and row['report']['invalid_clocks'] == 0, row
@@ -949,6 +910,10 @@ jobs:
               if 'sched' in decoded:
                   try:
                       events = scheduler_events(C / 'sched-script.out')
+                      for event in events:
+                          for _, dso in event['stack']:
+                              if dso.startswith('/'):
+                                  DSO_PATHS.add(dso)
                   except Exception as error:
                       capture_error(row, 'scheduler payloads', error)
               tids = {}
@@ -967,14 +932,14 @@ jobs:
                   row['longest_ui_waits'] = sorted(spans, key=lambda s: s['off_cpu_ms'], reverse=True)[:5]
                   row['ui_user_switch_out_chains'] = sum(any(dso.startswith('/') and '[kernel' not in dso
                                                              for _, dso in s['switch_out_stack']) for s in spans)
-                  if row['scheduler_mode'] == 'sched-tracepoints' and not row['ui_user_switch_out_chains']:
+                  if row['scheduler_mode'] == 'editor-pid-tree-fp' and not row['ui_user_switch_out_chains']:
                       capture_error(row, 'UI switch-out user chains', 'none recovered')
               except Exception as error:
                   capture_error(row, 'scheduler attribution', error)
               try:
                   # Receipt/log timing is independent of CPU/scheduler capture availability.
                   analysis = analyze(row, report, reports[0].with_name('neomacs.log'),
-                                     C / 'cpu-script.out' if 'cpu' in decoded else C / 'cpu-unavailable', events, tids)
+                                     C / 'sched-script.out' if 'sched' in decoded else C / 'capture-off', events, tids)
                   (C / 'analysis.json').write_text(json.dumps(analysis, indent=2) + '\n')
                   row['analysis'] = analysis
               except Exception as error:
@@ -996,27 +961,31 @@ jobs:
               save()
 
           with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
-              summary.write('## Frozen 120 Hz cohort (profiled, no retries)\n\n')
+              summary.write('## Frozen 120 Hz cohort (3 control pairs, 2 PID-captured pairs; no retries)\n\n')
               summary.write(f"Source `{result['source']}`; product `{result['product_sha256']}`. "
                             'Native test exits/assertions are retained; missing capture never discards p95. '
                             'Stage medians are non-additive statistics. GNU comparison is not performed by this workflow.\n\n')
               for scene in ['plain', 'rich']:
+                  baseline = {'plain': 26.116, 'rich': 50.285}[scene]
+                  groups = {mode: [r.get('report', {}).get('p95_response_ms')
+                                   for r in result['cells'] if r['scene'] == scene and r['capture'] == mode]
+                            for mode in ['OFF', 'ON']}
+                  summary.write(f"**{scene} capture OFF / ON p95s (ms):** {groups}; "
+                                f"run-3 steady reference {baseline} ms.\n\n")
                   cells = [r for r in result['cells'] if r['scene'] == scene]
                   values = [r.get('report', {}).get('p95_response_ms') for r in cells]
                   summary.write(f'**{scene} five p95s (ms):** {values}\n\n')
-                  summary.write('| Rep | Test exit | Response tail median | Receipt→request | Request→present | '
-                                'UI CPU | Evaluator CPU | CPU samples: llvmpipe / gpu-device / evaluator / UI |\n'
-                                '|---:|---:|---:|---:|---:|---:|---:|---|\n')
+                  summary.write('| Rep | Capture | Test exit | Response tail median | Receipt→request | Request→present | '
+                                'UI CPU | Evaluator CPU | CPU sampling |\n'
+                                '|---:|---|---:|---:|---:|---:|---:|---:|---|\n')
                   for r in cells:
                       a = r.get('analysis', {})
                       m = a.get('tail_medians', {})
                       values = [m.get(k) for k in ['response_ms', 'receive_to_request_ms',
                                  'request_to_present_ms', 'UI_on_cpu_ms', 'evaluator_on_cpu_ms']]
                       formatted = ['missing' if v is None else f'{v:.3f}' for v in values]
-                      roles = a.get('sample_roles', {})
-                      counts = ' / '.join(str(roles.get(k, 0)) for k in ['llvmpipe', 'gpu-device', 'evaluator', 'UI'])
-                      summary.write(f"| {r['rep']} | {r.get('test_exit', 'missing')} | " +
-                                    ' | '.join(formatted) + f' | {counts} |\n')
+                      summary.write(f"| {r['rep']} | {r['capture']} | {r.get('test_exit', 'missing')} | " +
+                                    ' | '.join(formatted) + ' | disabled |\n')
                       summary.write(f"\nCapture: {r['scheduler_mode']}; UI user switch-out chains: "
                                     f"{r.get('ui_user_switch_out_chains', 'unavailable')}.\n\n")
                       for wait in r.get('longest_ui_waits', []):
@@ -1034,7 +1003,7 @@ jobs:
           raise SystemExit(0 if len(result['cells']) == 10 and all(has_measurement(r)
                                    for r in result['cells']) else 1)
           PY
-      - name: Upload receipts, timelines and raw CPU captures
+      - name: Upload receipts, timelines and PID scheduler captures
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -1046,7 +1015,6 @@ jobs:
             tmp/scroll120-cohort/**/*.out
             tmp/scroll120-cohort/**/*.log
             tmp/scroll120-cohort/**/*.data
-            tmp/scroll120-cohort/**/ui-strace*
             tmp/scroll120-cohort/symbols.tar.gz
             tmp/scroll120-cohort/**/stderr
             tmp/scroll120-cohort/**/stdout
