@@ -72,6 +72,41 @@ fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
         .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
         .unwrap_or_else(|| "non-string cohort assertion".into())
 }
+/// Retry only admission. Once admitted, the body runs exactly once; its
+/// result (including an assertion) cannot be mistaken for a Busy admission.
+/// A resumed owner may precede the final peer that drains the stop phase.
+fn with_run<'era, R>(
+    owner: &mut Mutator<'era>,
+    mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<R, String>,
+) -> Result<R, String> {
+    contention::retry(
+        Deadline::contention(),
+        || {
+            let mut run = owner.run_access()?;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
+            let closed = contention::retry(
+                Deadline::contention(),
+                || run.close_cons_region(),
+                contention::registration,
+            );
+            drop(run);
+            let result = match result {
+                Ok(result) => result,
+                Err(payload) => Err(failure(payload)),
+            };
+            Ok(match closed {
+                Ok(()) => result,
+                Err(error) => Err(match result {
+                    Ok(_) => format!("cohort close: {error:?}"),
+                    Err(body) => format!("cohort close: {error:?}; body={body}"),
+                }),
+            })
+        },
+        contention::registration,
+    )
+    .map_err(|error| format!("cohort run admission: {error:?}"))?
+}
+
 fn seed<'era>(
     run: &mut RunAccess<'_, 'era>,
     mapper: PreparedHofBuiltin,
@@ -256,56 +291,28 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
                             CohortPhase::AfterSecondCollection,
                         ] {
                             if result.is_ok() {
-                                match owner.run_access() {
-                                    Ok(mut run) => {
-                                        let body =
-                                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                                                || -> Result<(), String> {
-                                                    if frame.is_none() {
-                                                        frame = Some(seed(
-                                                            &mut run,
-                                                            mapper,
-                                                            callback,
-                                                            callback_symbol,
-                                                            &replacement_key,
-                                                            &mapper_replacement_key,
-                                                        )?);
-                                                    }
-                                                    let (destination, inputs) = frame
-                                                        .as_mut()
-                                                        .ok_or("cohort frame absent")?;
-                                                    work(
-                                                        &code,
-                                                        admission,
-                                                        &mut run,
-                                                        destination,
-                                                        inputs,
-                                                        phase,
-                                                    )
-                                                },
-                                            ));
-                                        let closed = run.close_cons_region();
-                                        drop(run);
-                                        result = match body {
-                                            Ok(result) => result,
-                                            Err(payload) => Err(failure(payload)),
-                                        };
-                                        if let Err(error) = closed {
-                                            result = Err(format!(
-                                                "cohort close: {error:?}; body={result:?}"
-                                            ));
-                                        }
+                                result = with_run(&mut owner, |run| {
+                                    if frame.is_none() {
+                                        frame = Some(seed(
+                                            run,
+                                            mapper,
+                                            callback,
+                                            callback_symbol,
+                                            &replacement_key,
+                                            &mapper_replacement_key,
+                                        )?);
                                     }
-                                    Err(error) => {
-                                        result = Err(format!("cohort run admission: {error:?}"))
-                                    }
-                                }
+                                    let (destination, inputs) =
+                                        frame.as_mut().ok_or("cohort frame absent")?;
+                                    work(&code, admission, run, destination, inputs, phase)
+                                });
                             }
                             if matches!(phase, CohortPhase::AfterSecondCollection) {
                                 drop(frame.take());
-                                let cleared = owner
-                                    .run_access()
-                                    .and_then(|mut run| run.clear_root_slots());
+                                let cleared = with_run(&mut owner, |run| {
+                                    run.clear_root_slots()
+                                        .map_err(|error| format!("cohort clear roots: {error:?}"))
+                                });
                                 if let Err(error) = cleared {
                                     result =
                                         Err(format!("cohort clear: {error:?}; body={result:?}"));
@@ -343,9 +350,10 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
                             }
                         }
                         drop(frame);
-                        let cleared = owner
-                            .run_access()
-                            .and_then(|mut run| run.clear_root_slots());
+                        let cleared = with_run(&mut owner, |run| {
+                            run.clear_root_slots()
+                                .map_err(|error| format!("cohort final clear roots: {error:?}"))
+                        });
                         if let Err(error) = cleared {
                             result = Err(format!("cohort final clear: {error:?}; body={result:?}"));
                         }
