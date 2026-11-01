@@ -5465,6 +5465,10 @@ fn buffer_search_translation_table_with_symbols(
 #[path = "tests/declared_signed_positions.rs"]
 mod declared_signed_position_tests;
 
+#[cfg(test)]
+#[path = "tests/pike_vm_fuzz_regression_test.rs"]
+mod pike_vm_fuzz_regression_tests;
+
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
 pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {

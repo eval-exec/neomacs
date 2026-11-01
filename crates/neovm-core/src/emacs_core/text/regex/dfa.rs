@@ -644,6 +644,15 @@ impl Facts {
     /// or below U+00FF (`WordBoundaryLookup::boundary_between`), so such a
     /// pair decides `\b` per character pair, never per class.
     pub(crate) const WIDE_WORD: Self = Self(1 << 4);
+    /// The state's previous character begins with a continuation byte, which
+    /// is not a character head (GNU `CHAR_HEAD_P`, character.h:283): the
+    /// previous-character scan (`GET_CHAR_BEFORE_2`, regex-emacs.c:67)
+    /// crosses such a byte and lands on an earlier character, so a closure
+    /// at a following position reads that character's syntax, not the facts
+    /// carried here.  This is a fact about a state, never a character: it is
+    /// not part of any mask, and transitions out of a state carrying it are
+    /// never cached (like a pair-dependent one).
+    pub(crate) const NON_HEAD_PREV: Self = Self(1 << 6);
 
     pub(crate) const fn empty() -> Self {
         Self(0)
@@ -1509,6 +1518,14 @@ impl ExistenceDfa {
             && (prev.contains(Facts::WIDE_WORD) || current.contains(Facts::WIDE_WORD))
     }
 
+    /// Whether some assertion reads the previous character's syntax: the
+    /// word and symbol boundaries, whose previous character the scan decides
+    /// (`^` and `$` read the raw preceding byte, not the character).
+    #[inline]
+    fn prev_reads_syntax(&self) -> bool {
+        self.prev_mask.0 & !(Facts::EDGE.0 | Facts::NEWLINE.0) != 0
+    }
+
     /// Compute the transition out of the state at `row` on the character of
     /// class `class` at `at.d`: the closure at `at`, then every consuming
     /// position whose predicate accepts the class.  Cached unless `cache` is
@@ -1543,14 +1560,27 @@ impl ExistenceDfa {
                 DEAD
             } else {
                 let facts = self.classes.facts(class);
-                let facts = Facts(facts.bits() & self.prev_mask.bits());
+                let mut facts = Facts(facts.bits() & self.prev_mask.bits());
+                // The character just consumed begins with a continuation
+                // byte: the previous-character scan at later positions
+                // crosses it (`GET_CHAR_BEFORE_2` scans while
+                // `!CHAR_HEAD_P`), so the facts carried here do not decide
+                // what a closure reads.  Mark the state, keeping every
+                // transition out of it out of the cache.
+                if self.prev_reads_syntax()
+                    && at.target_multibyte
+                    && (at.text[at.d] & 0xC0) == 0x80
+                {
+                    facts = facts | Facts::NON_HEAD_PREV;
+                }
                 self.intern_state(&next, facts)
             };
             self.kernel = next;
             result
         };
         self.positions = positions;
-        let slow = self.pair_dependent(prev, class);
+        let slow =
+            self.pair_dependent(prev, class) || prev.contains(Facts::NON_HEAD_PREV);
         if slow {
             self.counters.slow_transitions += 1;
         }
@@ -1978,7 +2008,11 @@ impl ExistenceDfa {
         // are what that lookup answers there.  A cached transition stays a
         // function of (state, class): the assertions it evaluated read only
         // the facts both carry, and a class read at a position is interned
-        // like any other.
+        // like any other.  Two kinds never enter the cache: pair-dependent
+        // ones, and transitions out of a state whose previous character
+        // begins with a continuation byte (`NON_HEAD_PREV`), because the
+        // previous-character scan at a later position crosses that byte and
+        // reads an earlier character instead.
         // Preserve the existing projection: positional assertions retain the
         // original invocation plan; the base table uses physical coordinates.
         let base_syntax = MatchSyntax::physical(&base);

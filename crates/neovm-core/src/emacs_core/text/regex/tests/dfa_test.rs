@@ -2727,3 +2727,64 @@ fn cold_isolated_whole_search_failures_admit_at_threshold() {
     assert!(!compiled.dfa.initialized());
     assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
 }
+
+/// The weekly regex differential fuzzer's crash (workflow `regex fuzz`, run
+/// 41276399804 on main 589873beb1): a backward search's earlier candidate
+/// verdict corrupted a later one, so the Pike-engine pass found nothing where
+/// the backtracker oracle had matched.
+///
+/// The text carries a run of `0x85` bytes at 6..34 that no lead byte opens.
+/// The character consumed at 33 (a lone truncated lead) begins with a
+/// continuation byte, so GNU's previous-character scan (`GET_CHAR_BEFORE_2`,
+/// regex-emacs.c:67, scanning while `!CHAR_HEAD_P`, character.h:283) crosses
+/// the whole run and reads the NUL at 5 as the previous character of 34:
+/// `\B` holds there, and `\B\0.\0` completes the match [5,37).  The
+/// consumed character's own syntax (an eight-bit word constituent) still
+/// named the state's previous-character facts, so the candidate at 34 -- whose
+/// walk reaches the same facts through the head byte `0xFF` at 35, where the
+/// scan stops and `\B` fails -- cached the loop-only transition under those
+/// facts, and the candidate at 5 read it back.  A state whose previous
+/// character begins with a continuation byte is marked `Facts::NON_HEAD_PREV`
+/// and never caches its transitions, so the two walks can no longer share the
+/// entry.
+#[test]
+fn an_earlier_verdict_does_not_poison_a_later_candidate_over_a_non_head_run() {
+    crate::test_utils::init_test_tracing();
+    const PATTERN: &str = "..?*\\B\0.\0";
+    const TEXT: &[u8] = &[142, 17, 0, 46, 117, 0, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 133, 0, 255, 0, 39, 39, 39, 39, 39, 39, 39, 39, 39, 122, 241, 0, 149, 249, 0, 0, 42, 39, 39, 0, 13, 33, 192, 1, 255, 255, 254, 255, 255, 44, 137, 0, 254, 255, 255, 255, 46, 46, 63, 42, 92, 66, 0, 46, 0, 142, 17, 0, 46, 117, 0, 0, 255, 39, 0, 125, 39, 125, 39, 121, 39, 241, 0, 149, 249, 0, 0, 42, 0, 254, 255, 255, 255, 0, 0, 0, 47, 39, 39, 39, 39, 39, 39, 39, 0, 13, 33, 245, 245, 245, 245, 245, 245, 245, 255, 255, 255, 127, 245, 245, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 180, 245, 245, 245, 245, 245, 245, 245, 255, 255, 255, 103, 57, 50, 227, 42, 255, 255, 255, 255, 0, 251, 0, 0, 10, 255, 196, 122, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 254, 255, 255, 255, 255, 196, 255, 255, 255, 247, 255, 49, 0, 0, 0];
+    let syntax = DefaultSyntaxLookup;
+    use crate::emacs_core::regex_emacs::with_anchor_alt;
+    let mut compiled = with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
+    compiled.target_multibyte = true;
+    prime(&compiled, &syntax).unwrap();
+    let verdict = |p: usize| {
+        let mut slot = compiled.dfa.slot.borrow_mut();
+        let DfaSlot::Live(live) = &mut *slot else { panic!("slot not live") };
+        live.dfa
+            .anchored_exists(&compiled, TEXT, p, 44, 45, &syntax)
+    };
+
+    // The earlier candidates of the crash's backward search: 34 is correctly
+    // rejected (its own walk dies at the stop), and 38 likewise (the walk
+    // whose cached entry was the poison on main).
+    assert_eq!(verdict(38), Exists::No { consumed: 6 });
+    assert_eq!(verdict(34), Exists::No { consumed: 10 });
+
+    // The candidate the crash lost.  The match [5,37) runs `\B` at 34, where
+    // the previous-character scan reads the NUL at 5, so the walk must take
+    // the `\B\0.\0` branch -- even after the verdicts above.
+    assert_eq!(verdict(5), Exists::Yes);
+
+    // And the same search the fuzzer ran, end to end from a cold pattern:
+    // the backtracker pass first, then the Pike pass, one compiled pattern.
+    use crate::emacs_core::regex_emacs::{RegexEngineOverride, with_regex_engine_override};
+    let mut cold = with_anchor_alt(true, || regex_compile(PATTERN, false, true)).unwrap();
+    cold.target_multibyte = true;
+    for engine in [RegexEngineOverride::Backtracker, RegexEngineOverride::PikeVm] {
+        let found =
+            with_regex_engine_override(engine, || re_search(&cold, TEXT, 44, -44, &syntax, 45));
+        let (start, registers) =
+            found.unwrap_or_else(|| panic!("{engine:?} matches the crash case"));
+        assert_eq!((start, registers.start[0], registers.end[0]), (5, 5, 37));
+    }
+}
