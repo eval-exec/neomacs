@@ -7620,6 +7620,7 @@ pub use redisplay_hooks::{
 mod vm_shared;
 
 mod signal_dispatch;
+pub(crate) mod signal_entry;
 mod signal_room;
 
 mod construct;

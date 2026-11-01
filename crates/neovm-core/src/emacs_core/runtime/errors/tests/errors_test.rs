@@ -1,5 +1,6 @@
 use super::super::intern::intern;
 use super::*;
+use crate::emacs_core::eval::signal_entry::builtin_signal;
 use crate::emacs_core::print::builtin_error_message_string;
 
 fn init_runtime_errors(context: &mut crate::emacs_core::eval::Context) {

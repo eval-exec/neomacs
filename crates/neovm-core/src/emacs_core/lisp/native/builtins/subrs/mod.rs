@@ -353,7 +353,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "signal",
-        NativeFn::ContextVec(crate::emacs_core::errors::builtin_signal),
+        NativeFn::ContextVec(crate::emacs_core::eval::signal_entry::builtin_signal),
         SubrArity::new(1, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
