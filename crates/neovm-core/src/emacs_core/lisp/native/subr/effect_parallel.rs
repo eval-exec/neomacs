@@ -7,8 +7,9 @@
 //! construction: they inherit the resolved target's class exactly as in P3.
 
 use super::effect_schema::{
-    ArithOperands, CatalogKind, ParallelClass, ParallelDeclaration, ParallelSchemaError,
-    ParallelVariant, PlainVarAccess, ReturnDisposition, SealedAuthority, validate_parallel,
+    ArithOperands, CatalogKind, DispatchShapeError, INLINED_NATIVE_OPS, ParallelArm, ParallelClass,
+    ParallelDeclaration, ParallelSchemaError, ParallelVariant, PlainVarAccess, ReturnDisposition,
+    SealedAuthority, WorldSplit, dispatch_arm, validate_parallel,
 };
 
 const CONS_FIELD_READ: &str = "P3 review: single-object single-word cons-field read; no traversal (classification Car/Cdr/car/cdr).";
@@ -865,6 +866,23 @@ pub(crate) const EXPECTED_SCALAR_ENTRIES: usize = 34;
 #[allow(dead_code)] // Read by the architecture gate.
 pub(crate) const EXPECTED_WORLD_ENTRIES: usize = 1_664;
 
+/// Exact canonical dispatch-arm expectations over the 1,725 names. The
+/// canonical P3 class stays World for the typed splits; these counts name the
+/// ARM each canonical name resolves to, so a projection or count drift fails
+/// the closed-world gate.
+#[allow(dead_code)] // Read by the architecture gate and catalog tests.
+pub(crate) const EXPECTED_WORLD_ESCAPE_NAMES: usize = 1_613;
+#[allow(dead_code)] // Read by the architecture gate and catalog tests.
+pub(crate) const EXPECTED_RETURN_SPLIT_NAMES: usize = 1;
+#[allow(dead_code)] // Read by the architecture gate and catalog tests.
+pub(crate) const EXPECTED_PLAIN_VAR_SPLIT_NAMES: usize = 4;
+#[allow(dead_code)] // Read by the architecture gate and catalog tests.
+pub(crate) const EXPECTED_ARITH_SPLIT_NAMES: usize = 32;
+/// The call-free (green-guard) declaration set: every name must resolve to
+/// exactly one registered Primitive row.
+#[allow(dead_code)] // Read by the architecture gate and catalog tests.
+pub(crate) const EXPECTED_CANNOT_REENTER_NAMES: usize = 5;
+
 /// Exact declaration and canonical-name expectations.
 #[allow(dead_code)] // Read by the architecture gate and catalog tests.
 pub(crate) const EXPECTED_CANONICAL_NAMES: usize = 1_725;
@@ -910,6 +928,13 @@ pub(crate) enum ParallelCatalogError<'name> {
     VariantMismatch {
         name: &'name str,
     },
+    DispatchShape {
+        name: &'name str,
+        error: DispatchShapeError,
+    },
+    ReentryNotPrimitive {
+        name: &'name str,
+    },
     DuplicateCanonicalName {
         name: &'name str,
     },
@@ -948,6 +973,16 @@ impl std::fmt::Display for ParallelCatalogError<'_> {
                     "typed variant for {name:?} is not the designated one"
                 )
             }
+            Self::DispatchShape { name, error } => {
+                write!(
+                    formatter,
+                    "dispatch arm for {name:?} is malformed: {error:?}"
+                )
+            }
+            Self::ReentryNotPrimitive { name } => write!(
+                formatter,
+                "call-free name {name:?} has no single registered Primitive row"
+            ),
             Self::DuplicateCanonicalName { name } => write!(
                 formatter,
                 "canonical name {name:?} carries divergent classes across entries"
@@ -1080,6 +1115,18 @@ pub(crate) fn canonical_parallel_error<'name>(
         }
     }
 
+    // Every resolved row must project to exactly one executor arm. This is
+    // also the generated table's shape: an impossible (class, variant) pair
+    // is a typed error here, never a silently chosen arm in the cold data.
+    for row in rows {
+        dispatch_arm(row.class, row.variant).map_err(|error| {
+            ParallelCatalogError::DispatchShape {
+                name: row.name,
+                error,
+            }
+        })?;
+    }
+
     let mut canonical: Vec<(&str, ParallelClass, Option<ParallelVariant>)> = Vec::new();
     for row in rows {
         if POST_P3_WORLD_REGISTRATIONS.contains(&row.name) {
@@ -1114,6 +1161,69 @@ pub(crate) fn canonical_parallel_error<'name>(
         "canonical Scalar names",
         CANONICAL_SCALAR_NAMES,
         scalar_names,
+    )?;
+
+    // Canonical dispatch-arm coverage: every one of the 1,725 names resolves
+    // to exactly one arm of the generated table.
+    let mut scalar_arms = 0;
+    let mut sealed_arms = 0;
+    let mut world_escape_arms = 0;
+    let mut return_split_arms = 0;
+    let mut plain_var_split_arms = 0;
+    let mut arith_split_arms = 0;
+    for (name, class, variant) in &canonical {
+        match dispatch_arm(*class, *variant)
+            .map_err(|error| ParallelCatalogError::DispatchShape { name: *name, error })?
+        {
+            ParallelArm::Scalar => scalar_arms += 1,
+            ParallelArm::Sealed(_) => sealed_arms += 1,
+            ParallelArm::World(WorldSplit::Escape) => world_escape_arms += 1,
+            ParallelArm::World(WorldSplit::Return(_)) => return_split_arms += 1,
+            ParallelArm::World(WorldSplit::PlainVar(_)) => plain_var_split_arms += 1,
+            ParallelArm::World(WorldSplit::Arith(_)) => arith_split_arms += 1,
+        }
+    }
+    count_mismatch("canonical Scalar arms", CANONICAL_SCALAR_NAMES, scalar_arms)?;
+    count_mismatch("canonical Sealed arms", CANONICAL_SEALED_NAMES, sealed_arms)?;
+    count_mismatch(
+        "canonical World escape arms",
+        EXPECTED_WORLD_ESCAPE_NAMES,
+        world_escape_arms,
+    )?;
+    count_mismatch(
+        "canonical Return-split arms",
+        EXPECTED_RETURN_SPLIT_NAMES,
+        return_split_arms,
+    )?;
+    count_mismatch(
+        "canonical PlainVar-split arms",
+        EXPECTED_PLAIN_VAR_SPLIT_NAMES,
+        plain_var_split_arms,
+    )?;
+    count_mismatch(
+        "canonical Arith-split arms",
+        EXPECTED_ARITH_SPLIT_NAMES,
+        arith_split_arms,
+    )?;
+
+    // The green-guard re-entry axis has one source: every declared call-free
+    // name must resolve to exactly one registered Primitive row, so no
+    // generated dispatch row can carry a classification for nothing.
+    let mut cannot_reenter = 0;
+    for name in INLINED_NATIVE_OPS {
+        let primitives = rows
+            .iter()
+            .filter(|row| row.kind == CatalogKind::Primitive && row.name == name)
+            .count();
+        if primitives != 1 {
+            return Err(ParallelCatalogError::ReentryNotPrimitive { name });
+        }
+        cannot_reenter += 1;
+    }
+    count_mismatch(
+        "call-free names",
+        EXPECTED_CANNOT_REENTER_NAMES,
+        cannot_reenter,
     )?;
 
     let mut world_entries = 0;

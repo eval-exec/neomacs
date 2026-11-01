@@ -1,5 +1,5 @@
-//! Fast-path re-entry classification for inlined call sites, beside the
-//! effect catalog (`effect_catalog`) it derives from.
+//! Fast-path re-entry classification for inlined call sites, derived from the
+//! E1 cold catalog (`effect_catalog`) it is folded into.
 //!
 //! The JIT's green-guard design classifies an INLINED call site by one
 //! criterion: can the site's fast path run Lisp or release the Baton? A
@@ -9,43 +9,26 @@
 //! original call whose skipped call would have revalidated, and revalidates
 //! after every release point instead.
 //!
-//! This is the single classification source — the lowering asks here, it
-//! never keeps its own intrinsic list. Names not listed are `MayReenter`
-//! (conservative): an unknown callee is a call boundary, and call sites
-//! revalidate by rule rather than by membership.
+//! The single source is [`INLINED_NATIVE_OPS`] in the cold schema; the source
+//! scanner folds it into every generated dispatch row, and this module is
+//! only the lowering-facing query over that generated table. Names not listed
+//! are `MayReenter` (conservative): an unknown callee is a call boundary, and
+//! call sites revalidate by rule rather than by membership.
 
-/// Whether an inlined site's fast path can run Lisp or release the Baton.
-///
-/// The re-entry axis of the effect vocabulary: orthogonal to the catalog's
-/// `Authority` (which classifies parallel admission, not fast-path
-/// re-entrancy — `mod` and `sleep-for` are both `Authority::World`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FastPathReentry {
-    /// Machine arithmetic over values already in registers: cannot call
-    /// Lisp, grow eval depth, allocate or serve attention at the site.
-    /// Signaling (`arith-error`) exits compiled code through the slow path.
-    CannotReenter,
-    /// The fast path can run Lisp or release the Baton (the default for
-    /// catalog members: any callee may transitively reach `thread_select`
-    /// or a condition/mutex wait).
-    MayReenter,
-}
+use super::effect_catalog::reentry_of_primitive_name;
 
-/// The intrinsics the JIT bakes as native machine ops (`arith_op_inlines`).
-/// Ascending name order; `is_inlined_intrinsic` binary-searches.
-const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor", "mod"];
+pub(crate) use super::effect_schema::FastPathReentry;
+#[cfg(test)]
+pub(crate) use super::effect_schema::INLINED_NATIVE_OPS;
 
-/// The classification of `name`'s fast path.
+/// The classification of `name`'s fast path from the generated cold table.
 ///
 /// `CannotReenter` exactly for the native-arithmetic intrinsics above; the
 /// catalog's wait/read/thread family and every unlisted name are
-/// `MayReenter`. Both classes are pinned by tests.
+/// `MayReenter`. Both classes are pinned by tests, including the cross-module
+/// pin against `arith_op_inlines`.
 pub(crate) fn fast_path_reentry(name: &str) -> FastPathReentry {
-    if INLINED_NATIVE_OPS.binary_search(&name).is_ok() {
-        FastPathReentry::CannotReenter
-    } else {
-        FastPathReentry::MayReenter
-    }
+    reentry_of_primitive_name(name)
 }
 
 #[cfg(test)]

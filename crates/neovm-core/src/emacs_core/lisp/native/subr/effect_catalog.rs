@@ -8,8 +8,8 @@
 //! for E4; no serial dispatcher reads it.
 
 use super::effect_schema::{
-    ArithOperands, Authority, CatalogKind, ParallelClass, ParallelVariant, PlainVarAccess,
-    ReturnDisposition, SealedAuthority,
+    ArithOperands, Authority, CatalogKind, DispatchSlot, FastPathReentry, ParallelArm,
+    ParallelClass, ParallelVariant, PlainVarAccess, ReturnDisposition, SealedAuthority, WorldSplit,
 };
 use crate::emacs_core::eval::parallel_entry::capability::{
     BatonWitness, ParallelExecution, SerialContext,
@@ -95,6 +95,40 @@ pub(crate) fn alias_target_class(target: AliasTarget<'_>) -> Option<ParallelClas
             Some(ParallelClass::World)
         }
     }
+}
+
+/// The cold E1 inventory, for crate modules outside this subtree (the E4
+/// substrate's cold name resolution and its gate tests). The table stays
+/// read-only and cold; no serial dispatcher consumes it.
+#[allow(dead_code)] // E4-S0 is dormant; stage 1's cold resolution consumes it.
+#[inline]
+pub(crate) fn inventory() -> &'static [InventoryEntry] {
+    INVENTORY
+}
+
+/// The E4 cold dispatch row of the entry with the given E1 registration
+/// index (the exact order of [`INVENTORY`]). A miss is out of range; the
+/// generated row for an unadmitted entry is `World(WorldSplit::Escape)`.
+#[allow(dead_code)] // E4-S0 is dormant; E4 stage 1 consumes this.
+#[inline]
+pub(crate) fn primitive_dispatch(index: usize) -> Option<DispatchSlot> {
+    PARALLEL_DISPATCH.get(index).copied()
+}
+
+/// The E4 cold dispatch row of one bytecode opcode (generated exhaustive
+/// match against the real `Op` enum).
+#[allow(dead_code)] // E4-S0 is dormant; E4 stage 1 consumes this.
+#[inline]
+pub(crate) fn opcode_dispatch_slot(entry: &crate::emacs_core::bytecode::Op) -> DispatchSlot {
+    opcode_dispatch(entry)
+}
+
+/// The E4 cold dispatch row of one leaf registry entry (generated exhaustive
+/// match against the real `LeafId` enum).
+#[allow(dead_code)] // E4-S0 is dormant; E4 stage 1 consumes this.
+#[inline]
+pub(crate) fn leaf_dispatch_slot(entry: crate::emacs_core::subr::leaf::LeafId) -> DispatchSlot {
+    leaf_dispatch(entry)
 }
 
 #[cfg(test)]

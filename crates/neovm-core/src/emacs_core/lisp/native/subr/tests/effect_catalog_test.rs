@@ -533,3 +533,99 @@ fn pentry_catalog_parallel_gate_rejects_a_class_flip() {
         })
     ));
 }
+
+#[test]
+fn pentry_catalog_parallel_dispatch_rows_are_dense_and_canonical() {
+    use crate::emacs_core::subr::effect_schema::{
+        INLINED_NATIVE_OPS, ParallelArm, WorldSplit, dispatch_arm,
+    };
+
+    assert_eq!(PARALLEL_DISPATCH.len(), INVENTORY.len());
+    for (index, entry) in INVENTORY.iter().enumerate() {
+        let slot = PARALLEL_DISPATCH[index];
+        assert_eq!(
+            slot.arm,
+            dispatch_arm(entry.class, entry.variant).expect("valid class/variant pair"),
+            "arm row {} ({:?})",
+            entry.name,
+            entry.kind
+        );
+        let call_free =
+            entry.kind == CatalogKind::Primitive && INLINED_NATIVE_OPS.contains(&entry.name);
+        assert_eq!(
+            slot.reentry,
+            if call_free {
+                super::super::effect_schema::FastPathReentry::CannotReenter
+            } else {
+                super::super::effect_schema::FastPathReentry::MayReenter
+            },
+            "reentry row {} ({:?})",
+            entry.name,
+            entry.kind
+        );
+    }
+
+    // The generated exhaustive opcode/leaf projections carry the typed arms
+    // the executor consumes; a plain World site keeps the escape.
+    assert_eq!(
+        opcode_dispatch(&Op::Return).arm,
+        ParallelArm::World(WorldSplit::Return(
+            super::super::effect_schema::ReturnDisposition::OwnerLocal
+        ))
+    );
+    assert_eq!(
+        opcode_dispatch(&Op::VarRef(0)).arm,
+        ParallelArm::World(WorldSplit::PlainVar(
+            super::super::effect_schema::PlainVarAccess::Ref
+        ))
+    );
+    assert_eq!(
+        opcode_dispatch(&Op::Add1).arm,
+        ParallelArm::World(WorldSplit::Arith(
+            super::super::effect_schema::ArithOperands::Numeric
+        ))
+    );
+    assert_eq!(
+        opcode_dispatch(&Op::Car).arm,
+        ParallelArm::Sealed(SealedAuthority::ConsFieldRead)
+    );
+    assert_eq!(
+        opcode_dispatch(&Op::Call(0)).arm,
+        ParallelArm::World(WorldSplit::Escape)
+    );
+    assert_eq!(
+        leaf_dispatch(leaf::LeafId::Gethash).arm,
+        ParallelArm::Sealed(SealedAuthority::HashRead)
+    );
+    assert_eq!(
+        leaf_dispatch(leaf::LeafId::Nthcdr).arm,
+        ParallelArm::World(WorldSplit::Escape)
+    );
+}
+
+/// The checked-in generated mappings enumerate every variant and carry no
+/// wildcard, which is the shape the E0004 mutation fixture
+/// (`tests/pentry_ui/exhaustive_mapping_new_variant.rs`) pins: a new enum
+/// variant without regeneration fails to compile instead of defaulting.
+#[test]
+fn pentry_catalog_generated_dispatch_mappings_have_no_wildcard() {
+    let source = include_str!("../effect_inventory.inc");
+    for function in [
+        "opcode_dispatch",
+        "leaf_dispatch",
+        "opcode_class",
+        "leaf_class",
+    ] {
+        let start = source
+            .find(&format!("fn {function}("))
+            .unwrap_or_else(|| panic!("{function} must be generated"));
+        let body = &source[start..];
+        let end = body
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("{function} must be complete"));
+        assert!(
+            !body[..end].contains("_ =>"),
+            "{function} must enumerate every closed-enum variant (E0004 mutation fixture)"
+        );
+    }
+}

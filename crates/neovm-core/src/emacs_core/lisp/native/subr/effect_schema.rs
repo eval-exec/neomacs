@@ -286,3 +286,111 @@ pub const fn assert_parallel_valid(declarations: &[ParallelDeclaration]) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// E4-S0: the executor-facing dispatch vocabulary.
+//
+// The generated cold inventory carries one `DispatchSlot` per E1 entry: the
+// Scalar/Sealed/World arm E4 dispatches on plus the green-guard fast-path
+// re-entry axis. Nothing here is read by a serial dispatcher; the source
+// scanner shares these types and the projection function so the generated
+// table, the closed-world gate and the E4 accessors cannot drift.
+// ---------------------------------------------------------------------------
+
+/// Whether an inlined call site's fast path can run Lisp or release the
+/// Baton (the green-guard re-entry axis, folded into the E1 catalog).
+///
+/// Orthogonal to [`ParallelClass`], which classifies parallel admission, not
+/// fast-path re-entrancy: `mod` is `World` for admission and `CannotReenter`
+/// for the JIT's baked arithmetic intrinsic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FastPathReentry {
+    /// Machine arithmetic over values already in registers: cannot call
+    /// Lisp, grow eval depth, allocate or serve attention at the site.
+    /// Signaling (`arith-error`) exits compiled code through the slow path.
+    CannotReenter,
+    /// The fast path can run Lisp or release the Baton (the conservative
+    /// default for every catalog member and every unknown name).
+    MayReenter,
+}
+
+/// The native-arithmetic intrinsics the JIT bakes as machine ops
+/// (`arith_op_inlines`). This is the ONE declaration of the call-free set:
+/// the source scanner folds it into the generated dispatch table, the
+/// lowering asks the generated table, and the pin test compares the JIT's
+/// own inlining set against it. Ascending name order; the generated lookup
+/// binary-searches its sorted projection.
+pub const INLINED_NATIVE_OPS: [&str; 5] = ["logand", "logior", "lognot", "logxor", "mod"];
+
+/// The executor arm of one admitted entry (E4-DESIGN §2/§3.1).
+///
+/// A `World` arm is not necessarily "always serial": the [`WorldSplit`]
+/// names the typed R1/R6 refinement whose runtime guard may still select the
+/// World escape. A table miss is therefore exactly `World(WorldSplit::Escape)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParallelArm {
+    /// Runs inline in the executor: no authority, no heap payload access.
+    Scalar,
+    /// Runs through the typed single-object sealed authority.
+    Sealed(SealedAuthority),
+    /// Not executable owner-locally as written; the split names the typed
+    /// refinement, and `Escape` is the conservative default.
+    World(WorldSplit),
+}
+
+/// The typed disposition of a World-class entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorldSplit {
+    /// Always takes the serial escape (every unlisted registration).
+    Escape,
+    /// `Op::Return`: owner-local unwind, or serial cleanup when the frame
+    /// needs Lisp at exit (E4 peer required change 1).
+    Return(ReturnDisposition),
+    /// `VarRef`/`VarSet`/`VarBind`/`Unbind` through an `EffectivePlainKey`.
+    PlainVar(PlainVarAccess),
+    /// The R6 numeric-arithmetic split: numeric operands are owner-local,
+    /// a marker operand escapes.
+    Arith(ArithOperands),
+}
+
+/// One generated dispatch row: the arm and the folded re-entry axis.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DispatchSlot {
+    pub arm: ParallelArm,
+    pub reentry: FastPathReentry,
+}
+
+/// A class/variant combination no entry may carry: a typed split refines a
+/// canonical World entry only (the same rule `validate_parallel` enforces on
+/// declarations; the gate applies it to resolved rows too).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatchShapeError {
+    VariantOnNonWorldClass,
+}
+
+/// The one projection from a resolved `(class, variant)` pair to an executor
+/// arm. The generated table, the closed-world gate and the E4 accessors share
+/// this function; an impossible combination is a typed error, never a
+/// silently chosen arm.
+pub const fn dispatch_arm(
+    class: ParallelClass,
+    variant: Option<ParallelVariant>,
+) -> Result<ParallelArm, DispatchShapeError> {
+    match (class, variant) {
+        (ParallelClass::World, None) => Ok(ParallelArm::World(WorldSplit::Escape)),
+        (ParallelClass::World, Some(ParallelVariant::Return(disposition))) => {
+            Ok(ParallelArm::World(WorldSplit::Return(disposition)))
+        }
+        (ParallelClass::World, Some(ParallelVariant::PlainVar(access))) => {
+            Ok(ParallelArm::World(WorldSplit::PlainVar(access)))
+        }
+        (ParallelClass::World, Some(ParallelVariant::Arith(operands))) => {
+            Ok(ParallelArm::World(WorldSplit::Arith(operands)))
+        }
+        (ParallelClass::Sealed(authority), None) => Ok(ParallelArm::Sealed(authority)),
+        (ParallelClass::Scalar, None) => Ok(ParallelArm::Scalar),
+        (ParallelClass::Sealed(_) | ParallelClass::Scalar, Some(_)) => {
+            Err(DispatchShapeError::VariantOnNonWorldClass)
+        }
+    }
+}

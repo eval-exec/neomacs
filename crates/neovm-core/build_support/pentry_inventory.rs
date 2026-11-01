@@ -21,8 +21,9 @@ mod effect_schema;
 use effect_parallel::{ADMITTED, CatalogRow, canonical_parallel_error};
 use effect_schema as schema;
 use schema::{
-    ArithOperands, Authority, CatalogKind, Classification, ParallelClass, ParallelVariant,
-    PlainVarAccess, ReturnDisposition, SchemaEntry, SchemaError, SealedAuthority,
+    ArithOperands, Authority, CatalogKind, Classification, FastPathReentry, INLINED_NATIVE_OPS,
+    ParallelArm, ParallelClass, ParallelVariant, PlainVarAccess, ReturnDisposition, SchemaEntry,
+    SchemaError, SealedAuthority, WorldSplit, dispatch_arm,
 };
 
 #[derive(Clone, Copy)]
@@ -44,6 +45,9 @@ struct Record {
     classification: Classification,
     class: ParallelClass,
     variant: Option<ParallelVariant>,
+    /// The green-guard fast-path re-entry axis, folded into the same
+    /// generated dispatch row as the class and typed variant.
+    reentry: FastPathReentry,
     target: Option<String>,
 }
 
@@ -76,6 +80,7 @@ impl Scanner<'_> {
             classification,
             class: ParallelClass::World,
             variant: None,
+            reentry: FastPathReentry::MayReenter,
             target: None,
         });
     }
@@ -592,6 +597,71 @@ fn variant_expr(variant: Option<ParallelVariant>) -> String {
     }
 }
 
+fn reentry_expr(reentry: FastPathReentry) -> &'static str {
+    match reentry {
+        FastPathReentry::CannotReenter => "FastPathReentry::CannotReenter",
+        FastPathReentry::MayReenter => "FastPathReentry::MayReenter",
+    }
+}
+
+/// The generated expression for one executor arm. The exhaustive match over
+/// the three closed vocabularies is the compile-time guard: a new authority,
+/// split or operand kind cannot be generated without naming its arm.
+fn arm_expr(
+    class: ParallelClass,
+    variant: Option<ParallelVariant>,
+) -> Result<&'static str, String> {
+    let arm = dispatch_arm(class, variant).map_err(|error| {
+        format!("dispatch row for class {class:?} variant {variant:?} is malformed: {error:?}")
+    })?;
+    Ok(match arm {
+        ParallelArm::Scalar => "ParallelArm::Scalar",
+        ParallelArm::Sealed(SealedAuthority::ConsFieldRead) => {
+            "ParallelArm::Sealed(SealedAuthority::ConsFieldRead)"
+        }
+        ParallelArm::Sealed(SealedAuthority::ConsFieldWrite) => {
+            "ParallelArm::Sealed(SealedAuthority::ConsFieldWrite)"
+        }
+        ParallelArm::Sealed(SealedAuthority::ConsAllocation) => {
+            "ParallelArm::Sealed(SealedAuthority::ConsAllocation)"
+        }
+        ParallelArm::Sealed(SealedAuthority::HashRead) => {
+            "ParallelArm::Sealed(SealedAuthority::HashRead)"
+        }
+        ParallelArm::Sealed(SealedAuthority::CanonicalSymbol) => {
+            "ParallelArm::Sealed(SealedAuthority::CanonicalSymbol)"
+        }
+        ParallelArm::Sealed(SealedAuthority::HeaderWord) => {
+            "ParallelArm::Sealed(SealedAuthority::HeaderWord)"
+        }
+        ParallelArm::World(WorldSplit::Escape) => "ParallelArm::World(WorldSplit::Escape)",
+        ParallelArm::World(WorldSplit::Return(ReturnDisposition::OwnerLocal)) => {
+            "ParallelArm::World(WorldSplit::Return(ReturnDisposition::OwnerLocal))"
+        }
+        ParallelArm::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup)) => {
+            "ParallelArm::World(WorldSplit::Return(ReturnDisposition::NeedsSerialCleanup))"
+        }
+        ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Ref)) => {
+            "ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Ref))"
+        }
+        ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Set)) => {
+            "ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Set))"
+        }
+        ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Bind)) => {
+            "ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Bind))"
+        }
+        ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Unbind)) => {
+            "ParallelArm::World(WorldSplit::PlainVar(PlainVarAccess::Unbind))"
+        }
+        ParallelArm::World(WorldSplit::Arith(ArithOperands::Numeric)) => {
+            "ParallelArm::World(WorldSplit::Arith(ArithOperands::Numeric))"
+        }
+        ParallelArm::World(WorldSplit::Arith(ArithOperands::MarkerInvolved)) => {
+            "ParallelArm::World(WorldSplit::Arith(ArithOperands::MarkerInvolved))"
+        }
+    })
+}
+
 fn class_text(class: ParallelClass) -> String {
     match class {
         ParallelClass::World => "World".into(),
@@ -650,6 +720,7 @@ fn alias_records(source: &str, records: &mut Vec<Record>) -> Result<(), String> 
             classification: Classification::Classified(Authority::World),
             class: ParallelClass::World,
             variant: None,
+            reentry: FastPathReentry::MayReenter,
             target,
         });
     }
@@ -707,6 +778,29 @@ fn apply_parallel_catalog(records: &mut Vec<Record>) -> Result<(), String> {
         .collect::<Vec<_>>();
     canonical_parallel_error(&rows, ADMITTED)
         .map_err(|error| format!("parallel catalog architecture gate: {error}"))
+}
+
+/// Fold the green-guard fast-path re-entry axis into the same records the
+/// generated dispatch table is built from. The one source is
+/// `INLINED_NATIVE_OPS`: every declared call-free name must resolve to
+/// exactly one registered Primitive, so a rename or removal fails generation
+/// instead of silently classifying no dispatch row.
+fn apply_reentry_catalog(records: &mut [Record]) -> Result<(), String> {
+    for name in INLINED_NATIVE_OPS {
+        let mut found = 0;
+        for record in records.iter_mut() {
+            if record.kind == CatalogKind::Primitive && record.name == name {
+                record.reentry = FastPathReentry::CannotReenter;
+                found += 1;
+            }
+        }
+        if found != 1 {
+            return Err(format!(
+                "reentry catalog: call-free name {name:?} has {found} registered primitive rows (expected exactly 1)"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -793,6 +887,7 @@ fn generate_inner(
                 classification,
                 class: ParallelClass::World,
                 variant: None,
+                reentry: FastPathReentry::MayReenter,
                 target: None,
             });
         }
@@ -809,6 +904,7 @@ fn generate_inner(
             classification: tier_i_classification,
             class: ParallelClass::World,
             variant: None,
+            reentry: FastPathReentry::MayReenter,
             target: None,
         });
     }
@@ -818,6 +914,7 @@ fn generate_inner(
     alias_records(&aliases_source, &mut records)?;
     if parallel_gate == ParallelGate::Canonical {
         apply_parallel_catalog(&mut records)?;
+        apply_reentry_catalog(&mut records)?;
     }
 
     let schema_entries = records
@@ -905,10 +1002,61 @@ fn generate_inner(
         generated.push_str(&format!("    {},\n", variant_expr(record.variant)));
     }
     generated.push_str("];\n");
-    for (table, function, argument, variants, kind) in [
+    // The E4-S0 dispatch row: one Scalar/Sealed/World arm and the folded
+    // green-guard re-entry axis per E1 entry. This is the single generated
+    // classification source; no serial dispatcher reads it.
+    generated.push_str(
+        "/// Dense cold E4 dispatch rows indexed by the E1 registration index:\n\
+         /// the executor arm plus the folded FastPathReentry axis.\n\
+         /// E4-S0 is dormant: no serial dispatcher reads this table.\n",
+    );
+    generated.push_str("#[allow(dead_code)]\n");
+    generated.push_str("pub(crate) static PARALLEL_DISPATCH: &[DispatchSlot] = &[\n");
+    for record in &records {
+        let arm = arm_expr(record.class, record.variant)?;
+        generated.push_str(&format!(
+            "    DispatchSlot {{ arm: {arm}, reentry: {} }},\n",
+            reentry_expr(record.reentry)
+        ));
+    }
+    generated.push_str("];\n");
+    // The lowering-facing query over the same axis. Only non-default
+    // (CannotReenter) names are stored; ascending so the runtime lookup is a
+    // binary search and a drift from INLINED_NATIVE_OPS is visible here.
+    let mut reentry_names = records
+        .iter()
+        .filter(|record| {
+            record.kind == CatalogKind::Primitive
+                && record.reentry == FastPathReentry::CannotReenter
+        })
+        .map(|record| (record.name.as_str(), record.reentry))
+        .collect::<Vec<_>>();
+    reentry_names.sort_by(|left, right| left.0.cmp(right.0));
+    generated.push_str(
+        "/// Ascending call-free names (the generated projection of\n\
+         /// INLINED_NATIVE_OPS). The lowering queries this; no serial\n\
+         /// dispatcher reads it.\n",
+    );
+    generated.push_str("#[allow(dead_code)]\n");
+    generated.push_str("pub(super) static REENTRY_NAMES: &[(&str, FastPathReentry)] = &[\n");
+    for (name, reentry) in &reentry_names {
+        generated.push_str(&format!("    ({name:?}, {}),\n", reentry_expr(*reentry)));
+    }
+    generated.push_str("];\n");
+    generated.push_str(
+        "#[allow(dead_code)] // The lowering-facing query; no serial dispatcher reads it.\n\
+         pub(super) fn reentry_of_primitive_name(name: &str) -> FastPathReentry {\n\
+         \x20   match REENTRY_NAMES.binary_search_by(|(entry, _)| (*entry).cmp(name)) {\n\
+         \x20       Ok(index) => REENTRY_NAMES[index].1,\n\
+         \x20       Err(_) => FastPathReentry::MayReenter,\n\
+         \x20   }\n\
+         }\n",
+    );
+    for (table, function, dispatch_function, argument, variants, kind) in [
         (
             "OPCODES",
             "opcode_class",
+            "opcode_dispatch",
             "crate::emacs_core::bytecode::Op",
             &opcodes,
             CatalogKind::Opcode,
@@ -916,21 +1064,23 @@ fn generate_inner(
         (
             "LEAVES",
             "leaf_class",
+            "leaf_dispatch",
             "crate::emacs_core::subr::leaf::LeafId",
             &leaves,
             CatalogKind::Leaf,
         ),
     ] {
-        let classes = variants
+        let slots = variants
             .iter()
             .map(|variant| {
                 records
                     .iter()
                     .find(|record| record.kind == kind && record.name == variant.name)
-                    .map(|record| record.class)
-                    .unwrap_or(ParallelClass::World)
+                    .map(|record| (record.class, record.variant, record.reentry))
+                    .unwrap_or((ParallelClass::World, None, FastPathReentry::MayReenter))
             })
             .collect::<Vec<_>>();
+        let classes = slots.iter().map(|(class, _, _)| *class).collect::<Vec<_>>();
         generated.push_str("#[allow(dead_code)] // E1 cold registry has no production consumer.\n");
         generated.push_str(&format!(
             "pub(super) static {table}: &[(&str, ParallelClass)] = &[\n"
@@ -955,6 +1105,23 @@ fn generate_inner(
                 "        {argument}::{} => {},\n",
                 variant.pattern,
                 class_expr(*class)
+            ));
+        }
+        generated.push_str("    }\n}\n");
+        // The E4 arm projection over the same site, including the typed
+        // variant and the re-entry axis, so an opcode site needs one match.
+        generated.push_str(
+            "#[allow(dead_code)] // E1 exhaustive dispatch projection; E4 consumes it cold.\n",
+        );
+        generated.push_str(&format!(
+            "pub(super) fn {dispatch_function}(entry: {reference}{argument}) -> DispatchSlot {{\n    match entry {{\n"
+        ));
+        for (variant, (class, variant_opt, reentry)) in variants.iter().zip(&slots) {
+            let arm = arm_expr(*class, *variant_opt)?;
+            generated.push_str(&format!(
+                "        {argument}::{} => DispatchSlot {{ arm: {arm}, reentry: {} }},\n",
+                variant.pattern,
+                reentry_expr(*reentry)
             ));
         }
         generated.push_str("    }\n}\n");
