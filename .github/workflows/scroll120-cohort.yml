@@ -119,8 +119,22 @@ jobs:
             linux-tools-common linux-tools-generic
           # The hosted Azure kernel may not have a matching -tools package in APT.
           # Use the provisioned portable perf directly, as in the local capture.
-          mapfile -t perf_bins < <(find /usr/lib/linux-tools -type f -name perf | sort -V)
-          test "${#perf_bins[@]}" -gt 0
+          # Ubuntu's per-kernel perf entries are symlinks into linux-tools-<version>.
+          mapfile -t perf_bins < <(find -L /usr/lib/linux-tools -type f -name perf | sort -V)
+          printf 'Portable perf candidates (%s):\n' "${#perf_bins[@]}"
+          printf '  %s\n' "${perf_bins[@]}"
+          if [[ ${#perf_bins[@]} -eq 0 ]]; then
+            echo "::error::No executable perf found after linux-tools-generic installation"
+            ls -la /usr/lib/linux-tools*
+            exit 1
+          fi
+          test -x "${perf_bins[-1]}"
+          uname -r
+          "${perf_bins[-1]}" version
+          # The generic perf executable is portable across the hosted Azure kernel.
+          # Provision access explicitly; do not silently rely on the runner default.
+          sudo sysctl kernel.perf_event_paranoid=1
+          "${perf_bins[-1]}" stat -e task-clock -- true
           echo "SCROLL120_PERF=${perf_bins[-1]}" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
         with:
