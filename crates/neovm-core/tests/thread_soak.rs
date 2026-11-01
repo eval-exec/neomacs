@@ -28,9 +28,21 @@
 //! executing the built test binary directly (`--exact soak --nocapture`),
 //! which is a plain run of a built target and has no nextest timeout.
 //!
-//! RSS: `SOAK_RSS_LIMIT_KIB_PER_MIN` (default 2048) bounds the slope of the
-//! summed VmRSS of the editor's process subtree after the first minute; a
-//! slope above it (and more than 8 MiB of growth) fails the scenario.
+//! RSS: `SOAK_RSS_LIMIT_KIB_PER_MIN` (default 2048) bounds the growth of the
+//! *editor process's* VmRSS. The gate has a minimum-window rule (only runs of
+//! at least 60 s are classified: shorter windows extrapolate a startup
+//! transient) and compares quarter means, requiring the last quarter's slope
+//! to exceed the bar, more than 8 MiB of growth from Q2 to Q4, and at least
+//! half of the previous quarter's slope (a decaying warmup is not a leak).
+//!
+//! Which memory grows: every receipt row also carries the row's boundary GC
+//! marks -- total `gcs-done`, retained heap from the boundary full
+//! collections, and the non-forcing heap-layout census (managed live bytes,
+//! page backing, allocated objects, live thread objects) -- and the run
+//! artifacts carry a per-minute `SOAK-PROGRESS` curve sidecar. RSS rising
+//! with flat live bytes points at native state; live bytes and objects
+//! rising points at Lisp data the collector either cannot reach or is never
+//! triggered for.
 //!
 //! No product code, no product knob, no TLS byte, no Context/World field:
 //! this target only reads env and spawns processes.
@@ -61,20 +73,104 @@ struct Scenario {
 // The full P11 mix. Each scenario's checked `state=` digest is
 // duration-independent; per-scenario knobs ride on the row env.
 const SCENARIOS: &[Scenario] = &[
-    Scenario { name: "spawn_join_live_16", row: "soak_spawn_join.el", row_env: &[("SOAK_N", "16")], gnu: true, mem_gb: 8 },
-    Scenario { name: "spawn_join_live_100", row: "soak_spawn_join.el", row_env: &[("SOAK_N", "100")], gnu: true, mem_gb: 8 },
-    Scenario { name: "spawn_join_live_300", row: "soak_spawn_join.el", row_env: &[("SOAK_N", "300")], gnu: true, mem_gb: 8 },
-    Scenario { name: "mutex_ordered", row: "soak_mutex_ordered.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "cond_notify_all", row: "soak_cond.el", row_env: &[("SOAK_KIND", "all")], gnu: true, mem_gb: 8 },
-    Scenario { name: "cond_notify_one", row: "soak_cond.el", row_env: &[("SOAK_KIND", "one")], gnu: true, mem_gb: 8 },
-    Scenario { name: "yield_loop", row: "soak_yield.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "timers", row: "soak_timers.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "accept_process_output", row: "soak_proc.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "signal_from_callee", row: "soak_signal.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "redefine_inlined_parked", row: "soak_redefine.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "weak_hash_match_cache", row: "soak_weak_cache.el", row_env: &[], gnu: true, mem_gb: 8 },
-    Scenario { name: "many_gated_100", row: "soak_many_gated.el", row_env: &[("SOAK_N", "100")], gnu: true, mem_gb: 8 },
-    Scenario { name: "many_gated_300", row: "soak_many_gated.el", row_env: &[("SOAK_N", "300")], gnu: true, mem_gb: 8 },
+    Scenario {
+        name: "spawn_join_live_16",
+        row: "soak_spawn_join.el",
+        row_env: &[("SOAK_N", "16")],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "spawn_join_live_100",
+        row: "soak_spawn_join.el",
+        row_env: &[("SOAK_N", "100")],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "spawn_join_live_300",
+        row: "soak_spawn_join.el",
+        row_env: &[("SOAK_N", "300")],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "mutex_ordered",
+        row: "soak_mutex_ordered.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "cond_notify_all",
+        row: "soak_cond.el",
+        row_env: &[("SOAK_KIND", "all")],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "cond_notify_one",
+        row: "soak_cond.el",
+        row_env: &[("SOAK_KIND", "one")],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "yield_loop",
+        row: "soak_yield.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "timers",
+        row: "soak_timers.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "accept_process_output",
+        row: "soak_proc.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "signal_from_callee",
+        row: "soak_signal.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "redefine_inlined_parked",
+        row: "soak_redefine.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "weak_hash_match_cache",
+        row: "soak_weak_cache.el",
+        row_env: &[],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "many_gated_100",
+        row: "soak_many_gated.el",
+        row_env: &[("SOAK_N", "100")],
+        gnu: true,
+        mem_gb: 8,
+    },
+    Scenario {
+        name: "many_gated_300",
+        row: "soak_many_gated.el",
+        row_env: &[("SOAK_N", "300")],
+        gnu: true,
+        mem_gb: 8,
+    },
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,6 +268,8 @@ struct Config {
     only: Option<Vec<String>>,
     /// `SOAK_MEM_GB` overrides every scenario's sandbox budget.
     mem_gb_override: Option<u32>,
+    /// `SOAK_ROW_ENV=K=V,K2=V2` extra row knobs (e.g. SOAK_FORCE_GC=1).
+    row_env: Vec<(String, String)>,
 }
 
 impl Config {
@@ -188,26 +286,42 @@ impl Config {
             "arm" => Role::Arm,
             other => panic!("unknown SOAK_MODE {other} (smoke|reference|arm)"),
         };
-        let seed: u64 = env::var("SOAK_SEED").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
-        let scenario_secs = match role {
-            Role::Smoke => env::var("SOAK_SMOKE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(1),
-            Role::Reference => env::var("SOAK_REF_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(10),
-            Role::Arm => {
-                let total: u64 = env::var("SOAK_SECONDS")
+        let seed: u64 = env::var("SOAK_SEED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        // One explicit per-scenario duration wins over the role default; the
+        // diagnostic mode uses it to watch a single scenario's RSS trend.
+        let scenario_secs = env::var("SOAK_SCENARIO_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(match role {
+                Role::Smoke => env::var("SOAK_SMOKE_SECS")
                     .ok()
                     .and_then(|v| v.parse().ok())
-                    .unwrap_or(1800);
-                (total / SCENARIOS.len() as u64).max(2)
-            }
-        };
+                    .unwrap_or(1),
+                Role::Reference => env::var("SOAK_REF_SECS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(10),
+                Role::Arm => {
+                    let total: u64 = env::var("SOAK_SECONDS")
+                        .ok()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(1800);
+                    (total / SCENARIOS.len() as u64).max(2)
+                }
+            });
         let receipt = env::var_os("SOAK_RECEIPT")
             .map(PathBuf::from)
-            .unwrap_or_else(|| repo.join("tmp/v10x/soak/receipts").join(format!(
-                "{}-seed{}-{}.tsv",
-                env::var("SOAK_ARM").unwrap_or_else(|_| "sim".to_owned()),
-                seed,
-                mode,
-            )));
+            .unwrap_or_else(|| {
+                repo.join("tmp/v10x/soak/receipts").join(format!(
+                    "{}-seed{}-{}.tsv",
+                    env::var("SOAK_ARM").unwrap_or_else(|_| "sim".to_owned()),
+                    seed,
+                    mode,
+                ))
+            });
         Config {
             role,
             mode,
@@ -225,9 +339,12 @@ impl Config {
                 .unwrap_or_else(|| repo.join("tmp/v10x/sandbox-run.sh")),
             cpus: env::var("SOAK_CPUS").unwrap_or_else(|_| "0-3,14-31".to_owned()),
             receipt,
-            reference: env::var_os("SOAK_REFERENCE").map(PathBuf::from).unwrap_or_else(|| {
-                repo.join("tmp/v10x/soak/reference").join(format!("seed{seed}.tsv"))
-            }),
+            reference: env::var_os("SOAK_REFERENCE")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    repo.join("tmp/v10x/soak/reference")
+                        .join(format!("seed{seed}.tsv"))
+                }),
             gnu_bin: env::var_os("TB_GNU_BIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/home/exec/.local/bin/emacs")),
@@ -247,6 +364,16 @@ impl Config {
                     .collect()
             }),
             mem_gb_override: env::var("SOAK_MEM_GB").ok().and_then(|v| v.parse().ok()),
+            row_env: env::var("SOAK_ROW_ENV")
+                .ok()
+                .map(|value| {
+                    value
+                        .split(',')
+                        .filter_map(|pair| pair.split_once('='))
+                        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -266,6 +393,22 @@ impl Config {
     }
 }
 
+/// One row-reported `SOAK-PROGRESS` minute mark: total GC cycles so far, the
+/// cumulative allocation counters, and (Neomacs only) the non-forcing heap
+/// census that attributes RSS growth either to live Lisp data or to native
+/// page backing. GNU rows carry only gcs/use.
+#[derive(Default, Clone)]
+struct Progress {
+    seconds: u64,
+    gcs: Option<i64>,
+    use_: String,
+    heap_kib: Option<u64>,
+    live_bytes: Option<i64>,
+    backing_bytes: Option<i64>,
+    objects: Option<i64>,
+    thread_objs: Option<i64>,
+}
+
 /// One child invocation's raw observations.
 struct Run {
     scenario: &'static str,
@@ -279,6 +422,12 @@ struct Run {
     rss_start_kib: Option<u64>,
     rss_end_kib: Option<u64>,
     rss_slope_kib_per_min: Option<f64>,
+    /// Quarter means (q1..q4) of the editor's VmRSS, and the Q2->Q3 and
+    /// Q3->Q4 slopes; the leak gate requires the last slope to be sustained
+    /// (not a warmup transient) before it fails.
+    rss_quarters_kib: [Option<f64>; 4],
+    rss_slope_prev_kib_per_min: Option<f64>,
+    rss_slope_last_kib_per_min: Option<f64>,
     sandbox_mem_gb: u32,
     /// Failure-instant classification evidence for thread-spawn EAGAIN:
     /// the editor's transient scope (memory.peak/max, pids.current/max,
@@ -294,6 +443,25 @@ struct Run {
     host_available_kib: u64,
     host_committed_kib: u64,
     scope_sample_ms: u128,
+    /// Row-reported GC marks: `SOAK-GC t=start|end gcs=.. heap=.. use=..`.
+    gc_start: Option<i64>,
+    gc_end: Option<i64>,
+    heap_start_kib: Option<u64>,
+    heap_end_kib: Option<u64>,
+    use_start: String,
+    use_end: String,
+    /// Non-forcing heap census at the two marks (Neomacs rows only):
+    /// managed live bytes, page backing bytes, allocated objects, live
+    /// thread objects.  Native RSS rising with flat live bytes is a native
+    /// leak; live bytes and thread objects rising is a GC-trigger gap.
+    live_start_bytes: Option<i64>,
+    live_end_bytes: Option<i64>,
+    backing_start_bytes: Option<i64>,
+    backing_end_bytes: Option<i64>,
+    objects_start: Option<i64>,
+    objects_end: Option<i64>,
+    thread_objs_start: Option<i64>,
+    thread_objs_end: Option<i64>,
     stderr_tail: String,
 }
 
@@ -317,7 +485,11 @@ fn read_reference(path: &Path) -> BTreeMap<String, (String, Option<String>)> {
                 columns[0].to_owned(),
                 (
                     columns[1].to_owned(),
-                    if columns[2].is_empty() { None } else { Some(columns[2].to_owned()) },
+                    if columns[2].is_empty() {
+                        None
+                    } else {
+                        Some(columns[2].to_owned())
+                    },
                 ),
             );
         }
@@ -350,7 +522,13 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         .expect("receipt has a parent")
         .join("runs");
     let _ = fs::create_dir_all(&out_dir);
-    let tag = format!("{}-{}-seed{}-{}", scenario.name, arm.name(), config.seed, if gnu { "gnu" } else { "neo" });
+    let tag = format!(
+        "{}-{}-seed{}-{}",
+        scenario.name,
+        arm.name(),
+        config.seed,
+        if gnu { "gnu" } else { "neo" }
+    );
     let perf_path = out_dir.join(format!("{tag}.perf"));
     let stdout_path = out_dir.join(format!("{tag}.out"));
     let stderr_path = out_dir.join(format!("{tag}.err"));
@@ -378,9 +556,16 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         .env("SOAK_SEED", config.seed.to_string())
         .env("SOAK_SECS", config.scenario_secs.to_string())
         .env("SANDBOX_MEM_GB", config.mem_gb_for(scenario).to_string())
-        .stdout(Stdio::from(fs::File::create(&stdout_path).expect("stdout file")))
-        .stderr(Stdio::from(fs::File::create(&stderr_path).expect("stderr file")));
+        .stdout(Stdio::from(
+            fs::File::create(&stdout_path).expect("stdout file"),
+        ))
+        .stderr(Stdio::from(
+            fs::File::create(&stderr_path).expect("stderr file"),
+        ));
     for &(key, value) in scenario.row_env {
+        command.env(key, value);
+    }
+    for (key, value) in &config.row_env {
         command.env(key, value);
     }
     // The workspace `.cargo/config.toml` sets RUST_MIN_STACK=128 MiB for the
@@ -403,7 +588,12 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
     }
     if gnu {
         // GNU has no neomacs arm knobs; expose the seed to the row only.
-        for var in ["NEOVM_THREADS", "NEOVM_GC_GENERATIONAL", "NEOVM_GC_VERIFY_GENERATIONAL", "NEOVM_JIT_INLINE"] {
+        for var in [
+            "NEOVM_THREADS",
+            "NEOVM_GC_GENERATIONAL",
+            "NEOVM_GC_VERIFY_GENERATIONAL",
+            "NEOVM_JIT_INLINE",
+        ] {
             command.env_remove(var);
         }
     } else {
@@ -443,6 +633,9 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
 
     let stdout = fs::read_to_string(&stdout_path).unwrap_or_default();
     let (state, diag) = parse_result(&stdout);
+    let (gc_start, gc_end) = parse_gc_marks(&stdout);
+    let progress = parse_progress(&stdout);
+    write_curve(&out_dir, &tag, samples, &progress);
     let stderr_tail = fs::read_to_string(&stderr_path)
         .unwrap_or_default()
         .lines()
@@ -465,6 +658,9 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         rss_start_kib: samples.first().map(|(_, rss)| *rss),
         rss_end_kib: samples.last().map(|(_, rss)| *rss),
         rss_slope_kib_per_min: rss_slope(samples),
+        rss_quarters_kib: sampled.quarters.map(|quarter| quarter.map(|(_, rss)| rss)),
+        rss_slope_prev_kib_per_min: quarter_slope(&sampled.quarters, 1, 2),
+        rss_slope_last_kib_per_min: quarter_slope(&sampled.quarters, 2, 3),
         sandbox_mem_gb: config.mem_gb_for(scenario),
         scope_peak_kib: sampled.scope.peak_kib,
         scope_memory_max: sampled.scope.memory_max_raw,
@@ -477,6 +673,20 @@ fn run_row(config: &Config, scenario: &Scenario, arm: Arm, gnu: bool) -> Run {
         host_available_kib: sampled.scope.host_available_kib,
         host_committed_kib: sampled.scope.host_committed_kib,
         scope_sample_ms: sampled.scope.at_ms,
+        gc_start: gc_start.get("gcs").and_then(|v| v.parse().ok()),
+        gc_end: gc_end.get("gcs").and_then(|v| v.parse().ok()),
+        heap_start_kib: gc_start.get("heap").and_then(|v| v.parse().ok()),
+        heap_end_kib: gc_end.get("heap").and_then(|v| v.parse().ok()),
+        use_start: gc_start.get("use").cloned().unwrap_or_default(),
+        use_end: gc_end.get("use").cloned().unwrap_or_default(),
+        live_start_bytes: gc_start.get("live").and_then(|v| v.parse().ok()),
+        live_end_bytes: gc_end.get("live").and_then(|v| v.parse().ok()),
+        backing_start_bytes: gc_start.get("backing").and_then(|v| v.parse().ok()),
+        backing_end_bytes: gc_end.get("backing").and_then(|v| v.parse().ok()),
+        objects_start: gc_start.get("objs").and_then(|v| v.parse().ok()),
+        objects_end: gc_end.get("objs").and_then(|v| v.parse().ok()),
+        thread_objs_start: gc_start.get("thread-objs").and_then(|v| v.parse().ok()),
+        thread_objs_end: gc_end.get("thread-objs").and_then(|v| v.parse().ok()),
         stderr_tail,
     }
 }
@@ -502,6 +712,98 @@ fn parse_result(stdout: &str) -> (Option<String>, BTreeMap<String, String>) {
     (state, diag)
 }
 
+type Fields = BTreeMap<String, String>;
+
+fn parse_fields(rest: &str) -> Fields {
+    rest.split_whitespace()
+        .filter_map(|field| field.split_once('='))
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect()
+}
+
+/// `SOAK-GC t=start|end gcs=<n> heap=<kib> use=<csv>` marks (the row calls
+/// `garbage-collect` once at each boundary, then reports the stats buckets).
+fn parse_gc_marks(stdout: &str) -> (Fields, Fields) {
+    let mut start = Fields::new();
+    let mut end = Fields::new();
+    for line in stdout.lines() {
+        let Some(rest) = line.strip_prefix("SOAK-GC ") else {
+            continue;
+        };
+        let fields = parse_fields(rest);
+        match fields.get("t").map(String::as_str) {
+            Some("start") => start = fields,
+            Some("end") => end = fields,
+            _ => {}
+        }
+    }
+    (start, end)
+}
+
+/// `SOAK-PROGRESS t=<sec> gcs=<n> use=<csv>[ heap=<kib>][ live=.. backing=..
+/// objs=.. thread-objs=..]` rows, one per minute (heap only in the forced-GC
+/// arm, where the row has a fresh reading; the census is non-forcing and
+/// present whenever the editor exposes `neomacs--heap-layout-stats`).
+fn parse_progress(stdout: &str) -> Vec<Progress> {
+    let mut out = Vec::new();
+    for line in stdout.lines() {
+        let Some(rest) = line.strip_prefix("SOAK-PROGRESS ") else {
+            continue;
+        };
+        let fields = parse_fields(rest);
+        let Some(seconds) = fields.get("t").and_then(|v| v.parse::<u64>().ok()) else {
+            continue;
+        };
+        out.push(Progress {
+            seconds,
+            gcs: fields.get("gcs").and_then(|v| v.parse::<i64>().ok()),
+            use_: fields.get("use").cloned().unwrap_or_default(),
+            heap_kib: fields.get("heap").and_then(|v| v.parse::<u64>().ok()),
+            live_bytes: fields.get("live").and_then(|v| v.parse::<i64>().ok()),
+            backing_bytes: fields.get("backing").and_then(|v| v.parse::<i64>().ok()),
+            objects: fields.get("objs").and_then(|v| v.parse::<i64>().ok()),
+            thread_objs: fields
+                .get("thread-objs")
+                .and_then(|v| v.parse::<i64>().ok()),
+        });
+    }
+    out
+}
+
+/// Write a per-minute curve next to the run's artifacts: the driver's own
+/// RSS means joined with the row's GC/allocation/heap progress marks. This is
+/// the "which memory grows" evidence for an RSS-slope finding.
+fn write_curve(dir: &Path, tag: &str, samples: &[(u128, u64)], progress: &[Progress]) {
+    let mut per_minute: BTreeMap<u64, (f64, usize)> = BTreeMap::new();
+    for (t, rss) in samples {
+        let minute = (*t as u64) / 60_000;
+        let entry = per_minute.entry(minute).or_insert((0.0, 0));
+        entry.0 += *rss as f64;
+        entry.1 += 1;
+    }
+    let mut text = String::from(
+        "minute\trss_mean_kib\tgcs\tuse\theap_kib\tlive_bytes\tbacking_bytes\tobjects\tthread_objs\n",
+    );
+    for (minute, (rss_sum, count)) in per_minute {
+        let mark = progress.iter().find(|mark| mark.seconds / 60 == minute);
+        let num = |value: Option<i64>| value.map(|v| v.to_string()).unwrap_or_default();
+        text.push_str(&format!(
+            "{minute}\t{:.0}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            rss_sum / count as f64,
+            num(mark.and_then(|m| m.gcs)),
+            mark.map(|m| m.use_.clone()).unwrap_or_default(),
+            mark.and_then(|m| m.heap_kib)
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            num(mark.and_then(|m| m.live_bytes)),
+            num(mark.and_then(|m| m.backing_bytes)),
+            num(mark.and_then(|m| m.objects)),
+            num(mark.and_then(|m| m.thread_objs)),
+        ));
+    }
+    let _ = fs::write(dir.join(format!("{tag}.curve.tsv")), text);
+}
+
 /// Sum the counted `instructions:u` lines (hybrid PMU splits into atom+core).
 fn read_instructions(path: &Path) -> Option<u128> {
     let text = fs::read_to_string(path).ok()?;
@@ -509,7 +811,10 @@ fn read_instructions(path: &Path) -> Option<u128> {
     let mut any = false;
     for line in text.lines() {
         let columns: Vec<&str> = line.split(',').collect();
-        if columns.len() < 3 || !columns[2].contains("instructions") || line.contains("<not counted>") {
+        if columns.len() < 3
+            || !columns[2].contains("instructions")
+            || line.contains("<not counted>")
+        {
             continue;
         }
         if let Ok(value) = columns[0].trim().parse::<u128>() {
@@ -542,13 +847,28 @@ struct ScopeStats {
 struct Sampled {
     samples: Vec<(u128, u64)>,
     scope: ScopeStats,
+    /// Mean (t_ms, VmRSS_kib) over four equal quarters of the run; the leak
+    /// gate compares the last quarter's slope with the previous quarter's.
+    quarters: [Option<(f64, f64)>; 4],
 }
 
-/// Collect (elapsed_ms, summed_kib) VmRSS of the process subtree, unioned
-/// with any process whose cmdline names this row (the PID-namespace hop can
-/// reparent the editor away from our direct child), plus the editor's scope
-/// accounting, rlimits and host memory pressure. The last tick before the
-/// child disappears is the failure instant recorded in the receipt.
+fn read_vm_rss(pid: u32) -> Option<u64> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            return rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u64>().ok());
+        }
+    }
+    None
+}
+
+/// Collect (elapsed_ms, rss_kib) of the *editor* process, falling back to the
+/// subtree sum only while the editor has not been identified yet, plus the
+/// editor's scope accounting, rlimits and host memory pressure. The last tick
+/// before the child disappears is the failure instant recorded in the receipt.
 fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
     let started = Instant::now();
     let mut samples = Vec::new();
@@ -587,22 +907,29 @@ fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
         }
         read_host_memory(&mut scope);
         scope.editor_pid = editor_pid;
-        let mut rss = 0u64;
         let mut alive = false;
-        for pid in &pids {
-            if let Ok(status) = fs::read_to_string(format!("/proc/{pid}/status")) {
+        let mut rss = match editor_pid.and_then(read_vm_rss) {
+            Some(kib) => {
                 alive = true;
-                for line in status.lines() {
-                    if let Some(rest) = line.strip_prefix("VmRSS:") {
-                        if let Some(kib) = rest.split_whitespace().next().and_then(|v| v.parse::<u64>().ok()) {
-                            rss += kib;
-                        }
+                kib
+            }
+            None => {
+                // Startup window: the editor is not visible yet, sum the tree.
+                let mut sum = 0u64;
+                for pid in &pids {
+                    if let Some(kib) = read_vm_rss(*pid) {
+                        alive = true;
+                        sum += kib;
                     }
                 }
+                sum
             }
-        }
+        };
         if !alive {
             break;
+        }
+        if editor_pid.is_some() && read_vm_rss(editor_pid.unwrap()).is_none() {
+            rss = 0;
         }
         scope.at_ms = started.elapsed().as_millis();
         samples.push((scope.at_ms, rss));
@@ -611,7 +938,37 @@ fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
         // scope/rlimits before it disappears (500 ms sampled only the parent).
         thread::sleep(Duration::from_millis(100));
     }
-    Sampled { samples, scope }
+    let quarters = quarter_means(&samples);
+    Sampled {
+        samples,
+        scope,
+        quarters,
+    }
+}
+
+fn quarter_means(samples: &[(u128, u64)]) -> [Option<(f64, f64)>; 4] {
+    let mut out = [None; 4];
+    if samples.len() < 8 {
+        return out;
+    }
+    let t0 = samples.first().expect("non-empty").0 as f64;
+    let t1 = samples.last().expect("non-empty").0 as f64;
+    if t1 <= t0 {
+        return out;
+    }
+    let mut sums = [(0.0f64, 0.0f64, 0usize); 4];
+    for (t, rss) in samples {
+        let quarter = (((*t as f64 - t0) * 4.0 / (t1 - t0)) as usize).min(3);
+        sums[quarter].0 += *t as f64;
+        sums[quarter].1 += *rss as f64;
+        sums[quarter].2 += 1;
+    }
+    for (quarter, (sum_t, sum_rss, count)) in sums.into_iter().enumerate() {
+        if count > 0 {
+            out[quarter] = Some((sum_t / count as f64, sum_rss / count as f64));
+        }
+    }
+    out
 }
 
 /// The editor is the only process in the sandbox whose executable is
@@ -775,6 +1132,16 @@ fn rss_slope(samples: &[(u128, u64)]) -> Option<f64> {
     Some(num / den * 60_000.0)
 }
 
+/// Slope (KiB/min) between the mean points of two quarters.
+fn quarter_slope(quarters: &[Option<(f64, f64)>; 4], from: usize, to: usize) -> Option<f64> {
+    let (t0, y0) = quarters[from]?;
+    let (t1, y1) = quarters[to]?;
+    if t1 <= t0 {
+        return None;
+    }
+    Some((y1 - y0) / (t1 - t0) * 60_000.0)
+}
+
 fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io::Result<()> {
     if let Some(parent) = config.receipt.parent() {
         fs::create_dir_all(parent)?;
@@ -782,7 +1149,7 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
     let mut file = fs::File::create(&config.receipt)?;
     writeln!(
         file,
-        "arm\tscenario\tseed\tmode\tsandbox_mem_gb\titers\twall_ms\tinstructions\trss_start_kib\trss_end_kib\trss_slope_kib_per_min\tscope_peak_kib\tscope_mem_max\tscope_pids_current\tscope_pids_max\tscope_max_events\tscope_oom_events\trlimit_nproc\trlimit_as\thost_memavail_kib\thost_committed_as_kib\tscope_sample_ms\trc\tresult\tfailure"
+        "arm\tscenario\tseed\tmode\tsandbox_mem_gb\titers\twall_ms\tinstructions\trss_start_kib\trss_end_kib\trss_slope_kib_per_min\trss_q1_kib\trss_q2_kib\trss_q3_kib\trss_q4_kib\trss_slope_prev_kib_min\trss_slope_last_kib_min\tgc_start\tgc_end\theap_start_kib\theap_end_kib\tuse_start\tuse_end\tlive_start_bytes\tlive_end_bytes\tbacking_start_bytes\tbacking_end_bytes\tobjects_start\tobjects_end\tthread_objs_start\tthread_objs_end\tscope_peak_kib\tscope_mem_max\tscope_pids_current\tscope_pids_max\tscope_max_events\tscope_oom_events\trlimit_nproc\trlimit_as\thost_memavail_kib\thost_committed_as_kib\tscope_sample_ms\trc\tresult\tfailure"
     )?;
     for run in runs {
         let iters = run.diag.get("iters").cloned().unwrap_or_default();
@@ -792,7 +1159,7 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
             .unwrap_or_default();
         writeln!(
             file,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             run.arm,
             run.scenario,
             config.seed,
@@ -804,6 +1171,52 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
             run.rss_start_kib.map(|v| v.to_string()).unwrap_or_default(),
             run.rss_end_kib.map(|v| v.to_string()).unwrap_or_default(),
             slope,
+            run.rss_quarters_kib[0]
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_default(),
+            run.rss_quarters_kib[1]
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_default(),
+            run.rss_quarters_kib[2]
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_default(),
+            run.rss_quarters_kib[3]
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_default(),
+            run.rss_slope_prev_kib_per_min
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_default(),
+            run.rss_slope_last_kib_per_min
+                .map(|v| format!("{v:.0}"))
+                .unwrap_or_default(),
+            run.gc_start.map(|v| v.to_string()).unwrap_or_default(),
+            run.gc_end.map(|v| v.to_string()).unwrap_or_default(),
+            run.heap_start_kib
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            run.heap_end_kib.map(|v| v.to_string()).unwrap_or_default(),
+            run.use_start,
+            run.use_end,
+            run.live_start_bytes
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            run.live_end_bytes
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            run.backing_start_bytes
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            run.backing_end_bytes
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            run.objects_start.map(|v| v.to_string()).unwrap_or_default(),
+            run.objects_end.map(|v| v.to_string()).unwrap_or_default(),
+            run.thread_objs_start
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            run.thread_objs_end
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
             run.scope_peak_kib,
             run.scope_memory_max,
             run.scope_pids_current,
@@ -815,7 +1228,9 @@ fn write_receipt(config: &Config, runs: &[Run], failures: &[String]) -> std::io:
             run.host_available_kib,
             run.host_committed_kib,
             run.scope_sample_ms,
-            run.rc.map(|v| v.to_string()).unwrap_or_else(|| "signal".to_owned()),
+            run.rc
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "signal".to_owned()),
             if run.ok() { "ok" } else { "FAIL" },
             run.stderr_tail,
         )?;
@@ -841,14 +1256,24 @@ fn check_run(run: &Run, enforce_rss: bool, rss_limit: f64, failures: &mut Vec<St
         ));
     }
     if enforce_rss {
-        if let Some(slope) = run.rss_slope_kib_per_min {
-            let growth = run
-                .rss_end_kib
-                .unwrap_or(0)
-                .saturating_sub(run.rss_start_kib.unwrap_or(0));
-            if slope > rss_limit && growth > 8 * 1024 {
+        // Sustained-growth leak gate: the editor's RSS slope over the last
+        // quarter must exceed the stated limit AND not be a decaying warmup
+        // transient (a warmup shows Q2->Q3 slopes far above Q3->Q4), with at
+        // least 8 MiB of growth across the last half. start/end samples are
+        // not used: the first tick predates the editor and the last can catch
+        // its teardown, which made the old end-minus-start rule noisy.
+        let q2 = run.rss_quarters_kib[1];
+        let q4 = run.rss_quarters_kib[3];
+        let grown = match (q2, q4) {
+            (Some(early), Some(late)) => late - early,
+            _ => 0.0,
+        };
+        if let Some(slope_last) = run.rss_slope_last_kib_per_min {
+            let prior = run.rss_slope_prev_kib_per_min.unwrap_or(0.0).max(0.0);
+            if grown > 8.0 * 1024.0 && slope_last > rss_limit && slope_last > 0.5 * prior {
                 failures.push(format!(
-                    "{}: {} RSS slope {slope:.0} KiB/min > {rss_limit} over {growth} KiB",
+                    "{}: {} sustained RSS growth: last-quarter slope {slope_last:.0} KiB/min \
+                     (prior quarter {prior:.0}) over {grown:.0} KiB from q2 to q4 (limit {rss_limit})",
                     run.scenario, run.arm
                 ));
             }
@@ -887,14 +1312,21 @@ fn soak() {
         None
     };
     if config.role == Role::Arm && reference.as_ref().is_some_and(|r| r.is_empty()) {
-        panic!("reference file {} is missing or empty; run SOAK_MODE=reference first", config.reference.display());
+        panic!(
+            "reference file {} is missing or empty; run SOAK_MODE=reference first",
+            config.reference.display()
+        );
     }
 
     let selected = config.selected();
     for scenario in &selected {
         let row = config.rows.join(scenario.row);
         if !row.is_file() {
-            failures.push(format!("{}: row file missing at {}", scenario.name, row.display()));
+            failures.push(format!(
+                "{}: row file missing at {}",
+                scenario.name,
+                row.display()
+            ));
             continue;
         }
         if let Some(reference) = &reference {
@@ -913,14 +1345,22 @@ fn soak() {
                     config.seed
                 ));
             }
-            check_run(&run, true, config.rss_limit_kib_per_min, &mut failures);
+            // Minimum-window rule: the RSS-slope gate classifies only runs of
+            // at least 60 s (the quarter means need a real trend; short
+            // windows extrapolate a startup transient into a huge slope).
+            check_run(
+                &run,
+                run.wall_ms >= 60_000,
+                config.rss_limit_kib_per_min,
+                &mut failures,
+            );
             runs.push(run);
             if let Some(gnu_state) = gnu_state {
                 if !gnu_state.is_empty() {
-                    runs.last_mut().expect("just pushed").diag.insert(
-                        "gnu_reference_state".to_owned(),
-                        gnu_state.clone(),
-                    );
+                    runs.last_mut()
+                        .expect("just pushed")
+                        .diag
+                        .insert("gnu_reference_state".to_owned(), gnu_state.clone());
                 }
             }
             continue;
@@ -930,7 +1370,10 @@ fn soak() {
         let sim = run_row(&config, scenario, Arm::Sim, false);
         let sim_state = sim.state.clone();
         if sim_state.is_none() {
-            failures.push(format!("{}: sim reference produced no SOAK-RESULT state", scenario.name));
+            failures.push(format!(
+                "{}: sim reference produced no SOAK-RESULT state",
+                scenario.name
+            ));
         }
         check_run(&sim, false, config.rss_limit_kib_per_min, &mut failures);
         runs.push(sim);
@@ -986,5 +1429,9 @@ fn soak() {
         config.receipt.display(),
         config.reference.display()
     );
-    assert!(failures.is_empty(), "soak failures:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "soak failures:\n{}",
+        failures.join("\n")
+    );
 }
