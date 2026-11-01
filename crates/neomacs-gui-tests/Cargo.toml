@@ -39,6 +39,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
+neomacs-test-oracle.workspace = true
 winit.workspace = true
 wgpu.workspace = true
 pollster.workspace = true

@@ -4010,6 +4010,7 @@ dependencies = [
  "neomacs-melpa-test-support",
  "neomacs-test-env",
  "neomacs-test-fonts",
+ "neomacs-test-oracle",
  "pollster",
  "rustix 1.1.4",
  "serde",
