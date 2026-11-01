@@ -2743,6 +2743,120 @@ fn timed_read_preserves_idle_epoch_during_preliminary_redisplay_service() {
     );
     assert_eq!(eval.command_loop.idle_start_time, epoch);
 }
+fn mouse_left_press(
+    eval: &mut crate::emacs_core::eval::Context,
+    frame_id: crate::window::FrameId,
+    x: f32,
+    y: f32,
+) -> Value {
+    eval.handle_read_char_input_event(
+        InputEvent::MousePress {
+            button: MouseButton::Left,
+            x,
+            y,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+    .expect("a mouse press produces a Lisp event")
+}
+
+fn mouse_left_release(
+    eval: &mut crate::emacs_core::eval::Context,
+    frame_id: crate::window::FrameId,
+    x: f32,
+    y: f32,
+) -> Option<Value> {
+    eval.handle_read_char_input_event(
+        InputEvent::MouseRelease {
+            button: MouseButton::Left,
+            x,
+            y,
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+}
+
+/// GNU `make_lispy_event` returns `list3 (head, start_pos, position)` for a
+/// drag (`src/keyboard.c:6739-6741`); START is the copied down position, so
+/// `mouse-set-region` receives the dragged range rather than an empty one.
+#[test]
+fn a_drag_release_carries_the_press_and_release_positions_like_gnu() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    let press = mouse_left_press(&mut eval, frame_id, 22.0, 12.0);
+    let press_position =
+        crate::emacs_core::value::list_to_vec(&press).expect("a press event is a proper list")[1];
+    let release =
+        mouse_left_release(&mut eval, frame_id, 100.0, 12.0).expect("the drag release is an event");
+    assert_eq!(release.cons_car(), Value::symbol("drag-mouse-1"));
+    let slots =
+        crate::emacs_core::value::list_to_vec(&release).expect("a drag event is a proper list");
+    assert_eq!(
+        slots.len(),
+        3,
+        "GNU drag events are (HEAD START END), not (HEAD END)"
+    );
+    assert_eq!(
+        slots[1], press_position,
+        "START is the position of the matching down event"
+    );
+    assert_ne!(
+        slots[2], press_position,
+        "END is the release position, not the press position"
+    );
+}
+
+/// GNU returns `list3 (head, position, count)` for a double/triple click
+/// (`src/keyboard.c:6742-6745`), for both the down and the up event.
+#[test]
+fn a_double_click_event_carries_the_click_count_like_gnu() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    mouse_left_press(&mut eval, frame_id, 22.0, 12.0);
+    mouse_left_release(&mut eval, frame_id, 22.0, 12.0);
+
+    let second_press = mouse_left_press(&mut eval, frame_id, 22.0, 12.0);
+    assert_eq!(
+        second_press.cons_car(),
+        Value::symbol("double-down-mouse-1")
+    );
+    let press_slots = crate::emacs_core::value::list_to_vec(&second_press)
+        .expect("a double press is a proper list");
+    assert_eq!(press_slots.len(), 3, "GNU double presses carry the count");
+    assert_eq!(press_slots[2], Value::fixnum(2));
+
+    let release = mouse_left_release(&mut eval, frame_id, 22.0, 12.0)
+        .expect("the double release is an event");
+    assert_eq!(release.cons_car(), Value::symbol("double-mouse-1"));
+    let slots =
+        crate::emacs_core::value::list_to_vec(&release).expect("a double click is a proper list");
+    assert_eq!(slots.len(), 3, "GNU double clicks carry the count");
+    assert_eq!(slots[2], Value::fixnum(2));
+}
+
+/// GNU drops an up event that has no matching down: the release branch
+/// returns Qnil when `start_pos` is not a cons (`src/keyboard.c:6628-6632`),
+/// and the down position is cleared on every release.
+#[test]
+fn a_release_without_a_press_is_ignored_like_gnu() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    assert_eq!(
+        mouse_left_release(&mut eval, frame_id, 22.0, 12.0),
+        None,
+        "a release with no recorded press is dropped"
+    );
+    mouse_left_press(&mut eval, frame_id, 22.0, 12.0);
+    mouse_left_release(&mut eval, frame_id, 22.0, 12.0);
+    assert_eq!(
+        mouse_left_release(&mut eval, frame_id, 22.0, 12.0),
+        None,
+        "the down position is cleared after the first release"
+    );
+}
+
 /// GNU `keyboard.c:6610-6710`: a button release whose frame-relative pointer
 /// position moved outside `double-click-fuzz` is a drag (`drag-mouse-1`), not a
 /// click. `[drag-mouse-1]` is bound to `mouse-set-region`; delivering the drag
@@ -2782,6 +2896,104 @@ fn a_release_after_pointer_movement_is_a_drag_event_like_gnu() {
         Value::symbol("drag-mouse-1"),
         "a moved release must be a drag, not a click"
     );
+}
+
+/// GNU only turns a posn area into a leading key element when the event
+/// head's `event-kind` is `mouse-click` or `touchscreen`
+/// (`src/keyboard.c:11403-11406`).  A `mouse-movement` head has kind
+/// `mouse-movement` (`src/keyboard.c:13299-13300`), so its area stays inside
+/// the posn; prefixed movement events made `[left-fringe mouse-movement]`
+/// undefined (issue 621).
+#[test]
+fn a_mouse_movement_event_is_not_area_prefixed_like_gnu() {
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let result = eval
+        .eval_str(
+            r#"(let* ((win (selected-window))
+                      (xy (cons 10 5))
+                      (fringe (list win 'left-fringe xy 0 nil 1 xy 8 5))
+                      (shape (lambda (event)
+                               (if (symbolp event) event
+                                 (list (car event) 'posn)))))
+                 (put 'mouse-movement 'event-kind 'mouse-movement)
+                 (mapcar shape
+                         (let ((unread-command-events
+                                (list (list 'mouse-movement fringe))))
+                           (append (read-key-sequence nil) nil))))"#,
+        )
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::print_value(&result),
+        "((mouse-movement posn))",
+        "a movement event over a fringe keeps its area inside the posn"
+    );
+}
+
+/// GNU's second area-prefix branch (`src/keyboard.c:11445-11482`, and the
+/// equivalent `read_char` split at `:3171-3184`) does not consult
+/// `event-kind`: menu-bar, tool-bar and tab-bar events from the keyboard
+/// buffer are prefixed by their area symbol.  Neomacs builds those chrome
+/// events outside `make_mouse_event`, so the kind gate must not swallow
+/// them.
+#[test]
+fn chrome_area_events_are_prefixed_without_event_kind_like_gnu() {
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let result = eval
+        .eval_str(
+            r#"(let* ((win (selected-window))
+                      (xy (cons 10 5))
+                      (menu-bar (list nil 'menu-bar xy 0 nil 1 xy 8 5))
+                      (tool-bar (list (selected-frame) 'tool-bar
+                                      xy 0 nil 1 xy 8 5))
+                      (shape (lambda (events)
+                               (mapcar (lambda (event)
+                                         (if (symbolp event) event
+                                           (list (car event) 'posn)))
+                                       (let ((unread-command-events events))
+                                         (append (read-key-sequence nil) nil))))))
+                 (list
+                  (funcall shape (list (list 'mouse-1 menu-bar) ?x))
+                  (funcall shape (list (list 'tool-bar-item tool-bar) ?x))))"#,
+        )
+        .unwrap();
+    assert_eq!(
+        crate::emacs_core::print_value(&result),
+        "((menu-bar (mouse-1 posn)) (tool-bar (tool-bar-item posn)))",
+        "chrome events keep the area prefix even when their head has no event-kind"
+    );
+}
+
+/// GNU `modify_event_symbol` puts `event-kind` = `mouse-click` on the base
+/// mouse stem, and `apply_modifiers` copies it to the derived down/drag/wheel
+/// heads (`src/keyboard.c:7806-7823`, `7653-7670`).  Real lookups need that
+/// property for the area prefix (`src/keyboard.c:11403-11406`).
+#[test]
+fn real_mouse_events_mark_their_heads_as_mouse_click_like_gnu() {
+    let (mut eval, frame_id, _window) = frame_with_a_divider();
+    mouse_left_press(&mut eval, frame_id, 22.0, 12.0);
+    let mouse = eval.eval_str("(get 'mouse-1 'event-kind)").unwrap();
+    assert_eq!(crate::emacs_core::print_value(&mouse), "mouse-click");
+    let down = eval.eval_str("(get 'down-mouse-1 'event-kind)").unwrap();
+    assert_eq!(crate::emacs_core::print_value(&down), "mouse-click");
+    mouse_left_release(&mut eval, frame_id, 100.0, 12.0);
+    let drag = eval.eval_str("(get 'drag-mouse-1 'event-kind)").unwrap();
+    assert_eq!(crate::emacs_core::print_value(&drag), "mouse-click");
+
+    eval.handle_read_char_input_event(
+        InputEvent::MouseScroll {
+            delta_x: 0.0,
+            delta_y: 1.0,
+            x: 22.0,
+            y: 12.0,
+            modifiers: Modifiers::none(),
+            target_frame_id: frame_id.0,
+        },
+        TtyInputDecoding::KeyboardCodingSystem,
+    )
+    .unwrap()
+    .expect("a wheel event");
+    let wheel = eval.eval_str("(get 'wheel-up 'event-kind)").unwrap();
+    assert_eq!(crate::emacs_core::print_value(&wheel), "mouse-click");
 }
 
 #[test]
