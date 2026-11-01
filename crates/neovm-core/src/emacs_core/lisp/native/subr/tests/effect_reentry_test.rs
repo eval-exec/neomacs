@@ -59,3 +59,25 @@ fn intrinsic_table_stays_sorted() {
     sorted.sort_unstable();
     assert_eq!(sorted, INLINED_NATIVE_OPS);
 }
+
+/// Every baked-intrinsic name is a REGISTERED catalog subr: the table keys
+/// into the effect inventory, so a name that drifts out of the catalog (a
+/// rename, a removal, a move to an opcode row) turns this red instead of
+/// silently classifying a callable nothing dispatches.
+#[test]
+fn inlined_native_ops_are_registered_catalog_subrs() {
+    use crate::emacs_core::subr::effect_catalog::INVENTORY;
+    use crate::emacs_core::subr::effect_schema::CatalogKind;
+
+    for name in INLINED_NATIVE_OPS {
+        let rows: Vec<_> = INVENTORY
+            .iter()
+            .filter(|entry| entry.kind == CatalogKind::Primitive && entry.name == name)
+            .collect();
+        assert_eq!(
+            rows.len(),
+            1,
+            "{name} must appear as exactly one registered Primitive row"
+        );
+    }
+}

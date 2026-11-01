@@ -184,12 +184,27 @@ fn green_intrinsic_loop_leaf_is_sim_identical() {
         sim, green,
         "the green intrinsic-loop leaf must be identical to sim's"
     );
-    // The leaf really inlined the intrinsics (guard-free does not mean
-    // shimmed: no arith spec call remains in the body).
+    // The leaf really inlined the intrinsics — STRUCTURALLY, not by shim
+    // name: the dump renders every shim call as a bare `load_ext_name
+    // userextnameN`, so a name-absence check can never fail. The two baked
+    // arith sites leave machine ops nothing else in this body can produce:
+    // logand is a register-register AND (tag checks test immediates, they
+    // never AND two registers), and `mod i 7` bakes the remainder op plus
+    // GNU's floor-sign adjustment — truncate-rem then add the divisor when
+    // the signs disagree (`shrq $0x3f` extracts that sign bit; nothing else
+    // in this body shifts by 63).
     let text = green.join("\n");
     assert!(
-        !text.contains("neovm_jit_arith"),
-        "the loop body must not call the arith shim: {text}"
+        text.contains("andq %r"),
+        "logand must be baked as a register AND: {text}"
+    );
+    assert!(
+        text.contains("checked_srem_seq"),
+        "mod must be baked as a remainder machine op: {text}"
+    );
+    assert!(
+        text.contains("shrq $0x3f"),
+        "mod must bake GNU's floor-sign adjustment: {text}"
     );
 }
 
