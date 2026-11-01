@@ -52,30 +52,6 @@ jobs:
       - name: Ensure zstd can unpack the CodeQL bundle
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zstd
 
-      # The Rust extractor expands macros through rust-analyzer, which needs
-      # the standard library's sources (the `rust-src` component) for every
-      # std macro: assert_eq!, vec!, format!, line!, module_path! and the
-      # dependency macros that expand to them. The pinned toolchain in
-      # rust-toolchain.toml is installed without `rust-src` (it is deliberately
-      # not in that file: its presence changes compile-fail goldens), so every
-      # std macro site failed to expand and the extractor emitted one
-      # diagnostic per site: 141,819 on 2026-10-30, 174,753 on ad274d3780.
-      # Those diagnostics are what the SARIF carries (265 MB raw for a handful
-      # of results), and since 2026-10-31 the code-scanning endpoint stops
-      # processing it with HTTP 504 after ~20 s. Installing the component here
-      # makes the expansions succeed, which both shrinks the SARIF to its
-      # results and lets the queries see the expanded code.
-      - name: Install the pinned toolchain's standard-library sources
-        if: matrix.language == 'rust'
-        run: |
-          set -u
-          channel=$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml)
-          echo "pinned toolchain: $channel"
-          rustup toolchain install "$channel" --component rust-src
-          sysroot=$(rustc --print sysroot)
-          echo "sysroot: $sysroot"
-          test -d "$sysroot/lib/rustlib/src/rust/library/core"
-
       - name: Initialize CodeQL
         id: init
         uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
@@ -86,17 +62,21 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: none
 
-      # Analysis and upload are separate steps so that a failed upload can be
-      # retried without re-running the 15 min Rust analysis. Since
-      # 2026-10-31 16:07Z every Rust upload on main has died with "We couldn't
-      # respond to your request in time" (the code-scanning SARIF endpoint's
-      # 60 s gateway timeout; the same upload took 11 s at 11:09Z and the
-      # analysis itself completes normally). The retry cannot use the
-      # upload-sarif action: the codeql-action allows one upload per job per
-      # category and aborts the second ("only one run of the codeql/analyze or
-      # codeql/upload-sarif actions is allowed per job per tool/category", seen
-      # on 01cbf77c5b), so the attempts go through the CodeQL CLI the init
-      # step installed. The SARIF already carries the category set by analyze.
+      # Analysis and upload are separate steps. The Rust extractor (build-mode
+      # none, bundle 2.26.3) reports "macro expansion failed for 'X'" for
+      # almost every core/alloc/dependency macro call in this tree (174,799
+      # sites on 86660dd99b; only std's own macro_rules expand) and writes one
+      # toolExecutionNotification per site into the SARIF: 446,259
+      # notifications next to 42 results, 265 MB raw / 5 MB gzipped. Since
+      # 2026-10-31 the code-scanning endpoint answers HTTP 504 after ~20 s on
+      # that payload (the same shape uploaded in 11 s on 2026-10-30). Installing
+      # the toolchain's rust-src component changed nothing (identical per-file
+      # counts), so the notifications are stripped before upload: the alerts
+      # are unaffected, the Analyze step log keeps every WARN line, and the
+      # counts are printed below. The retry cannot use the upload-sarif action
+      # (one upload per job per category), so the attempts go through the
+      # CodeQL CLI the init step installed; the SARIF carries the category set
+      # by analyze.
       - name: Analyze
         uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
@@ -104,22 +84,25 @@ jobs:
           upload: never
           output: ${{ runner.temp }}/codeql-sarif
 
-      - name: Upload SARIF (up to three attempts)
+      - name: Upload SARIF (results only, up to three attempts)
         env:
           CODEQL: ${{ steps.init.outputs.codeql-path }}
           SARIF: ${{ runner.temp }}/codeql-sarif/${{ matrix.language }}.sarif
+          UPLOAD: ${{ runner.temp }}/codeql-sarif/${{ matrix.language }}.results.sarif
           GH_TOKEN: ${{ github.token }}
         run: |
           set -u
           ls -l "$(dirname "$SARIF")"
           printf 'sarif bytes=%s gzip=%s\n' "$(stat -c %s "$SARIF")" "$(gzip -c "$SARIF" | wc -c)"
-          # Composition, so a failed upload says what the payload was made of
-          # (results, or extractor diagnostics as in the 2026-10-31 timeouts).
           jq -r '"sarif results=\([.runs[].results[]] | length) extractor-notifications=\([.runs[].invocations[]?.toolExecutionNotifications[]?] | length)"' "$SARIF"
+          # Results only: the extractor's per-site notifications stay in the
+          # Analyze step log and are not uploaded (see the comment above).
+          jq -c 'del(.runs[].invocations[]?.toolExecutionNotifications)' "$SARIF" > "$UPLOAD"
+          printf 'upload bytes=%s gzip=%s\n' "$(stat -c %s "$UPLOAD")" "$(gzip -c "$UPLOAD" | wc -c)"
           for attempt in 1 2 3; do
             if printf '%s' "$GH_TOKEN" | "$CODEQL" github upload-results \
                  --repository="$GITHUB_REPOSITORY" --ref="$GITHUB_REF" --commit="$GITHUB_SHA" \
-                 --sarif="$SARIF" --github-auth-stdin; then
+                 --sarif="$UPLOAD" --github-auth-stdin; then
               echo "upload attempt $attempt succeeded"; exit 0
             fi
             echo "upload attempt $attempt failed"
