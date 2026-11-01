@@ -28,6 +28,11 @@ pub(crate) struct GreenSelectHandle {
 static_assertions::assert_impl_all!(GreenSelectHandle: Send, Sync);
 
 impl GreenSelectHandle {
+    /// Cold native-service capture of this backend's existing readiness owner.
+    pub(crate) fn control_source(&self) -> Arc<ControlWake> {
+        Arc::clone(&self.wake)
+    }
+
     /// The durable scheduler transition precedes this hint. Native input keeps
     /// its original bit and notify path; control has independent destinations.
     pub(crate) fn notify(&self) {

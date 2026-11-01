@@ -793,3 +793,6 @@ fn artificial_hop_delivers_signal_is_rejected() {
         returned_scenario,
     );
 }
+
+#[path = "pending_native.rs"]
+mod pending_native;

@@ -12,6 +12,7 @@ use super::transport::{
 };
 use super::{HostRequestKey, HostRootError, PreparedHostCall, RootsRetired};
 use crate::host_effect::contracts::OwnedNativeData;
+use crate::host_effect::native_pending::{NativeAdapterStep, PendingNativeOperation};
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -309,6 +310,19 @@ impl ServiceRuntime {
         }
     }
 
+    pub(super) fn native_observations(&mut self) -> Vec<transport::ControlObservation> {
+        let session = match self {
+            Self::Dormant => return Vec::new(),
+            Self::Open(session) => session,
+        };
+        session.transport.drain_commands();
+        let mut observations = Vec::new();
+        while let Some(observation) = session.transport.next_observation() {
+            observations.push(observation);
+        }
+        observations
+    }
+
     pub(in crate::emacs_core::eval::green) fn take_terminal(
         &mut self,
         key: HostRequestKey,
@@ -534,19 +548,92 @@ impl<'receive> MainServiceTurn<'receive> {
                 (baton, slice)
             }
         };
-        {
-            let runtime = baton.green_runtime();
-            let Some(runtime) = runtime.as_ref() else {
-                unreachable_service()
-            };
-            let mut registry = runtime.parked.borrow_mut();
-            match registry.hosts().settle(key) {
-                Ok(settled) => drop(settled),
-                Err(error) => fatal_service(error),
-            }
-        }
-        ServedSlice { baton, slice }
+        finish_native_turn(key, baton, slice)
     }
+
+    /// The owned path returns a pending native record, never a borrowed scope.
+    pub(super) fn serve_step(
+        self,
+        start: impl FnOnce(HostRequestKey, OwnedNativeData) -> NativeAdapterStep,
+    ) -> ServiceStep {
+        let Self {
+            key,
+            baton,
+            control: _,
+            receiver: _,
+            turn,
+        } = self;
+        match turn {
+            NativeTurn::AlreadySettled { slice } => {
+                ServiceStep::Complete(finish_native_turn(key, baton, slice))
+            }
+            NativeTurn::Dispatch {
+                slice,
+                ticket,
+                native,
+            } => match start(key, native) {
+                NativeAdapterStep::Complete(outcome) => {
+                    ServiceStep::Complete(complete_native_turn(baton, slice, ticket, outcome))
+                }
+                NativeAdapterStep::Pending(operation) => ServiceStep::Pending {
+                    baton,
+                    slice,
+                    ticket,
+                    operation,
+                },
+                NativeAdapterStep::RequiresOwner(never) => match never {},
+            },
+        }
+    }
+}
+
+pub(super) enum ServiceStep {
+    Complete(ServedSlice),
+    Pending {
+        baton: Baton,
+        slice: ReservedServiceSlice,
+        ticket: DispatchTicket,
+        operation: PendingNativeOperation,
+    },
+}
+
+pub(super) fn complete_native_turn(
+    baton: Baton,
+    slice: ReservedServiceSlice,
+    ticket: DispatchTicket,
+    outcome: NativeOutcome,
+) -> ServedSlice {
+    let key = slice.key();
+    {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            unreachable_service()
+        };
+        let mut registry = runtime.parked.borrow_mut();
+        if let Err(error) = registry.services.complete(ticket, outcome) {
+            fatal_service(error);
+        }
+    }
+    finish_native_turn(key, baton, slice)
+}
+
+fn finish_native_turn(
+    key: HostRequestKey,
+    baton: Baton,
+    slice: ReservedServiceSlice,
+) -> ServedSlice {
+    {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            unreachable_service()
+        };
+        let mut registry = runtime.parked.borrow_mut();
+        match registry.hosts().settle(key) {
+            Ok(settled) => drop(settled),
+            Err(error) => fatal_service(error),
+        }
+    }
+    ServedSlice { baton, slice }
 }
 
 pub(in crate::emacs_core::eval::green) struct ServedSlice {
@@ -718,6 +805,7 @@ enum FixtureCompletion {
 pub(in crate::emacs_core::eval::green) enum FixtureDriver {
     Unavailable,
     Installed(Box<dyn FnOnce(&mut NativeServiceScope<'_>) -> NativeOutcome + Send>),
+    Owned(super::pump::FixtureNativeDriver),
 }
 
 #[cfg(test)]
@@ -757,6 +845,13 @@ impl ServiceRuntime {
         self.session().driver = FixtureDriver::Installed(Box::new(driver));
     }
 
+    pub(in crate::emacs_core::eval::green) fn install_native_fixture_driver(
+        &mut self,
+        driver: super::pump::FixtureNativeDriver,
+    ) {
+        self.session().driver = FixtureDriver::Owned(driver);
+    }
+
     pub(in crate::emacs_core::eval::green) fn take_fixture_driver(&mut self) -> FixtureDriver {
         std::mem::replace(&mut self.session().driver, FixtureDriver::Unavailable)
     }
@@ -767,25 +862,28 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
     baton: Baton,
     control: &Control,
     receiver: &Receiver<Wake>,
+    pump: &mut super::pump::MainNativePump,
 ) -> ServiceReturn {
     baton.enter();
     #[cfg(test)]
-    let driver = {
-        let runtime = baton.green_runtime();
-        let Some(runtime) = runtime.as_ref() else {
-            unreachable_service()
+    {
+        let driver = {
+            let runtime = baton.green_runtime();
+            let Some(runtime) = runtime.as_ref() else {
+                unreachable_service()
+            };
+            runtime.parked.borrow_mut().services.take_fixture_driver()
         };
-        runtime.parked.borrow_mut().services.take_fixture_driver()
-    };
-    let turn = MainServiceTurn::from_main_wake(key, baton, control, receiver);
-    #[cfg(test)]
-    let served = turn.serve(|scope| match driver {
-        FixtureDriver::Unavailable => NativeOutcome::HostClosed,
-        FixtureDriver::Installed(driver) => driver(scope),
-    });
-    #[cfg(not(test))]
-    let served = turn.serve(|_| NativeOutcome::HostClosed);
-    served.return_to_requester(control)
+        match driver {
+            FixtureDriver::Installed(driver) => {
+                let turn = MainServiceTurn::from_main_wake(key, baton, control, receiver);
+                return turn.serve(driver).return_to_requester(control);
+            }
+            FixtureDriver::Owned(driver) => pump.install_fixture_driver(driver),
+            FixtureDriver::Unavailable => {}
+        }
+    }
+    pump.serve(key, baton, control, receiver)
 }
 
 /// Called only after switch.rs publishes the ordinary parked census. All

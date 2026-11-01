@@ -104,3 +104,19 @@ GNU Lisp behaviour or OS host affinity. Those require the production
 integration, mutation, GNU-oracle and instrumented-channel tests. In particular,
 the abstract model has no raw Lisp Values and performs no GC. Its role is to
 reject protocol histories that would invalidate those production proofs.
+
+## Owned pending-native driver
+
+`tests/pending_native.rs`, included in the existing protocol target, adds two
+positive histories and five mutation controls. Two request reservations retain
+independent keys and roots while B's native service unblocks A. Physical driver
+acquisition is separate from keyed completion. Cancellation/close retain native
+backing until actual settlement and root drain; the last ordinary owner cannot
+drop a transferred Baton before the native driver's acquire.
+
+An independent event audit detects ResumeWrongPendingKey,
+NativeWaitStarvesSecondRequest, CompleteBeforeReacquire, FreeBackingBeforeDrain
+and CloseDropsReleasedBaton. The starvation mutation makes a finite incorrect
+rearm choice with B queued; a timeout or Loom deadlock is not an accepted witness.
+The seven cases passed on the cut-2 source alongside the existing 28 histories.
+These abstract models supplement the actual Green runtime and sanitizer tests.

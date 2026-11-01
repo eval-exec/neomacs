@@ -21,10 +21,13 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod pending;
+mod pump;
 mod scheduling;
 mod transport;
+pub(super) use pump::{MainNativeDrain, OwnerReceive};
 pub(super) use scheduling::RealWaitPermit;
-pub(super) use scheduling::{HostResume, dispatch_host, serve_main_wake};
+pub(super) use scheduling::{HostResume, dispatch_host};
 pub(super) use transport::NativeSettlement;
 
 /// Process-wide correlation allocation, not host authority or a TLS slot.

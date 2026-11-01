@@ -94,13 +94,22 @@ pub(crate) enum Handoff {
 #[must_use]
 pub(super) enum Wake {
     Resume(Baton),
-    ServiceTurn { key: HostRequestKey, baton: Baton },
+    ServiceTurn {
+        key: HostRequestKey,
+        baton: Baton,
+    },
+    /// Reenter the owned native driver without restoring main's Lisp owner.
+    NativePump {
+        baton: Baton,
+    },
 }
 
 impl Wake {
     fn baton(&self) -> &Baton {
         match self {
-            Self::Resume(baton) | Self::ServiceTurn { baton, .. } => baton,
+            Self::Resume(baton) | Self::ServiceTurn { baton, .. } | Self::NativePump { baton } => {
+                baton
+            }
         }
     }
 }
@@ -110,6 +119,7 @@ enum OwnerLocation {
     Running,
     Receiving,
     NativeReleased,
+    NativeDriving,
     Serving(HostRequestKey),
 }
 
@@ -117,6 +127,7 @@ enum OwnerLocation {
 enum ServicePhase {
     Reserved,
     Serving,
+    PendingNative,
     RealWait,
     Reacquiring,
     ServingAfterWait,
@@ -236,7 +247,37 @@ pub(super) enum ServiceReturn {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NextOwner {
     Resume(ThreadKey),
+    Native(NativeTurn),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeTurn {
     Service(HostRequestKey),
+    Pump,
+}
+
+enum NativePumpChoice {
+    Native(NativeTurn),
+    OriginalMain,
+}
+
+/// A driver acquire is the one physical cycle's return, not a request key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeAcquire {
+    Service(HostRequestKey),
+    Pump,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeWork {
+    Ready,
+    Idle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativePumpPurpose {
+    Serving,
+    Draining,
 }
 
 enum ReadySelection {
@@ -267,7 +308,7 @@ struct ControlState {
     physical: BTreeMap<ThreadKey, OwnerLocation>,
     services: BTreeMap<HostRequestKey, ServiceMetadata>,
     pending_services: VecDeque<HostRequestKey>,
-    pending_acquires: VecDeque<HostRequestKey>,
+    pending_acquires: VecDeque<NativeAcquire>,
     main_os_thread: Option<std::thread::ThreadId>,
 }
 
@@ -574,14 +615,14 @@ impl Control {
                 if !state.pending_services.contains(&slice.key) {
                     state.pending_services.push_back(slice.key);
                 }
-                let Some(key) = Self::pick_service(&mut state) else {
+                let Some(turn) = Self::pick_service(&mut state) else {
                     return Err(ServiceTransferRefusal {
                         reason: ServiceRefusal::WrongServiceState,
                         baton,
                     });
                 };
                 drop(state);
-                self.send_wake(ThreadKey::Main, Wake::ServiceTurn { key, baton });
+                self.send_wake(ThreadKey::Main, Self::native_wake(turn, baton));
                 Ok(ServiceTransfer::Dispatched)
             }
             Some(OwnerLocation::NativeReleased) => {
@@ -590,7 +631,10 @@ impl Control {
                 self.nudge_main(crate::host_effect::wake::ControlNudge::HostServiceReady);
                 Ok(ServiceTransfer::Queued(baton))
             }
-            Some(OwnerLocation::Running | OwnerLocation::Serving(_)) | None => {
+            Some(
+                OwnerLocation::Running | OwnerLocation::NativeDriving | OwnerLocation::Serving(_),
+            )
+            | None => {
                 // The sole-Baton protocol makes a simultaneously running main
                 // impossible. Preserve the Baton and reservation for diagnosis.
                 Err(ServiceTransferRefusal {
@@ -617,8 +661,8 @@ impl Control {
         state
             .physical
             .insert(ThreadKey::Main, OwnerLocation::Receiving);
-        if let Some(key) = Self::pick_service(&mut state) {
-            return Ok(Wake::ServiceTurn { key, baton });
+        if let Some(turn) = Self::pick_service(&mut state) {
+            return Ok(Self::native_wake(turn, baton));
         }
         state
             .physical
@@ -709,9 +753,18 @@ impl Control {
                         self.send_wake(target, Wake::ServiceTurn { key, baton });
                         Ok(ServiceReturn::Sent)
                     }
+                    Wake::NativePump { baton } => {
+                        self.send_wake(target, Wake::NativePump { baton });
+                        Ok(ServiceReturn::Sent)
+                    }
                 }
             }
-            Some(ServicePhase::Reserved | ServicePhase::RealWait | ServicePhase::Reacquiring)
+            Some(
+                ServicePhase::Reserved
+                | ServicePhase::PendingNative
+                | ServicePhase::RealWait
+                | ServicePhase::Reacquiring,
+            )
             | None => std::process::abort(),
         }
     }
@@ -798,7 +851,9 @@ impl Control {
                 state
                     .physical
                     .insert(ThreadKey::Main, OwnerLocation::Receiving);
-                state.pending_acquires.push_back(slice.key);
+                state
+                    .pending_acquires
+                    .push_back(NativeAcquire::Service(slice.key));
                 drop(state);
                 self.metadata_changed.notify_all();
                 self.notify_select();
@@ -807,17 +862,283 @@ impl Control {
                         baton.enter();
                         Ok(baton)
                     }
-                    Ok(Wake::Resume(baton) | Wake::ServiceTurn { baton, .. }) => {
-                        Err(ServiceAcquireRefusal {
-                            reason: ServiceRefusal::WrongServiceState,
-                            release: NativeRelease::Idle(baton),
-                        })
-                    }
+                    Ok(
+                        Wake::Resume(baton)
+                        | Wake::ServiceTurn { baton, .. }
+                        | Wake::NativePump { baton },
+                    ) => Err(ServiceAcquireRefusal {
+                        reason: ServiceRefusal::WrongServiceState,
+                        release: NativeRelease::Idle(baton),
+                    }),
                     // Losing the sole Baton is an ownership failure. Native
                     // request cancellation itself never closes this channel.
                     Err(_) => std::process::abort(),
                 }
             }
+        }
+    }
+
+    /// Preserve this request's linear reservation while the owned driver
+    /// serves another request. Deferral alone admits no ordinary Lisp owner.
+    pub(super) fn defer_native_service(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<Baton, ServiceTransferRefusal> {
+        let mut state = self.state();
+        let result = if state.main_os_thread != Some(std::thread::current().id()) {
+            Err(ServiceRefusal::WrongMainThread)
+        } else {
+            Self::defer_native_metadata(&mut state, slice)
+        };
+        match result {
+            Ok(()) => Ok(baton),
+            Err(reason) => Err(ServiceTransferRefusal { reason, baton }),
+        }
+    }
+
+    fn defer_native_metadata(
+        state: &mut ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Serving(slice.key)) {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let Some(metadata) = state.services.get_mut(&slice.key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != slice.requester {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        metadata.phase = match metadata.phase {
+            ServicePhase::Serving => ServicePhase::PendingNative,
+            ServicePhase::ServingAfterWait => ServicePhase::RealWait,
+            ServicePhase::Reserved
+            | ServicePhase::PendingNative
+            | ServicePhase::RealWait
+            | ServicePhase::Reacquiring => return Err(ServiceRefusal::WrongServiceState),
+        };
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+        Ok(())
+    }
+
+    /// Called only after the owned native record has an actual completion.
+    /// The record retains the request's dispatch and cancellation obligations.
+    pub(super) fn enter_native_completion(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<Baton, ServiceTransferRefusal> {
+        let mut state = self.state();
+        let result = if state.main_os_thread != Some(std::thread::current().id()) {
+            Err(ServiceRefusal::WrongMainThread)
+        } else {
+            Self::enter_native_completion_metadata(&mut state, slice)
+        };
+        match result {
+            Ok(()) => Ok(baton),
+            Err(reason) => Err(ServiceTransferRefusal { reason, baton }),
+        }
+    }
+
+    fn enter_native_completion_metadata(
+        state: &mut ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::NativeDriving) {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let Some(metadata) = state.services.get_mut(&slice.key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != slice.requester {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        metadata.phase = match metadata.phase {
+            ServicePhase::PendingNative => ServicePhase::Serving,
+            ServicePhase::RealWait => ServicePhase::ServingAfterWait,
+            ServicePhase::Reserved
+            | ServicePhase::Serving
+            | ServicePhase::Reacquiring
+            | ServicePhase::ServingAfterWait => return Err(ServiceRefusal::WrongServiceState),
+        };
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Serving(slice.key));
+        Ok(())
+    }
+
+    /// The sole physical executor lends ordinary eligibility to every newly
+    /// pending call together. The driver owns one release, never one per key.
+    pub(super) fn release_native_pump(
+        &self,
+        _permit: RealWaitPermit,
+        baton: Baton,
+    ) -> Result<NativeRelease, ServiceTransferRefusal> {
+        let mut state = self.state();
+        let reason = if state.main_os_thread != Some(std::thread::current().id()) {
+            Some(ServiceRefusal::WrongMainThread)
+        } else if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::NativeDriving)
+            || Self::pending_native(&state) == NativeWork::Idle
+        {
+            Some(ServiceRefusal::WrongServiceState)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ServiceTransferRefusal { reason, baton });
+        }
+        for metadata in state.services.values_mut() {
+            if metadata.phase == ServicePhase::PendingNative {
+                metadata.phase = ServicePhase::RealWait;
+            }
+        }
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+        let next = match Self::pick(&mut state) {
+            Some((key, None)) => Some(key),
+            Some((_, Some(_))) | None => None,
+        };
+        drop(state);
+        match next {
+            Some(key) => {
+                self.send_wake(key, Wake::Resume(baton));
+                Ok(NativeRelease::Transferred)
+            }
+            None => Ok(NativeRelease::Idle(baton)),
+        }
+    }
+
+    /// Physical completion first reacquires the native driver, not whichever
+    /// request happened to arm the poll. A service wake for another key is valid.
+    pub(super) fn reacquire_native_pump(
+        &self,
+        release: NativeRelease,
+        receiver: &mpsc::Receiver<Wake>,
+    ) -> Result<Wake, ServiceAcquireRefusal> {
+        let mut state = self.state();
+        let reason = if state.main_os_thread != Some(std::thread::current().id()) {
+            Some(ServiceRefusal::WrongMainThread)
+        } else if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::NativeReleased) {
+            Some(ServiceRefusal::WrongServiceState)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ServiceAcquireRefusal { reason, release });
+        }
+        match release {
+            NativeRelease::Idle(baton) => {
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+                drop(state);
+                baton.enter();
+                Ok(Wake::NativePump { baton })
+            }
+            NativeRelease::Transferred => {
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::Receiving);
+                if !state.pending_acquires.contains(&NativeAcquire::Pump) {
+                    state.pending_acquires.push_back(NativeAcquire::Pump);
+                }
+                drop(state);
+                self.notify_select();
+                match receiver.recv() {
+                    Ok(wake) => {
+                        wake.baton().enter();
+                        Ok(wake)
+                    }
+                    Err(_) => std::process::abort(),
+                }
+            }
+        }
+    }
+
+    /// Service-only choices preserve main's original wait. A still-reserved
+    /// PendingNative call cannot admit main's unrelated Lisp continuation.
+    pub(super) fn choose_native_pump_turn(
+        &self,
+        baton: Baton,
+        purpose: NativePumpPurpose,
+    ) -> Result<Wake, ServiceTransferRefusal> {
+        let mut state = self.state();
+        let reason = if state.main_os_thread != Some(std::thread::current().id()) {
+            Some(ServiceRefusal::WrongMainThread)
+        } else if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::NativeDriving) {
+            Some(ServiceRefusal::WrongServiceState)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            return Err(ServiceTransferRefusal { reason, baton });
+        }
+        match Self::choose_native_metadata(&mut state, purpose) {
+            NativePumpChoice::Native(turn) => Ok(Self::native_wake(turn, baton)),
+            NativePumpChoice::OriginalMain => Ok(Wake::Resume(baton)),
+        }
+    }
+
+    fn choose_native_metadata(
+        state: &mut ControlState,
+        purpose: NativePumpPurpose,
+    ) -> NativePumpChoice {
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        if let Some(turn) = Self::pick_queued_service(state) {
+            return NativePumpChoice::Native(turn);
+        }
+        let released = state
+            .services
+            .values()
+            .any(|metadata| metadata.phase == ServicePhase::RealWait);
+        let reserved = state
+            .services
+            .values()
+            .any(|metadata| metadata.phase == ServicePhase::PendingNative);
+        match purpose {
+            NativePumpPurpose::Serving => {
+                if released
+                    && !reserved
+                    && state.waits.get(&ThreadKey::Main) == Some(&Wait::Runnable)
+                {
+                    let _ = Self::pop_ready(state, ReadySelection::NativeMainAcquire);
+                    state
+                        .physical
+                        .insert(ThreadKey::Main, OwnerLocation::Running);
+                    return NativePumpChoice::OriginalMain;
+                }
+            }
+            NativePumpPurpose::Draining => {}
+        }
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+        NativePumpChoice::Native(NativeTurn::Pump)
+    }
+
+    /// Existing owned process source; no host object or World borrow escapes.
+    pub(super) fn native_pump_source(
+        &self,
+    ) -> Result<std::sync::Arc<crate::host_effect::wake::ControlWake>, ServiceRefusal> {
+        self.select
+            .get()
+            .and_then(Option::as_ref)
+            .map(GreenSelectHandle::control_source)
+            .ok_or(ServiceRefusal::MainUnavailable)
+    }
+
+    /// Recheck after registration, before committing to an actual OS wait.
+    pub(super) fn native_service_queued(&self) -> NativeWork {
+        if Self::queued_native_work(&self.state()) == NativeWork::Ready {
+            NativeWork::Ready
+        } else {
+            NativeWork::Idle
         }
     }
 
@@ -844,9 +1165,9 @@ impl Control {
                     baton,
                 });
             }
-            if let Some(key) = Self::pick_service(&mut state) {
+            if let Some(turn) = Self::pick_service(&mut state) {
                 drop(state);
-                self.send_wake(ThreadKey::Main, Wake::ServiceTurn { key, baton });
+                self.send_wake(ThreadKey::Main, Self::native_wake(turn, baton));
                 return Ok(ServiceTransfer::Dispatched);
             }
             state = self
@@ -1451,29 +1772,43 @@ impl Control {
         }
     }
 
-    /// Native acquire/service turns never complete main's semantic Wait.
-    fn pick_service(state: &mut ControlState) -> Option<HostRequestKey> {
-        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Receiving) {
-            return None;
-        }
-        while let Some(key) = state.pending_acquires.pop_front() {
-            let Some(metadata) = state.services.get_mut(&key) else {
-                continue;
-            };
-            match metadata.phase {
-                ServicePhase::Reacquiring => {
-                    metadata.phase = ServicePhase::ServingAfterWait;
+    fn pick_acquire(state: &mut ControlState) -> Option<NativeTurn> {
+        while let Some(acquire) = state.pending_acquires.pop_front() {
+            match acquire {
+                NativeAcquire::Pump => {
+                    if Self::pending_native(state) == NativeWork::Idle {
+                        continue;
+                    }
                     state
                         .physical
-                        .insert(ThreadKey::Main, OwnerLocation::Serving(key));
-                    return Some(key);
+                        .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+                    return Some(NativeTurn::Pump);
                 }
-                ServicePhase::Reserved
-                | ServicePhase::Serving
-                | ServicePhase::RealWait
-                | ServicePhase::ServingAfterWait => {}
+                NativeAcquire::Service(key) => {
+                    let Some(metadata) = state.services.get_mut(&key) else {
+                        continue;
+                    };
+                    match metadata.phase {
+                        ServicePhase::Reacquiring => {
+                            metadata.phase = ServicePhase::ServingAfterWait;
+                            state
+                                .physical
+                                .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+                            return Some(NativeTurn::Service(key));
+                        }
+                        ServicePhase::Reserved
+                        | ServicePhase::Serving
+                        | ServicePhase::PendingNative
+                        | ServicePhase::RealWait
+                        | ServicePhase::ServingAfterWait => {}
+                    }
+                }
             }
         }
+        None
+    }
+
+    fn pick_reserved_service(state: &mut ControlState) -> Option<NativeTurn> {
         while let Some(key) = state.pending_services.pop_front() {
             let Some(metadata) = state.services.get_mut(&key) else {
                 continue;
@@ -1484,9 +1819,10 @@ impl Control {
                     state
                         .physical
                         .insert(ThreadKey::Main, OwnerLocation::Serving(key));
-                    return Some(key);
+                    return Some(NativeTurn::Service(key));
                 }
                 ServicePhase::Serving
+                | ServicePhase::PendingNative
                 | ServicePhase::RealWait
                 | ServicePhase::Reacquiring
                 | ServicePhase::ServingAfterWait => {}
@@ -1495,33 +1831,89 @@ impl Control {
         None
     }
 
+    fn pending_native(state: &ControlState) -> NativeWork {
+        if state.services.values().any(|metadata| {
+            matches!(
+                metadata.phase,
+                ServicePhase::PendingNative | ServicePhase::RealWait
+            )
+        }) {
+            NativeWork::Ready
+        } else {
+            NativeWork::Idle
+        }
+    }
+
+    fn pick_queued_service(state: &mut ControlState) -> Option<NativeTurn> {
+        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Receiving) {
+            return None;
+        }
+        Self::pick_acquire(state).or_else(|| Self::pick_reserved_service(state))
+    }
+
+    /// Native acquire/service turns never complete main's semantic Wait.
+    fn pick_service(state: &mut ControlState) -> Option<NativeTurn> {
+        if let Some(turn) = Self::pick_queued_service(state) {
+            return Some(turn);
+        }
+        if state.physical.get(&ThreadKey::Main) == Some(&OwnerLocation::Receiving)
+            && Self::pending_native(state) == NativeWork::Ready
+        {
+            // Pending native work remains a progress source even when no Lisp
+            // owner is runnable. Reenter only the driver, never main's Lisp.
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+            return Some(NativeTurn::Pump);
+        }
+        None
+    }
+
+    fn queued_native_work(state: &ControlState) -> NativeWork {
+        if state.pending_acquires.iter().any(|acquire| match acquire {
+            NativeAcquire::Pump => Self::pending_native(state) == NativeWork::Ready,
+            NativeAcquire::Service(key) => state
+                .services
+                .get(key)
+                .is_some_and(|metadata| metadata.phase == ServicePhase::Reacquiring),
+        }) || state.pending_services.iter().any(|key| {
+            state
+                .services
+                .get(key)
+                .is_some_and(|metadata| metadata.phase == ServicePhase::Reserved)
+        }) {
+            NativeWork::Ready
+        } else {
+            NativeWork::Idle
+        }
+    }
+
     fn service_ready(state: &ControlState) -> bool {
         state.physical.get(&ThreadKey::Main) == Some(&OwnerLocation::Receiving)
-            && (state.pending_acquires.iter().any(|key| {
-                state
-                    .services
-                    .get(key)
-                    .is_some_and(|metadata| metadata.phase == ServicePhase::Reacquiring)
-            }) || state.pending_services.iter().any(|key| {
-                state
-                    .services
-                    .get(key)
-                    .is_some_and(|metadata| metadata.phase == ServicePhase::Reserved)
-            }))
+            && Self::queued_native_work(state) == NativeWork::Ready
+    }
+
+    fn native_wake(turn: NativeTurn, baton: Baton) -> Wake {
+        match turn {
+            NativeTurn::Service(key) => Wake::ServiceTurn { key, baton },
+            NativeTurn::Pump => Wake::NativePump { baton },
+        }
     }
 
     fn wake_for(next: NextOwner, baton: Baton) -> (ThreadKey, Wake) {
         match next {
             NextOwner::Resume(key) => (key, Wake::Resume(baton)),
-            NextOwner::Service(key) => (ThreadKey::Main, Wake::ServiceTurn { key, baton }),
+            NextOwner::Native(turn) => (ThreadKey::Main, Self::native_wake(turn, baton)),
         }
     }
 
-    fn intercept_ready(state: &mut ControlState, me: ThreadKey) -> Option<HostRequestKey> {
+    fn intercept_ready(state: &mut ControlState, me: ThreadKey) -> Option<NativeTurn> {
         if me == ThreadKey::Main {
             state.physical.insert(me, OwnerLocation::Receiving);
         }
-        if let Some(key) = Self::pick_service(state) {
+        // A pending-only driver is a scheduling fallback, not authority to
+        // intercept a terminal's direct return to its reserved requester.
+        if let Some(turn) = Self::pick_queued_service(state) {
             if me != ThreadKey::Main {
                 state.physical.insert(me, OwnerLocation::Receiving);
                 if state.waits.get(&me) == Some(&Wait::Runnable) && !state.ready.contains(&me) {
@@ -1530,7 +1922,7 @@ impl Control {
                     state.ready.push_front(me);
                 }
             }
-            Some(key)
+            Some(turn)
         } else {
             state.physical.insert(me, OwnerLocation::Running);
             None
@@ -1551,15 +1943,16 @@ impl Control {
                 Wake::ServiceTurn { key, baton } => {
                     return Wake::ServiceTurn { key, baton };
                 }
+                Wake::NativePump { baton } => return Wake::NativePump { baton },
                 Wake::Resume(baton) => {
                     let key = Self::intercept_ready(&mut self.state(), me);
                     match key {
                         None => return Wake::Resume(baton),
-                        Some(key) if me == ThreadKey::Main => {
-                            return Wake::ServiceTurn { key, baton };
+                        Some(turn) if me == ThreadKey::Main => {
+                            return Self::native_wake(turn, baton);
                         }
-                        Some(key) => {
-                            self.send_wake(ThreadKey::Main, Wake::ServiceTurn { key, baton });
+                        Some(turn) => {
+                            self.send_wake(ThreadKey::Main, Self::native_wake(turn, baton));
                             wake = match receiver.recv() {
                                 Ok(wake) => {
                                     wake.baton().enter();
@@ -1609,20 +2002,22 @@ impl Control {
                 {
                     Self::wake_selects(&mut state);
                 }
-                if let Some(key) = Self::pick_service(&mut state) {
-                    return Some(NextOwner::Service(key));
+                if let Some(turn) = Self::pick_service(&mut state) {
+                    return Some(NextOwner::Native(turn));
                 }
                 match Self::pick(&mut state) {
                     Some((key, None)) => return Some(NextOwner::Resume(key)),
                     Some((_, Some(deadline))) => deadline,
                     None => {
-                        if !state.closing
-                            && state.physical.get(&ThreadKey::Main)
-                                == Some(&OwnerLocation::NativeReleased)
+                        if state.physical.get(&ThreadKey::Main)
+                            == Some(&OwnerLocation::NativeReleased)
+                            && (!state.closing || Self::pending_native(&state) == NativeWork::Ready)
                         {
                             // No ordinary owner can run, but main's actual
-                            // native wait can still complete. Keep the Baton
-                            // out of Lisp until its acquire is announced.
+                            // native wait can still complete. Closing cannot
+                            // drop the last Baton while native settlements and
+                            // their parked roots remain live. Keep it out of
+                            // Lisp until the driver's acquire is announced.
                             drop(
                                 self.metadata_changed
                                     .wait(state)
@@ -1644,8 +2039,8 @@ impl Control {
                 let mut state = self.state();
                 // Recheck under the same lock used by the notifier: an acquire
                 // between the initial scan and this wait must not be lost.
-                if let Some(key) = Self::pick_service(&mut state) {
-                    return Some(NextOwner::Service(key));
+                if let Some(turn) = Self::pick_service(&mut state) {
+                    return Some(NextOwner::Native(turn));
                 }
                 if let Some((key, None)) = Self::pick(&mut state) {
                     return Some(NextOwner::Resume(key));
@@ -1696,7 +2091,11 @@ impl Control {
             *key != ThreadKey::Main
                 || !matches!(
                     state.physical.get(key),
-                    Some(OwnerLocation::NativeReleased | OwnerLocation::Serving(_))
+                    Some(
+                        OwnerLocation::NativeReleased
+                            | OwnerLocation::NativeDriving
+                            | OwnerLocation::Serving(_)
+                    )
                 )
         }) {
             if let Some(key) = state.ready.remove(index) {
@@ -1720,7 +2119,11 @@ impl Control {
                 **key != ThreadKey::Main
                     || !matches!(
                         state.physical.get(key),
-                        Some(OwnerLocation::NativeReleased | OwnerLocation::Serving(_))
+                        Some(
+                            OwnerLocation::NativeReleased
+                                | OwnerLocation::NativeDriving
+                                | OwnerLocation::Serving(_)
+                        )
                     )
             })
             .filter_map(|(key, wait)| match wait {
@@ -1790,14 +2193,12 @@ impl Control {
         }
     }
 
-    /// ME ended: hand the Baton to the next thread, wake its joiners, and
-    /// return without waiting. With no thread able to run, the runtime is
-    /// closing: every waiting thread is woken (it signals) and gets the
-    /// Baton in turn.
-    pub(crate) fn finish(&self, me: ThreadKey, baton: Baton) {
+    /// Publish exit and join readiness before entering a scheduler/native wait.
+    /// A released native main may be the only owner that can make progress.
+    fn publish_owner_exit(&self, me: ThreadKey) {
         {
             let mut state = self.state();
-            state.waits.insert(me, Wait::Exited);
+            Self::set_wait(&mut state, me, Wait::Exited);
             state.physical.remove(&me);
             let joiners: Vec<ThreadKey> = state
                 .waits
@@ -1809,6 +2210,17 @@ impl Control {
                 Self::wake_locked(&mut state, key);
             }
         }
+        // NativeMain observes a different arm from the idle selector. Wake it
+        // before pick_next can wait for that owner's physical reacquisition.
+        self.notify_select();
+    }
+
+    /// ME ended: hand the Baton to the next thread, wake its joiners, and
+    /// return without waiting. With no thread able to run, the runtime is
+    /// closing: every waiting thread is woken (it signals) and gets the
+    /// Baton in turn.
+    pub(crate) fn finish(&self, me: ThreadKey, baton: Baton) {
+        self.publish_owner_exit(me);
         let next = self.pick_next().or_else(|| {
             let mut state = self.state();
             state.closing = true;
@@ -1880,10 +2292,12 @@ mod tests {
                 phase: ServicePhase::Reacquiring,
             },
         );
-        state.pending_acquires.push_back(host_key());
+        state
+            .pending_acquires
+            .push_back(NativeAcquire::Service(host_key()));
         assert_eq!(
             Control::intercept_ready(&mut state, worker),
-            Some(host_key())
+            Some(NativeTurn::Service(host_key()))
         );
         assert_eq!(state.physical.get(&worker), Some(&OwnerLocation::Receiving));
         assert_eq!(
@@ -1923,9 +2337,14 @@ mod tests {
                 phase: ServicePhase::Reacquiring,
             },
         );
-        state.pending_acquires.push_back(host_key());
+        state
+            .pending_acquires
+            .push_back(NativeAcquire::Service(host_key()));
         assert!(Control::service_ready(&state));
-        assert_eq!(Control::pick_service(&mut state), Some(host_key()));
+        assert_eq!(
+            Control::pick_service(&mut state),
+            Some(NativeTurn::Service(host_key()))
+        );
         assert_eq!(state.waits.get(&ThreadKey::Main), Some(&original));
         assert_eq!(state.ready.front(), Some(&unrelated));
         assert_eq!(
@@ -1980,9 +2399,14 @@ mod tests {
                 },
             );
         }
-        state.pending_acquires.push_back(key);
+        state
+            .pending_acquires
+            .push_back(NativeAcquire::Service(key));
         state.pending_services.push_back(later);
-        assert_eq!(Control::pick_service(&mut state), Some(key));
+        assert_eq!(
+            Control::pick_service(&mut state),
+            Some(NativeTurn::Service(key))
+        );
         assert_eq!(state.pending_services.front(), Some(&later));
         assert_eq!(
             Control::pick_service(&mut state),
@@ -1992,7 +2416,247 @@ mod tests {
         state
             .physical
             .insert(ThreadKey::Main, OwnerLocation::Receiving);
-        assert_eq!(Control::pick_service(&mut state), Some(later));
+        assert_eq!(
+            Control::pick_service(&mut state),
+            Some(NativeTurn::Service(later))
+        );
+    }
+
+    #[test]
+    fn native_pump_serves_b_without_completing_pending_a_or_main_wait() {
+        let a = host_key();
+        let b = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let owner_a = ThreadKey::Worker(NonZeroU64::MIN);
+        let owner_b = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let original_wait = Wait::Join(owner_a);
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, original_wait);
+        Control::set_wait(&mut state, owner_a, Wait::HostRequest(a));
+        Control::set_wait(&mut state, owner_b, Wait::HostRequest(b));
+        for (key, requester, phase) in [
+            (a, owner_a, ServicePhase::RealWait),
+            (b, owner_b, ServicePhase::Reserved),
+        ] {
+            state
+                .services
+                .insert(key, ServiceMetadata { requester, phase });
+        }
+        state.pending_services.push_back(b);
+        state.pending_acquires.push_back(NativeAcquire::Pump);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        assert_eq!(Control::pick_service(&mut state), Some(NativeTurn::Pump));
+        assert_eq!(state.services[&a].phase, ServicePhase::RealWait);
+        assert!(
+            matches!(Control::choose_native_metadata(&mut state, NativePumpPurpose::Serving), NativePumpChoice::Native(NativeTurn::Service(key)) if key == b)
+        );
+        assert_eq!(state.services[&a].phase, ServicePhase::RealWait);
+        assert_eq!(state.services[&b].phase, ServicePhase::Serving);
+        assert_eq!(state.waits[&ThreadKey::Main], original_wait);
+
+        let slice_b = ReservedServiceSlice {
+            key: b,
+            requester: owner_b,
+            _confined: PhantomData,
+        };
+        assert_eq!(Control::defer_native_metadata(&mut state, &slice_b), Ok(()));
+        assert_eq!(state.services[&a].phase, ServicePhase::RealWait);
+        assert_eq!(state.services[&b].phase, ServicePhase::PendingNative);
+        let slice_a = ReservedServiceSlice {
+            key: a,
+            requester: owner_a,
+            _confined: PhantomData,
+        };
+        assert_eq!(
+            Control::enter_native_completion_metadata(&mut state, &slice_a),
+            Ok(())
+        );
+        assert_eq!(state.services[&a].phase, ServicePhase::ServingAfterWait);
+        assert_eq!(state.services[&b].phase, ServicePhase::PendingNative);
+        assert_eq!(state.waits[&ThreadKey::Main], original_wait);
+        assert!(
+            state.ready.is_empty(),
+            "native hops cannot enqueue a Lisp continuation"
+        );
+    }
+
+    #[test]
+    fn pending_native_record_keeps_no_runnable_scheduler_in_the_driver() {
+        let key = host_key();
+        let owner = ThreadKey::Worker(NonZeroU64::MIN);
+        let original_wait = Wait::Join(owner);
+        for phase in [ServicePhase::PendingNative, ServicePhase::RealWait] {
+            let mut state = ControlState::default();
+            Control::set_wait(&mut state, ThreadKey::Main, original_wait);
+            Control::set_wait(&mut state, owner, Wait::HostRequest(key));
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: owner,
+                    phase,
+                },
+            );
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::Receiving);
+            assert_eq!(Control::pick(&mut state), None);
+            assert_eq!(Control::queued_native_work(&state), NativeWork::Idle);
+            assert!(!Control::service_ready(&state));
+            assert_eq!(Control::pick_service(&mut state), Some(NativeTurn::Pump));
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(
+                state.physical[&ThreadKey::Main],
+                OwnerLocation::NativeDriving
+            );
+            assert_eq!(state.waits[&ThreadKey::Main], original_wait);
+            assert!(state.ready.is_empty());
+        }
+    }
+
+    #[test]
+    fn stale_native_pump_acquire_does_not_revive_a_drained_record() {
+        let owner = ThreadKey::Worker(NonZeroU64::MIN);
+        let mut state = ControlState::default();
+        let original = Wait::Join(owner);
+        Control::set_wait(&mut state, ThreadKey::Main, original);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        state.pending_acquires.push_back(NativeAcquire::Pump);
+        assert_eq!(Control::queued_native_work(&state), NativeWork::Idle);
+        assert!(!Control::service_ready(&state));
+        assert_eq!(Control::pick_service(&mut state), None);
+        assert!(state.pending_acquires.is_empty());
+        assert_eq!(state.waits[&ThreadKey::Main], original);
+        assert_eq!(state.physical[&ThreadKey::Main], OwnerLocation::Receiving);
+    }
+
+    #[test]
+    fn pending_only_driver_cannot_intercept_a_reserved_requester_return() {
+        let owner_a = ThreadKey::Worker(NonZeroU64::MIN);
+        let returning_b = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Join(owner_a));
+        Control::set_wait(&mut state, returning_b, Wait::Runnable);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        state.physical.insert(returning_b, OwnerLocation::Receiving);
+        state.services.insert(
+            host_key(),
+            ServiceMetadata {
+                requester: owner_a,
+                phase: ServicePhase::RealWait,
+            },
+        );
+        assert!(!Control::service_ready(&state));
+        assert_eq!(Control::intercept_ready(&mut state, returning_b), None);
+        assert_eq!(state.physical[&returning_b], OwnerLocation::Running);
+        assert_eq!(state.physical[&ThreadKey::Main], OwnerLocation::Receiving);
+        assert_eq!(state.services[&host_key()].phase, ServicePhase::RealWait);
+        assert!(state.ready.is_empty());
+    }
+
+    #[test]
+    fn a_new_pending_native_reservation_cannot_resume_main_on_an_older_release() {
+        let a = host_key();
+        let b = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+        Control::enqueue_ready(&mut state, ThreadKey::Main);
+        for (key, phase) in [
+            (a, ServicePhase::RealWait),
+            (b, ServicePhase::PendingNative),
+        ] {
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: ThreadKey::Worker(NonZeroU64::MIN),
+                    phase,
+                },
+            );
+        }
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+        assert!(matches!(
+            Control::choose_native_metadata(&mut state, NativePumpPurpose::Serving),
+            NativePumpChoice::Native(NativeTurn::Pump)
+        ));
+        assert_eq!(state.ready.front(), Some(&ThreadKey::Main));
+        assert_eq!(state.services[&a].phase, ServicePhase::RealWait);
+        assert_eq!(state.services[&b].phase, ServicePhase::PendingNative);
+    }
+
+    #[test]
+    fn explicit_native_drain_does_not_resume_main_before_settlement() {
+        for purpose in [NativePumpPurpose::Serving, NativePumpPurpose::Draining] {
+            let key = host_key();
+            let mut state = ControlState::default();
+            Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+            Control::enqueue_ready(&mut state, ThreadKey::Main);
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: ThreadKey::Worker(NonZeroU64::MIN),
+                    phase: ServicePhase::RealWait,
+                },
+            );
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+            let choice = Control::choose_native_metadata(&mut state, purpose);
+            match purpose {
+                NativePumpPurpose::Serving => {
+                    assert!(matches!(choice, NativePumpChoice::OriginalMain));
+                    assert_eq!(state.physical[&ThreadKey::Main], OwnerLocation::Running);
+                    assert!(state.ready.is_empty());
+                }
+                NativePumpPurpose::Draining => {
+                    assert!(matches!(choice, NativePumpChoice::Native(NativeTurn::Pump)));
+                    assert_eq!(
+                        state.physical[&ThreadKey::Main],
+                        OwnerLocation::NativeDriving
+                    );
+                    assert_eq!(state.ready.front(), Some(&ThreadKey::Main));
+                }
+            }
+            assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+            assert_eq!(state.services[&key].phase, ServicePhase::RealWait);
+        }
+    }
+
+    #[test]
+    fn pending_native_completion_refuses_another_owner_without_changing_any_phase() {
+        let key = host_key();
+        let owner = ThreadKey::Worker(NonZeroU64::MIN);
+        let other = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let mut state = ControlState::default();
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester: owner,
+                phase: ServicePhase::RealWait,
+            },
+        );
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+        let wrong = ReservedServiceSlice {
+            key,
+            requester: other,
+            _confined: PhantomData,
+        };
+        assert_eq!(
+            Control::enter_native_completion_metadata(&mut state, &wrong),
+            Err(ServiceRefusal::WrongServiceState)
+        );
+        assert_eq!(state.services[&key].phase, ServicePhase::RealWait);
+        assert_eq!(
+            state.physical[&ThreadKey::Main],
+            OwnerLocation::NativeDriving
+        );
     }
 
     #[test]
@@ -2036,6 +2700,44 @@ mod tests {
             state.waits.get(&requester),
             Some(&Wait::HostRequest(host_key()))
         );
+    }
+
+    #[test]
+    fn pending_native_owner_exit_publishes_readiness_before_native_reacquire() {
+        use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWakeOutcome};
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        for original in [Wait::Runnable, Wait::Join(worker)] {
+            let manager = crate::emacs_core::process::ProcessManager::new();
+            let control = Control::default();
+            let _main = control.register_main();
+            let _worker = control.register_worker(worker);
+            control.install_select(manager.green_select_handle());
+            {
+                let mut state = control.state();
+                Control::set_wait(&mut state, ThreadKey::Main, original);
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+            }
+            let source = control.native_pump_source().unwrap();
+            let armed = source.arm(ControlDestination::NativeMain).unwrap();
+            assert_eq!(armed.poll(), None);
+            control.publish_owner_exit(worker);
+            assert_eq!(control.wait_of(worker), Some(Wait::Exited));
+            assert_eq!(control.wait_of(ThreadKey::Main), Some(Wait::Runnable));
+            assert_eq!(
+                armed.poll(),
+                Some(ControlWakeOutcome::ControlReady(
+                    ControlNudge::SchedulerReady
+                )),
+                "worker exit must wake main before waiting for its native acquire"
+            );
+            assert_eq!(
+                control.state().physical.get(&ThreadKey::Main),
+                Some(&OwnerLocation::NativeReleased),
+                "a wake hint does not fabricate native reacquisition"
+            );
+        }
     }
 
     #[test]

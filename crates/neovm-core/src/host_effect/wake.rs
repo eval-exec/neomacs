@@ -17,7 +17,7 @@ use super::contracts::ReadDeadline;
 #[path = "wake/native_wait.rs"]
 pub(crate) mod native_wait;
 
-use native_wait::{InlineNativeWait, NativeWaitHandoff};
+use native_wait::{InlineNativeWait, NativeWaitContinuation, NativeWaitHandoff};
 
 /// Keep the ordinary input bit at the allocation's original address. Only cold
 /// attachment/control operations consult the sidecar. Hot forwarding methods
@@ -469,6 +469,17 @@ impl ControlWake {
         })
     }
 
+    /// Owned fault seam: production has neither a failure knob nor a second
+    /// notifier path. The next actual native notification closes this source.
+    #[cfg(test)]
+    pub(crate) fn fail_next_native_notification_for_test(&self) {
+        self.native
+            .as_ref()
+            .expect("native endpoint fixture")
+            .fail_next_notification
+            .store(true, Ordering::Release);
+    }
+
     /// Retirement is durable before closing the owned wake source. An old
     /// publisher can only observe this allocation's retired session.
     pub(crate) fn retire(&self) {
@@ -662,6 +673,9 @@ impl WaitRegistration {
                         ReadDeadline::At(deadline),
                         handoff,
                     );
+                    if handoff.continuation() == NativeWaitContinuation::ReturnToDriver {
+                        return ControlWakeOutcome::NativeReady;
+                    }
                     metadata = self.wake.lock();
                 }
                 ReadDeadline::Unbounded => {
@@ -673,6 +687,9 @@ impl WaitRegistration {
                         ReadDeadline::Unbounded,
                         handoff,
                     );
+                    if handoff.continuation() == NativeWaitContinuation::ReturnToDriver {
+                        return ControlWakeOutcome::NativeReady;
+                    }
                     metadata = self.wake.lock();
                 }
             }
@@ -776,6 +793,9 @@ impl NativePollLease {
                             ControlWakeOutcome::NativeReady
                         },
                     );
+                }
+                if handoff.continuation() == NativeWaitContinuation::ReturnToDriver {
+                    return Ok(ControlWakeOutcome::NativeReady);
                 }
             }
         }

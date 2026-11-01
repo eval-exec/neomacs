@@ -10,34 +10,15 @@ use crate::host_effect::contracts::OwnedNativeData;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use std::collections::{BTreeMap, VecDeque};
 
-/// Why the requesting owner no longer wants ordinary native completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::emacs_core::eval::green) enum CancelReason {
-    TargetSignal,
-    TargetQuit,
-    OwnerEnded,
-    SessionClosing,
-}
+pub(in crate::emacs_core::eval::green) use crate::host_effect::native_outcome::{
+    CancelReason, NativeOutcome, NativeReply,
+};
 
 /// Enqueue succeeded once, or the actor no longer exists. Never retry Delivered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DeliveryStatus {
     Delivered,
     ReceiverClosed,
-}
-
-/// Native-only payloads. Registered Lisp errors remain in the root registry.
-#[derive(Debug, PartialEq, Eq)]
-pub(in crate::emacs_core::eval::green) enum NativeReply {
-    Returned(OwnedNativeData),
-    LispError(OwnedNativeData),
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(in crate::emacs_core::eval::green) enum NativeOutcome {
-    Reply(NativeReply),
-    Interrupted(CancelReason),
-    HostClosed,
 }
 
 /// Cancellation after dispatch never claims that the native effect rolled back.

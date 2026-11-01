@@ -8,7 +8,9 @@
 use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
 use super::carrier::CarrierJob;
-use super::host_service::{self, NativeSettlement, PreparedHostCall, RestoredHostOwner};
+use super::host_service::{
+    self, MainNativeDrain, NativeSettlement, OwnerReceive, PreparedHostCall, RestoredHostOwner,
+};
 use super::scheduler::{
     Control, Handoff, Lifecycle, NativeRelease, ServiceReturn, ThreadKey, Wait, Wake,
 };
@@ -78,7 +80,7 @@ enum MainWaitAuthority {
 
 struct MainNativeHandoff<'native> {
     control: &'native Control,
-    receiver: &'native mpsc::Receiver<Wake>,
+    receiver: &'native mut OwnerReceive,
     wait_end: Instant,
     authority: MainWaitAuthority,
 }
@@ -103,7 +105,9 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
         else {
             std::process::abort()
         };
-        let wake = self.control.reacquire_main_wait(release, self.receiver);
+        let wake = self
+            .control
+            .reacquire_main_wait(release, self.receiver.as_channel());
         self.authority = MainWaitAuthority::Held(receive_owner_turn(
             ThreadKey::Main,
             wake,
@@ -138,7 +142,7 @@ impl MainNativeHandoff<'_> {
 pub(crate) struct GreenSeat {
     pub(crate) key: ThreadKey,
     pub(super) control: Arc<Control>,
-    receiver: Option<mpsc::Receiver<Wake>>,
+    receiver: Option<OwnerReceive>,
     /// The World's Baton, while this thread runs.
     baton: Option<Baton>,
     /// A constant or native forwarder refused a rebind. Deliver this after
@@ -214,7 +218,7 @@ impl Context {
             .install_green_seat(Box::new(GreenSeat {
                 key,
                 control,
-                receiver: Some(receiver),
+                receiver: Some(OwnerReceive::new(key, receiver)),
                 baton: Some(baton),
                 binding_resume_error: None,
                 parked_roots_buffer: Vec::new(),
@@ -433,7 +437,7 @@ impl Context {
             .baton
             .take()
             .expect("the running thread holds the Baton");
-        let receiver = seat.receiver.take().expect("a seat keeps its channel");
+        let mut receiver = seat.receiver.take().expect("a seat keeps its channel");
         // The thread record keeps what another thread may read or change
         // while this one is parked: its current buffer and its errors.
         let current = self.buffers.current_buffer_id();
@@ -450,13 +454,15 @@ impl Context {
         self.publish_parked_roots(&baton, key, publication);
         // All World/registry borrows have ended before the unique Baton moves.
         let (outcome, host_resume, native_resume) = match request {
-            ParkRequest::Ordinary(wait) => {
-                (control.transfer(key, wait, baton, &receiver), None, None)
-            }
+            ParkRequest::Ordinary(wait) => (
+                control.transfer(key, wait, baton, receiver.as_channel()),
+                None,
+                None,
+            ),
             ParkRequest::MainNative { mut wait, wait_end } => {
                 let mut handoff = MainNativeHandoff {
                     control: &control,
-                    receiver: &receiver,
+                    receiver: &mut receiver,
                     wait_end,
                     authority: MainWaitAuthority::Held(baton),
                 };
@@ -464,8 +470,13 @@ impl Context {
                 (Ok(Wake::Resume(handoff.into_baton())), None, Some(result))
             }
             ParkRequest::Host { call, native } => {
-                let (wake, resume) =
-                    host_service::dispatch_host(call, native, baton, &control, &receiver);
+                let (wake, resume) = host_service::dispatch_host(
+                    call,
+                    native,
+                    baton,
+                    &control,
+                    receiver.as_channel(),
+                );
                 (Ok(wake), Some(resume), None)
             }
         };
@@ -475,7 +486,7 @@ impl Context {
         };
         // A service turn must not restore main's Lisp continuation, JIT pins,
         // bindings or TLS, or consume its original semantic Wait.
-        let baton = receive_owner_turn(key, wake, &control, &receiver);
+        let baton = receive_owner_turn(key, wake, &control, &mut receiver);
         // Only the returning continuation refreshes its private dispatch
         // header from canonical cells. A peer's function write updates its own
         // header, so comparing our stale header would miss that redefinition.
@@ -760,11 +771,30 @@ impl Context {
             return;
         }
         let control = Arc::clone(&seat.control);
+        let mut native_drain = match seat.receiver.as_mut() {
+            Some(receiver) => receiver.close_native(),
+            // A running main owns its receive-side storage. Losing it cannot
+            // authorize dropping outstanding native tickets or parked roots.
+            None => std::process::abort(),
+        };
         control.close();
-        while control.others_could_run(ThreadKey::Main) {
+        loop {
+            match native_drain {
+                MainNativeDrain::Drained => {
+                    if !control.others_could_run(ThreadKey::Main) {
+                        break;
+                    }
+                }
+                MainNativeDrain::Pending => {}
+            }
             // Each hand-off ends a thread; main's own exit flow, if any, has
-            // nowhere left to go.
+            // nowhere left to go. Native-only HostRequest waiters remain a
+            // drain obligation even with no ordinarily runnable peer.
             let _ = self.green_park(Wait::Runnable);
+            native_drain = match self.green_seat().and_then(|seat| seat.receiver.as_mut()) {
+                Some(receiver) => receiver.native_drain(),
+                None => std::process::abort(),
+            };
         }
         // Every carrier is idle here (no Lisp thread can run after the loop
         // above). Wake and join them deterministically; idle carriers hold no
@@ -990,12 +1020,12 @@ fn receive_owner_turn(
     key: ThreadKey,
     mut wake: Wake,
     control: &Control,
-    receiver: &mpsc::Receiver<Wake>,
+    receiver: &mut OwnerReceive,
 ) -> Baton {
     let _abort_on_panic = AbortOnPanic;
     loop {
-        wake = control.intercept_acquire(key, wake, receiver);
-        match wake {
+        wake = control.intercept_acquire(key, wake, receiver.as_channel());
+        let result = match wake {
             Wake::Resume(baton) => {
                 baton.enter();
                 return baton;
@@ -1008,18 +1038,28 @@ fn receive_owner_turn(
                     tracing::error!(?key, "native service addressed a non-main owner");
                     std::process::abort();
                 }
-                match host_service::serve_main_wake(request, baton, control, receiver) {
-                    ServiceReturn::ResumeMain(baton) => {
-                        baton.enter();
-                        return baton;
-                    }
-                    ServiceReturn::Sent => {
-                        wake = match receiver.recv() {
-                            Ok(wake) => wake,
-                            Err(_) => std::process::abort(),
-                        };
-                    }
+                receiver.serve(request, baton, control)
+            }
+            Wake::NativePump { baton } => {
+                if key != ThreadKey::Main {
+                    tracing::error!(?key, "native pump addressed a non-main owner");
+                    std::process::abort();
                 }
+                receiver.drive(baton, control)
+            }
+        };
+        match result {
+            // Already qualified by the native scheduler. Re-intercepting would
+            // steal a ready original main turn merely because A remains pending.
+            ServiceReturn::ResumeMain(baton) => {
+                baton.enter();
+                return baton;
+            }
+            ServiceReturn::Sent => {
+                wake = match receiver.as_channel().recv() {
+                    Ok(wake) => wake,
+                    Err(_) => std::process::abort(),
+                };
             }
         }
     }
@@ -1044,7 +1084,8 @@ pub(super) fn run_carrier_job(
     // A panic here would drop the Baton with this thread's owner, and every
     // parked thread would wait for it forever: end the process instead.
     let _abort_on_panic = AbortOnPanic;
-    let Ok(wake) = receiver.recv() else {
+    let mut receiver = OwnerReceive::new(key, receiver);
+    let Ok(wake) = receiver.as_channel().recv() else {
         // The runtime went away before this thread ever ran; the pool is
         // draining and never reuses this slot.
         return super::carrier::ParkResult::Exit;
@@ -1072,7 +1113,7 @@ pub(super) fn run_carrier_job(
         crate::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
         "carrier job starts with a stale TAGGED_HEAP TLS pointer"
     );
-    let baton = receive_owner_turn(key, wake, &control, &receiver);
+    let baton = receive_owner_turn(key, wake, &control, &mut receiver);
     baton.enter();
     set_job_thread_name(key);
     #[cfg(feature = "jit")]
@@ -1121,7 +1162,12 @@ pub(super) fn run_carrier_job(
         }
         runtime.pending_starts.borrow_mut().remove(&key)
     });
-    owner.take_green_seat(key, Arc::clone(&control), receiver, baton);
+    owner.take_green_seat(
+        key,
+        Arc::clone(&control),
+        receiver.into_worker_channel(),
+        baton,
+    );
     #[cfg(test)]
     if PANIC_NEXT_WORKER.swap(false, std::sync::atomic::Ordering::Relaxed) {
         panic!("test hook: a Green worker panics");

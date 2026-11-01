@@ -18,10 +18,10 @@ source_paths=(
     'src/host_effect/wake/tests/native_wait.rs'
 )
 source_hashes=(
-    '0fe0a0e5b5f8b418a428a5f57b6349b7275d0b7a2ddb4e256b879a8669a84aea'
+    'c95e530e27dc55ec6daf562f65d85d38f6c7a6d36f5eea120315db37ce2a45c2'
     '74b286788d30e9903a6b91048debfd423b13efa9c05ddef28842b76181a54233'
     '366bda39a7ef68e7f0cd9d4107e74b23fb6ce98a0ab614d733ab9a66161014e2'
-    '40da6e5f793725c91ac732f69f9b4fe03efd35e6de63c4067200d37633d85fa4'
+    '5872a982be4fa90284916a29e85e2ed10eccd4c91ebd3f39a50dfcb4c2940c4f'
     '213e1fda27001164d3c6abe21b96f1797269dbcae0e8f61d2dbebec15c422109'
 )
 for index in "${!source_paths[@]}"; do

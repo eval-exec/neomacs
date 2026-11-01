@@ -22,6 +22,12 @@ pub(crate) struct RealWaitPermit {
 
 static_assertions::assert_not_impl_any!(RealWaitPermit: Send, Sync, Clone, Copy);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeWaitContinuation {
+    RecheckPredicate,
+    ReturnToDriver,
+}
+
 /// Static owner projection for release and restoration around physical waits.
 ///
 /// `release` must not lock the paired control predicate: a condition wait still
@@ -30,6 +36,12 @@ static_assertions::assert_not_impl_any!(RealWaitPermit: Send, Sync, Clone, Copy)
 pub(crate) trait NativeWaitHandoff {
     fn release(&mut self, permit: RealWaitPermit);
     fn reacquire(&mut self);
+    /// A routed pump must classify owned completions after every physical
+    /// cycle. Ordinary static projections keep the canonical predicate loop.
+    #[inline(always)]
+    fn continuation(&self) -> NativeWaitContinuation {
+        NativeWaitContinuation::RecheckPredicate
+    }
     #[cfg(test)]
     fn physical_block_entered(&mut self) {}
     #[cfg(test)]

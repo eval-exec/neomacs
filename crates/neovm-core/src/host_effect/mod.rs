@@ -7,3 +7,6 @@
 pub mod contracts;
 
 pub(crate) mod wake;
+
+pub(crate) mod native_outcome;
+pub(crate) mod native_pending;

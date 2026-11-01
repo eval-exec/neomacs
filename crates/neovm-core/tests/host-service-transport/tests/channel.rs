@@ -1,23 +1,18 @@
-//! Real production transport, with metadata/native DTO shims only.
-#![forbid(unsafe_code)]
+//! Actual native ownership, wake, pending registry and service transport.
+#![deny(unsafe_op_in_unsafe_fn)]
 #![allow(dead_code)]
 
-mod host_effect {
-    pub mod contracts {
-        #[derive(Debug, PartialEq, Eq)]
-        pub enum OwnedNativeData {
-            None,
-            Text(String),
-            Bytes(Vec<u8>),
-            Truth(NativeTruth),
-        }
+#[path = "../../../src/host_effect/contracts.rs"]
+pub(crate) mod contracts;
+#[path = "../../../src/host_effect/native_outcome.rs"]
+pub(crate) mod native_outcome;
+#[path = "../../../src/host_effect/native_pending.rs"]
+pub(crate) mod native_pending;
+#[path = "../../../src/host_effect/wake.rs"]
+pub(crate) mod wake;
 
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum NativeTruth {
-            False,
-            True,
-        }
-    }
+mod host_effect {
+    pub(crate) use crate::{contracts, native_outcome, native_pending, wake};
 }
 
 mod emacs_core;
