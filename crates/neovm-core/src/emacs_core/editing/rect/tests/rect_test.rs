@@ -12,6 +12,102 @@ fn bootstrap_eval_all(src: &str) -> Vec<String> {
 }
 
 #[test]
+fn rectangle_copied_properties_have_only_manager_roots() {
+    use crate::buffer::{CharPos0, CharRange};
+    use crate::emacs_core::Context;
+
+    struct Probe(usize);
+
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.gc_stress = false;
+    eval.gc_collect_exact();
+    eval.tagged_heap.set_gc_threshold(usize::MAX);
+    let property = Value::symbol("rectangle-owner-only");
+    let probes = eval.with_gc_inhibited(|eval| {
+        let mut probes = Vec::new();
+        let mut lines = Vec::new();
+        for mut line in [
+            LispString::from_utf8("line-é"),
+            LispString::from_unibyte(vec![0x80, b'x']),
+        ] {
+            let payload = Value::vector(vec![Value::fixnum(probes.len() as i64)]);
+            probes.push(Probe(payload.bits()));
+            line.intervals_mut().put_property_in_char_range(
+                CharRange::from_usize(0, 1),
+                property,
+                payload,
+            );
+            lines.push(line);
+        }
+        // The World owns native restored copies independently of the Lisp
+        // killed-rectangle variable, buffers, explicit roots or caller values.
+        *eval.rectangle = RectangleState { killed: lines };
+        probes
+    });
+    let check_live = |eval: &Context| {
+        // Check the untouched second line before the mutation's omitted first
+        // line, proving that the remaining visit still retains its graph.
+        for Probe(bits) in probes.iter().rev() {
+            assert!(
+                eval.tagged_heap.retains_veclike(Value::from_bits(*bits)),
+                "rectangle-only property vector was reclaimed"
+            );
+        }
+        for (index, Probe(bits)) in probes.iter().enumerate() {
+            assert_eq!(
+                Value::from_bits(*bits)
+                    .as_vector_data()
+                    .expect("live rectangle property vector")
+                    .as_slice(),
+                &[Value::fixnum(index as i64)]
+            );
+            assert_eq!(
+                eval.rectangle.killed[index]
+                    .intervals()
+                    .get_property_at_char_pos(CharPos0::ZERO, property)
+                    .expect("retained rectangle property")
+                    .bits(),
+                *bits
+            );
+        }
+    };
+    let completed = eval.gc_count;
+    if eval.tagged_heap.generational_enabled() {
+        assert!(eval.tagged_heap.should_run_minor(false, false));
+        eval.gc_pending = true;
+        eval.gc_safe_point_exact();
+        assert!(eval.tagged_heap.sweep_in_progress(), "expected minor sweep");
+        assert!(!eval.tagged_heap.concurrent_mark_running());
+        for _ in 0..10_000 {
+            if !eval.tagged_heap.sweep_in_progress() {
+                break;
+            }
+            eval.gc_safe_point_exact();
+        }
+        assert!(!eval.tagged_heap.sweep_in_progress());
+        assert!(!eval.tagged_heap.mark_in_progress());
+    } else {
+        eval.gc_collect_exact();
+    }
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+    let completed = eval.gc_count;
+    eval.gc_collect_exact();
+    assert_eq!(eval.gc_count, completed + 1);
+    check_live(&eval);
+
+    *eval.rectangle = RectangleState::new();
+    eval.gc_collect_exact();
+    for Probe(bits) in probes {
+        assert!(
+            !eval.tagged_heap.retains_veclike(Value::from_bits(bits)),
+            "retired rectangle graph remained permanently rooted"
+        );
+    }
+}
+
+#[test]
 fn rectangle_state_default() {
     crate::test_utils::init_test_tracing();
     let state = RectangleState::new();

@@ -241,6 +241,7 @@ impl Baton {
             global.face_table.trace_roots_with(&mut visit);
             global.threads.trace_roots_with(&mut visit);
             global.kmacro.trace_roots_with(&mut visit);
+            global.rectangle.trace_roots_with(&mut visit);
             global.command_loop.trace_roots_with(&mut visit);
             global.modes.trace_roots_with(&mut visit);
             buffers.parallel_marker_chain_head_slots()

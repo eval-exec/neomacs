@@ -510,6 +510,8 @@ impl Context {
             self.threads.trace_roots_with(visit);
             group("kmacro");
             self.kmacro.trace_roots_with(visit);
+            group("rectangle");
+            self.rectangle.trace_roots_with(visit);
             group("command_loop");
             crate::gc_trace::GcTrace::trace_roots_with(&*self.command_loop, visit);
             group("modes");

@@ -20,6 +20,7 @@ use crate::emacs_core::error::LispCondition;
 #[cfg(test)]
 use crate::emacs_core::error::{expect_max_args, expect_min_args};
 use crate::emacs_core::value::ValueKind;
+use crate::gc_trace::GcTrace;
 use crate::heap_types::LispString;
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,21 @@ impl RectangleState {
 impl Default for RectangleState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl GcTrace for RectangleState {
+    fn trace_roots(&self, roots: &mut Vec<Value>) {
+        self.trace_roots_with(&mut |value| roots.push(value));
+    }
+
+    fn trace_roots_with(&self, visit: &mut dyn FnMut(Value)) {
+        let Self { killed } = self;
+        // GNU rect.el retains buffer-substring properties in killed-rectangle;
+        // restored native copies have the same property-graph obligation.
+        for line in killed {
+            line.trace_roots_with(visit);
+        }
     }
 }
 
