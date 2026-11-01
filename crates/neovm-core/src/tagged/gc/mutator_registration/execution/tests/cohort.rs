@@ -88,39 +88,72 @@ fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
         .or_else(|| payload.downcast_ref::<&str>().map(|text| text.to_string()))
         .unwrap_or_else(|| "non-string cohort assertion".into())
 }
-/// Retry only admission. Once admitted, the body runs exactly once; its
-/// result (including an assertion) cannot be mistaken for a Busy admission.
-/// A resumed owner may precede the final peer that drains the stop phase.
+/// Wait on the product's resume-debt event, never on the body's outcome.
+/// The predicate gate covers admission only and is released before the body;
+/// concurrent native code, publication, and symbol writers remain concurrent.
 fn with_run<'era, R>(
     owner: &mut Mutator<'era>,
     mut body: impl FnMut(&mut RunAccess<'_, 'era>) -> Result<R, String>,
 ) -> Result<R, String> {
-    contention::retry(
-        Deadline::contention(),
-        || {
-            let mut run = owner.run_access()?;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
-            let closed = contention::retry(
-                Deadline::contention(),
-                || run.close_cons_region(),
-                contention::registration,
-            );
-            drop(run);
-            let result = match result {
-                Ok(result) => result,
-                Err(payload) => Err(failure(payload)),
-            };
-            Ok(match closed {
-                Ok(()) => result,
-                Err(error) => Err(match result {
-                    Ok(_) => format!("cohort close: {error:?}"),
-                    Err(body) => format!("cohort close: {error:?}; body={body}"),
-                }),
-            })
-        },
-        contention::registration,
-    )
-    .map_err(|error| format!("cohort run admission: {error:?}"))?
+    use super::super::super::rendezvous::Phase;
+
+    let registry = owner.registry;
+    let _park = registry.park_ticket();
+    let mut gate = registry
+        .lock_blocking()
+        .map_err(|error| format!("cohort admission gate: {error:?}"))?;
+    loop {
+        match gate.rendezvous.phase {
+            Phase::Idle => break,
+            Phase::DrainingResumes => {
+                // Check the specified non-blocking refusal while its actual
+                // predicate is locked. Busy in any other phase is not retried.
+                match owner.run_access() {
+                    Err(RegistrationError::Busy) => {}
+                    Err(error) => return Err(format!("cohort drain refusal: {error:?}")),
+                    Ok(run) => {
+                        drop(gate);
+                        drop(run);
+                        return Err("cohort admitted during DrainingResumes".into());
+                    }
+                }
+                // The final ResumeGcImage::try_apply -> finish_debt opens Idle
+                // and notifies this same condvar. wait atomically releases the
+                // predicate mutex, including the product's poison wake path.
+                gate = registry
+                    .wait(gate)
+                    .map_err(|error| format!("cohort resume-debt wait: {error:?}"))?;
+            }
+            Phase::Stopping(_) | Phase::Tracing(_) | Phase::Poisoned => {
+                return Err(format!(
+                    "cohort unexpected admission phase: {:?}",
+                    gate.rendezvous.phase
+                ));
+            }
+        }
+    }
+    // Admit under the predicate gate so another owner cannot start restoring
+    // between the Idle observation and run_access. The body takes no gate.
+    let admitted = owner.run_access();
+    drop(gate);
+    drop(_park);
+    let mut run = admitted.map_err(|error| format!("cohort run admission: {error:?}"))?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&mut run)));
+    // A close error is terminal evidence, never a reason to repeat the body or
+    // the close. Normal local-region closure requires no registry mutex.
+    let closed = run.close_cons_region();
+    drop(run);
+    let result = match result {
+        Ok(result) => result,
+        Err(payload) => Err(failure(payload)),
+    };
+    match closed {
+        Ok(()) => result,
+        Err(error) => Err(match result {
+            Ok(_) => format!("cohort close: {error:?}"),
+            Err(body) => format!("cohort close: {error:?}; body={body}"),
+        }),
+    }
 }
 
 fn seed<'era>(
