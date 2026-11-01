@@ -6,7 +6,6 @@ use crate::emacs_core::intern::intern;
 use crate::tagged::gc::function_write_hooks::HofOperation;
 use crate::tagged::gc::{PreparedHofBuiltin, PreparedUnaryFunction};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::Duration;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CohortSize {
@@ -61,9 +60,21 @@ impl Drop for Commands {
     }
 }
 fn receive<T>(receiver: &Receiver<T>) -> Result<T, String> {
-    receiver
-        .recv_timeout(Duration::from_secs(60))
-        .map_err(|error| format!("cohort wait: {error:?}"))
+    // Interpreter collection work may exceed the native wait budget. Keep
+    // identical rendezvous/disconnection semantics without racing that clock,
+    // as in the retained combined-collection fixture.
+    #[cfg(not(miri))]
+    {
+        receiver
+            .recv_timeout(contention::SPIN_WAIT)
+            .map_err(|error| format!("cohort wait: {error:?}"))
+    }
+    #[cfg(miri)]
+    {
+        receiver
+            .recv()
+            .map_err(|error| format!("cohort wait: {error:?}"))
+    }
 }
 fn failure(payload: Box<dyn std::any::Any + Send>) -> String {
     payload
@@ -476,6 +487,13 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
                     .collect::<Vec<_>>();
                 (controller, workers)
             });
+            // Preserve the primary worker error even if terminal finish also
+            // refuses: a secondary lifecycle diagnostic must not hide it.
+            for (index, worker) in workers.iter().enumerate() {
+                if let Ok(Err(error)) = worker {
+                    eprintln!("NMJIT_N4_COHORT_WORKER_OUTCOME {index}: {error}");
+                }
+            }
             drop(admission);
             let (collector, keeper) = era.finish().expect("cohort finish after drained owners");
             drop(collector);
