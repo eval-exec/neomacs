@@ -1173,11 +1173,12 @@ pub(crate) fn builtin_frame_root_frame(
 
 /// `(mouse-position-in-root-frame)` -> (X . Y) or nil
 ///
-/// Mirrors GNU `src/frame.c` `Fmouse_position_in_root_frame`: take
-/// `mouse-position` (after `mouse-position-function`) and add the
+/// Mirrors GNU `Fmouse_position_in_root_frame` (`src/frame.c:7010-7039`):
+/// take `mouse-position` (after `mouse-position-function`) and add the
 /// position of its frame and of every ancestor frame.  On a tty
-/// `mouse-drag-line' reads the pointer through this primitive, so
-/// answering nil left mode-line and divider drags unable to resize.
+/// `mouse-drag-line` reads the pointer through this primitive
+/// (`lisp/mouse.el:862-871`), so answering nil left mode-line and divider
+/// drags unable to resize.
 pub(crate) fn builtin_mouse_position_in_root_frame(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1192,10 +1193,14 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
     };
     let coords = pos.cons_cdr();
     if !coords.is_cons() {
+        // GNU reads the cdr with XCAR/XCDR without validating it; a hook that
+        // returns this shape crashes the reference build.  Stay nil instead.
         return Ok(Value::NIL);
     }
-    let (Some(mut x), Some(mut y)) = (coords.cons_car().as_fixnum(), coords.cons_cdr().as_fixnum())
-    else {
+    let (Some(mut x), Some(mut y)) = (
+        mouse_position_coordinate(coords.cons_car()),
+        mouse_position_coordinate(coords.cons_cdr()),
+    ) else {
         return Ok(Value::NIL);
     };
     let mut current = Some(crate::window::FrameId(frame_id));
@@ -1206,13 +1211,31 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
         }
         seen.push(id);
         let Some(frame) = eval.frames.get(id) else {
-            break;
+            // `mouse-position-function` can return a frame that has since
+            // been deleted; Neomacs keeps no geometry for it.  GNU would read
+            // the dead frame's stale left_pos/top_pos, which cannot be
+            // reproduced once the frame record is gone.
+            return Ok(Value::NIL);
         };
         x += frame.left_pos;
         y += frame.top_pos;
         current = eval.frames.frame_parent_id(id);
     }
     Ok(Value::cons(Value::fixnum(x), Value::fixnum(y)))
+}
+
+/// Decode one X/Y element of `mouse-position`.
+///
+/// `mouse-position` documents nil X/Y on a mouseless terminal.  The reference
+/// GNU build evaluates `XFIXNUM` on that nil as zero, so the normal mouseless
+/// `(FRAME nil . nil)` still answers the frame offsets.  Any other non-fixnum
+/// has no defined GNU result and is rejected instead of copied.
+fn mouse_position_coordinate(value: Value) -> Option<i64> {
+    if value.is_nil() {
+        Some(0)
+    } else {
+        value.as_fixnum()
+    }
 }
 
 pub(crate) fn builtin_gap_position(
