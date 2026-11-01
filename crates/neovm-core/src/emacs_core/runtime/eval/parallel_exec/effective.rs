@@ -18,6 +18,7 @@ use crate::emacs_core::forward::TlsIndex;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 /// The World/era generation a validated key was minted in. Structural
 /// changes escape the executor and revalidate cached keys by this value.
@@ -65,6 +66,9 @@ pub(crate) struct EffectivePlainKey<'era> {
     era: EraId,
     shape: ShapeGeneration,
     _era: PhantomData<&'era ()>,
+    /// The key is owner-confined: sending it to another owner would name a
+    /// slot it does not own.
+    _confined: PhantomData<Rc<()>>,
 }
 
 impl<'era> EffectivePlainKey<'era> {
@@ -83,6 +87,7 @@ impl<'era> EffectivePlainKey<'era> {
             era,
             shape,
             _era: PhantomData,
+            _confined: PhantomData,
         }
     }
 
@@ -112,6 +117,8 @@ impl<'era> EffectivePlainKey<'era> {
         self.era == era && self.shape == shape
     }
 }
+
+static_assertions::assert_not_impl_any!(EffectivePlainKey<'static>: Send, Sync);
 
 /// A read view over one owner's binding slab.
 pub(crate) trait OwnerSlots {

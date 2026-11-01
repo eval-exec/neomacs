@@ -646,6 +646,8 @@ pub(crate) struct FrameArena {
     next_generation: NonZeroU32,
 }
 
+static_assertions::assert_not_impl_any!(FrameArena: Send, Sync);
+
 impl FrameArena {
     pub(crate) fn new(depth_limit: u32) -> Self {
         Self {
