@@ -156,8 +156,7 @@ It does **not** model a stop, sweep or reclamation during the gap: IN_SLICE
 still blocks stop-all, and a real function journal can retain old definitions.
 Actual tracing/reclamation obligations remain with the grace/engine fixtures.
 These models do not prove the engine's authority-word implementation, memory
-ordering, generated HOF lowering or source/definition provenance. The model
-author has not run these cases; the parent owns frozen-chain qualification.
+ordering, generated HOF lowering or source/definition provenance. Frozen-chain qualification owns the actual case counts and witnesses.
 
 Native registration is a separate semantic publisher, not a symbol writer.
 Preparation alone copies its metadata under its existing guard; runtime reads
@@ -174,3 +173,10 @@ matching the engine. Preparation reads the clock before its guarded copy and
 compares the clock again afterward, including refused verification paths.
 A postload-only receipt can otherwise bless old verified metadata with a new
 registration generation. The mixed-preparation negative names that witness.
+
+HOF negative controls record typed selection violations at the offending
+boundary, then complete the same activation/reader teardown and actor joins.
+They drop the modeled runtime before asserting the exact named witness. This
+keeps a deliberate witness from unwinding live Loom RAII state; it does not
+move the observation, remove a contender or change the violated invariant.
+Preparation controls likewise join and drop their runtime before asserting.

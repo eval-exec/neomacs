@@ -119,6 +119,7 @@ enum UpdateOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectionOutcome {
     Selected(CallbackSnapshot),
+    ContractViolation(SelectionViolation),
     MapperRefused,
     RegistrationChanged,
     Busy,
@@ -127,6 +128,36 @@ enum SelectionOutcome {
 enum LeaseState {
     Active,
     Released,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionViolation {
+    MixedBuiltinAndCallback,
+    UnrootedCallback,
+    StaleNativeRegistration,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootRelease {
+    Rooted,
+    Missing,
+}
+
+/// Report only after every actor has joined and the runtime has been dropped.
+/// A named negative must not unwind a live modeled RAII activation or reader.
+fn assert_selection_contract(outcome: SelectionOutcome) {
+    match outcome {
+        SelectionOutcome::Selected(snapshot) => snapshot.check(),
+        SelectionOutcome::MapperRefused
+        | SelectionOutcome::RegistrationChanged
+        | SelectionOutcome::Busy => {}
+        SelectionOutcome::ContractViolation(violation) => match violation {
+            SelectionViolation::MixedBuiltinAndCallback => {
+                panic!("HOF_MIXED_BUILTIN_AND_CALLBACK")
+            }
+            SelectionViolation::UnrootedCallback => panic!("HOF_UNROOTED_CALLBACK_SELECTION"),
+            SelectionViolation::StaleNativeRegistration => panic!("HOF_STALE_NATIVE_REGISTRATION"),
+        },
+    }
 }
 
 struct State {
@@ -258,16 +289,17 @@ impl Reader {
         (state.mapper, snapshot)
     }
 
-    fn release(mut self, activation: &Activation) {
-        let rooted = match self.selected {
-            None => true,
-            Some(selected) => activation.home == Some(selected),
+    fn release(mut self, activation: &Activation) -> RootRelease {
+        let release = match self.selected {
+            None => RootRelease::Rooted,
+            Some(selected) if activation.home == Some(selected) => RootRelease::Rooted,
+            Some(_) => RootRelease::Missing,
         };
         self.leave();
-        // Assert after unlocking so negative teardown cannot poison the state.
-        // This is the stronger root-before-reader-release contract, NOT a
-        // claim that GC can stop an owner which is still IN_SLICE here.
-        assert!(rooted, "HOF_UNROOTED_CALLBACK_SELECTION");
+        // Record at release, but assert only AFTER modeled RAII cleanup and
+        // all actor joins. This is the stronger root-before-reader-release
+        // contract, NOT a claim that GC can stop an IN_SLICE owner here.
+        release
     }
 
     fn leave(&mut self) {
@@ -399,27 +431,28 @@ fn select(
         RegistrationCheck::IgnorePreparedStamp => {}
     }
     let (mapper_at_selection, selected) = reader.select();
-    assert!(
-        mapper_at_selection == Mapper::Canonical,
-        "HOF_MIXED_BUILTIN_AND_CALLBACK"
-    );
-    match transfer {
+    let release = match transfer {
         RootTransfer::BeforeReaderRelease => {
             activation.install(selected);
-            reader.release(&activation);
+            reader.release(&activation)
         }
         RootTransfer::AfterReaderRelease => {
-            reader.release(&activation);
+            let release = reader.release(&activation);
             activation.install(selected);
+            release
         }
-    }
+    };
     assert_eq!(activation.home, Some(selected));
-    assert!(
-        observed == prepared.registration,
-        "HOF_STALE_NATIVE_REGISTRATION"
-    );
     selected.check();
-    SelectionOutcome::Selected(selected)
+    if mapper_at_selection != Mapper::Canonical {
+        SelectionOutcome::ContractViolation(SelectionViolation::MixedBuiltinAndCallback)
+    } else if release == RootRelease::Missing {
+        SelectionOutcome::ContractViolation(SelectionViolation::UnrootedCallback)
+    } else if observed != prepared.registration {
+        SelectionOutcome::ContractViolation(SelectionViolation::StaleNativeRegistration)
+    } else {
+        SelectionOutcome::Selected(selected)
+    }
 }
 
 fn update(runtime: &Arc<Runtime>, update: Update) -> UpdateOutcome {
@@ -468,15 +501,12 @@ fn same_counted_reader_covers_mapper_callback_and_private_root() {
             }));
         }
         redefine(&runtime);
-        for reader in readers {
-            match support::join(reader) {
-                SelectionOutcome::Selected(snapshot) => snapshot.check(),
-                SelectionOutcome::MapperRefused
-                | SelectionOutcome::RegistrationChanged
-                | SelectionOutcome::Busy => {}
-            }
-        }
+        let outcomes: Vec<_> = readers.into_iter().map(support::join).collect();
         check_quiescent(&runtime);
+        drop(runtime);
+        for outcome in outcomes {
+            assert_selection_contract(outcome);
+        }
     });
 }
 
@@ -489,7 +519,7 @@ fn negative_split_readers_mix_mapper_guard_and_callback_selection() {
             let runtime = runtime.clone();
             thread::spawn(move || redefine(&runtime))
         };
-        let _outcome = select(
+        let outcome = select(
             &runtime,
             prepared,
             LeaseProtocol::SplitReaders,
@@ -498,6 +528,8 @@ fn negative_split_readers_mix_mapper_guard_and_callback_selection() {
         );
         support::join(writer);
         check_quiescent(&runtime);
+        drop(runtime);
+        assert_selection_contract(outcome);
     });
 }
 
@@ -510,7 +542,7 @@ fn negative_reader_release_precedes_private_root_contract() {
             let runtime = runtime.clone();
             thread::spawn(move || redefine(&runtime))
         };
-        let _outcome = select(
+        let outcome = select(
             &runtime,
             prepared,
             LeaseProtocol::SameReader,
@@ -519,6 +551,8 @@ fn negative_reader_release_precedes_private_root_contract() {
         );
         support::join(writer);
         check_quiescent(&runtime);
+        drop(runtime);
+        assert_selection_contract(outcome);
     });
 }
 
@@ -535,33 +569,30 @@ fn registration_clock_change_refuses_stale_prepared_builtin() {
             let runtime = runtime.clone();
             thread::spawn(move || update(&runtime, Update::RedefineCallback))
         };
-        match select(
+        let outcome = select(
             &runtime,
             prepared,
             LeaseProtocol::SameReader,
             RootTransfer::BeforeReaderRelease,
             RegistrationCheck::PreparedStamp,
-        ) {
-            SelectionOutcome::Selected(snapshot) => snapshot.check(),
-            SelectionOutcome::RegistrationChanged | SelectionOutcome::Busy => {}
-            SelectionOutcome::MapperRefused => panic!("no mapper writer in registration case"),
-        }
+        );
         support::join(registrar);
         let _legal_writer_outcome = support::join(writer);
         // Joined publication happens before this fresh acquisition. Refusal is
         // now mandatory; no metadata dereference or symbol-writer exclusion is
         // used to establish the stale-registration outcome.
-        assert_eq!(
-            select(
-                &runtime,
-                prepared,
-                LeaseProtocol::SameReader,
-                RootTransfer::BeforeReaderRelease,
-                RegistrationCheck::PreparedStamp,
-            ),
-            SelectionOutcome::RegistrationChanged
+        let after_registration = select(
+            &runtime,
+            prepared,
+            LeaseProtocol::SameReader,
+            RootTransfer::BeforeReaderRelease,
+            RegistrationCheck::PreparedStamp,
         );
         check_quiescent(&runtime);
+        drop(runtime);
+        assert_selection_contract(outcome);
+        assert_ne!(outcome, SelectionOutcome::MapperRefused);
+        assert_eq!(after_registration, SelectionOutcome::RegistrationChanged);
     });
 }
 
@@ -579,7 +610,7 @@ fn negative_ignored_stamp_accepts_stale_native_registration() {
             thread::spawn(move || update(&runtime, Update::RedefineCallback))
         };
         support::join(registrar);
-        let _legal_selection_outcome = select(
+        let outcome = select(
             &runtime,
             prepared,
             LeaseProtocol::SameReader,
@@ -588,6 +619,8 @@ fn negative_ignored_stamp_accepts_stale_native_registration() {
         );
         let _legal_writer_outcome = support::join(writer);
         check_quiescent(&runtime);
+        drop(runtime);
+        assert_selection_contract(outcome);
     });
 }
 
@@ -599,7 +632,11 @@ fn bracketed_preparation_refuses_changed_registration_generation() {
             let runtime = runtime.clone();
             thread::spawn(move || replace_native_registration(&runtime))
         };
-        match prepare(&runtime, PreparationProtocol::BracketMetadataCopy) {
+        let outcome = prepare(&runtime, PreparationProtocol::BracketMetadataCopy);
+        support::join(registrar);
+        check_quiescent(&runtime);
+        drop(runtime);
+        match outcome {
             PreparationOutcome::Prepared(prepared) => {
                 // An original receipt may precede a later publication; compare
                 // its copied identity, never a subsequently loaded clock.
@@ -610,8 +647,6 @@ fn bracketed_preparation_refuses_changed_registration_generation() {
             }
             PreparationOutcome::NonCanonical => {}
         }
-        support::join(registrar);
-        check_quiescent(&runtime);
     });
 }
 
@@ -623,7 +658,11 @@ fn negative_postload_only_blesses_mixed_preparation_generation() {
             let runtime = runtime.clone();
             thread::spawn(move || replace_native_registration(&runtime))
         };
-        match prepare(&runtime, PreparationProtocol::PostloadOnly) {
+        let outcome = prepare(&runtime, PreparationProtocol::PostloadOnly);
+        support::join(registrar);
+        check_quiescent(&runtime);
+        drop(runtime);
+        match outcome {
             PreparationOutcome::Prepared(prepared) => {
                 // Broken history: copy OLD canonical semantics, release the
                 // metadata guard, registrar changes semantics and publishes,
@@ -638,7 +677,5 @@ fn negative_postload_only_blesses_mixed_preparation_generation() {
             }
             PreparationOutcome::NonCanonical => {}
         }
-        support::join(registrar);
-        check_quiescent(&runtime);
     });
 }
