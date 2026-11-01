@@ -115,6 +115,8 @@ jobs:
       - name: Install CI GUI ecosystem and perf
         run: |
           scripts/ci/setup-linux.sh ecosystem
+          # Fixed offscreen Mesa/llvmpipe capacity proxy; separate from scroll timing.
+          sudo apt-get install -y --no-install-recommends glmark2
           if ! sudo apt-get install -y --no-install-recommends \
             linux-tools-common linux-tools-generic binutils; then
             echo '::warning::Optional capture package provisioning failed; measurements will still run'
@@ -216,6 +218,77 @@ jobs:
 
           def save():
               (O / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+
+
+          def command_text(command):
+              try:
+                  completed = subprocess.run(command, capture_output=True, text=True, timeout=5, check=True)
+                  return completed.stdout.strip()
+              except (OSError, subprocess.SubprocessError) as error:
+                  return {'unavailable': repr(error)}
+
+
+          def host_identity():
+              cpu = command_text(['lscpu', '--json'])
+              fields = {entry['field'].rstrip(':'): entry['data']
+                        for entry in json.loads(cpu)['lscpu']} if isinstance(cpu, str) else {}
+              flags = fields.get('Flags', '').split()
+              frequencies = {}
+              for path in sorted(Path('/sys/devices/system/cpu/cpu0/cpufreq').glob('*')):
+                  if path.is_file():
+                      try:
+                          frequencies[path.name] = path.read_text().strip()
+                      except OSError as error:
+                          frequencies[path.name] = {'unavailable': repr(error)}
+              cpuinfo = Path('/proc/cpuinfo').read_text()
+              meminfo = Path('/proc/meminfo').read_text()
+              return {
+                  'lscpu': fields or cpu,
+                  'model_name': fields.get('Model name'),
+                  'vector_flags': [flag for flag in flags if flag in ['avx', 'avx2'] or flag.startswith('avx512')],
+                  'current_cpu_MHz': re.findall(r'^cpu MHz\s*:\s*(.*)$', cpuinfo, re.MULTILINE),
+                  'cpu0_cpufreq': frequencies or {'unavailable': 'no cpu0 cpufreq interface'},
+                  'nproc': command_text(['nproc']),
+                  'MemTotal': next((line for line in meminfo.splitlines() if line.startswith('MemTotal:')), None),
+                  # Only the VM size is requested; never collect instance identities, tokens or user data.
+                  'azure_vm_size': command_text(['curl', '--fail', '--silent', '--show-error', '--noproxy', '*',
+                                                 '--connect-timeout', '1', '--max-time', '2', '-H', 'Metadata:true',
+                                                 'http://169.254.169.254/metadata/instance/compute/vmSize'
+                                                 '?api-version=2021-02-01&format=text']),
+              }
+
+
+          def parse_capacity(text):
+              renderer = re.search(r'GL_RENDERER:\s*([^\n]+)', text)
+              assert renderer and 'llvmpipe' in renderer[1].lower(), 'Capacity probe did not use llvmpipe'
+              samples = [float(value) for value in re.findall(r'FrameTime:\s*([0-9.]+)\s*ms', text)]
+              assert len(samples) == 5 and all(value > 0 for value in samples), ('Five positive frame costs required', samples)
+              return {'renderer': renderer[1].strip(), 'frame_ms': samples,
+                      'median_frame_ms': statistics.median(samples)}
+
+
+          def capacity_probe(directory):
+              # A CPU shader/rasterizer throughput proxy, NOT a Vulkan presentation budget or
+              # a substitute for product latency. glFinish bounds each offscreen frame's work.
+              command = ['timeout', '--kill-after=2s', '25s', 'xvfb-run', '--auto-servernum',
+                         '--server-args=-screen 0 1280x800x24 -nolisten tcp',
+                         'glmark2', '--off-screen', '--size', '1280x800', '--frame-end', 'finish', '--reuse-context']
+              command += ['--benchmark', 'shading:shading=phong:duration=1.0'] * 5
+              probe = {'kind': 'OpenGL offscreen llvmpipe phong; five 1s scenes; glFinish per frame',
+                       'dimensions': [1280, 800], 'command': command}
+              env = os.environ.copy()
+              env.update(LIBGL_ALWAYS_SOFTWARE='1', GALLIUM_DRIVER='llvmpipe', LP_NUM_THREADS='4', vblank_mode='0')
+              try:
+                  with (directory / 'capacity.out').open('w') as log:
+                      process = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                               timeout=30, check=True)
+                  probe.update(parse_capacity((directory / 'capacity.out').read_text()))
+                  probe['exit'] = process.returncode
+              except (OSError, subprocess.SubprocessError, AssertionError) as error:
+                  # Missing capacity remains explicit and never discards a scroll measurement.
+                  probe['capture_error'] = repr(error)
+              (directory / 'capacity.json').write_text(json.dumps(probe, indent=2) + '\n')
+              return probe
 
 
           def clock_pair():
@@ -772,6 +845,9 @@ jobs:
               shutil.rmtree(root)
 
 
+          result['host'] = host_identity()
+          (O / 'host.json').write_text(json.dumps(result['host'], indent=2) + '\n')
+          print('HOST:', json.dumps(result['host']), flush=True)
           save()
           assert len(result['affinity']) == os.cpu_count() == 4, \
               'This protocol requires the complete four-logical-CPU CI runner'
@@ -789,6 +865,8 @@ jobs:
           for scene, rep in PLAN:
               C = O / f'{scene}-{rep}'
               C.mkdir()
+              capacity = capacity_probe(C)
+              print('CAPACITY', scene, rep, json.dumps(capacity), flush=True)
               target = C / 'artifacts'
               env = os.environ.copy()
               env.update(CARGO_TARGET_DIR=str(target), NEXTEST_WORKSPACE_ROOT=str(W),
@@ -803,7 +881,8 @@ jobs:
                           'WAYLAND_DEBUG', 'NEOMACS_LAYOUT_STATS_FILE']:
                   env.pop(key, None)
               capture_requested = rep in [2, 4]
-              row = {'scene': scene, 'rep': rep, 'clock_pair_start': clock_pair(),
+              row = {'scene': scene, 'rep': rep, 'host': result['host'], 'capacity': capacity,
+                     'clock_pair_start': clock_pair(),
                      'capture': 'ON' if capture_requested else 'OFF', 'cpu_sampling': 'disabled',
                      'scheduler_mode': capabilities['scheduler_mode'] if capture_requested else 'control-off'}
               result['cells'].append(row)
@@ -962,6 +1041,10 @@ jobs:
 
           with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
               summary.write('## Frozen 120 Hz cohort (3 control pairs, 2 PID-captured pairs; no retries)\n\n')
+              summary.write('**Host identity:**\n```json\n' + json.dumps(result['host'], indent=2) + '\n```\n\n')
+              summary.write('Capacity is a fixed offscreen OpenGL llvmpipe throughput proxy, not a Vulkan latency budget. '
+                            'Each cell runs five 1s phong scenes at 1280×800 before its scroll timer. '
+                            'Raw p95s and assertions remain unchanged; p95 / capacity-frame-ms is diagnostic only.\n\n')
               summary.write(f"Source `{result['source']}`; product `{result['product_sha256']}`. "
                             'Native test exits/assertions are retained; missing capture never discards p95. '
                             'Stage medians are non-additive statistics. GNU comparison is not performed by this workflow.\n\n')
@@ -975,6 +1058,16 @@ jobs:
                   cells = [r for r in result['cells'] if r['scene'] == scene]
                   values = [r.get('report', {}).get('p95_response_ms') for r in cells]
                   summary.write(f'**{scene} five p95s (ms):** {values}\n\n')
+                  summary.write('| Rep | Capacity median frame ms | Raw p95 ms | p95 / capacity frame ms |\n'
+                                '|---:|---:|---:|---:|\n')
+                  for r in cells:
+                      capacity_ms = r['capacity'].get('median_frame_ms')
+                      p95 = r.get('report', {}).get('p95_response_ms')
+                      ratio = p95 / capacity_ms if p95 is not None and capacity_ms else None
+                      summary.write(f"| {r['rep']} | {capacity_ms} | {p95} | {ratio} |\n")
+                      if 'capture_error' in r['capacity']:
+                          summary.write(f"\nCapacity unavailable: `{r['capacity']['capture_error']}`\n\n")
+                  summary.write('\n')
                   summary.write('| Rep | Capture | Test exit | Response tail median | Receipt→request | Request→present | '
                                 'UI CPU | Evaluator CPU | CPU sampling |\n'
                                 '|---:|---|---:|---:|---:|---:|---:|---:|---|\n')
