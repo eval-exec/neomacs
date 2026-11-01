@@ -61,7 +61,48 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: none
 
+      # Analysis and upload are separate steps so that a failed upload can be
+      # retried without re-running the 15 min Rust analysis. Since
+      # 2026-10-31 16:07Z every Rust upload on main has died in the analyze
+      # action's own upload with "We couldn't respond to your request in
+      # time" (the code-scanning SARIF endpoint's 60 s gateway timeout; the
+      # same upload took 11 s at 11:09Z and the analysis itself completes
+      # normally), so one attempt per run is not enough.
       - name: Analyze
         uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
+          category: /language:${{ matrix.language }}
+          upload: never
+          output: ${{ runner.temp }}/codeql-sarif
+
+      - name: Upload SARIF
+        id: upload-sarif
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
+          category: /language:${{ matrix.language }}
+
+      - name: Wait before the second upload attempt
+        if: steps.upload-sarif.outcome == 'failure'
+        run: sleep 120
+
+      - name: Upload SARIF (second attempt)
+        id: upload-sarif-retry
+        if: steps.upload-sarif.outcome == 'failure'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
+          category: /language:${{ matrix.language }}
+
+      - name: Wait before the third upload attempt
+        if: steps.upload-sarif-retry.outcome == 'failure'
+        run: sleep 300
+
+      - name: Upload SARIF (third attempt)
+        if: steps.upload-sarif-retry.outcome == 'failure'
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        with:
+          sarif_file: ${{ runner.temp }}/codeql-sarif
           category: /language:${{ matrix.language }}
