@@ -182,7 +182,9 @@ agree on them modulo the second the search ran)."
            "duration [0-9.]+ s" "duration [N] s" masked))
     (setq masked
           (replace-regexp-in-string
-           " at [A-Z][a-z][a-z] [A-Z][a-z][a-z] [0-9]+ [0-9:]+" " at [TIME]" masked))
+           ;; `%e'-style day of month: space-padded, so "Nov  1" on the
+           ;; first nine days of a month.
+           " at [A-Z][a-z][a-z] [A-Z][a-z][a-z] +[0-9]+ [0-9:]+" " at [TIME]" masked))
     masked))
 
 (defun rg-test-offset (position)
