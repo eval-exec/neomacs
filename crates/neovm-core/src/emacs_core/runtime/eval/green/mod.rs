@@ -306,6 +306,10 @@ mod spawn_refusal_tests;
 mod spawn_failure_tests;
 
 #[cfg(test)]
+#[path = "../tests/green_thread_retirement_test.rs"]
+mod thread_retirement_tests;
+
+#[cfg(test)]
 #[path = "../tests/green_parked_root_equivalence_test.rs"]
 mod parked_root_equivalence_tests;
 

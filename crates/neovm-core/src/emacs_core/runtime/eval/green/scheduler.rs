@@ -1618,6 +1618,14 @@ impl Control {
             || state.physical.contains_key(&key)
     }
 
+    /// Test-only: how many threads the registry currently charges (wait
+    /// entries, wake senders).
+    #[cfg(test)]
+    pub(super) fn registry_sizes_for_test(&self) -> (usize, usize) {
+        let state = self.state();
+        (state.waits.len(), state.senders.len())
+    }
+
     /// Whether KEY has ended.
     pub(crate) fn exited(&self, key: ThreadKey) -> bool {
         matches!(self.state().waits.get(&key), Some(Wait::Exited) | None)
