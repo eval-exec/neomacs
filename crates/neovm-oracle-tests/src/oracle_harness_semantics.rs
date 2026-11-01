@@ -84,10 +84,22 @@ fn oracle_sandbox_pins_snapshot_time_zone() {
     );
 }
 
+/// The host-keyed identity inputs must be pinned for BOTH editors.
+///
+/// `user-full-name` came from the runner's passwd GECOS until the Oracle
+/// profile pinned `NAME` (GNU prefers `$NAME` over GECOS,
+/// `src/editfns.c:128-134`), and Org export's default author then leaked it
+/// into 15 checked-in expectations on a GECOS-named host.  This probe is the
+/// contract: the pinned `NAME`, `LOGNAME`/`USER`, host and mail, and the exact
+/// full/login names both editors observe.  The real login name and the uid
+/// follow the runner's passwd identity instead of an environment pin
+/// (`src/editfns.c:99`), so they are type-checked only: the main box, CI, and
+/// treeroot legitimately differ there, and embedding them would key this
+/// expectation to the host like the old Org author leak did.
 #[test]
 fn oracle_sandbox_isolates_home_and_identity() {
     let expect = expect_test::expect![[
-        r#""OK (\"[ORACLE-HOME]\" \"exec\" \"exec\" \"oracle-host\" \"exec@oracle-host\" \"oracle-host\" \"oracle-host\" \"exec@oracle-host\" t t)""#
+        r#""OK (\"[ORACLE-HOME]\" \"exec\" \"exec\" \"oracle-host\" \"exec@oracle-host\" \"oracle-host\" \"oracle-host\" \"exec@oracle-host\" \"\" \"exec\" t t t t)""#
     ]];
 
     crate::common::assert_oracle_parity_expect(
@@ -101,6 +113,10 @@ fn oracle_sandbox_isolates_home_and_identity() {
                     system-name
                     (system-name)
                     user-mail-address
+                    (user-full-name)
+                    user-login-name
+                    (stringp (user-real-login-name))
+                    (integerp (user-uid))
                     (file-directory-p home)
                     (file-in-directory-p home scratch)))"#,
         expect,
