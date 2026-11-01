@@ -1662,6 +1662,19 @@ pub enum MouseButton {
     Button5,
 }
 
+impl MouseButton {
+    /// Index into [`KBoard::button_down`].
+    fn index(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Middle => 1,
+            Self::Right => 2,
+            Self::Button4 => 3,
+            Self::Button5 => 4,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Prefix argument
 // ---------------------------------------------------------------------------
@@ -1898,6 +1911,11 @@ pub struct KBoard {
     /// `double-click-time` / `double-click-fuzz` comparisons.
     /// Keyboard audit Finding 12.
     pub last_mouse_click: Option<LastMouseClick>,
+    /// Per-button down positions while the button is held.  GNU keeps one
+    /// `start_pos` per button in `button_down_location`; taking the entry on
+    /// release is what lets a stray up event be dropped
+    /// (`src/keyboard.c:6564-6566`, `6628-6632`).
+    pub button_down: [Option<MousePressState>; 5],
 }
 
 /// Snapshot of the most recent mouse click used for double/triple
@@ -1915,6 +1933,34 @@ pub struct LastMouseClick {
     /// `double-click-time` / `double-click-fuzz` of the previous
     /// click. Capped at 3.
     pub click_count: u32,
+}
+
+/// One entry of GNU's `button_down_location` table: the down event's
+/// position while its button is held.  The entry is taken on the matching
+/// release, so a later up event without a new down is dropped
+/// (`src/keyboard.c:6564-6566`, `6628-6632`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MousePressState {
+    pub x: f32,
+    pub y: f32,
+    pub frame_id: u64,
+    /// Click count computed for this down event; the release reuses it.
+    pub click_count: u32,
+    /// The full Lisp position copied from the down event: a drag event's
+    /// START (`src/keyboard.c:6615`, `6739-6741`).
+    pub position: Value,
+}
+
+/// Payload shape of a mouse event, mirroring GNU `make_lispy_event`
+/// (`src/keyboard.c:6739-6745`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum MouseEventPayload {
+    /// `(HEAD POSITION)`.
+    Position(Value),
+    /// `(HEAD START END)`: START is the down event's position.
+    Drag { start: Value, end: Value },
+    /// `(HEAD POSITION COUNT)` for a double/triple click.
+    WithClickCount { position: Value, count: u32 },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1951,6 +1997,7 @@ impl KBoard {
             dribble: None,
             in_input_method_function: false,
             last_mouse_click: None,
+            button_down: [None; 5],
         }
     }
 
@@ -2247,6 +2294,9 @@ impl crate::gc_trace::GcTrace for KBoard {
         }
         if let Some(event) = self.last_help_echo_event {
             roots.push(event);
+        }
+        for press in self.button_down.iter().flatten() {
+            roots.push(press.position);
         }
         roots.extend(self.unread_events.iter().copied());
         roots.extend(self.current_key_sequence.raw_events().iter().copied());
@@ -4960,7 +5010,7 @@ impl crate::emacs_core::eval::Context {
                 .len()
                 == 1
                 && let Some(prefixed) =
-                    Self::maybe_prefix_mouse_area(&translated_events, self.symbol_mode())
+                    Self::maybe_prefix_mouse_area(self, &translated_events, self.symbol_mode())
             {
                 self.command_loop
                     .keyboard
@@ -5810,17 +5860,26 @@ impl crate::emacs_core::eval::Context {
                 // click state and update `last_mouse_click` so
                 // the matching release can read the same count.
                 // Mirrors GNU `keyboard.c:6041-6130`.
+                let position = Self::make_mouse_position(x, y, target_frame_id, self);
                 let click_count = self.classify_mouse_click_on_press(button, x, y, target_frame_id);
+                self.command_loop.keyboard.kboard.button_down[button.index()] =
+                    Some(MousePressState {
+                        x,
+                        y,
+                        frame_id: target_frame_id,
+                        click_count,
+                        position,
+                    });
                 let prefix = Self::mouse_event_prefix_for_click_count("down-mouse", click_count);
-                let event = Self::make_mouse_event(
-                    &button,
-                    x,
-                    y,
-                    target_frame_id,
-                    &modifiers,
-                    &prefix,
-                    self,
-                );
+                let payload = if click_count >= 2 {
+                    MouseEventPayload::WithClickCount {
+                        position,
+                        count: click_count,
+                    }
+                } else {
+                    MouseEventPayload::Position(position)
+                };
+                let event = Self::make_mouse_event(self, &button, &modifiers, &prefix, payload);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }
@@ -5832,16 +5891,14 @@ impl crate::emacs_core::eval::Context {
             } => {
                 self.clear_current_message_for_keyboard_input();
                 self.window_edge_drag.released(button);
-                // Use the click count recorded on the matching
-                // press so the release event carries the same
-                // double/triple modifier. Keyboard audit F12.
-                let press = self
-                    .command_loop
-                    .keyboard
-                    .kboard
-                    .last_mouse_click
-                    .filter(|state| state.button == button);
-                let click_count = press.map(|state| state.click_count).unwrap_or(1);
+                // GNU keeps one down position per button and clears it on
+                // release, so an up event with no matching down is dropped
+                // (`src/keyboard.c:6564-6566`, `6628-6632`).
+                let Some(press) =
+                    self.command_loop.keyboard.kboard.button_down[button.index()].take()
+                else {
+                    return Ok(None);
+                };
                 // GNU `keyboard.c:6610-6710`: an up event is a drag, not a
                 // click, when the frame-relative pointer moved outside
                 // `double-click-fuzz` (`0 < fuzz`) or landed in another
@@ -5849,22 +5906,27 @@ impl crate::emacs_core::eval::Context {
                 // which keeps the dragged region active; a plain `mouse-1`
                 // runs `mouse-set-point`, and the drag transient map then
                 // deactivates and pops the mark.
+                let position = Self::make_mouse_position(x, y, target_frame_id, self);
                 let fuzz = self.double_click_fuzz();
-                let drag = press.is_some_and(|state| {
-                    state.frame_id != target_frame_id
-                        || !(fuzz > 0.0 && (x - state.x).abs() < fuzz && (y - state.y).abs() < fuzz)
-                });
+                let drag = press.frame_id != target_frame_id
+                    || !(fuzz > 0.0 && (x - press.x).abs() < fuzz && (y - press.y).abs() < fuzz);
                 let base = if drag { "drag-mouse" } else { "mouse" };
-                let prefix = Self::mouse_event_prefix_for_click_count(base, click_count);
-                let event = Self::make_mouse_event(
-                    &button,
-                    x,
-                    y,
-                    target_frame_id,
-                    &Modifiers::none(),
-                    &prefix,
-                    self,
-                );
+                let prefix = Self::mouse_event_prefix_for_click_count(base, press.click_count);
+                let payload = if drag {
+                    MouseEventPayload::Drag {
+                        start: press.position,
+                        end: position,
+                    }
+                } else if press.click_count >= 2 {
+                    MouseEventPayload::WithClickCount {
+                        position,
+                        count: press.click_count,
+                    }
+                } else {
+                    MouseEventPayload::Position(position)
+                };
+                let event =
+                    Self::make_mouse_event(self, &button, &Modifiers::none(), &prefix, payload);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }
@@ -5896,6 +5958,8 @@ impl crate::emacs_core::eval::Context {
                 let mut sym = String::new();
                 Self::append_modifier_prefix(&modifiers, &mut sym);
                 sym.push_str(dir);
+                Self::mark_event_head_kind(self, dir, "mouse-click");
+                Self::mark_event_head_kind(self, &sym, "mouse-click");
                 let position = Self::make_mouse_position(x, y, target_frame_id, self);
                 // Frontends accumulate fractional wheel units before this
                 // integral command boundary. Preserve multiple steps in GNU's
@@ -5938,6 +6002,8 @@ impl crate::emacs_core::eval::Context {
                 let mut symbol = String::new();
                 Self::append_modifier_prefix(&modifiers, &mut symbol);
                 symbol.push_str(direction);
+                Self::mark_event_head_kind(self, direction, "mouse-click");
+                Self::mark_event_head_kind(self, &symbol, "mouse-click");
                 let position = Self::make_mouse_position(x, y, target_frame_id, self);
                 // GNU keyboard.c make_lispy_event: (HEAD POS CLICK-COUNT
                 // LINE-COUNT (PIXEL-X . PIXEL-Y)). Normal command dispatch owns
@@ -6897,13 +6963,11 @@ impl crate::emacs_core::eval::Context {
     }
 
     pub(crate) fn make_mouse_event(
+        eval: &mut Self,
         button: &MouseButton,
-        x: f32,
-        y: f32,
-        target_frame_id: u64,
         modifiers: &Modifiers,
         prefix: &str,
-        eval: &Self,
+        payload: MouseEventPayload,
     ) -> Value {
         let button_num = match button {
             MouseButton::Left => 1,
@@ -6915,9 +6979,29 @@ impl crate::emacs_core::eval::Context {
         let mut sym = String::new();
         Self::append_modifier_prefix(modifiers, &mut sym);
         sym.push_str(&format!("{}-{}", prefix, button_num));
+        // GNU `modify_event_symbol` marks the base stem as `mouse-click` and
+        // `apply_modifiers` copies that kind to every derived head
+        // (`src/keyboard.c:7806-7823`, `7653-7670`).  The area-prefix gate
+        // reads it (`src/keyboard.c:11403-11406`).
+        Self::mark_event_head_kind(eval, &format!("mouse-{button_num}"), "mouse-click");
+        Self::mark_event_head_kind(eval, &sym, "mouse-click");
+        let head = Value::symbol(&sym);
 
-        let position = Self::make_mouse_position(x, y, target_frame_id, eval);
-        Value::list(vec![Value::symbol(&sym), position])
+        match payload {
+            MouseEventPayload::Position(position) => Value::list(vec![head, position]),
+            MouseEventPayload::Drag { start, end } => Value::list(vec![head, start, end]),
+            MouseEventPayload::WithClickCount { position, count } => {
+                Value::list(vec![head, position, Value::fixnum(count as i64)])
+            }
+        }
+    }
+
+    /// GNU `Fput (symbol, Qevent_kind, kind)` for a mouse event head.
+    fn mark_event_head_kind(eval: &mut Self, head: &str, kind: &str) {
+        let key = intern("event-kind");
+        let _ = eval
+            .obarray_mut()
+            .put_property_id(intern(head), key, Value::symbol(kind));
     }
 
     fn event_position(event: &Value, mode: SymbolMode) -> Option<Value> {
@@ -6976,14 +7060,58 @@ impl crate::emacs_core::eval::Context {
         }
     }
 
-    fn maybe_prefix_mouse_area(events: &[Value], mode: SymbolMode) -> Option<Vec<Value>> {
+    fn maybe_prefix_mouse_area(
+        eval: &Self,
+        events: &[Value],
+        mode: SymbolMode,
+    ) -> Option<Vec<Value>> {
         let first = events.first()?;
-        let position = Self::event_position(first, mode)?;
-        let area = Self::event_position_area(&position, mode)?;
+        // GNU's first branch turns a posn area into a leading key element
+        // only when the event head's `event-kind` is `mouse-click` or
+        // `touchscreen` (`src/keyboard.c:11403-11406`).  Movement heads have
+        // kind `mouse-movement` and keep their area inside the posn.
+        if !first.is_cons() {
+            return None;
+        }
+        let kind_name = first
+            .cons_car()
+            .as_symbol_name(mode)
+            .and_then(|name| {
+                eval.obarray()
+                    .get_property_id(intern(name), intern("event-kind"))
+            })
+            .and_then(|kind| kind.as_symbol_name(mode));
+        if let Some(kind_name) = kind_name
+            && (kind_name == "mouse-click" || kind_name == "touchscreen")
+        {
+            let position = Self::event_position(first, mode)?;
+            let area = Self::event_position_area(&position, mode)?;
+            return Some(Self::prepend_mouse_area(area, events));
+        }
+        // GNU's second branch is independent of `event-kind`: menu-bar,
+        // tool-bar and tab-bar events carry their area as the fake prefix
+        // whenever they come directly from the keyboard buffer
+        // (`src/keyboard.c:11445-11482`, and the `read_char` split at
+        // `:3171-3184`).
+        let slots = crate::emacs_core::value::list_to_vec(first)?;
+        let position = *slots.get(1)?;
+        let position_slots = crate::emacs_core::value::list_to_vec(&position)?;
+        if position_slots.len() < 2 {
+            return None;
+        }
+        let area = *position_slots.get(1)?;
+        let area_name = area.as_symbol_name(mode)?;
+        if area_name == "menu-bar" || area_name == "tool-bar" || area_name == "tab-bar" {
+            return Some(Self::prepend_mouse_area(area, events));
+        }
+        None
+    }
+
+    fn prepend_mouse_area(area: Value, events: &[Value]) -> Vec<Value> {
         let mut prefixed = Vec::with_capacity(events.len() + 1);
         prefixed.push(area);
         prefixed.extend_from_slice(events);
-        Some(prefixed)
+        prefixed
     }
 
     fn mouse_event_symbol_name(event: &Value, mode: SymbolMode) -> Option<String> {

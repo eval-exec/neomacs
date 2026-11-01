@@ -74,3 +74,54 @@ fn oracle_key_translate_parses_keys_mutates_table_and_reports_errors() {
         &neovm,
     );
 }
+
+/// GNU prefixes a non-text event by its posn area only when the event
+/// head's `event-kind` is `mouse-click` or `touchscreen`
+/// (`src/keyboard.c:11403-11406`).  Movement heads have kind
+/// `mouse-movement` (`src/keyboard.c:13299-13300`), and the area comes from
+/// `EVENT_START` (`src/keyboard.c:11409`): a drag is prefixed by the press
+/// area, not the release area.  Menu-bar, tool-bar and tab-bar events take
+/// GNU's second branch (`src/keyboard.c:11445-11482`), which does not consult
+/// the kind.  Prefixed movement events made `[left-fringe mouse-movement]`
+/// undefined (issue 621).
+#[test]
+fn mouse_area_prefix_is_gated_by_event_kind_like_gnu() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"
+(let* ((win (selected-window))
+       (xy (cons 10 5))
+       (fringe (list win 'left-fringe xy 0 nil 1 xy 8 5))
+       (text (list win (point-min) xy 0 nil 1 xy 8 5))
+       (mode-line (list win 'mode-line xy 0 nil 1 xy 8 5))
+       (menu-bar (list nil 'menu-bar xy 0 nil 1 xy 8 5))
+       (tool-bar (list (selected-frame) 'tool-bar xy 0 nil 1 xy 8 5))
+       (tab-bar (list (selected-frame) 'tab-bar xy 0 nil 1 xy 8 5))
+       (shape (lambda (events)
+                (mapcar (lambda (event)
+                          (if (symbolp event) event
+                            (cons (car event)
+                                  (make-list (1- (length event)) 'posn))))
+                        (let ((unread-command-events events))
+                          (append (read-key-sequence nil) nil))))))
+  ;; A fresh batch session never translated a real mouse event, so the
+  ;; mouse symbols have no event-kind yet.  Give them GNU's kinds to
+  ;; test the gate itself.
+  (put 'mouse-movement 'event-kind 'mouse-movement)
+  (put 'drag-mouse-1 'event-kind 'mouse-click)
+  (list
+   (funcall shape (list (list 'mouse-movement fringe)))
+   (funcall shape (list (list 'mouse-movement text)))
+   (funcall shape (list (list 'drag-mouse-1 text fringe) ?x))
+   (funcall shape (list (list 'drag-mouse-1 fringe text) ?x))
+   (funcall shape (list (list 'drag-mouse-1 text mode-line) ?x))
+   (funcall shape (list (list 'mouse-1 menu-bar) ?x))
+   (funcall shape (list (list 'tool-bar-item tool-bar) ?x))
+   (funcall shape (list (list 'down-mouse-1 tab-bar) ?x))))"#;
+    let (gnu, neomacs) = eval_oracle_and_neovm(form);
+    assert_ok_eq(
+        "(((mouse-movement posn)) ((mouse-movement posn)) ((drag-mouse-1 posn posn)) (left-fringe (drag-mouse-1 posn posn)) ((drag-mouse-1 posn posn)) (menu-bar (mouse-1 posn)) (tool-bar (tool-bar-item posn)) (tab-bar (down-mouse-1 posn)))",
+        &gnu,
+        &neomacs,
+    );
+}
