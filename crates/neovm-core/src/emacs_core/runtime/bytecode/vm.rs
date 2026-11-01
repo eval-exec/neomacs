@@ -9749,7 +9749,7 @@ impl<'a> Vm<'a> {
 
     fn builtin_maphash_shared(&mut self, args: &[Value]) -> EvalResult {
         let (func, table) = crate::emacs_core::hashtab::validate_maphash_args(args)?;
-        let callee = crate::emacs_core::hashtab::MaphashCallee::resolve(func);
+        let callee = crate::emacs_core::builtins::maphash::MaphashCallee::resolve(func);
         self.with_dynamic_vm_roots(|vm| {
             vm.push_dynamic_vm_root(func);
             vm.push_dynamic_vm_root(table);
@@ -9767,15 +9767,17 @@ impl<'a> Vm<'a> {
                 vm.push_dynamic_vm_root(key);
                 vm.push_dynamic_vm_root(value);
                 match callee {
-                    crate::emacs_core::hashtab::MaphashCallee::Generic(function) => {
+                    crate::emacs_core::builtins::maphash::MaphashCallee::Generic(function) => {
                         vm.call_function2(function, key, value)?;
                     }
                     #[cfg(feature = "jit")]
-                    crate::emacs_core::hashtab::MaphashCallee::ByteCode(function) => {
+                    crate::emacs_core::builtins::maphash::MaphashCallee::ByteCode(function) => {
                         vm.call_maphash_bytecode::<true>(function, key, value)?;
                     }
                     #[cfg(feature = "jit")]
-                    crate::emacs_core::hashtab::MaphashCallee::UnobservedByteCode(function) => {
+                    crate::emacs_core::builtins::maphash::MaphashCallee::UnobservedByteCode(
+                        function,
+                    ) => {
                         vm.call_maphash_bytecode::<false>(function, key, value)?;
                     }
                 }

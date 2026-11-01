@@ -3162,7 +3162,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // in GNU, and copying that asymmetry is the point.  DIVERGENCES.md 150.
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "maphash",
-        NativeFn::ContextVec(crate::emacs_core::hashtab::builtin_maphash),
+        NativeFn::ContextVec(super::maphash::builtin_maphash),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
