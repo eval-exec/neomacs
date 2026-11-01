@@ -12,6 +12,7 @@ autotests = false
 [dependencies]
 crossbeam-channel = "=0.5.15"
 static_assertions = "=1.1.0"
+polling = "=3.11.0"
 
 [[test]]
 name = "channel"
