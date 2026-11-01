@@ -162,6 +162,24 @@ impl RowMeasurer {
                         {
                             target += 1;
                         }
+                        // GNU's iterator moves towards ZV (window.c:6502-6530):
+                        // a goal past the last row, or the "ensure we actually
+                        // do move" step from that row, leaves it at ZV itself.
+                        // Without a final newline no row starts at ZV, so
+                        // answer ZV and let the caller report end-of-buffer
+                        // (:6536-6562) instead of the last row's start.
+                        // GNU vscrolls instead when that last row is only
+                        // partly visible (:6544-6553), which only a last row
+                        // taller than the window reaches here; this reports
+                        // end-of-buffer, where GNU's own (while t (scroll-up))
+                        // callers can keep vscrolling forever.
+                        let last = rows.last().expect("origin row");
+                        if last.end_buffer_pos == Some(accessible.end_lisp())
+                            && (goal >= last.y.saturating_add(last.height)
+                                || rows[target].start_buffer_pos <= Some(origin))
+                        {
+                            return Ok(accessible.end_lisp());
+                        }
                     } else if delta < 0 {
                         while target > 0 && rows[target].start_buffer_pos >= Some(origin) {
                             target -= 1;
