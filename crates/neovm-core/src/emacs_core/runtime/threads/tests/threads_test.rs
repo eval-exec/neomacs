@@ -2218,3 +2218,7 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
     assert!(!eval.tagged_heap.owns_heap_value_for_test(thread));
     assert!(!eval.tagged_heap.owns_heap_value_for_test(child));
 }
+
+#[cfg(not(feature = "gc-memory-telemetry"))]
+#[path = "threading_payload_tests.rs"]
+mod threading_payload_tests;
