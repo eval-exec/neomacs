@@ -212,6 +212,9 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("REGEX_CACHE_HEAP", TlsClass::CarrierIntrinsic),
     ("REGISTERED", TlsClass::CarrierIntrinsic),
     ("REGISTRATION", TlsClass::CarrierIntrinsic),
+    // The green guard's debug-only emission counter (jit/compile/lowering.rs):
+    // a cfg(debug_assertions) `Cell<u64>` that holds no Value.
+    ("RELEASE_REVALIDATION_EMITTED", TlsClass::SourceOnly),
     ("RESULT_SETS", TlsClass::CarrierIntrinsic),
     ("RETAG_COUNT", TlsClass::MustReset),
     ("REVISION", TlsClass::CarrierIntrinsic),

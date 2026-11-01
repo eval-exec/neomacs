@@ -152,6 +152,10 @@ enum LowerRoot {
     /// parallel-Lisp effect work. A top-level production module like the
     /// other lower roots; its contracts name no emacs_core item today.
     HostEffect,
+    /// The debug-only carrier TLS fingerprint helpers added with the bounded
+    /// carrier pool (main f479e27499). A top-level production module like the
+    /// other lower roots; it names no emacs_core item.
+    TlsFingerprint,
 }
 
 impl LowerRoot {
@@ -176,6 +180,7 @@ impl LowerRoot {
             "window" => Self::Window,
             "host_input" => Self::HostInput,
             "host_effect" => Self::HostEffect,
+            "tls_fingerprint" => Self::TlsFingerprint,
             unknown => {
                 panic!("unknown top-level production module {unknown}; add a LowerRoot variant")
             }
@@ -203,6 +208,7 @@ impl LowerRoot {
             Self::Window => "window",
             Self::HostInput => "host_input",
             Self::HostEffect => "host_effect",
+            Self::TlsFingerprint => "tls_fingerprint",
         }
     }
 }
@@ -229,11 +235,13 @@ fn is_g0_member(name: &str) -> bool {
 }
 
 /// Top-level modules that move into `neovm-value` with G0, so a G0 reference
-/// to one of them stays inside the bottom crate.
+/// to one of them stays inside the bottom crate. `tls_fingerprint` is a
+/// std-only, debug-only hashing helper that the per-module carrier TLS probes
+/// in G0 members (error, intern, symbol) call; it names nothing above itself.
 fn is_bottom_peer(root: LowerRoot) -> bool {
     matches!(
         root,
-        LowerRoot::Tagged | LowerRoot::HeapTypes | LowerRoot::GcTrace
+        LowerRoot::Tagged | LowerRoot::HeapTypes | LowerRoot::GcTrace | LowerRoot::TlsFingerprint
     )
 }
 
