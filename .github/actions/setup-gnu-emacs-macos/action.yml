@@ -1,8 +1,8 @@
 name: 'Set up GNU Emacs oracle (macOS)'
 description: >-
-  Install the GNU Emacs that the macOS neovm-core parity suite runs against:
-  the pinned parity reference built from the exact emacs-mirror commit by the
-  one recipe (scripts/ci/build-gnu-oracle.sh), whose Darwin profile is a
+  Install the GNU Emacs that the macOS neovm-core and oracle-parity suites run
+  against: the pinned parity reference built from the exact emacs-mirror commit
+  by the one recipe (scripts/ci/build-gnu-oracle.sh), whose Darwin profile is a
   window-system-less build (--without-x --without-ns) with the kqueue
   notification backend.  The version string is not an identity, so the smoke
   step asserts the configured features and configure line
@@ -12,9 +12,10 @@ description: >-
 
   This is the macOS sibling of .github/actions/setup-gnu-emacs.  It differs
   only in the host: the recipe's Darwin profile replaces the GTK3 line, the
-  cached tree is keyed by the recipe scripts' hash as well as the GNU commit
-  (a configure-line edit must rebuild, and there is no apt package list to
-  patch), and the build dependencies come from Homebrew.
+  cached tree is keyed by the GNU commit, the selected recipe profile, the
+  runner image and the recipe scripts' hash (a configure-line edit, a profile
+  change or a runner image change must rebuild, and there is no apt package
+  list to patch), and the build dependencies come from Homebrew.
 
 outputs:
   emacs:
@@ -29,6 +30,11 @@ outputs:
   commit:
     description: 'The pinned mirror_commit from parity-reference.toml.'
     value: ${{ steps.pin.outputs.commit }}
+  libfaketime:
+    description: >-
+      The libfaketime dylib the frozen-clock oracle cases preload on macOS
+      (NEOVM_LIBFAKETIME_SO).
+    value: ${{ steps.faketime.outputs.dylib }}
 
 inputs:
   cache-version:
@@ -38,6 +44,14 @@ inputs:
       installed tree (an intentionally different Homebrew dependency set).
     required: false
     default: "1"
+  profile:
+    description: >-
+      The build-gnu-oracle.sh Darwin profile.  macos-batch is the
+      characterized CI reference (--without-x --without-ns); macos-x11 is the
+      opt-in window-system comparison profile.  The cache key carries the
+      profile, so switching it rebuilds instead of restoring a different GNU.
+    required: false
+    default: "macos-batch"
 
 runs:
   using: 'composite'
@@ -62,15 +76,33 @@ runs:
         sudo mkdir -p /opt/gnu-emacs-oracle
         sudo chown "$(id -u):$(id -g)" /opt/gnu-emacs-oracle
 
+    - name: Record the hosted runner image generation
+      id: image
+      shell: bash
+      run: |
+        # The runner image is a build input the recipe does not spell out:
+        # its Apple toolchain, SDK and Homebrew bottles all move when GitHub
+        # rolls the image, so a cached 31.1 from the previous image is a
+        # different oracle.  ImageOS/ImageVersion are the hosted runner's own
+        # identification; self-hosted runners do not set them, and the
+        # explicit "unknown" keeps the key valid rather than collapsing two
+        # empty contexts into the same entry.
+        set -euo pipefail
+        echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+        echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
     - name: Restore the cached oracle build
       id: cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /opt/gnu-emacs-oracle
-        # The GNU commit names the source; the recipe hash names what that
-        # source was configured with.  Both are load-bearing: two builds of
-        # 31.1 with different configure lines are different oracles.
-        key: gnu-emacs-oracle-macos-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}
+        # The GNU commit names the source; the profile names which recipe
+        # line built it; the runner image pins the compiler/Homebrew inputs
+        # the recipe does not spell out; and the recipe hash names what that
+        # source was configured with.  All four are load-bearing: two builds
+        # of 31.1 with different configure lines, toolchains or profiles are
+        # different oracles.
+        key: gnu-emacs-oracle-macos-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.image.outputs.os }}-${{ steps.image.outputs.version }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}
 
     - name: Install the oracle's Homebrew dependencies
       shell: bash
@@ -88,14 +120,30 @@ runs:
         # oracle took the SDK's libxml2 through configure's fallback probe
         # (--with-xml2=ifavailable), and check-gnu-oracle.sh fails loudly if a
         # future runner image stops providing it.
+        #
+        # libfaketime is not a dependency of GNU; it is the frozen-clock
+        # input the oracle corpus preloads (NEOVM_LIBFAKETIME_SO on Darwin,
+        # the DYLD_INSERT_LIBRARIES sibling of the Linux shards' LD_PRELOAD).
+        # Installing it on the hit path keeps both paths identical, and the
+        # step below proves the dylib a cache HIT restored the oracle with.
         set -euo pipefail
-        brew install autoconf automake texinfo pkgconf gnutls
+        brew install autoconf automake texinfo pkgconf gnutls libfaketime
+
+    - name: Locate libfaketime for the frozen-clock oracle cases
+      id: faketime
+      shell: bash
+      run: |
+        set -euo pipefail
+        dylib="$(brew --prefix libfaketime)/lib/faketime/libfaketime.1.dylib"
+        test -f "$dylib"
+        echo "dylib=$dylib" >> "$GITHUB_OUTPUT"
 
     - name: Build GNU Emacs from the pinned commit
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         EMACS_COMMIT: ${{ steps.pin.outputs.commit }}
+        EMACS_ORACLE_PROFILE: ${{ inputs.profile }}
       run: |
         # The recipe -- source fetch, autogen, the Darwin configure line,
         # make, install, manifest -- lives in scripts/ci/build-gnu-oracle.sh.
@@ -140,4 +188,4 @@ runs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: /opt/gnu-emacs-oracle
-        key: gnu-emacs-oracle-macos-${{ runner.arch }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}
+        key: gnu-emacs-oracle-macos-${{ runner.arch }}-${{ inputs.profile }}-${{ steps.image.outputs.os }}-${{ steps.image.outputs.version }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('scripts/ci/build-gnu-oracle.sh', 'scripts/ci/check-gnu-oracle.sh') }}-v${{ inputs.cache-version }}

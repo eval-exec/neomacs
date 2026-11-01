@@ -1,0 +1,47 @@
+name: macos oracle cache
+
+# Populate the pinned GNU Emacs oracle cache that the macOS test-suite jobs
+# restore.
+#
+# WHY THIS IS A WORKFLOW OF ITS OWN.  The test-suite workflow cancels its
+# in-progress run on every new push (concurrency.cancel-in-progress), so a cold
+# macOS oracle build started there can be cancelled before its attested save
+# step runs.  This workflow is not part of that concurrency group and does not
+# cancel itself (cancel-in-progress: false); a schedule or a manual dispatch
+# warms the cache entry keyed by (GNU commit, recipe profile, runner image,
+# recipe scripts), and the test-suite jobs then restore it in seconds.
+#
+# A missing cache is not a silent skip: test-suite.yml's own
+# `gnu-emacs-oracle-macos` job builds the same entry in-run before the test
+# jobs start, so the slow path is a longer run, never a skipped oracle test.
+# The measured cold build at the hosted runner's 3-way parallelism is recorded
+# in the commit that added this workflow.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, ahead of the test suite's Sunday cron and off the hour so the
+    # hosted-runner scheduler is not the constraint.
+    - cron: "23 4 * * 3"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-oracle-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    name: warm the pinned GNU Emacs oracle (macos aarch64)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The action restores the entry, builds it on a miss with
+      # scripts/ci/build-gnu-oracle.sh (Darwin macos-batch profile), attests
+      # the result, and saves the attested tree from its own inline step.
+      - name: Set up GNU Emacs oracle (macOS)
+        uses: ./.github/actions/setup-gnu-emacs-macos

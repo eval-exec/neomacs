@@ -208,15 +208,24 @@ jobs:
   # because it shares nothing with Linux beyond the test sources: the runtime
   # and test binaries are compiled on the Mac, and the oracle is a
   # window-system-less GNU built by the recipe's Darwin profile
-  # (setup-gnu-emacs-macos).  The test phase itself is short -- the whole
-  # neovm-core package ran in about 90 s on an M6 -- so there is nothing to
-  # shard; the job is dominated by the one-time GNU build (cached by mirror
-  # commit + recipe hash) and by `cargo xtask fresh-build --release`, which
-  # the job script covers with the same harness-codegen trade as the Linux
-  # archive job.
+  # (setup-gnu-emacs-macos).  It runs the neovm-core package and then the
+  # host-hermetic oracle-parity families -- the org/divergence/file/process
+  # selection of package neovm-oracle-tests whose expectations hold on both
+  # hosts after the macOS-keyed fixes -- in Verify mode, so those
+  # expectations are proven in CI and not only on a developer's Mac.  The
+  # unfiltered package still carries Linux-keyed lib expectation families
+  # (cus_start_platform, defvar_*, fontset, file acl, trigonometry, ...);
+  # making those host-hermetic is a separate expectation project, and this
+  # job states its boundary rather than skipping them silently.  The
+  # selection is unsharded because a macOS runner has three cores; the job
+  # keeps its 150-minute timeout and the measured wall time is recorded in
+  # the commit that added the second suite.  The GNU build itself is warmed
+  # by the separate `gnu-emacs-oracle-macos` job (below), so a cancelled test
+  # job cannot lose it.
   neovm-core-tests-macos:
     name: neovm-core tests (macos aarch64)
     if: ${{ github.event_name != 'schedule' }}
+    needs: [gnu-emacs-oracle-macos]
     runs-on: macos-latest
     timeout-minutes: 150
     env:
@@ -268,6 +277,43 @@ jobs:
             "${{ steps.oracle.outputs.manifest }}" \
             "${{ steps.oracle.outputs.version }}" \
             "${{ steps.oracle.outputs.commit }}"
+
+      # The host-hermetic oracle-parity families, on the Darwin runner
+      # against the same attested GNU and the runtime `fresh-build` just
+      # produced.  Verify mode runs the local GNU for every case and compares
+      # it with the checked-in expectation, then requires Neomacs to match
+      # that same live GNU: the live-comparison cases that Snapshot mode can
+      # only check against a recorded value execute here, and a macOS-keyed
+      # expectation is proven in CI rather than only on a lane's Mac.
+      #
+      # The -E selection is the set proven host-hermetic end to end on the
+      # macmini (9652/9652 in Verify).  The rest of the package's lib
+      # expectations are still GNU/Linux-keyed (cus_start_platform,
+      # defvar_*, fontset, ...); running them here would be red for reasons a
+      # workflow change cannot fix, so they stay on the Linux shards until
+      # their families get the same macOS-keyed treatment.
+      - name: Run the macOS oracle-parity families
+        env:
+          # The identity pins the canonical oracle environment gives GNU on
+          # Linux.  GNU prefers $NAME over the passwd GECOS (src/editfns.c:
+          # 128-134), and a macOS runner's account full name is exactly the
+          # leak the org author expectations pin out.  Scoped to this step so
+          # cargo and Homebrew keep the runner's own identity.
+          NAME: ""
+          USER: exec
+          LOGNAME: exec
+          HOSTNAME: oracle-host
+          EMAIL: exec@oracle-host
+          NEOVM_FORCE_ORACLE_PATH: ${{ steps.oracle.outputs.emacs }}
+          NEOVM_ORACLE_MODE: verify
+          NEOVM_BINARY_PATH: ${{ github.workspace }}/target/release/neomacs
+          NEOMACS_BIN: ${{ github.workspace }}/target/release/neomacs
+          NEOMACS_RUNTIME_ROOT: ${{ github.workspace }}
+          NEOVM_LIBFAKETIME_SO: ${{ steps.oracle.outputs.libfaketime }}
+        run: >-
+          cargo nextest run -p neovm-oracle-tests --test oracle --lib
+          -E 'test(/org_mode/) | test(/orgexport_/) | test(~process_attributes) | test(/oracle_harness/) | test(/system_info/) | test(/user_env_load_locale_state/) | test(/misc_strict_edge_semantics/) | test(/case_428/) | test(/case_444/) | test(/file_name_runtime/) | test(/file_remote_tramp/) | test(/file_ops_deep/)'
+          --no-fail-fast
 
   # The compile-fail contracts build only with the `contract-fixtures`
   # feature because each runner compiles separate trybuild fixture crates,
@@ -396,6 +442,29 @@ jobs:
 
       - name: Set up GNU Emacs oracle
         uses: ./.github/actions/setup-gnu-emacs
+
+  gnu-emacs-oracle-macos:
+    name: GNU Emacs oracle (macos aarch64)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - *checkout
+
+      # Warm the cache entry once per (GNU commit, recipe profile, runner
+      # image, recipe hash), from a job of its own: the build is attested and
+      # saved before any test job starts, so a test job that is red or
+      # restarted cannot lose it.  On a cache hit this job is a restore plus
+      # the smoke check (seconds); on a miss it compiles the pinned GNU with
+      # the Darwin recipe.  The measured miss time at the runner's 3-way
+      # parallelism is recorded in the commit that added this job; the warm
+      # budget is 60 minutes, well above it.  A push can still cancel this
+      # whole run while that build is in flight, so
+      # .github/workflows/macos-oracle-cache.yml warms the same entry from a
+      # schedule or workflow_dispatch that push cancellations cannot
+      # interrupt; this job only keeps one run self-sufficient while that
+      # schedule is cold.
+      - name: Set up GNU Emacs oracle (macOS)
+        uses: ./.github/actions/setup-gnu-emacs-macos
 
   neomacs-test-runtime:
     name: Packaged Neomacs Runtime (linux x86_64)
