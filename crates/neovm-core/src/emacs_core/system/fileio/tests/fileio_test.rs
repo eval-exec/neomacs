@@ -5554,6 +5554,103 @@ fn insert_file_contents_visit_decodes_text_enriched_formats() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A file name handler only replaces the *reading* part of
+/// `insert-file-contents`.  GNU refuses a read-only buffer before calling it
+/// (src/fileio.c:4146-4147); afterwards the handler branch takes INSERTED
+/// from the handler's `(FILE N)` when N fits after point (:4168-4170) and
+/// does `goto handled` (:4171), so the post-insert tail still runs -- the
+/// VISIT bookkeeping (:5148-5169), `after-insert-file-set-coding`
+/// (:5174-5184), and, when INSERTED > 0, `format-decode` and
+/// `after-insert-file-functions` (:5189-5306) -- and the handler's own value
+/// is returned, or `(FILE INSERTED)` when it is nil (:5331-5332).  Handlers
+/// that decode the text themselves (jka-compr, epa-file, url-handlers) rely
+/// on this for `buffer-file-coding-system`.
+///
+/// Expected values are derived from that GNU 31.1 source.
+#[test]
+fn insert_file_contents_runs_post_insert_steps_after_a_file_name_handler() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (progn
+          (defvar vm-ifc-log nil)
+          (defvar vm-ifc-calls 0)
+          (defvar vm-ifc-result 5)
+          (defun vm-ifc-handler (operation &rest args)
+            (if (eq operation 'insert-file-contents)
+                (progn
+                  (setq vm-ifc-calls (1+ vm-ifc-calls))
+                  (save-excursion (insert "h\u00e9llo"))
+                  (setq last-coding-system-used 'utf-8-unix)
+                  (and vm-ifc-result (list (car args) vm-ifc-result)))
+              (let ((inhibit-file-name-handlers
+                     (cons 'vm-ifc-handler inhibit-file-name-handlers))
+                    (inhibit-file-name-operation operation))
+                (apply operation args))))
+          (defmacro vm-ifc-with (&rest body)
+            `(let ((file-name-handler-alist '(("\\`/vm-ifc:" . vm-ifc-handler)))
+                   (after-insert-file-functions
+                    (list (lambda (n)
+                            (push (list 'after-insert n (point) (buffer-modified-p))
+                                  vm-ifc-log)
+                            nil))))
+               (setq vm-ifc-log nil vm-ifc-calls 0)
+               ,@body))
+          nil)
+        (vm-ifc-with
+         (with-temp-buffer
+           (setq buffer-file-coding-system 'undecided)
+           (list (insert-file-contents "/vm-ifc:x")
+                 buffer-file-coding-system vm-ifc-log (buffer-string))))
+        (vm-ifc-with
+         (let ((buf (generate-new-buffer "vm-ifc-visit")))
+           (unwind-protect
+               (with-current-buffer buf
+                 (setq buffer-file-coding-system 'undecided)
+                 (list (insert-file-contents "/vm-ifc:x" t)
+                       buffer-file-coding-system vm-ifc-log
+                       (buffer-modified-p) buffer-undo-list buffer-saved-size))
+             (kill-buffer buf))))
+        (let ((vm-ifc-result 99))
+          (vm-ifc-with
+           (with-temp-buffer
+             (setq buffer-file-coding-system 'undecided)
+             (list (insert-file-contents "/vm-ifc:x")
+                   buffer-file-coding-system vm-ifc-log))))
+        (let ((vm-ifc-result nil))
+          (vm-ifc-with
+           (with-temp-buffer
+             (list (insert-file-contents "/vm-ifc:x") vm-ifc-log))))
+        (vm-ifc-with
+         (with-temp-buffer
+           (setq buffer-read-only t)
+           (list (condition-case err (insert-file-contents "/vm-ifc:x")
+                   (buffer-read-only (car err)))
+                 vm-ifc-calls)))
+        "#,
+    );
+    assert_eq!(results[0], "OK nil");
+    // The coding system follows `last-coding-system-used`, and the hook sees
+    // the handler's count with point before the inserted text.
+    assert_eq!(
+        results[1],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 t)) "héllo")"#
+    );
+    // VISIT: the buffer is already unmodified when the hook runs, the undo
+    // list of an initially empty buffer is discarded, and save_length is set.
+    assert_eq!(
+        results[2],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 nil)) nil nil 5)"#
+    );
+    // N beyond ZV - PT: INSERTED is 0, so the coding system is still set but
+    // `format-decode` and the hooks are skipped; the value is the handler's.
+    assert_eq!(results[3], r#"OK (("/vm-ifc:x" 99) utf-8-unix nil)"#);
+    // A nil value is replaced by (FILE INSERTED).
+    assert_eq!(results[4], r#"OK (("/vm-ifc:x" 0) nil)"#);
+    // A read-only buffer is refused before the handler is called.
+    assert_eq!(results[5], "OK (buffer-read-only 0)");
+}
+
 #[test]
 fn test_insert_file_contents_beg_end_semantics() {
     crate::test_utils::init_test_tracing();
