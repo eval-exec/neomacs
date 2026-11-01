@@ -20,38 +20,39 @@ fn oracle_file_name_case_insensitive_existing_and_missing_paths() {
       (progn
         (make-directory sub)
         (write-region "x" nil file nil 'silent)
-        (list
-         ;; Existing files and directories should use the same filesystem
-         ;; probe result.
-         (file-name-case-insensitive-p root)
-         (file-name-case-insensitive-p sub)
-         (file-name-case-insensitive-p file)
-         ;; Missing descendants walk upward to the existing parent.
-         (file-name-case-insensitive-p missing-child)
-         (equal (file-name-case-insensitive-p missing-child)
-                (file-name-case-insensitive-p sub))
-         ;; Relative names are expanded before probing.
-         (let ((default-directory sub))
-           (equal (file-name-case-insensitive-p "MixedName.txt")
-                  (file-name-case-insensitive-p file)))
-         (condition-case err
-             (file-name-case-insensitive-p)
-           (error (list (car err) (cdr err))))
-         (condition-case err
-             (file-name-case-insensitive-p file 'extra)
-           (error (list (car err) (cdr err))))
-         (condition-case err
-             (file-name-case-insensitive-p 42)
-           (error (list (car err) (cdr err))))))
+        (let ((ref (file-name-case-insensitive-p root)))
+          (list
+           ;; The absolute answer is the host filesystem's property (ext4
+           ;; nil, APFS t).  Assert the PROBE CONTRACT: every existing path
+           ;; agrees with the root; a missing name answers nil -- the
+           ;; docstring's rule (src/fileio.c:2688-2702); the upward walk is
+           ;; only for trouble determining a filesystem, and Darwin reports
+           ;; a missing path as definitively not case-insensitive; and
+           ;; relative names expand before probing.
+           (eq (file-name-case-insensitive-p root) ref)
+           (eq (file-name-case-insensitive-p sub) ref)
+           (eq (file-name-case-insensitive-p file) ref)
+           (null (file-name-case-insensitive-p missing-child))
+           (let ((default-directory sub))
+             (eq (file-name-case-insensitive-p "MixedName.txt")
+                 (file-name-case-insensitive-p file)))
+           (condition-case err
+               (file-name-case-insensitive-p)
+             (error (list (car err) (cdr err))))
+           (condition-case err
+               (file-name-case-insensitive-p file 'extra)
+             (error (list (car err) (cdr err))))
+           (condition-case err
+               (file-name-case-insensitive-p 42)
+             (error (list (car err) (cdr err)))))))
     (ignore-errors (delete-directory root t))))
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK (nil nil nil nil t t (wrong-number-of-arguments (file-name-case-insensitive-p 0)) (wrong-number-of-arguments (file-name-case-insensitive-p 2)) (wrong-type-argument (stringp 42)))""#
+        r#""OK (t t t t t (wrong-number-of-arguments (file-name-case-insensitive-p 0)) (wrong-number-of-arguments (file-name-case-insensitive-p 2)) (wrong-type-argument (stringp 42)))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
-
 #[test]
 fn oracle_file_name_case_insensitive_handler_and_argument_order_edges() {
     return_if_neovm_enable_oracle_proptest_not_set!();
