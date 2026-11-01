@@ -2902,6 +2902,23 @@ impl LoadReadStreamToken {
     }
 }
 
+/// How a [`LoadReadCursor`] obtains `read-symbol-shorthands` for
+/// `(read STREAM=standard-input)`.
+///
+/// GNU's reader consults the variable at every symbol lookup
+/// (`src/lread.c:4956-5010`), so the binding visible at the `(read)` call is
+/// authoritative.  `load` derives a file's value from its Local Variables
+/// section without binding the variable, so it captures that value when the
+/// stream starts.  `eval-buffer` and `eval-region` read a buffer whose binding
+/// evaluated forms can change, so they resolve it at each `(read)`.
+#[derive(Clone, Debug)]
+pub(crate) enum LoadReadShorthands {
+    /// The value captured when a `load` stream started.
+    Snapshot(Option<super::value_reader::ReadSymbolShorthands>),
+    /// The current buffer-local or dynamic binding.
+    CurrentBinding,
+}
+
 /// One active load-read cursor: the heap `LispString` being read plus a byte
 /// offset into it that BOTH the readevalloop and `(read)` advance.  See
 /// [`LoadReadStreamToken`] and [`Context::load_read_cursors`].
@@ -2916,9 +2933,8 @@ pub(crate) struct LoadReadCursor {
     /// Shared byte offset into `source`, advanced by both the readevalloop and
     /// `(read STREAM=standard-input)`.
     pub(crate) pos: usize,
-    /// `read-symbol-shorthands` active for this source, if any — so `(read)`
-    /// applies the same shorthand rewrites the loader does.
-    pub(crate) shorthands: Option<super::value_reader::ReadSymbolShorthands>,
+    /// How `(read STREAM=standard-input)` resolves `read-symbol-shorthands`.
+    pub(crate) shorthands: LoadReadShorthands,
 }
 
 /// Result of reading a Lisp variable before choosing whether an unbound cell

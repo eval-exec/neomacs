@@ -7,4 +7,5 @@ mod apply_strict_edge_semantics;
 mod basic;
 mod buffer_region_semantics;
 mod comprehensive_patterns;
+mod eval_buffer_shorthands;
 mod regexp_pcase_edge_semantics;

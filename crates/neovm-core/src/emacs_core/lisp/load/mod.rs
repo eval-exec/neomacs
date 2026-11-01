@@ -1995,7 +1995,7 @@ fn streaming_readevalloop_lisp_source(
         source: content_value,
         eof_source,
         pos: 0,
-        shorthands: shorthands.cloned(),
+        shorthands: super::eval::LoadReadShorthands::Snapshot(shorthands.cloned()),
     });
 
     let load_specpdl_base = eval.specpdl.len();

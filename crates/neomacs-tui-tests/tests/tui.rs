@@ -93,6 +93,8 @@ mod issue_470;
 mod issue_654_centered_cursor;
 #[path = "issue_656_kill_minibuffer.rs"]
 mod issue_656_kill_minibuffer;
+#[path = "issue_658_eval_buffer_shorthands.rs"]
+mod issue_658_eval_buffer_shorthands;
 #[path = "mark_region_fill.rs"]
 mod mark_region_fill;
 #[path = "menu_bar.rs"]
