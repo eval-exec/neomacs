@@ -235,7 +235,10 @@ fn divergence_make_network_process_explicit_inet_address() {
 fn divergence_make_network_process_local_stream_server_accepts_client() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (listen t t open t t 1 t t t t)""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (listen t t open t t 1 t t t t)""#,
+        MacosDarwin => r#""OK (listen t t open t nil 1 t t nil t)""#,
+    );
     crate::common::assert_oracle_parity_with_case_workdir_expect(
         r#"(let ((default-directory temporary-file-directory)
        (path "neomacs-local-sock")
@@ -280,8 +283,10 @@ fn divergence_make_network_process_local_stream_server_accepts_client() {
 fn divergence_make_network_process_explicit_local_address() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect =
-        expect_test::expect![[r#""OK (listen t \"ignored\" 1 open t t \"bad.invalid\" 1)""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (listen t \"ignored\" 1 open t t \"bad.invalid\" 1)""#,
+        MacosDarwin => r#""OK (listen t \"ignored\" 1 open t nil \"bad.invalid\" 1)""#,
+    );
     crate::common::assert_oracle_parity_with_case_workdir_expect(
         r#"(let ((default-directory temporary-file-directory)
       (path "neomacs-local-address")
