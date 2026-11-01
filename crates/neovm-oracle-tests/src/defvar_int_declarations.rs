@@ -209,12 +209,14 @@ fn oracle_command_line_max_length_is_derived_from_this_editors_stack_rlimit() {
 
     let form = r#"
 (let* ((reported (with-temp-buffer
-                   (call-process "sh" nil t nil "-c" "ulimit -s")
+                   (call-process "getconf" nil t nil "ARG_MAX")
                    (car (split-string (buffer-string)))))
-       (stack (if (equal reported "unlimited")
-                  most-positive-fixnum
-                (* 1024 (string-to-number reported))))
-       (predicted (/ (max 131072 (min (/ stack 4) (* 6 1024 1024))) 4)))
+       ;; GNU computes command-line-max-length as sysconf(_SC_ARG_MAX)/4
+       ;; (src/callproc.c:2246-2252).  Ask the same sysconf in a child that
+       ;; inherits this editor's raised RLIMIT_STACK: glibc derives ARG_MAX
+       ;; from that limit, while Darwin reports its fixed ARG_MAX -- either
+       ;; way the answer is this host's derivation, never a Linux literal.
+       (predicted (/ (string-to-number reported) 4)))
   (list (integerp command-line-max-length)
         (> command-line-max-length 0)
         (= command-line-max-length predicted)))"#;
