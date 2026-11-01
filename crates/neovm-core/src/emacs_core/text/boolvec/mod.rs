@@ -372,14 +372,7 @@ pub(crate) fn builtin_make_bool_vector(args: Vec<Value>) -> EvalResult {
     make_bool_vector(args).map_err(crate::emacs_core::alloc::AllocationFailure::into_flow)
 }
 
-pub(crate) fn builtin_make_bool_vector_in_context(
-    context: &mut crate::emacs_core::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    make_bool_vector(args).map_err(|failure| failure.into_flow_in_context(context))
-}
-
-fn make_bool_vector(
+pub(crate) fn make_bool_vector(
     args: Vec<Value>,
 ) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-bool-vector", &args, 2)?;

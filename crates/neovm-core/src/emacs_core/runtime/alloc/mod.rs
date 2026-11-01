@@ -336,26 +336,6 @@ impl AllocationFailure {
             }
         }
     }
-
-    pub(crate) fn into_flow_in_context(
-        self,
-        context: &crate::emacs_core::eval::Context,
-    ) -> crate::emacs_core::error::Flow {
-        match self {
-            Self::Lisp(flow) => flow,
-            Self::MemoryExhausted(_) | Self::NullAllocation | Self::InvalidLayout(_) => context
-                .special_variable_value_by_id(crate::emacs_core::intern::intern(
-                    "memory-signal-data",
-                ))
-                .map(|binding| {
-                    crate::emacs_core::error::memory_signal_from_binding_value(
-                        binding,
-                        context.symbol_mode(),
-                    )
-                })
-                .unwrap_or_else(crate::emacs_core::error::memory_exhausted_error),
-        }
-    }
 }
 
 /// Register bootstrap variables owned by the allocation / GC subsystem.

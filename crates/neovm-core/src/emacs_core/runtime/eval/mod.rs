@@ -7623,6 +7623,7 @@ mod signal_dispatch;
 pub(crate) mod signal_entry;
 mod signal_room;
 
+mod allocation_flow;
 mod construct;
 mod dispatch_class;
 mod form_head_cache;

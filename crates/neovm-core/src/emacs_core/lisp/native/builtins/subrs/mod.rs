@@ -7746,7 +7746,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "make-bool-vector",
-        NativeFn::ContextVec(crate::emacs_core::boolvec::builtin_make_bool_vector_in_context),
+        NativeFn::ContextVec(super::collections::builtin_make_bool_vector_in_context),
         SubrArity::new(2, Some(2)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(

@@ -258,6 +258,14 @@ pub(crate) fn builtin_make_vector_in_context(
     make_vector(args).map_err(|failure| failure.into_flow_in_context(context))
 }
 
+pub(crate) fn builtin_make_bool_vector_in_context(
+    context: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    crate::emacs_core::boolvec::make_bool_vector(args)
+        .map_err(|failure| failure.into_flow_in_context(context))
+}
+
 fn make_vector(args: Vec<Value>) -> Result<Value, crate::emacs_core::alloc::AllocationFailure> {
     expect_args("make-vector", &args, 2)?;
     let len = expect_wholenump(&args[0])? as usize;
