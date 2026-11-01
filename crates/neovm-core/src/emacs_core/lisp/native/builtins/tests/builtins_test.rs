@@ -11684,18 +11684,20 @@ fn mouse_position_in_root_frame_adds_frame_offsets_to_mouse_position() {
         .expect("selected-frame should evaluate");
     let frame_id = frame.as_frame_id().unwrap();
 
-    // No mouse position yet: GNU answers nil when X/Y are not known.
-    let none = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
-        .expect("mouse-position-in-root-frame should resolve")
-        .expect("mouse-position-in-root-frame should evaluate");
-    assert_eq!(none, Value::NIL);
-
     if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(frame_id)) {
         frame.char_width = 1.0;
         frame.char_height = 1.0;
         frame.left_pos = 3;
         frame.top_pos = 4;
     }
+
+    // No mouse position yet: mouse-position is (FRAME nil . nil).  GNU's
+    // XFIXNUM reads nil as zero, so only the frame offsets remain.
+    let none = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(none, Value::cons(Value::fixnum(3), Value::fixnum(4)));
+
     dispatch_builtin(
         &mut eval,
         "display--update-for-mouse-movement",
@@ -11708,6 +11710,84 @@ fn mouse_position_in_root_frame_adds_frame_offsets_to_mouse_position() {
         .expect("mouse-position-in-root-frame should resolve")
         .expect("mouse-position-in-root-frame should evaluate");
     assert_eq!(pos, Value::cons(Value::fixnum(22), Value::fixnum(49)));
+}
+
+#[test]
+fn mouse_position_in_root_frame_walks_parent_frames() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let parent = dispatch_builtin(&mut eval, "selected-frame", vec![])
+        .expect("selected-frame should resolve")
+        .expect("selected-frame should evaluate");
+    let parent_id = parent.as_frame_id().unwrap();
+    if let Some(frame) = eval.frames.get_mut(crate::window::FrameId(parent_id)) {
+        frame.left_pos = 3;
+        frame.top_pos = 4;
+    }
+    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let child_id = eval.frames.create_frame("issue661-child", 80, 24, buffer);
+    if let Some(frame) = eval.frames.get_mut(child_id) {
+        frame.left_pos = 5;
+        frame.top_pos = 6;
+        frame.parent_frame = Value::make_frame(parent_id);
+    }
+    eval.store_variable_by_name("issue661-child-frame", Value::make_frame(child_id.0));
+    eval.eval_str(
+        "(setq mouse-position-function
+               (lambda (_pos) (cons issue661-child-frame (cons 19 45))))",
+    )
+    .expect("install mouse-position-function");
+
+    let pos = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(
+        pos,
+        Value::cons(Value::fixnum(3 + 5 + 19), Value::fixnum(4 + 6 + 45))
+    );
+}
+
+#[test]
+fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    eval.store_variable_by_name("issue661-dead-frame", Value::make_frame(999_999));
+    eval.eval_str(
+        "(setq mouse-position-function
+               (lambda (_pos) (cons issue661-dead-frame (cons 5 6))))",
+    )
+    .expect("install mouse-position-function");
+
+    let pos = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(pos, Value::NIL);
+}
+
+#[test]
+fn mouse_position_in_root_frame_returns_nil_for_malformed_positions() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+
+    // GNU reads these shapes without validation: the reference build
+    // segfaults on a non-cons cdr and on a non-list position.  Neomacs must
+    // answer nil instead of reproducing the crash.
+    eval.eval_str(
+        "(setq mouse-position-function
+               (lambda (_pos) (cons (selected-frame) nil)))",
+    )
+    .expect("install malformed cdr");
+    let cdr = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(cdr, Value::NIL);
+
+    eval.eval_str("(setq mouse-position-function (lambda (_pos) 7))")
+        .expect("install non-list position");
+    let position = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(position, Value::NIL);
 }
 
 #[test]

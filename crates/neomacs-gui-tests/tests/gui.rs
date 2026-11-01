@@ -124,6 +124,9 @@ mod minibuffer_line_gui;
 #[path = "minibuffer_selected_window.rs"]
 mod minibuffer_selected_window;
 
+#[path = "mouse_position_in_root_frame_gui_oracle.rs"]
+mod mouse_position_in_root_frame_gui_oracle;
+
 #[path = "native_frame_focus.rs"]
 mod native_frame_focus;
 
