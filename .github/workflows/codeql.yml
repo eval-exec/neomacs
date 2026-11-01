@@ -52,6 +52,30 @@ jobs:
       - name: Ensure zstd can unpack the CodeQL bundle
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zstd
 
+      # The Rust extractor expands macros through rust-analyzer, which needs
+      # the standard library's sources (the `rust-src` component) for every
+      # std macro: assert_eq!, vec!, format!, line!, module_path! and the
+      # dependency macros that expand to them. The pinned toolchain in
+      # rust-toolchain.toml is installed without `rust-src` (it is deliberately
+      # not in that file: its presence changes compile-fail goldens), so every
+      # std macro site failed to expand and the extractor emitted one
+      # diagnostic per site: 141,819 on 2026-10-30, 174,753 on ad274d3780.
+      # Those diagnostics are what the SARIF carries (265 MB raw for a handful
+      # of results), and since 2026-10-31 the code-scanning endpoint stops
+      # processing it with HTTP 504 after ~20 s. Installing the component here
+      # makes the expansions succeed, which both shrinks the SARIF to its
+      # results and lets the queries see the expanded code.
+      - name: Install the pinned toolchain's standard-library sources
+        if: matrix.language == 'rust'
+        run: |
+          set -u
+          channel=$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml)
+          echo "pinned toolchain: $channel"
+          rustup toolchain install "$channel" --component rust-src
+          sysroot=$(rustc --print sysroot)
+          echo "sysroot: $sysroot"
+          test -d "$sysroot/lib/rustlib/src/rust/library/core"
+
       - name: Initialize CodeQL
         id: init
         uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
@@ -89,6 +113,9 @@ jobs:
           set -u
           ls -l "$(dirname "$SARIF")"
           printf 'sarif bytes=%s gzip=%s\n' "$(stat -c %s "$SARIF")" "$(gzip -c "$SARIF" | wc -c)"
+          # Composition, so a failed upload says what the payload was made of
+          # (results, or extractor diagnostics as in the 2026-10-31 timeouts).
+          jq -r '"sarif results=\([.runs[].results[]] | length) extractor-notifications=\([.runs[].invocations[]?.toolExecutionNotifications[]?] | length)"' "$SARIF"
           for attempt in 1 2 3; do
             if printf '%s' "$GH_TOKEN" | "$CODEQL" github upload-results \
                  --repository="$GITHUB_REPOSITORY" --ref="$GITHUB_REF" --commit="$GITHUB_SHA" \
