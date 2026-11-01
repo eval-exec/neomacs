@@ -1171,10 +1171,48 @@ pub(crate) fn builtin_frame_root_frame(
     Ok(Value::make_frame(root.0))
 }
 
-/// `(mouse-position-in-root-frame)` — stub, returns nil.
-pub(crate) fn builtin_mouse_position_in_root_frame(args: Vec<Value>) -> EvalResult {
+/// `(mouse-position-in-root-frame)` -> (X . Y) or nil
+///
+/// Mirrors GNU `src/frame.c` `Fmouse_position_in_root_frame`: take
+/// `mouse-position` (after `mouse-position-function`) and add the
+/// position of its frame and of every ancestor frame.  On a tty
+/// `mouse-drag-line' reads the pointer through this primitive, so
+/// answering nil left mode-line and divider drags unable to resize.
+pub(crate) fn builtin_mouse_position_in_root_frame(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("mouse-position-in-root-frame", &args, 0)?;
-    Ok(Value::NIL)
+    let pos = builtin_mouse_position(eval, vec![])?;
+    if !pos.is_cons() {
+        return Ok(Value::NIL);
+    }
+    let Some(frame_id) = pos.cons_car().as_frame_id() else {
+        return Ok(Value::NIL);
+    };
+    let coords = pos.cons_cdr();
+    if !coords.is_cons() {
+        return Ok(Value::NIL);
+    }
+    let (Some(mut x), Some(mut y)) = (coords.cons_car().as_fixnum(), coords.cons_cdr().as_fixnum())
+    else {
+        return Ok(Value::NIL);
+    };
+    let mut current = Some(crate::window::FrameId(frame_id));
+    let mut seen: Vec<crate::window::FrameId> = Vec::new();
+    while let Some(id) = current {
+        if seen.contains(&id) {
+            break;
+        }
+        seen.push(id);
+        let Some(frame) = eval.frames.get(id) else {
+            break;
+        };
+        x += frame.left_pos;
+        y += frame.top_pos;
+        current = eval.frames.frame_parent_id(id);
+    }
+    Ok(Value::cons(Value::fixnum(x), Value::fixnum(y)))
 }
 
 pub(crate) fn builtin_gap_position(
