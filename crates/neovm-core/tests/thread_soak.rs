@@ -4,7 +4,8 @@
 //! row file run by the *built* editor binary inside a sandbox launcher (never
 //! in-process), so the same sandbox wraps neomacs and the GNU 31.1 oracle.
 //! The launcher is tracked (`crates/neovm-core/tests/soak/sandbox-run.sh`,
-//! capability-detected: systemd scope -> user/PID namespace -> direct exec) and
+//! capability-detected: systemd scope with a PID namespace -> the scope alone ->
+//! user/PID namespace -> direct exec, each probed with its exact prefix) and
 //! can be replaced with the soak lane's own wrapper via `SOAK_SANDBOX`. One
 //! child process = one scenario = one receipt line.
 //!
