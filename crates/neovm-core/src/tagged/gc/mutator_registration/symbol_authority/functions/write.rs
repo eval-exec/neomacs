@@ -125,7 +125,7 @@ fn keeper_compiler_quiescent() -> bool {
     true
 }
 
-impl EraCore<'_> {
+impl<K: EraKeeper> EraCore<'_, K> {
     /// Reserve this existing symbol's stamp and one original-target journal
     /// slot before ANY owner registers. No running write grows Rust metadata.
     pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {

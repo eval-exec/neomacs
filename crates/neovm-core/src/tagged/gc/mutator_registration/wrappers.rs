@@ -10,85 +10,150 @@ use super::*;
 
 /// Production multi-mutator authority, minted only from checked GEN1 inputs.
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
-pub struct ParallelHeapEra<'heap> {
-    pub(super) core: EraCore<'heap>,
+pub struct ParallelHeapEra<'heap, K: EraKeeper> {
+    pub(super) core: EraCore<'heap, K>,
     witness: Gen1Construction,
 }
 
 /// Restricted proof executors retain GEN0 coverage without production admission.
 #[cfg(test)]
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
-pub(crate) struct ProofEra<'heap> {
-    pub(super) core: EraCore<'heap>,
+pub(crate) struct ProofEra<'heap, K: EraKeeper> {
+    pub(super) core: EraCore<'heap, K>,
     witness: ProofConstruction,
 }
 
 /// Finish refusal preserves the production admission and its exact evidence.
 #[must_use]
-pub(crate) struct EraFinishFailure<'heap> {
+pub(crate) struct EraFinishFailure<'heap, K: EraKeeper> {
     pub(crate) reason: RegistrationError,
-    pub(crate) era: ParallelHeapEra<'heap>,
+    pub(crate) era: ParallelHeapEra<'heap, K>,
 }
 #[cfg(test)]
 #[must_use]
-pub(crate) struct ProofEraFinishFailure<'heap> {
+pub(crate) struct ProofEraFinishFailure<'heap, K: EraKeeper> {
     pub(crate) reason: RegistrationError,
-    pub(crate) era: ProofEra<'heap>,
+    pub(crate) era: ProofEra<'heap, K>,
 }
 
-impl<'heap> ParallelHeapEra<'heap> {
+impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
+    /// # Safety
+    /// prepare must return the original retained keeper's epoch and backing,
+    /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) fn admit(
+    pub(crate) unsafe fn admit_with(
         admission: Gen1Admission<'heap>,
-        keeper: Baton,
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        EraCore::admit(ProductionAdmission::check(admission, keeper)?)
+        keeper: K,
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
+        EraCore::admit(ProductionAdmission::check(admission, keeper)?, prepare)
             .map(|(core, witness)| Self { core, witness })
     }
 
+    /// # Safety
+    /// prepare must return the original retained keeper's epoch and backing,
+    /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) fn admit_rooted(
+    pub(crate) unsafe fn admit_rooted_with(
         admission: Gen1Admission<'heap>,
-        keeper: Baton,
+        keeper: K,
         roots: FrozenLegacyRoots,
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        EraCore::admit_rooted(ProductionAdmission::check(admission, keeper)?, roots)
-            .map(|(core, witness)| Self { core, witness })
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
+        EraCore::admit_rooted(
+            ProductionAdmission::check(admission, keeper)?,
+            roots,
+            prepare,
+        )
+        .map(|(core, witness)| Self { core, witness })
     }
 }
 
 #[cfg(test)]
-impl<'heap> ProofEra<'heap> {
+impl<'heap, K: EraKeeper> ProofEra<'heap, K> {
+    /// # Safety
+    /// prepare must return the original retained keeper's epoch and backing,
+    /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) fn admit(
+    pub(crate) unsafe fn admit_with(
         collector: QuiescentCollector<'heap>,
-        keeper: Baton,
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        EraCore::admit(ProofAdmission::check(collector, keeper)?)
+        keeper: K,
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
+        EraCore::admit(ProofAdmission::check(collector, keeper)?, prepare)
             .map(|(core, witness)| Self { core, witness })
     }
 
+    /// # Safety
+    /// prepare must return the original retained keeper's epoch and backing,
+    /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) fn admit_rooted(
+    pub(crate) unsafe fn admit_rooted_with(
         collector: QuiescentCollector<'heap>,
-        keeper: Baton,
+        keeper: K,
         roots: FrozenLegacyRoots,
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
-        EraCore::admit_rooted(ProofAdmission::check(collector, keeper)?, roots)
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
+        EraCore::admit_rooted(ProofAdmission::check(collector, keeper)?, roots, prepare)
             .map(|(core, witness)| Self { core, witness })
     }
 
+    /// # Safety
+    /// prepare must return the original retained keeper's epoch and backing,
+    /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) fn admit_rooted_with_weak_tables_for_test(
+    pub(crate) unsafe fn admit_rooted_with_weak_tables_for_test_inner(
         collector: QuiescentCollector<'heap>,
-        keeper: Baton,
+        keeper: K,
         roots: FrozenLegacyRoots,
         tables: &[crate::tagged::value::TaggedValue],
-    ) -> Result<Self, EraAdmissionFailure<'heap>> {
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<Self, EraAdmissionFailure<'heap, K>> {
         EraCore::admit_rooted_with_weak_tables_for_test(
             ProofAdmission::check(collector, keeper)?,
             roots,
             tables,
+            prepare,
         )
         .map(|(core, witness)| Self { core, witness })
     }
@@ -134,7 +199,7 @@ impl<'heap> ProofEra<'heap> {
 // register mint receives the wrapper's sealed, nominal construction witness.
 macro_rules! era_operations {
     ($era:ident, $failure:ident) => {
-        impl<'heap> $era<'heap> {
+        impl<'heap, K: EraKeeper> $era<'heap, K> {
             pub fn heap_identity(&self) -> HeapIdentity {
                 self.core.heap_identity()
             }
@@ -183,19 +248,42 @@ macro_rules! era_operations {
             }
 
             #[cold]
-            pub fn collect_stopped(
+            /// # Safety
+            /// The upper adapter must supply the complete CURRENT World root
+            /// walk of the retained keeper, including stable marker head slots.
+            /// No root or reference may escape its real stopped authority.
+            pub(crate) unsafe fn collect_stopped_with(
                 &self,
                 stopped: &mut AllStopped<'_>,
+                roots: impl FnOnce(
+                    &K,
+                    &mut AllStopped<'_>,
+                    &mut Vec<crate::tagged::value::TaggedValue>,
+                ) -> Result<
+                    Vec<*mut *mut crate::tagged::header::MarkerObj>,
+                    RendezvousError,
+                >,
             ) -> Result<CollectionReport, CollectionError> {
-                self.core.collect_stopped(stopped)
+                self.core.collect_stopped(stopped, roots)
             }
 
             #[cold]
-            pub fn collect_stopped_minor(
+            /// # Safety
+            /// Same complete CURRENT World census as collect_stopped_with.
+            /// GEN0 still refuses before invoking the supplied walk.
+            pub(crate) unsafe fn collect_stopped_minor_with(
                 &self,
                 stopped: &mut AllStopped<'_>,
+                roots: impl FnOnce(
+                    &K,
+                    &mut AllStopped<'_>,
+                    &mut Vec<crate::tagged::value::TaggedValue>,
+                ) -> Result<
+                    Vec<*mut *mut crate::tagged::header::MarkerObj>,
+                    RendezvousError,
+                >,
             ) -> Result<CollectionReport, MinorCollectionError> {
-                self.core.collect_stopped_minor(stopped)
+                self.core.collect_stopped_minor(stopped, roots)
             }
 
             pub fn prepare_function_symbol(&self, key: &SymbolHandle) -> Result<(), FunctionError> {
@@ -216,7 +304,7 @@ macro_rules! era_operations {
 
             pub(crate) fn finish(
                 self,
-            ) -> Result<(QuiescentCollector<'heap>, Baton), $failure<'heap>> {
+            ) -> Result<(QuiescentCollector<'heap>, K), $failure<'heap, K>> {
                 let Self { core, witness } = self;
                 core.finish().map_err(|failure| $failure {
                     reason: failure.reason,
@@ -228,7 +316,7 @@ macro_rules! era_operations {
             }
         }
 
-        impl std::fmt::Debug for $era<'_> {
+        impl<K: EraKeeper> std::fmt::Debug for $era<'_, K> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.debug_struct(stringify!($era))
                     .field("core", &self.core)
@@ -236,7 +324,7 @@ macro_rules! era_operations {
             }
         }
 
-        impl std::fmt::Debug for $failure<'_> {
+        impl<K: EraKeeper> std::fmt::Debug for $failure<'_, K> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 f.debug_tuple(stringify!($failure))
                     .field(&self.reason)
@@ -249,6 +337,7 @@ era_operations!(ParallelHeapEra, EraFinishFailure);
 #[cfg(test)]
 era_operations!(ProofEra, ProofEraFinishFailure);
 
-static_assertions::assert_not_impl_any!(ParallelHeapEra<'static>: Send, Sync, Clone, Copy);
 #[cfg(test)]
-static_assertions::assert_not_impl_any!(ProofEra<'static>: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(ParallelHeapEra<'static, super::Baton>: Send, Sync, Clone, Copy);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(ProofEra<'static, super::Baton>: Send, Sync, Clone, Copy);

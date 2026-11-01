@@ -90,20 +90,24 @@ fn nmjit_n3_initial_table_preparation_refusal_returns_complete_ownership() {
         let admission = ProofAdmission::check(collector, keeper)
             .expect("empty fixture returns valid exclusive admission inputs");
         let (checked, witness) = admission.into_checked();
-        let (outcome, mut collector, keeper) =
-            match EraCore::admit_checked(checked, witness, InitialTablePreparation::RefuseOnce) {
-                Err(failure) => (
-                    PreparationOutcome::Refused(failure.reason),
-                    failure.collector,
-                    failure.keeper,
-                ),
-                Ok((core, _witness)) => {
-                    let (collector, keeper) = core.finish().unwrap_or_else(|failure| {
-                        panic!("unexpected admission cleanup refused: {:?}", failure.reason)
-                    });
-                    (PreparationOutcome::Admitted, collector, keeper)
-                }
-            };
+        let (outcome, mut collector, keeper) = match EraCore::admit_checked(
+            checked,
+            witness,
+            crate::emacs_core::eval::world::prepare_keeper_backing,
+            InitialTablePreparation::RefuseOnce,
+        ) {
+            Err(failure) => (
+                PreparationOutcome::Refused(failure.reason),
+                failure.collector,
+                failure.keeper,
+            ),
+            Ok((core, _witness)) => {
+                let (collector, keeper) = core.finish().unwrap_or_else(|failure| {
+                    panic!("unexpected admission cleanup refused: {:?}", failure.reason)
+                });
+                (PreparationOutcome::Admitted, collector, keeper)
+            }
+        };
         let returned_heap = collector.heap_identity();
         let returned_mode = collector.registration_heap_mut().generational_enabled();
         let returned_keeper_heap = keeper.parallel_heap_identity();

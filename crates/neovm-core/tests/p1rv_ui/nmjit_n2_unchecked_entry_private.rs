@@ -1,4 +1,4 @@
-use neovm_core::tagged::gc::ParallelHeapEra;
+use neovm_core::emacs_core::eval::WorldEra as ParallelHeapEra;
 
 fn unchecked_entry() {
     let _ = ParallelHeapEra::admit;

@@ -190,13 +190,24 @@ fn supported_with_weak(
     Ok(())
 }
 
-impl<'heap> EraCore<'heap> {
+impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     #[cfg(test)]
-    pub(super) fn admit_rooted_with_weak_tables_for_test<A: construction::CoreAdmission<'heap>>(
+    pub(super) fn admit_rooted_with_weak_tables_for_test<
+        A: construction::CoreAdmission<'heap, K>,
+    >(
         admission: A,
         roots: FrozenLegacyRoots,
         tables: &[TaggedValue],
-    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap, K>> {
         let (mut checked, witness) = admission.into_checked();
         let (collector, keeper) = checked.parts_mut();
         let permission = if roots.heap_identity() != collector.heap_identity() {
@@ -217,6 +228,7 @@ impl<'heap> EraCore<'heap> {
         let (mut era, witness) = Self::admit_checked(
             checked,
             witness,
+            prepare,
             #[cfg(test)]
             InitialTablePreparation::Actual,
         )?;
@@ -237,10 +249,19 @@ impl<'heap> EraCore<'heap> {
     }
 
     #[cold]
-    pub(super) fn admit_rooted<A: construction::CoreAdmission<'heap>>(
+    pub(super) fn admit_rooted<A: construction::CoreAdmission<'heap, K>>(
         admission: A,
         roots: FrozenLegacyRoots,
-    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (
+                super::super::FacadeEpochRetention,
+                symbol_authority::SymbolBacking,
+            ),
+            RegistrationError,
+        >,
+    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap, K>> {
         let (mut checked, witness) = admission.into_checked();
         let (collector, _) = checked.parts_mut();
         let validation = if roots.heap_identity() != collector.heap_identity() {
@@ -254,6 +275,7 @@ impl<'heap> EraCore<'heap> {
         let (mut era, witness) = Self::admit_checked(
             checked,
             witness,
+            prepare,
             #[cfg(test)]
             InitialTablePreparation::Actual,
         )?;
@@ -309,20 +331,32 @@ impl<'heap> EraCore<'heap> {
     }
 
     #[cold]
-    pub fn collect_stopped(
+    pub(super) fn collect_stopped(
         &self,
         stopped: &mut AllStopped<'_>,
+        roots: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<TaggedValue>,
+        )
+            -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
     ) -> Result<CollectionReport, CollectionError> {
-        self.collect_stopped_kind(stopped, GenerationCycle::Major)
+        self.collect_stopped_kind(stopped, GenerationCycle::Major, roots)
     }
 
     /// A genuine all-owner minor, with the same checked current root census,
     /// image transfer, eager promotion/sweep and response restoration as full.
     /// GEN0 refusal happens before entering the terminal trace callback.
     #[cold]
-    pub fn collect_stopped_minor(
+    pub(super) fn collect_stopped_minor(
         &self,
         stopped: &mut AllStopped<'_>,
+        roots: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<TaggedValue>,
+        )
+            -> Result<Vec<*mut *mut crate::tagged::header::MarkerObj>, RendezvousError>,
     ) -> Result<CollectionReport, MinorCollectionError> {
         self.check_collection(stopped)?;
         {
@@ -344,7 +378,7 @@ impl<'heap> EraCore<'heap> {
                 }
             }
         }
-        self.collect_stopped_kind(stopped, GenerationCycle::Minor)
+        self.collect_stopped_kind(stopped, GenerationCycle::Minor, roots)
             .map_err(MinorCollectionError::Collection)
     }
 
@@ -353,6 +387,14 @@ impl<'heap> EraCore<'heap> {
         &self,
         stopped: &mut AllStopped<'_>,
         kind: GenerationCycle,
+        collect_world: impl FnOnce(
+            &K,
+            &mut AllStopped<'_>,
+            &mut Vec<TaggedValue>,
+        ) -> Result<
+            Vec<*mut *mut crate::tagged::header::MarkerObj>,
+            RendezvousError,
+        >,
     ) -> Result<CollectionReport, CollectionError> {
         self.check_collection(stopped)?;
         let registry = self.registry();
@@ -385,11 +427,11 @@ impl<'heap> EraCore<'heap> {
             .as_ref()
             .ok_or(RendezvousError::Publication)?
             .append_words(&mut roots);
-        let heads = self
-            .keeper
-            .as_ref()
-            .ok_or(RendezvousError::Publication)?
-            .collect_parallel_world_roots(stopped, &mut roots)?;
+        let heads = collect_world(
+            self.keeper.as_ref().ok_or(RendezvousError::Publication)?,
+            stopped,
+            &mut roots,
+        )?;
         {
             let mut collector = self
                 .collector

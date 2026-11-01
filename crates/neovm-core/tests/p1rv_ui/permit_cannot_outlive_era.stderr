@@ -1,7 +1,7 @@
 error[E0515]: cannot return value referencing function parameter `era`
- --> tests/p1rv_ui/permit_cannot_outlive_era.rs:5:23
+ --> tests/p1rv_ui/permit_cannot_outlive_era.rs:6:23
   |
-4 |     match era.register(1, 0) {
+5 |     match era.register(1, 0) {
   |           --- `era` is borrowed here
-5 |         Ok(permit) => permit,
+6 |         Ok(permit) => permit,
   |                       ^^^^^^ returns a value referencing data owned by the current function

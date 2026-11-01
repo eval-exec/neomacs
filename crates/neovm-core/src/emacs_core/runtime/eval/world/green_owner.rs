@@ -79,7 +79,7 @@ impl World {
 /// The right to run Lisp in a Green World: whoever holds it is the one OS
 /// thread that may touch the World. See the module's safety argument.
 #[must_use = "the World's Lisp stops while its Baton is dropped"]
-pub(crate) struct Baton {
+pub struct Baton {
     /// Keeps concurrent marking excluded for the Green era (point 5).
     /// Release before `world`: this Baton can own the final World reference.
     _retention: crate::tagged::gc::FacadeEpochRetention,

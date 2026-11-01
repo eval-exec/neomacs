@@ -21,17 +21,15 @@ impl WeakSweepPermit {
     /// Only the serial keeper's explicit fixture admission can mint permission.
     /// Validate catalog membership before interpreting any caller-supplied word.
     #[cfg(test)]
-    pub(super) fn mint(
+    pub(super) fn mint<K: EraKeeper>(
         heap: &TaggedHeap,
-        keeper: &Baton,
+        keeper: &K,
         tables: &[TaggedValue],
     ) -> Result<Self, RegistrationError> {
         if heap.heap_identity() != keeper.parallel_heap_identity() {
             return Err(RegistrationError::WrongHeap);
         }
-        if !keeper.held_here() {
-            return Err(RegistrationError::WrongThread);
-        }
+        keeper.keeper_designator()?;
         let mut allowed = FxHashSet::default();
         for table in tables {
             let address = table.bits() & !crate::tagged::value::TAG_MASK;

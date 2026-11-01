@@ -180,7 +180,7 @@ impl Rendezvous<'_> {
         self.registry.park.wake.notify_all();
     }
 }
-impl EraCore<'_> {
+impl<K: EraKeeper> EraCore<'_, K> {
     #[cfg(test)]
     pub(crate) fn test_root_epoch_retention(&self) -> super::super::FacadeEpochRetention {
         self.registry()

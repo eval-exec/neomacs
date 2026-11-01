@@ -1,4 +1,5 @@
-//! The opaque keeper World designator is minted only by eval's World owner.
+//! Opaque keeper World designators and frozen legacy roots are minted only by
+//! eval's World owner.
 //!
 //! This source boundary complements the constructor's unsafe contract; it does
 //! not attempt Rust alias resolution. Reuse the plist seam's code-only scanner
@@ -8,11 +9,28 @@ use std::path::{Path, PathBuf};
 
 use super::{code_only, find_all, source_files, test_gated_ranges};
 
-const DESIGNATOR: &str = "KeeperWorldDesignator";
 const OWNER: &str = "src/emacs_core/runtime/eval/world";
 
-fn constructor_sites(code: &str) -> Vec<usize> {
-    find_all(code, DESIGNATOR)
+#[derive(Clone, Copy, Debug)]
+enum Constructor {
+    KeeperWorldDesignator,
+    FrozenLegacyRoots,
+}
+
+impl Constructor {
+    const ALL: [Self; 2] = [Self::KeeperWorldDesignator, Self::FrozenLegacyRoots];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::KeeperWorldDesignator => "KeeperWorldDesignator",
+            Self::FrozenLegacyRoots => "FrozenLegacyRoots",
+        }
+    }
+}
+
+fn constructor_sites(code: &str, constructor: Constructor) -> Vec<usize> {
+    let name = constructor.name();
+    find_all(code, name)
         .into_iter()
         .filter(|&offset| {
             // Do not mistake a longer identifier for this capability's name.
@@ -23,7 +41,7 @@ fn constructor_sites(code: &str) -> Vec<usize> {
             {
                 return false;
             }
-            let tail = code[offset + DESIGNATOR.len()..].trim_start();
+            let tail = code[offset + name.len()..].trim_start();
             let Some(tail) = tail.strip_prefix("::") else {
                 return false;
             };
@@ -35,10 +53,10 @@ fn constructor_sites(code: &str) -> Vec<usize> {
         .collect()
 }
 
-fn production_sites(source: &str) -> Vec<usize> {
+fn production_sites(source: &str, constructor: Constructor) -> Vec<usize> {
     let code = code_only(source);
     let ranges = test_gated_ranges(&code);
-    constructor_sites(&code)
+    constructor_sites(&code, constructor)
         .into_iter()
         .filter(|offset| {
             !ranges
@@ -52,8 +70,7 @@ fn owner_allows(relative: &Path) -> bool {
     relative.starts_with(OWNER)
 }
 
-#[test]
-fn keeper_world_designators_are_minted_only_by_the_world_owner() {
+fn assert_world_owner_constructor(constructor: Constructor) {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     source_files(&manifest.join("src"), &mut files);
@@ -69,30 +86,48 @@ fn keeper_world_designators_are_minted_only_by_the_world_owner() {
         }
         let source = std::fs::read_to_string(&path).expect("read source file");
         let code = code_only(&source);
-        for offset in production_sites(&source) {
+        for offset in production_sites(&source, constructor) {
             let line = code[..offset].matches('\n').count() + 1;
             let site = format!("{}:{line}", relative.display());
             assert!(
                 owner_allows(relative),
-                "KeeperWorldDesignator::new outside the eval World owner: {site}"
+                "{}::new outside the eval World owner: {site}",
+                constructor.name()
             );
             constructors.push(site);
         }
     }
     assert!(
         !constructors.is_empty(),
-        "the guard must observe an actual World-owner constructor call"
+        "the guard must observe an actual World-owner {}::new call",
+        constructor.name()
     );
 }
 
 #[test]
-fn keeper_world_designator_guard_controls_detect_synthetic_bypasses() {
+fn keeper_world_designators_are_minted_only_by_the_world_owner() {
+    assert_world_owner_constructor(Constructor::KeeperWorldDesignator);
+}
+
+#[test]
+fn frozen_legacy_roots_are_minted_only_by_the_world_owner() {
+    assert_world_owner_constructor(Constructor::FrozenLegacyRoots);
+}
+
+fn assert_synthetic_controls(constructor: Constructor) {
+    // The fixture inventory is shared by both constructor seams; replacement
+    // also exercises the longer-identifier negative control for each name.
     for source in [
         "fn bypass() { unsafe { KeeperWorldDesignator::new(ptr) }; }",
         "fn bypass() { unsafe { crate::tagged::KeeperWorldDesignator :: new (ptr) }; }",
         "fn bypass() { unsafe { KeeperWorldDesignator /* explanation */ ::\n new(ptr) }; }",
     ] {
-        assert_eq!(production_sites(source).len(), 1, "must detect: {source}");
+        let source = source.replace("KeeperWorldDesignator", constructor.name());
+        assert_eq!(
+            production_sites(&source, constructor).len(),
+            1,
+            "must detect: {source}"
+        );
     }
     for source in [
         "// KeeperWorldDesignator::new(ptr)\nconst S: &str = \"KeeperWorldDesignator::new(ptr)\";",
@@ -102,10 +137,18 @@ fn keeper_world_designator_guard_controls_detect_synthetic_bypasses() {
         "#[cfg(all(test, feature = \"fixture\"))] mod fixture { fn f() { KeeperWorldDesignator::new(ptr); } }",
         "fn unrelated() { OtherKeeperWorldDesignator::new(ptr); KeeperWorldDesignator::new_unchecked(ptr); }",
     ] {
+        let source = source.replace("KeeperWorldDesignator", constructor.name());
         assert!(
-            production_sites(source).is_empty(),
+            production_sites(&source, constructor).is_empty(),
             "must not flag: {source}"
         );
+    }
+}
+
+#[test]
+fn keeper_world_designator_guard_controls_detect_synthetic_bypasses() {
+    for constructor in Constructor::ALL {
+        assert_synthetic_controls(constructor);
     }
     assert!(owner_allows(Path::new(
         "src/emacs_core/runtime/eval/world/parallel_roots.rs"

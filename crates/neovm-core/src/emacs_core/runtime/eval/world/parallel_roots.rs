@@ -13,32 +13,8 @@ mod parallel_admission;
 pub(crate) use parallel_admission::OwnedProofProjection;
 pub(crate) use parallel_admission::{OwnedParallelError, OwnedParallelProjection};
 
-/// An immutable census of the original Context, whose execution is suspended
-/// for the entire era. Construction is sealed to that Context before the
-/// QuiescentCollector heap loan exists. Values never cross an owner thread.
-#[derive(Debug)]
-pub(crate) struct FrozenLegacyRoots {
-    heap: HeapIdentity,
-    words: Vec<TaggedValue>,
-    functions_quiescent: bool,
-}
-
-impl FrozenLegacyRoots {
-    pub(crate) fn permits_function_writes(&self) -> bool {
-        self.functions_quiescent
-    }
-    pub(crate) fn heap_identity(&self) -> HeapIdentity {
-        self.heap
-    }
-
-    /// Copies words only. The consumer must hold stopped collector authority
-    /// for this exact heap before decoding them or tracing the resulting set.
-    pub(crate) fn append_words(&self, out: &mut Vec<TaggedValue>) {
-        out.extend_from_slice(&self.words);
-    }
-}
-
-static_assertions::assert_not_impl_any!(FrozenLegacyRoots: Send, Sync, Clone, Copy);
+use crate::tagged::gc::FrozenFunctionRoots;
+pub(crate) use crate::tagged::gc::FrozenLegacyRoots;
 
 impl Context {
     /// C4 admits inactive compiled caches, but no suspended legacy Lisp/native
@@ -137,11 +113,16 @@ impl Context {
             &self.dynamic_module_registry,
             &mut words,
         );
-        Ok(FrozenLegacyRoots {
-            heap: keeper.parallel_heap_identity(),
-            words,
-            functions_quiescent: self.function_cells_quiescent(),
-        })
+        let functions = if self.function_cells_quiescent() {
+            FrozenFunctionRoots::Quiescent
+        } else {
+            FrozenFunctionRoots::MayBeActive
+        };
+        // SAFETY: the complete original Context census was captured above,
+        // while its retained keeper excludes execution. Admission consumes it
+        // before any Context resumes; the quiescence check covers activations
+        // and outstanding compiled jobs.
+        Ok(unsafe { FrozenLegacyRoots::new(keeper.parallel_heap_identity(), words, functions) })
     }
 }
 
@@ -374,3 +355,20 @@ mod function_boundary;
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 #[path = "tests/intern_boundary.rs"]
 mod intern_boundary;
+
+// SAFETY: Baton is the unique serial-execution authority of its retained
+// World. Era ownership holds the real token by value on its keeper thread;
+// keeper_designator checks held_here before lending original manager identities.
+unsafe impl crate::tagged::gc::EraKeeper for Baton {
+    fn keeper_designator(
+        &self,
+    ) -> Result<
+        crate::emacs_core::symbol::parallel::KeeperWorldDesignator<'_>,
+        crate::tagged::gc::RegistrationError,
+    > {
+        Baton::keeper_designator(self)
+    }
+    fn parallel_heap_identity(&self) -> HeapIdentity {
+        Baton::parallel_heap_identity(self)
+    }
+}

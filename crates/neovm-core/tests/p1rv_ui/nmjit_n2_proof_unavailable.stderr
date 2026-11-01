@@ -9,5 +9,5 @@ note: found an item that was configured out
   |
   | #[cfg(test)]
   |       ---- the item is gated here
-  | pub(crate) use mutator_registration::ProofEra;
-  |                                      ^^^^^^^^
+  | pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
+  |                                                                 ^^^^^^^^

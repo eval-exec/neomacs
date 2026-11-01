@@ -10,8 +10,7 @@ mod factory;
 use crate::emacs_core::eval::green::GreenStartError;
 use crate::emacs_core::value::{HashTableTest, HashTableWeakness, LispHashTable};
 use crate::tagged::gc::{
-    ParallelHeapEra, QuiescentCollector, RegistrationError, RendezvousError,
-    clear_tagged_heap_root_if_installed,
+    QuiescentCollector, RegistrationError, RendezvousError, clear_tagged_heap_root_if_installed,
 };
 use crate::tagged::value::TaggedValue;
 use factory::{AdmissionPlan, ProductionPlan};
@@ -34,11 +33,11 @@ pub(crate) enum OwnedParallelError {
 #[allow(dead_code)]
 #[must_use]
 pub(crate) struct OwnedParallelProjection<'heap> {
-    era: ParallelHeapEra<'heap>,
+    era: super::WorldEra<'heap>,
 }
 
 impl<'heap> OwnedParallelProjection<'heap> {
-    pub(crate) fn era(&self) -> &ParallelHeapEra<'heap> {
+    pub(crate) fn era(&self) -> &super::WorldEra<'heap> {
         &self.era
     }
 

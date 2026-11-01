@@ -22,6 +22,11 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+mod era;
+pub use era::WorldEra;
+pub(crate) use era::prepare_keeper_backing;
+#[cfg(test)]
+pub(crate) use era::{WorldProofEra, WorldProofEraFinishFailure};
 mod green_owner;
 mod slot;
 mod sole_owner;

@@ -4,10 +4,10 @@ error[E0624]: associated function `admit` is private
 4 |       let _ = ParallelHeapEra::admit;
   |                                ^^^^^ private associated function
   |
- ::: src/tagged/gc/mutator_registration/wrappers.rs
+ ::: src/emacs_core/runtime/eval/world/era.rs
   |
   | /     pub(crate) fn admit(
-  | |         admission: Gen1Admission<'heap>,
+  | |         admission: gc::Gen1Admission<'heap>,
   | |         keeper: Baton,
-  | |     ) -> Result<Self, EraAdmissionFailure<'heap>> {
-  | |_________________________________________________- private associated function defined here
+  | |     ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>> {
+  | |____________________________________________________________- private associated function defined here

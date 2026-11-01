@@ -1,7 +1,6 @@
 //! These are the product types, not the standalone N1 sketches.
-use neovm_core::tagged::gc::{
-    Gen1Admission, Gen1AdmissionError, MutatorPermit, ParallelHeapEra, RegistrationError,
-};
+use neovm_core::emacs_core::eval::WorldEra as ParallelHeapEra;
+use neovm_core::tagged::gc::{Gen1Admission, Gen1AdmissionError, MutatorPermit, RegistrationError};
 
 fn preserve<'heap>(admission: Gen1Admission<'heap>) -> Gen1Admission<'heap> {
     admission

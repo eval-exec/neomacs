@@ -2806,9 +2806,12 @@ pub use mutator_registration::{
 };
 
 #[cfg(test)]
-pub(crate) use mutator_registration::ProofEra;
+pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
+#[cfg(test)]
+pub(crate) use mutator_registration::{GenericProofEra, GenericProofEraFinishFailure};
 
 pub(crate) use mutator_registration::{
+    EraAdmissionFailure, EraFinishFailure, EraKeeper, FrozenFunctionRoots, FrozenLegacyRoots,
     OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken, SymbolWriteToken,
 };
 

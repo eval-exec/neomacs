@@ -1,4 +1,4 @@
-error: cannot construct `ParallelHeapEra<'_>` with struct literal syntax due to private fields
+error: cannot construct `ParallelHeapEra<'_, eval::world::green_owner::Baton>` with struct literal syntax due to private fields
  --> tests/p1rv_ui/era_cannot_be_constructed.rs:4:5
   |
 4 |     ParallelHeapEra {}

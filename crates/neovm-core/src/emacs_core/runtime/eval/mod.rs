@@ -59,7 +59,7 @@ use crate::window::{
 };
 
 pub(crate) mod world;
-pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews};
+pub use world::{ContextShutdownError, ObarrayWriteAccess, OutstandingWorldViews, WorldEra};
 pub(crate) use world::{ObarrayView, OwnedRootRegistryView, WorldSlot, WorldView};
 
 mod callback;

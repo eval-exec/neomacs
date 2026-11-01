@@ -26,7 +26,7 @@ mod word;
 use super::*;
 use crate::emacs_core::intern::SymId;
 pub use crate::emacs_core::symbol::parallel::PlainSymbolBacking;
-use crate::emacs_core::symbol::parallel::{KeeperWorldDesignator, SymbolBacking};
+pub(super) use crate::emacs_core::symbol::parallel::{KeeperWorldDesignator, SymbolBacking};
 
 #[cfg(test)]
 #[derive(Clone, Copy)]
@@ -117,7 +117,7 @@ impl std::fmt::Debug for SymbolHandle {
 
 // Keep the existing symbol-vocabulary boundary in this module. Nominal era
 // wrappers do not add their own dependency on the upper interner module.
-impl ParallelHeapEra<'_> {
+impl<K: EraKeeper> ParallelHeapEra<'_, K> {
     pub fn admit_plain_symbol(&self, symbol: SymId) -> Result<SymbolHandle, RegistrationError> {
         self.core.admit_plain_symbol(symbol)
     }
@@ -129,7 +129,7 @@ impl ProofEra<'_> {
     }
 }
 
-impl EraCore<'_> {
+impl<K: EraKeeper> EraCore<'_, K> {
     /// Serial keeper admission only, before ANY participant is registered.
     /// Unsupported/absent cells refuse without creating or redirecting them.
     pub fn admit_plain_symbol(&self, symbol: SymId) -> Result<SymbolHandle, RegistrationError> {

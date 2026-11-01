@@ -39,7 +39,7 @@ impl PreparedNameFunction {
     }
 }
 
-impl EraCore<'_> {
+impl<K: EraKeeper> EraCore<'_, K> {
     pub(in crate::tagged::gc::mutator_registration) fn prepare_name_function_symbol(
         &self,
         key: &SymbolHandle,

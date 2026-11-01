@@ -1,4 +1,4 @@
-use neovm_core::tagged::gc::ParallelHeapEra;
+use neovm_core::emacs_core::eval::WorldEra as ParallelHeapEra;
 
 #[path = "../thread_safety_ui/support/thread_bounds.rs"]
 mod thread_bounds;

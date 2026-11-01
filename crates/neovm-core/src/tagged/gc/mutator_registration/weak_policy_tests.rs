@@ -31,10 +31,10 @@ fn a6_ht_b8_fence_requires_explicit_complete_weak_inventory() {
     let mut context = clean_context();
     let table = weak(&mut context);
     context.with_weak_sweep_keeper_for_test(|context, keeper| {
-        let none = WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[]).unwrap();
+        let none = WeakSweepPermit::mint(&context.tagged_heap, keeper, &[]).unwrap();
         assert!(supported(&context.tagged_heap).is_err());
         assert!(supported_with_weak(&context.tagged_heap, Some(&none)).is_err());
-        let permit = WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).unwrap();
+        let permit = WeakSweepPermit::mint(&context.tagged_heap, keeper, &[table]).unwrap();
         supported_with_weak(&context.tagged_heap, Some(&permit)).unwrap();
         assert!(!permit.covers(&context.tagged_heap, TaggedValue::NIL.bits()));
     });
@@ -48,15 +48,15 @@ fn a6_ht_b8_fence_refuses_foreign_and_non_table_designators() {
         let mut second = clean_context();
         second.with_weak_sweep_keeper_for_test(|second, second_keeper| {
             assert!(matches!(
-                WeakSweepPermit::mint(&second.tagged_heap, &first_keeper, &[table]),
+                WeakSweepPermit::mint(&second.tagged_heap, first_keeper, &[table]),
                 Err(RegistrationError::WrongHeap)
             ));
             assert!(matches!(
-                WeakSweepPermit::mint(&second.tagged_heap, &second_keeper, &[table]),
+                WeakSweepPermit::mint(&second.tagged_heap, second_keeper, &[table]),
                 Err(RegistrationError::Publication)
             ));
             assert!(matches!(
-                WeakSweepPermit::mint(&first.tagged_heap, &first_keeper, &[TaggedValue::fixnum(1)]),
+                WeakSweepPermit::mint(&first.tagged_heap, first_keeper, &[TaggedValue::fixnum(1)]),
                 Err(RegistrationError::Publication)
             ));
         });
@@ -77,15 +77,15 @@ fn a6_ht_b8_fence_refuses_pending_active_test_and_storage_authority() {
         // it deliberately constructs refused states without entering any owner.
         unsafe {
             (*ptr).table.test_depth.store(1, Ordering::Release);
-            assert!(WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).is_err());
+            assert!(WeakSweepPermit::mint(&context.tagged_heap, keeper, &[table]).is_err());
             (*ptr).table.test_depth.store(0, Ordering::Release);
             for word in [1, super::super::table_authority::WRITER] {
                 (*ptr).table.data.authority.store(word, Ordering::Release);
-                assert!(WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).is_err());
+                assert!(WeakSweepPermit::mint(&context.tagged_heap, keeper, &[table]).is_err());
             }
             (*ptr).table.data.authority.store(0, Ordering::Release);
             (*ptr).table.set_pending_dump_entries(Vec::new());
-            assert!(WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).is_err());
+            assert!(WeakSweepPermit::mint(&context.tagged_heap, keeper, &[table]).is_err());
             assert!(
                 (*ptr).table.needs_hydration(),
                 "refusal must not hydrate storage"
@@ -112,11 +112,11 @@ fn a6_ht_b8_fence_refuses_permanent_mapped_and_callback_payloads() {
             let generation = header.generation;
             let tenured = header.tenured;
             header.make_permanent(&ImageResident::for_test());
-            assert!(WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).is_err());
+            assert!(WeakSweepPermit::mint(&context.tagged_heap, keeper, &[table]).is_err());
             header.generation = generation;
             header.tenured = tenured;
         }
-        let permit = WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[table]).unwrap();
+        let permit = WeakSweepPermit::mint(&context.tagged_heap, keeper, &[table]).unwrap();
         // A decoded image owns its shell, not this heap's owned-object catalog.
         let mapped = Box::new(HashTableObj {
             header: VecLikeHeader::new(VecLikeType::HashTable),
@@ -130,7 +130,7 @@ fn a6_ht_b8_fence_refuses_permanent_mapped_and_callback_payloads() {
         });
         let mapped_ptr = std::ptr::from_ref(&*mapped).cast_mut();
         let mapped_value = unsafe { TaggedValue::from_veclike_ptr(mapped_ptr.cast()) };
-        assert!(WeakSweepPermit::mint(&context.tagged_heap, &keeper, &[mapped_value]).is_err());
+        assert!(WeakSweepPermit::mint(&context.tagged_heap, keeper, &[mapped_value]).is_err());
         context.tagged_heap.mapped_veclike_objects.push(
             super::super::super::arena_pages::MappedVecLikeObject::new(
                 mapped_ptr.cast(),

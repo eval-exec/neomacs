@@ -19,10 +19,18 @@ mod cons_allocation;
 mod cons_catalog;
 mod construction;
 mod wrappers;
+#[cfg(test)]
+use crate::emacs_core::eval::world::{
+    WorldProofEra as ProofEra, WorldProofEraFinishFailure as ProofEraFinishFailure,
+};
 pub(crate) use wrappers::EraFinishFailure;
 pub use wrappers::ParallelHeapEra;
 #[cfg(test)]
-pub(crate) use wrappers::{ProofEra, ProofEraFinishFailure};
+pub(crate) use wrappers::{
+    ProofEra as GenericProofEra, ProofEraFinishFailure as GenericProofEraFinishFailure,
+};
+mod keeper;
+pub(crate) use keeper::{EraKeeper, FrozenFunctionRoots, FrozenLegacyRoots};
 mod gate;
 mod image;
 mod native_extent;
@@ -86,7 +94,8 @@ use rustc_hash::FxHashMap;
 
 use super::young_registry::{YoungRegistrationId, YoungRegistryError};
 use super::{HeapIdentity, QuiescentCollector};
-use crate::emacs_core::eval::world::{Baton, FrozenLegacyRoots};
+#[cfg(test)]
+use crate::emacs_core::eval::world::Baton;
 use image::{OwnerGcState, PublishedGcImage};
 use weak_policy::WeakSweepPermit;
 
@@ -305,7 +314,7 @@ impl Registry {
 /// Keeper-confined RAII admission, with both heap and World retained.
 /// There is deliberately no Deref, heap accessor, or constructor from IDs.
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]
-struct EraCore<'heap> {
+struct EraCore<'heap, K: EraKeeper> {
     collector: RefCell<Option<QuiescentCollector<'heap>>>,
     suspended_cons: RefCell<Option<super::facade_mark::SuspendedConsCollector<'heap>>>,
     legacy_roots: Option<FrozenLegacyRoots>,
@@ -313,25 +322,25 @@ struct EraCore<'heap> {
     symbol_table_admission_charge: super::symbol_table::publication::RetainedTableBytes,
     #[cfg(test)]
     weak_sweep: Option<WeakSweepPermit>,
-    keeper: Option<Baton>,
+    keeper: Option<K>,
     registry: Option<Arc<Registry>>,
     _thread: PhantomData<Rc<()>>,
 }
 
-pub(crate) struct EraAdmissionFailure<'heap> {
+pub(crate) struct EraAdmissionFailure<'heap, K: EraKeeper> {
     pub(crate) reason: RegistrationError,
     pub(crate) collector: QuiescentCollector<'heap>,
-    pub(crate) keeper: Baton,
+    pub(crate) keeper: K,
 }
 
-impl std::fmt::Debug for EraAdmissionFailure<'_> {
+impl<K: EraKeeper> std::fmt::Debug for EraAdmissionFailure<'_, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("EraAdmissionFailure")
             .field(&self.reason)
             .finish()
     }
 }
-impl std::fmt::Debug for EraCore<'_> {
+impl<K: EraKeeper> std::fmt::Debug for EraCore<'_, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EraCore")
             .field("heap", &self.registry.as_ref().map(|r| r.heap))
@@ -340,9 +349,9 @@ impl std::fmt::Debug for EraCore<'_> {
 }
 
 /// A refused finish returns its private semantic core to the nominal wrapper.
-struct CoreFinishFailure<'heap> {
+struct CoreFinishFailure<'heap, K: EraKeeper> {
     reason: RegistrationError,
-    core: EraCore<'heap>,
+    core: EraCore<'heap, K>,
 }
 
 #[cfg(test)]
@@ -351,26 +360,39 @@ enum InitialTablePreparation {
     RefuseOnce,
 }
 
-impl<'heap> EraCore<'heap> {
+impl<'heap, K: EraKeeper> EraCore<'heap, K> {
     #[cold]
     #[inline(never)]
-    fn admit<A: construction::CoreAdmission<'heap>>(
+    fn admit<A: construction::CoreAdmission<'heap, K>>(
         admission: A,
-    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap>> {
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (super::FacadeEpochRetention, symbol_authority::SymbolBacking),
+            RegistrationError,
+        >,
+    ) -> Result<(Self, A::Evidence), EraAdmissionFailure<'heap, K>> {
         let (checked, witness) = admission.into_checked();
         Self::admit_checked(
             checked,
             witness,
+            prepare,
             #[cfg(test)]
             InitialTablePreparation::Actual,
         )
     }
 
     fn admit_checked<W: construction::ConstructionEvidence>(
-        checked: construction::CheckedCollector<'heap>,
+        checked: construction::CheckedCollector<'heap, K>,
         witness: W,
+        prepare: impl FnOnce(
+            &K,
+        ) -> Result<
+            (super::FacadeEpochRetention, symbol_authority::SymbolBacking),
+            RegistrationError,
+        >,
         #[cfg(test)] preparation: InitialTablePreparation,
-    ) -> Result<(Self, W), EraAdmissionFailure<'heap>> {
+    ) -> Result<(Self, W), EraAdmissionFailure<'heap, K>> {
         let (mut collector, keeper) = checked.into_parts();
         let heap = collector.heap_identity();
         let generation = match issue_generation(&NEXT_REGISTRATION_GENERATION) {
@@ -383,11 +405,11 @@ impl<'heap> EraCore<'heap> {
                 });
             }
         };
-        let root_epoch = match keeper.parallel_epoch_retention() {
-            Ok(epoch) => epoch,
-            Err(_) => {
+        let (root_epoch, backing) = match prepare(&keeper) {
+            Ok(prepared) => prepared,
+            Err(reason) => {
                 return Err(EraAdmissionFailure {
-                    reason: RegistrationError::Exhausted,
+                    reason,
                     collector,
                     keeper,
                 });
@@ -395,7 +417,6 @@ impl<'heap> EraCore<'heap> {
         };
         // All fallible pointer-table preparation precedes detaching the legacy
         // image, so refusal returns both original construction inputs intact.
-        let backing = keeper.parallel_symbol_backing();
         #[cfg(test)]
         match preparation {
             InitialTablePreparation::Actual => {}
@@ -618,7 +639,7 @@ impl<'heap> EraCore<'heap> {
     /// roots before this terminal transfer can restore serial ownership.
     pub(crate) fn finish(
         mut self,
-    ) -> Result<(QuiescentCollector<'heap>, Baton), CoreFinishFailure<'heap>> {
+    ) -> Result<(QuiescentCollector<'heap>, K), CoreFinishFailure<'heap, K>> {
         if let Err(reason) = self.prepare_finish() {
             return Err(CoreFinishFailure { reason, core: self });
         }
@@ -854,7 +875,7 @@ impl<'heap> EraCore<'heap> {
     }
 }
 
-impl Drop for EraCore<'_> {
+impl<K: EraKeeper> Drop for EraCore<'_, K> {
     fn drop(&mut self) {
         let Some(registry) = self.registry.take() else {
             return;
@@ -870,7 +891,8 @@ impl Drop for EraCore<'_> {
     }
 }
 
-static_assertions::assert_not_impl_any!(ParallelHeapEra<'static>: Send, Sync, Clone, Copy);
+#[cfg(test)]
+static_assertions::assert_not_impl_any!(ParallelHeapEra<'static, Baton>: Send, Sync, Clone, Copy);
 static_assertions::assert_impl_all!(MutatorEntry: Send, Sync);
 static_assertions::assert_impl_all!(MutatorKey: Send, Sync, Copy);
 

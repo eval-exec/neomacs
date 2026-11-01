@@ -1,5 +1,5 @@
-error[E0599]: no method named `alloc_cons` found for mutable reference `&mut ParallelHeapEra<'_>` in the current scope
+error[E0599]: no method named `alloc_cons` found for mutable reference `&mut ParallelHeapEra<'_, eval::world::green_owner::Baton>` in the current scope
  --> tests/p1rv_ui/era_has_no_heap_facade.rs:9:17
   |
 9 |     consume(era.alloc_cons(TaggedValue::NIL, TaggedValue::NIL));
-  |                 ^^^^^^^^^^ method not found in `&mut ParallelHeapEra<'_>`
+  |                 ^^^^^^^^^^ method not found in `&mut ParallelHeapEra<'_, eval::world::green_owner::Baton>`

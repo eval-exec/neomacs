@@ -215,11 +215,15 @@ impl Context {
         let collector = unsafe { (*heap).drain_to_quiescent(|_| {}) }.unwrap();
         // No Context exists in this fixture, hence no Context-private roots.
         // World storage is retained by the actual Baton, exactly as in C2.
-        let frozen = FrozenLegacyRoots {
-            heap: collector.heap_identity(),
-            words: Vec::new(),
-            // No Context or legacy activation exists in this minimal World.
-            functions_quiescent: true,
+        // SAFETY: this minimal World has no original Context or legacy
+        // activation, so its complete private census is empty and quiescent.
+        // The actual keeper retains all World storage for the admitted era.
+        let frozen = unsafe {
+            FrozenLegacyRoots::new(
+                collector.heap_identity(),
+                Vec::new(),
+                FrozenFunctionRoots::Quiescent,
+            )
         };
         let era = match ParallelHeapEra::admit_rooted(collector, keeper, frozen) {
             Ok(era) => era,
