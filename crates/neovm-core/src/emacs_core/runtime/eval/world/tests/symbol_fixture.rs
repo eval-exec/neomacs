@@ -252,11 +252,12 @@ impl Baton {
             return Err(RegistrationError::WrongThread.into());
         }
         stopped.check_world_roots(self.parallel_heap_identity())?;
+        let keeper = self.keeper_designator()?;
         let authority = stopped.symbols()?;
         let mut projections = Vec::new();
-        authority.append_current_projection_roots(self, &mut projections)?;
+        authority.append_current_projection_roots(&keeper, &mut projections)?;
         let mut symbols = Vec::new();
-        authority.append_current_symbol_roots(self, &mut symbols)?;
+        authority.append_current_symbol_roots(&keeper, &mut symbols)?;
         let projections = projections.into_iter().map(TaggedValue::bits).collect();
         let symbols = symbols.into_iter().map(TaggedValue::bits).collect();
         Ok((symbols, projections))

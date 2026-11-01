@@ -146,12 +146,17 @@ impl Context {
 }
 
 impl Baton {
-    /// Validate the original allocation designators of this retained World.
-    /// Pointer comparison itself borrows neither symbol nor projection storage.
-    pub(crate) fn check_symbol_root_designators(
+    /// Capture the original manager identities once while this keeper is held.
+    /// The returned proof cannot outlive this retained Baton or cross threads.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn keeper_designator(
         &self,
-        backing: &crate::emacs_core::symbol::parallel::SymbolBacking,
-    ) -> Result<(), crate::tagged::gc::RegistrationError> {
+    ) -> Result<
+        crate::emacs_core::symbol::parallel::KeeperWorldDesignator<'_>,
+        crate::tagged::gc::RegistrationError,
+    > {
+        use crate::emacs_core::symbol::parallel::KeeperWorldDesignator;
         use crate::tagged::gc::RegistrationError;
         if !self.held_here() {
             return Err(RegistrationError::WrongThread);
@@ -159,7 +164,12 @@ impl Baton {
         let obarray = std::ptr::NonNull::new(self.world.obarray.get())
             .ok_or(RegistrationError::Publication)?;
         let projections = std::ptr::NonNull::from(&self.world.thread_projections);
-        backing.check_root_designators(obarray, projections)
+        // SAFETY: these original manager allocations and the heap identity
+        // belong to this retained World. The return lifetime borrows this held
+        // Baton, and the proof is confined to this owner thread.
+        Ok(unsafe {
+            KeeperWorldDesignator::new(self.parallel_heap_identity(), obarray, projections)
+        })
     }
 
     /// Enumerate frozen shared storage once, after all ACKs, with no Context
@@ -188,9 +198,10 @@ impl Baton {
         // All symbol/projection access requires the same checked receiver.
         // Drop it before any collector/table bridge can borrow the stop.
         {
+            let keeper = self.keeper_designator()?;
             let symbols = stopped.symbols()?;
-            symbols.append_current_symbol_roots(self, out)?;
-            symbols.append_current_projection_roots(self, out)?;
+            symbols.append_current_symbol_roots(&keeper, out)?;
+            symbols.append_current_projection_roots(&keeper, out)?;
         }
         // SAFETY: the unique keeper retains the World; AllStopped checked this
         // heap, keeper and every participant's publication. No participant can

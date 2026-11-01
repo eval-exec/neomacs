@@ -174,15 +174,16 @@ fn root_families(backing: PlainSymbolBacking) {
                 // The guard restores the original policy even on an assertion.
                 let skip = ObarraySymbolCellSkipGuard::new();
                 let keeper = era.core.keeper.as_ref().unwrap();
+                let designator = keeper.keeper_designator().unwrap();
                 let mut cells = Vec::new();
                 let mut projections = Vec::new();
                 {
                     let symbols = stopped.symbols().unwrap();
                     symbols
-                        .append_current_symbol_roots(keeper, &mut cells)
+                        .append_current_symbol_roots(&designator, &mut cells)
                         .unwrap();
                     symbols
-                        .append_current_projection_roots(keeper, &mut projections)
+                        .append_current_projection_roots(&designator, &mut projections)
                         .unwrap();
                 }
                 let mut all_world = Vec::new();
@@ -304,16 +305,18 @@ fn p3sym_c6_keeper_nonzero_word_refuses_before_copy_and_recovers() {
         {
             let symbols = stopped.symbols().unwrap();
             let keeper = era.core.keeper.as_ref().unwrap();
+            let designator = keeper.keeper_designator().unwrap();
             for occupancy in [AuthorityOccupancy::Reader, AuthorityOccupancy::Writer] {
                 let guard = OccupiedWord::new(&era.registry().symbols.word, occupancy);
                 let mut out = vec![TaggedValue::T];
-                let cell_result = symbols.append_current_symbol_roots(keeper, &mut out);
-                let projection_result = symbols.append_current_projection_roots(keeper, &mut out);
+                let cell_result = symbols.append_current_symbol_roots(&designator, &mut out);
+                let projection_result =
+                    symbols.append_current_projection_roots(&designator, &mut out);
                 drop(guard);
                 observations.push((cell_result, projection_result, out));
             }
             symbols
-                .append_current_symbol_roots(keeper, &mut Vec::new())
+                .append_current_symbol_roots(&designator, &mut Vec::new())
                 .unwrap();
         }
         stopped.trace(|_, _| Ok(())).unwrap();
@@ -338,13 +341,19 @@ fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
             let inner_symbols = inner_stop.symbols().unwrap();
             let outer_keeper = outer.core.keeper.as_ref().unwrap();
             let inner_keeper = inner.core.keeper.as_ref().unwrap();
+            let outer_designator = outer_keeper.keeper_designator().unwrap();
+            let inner_designator = inner_keeper.keeper_designator().unwrap();
             let mut out = vec![TaggedValue::T];
-            let cells = outer_symbols.append_current_symbol_roots(inner_keeper, &mut out);
-            let projections = inner_symbols.append_current_projection_roots(outer_keeper, &mut out);
-            let backing =
-                outer_symbols.check_symbol_backing(&inner.registry().symbols.backing, outer_keeper);
-            let designators =
-                outer_keeper.check_symbol_root_designators(&inner.registry().symbols.backing);
+            let cells = outer_symbols.append_current_symbol_roots(&inner_designator, &mut out);
+            let projections =
+                inner_symbols.append_current_projection_roots(&outer_designator, &mut out);
+            let backing = outer_symbols
+                .check_symbol_backing(&inner.registry().symbols.backing, &outer_designator);
+            let designators = inner
+                .registry()
+                .symbols
+                .backing
+                .check_root_designators(outer_designator.obarray(), outer_designator.projections());
             drop(inner_symbols);
             inner_stop.trace(|_, _| Ok(())).unwrap();
             inner_stop.complete().unwrap();
@@ -376,8 +385,8 @@ fn p3sym_c6_keeper_root_source_guard_test() {
             .unwrap()
             + start];
     assert!(scanner.contains("stopped.symbols()?"));
-    assert!(scanner.contains("symbols.append_current_symbol_roots(self, out)?"));
-    assert!(scanner.contains("symbols.append_current_projection_roots(self, out)?"));
+    assert!(scanner.contains("symbols.append_current_symbol_roots(&keeper, out)?"));
+    assert!(scanner.contains("symbols.append_current_projection_roots(&keeper, out)?"));
     assert!(!scanner.contains("world.obarray.get()"));
     assert!(!scanner.contains("projections.trace_roots"));
     for manager in [

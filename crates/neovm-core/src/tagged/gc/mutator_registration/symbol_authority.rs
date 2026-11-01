@@ -26,7 +26,7 @@ mod word;
 use super::*;
 use crate::emacs_core::intern::SymId;
 pub use crate::emacs_core::symbol::parallel::PlainSymbolBacking;
-use crate::emacs_core::symbol::parallel::SymbolBacking;
+use crate::emacs_core::symbol::parallel::{KeeperWorldDesignator, SymbolBacking};
 
 #[cfg(test)]
 #[derive(Clone, Copy)]

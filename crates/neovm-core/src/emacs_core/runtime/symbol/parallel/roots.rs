@@ -1,6 +1,5 @@
 //! Checked keyless keeper census. No serial heap/Context/policy TLS is read.
 use super::*;
-use crate::emacs_core::eval::world::Baton;
 use crate::emacs_core::symbol::roots::SymbolRootSet;
 use crate::emacs_core::value::Value;
 use crate::tagged::gc::{KeeperSymbols, RegistrationError};
@@ -33,7 +32,7 @@ impl SymbolBacking {
     unsafe fn keeper_obarray(
         &self,
         authority: &KeeperSymbols<'_>,
-        keeper: &Baton,
+        keeper: &KeeperWorldDesignator<'_>,
     ) -> Result<&Obarray, RegistrationError> {
         authority.check_symbol_backing(self, keeper)?;
         // SAFETY: original allocation designator, matching retained Baton,
@@ -48,7 +47,7 @@ impl SymbolBacking {
     pub(crate) unsafe fn append_current_symbol_roots(
         &self,
         authority: &KeeperSymbols<'_>,
-        keeper: &Baton,
+        keeper: &KeeperWorldDesignator<'_>,
         out: &mut Vec<Value>,
     ) -> Result<(), RegistrationError> {
         // SAFETY: caller retains the stopped keeper; the leaf rechecks its
@@ -63,7 +62,7 @@ impl SymbolBacking {
     pub(crate) unsafe fn append_current_projection_roots(
         &self,
         authority: &KeeperSymbols<'_>,
-        keeper: &Baton,
+        keeper: &KeeperWorldDesignator<'_>,
         out: &mut Vec<Value>,
     ) -> Result<(), RegistrationError> {
         // SAFETY: same retained stop/World and no concurrent writer; generation

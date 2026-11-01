@@ -1,6 +1,5 @@
 //! Keyless stopped census. This receiver never mints running access.
 use super::*;
-use crate::emacs_core::eval::world::Baton;
 use crate::tagged::value::TaggedValue;
 
 impl KeeperSymbols<'_> {
@@ -9,26 +8,26 @@ impl KeeperSymbols<'_> {
     pub(crate) fn check_symbol_backing(
         &self,
         backing: &SymbolBacking,
-        keeper: &Baton,
+        keeper: &KeeperWorldDesignator<'_>,
     ) -> Result<(), RegistrationError> {
         if self.registry.keeper_thread != std::thread::current().id() {
             return Err(RegistrationError::WrongThread);
         }
-        if self.registry.heap != keeper.parallel_heap_identity() {
+        if self.registry.heap != keeper.heap() {
             return Err(RegistrationError::WrongHeap);
         }
         if !std::ptr::eq(backing, &self.registry.symbols.backing) {
             return Err(RegistrationError::StaleRegistration);
         }
         self.registry.symbols.ready()?;
-        keeper.check_symbol_root_designators(backing)
+        backing.check_root_designators(keeper.obarray(), keeper.projections())
     }
 
     /// Copy current cells and residual pools, including nonmember slots.
     /// The stop remains exclusively borrowed until this receiver drops.
     pub(crate) fn append_current_symbol_roots(
         &self,
-        keeper: &Baton,
+        keeper: &KeeperWorldDesignator<'_>,
         out: &mut Vec<TaggedValue>,
     ) -> Result<(), RegistrationError> {
         // SAFETY: only AllStopped mints this receiver and its exclusive loan
@@ -45,7 +44,7 @@ impl KeeperSymbols<'_> {
     /// snapshot. VOID has no managed word; no descriptor reference escapes.
     pub(crate) fn append_current_projection_roots(
         &self,
-        keeper: &Baton,
+        keeper: &KeeperWorldDesignator<'_>,
         out: &mut Vec<TaggedValue>,
     ) -> Result<(), RegistrationError> {
         // SAFETY: matching exclusive stopped keeper as above, with table loans

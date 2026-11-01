@@ -202,7 +202,7 @@ impl PreparationChecks {
     fn stopped(
         request: StoppedRequest,
         symbols: &crate::tagged::gc::KeeperSymbols<'_>,
-        keeper: &crate::emacs_core::eval::world::Baton,
+        keeper: &crate::emacs_core::symbol::parallel::KeeperWorldDesignator<'_>,
     ) -> Result<(), PreparationError> {
         match request {
             StoppedRequest::Noop => Ok(()),
