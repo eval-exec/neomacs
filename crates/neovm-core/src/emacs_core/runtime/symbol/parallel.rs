@@ -4,6 +4,7 @@
 mod keeper;
 pub(crate) use keeper::KeeperWorldDesignator;
 mod functions;
+mod parameters;
 mod roots;
 mod table;
 pub(crate) use functions::FunctionUpdate;

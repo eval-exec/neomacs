@@ -113,3 +113,47 @@ fn nmjit_n4_constant_syntax_refuses_multiple_form_and_nonlambda_bodies() {
     assert_refused(nonlambda);
     assert_refused(Value::fixnum(73));
 }
+
+#[test]
+fn nmjit_n4_unary_shape_requires_matching_prepared_parameter_and_scalar() {
+    let mut heap = TestHeap::new();
+    let parameters = heap.alloc_cons(Value::from_sym_id(FIRST_PARAMETER), Value::NIL);
+    let value = definition(&mut heap, parameters, Value::fixnum(73));
+    assert_eq!(
+        decode_shape(
+            value,
+            LAMBDA,
+            CallShape::UnaryScalar(UnaryParameter(FIRST_PARAMETER))
+        )
+        .unwrap()
+        .bits(),
+        Value::fixnum(73).bits()
+    );
+    assert!(matches!(
+        decode_shape(
+            value,
+            LAMBDA,
+            CallShape::UnaryScalar(UnaryParameter(SECOND_PARAMETER))
+        ),
+        Err(FunctionError::UnsupportedDefinition)
+    ));
+    let nullary = definition(&mut heap, Value::NIL, Value::fixnum(73));
+    assert!(matches!(
+        decode_shape(
+            nullary,
+            LAMBDA,
+            CallShape::UnaryScalar(UnaryParameter(FIRST_PARAMETER))
+        ),
+        Err(FunctionError::UnsupportedDefinition)
+    ));
+    let name = heap.alloc_string(LispString::from_utf8("constant-name"));
+    let managed_answer = definition(&mut heap, parameters, name);
+    assert!(matches!(
+        decode_shape(
+            managed_answer,
+            LAMBDA,
+            CallShape::UnaryScalar(UnaryParameter(FIRST_PARAMETER))
+        ),
+        Err(FunctionError::UnsupportedDefinition)
+    ));
+}

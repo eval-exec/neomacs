@@ -76,15 +76,11 @@ impl FunctionState {
 
 /// The initial closed call subset: no callbacks, mutable captures, alias
 /// resolution or internal UNBOUND. The shared graph is immutable in this era.
-fn validate_definition(
-    value: Value,
-    lambda: SymId,
-    subset: ReturnSubset,
-) -> Result<(), FunctionError> {
+fn validate_definition(value: Value, lambda: SymId, shape: CallShape) -> Result<(), FunctionError> {
     if value.is_nil() {
         return Ok(());
     }
-    constant::decode(value, lambda, subset).map(|_| ())
+    constant::decode_shape(value, lambda, shape).map(|_| ())
 }
 
 impl<K: EraKeeper> EraCore<'_, K> {
@@ -114,6 +110,40 @@ impl<K: EraKeeper> EraCore<'_, K> {
         key: &SymbolHandle,
         subset: ReturnSubset,
     ) -> Result<(), FunctionError> {
+        self.prepare_function_checked(key, |initial, lambda, authority| {
+            if let FunctionCellSnapshot::Bound(value) = initial {
+                if validate_definition(value, lambda, CallShape::Nullary(subset)).is_err() {
+                    // SAFETY: the retained original definition and this backing's
+                    // exclusive admission writer remain live throughout the hook.
+                    match unsafe {
+                        self.keeper
+                            .as_ref()
+                            .ok_or(RegistrationError::StaleRegistration)?
+                            .classify_initial_definition(value, authority)
+                    } {
+                        InitialDefinition::OpaqueScalarConstant => {}
+                        InitialDefinition::Unsupported => {
+                            return Err(FunctionError::UnsupportedDefinition);
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// One checked constructor for every admitted call shape. Validation must
+    /// finish before the immutable record is published; all refusal returns
+    /// leave authority under its ordinary RAII writer.
+    pub(super) fn prepare_function_checked<T>(
+        &self,
+        key: &SymbolHandle,
+        validate: impl FnOnce(
+            FunctionCellSnapshot,
+            SymId,
+            &SymbolWriteToken<'_>,
+        ) -> Result<T, FunctionError>,
+    ) -> Result<T, FunctionError> {
         let registry = self.registry();
         let keeper = self
             .keeper
@@ -147,18 +177,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
             .ok_or(FunctionError::UnsupportedDefinition)?;
         // SAFETY: retained backing, identity checked and exclusive admission.
         let initial = unsafe { symbols.backing.prepare_function(key.symbol, &authority) }?;
-        if let FunctionCellSnapshot::Bound(value) = initial {
-            if validate_definition(value, lambda, subset).is_err() {
-                // SAFETY: the retained original definition and this backing's
-                // exclusive admission writer remain live throughout the hook.
-                match unsafe { keeper.classify_initial_definition(value, &authority) } {
-                    InitialDefinition::OpaqueScalarConstant => {}
-                    InitialDefinition::Unsupported => {
-                        return Err(FunctionError::UnsupportedDefinition);
-                    }
-                }
-            }
-        }
+        let prepared = validate(initial, lambda, &authority)?;
         // SAFETY: only this keeper can register an owner, and WRITER is held.
         let records = unsafe { &mut *symbols.functions.records.get() };
         if !records.iter().any(|r| r.symbol == key.symbol) {
@@ -171,7 +190,7 @@ impl<K: EraKeeper> EraCore<'_, K> {
                 previous: None,
             });
         }
-        Ok(())
+        Ok(prepared)
     }
 }
 
@@ -194,6 +213,16 @@ impl<'era> RunAccess<'_, 'era> {
         dst: &mut OwnerRootSlot<'era>,
         subset: ReturnSubset,
     ) -> Result<(), FunctionError> {
+        self.fset_with_shape(symbol, src, dst, CallShape::Nullary(subset))
+    }
+
+    pub(super) fn fset_with_shape(
+        &mut self,
+        symbol: &SymbolHandle,
+        src: &OwnerRootSlot<'era>,
+        dst: &mut OwnerRootSlot<'era>,
+        shape: CallShape,
+    ) -> Result<(), FunctionError> {
         globals::check_home(self, src)?;
         globals::check_home(self, dst)?;
         let value = self
@@ -206,7 +235,7 @@ impl<'era> RunAccess<'_, 'era> {
         self.symbol_mut(symbol)?.write_function_into(
             super::super::intern::OwnerRootIndex::from(&*dst),
             FunctionUpdate::Fset(value),
-            subset,
+            shape,
         )
     }
 
@@ -221,7 +250,7 @@ impl<'era> RunAccess<'_, 'era> {
         self.symbol_mut(symbol)?.write_function_into(
             super::super::intern::OwnerRootIndex::from(&*dst),
             FunctionUpdate::Fmakunbound,
-            ReturnSubset::Scalar,
+            CallShape::Nullary(ReturnSubset::Scalar),
         )
     }
 }
@@ -232,7 +261,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
     update: FunctionUpdate,
     dst: &mut MarkWord,
     authority: &SymbolWriteToken<'_>,
-    subset: ReturnSubset,
+    shape: CallShape,
 ) -> Result<(), FunctionError> {
     // SAFETY: private token comes from the matching identity-checked writer;
     // no running reader touches this vector, and it never grows here.
@@ -243,7 +272,7 @@ pub(in crate::tagged::gc::mutator_registration::symbol_authority) fn publish(
         .ok_or(RegistrationError::Publication)?;
     let answer = match update {
         FunctionUpdate::Fset(value) => {
-            if validate_definition(value, record.lambda, subset).is_err() {
+            if validate_definition(value, record.lambda, shape).is_err() {
                 // An admitted compiled definition may be returned unchanged,
                 // never installed in a different cell or executed here. Check
                 // exact complete state before epoch planning, preserving the

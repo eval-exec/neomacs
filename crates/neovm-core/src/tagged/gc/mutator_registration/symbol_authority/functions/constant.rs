@@ -27,10 +27,51 @@ pub(super) fn decode(
     lambda: SymId,
     subset: ReturnSubset,
 ) -> Result<Value, FunctionError> {
+    decode_shape(value, lambda, CallShape::Nullary(subset))
+}
+
+/// Only prepared unary capabilities can select this calling convention.
+#[derive(Clone, Copy)]
+pub(in crate::tagged::gc::mutator_registration::symbol_authority) enum CallShape {
+    Nullary(ReturnSubset),
+    UnaryScalar(UnaryParameter),
+}
+
+/// A parameter validated under exclusive admission, not a raw arity count.
+#[derive(Clone, Copy)]
+pub(in crate::tagged::gc::mutator_registration::symbol_authority) struct UnaryParameter(
+    pub(super) SymId,
+);
+
+pub(super) fn unary_candidate(value: Value, lambda: SymId) -> Result<SymId, FunctionError> {
+    match parse_syntax(value, lambda, ReturnSubset::Scalar)?.parameters {
+        ParameterSyntax::UnaryCandidate(parameter) => Ok(parameter),
+        ParameterSyntax::Nullary => Err(FunctionError::UnsupportedDefinition),
+    }
+}
+
+pub(super) fn decode_shape(
+    value: Value,
+    lambda: SymId,
+    shape: CallShape,
+) -> Result<Value, FunctionError> {
+    let subset = match shape {
+        CallShape::Nullary(subset) => subset,
+        CallShape::UnaryScalar(_) => ReturnSubset::Scalar,
+    };
     let syntax = parse_syntax(value, lambda, subset)?;
-    match syntax.parameters {
-        ParameterSyntax::Nullary => Ok(syntax.answer),
-        ParameterSyntax::UnaryCandidate(_) => Err(FunctionError::UnsupportedDefinition),
+    match (shape, syntax.parameters) {
+        (CallShape::Nullary(_), ParameterSyntax::Nullary) => Ok(syntax.answer),
+        (CallShape::UnaryScalar(expected), ParameterSyntax::UnaryCandidate(actual))
+            if expected.0 == actual =>
+        {
+            Ok(syntax.answer)
+        }
+        (CallShape::Nullary(_), ParameterSyntax::UnaryCandidate(_))
+        | (CallShape::UnaryScalar(_), ParameterSyntax::Nullary)
+        | (CallShape::UnaryScalar(_), ParameterSyntax::UnaryCandidate(_)) => {
+            Err(FunctionError::UnsupportedDefinition)
+        }
     }
 }
 

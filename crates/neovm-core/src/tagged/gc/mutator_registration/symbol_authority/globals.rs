@@ -229,7 +229,7 @@ impl SymbolMut<'_, '_, '_> {
         &mut self,
         index: OwnerRootIndex,
         update: FunctionUpdate,
-        subset: super::functions::ReturnSubset,
+        shape: super::functions::CallShape,
     ) -> Result<(), FunctionError> {
         let registry = self.run.owner.registry;
         let dst = self
@@ -249,7 +249,7 @@ impl SymbolMut<'_, '_, '_> {
             update,
             dst,
             &authority,
-            subset,
+            shape,
         )
     }
 

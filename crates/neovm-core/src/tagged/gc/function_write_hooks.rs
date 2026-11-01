@@ -18,6 +18,13 @@ pub enum CompilerActivity {
     BackgroundCompilation,
 }
 
+/// Cold classification only; syntax alone cannot authorize parameter binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CallbackParameterKind {
+    Ordinary,
+    Unsupported,
+}
+
 pub trait FunctionWriteHooks {
     /// Classify an existing immutable definition; never materialize a dump
     /// payload, run a callback, or return a borrowed compiler object.

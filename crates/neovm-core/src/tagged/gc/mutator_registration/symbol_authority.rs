@@ -19,6 +19,7 @@ mod functions;
 pub use functions::FunctionOpKind;
 #[cfg(test)]
 pub(super) use functions::PreparedNameFunction;
+pub(crate) use functions::PreparedUnaryFunction;
 pub use functions::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
 };

@@ -303,6 +303,13 @@ macro_rules! era_operations {
                 self.core.prepare_function_symbol(key)
             }
 
+            pub(crate) fn prepare_unary_function_symbol(
+                &self,
+                key: &SymbolHandle,
+            ) -> Result<symbol_authority::PreparedUnaryFunction, FunctionError> {
+                self.core.prepare_unary_function_symbol(key)
+            }
+
             pub fn try_stop(&self) -> Result<Option<AllStopped<'_>>, RendezvousError> {
                 self.core.try_stop()
             }

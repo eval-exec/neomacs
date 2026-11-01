@@ -2,9 +2,11 @@
 mod call;
 mod constant;
 mod name;
-pub(super) use constant::ReturnSubset;
+mod unary;
+pub(super) use constant::{CallShape, ReturnSubset};
 #[cfg(test)]
 pub(in crate::tagged::gc::mutator_registration) use name::PreparedNameFunction;
+pub(crate) use unary::PreparedUnaryFunction;
 pub(super) mod write;
 use super::intern::OwnerRootIndex;
 use super::*;

@@ -1,5 +1,6 @@
 //! Crate-local registration vocabulary, reexported by the heap facade.
 //! Keep this list with its domain so new bounded operations do not expand gc.rs.
+pub(crate) use super::symbol_authority::PreparedUnaryFunction;
 pub(crate) use super::{
     CellRead, CellReadError, EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation,
     FrozenFunctionRoots, FrozenLegacyRoots, ImmediateResult, ImmediateResultError,

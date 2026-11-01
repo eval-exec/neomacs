@@ -58,7 +58,7 @@ enum ActivationState {
     Selected {
         epoch: u64,
         lambda: SymId,
-        subset: ReturnSubset,
+        shape: CallShape,
         instruction: Instruction,
     },
     Returned {
@@ -138,6 +138,21 @@ impl<'era> RunAccess<'_, 'era> {
         expected: &OwnerRootSlot<'era>,
         activation: &mut FunctionActivation<'era>,
     ) -> Result<FunctionSelection, FunctionError> {
+        self.named_call_begin_with_shape(
+            symbol,
+            expected,
+            activation,
+            CallShape::Nullary(ReturnSubset::Scalar),
+        )
+    }
+
+    pub(super) fn named_call_begin_with_shape(
+        &mut self,
+        symbol: &SymbolHandle,
+        expected: &OwnerRootSlot<'era>,
+        activation: &mut FunctionActivation<'era>,
+        shape: CallShape,
+    ) -> Result<FunctionSelection, FunctionError> {
         check_run(self)?;
         globals::check_home(self, expected)?;
         globals::check_home(self, &activation.home)?;
@@ -148,7 +163,7 @@ impl<'era> RunAccess<'_, 'era> {
             return Err(FunctionError::ActiveActivation);
         }
         self.symbol_ref(symbol)?
-            .select_named(OwnerRootIndex::from(expected), activation)
+            .select_named(OwnerRootIndex::from(expected), activation, shape)
     }
 
     pub fn sym_call_begin(
@@ -210,16 +225,16 @@ impl<'era> RunAccess<'_, 'era> {
                 ActivationState::Selected {
                     epoch,
                     lambda,
-                    subset,
+                    shape,
                     instruction,
                 } => {
-                    let answer = constant::decode(definition, lambda, subset)?;
+                    let answer = constant::decode_shape(definition, lambda, shape)?;
                     match instruction {
                         Instruction::Validate => {
                             activation.state = ActivationState::Selected {
                                 epoch,
                                 lambda,
-                                subset,
+                                shape,
                                 instruction: Instruction::Return,
                             }
                         }
@@ -263,6 +278,7 @@ impl SymbolRef<'_, '_, '_> {
         &mut self,
         expected: OwnerRootIndex,
         activation: &mut FunctionActivation<'_>,
+        shape: CallShape,
     ) -> Result<FunctionSelection, FunctionError> {
         let symbols = &self.run.owner.registry.symbols;
         // Match select_call's single-reader rule, without its cached branch:
@@ -299,7 +315,7 @@ impl SymbolRef<'_, '_, '_> {
             // Only admission-prepared metadata authorizes a supported shape.
             // Defer this refusal so an empty cell still reports VoidFunction.
             let lambda = lambda.ok_or(FunctionError::UnsupportedDefinition)?;
-            constant::decode(definition, lambda, ReturnSubset::Scalar)?;
+            constant::decode_shape(definition, lambda, shape)?;
             (clock, lambda, definition)
         };
         let local = self
@@ -327,7 +343,7 @@ impl SymbolRef<'_, '_, '_> {
         activation.state = ActivationState::Selected {
             epoch: clock,
             lambda,
-            subset: ReturnSubset::Scalar,
+            shape,
             instruction: Instruction::Validate,
         };
         Ok(FunctionSelection::Selected)
@@ -413,7 +429,7 @@ impl SymbolRef<'_, '_, '_> {
         activation.state = ActivationState::Selected {
             epoch: clock,
             lambda,
-            subset,
+            shape: CallShape::Nullary(subset),
             instruction: Instruction::Validate,
         };
         Ok(())
