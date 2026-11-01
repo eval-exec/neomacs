@@ -3,9 +3,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
-// Acceptance budgets for the sustained 120 Hz scenario. The response
-// budgets stay fixed across plain and rich content rather than being relaxed
-// to fit a slow run.
+// Original hardware/plain acceptance budgets. The independently calibrated
+// rich software-Vulkan tiers are selected before timing in budget.rs; no
+// scroll result can enlarge its own limits.
 //
 // The presentation-gap budget was a fixed 50 ms, which is exactly three
 // 16.67 ms (60 Hz) presenter intervals; the contract is "no confirmed
@@ -20,10 +20,78 @@ use serde_json::Value;
 // measured wake jitter.  A median interval above 20 ms is itself an
 // unhealthy presenter cadence and fails regardless, so a stalled run cannot
 // buy a larger gap budget with a larger median.
-const P95_RESPONSE_MS: f64 = 50.0;
-const MAX_RESPONSE_MS: f64 = 250.0;
 const MAX_RESPONSE_GAP_INTERVALS: f64 = 3.25;
 const MAX_PRESENTER_INTERVAL_MS: f64 = 20.0;
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(super) enum BudgetTier {
+    Original,
+    SoftwareVulkanFast,
+    SoftwareVulkanReducedCapacity,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct ResponseBudget {
+    tier: BudgetTier,
+    p95: std::time::Duration,
+    maximum: std::time::Duration,
+    gap: GapBudget,
+}
+
+#[derive(Debug, Serialize)]
+enum GapBudget {
+    OriginalCadence,
+    SoftwareVulkan {
+        maximum: std::time::Duration,
+        cadence: std::time::Duration,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Assessment {
+    WithinBudget,
+    ExceededBudget,
+}
+
+impl ResponseBudget {
+    #[cfg(test)]
+    pub(super) fn tier_for_test(&self) -> BudgetTier {
+        self.tier
+    }
+
+    pub(super) fn original() -> Self {
+        Self {
+            tier: BudgetTier::Original,
+            p95: std::time::Duration::from_millis(50),
+            maximum: std::time::Duration::from_millis(250),
+            gap: GapBudget::OriginalCadence,
+        }
+    }
+
+    pub(super) fn software_fast() -> Self {
+        Self {
+            tier: BudgetTier::SoftwareVulkanFast,
+            p95: std::time::Duration::from_millis(500),
+            maximum: std::time::Duration::from_millis(750),
+            gap: GapBudget::SoftwareVulkan {
+                maximum: std::time::Duration::from_millis(200),
+                cadence: std::time::Duration::from_millis(20),
+            },
+        }
+    }
+
+    pub(super) fn software_reduced_capacity() -> Self {
+        Self {
+            tier: BudgetTier::SoftwareVulkanReducedCapacity,
+            p95: std::time::Duration::from_millis(1500),
+            maximum: std::time::Duration::from_millis(2000),
+            gap: GapBudget::SoftwareVulkan {
+                maximum: std::time::Duration::from_millis(200),
+                cadence: std::time::Duration::from_millis(25),
+            },
+        }
+    }
+}
 
 #[derive(Debug, Serialize)]
 pub(super) struct Report {
@@ -104,20 +172,41 @@ impl Report {
         }
     }
 
-    pub(super) fn meets_response_budget(&self) -> bool {
-        self.invalid_clocks == 0
+    pub(super) fn assess(&self, budget: &ResponseBudget) -> Assessment {
+        let gap_ok = self
+            .max_response_gap_ms
+            .zip(self.median_response_gap_ms)
+            .is_some_and(|(maximum, median)| match budget.gap {
+                GapBudget::OriginalCadence => {
+                    median <= MAX_PRESENTER_INTERVAL_MS
+                        && maximum <= MAX_RESPONSE_GAP_INTERVALS * median
+                }
+                GapBudget::SoftwareVulkan {
+                    maximum: limit,
+                    cadence,
+                } => {
+                    median <= cadence.as_secs_f64() * 1000.0
+                        && maximum <= limit.as_secs_f64() * 1000.0
+                }
+            });
+        if self.invalid_clocks == 0
             && self
                 .p95_response_ms
-                .is_some_and(|value| value <= P95_RESPONSE_MS)
+                .is_some_and(|v| v <= budget.p95.as_secs_f64() * 1000.0)
             && self
                 .max_response_ms
-                .is_some_and(|value| value <= MAX_RESPONSE_MS)
-            && self.max_response_gap_ms.is_some_and(|max_gap| {
-                self.median_response_gap_ms.is_some_and(|median| {
-                    median <= MAX_PRESENTER_INTERVAL_MS
-                        && max_gap <= MAX_RESPONSE_GAP_INTERVALS * median
-                })
-            })
+                .is_some_and(|v| v <= budget.maximum.as_secs_f64() * 1000.0)
+            && gap_ok
+        {
+            Assessment::WithinBudget
+        } else {
+            Assessment::ExceededBudget
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn meets_response_budget(&self) -> bool {
+        self.assess(&ResponseBudget::original()) == Assessment::WithinBudget
     }
 }
 
@@ -232,3 +321,7 @@ mod tests {
         assert!(!report.meets_response_budget());
     }
 }
+
+#[cfg(test)]
+#[path = "budget_regression_tests.rs"]
+mod budget_regression_tests;

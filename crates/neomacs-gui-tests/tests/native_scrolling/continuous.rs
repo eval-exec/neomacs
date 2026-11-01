@@ -1,7 +1,15 @@
 //! Sustained device delivery, with no command-completion waits between inputs.
 use super::*;
+#[path = "budget.rs"]
+mod budget;
 #[path = "latency.rs"]
 mod latency;
+
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub(super) enum Workload {
+    Plain,
+    Rich,
+}
 
 pub(super) fn run(
     trackpad: &mut wayland::Trackpad,
@@ -9,7 +17,21 @@ pub(super) fn run(
     state_path: &Path,
     latency_path: &Path,
     initial: Value,
+    workload: Workload,
 ) {
+    let environment = budget::Environment::capture(artifacts, workload);
+    let selected_budget = environment.budget();
+    fs::write(
+        artifacts.join("continuous-environment.json"),
+        serde_json::to_vec_pretty(
+            &serde_json::json!({"environment": environment, "budget": selected_budget}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let selected_budget = selected_budget.unwrap_or_else(|error| {
+        panic!("uncalibrated scroll environment: {error:?}; {environment:?}; {artifacts:?}")
+    });
     // Longer opt-in runs expose intermittent stalls across coverage turnover.
     let inputs = std::env::var("NEOMACS_GUI_SCROLL_STREAM_INPUTS")
         .map(|value| {
@@ -110,45 +132,50 @@ pub(super) fn run(
                     line.split_once("wgpu adapter: ").map(|(_, adapter)| adapter.to_owned()))),
             "samples": samples,
             "report": report,
-            "response_budget_ms": {"p95": 50, "maximum": 250, "maximum_gap": 50},
+            "response_budget": selected_budget,
+            "environment": environment,
         }))
         .unwrap(),
     )
     .unwrap();
     assert!(
         drained,
-        "continuous input did not drain: {completed}; {artifacts:?}"
+        "continuous input did not drain: {completed}; {environment:?}; {artifacts:?}"
     );
     assert!(
         observations
             .iter()
             .any(|state| state["start"].as_u64() > initial["start"].as_u64()),
-        "continuous input never advanced the visible viewport: {artifacts:?}"
+        "continuous input never advanced the visible viewport: {environment:?}; {artifacts:?}"
     );
     assert_eq!(
         completed["start"], initial["start"],
-        "reversal: {artifacts:?}"
+        "reversal: {environment:?}; {artifacts:?}"
     );
     assert_eq!(
         completed["vscroll"], initial["vscroll"],
-        "reversal: {artifacts:?}"
+        "reversal: {environment:?}; {artifacts:?}"
     );
 
     // Preserve partial evidence before reporting missing or evicted receipts.
-    assert_eq!(samples.len(), inputs);
+    assert_eq!(
+        samples.len(),
+        inputs,
+        "missing receipts: {environment:?}; {artifacts:?}"
+    );
     for sample in &samples {
-        assert_eq!(sample["kind"], "precise");
+        assert_eq!(sample["kind"], "precise", "{environment:?}");
         assert_eq!(
             sample["evicted_inputs"], 0,
-            "latency ledger overflow: {artifacts:?}"
+            "latency ledger overflow: {environment:?}; {artifacts:?}"
         );
         assert!(
             sample["input_to_present_ns"].is_u64(),
-            "clock mismatch: {sample}"
+            "clock mismatch: {sample}; {environment:?}"
         );
     }
     assert!(
-        report.meets_response_budget(),
-        "continuous scroll exceeded response budget: {report:?}; {artifacts:?}"
+        report.assess(&selected_budget) == latency::Assessment::WithinBudget,
+        "continuous scroll exceeded response budget: {report:?}; budget={selected_budget:?}; {environment:?}; {artifacts:?}"
     );
 }

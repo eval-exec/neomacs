@@ -592,6 +592,11 @@ focus_follows_mouse yes
             &state_path,
             &latency_path,
             previous,
+            if rich {
+                continuous::Workload::Rich
+            } else {
+                continuous::Workload::Plain
+            },
         );
         return;
     }
