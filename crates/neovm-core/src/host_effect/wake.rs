@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use super::contracts::ReadDeadline;
 
+#[path = "wake/native_wait.rs"]
 pub(crate) mod native_wait;
 
 use native_wait::{InlineNativeWait, NativeWaitHandoff};
