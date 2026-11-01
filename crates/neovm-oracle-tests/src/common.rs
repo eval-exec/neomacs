@@ -208,6 +208,140 @@ pub(crate) fn reference_manifest_value(key: &str) -> Option<String> {
     })
 }
 
+/// The two pinned GNU 31.1 reference hosts whose per-host facts the oracle
+/// tests observe.
+///
+/// A per-host expectation names its discriminant and the value for every
+/// variant:
+///
+/// ```ignore
+/// let expect = crate::common::host_expect!(
+///     LinuxGnu => r#""OK ...linux answer...""#,
+///     MacosDarwin => r#""OK ...macOS answer...""#,
+/// );
+/// ```
+///
+/// The helper's match is exhaustive over this closed enum, so a call site that
+/// omits a reference does not compile.  An attested oracle outside the enum
+/// makes [`oracle_host_key`] panic: it never falls back to one host's answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OracleHostKey {
+    /// The pinned linux-gtk3 reference (`x86_64-pc-linux-gnu`).
+    LinuxGnu,
+    /// The pinned macos-batch reference (`aarch64-apple-darwin*`).
+    MacosDarwin,
+}
+
+impl OracleHostKey {
+    /// Map a GNU `system-configuration` value to the pinned reference it
+    /// identifies.  `None` is the unknown-host answer; there is deliberately
+    /// no default.
+    fn from_system_configuration(triple: &str) -> Option<Self> {
+        if triple.contains("-linux-gnu") {
+            Some(Self::LinuxGnu)
+        } else if triple.contains("-apple-darwin") {
+            Some(Self::MacosDarwin)
+        } else {
+            None
+        }
+    }
+}
+
+fn host_key_from_system_configuration(triple: &str) -> OracleHostKey {
+    OracleHostKey::from_system_configuration(triple).unwrap_or_else(|| {
+        panic!(
+            "host_expect: unknown GNU reference host {triple:?}; \
+             the per-host expectation helper knows only the pinned \
+             linux-gtk3 and macos-batch references"
+        )
+    })
+}
+
+/// The reference host whose per-host values apply.
+///
+/// Live modes resolve it from the attested oracle: the build manifest's
+/// `system_configuration` when the recipe recorded it, otherwise the oracle's
+/// own `system-configuration`.  Snapshot mode has no oracle and uses the
+/// compile-time target, which is the host of the Neomacs binary under test.
+/// An unrecognized host panics; it never defaults to Linux.
+pub(crate) fn oracle_host_key() -> OracleHostKey {
+    use std::sync::OnceLock;
+    static KEY: OnceLock<OracleHostKey> = OnceLock::new();
+    *KEY.get_or_init(|| {
+        if !oracle_mode_runs_live_gnu() {
+            return match std::env::consts::OS {
+                "linux" => OracleHostKey::LinuxGnu,
+                "macos" => OracleHostKey::MacosDarwin,
+                other => {
+                    panic!("host_expect: no pinned reference for snapshot host {other:?}")
+                }
+            };
+        }
+        let triple = reference_manifest_value("system_configuration")
+            .or_else(|| {
+                // The linux-gtk3 manifest predates the system_configuration
+                // row; ask the attested oracle itself (prin1 quotes it).
+                let output = run_oracle_eval("system-configuration").ok()?;
+                let value = output.trim().strip_prefix("OK ")?;
+                let value = value.strip_prefix('"')?.strip_suffix('"')?;
+                Some(value.to_string())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "host_expect: cannot resolve the GNU reference \
+                     system-configuration from the manifest or the oracle"
+                )
+            });
+        host_key_from_system_configuration(&triple)
+    })
+}
+
+/// Select the expectation for the running reference host.
+///
+/// Each entry names its [`OracleHostKey`] discriminant and the value; the
+/// match is exhaustive, so omitting a reference is a compile error.
+// The lib's non-test build compiles this module while the test modules that
+// use the macro are cfg(test)-gated; the macro is live in every test target.
+#[allow(unused_macros)]
+macro_rules! host_expect {
+    ($($key:ident => $lit:literal),+ $(,)?) => {{
+        match $crate::common::oracle_host_key() {
+            $($crate::common::OracleHostKey::$key => expect_test::expect![[$lit]],)+
+        }
+    }};
+}
+pub(crate) use host_expect;
+
+#[cfg(test)]
+mod host_key_tests {
+    use super::*;
+
+    #[test]
+    fn oracle_host_key_maps_the_two_pinned_references() {
+        assert_eq!(
+            OracleHostKey::from_system_configuration("x86_64-pc-linux-gnu"),
+            Some(OracleHostKey::LinuxGnu)
+        );
+        assert_eq!(
+            OracleHostKey::from_system_configuration("aarch64-apple-darwin27.0.0"),
+            Some(OracleHostKey::MacosDarwin)
+        );
+    }
+
+    #[test]
+    fn oracle_host_key_refuses_unknown_references_instead_of_defaulting() {
+        for triple in ["x86_64-w64-mingw32", "x86_64-unknown-freebsd", ""] {
+            assert_eq!(OracleHostKey::from_system_configuration(triple), None);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown GNU reference host")]
+    fn oracle_host_key_panics_on_an_unknown_reference() {
+        let _ = host_key_from_system_configuration("x86_64-w64-mingw32");
+    }
+}
+
 /// Whether a GNU oracle may be run.
 ///
 /// Resolution either returns an attested oracle or fails loudly; there is no
