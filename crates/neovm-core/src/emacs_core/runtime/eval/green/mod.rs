@@ -301,6 +301,10 @@ mod collector_spawn_failure_tests;
 #[path = "../tests/green_spawn_refusal_test.rs"]
 mod spawn_refusal_tests;
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../tests/green_spawn_failure_test.rs"]
+mod spawn_failure_tests;
+
 #[cfg(test)]
 #[path = "../tests/green_parked_root_equivalence_test.rs"]
 mod parked_root_equivalence_tests;
