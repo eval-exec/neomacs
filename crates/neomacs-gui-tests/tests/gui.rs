@@ -109,6 +109,9 @@ mod issue_417_startup;
 #[path = "issue_582_fullscreen.rs"]
 mod issue_582_fullscreen;
 
+#[path = "issue_621_mouse_drag_selection_gui_oracle.rs"]
+mod issue_621_mouse_drag_selection_gui_oracle;
+
 #[path = "kill_minibuffer_window_gui_oracle.rs"]
 mod kill_minibuffer_window_gui_oracle;
 

@@ -577,8 +577,7 @@ impl TuiSession {
         Self::gnu_emacs_with_erase_char(extra_args, PtyEraseChar::TerminalDefault)
     }
 
-    /// Spawn GNU Emacs in TUI mode on a PTY whose ERASE character is ERASE.
-    pub fn gnu_emacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
+    fn gnu_emacs_launch(extra_args: &str) -> TuiLaunch {
         // Keep the GNU oracle focused on TUI behavior.  On NixOS the async
         // native compiler can fail after startup and pop *Warnings*, which
         // pollutes the rendered screen unrelated to the command under test.
@@ -587,7 +586,7 @@ impl TuiSession {
         // downsamples every #RRGGBB face to an index (measured: Idx(211) for
         // Rgb(238,121,159)). GitHub runners export no COLORTERM, so pin the
         // terminal both editors see, the same way package_scenario does.
-        let launch = TuiLaunch::new("emacs")
+        TuiLaunch::new("emacs")
             .with_uncertified_startup()
             .args([
                 "-nw",
@@ -597,8 +596,17 @@ impl TuiSession {
                 QUIET_MX_SUGGESTION_EVAL,
             ])
             .env("COLORTERM", "truecolor")
-            .args(extra_args.split_whitespace());
-        Self::spawn_launch_with_erase_char(launch, "GNU", erase)
+            .args(extra_args.split_whitespace())
+    }
+
+    /// Spawn GNU Emacs in TUI mode on a PTY whose ERASE character is ERASE.
+    pub fn gnu_emacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
+        Self::spawn_launch_with_erase_char(Self::gnu_emacs_launch(extra_args), "GNU", erase)
+    }
+
+    /// Spawn GNU Emacs on a terminal with explicit TERM and geometry.
+    pub fn gnu_emacs_on_terminal(extra_args: &str, terminal: TuiTerminalConfig) -> Self {
+        Self::spawn_launch_on_terminal(Self::gnu_emacs_launch(extra_args), "GNU", terminal)
     }
 
     /// Spawn Neomacs in TUI mode.
@@ -609,8 +617,7 @@ impl TuiSession {
         Self::neomacs_with_erase_char(extra_args, PtyEraseChar::TerminalDefault)
     }
 
-    /// Spawn Neomacs in TUI mode on a PTY whose ERASE character is ERASE.
-    pub fn neomacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
+    fn neomacs_launch(extra_args: &str) -> TuiLaunch {
         let workspace = workspace_root();
         let bin = neomacs_binary_path(&workspace);
         assert!(
@@ -619,12 +626,21 @@ impl TuiSession {
              or set NEOMACS_TUI_NEOMACS_BIN.",
             bin.display()
         );
-        let launch = TuiLaunch::new(bin.as_os_str())
+        TuiLaunch::new(bin.as_os_str())
             .with_uncertified_startup()
             .args(["-nw", "-Q", QUIET_MX_SUGGESTION_EVAL])
             .env("COLORTERM", "truecolor")
-            .args(extra_args.split_whitespace());
-        Self::spawn_launch_with_erase_char(launch, "NEO", erase)
+            .args(extra_args.split_whitespace())
+    }
+
+    /// Spawn Neomacs in TUI mode on a PTY whose ERASE character is ERASE.
+    pub fn neomacs_with_erase_char(extra_args: &str, erase: PtyEraseChar) -> Self {
+        Self::spawn_launch_with_erase_char(Self::neomacs_launch(extra_args), "NEO", erase)
+    }
+
+    /// Spawn Neomacs on a terminal with explicit TERM and geometry.
+    pub fn neomacs_on_terminal(extra_args: &str, terminal: TuiTerminalConfig) -> Self {
+        Self::spawn_launch_on_terminal(Self::neomacs_launch(extra_args), "NEO", terminal)
     }
 
     /// Read PTY output until the editor has been quiet for
