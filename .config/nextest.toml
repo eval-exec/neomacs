@@ -19,6 +19,16 @@ capture-stdout = true
 capture-stderr = true
 
 [profile.default]
+# The P11 thread soak (tests/core.rs -> thread_soak.rs, test `thread_soak::soak`) is a driver, not a
+# unit test: it spawns the soak's staged editor binary on scenario rows inside a sandbox wrapper, pinned
+# to a CPU set, and every one of those defaults (SOAK_BIN, SOAK_ROWS, SOAK_SANDBOX, SOAK_CPUS) names
+# the soak machine's own untracked paths. It is run on purpose with --ignore-default-filter (see the
+# module docs), never by a default `cargo nextest run`. The filter below belongs here: the
+# [[profile.default.scripts]] filter further down only chooses which tests get the memory-limit
+# wrapper and does not exclude anything from the run, which is how the soak ran in CI core shard 06
+# and the macOS core job on 2026-11-01 and failed at once with "sandbox wrapper missing at
+# tmp/v10x/sandbox-run.sh (SOAK_SANDBOX)".
+default-filter = 'not (package(neovm-core) and test(=thread_soak::soak))'
 test-threads = 24
 
 # Many tests use the bootstrap evaluator (which loads 122 .el files)
@@ -48,7 +58,7 @@ slow-timeout = { period = "600s", terminate-after = 1, grace-period = "0s" }
 # environment a shipped editor has, so the soak runs outside this guardrail;
 # its own per-scenario SANDBOX_MEM_GB budget bounds RSS instead.
 [[profile.default.scripts]]
-filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::))) and not (package(neovm-core) and test(=soak))'
+filter = 'not test(/compile_contracts$/) and not (package(neomacs-gui-tests) and (test(~real_gui_smoke::) or test(~child_frame_animation::))) and not (package(neovm-core) and test(=thread_soak::soak))'
 # `prlimit` is a Linux util-linux executable, not a generic Unix interface.
 # macOS is cfg(unix) too, but has no `prlimit`; selecting by the actual host OS
 # keeps hosted native tests executable instead of failing before test startup.

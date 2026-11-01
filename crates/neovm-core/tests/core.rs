@@ -54,3 +54,6 @@ mod font_coverage;
 
 #[path = "nmjit_n1.rs"]
 mod nmjit_n1;
+
+#[path = "thread_soak.rs"]
+mod thread_soak;

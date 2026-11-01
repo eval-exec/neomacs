@@ -25,8 +25,17 @@
 //! Duration: `SOAK_SECONDS` is the per-arm budget across all scenarios
 //! (default 1800; `SOAK_MODE=smoke` uses `SOAK_SMOKE_SECS` per scenario,
 //! default 2, and is the <= 2 min gate). The long arms are run by
-//! executing the built test binary directly (`--exact soak --nocapture`),
-//! which is a plain run of a built target and has no nextest timeout.
+//! executing the built `core` test binary directly
+//! (`--exact thread_soak::soak --nocapture`), which is a plain run of a
+//! built target and has no nextest timeout.
+//!
+//! Selection: this module lives in the single `core` integration binary (the
+//! one-binary-per-crate lint) and `.config/nextest.toml` excludes
+//! `thread_soak::soak` from the default filter, because every default here
+//! (`SOAK_BIN`, `SOAK_ROWS`, `SOAK_SANDBOX`, `SOAK_CPUS`) names the soak
+//! driver's own staged binary, row directory, sandbox wrapper and CPU set,
+//! none of which exist on a CI runner or another developer's checkout. Run it
+//! on purpose with `--ignore-default-filter -E 'test(=thread_soak::soak)'`.
 //!
 //! RSS: `SOAK_RSS_LIMIT_KIB_PER_MIN` (default 2048) bounds the growth of the
 //! *editor process's* VmRSS. The gate has a minimum-window rule (only runs of
@@ -1282,7 +1291,7 @@ fn check_run(run: &Run, enforce_rss: bool, rss_limit: f64, failures: &mut Vec<St
 }
 
 /// The single test entry point. Smoke mode is the <= 2 min gate; the long
-/// arms run the same binary directly (`--exact soak!`) with SOAK_MODE=arm,
+/// arms run the same binary directly (`--exact thread_soak::soak`) with SOAK_MODE=arm,
 /// compared against the same-seed reference from SOAK_MODE=reference.
 #[test]
 fn soak() {
