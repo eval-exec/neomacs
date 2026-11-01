@@ -1,0 +1,26 @@
+[package]
+name = "n5-grace-loom"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-or-later"
+autotests = false
+
+# N5 design section 2.2 model (P13-PREP): the real N3 ledger, read-only,
+# composed with activation release points. No engine dependency.
+[workspace]
+
+[dev-dependencies]
+loom = "=0.7.2"
+static_assertions = "=1.1.0"
+
+[profile.test]
+opt-level = 1
+
+[[test]]
+name = "ledger"
+path = "tests/ledger.rs"
+
+[[test]]
+name = "measurement"
+path = "tests/measurement.rs"
