@@ -49,3 +49,23 @@ pub(crate) fn install_function_cell_observer(observer: FunctionCellObserver) {
 pub(crate) fn function_cell_observer() -> Option<&'static FunctionCellObserver> {
     FUNCTION_CELL_OBSERVER.get()
 }
+
+/// The evaluator's observed-run log for function-epoch moves
+/// (`eval/cconv_memo`). Beside the cell observer and installed at the same
+/// two one-time hooks; a typed no-op until then, so the function-cell write
+/// paths never name the evaluator.
+static FUNCTION_EPOCH_MOVE: OnceLock<fn(FunctionEpochBump, Option<SymId>)> = OnceLock::new();
+
+/// Install the evaluator's move log. Idempotent like the observer table.
+pub(crate) fn install_function_epoch_move_sink(sink: fn(FunctionEpochBump, Option<SymId>)) {
+    let _ = FUNCTION_EPOCH_MOVE.set(sink);
+}
+
+/// Report one function-epoch move to the evaluator's observed-run log when
+/// one is installed.
+#[inline(always)]
+pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId>) {
+    if let Some(sink) = FUNCTION_EPOCH_MOVE.get() {
+        sink(why, sym);
+    }
+}

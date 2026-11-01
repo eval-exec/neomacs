@@ -188,7 +188,7 @@ impl SymbolBacking {
         // Exactly the legacy attribution, on this committing owner's existing
         // counters. No serial setter, Context lookup, new TLS or atomic count.
         let why = update.reason();
-        crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
+        crate::emacs_core::symbol::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
         if let Some(observer) = crate::emacs_core::symbol::function_cell_observer() {
             (observer.epoch_bump)(why, Some(id));

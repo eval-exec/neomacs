@@ -1,4 +1,4 @@
-g0 eval 7
+g0 eval 4
 g0 top:buffer 1
 buffer builtins 6
 buffer chartable 1

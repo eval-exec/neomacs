@@ -64,6 +64,7 @@ pub use cell::{LispSymbol, SymbolFlags};
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 pub(crate) use function_cell_observer::{
     FunctionCellObserver, function_cell_observer, install_function_cell_observer,
+    install_function_epoch_move_sink, note_function_epoch_move,
 };
 pub(crate) use projection::{
     AdmissionPlanCell, ConcealOutcome, RevealedProjection, enter_projection_scope,
@@ -4052,7 +4053,7 @@ impl Obarray {
         self.dispatch_cells
             .function_epoch
             .store(epoch, Ordering::Release);
-        crate::emacs_core::eval::note_function_epoch_move(why, None);
+        note_function_epoch_move(why, None);
         #[cfg(feature = "jit")]
         if let Some(observer) = function_cell_observer() {
             (observer.epoch_bump)(why, None);
@@ -4122,7 +4123,7 @@ impl Obarray {
         self.dispatch_cells
             .function_epoch
             .store(epoch, Ordering::Release);
-        crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
+        note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
         if let Some(observer) = function_cell_observer() {
             (observer.epoch_bump)(why, Some(id));
