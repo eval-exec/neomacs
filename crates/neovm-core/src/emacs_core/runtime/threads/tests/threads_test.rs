@@ -1748,3 +1748,38 @@ fn failed_sim_thread_creation_preserves_an_absent_local_entry() {
     eval.unbind_to_with_result(depth, Ok(Value::NIL))
         .expect("clean up forwarded binding");
 }
+
+/// SOAK-FINDING-2 (P11 soak): a finished thread must leave the live registry.
+///
+/// GNU Emacs unlinks a finished thread from `all_threads` (src/thread.c:853-859,
+/// `run_thread`) and `all-threads` lists only `thread_live_p` entries
+/// (thread.c:1153-1160); a finished, unreachable thread is then collected like
+/// any pseudovector. Neomacs' `ThreadManager` keeps every created thread in
+/// `threads`/`thread_handles` and `trace_roots` roots every handle strongly,
+/// so a make-thread/thread-join loop grows without bound and no collection can
+/// reclaim it; the P11 soak rows see it as long-window RSS growth that a
+/// forced full collection does not stop. Red on main today; the fix belongs to
+/// the thread-object owner (P15).
+#[test]
+fn finished_threads_are_removed_from_the_registry() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let cycle = "(progn (thread-join (make-thread (lambda () nil))) nil)";
+    for _ in 0..20 {
+        eval.eval_str(cycle)
+            .expect("warmup make-thread/thread-join");
+    }
+    eval.gc_collect_exact();
+    let before = eval.threads.threads.len();
+    for _ in 0..200 {
+        eval.eval_str(cycle).expect("make-thread/thread-join");
+    }
+    eval.gc_collect_exact();
+    let after = eval.threads.threads.len();
+    assert!(
+        after <= before + 4,
+        "finished threads accumulate in the live registry: {before} -> {after} after 200 \
+         make-thread/thread-join cycles; GNU unlinks a finished thread from all_threads \
+         (src/thread.c:853-859) and collects it once unreachable (thread_live_p, \
+         src/thread.c:1153-1160)"
+    );
+}
