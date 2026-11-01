@@ -1743,6 +1743,10 @@ impl Clone for Runtime {
 /// exist; the observer is a typed no-op until then. The observer only
 /// forwards function-cell writes to the existing JIT metering and cache
 /// invalidation, so function objects outside a `Context` stay unaffected.
+/// Only built with the `jit` feature, like the `stats` and `cache` modules it
+/// forwards to; without it the observer table stays uninstalled and every
+/// function-cell write takes the typed no-op path.
+#[cfg(feature = "jit")]
 pub(crate) fn install_function_cell_observer() {
     crate::emacs_core::symbol::install_function_cell_observer(
         crate::emacs_core::symbol::FunctionCellObserver {
