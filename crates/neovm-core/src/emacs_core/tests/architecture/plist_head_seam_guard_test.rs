@@ -283,10 +283,11 @@ fn seam_body(code: &str) -> Option<(usize, usize)> {
 
 /// `plist.store_atomic(` occurrences outside test-gated items and outside the
 /// seam body.  An empty result means the rule holds for this source text.
-fn violations_in(code: &str) -> Vec<usize> {
-    let ranges = test_gated_ranges(code);
-    let seam = seam_body(code);
-    find_all(code, STORE)
+fn violations_in(source: &str) -> Vec<usize> {
+    let code = code_only(source);
+    let ranges = test_gated_ranges(&code);
+    let seam = seam_body(&code);
+    find_all(&code, STORE)
         .into_iter()
         .filter(|offset| {
             !ranges
