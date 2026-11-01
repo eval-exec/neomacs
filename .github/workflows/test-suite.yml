@@ -1000,6 +1000,8 @@ jobs:
           unset DISPLAY
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/wayland-menu"
           mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+          # The job sets CARGO_TERM_COLOR=always; the summary check below reads this
+          # log, so nextest writes it without colour escapes.
           LOG="$RUNNER_TEMP/wayland-menu.log"
           weston --backend=headless-backend.so --renderer=pixman \
                  --socket=wayland-menu --idle-time=0 >"$RUNNER_TEMP/weston.log" 2>&1 &
@@ -1009,12 +1011,12 @@ jobs:
           test -S "$XDG_RUNTIME_DIR/wayland-menu"
           if ! WAYLAND_DISPLAY=wayland-menu \
                cargo nextest run -p neomacs-display-runtime \
-                 --features wayland-live-tests --test-threads 1 \
+                 --features wayland-live-tests --test-threads 1 --color never \
                  -E 'test(linux_wayland_native_menu_smoke) or test(linux_wayland_native_menu_tooltip_smoke) or test(linux_wayland_native_menu_replacement_stress) or test(linux_wayland_deferred_menu_replacement_stress)' \
                  >"$LOG" 2>&1; then
             cat "$LOG"; exit 1
           fi
-          grep -Eq 'Summary \[[^]]*\] 4 tests run: 4 passed' "$LOG"
+          grep -Eq 'Summary \[[^]]*\] 4 tests run: 4 passed' "$LOG" || { cat "$LOG"; exit 1; }
 
       # Weston 16 does not implement xdg-toplevel-icon-v1; labwc 0.9.7 does,
       # and setup-labwc.sh provisions exactly that compositor.
@@ -1039,12 +1041,12 @@ jobs:
           test -S "$XDG_RUNTIME_DIR/wayland-0"
           if ! WAYLAND_DISPLAY=wayland-0 \
                cargo nextest run -p neomacs-display-runtime \
-                 --features wayland-live-tests --test-threads 1 \
+                 --features wayland-live-tests --test-threads 1 --color never \
                  -E 'test(private_wayland_compositor_accepts_native_toplevel_icon)' \
                  >"$LOG" 2>&1; then
             cat "$LOG"; exit 1
           fi
-          grep -Eq 'Summary \[[^]]*\] 1 test run: 1 passed' "$LOG"
+          grep -Eq 'Summary \[[^]]*\] 1 test run: 1 passed' "$LOG" || { cat "$LOG"; exit 1; }
 
       - name: Upload GUI diagnostics
         if: always()
