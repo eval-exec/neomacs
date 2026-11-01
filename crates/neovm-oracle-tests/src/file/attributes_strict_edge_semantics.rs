@@ -58,14 +58,19 @@ fn oracle_file_attributes_shape_id_format_missing_bad_filename_and_lessp_edges()
                                   (cons "beta" int-attrs))
            (file-attributes-lessp (cons "beta" int-attrs)
                                   (cons "alpha" int-attrs))
+           ;; file-attributes-lessp is Fstring_lessp (Fcar (f1), Fcar (f2))
+           ;; (src/dired.c:1137): C argument evaluation order is unspecified,
+           ;; so which argument Fcar rejects is a compiler fact (GCC x86-64
+           ;; reports "beta", Clang arm64 "alpha").  The GNU contract is the
+           ;; error class, not the payload.
            (condition-case err
                (file-attributes-lessp "alpha" "beta")
-             (error (list (car err) (cdr err)))))))
+             (error (car err))))))
     (delete-directory dir t)))
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK ((nil t t t t t t 5 \"-\" t t t 12) (t t) (t \"d\" 12) nil nil nil nil t nil (wrong-type-argument (listp \"beta\")))""#
+        r#""OK ((nil t t t t t t 5 \"-\" t t t 12) (t t) (t \"d\" 12) nil nil nil nil t nil wrong-type-argument)""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
