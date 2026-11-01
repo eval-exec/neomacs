@@ -38,6 +38,18 @@ fn builtin(operation: HofOperation) -> SubrEntry {
     }
 }
 
+#[derive(Debug)]
+enum ReconcileError {
+    Stop(RendezvousError),
+    Function(FunctionError),
+}
+fn reconcile_retry(error: &ReconcileError) -> Retry {
+    match error {
+        ReconcileError::Stop(error) => contention::rendezvous(error),
+        ReconcileError::Function(error) => contention::function(error),
+    }
+}
+
 enum FixtureParameters {
     Nullary,
     Unary(crate::emacs_core::intern::SymId),
@@ -148,66 +160,124 @@ pub(crate) fn prepared_hof_fixture<P>(
                 .expect("HOF fixture registration")
                 .activate(era.heap_identity(), 1)
                 .expect("HOF fixture owner");
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Keep RunAccess OUTSIDE the assertion-catching closure: even a
+            // body/setup assertion must close its canonical region before the
+            // run's Drop checks the original IN_SLICE exit obligation.
+            let result = {
                 let mut run = owner.run_access().expect("HOF fixture run");
-                let destination = run.private_nil_root().expect("HOF result home");
-                let mut expected = run.private_nil_root().expect("HOF expected callback home");
-                run.sym_function_into(&callback_symbol, &mut expected)
-                    .expect("root original callback");
-                let mut replacement_home = run.private_nil_root().expect("HOF replacement home");
-                run.sym_value_into(&replacement_key, &mut replacement_home)
-                    .expect("root replacement callback");
-                let mut mapper_replacement_home =
-                    run.private_nil_root().expect("HOF mapper replacement home");
-                run.sym_value_into(&mapper_replacement_key, &mut mapper_replacement_home)
-                    .expect("root mapper replacement");
-                let singleton = HofSingleton::new(
-                    &mut run,
-                    ImmediateResult::Fixnum(Fixnum::try_from(7).expect("small input fixnum")),
-                )
-                .expect("real rooted singleton input");
-                let scratch = HofScratch::new(&mut run).expect("resident HOF scratch");
-                let inputs = HofTestInputs {
-                    mapper,
-                    callback,
-                    expected,
-                    replacement: replacement_home,
-                    singleton,
-                    scratch,
-                    callback_symbol,
-                    mapper_replacement: mapper_replacement_home,
-                };
-                body(&prepared, &admission, &mut run, &destination, inputs);
-            }));
-            // The body and all its activation borrows unwind before any homes
-            // are cleared. Cleanup is independent of the body's test result.
-            let cleanup = (|| {
-                owner
-                    .run_access()
-                    .and_then(|mut run| run.clear_root_slots())
-                    .map_err(|reason| format!("HOF fixture roots: {reason:?}"))?;
-                retry_owned(
-                    Deadline::contention(),
-                    owner,
-                    |owner| owner.retire_rooted(&[]),
-                    |failure| match contention::rendezvous(&failure.reason) {
-                        Retry::Busy => ControlFlow::Continue(failure.into_owner()),
-                        Retry::Refuse => ControlFlow::Break(failure),
-                    },
-                )
-                .map_err(|failure| format!("HOF fixture retirement: {failure:?}"))
-            })();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let destination = run.private_nil_root().expect("HOF result home");
+                    let mut expected = run.private_nil_root().expect("HOF expected callback home");
+                    run.sym_function_into(&callback_symbol, &mut expected)
+                        .expect("root original callback");
+                    let mut replacement_home =
+                        run.private_nil_root().expect("HOF replacement home");
+                    run.sym_value_into(&replacement_key, &mut replacement_home)
+                        .expect("root replacement callback");
+                    let mut mapper_replacement_home =
+                        run.private_nil_root().expect("HOF mapper replacement home");
+                    run.sym_value_into(&mapper_replacement_key, &mut mapper_replacement_home)
+                        .expect("root mapper replacement");
+                    let singleton = HofSingleton::new(
+                        &mut run,
+                        ImmediateResult::Fixnum(Fixnum::try_from(7).expect("small input fixnum")),
+                    )
+                    .expect("real rooted singleton input");
+                    let scratch = HofScratch::new(&mut run).expect("resident HOF scratch");
+                    let inputs = HofTestInputs {
+                        mapper,
+                        callback,
+                        expected,
+                        replacement: replacement_home,
+                        singleton,
+                        scratch,
+                        callback_symbol,
+                        mapper_replacement: mapper_replacement_home,
+                    };
+                    body(&prepared, &admission, &mut run, &destination, inputs);
+                }));
+                let closed = run.close_cons_region();
+                drop(run);
+                assert_eq!(closed, Ok(()), "HOF fixture closed canonical region");
+                result
+            };
+            // Body locals/activation borrows are gone and the run is closed.
+            // Clear all exact homes regardless of the body's result. A real
+            // stopped collection, not a no-op trace, must drain the owner's
+            // young backlinks before terminal image merging can succeed.
+            owner
+                .run_access()
+                .and_then(|mut run| run.clear_root_slots())
+                .expect("HOF fixture cleared roots");
             drop(admission);
-            let mut stopped = era.stop().expect("HOF fixture stop");
-            era.return_cons_storage(&stopped)
-                .expect("return HOF cons storage");
-            stopped
-                .symbols()
-                .expect("HOF stopped symbol authority")
-                .reconcile_functions()
-                .expect("HOF function reconciliation");
-            stopped.trace(|_, _| Ok(())).expect("HOF stopped trace");
-            stopped.complete().expect("HOF fixture resume");
+            let _probes = crate::tagged::gc::mutator_registration::a8_probes::suppress();
+            // This is terminal keeper-thread publication, NOT a blocking
+            // worker/native body. The keeper drives and completes its own
+            // stop synchronously, then retires this already-published owner.
+            // with_native_extent's worker-only wait/restore contract is not
+            // appropriate here: there is no blocked native body to resume.
+            contention::retry(
+                Deadline::contention(),
+                || owner.enter_native(&[]),
+                contention::rendezvous,
+            )
+            .expect("HOF fixture terminal publication");
+            let mut stopped = contention::retry(
+                Deadline::contention(),
+                || era.stop(),
+                contention::rendezvous,
+            )
+            .expect("HOF fixture stop");
+            contention::retry(
+                Deadline::contention(),
+                || era.return_cons_storage(&stopped),
+                contention::registration,
+            )
+            .expect("return HOF cons storage");
+            contention::retry(
+                Deadline::contention(),
+                || {
+                    stopped
+                        .symbols()
+                        .map_err(ReconcileError::Stop)?
+                        .reconcile_functions()
+                        .map_err(ReconcileError::Function)
+                },
+                reconcile_retry,
+            )
+            .expect("HOF function reconciliation");
+            let collection = contention::retry(
+                Deadline::contention(),
+                || era.collect_stopped(&mut stopped),
+                contention::rendezvous,
+            )
+            .expect("HOF fixture real stopped collection");
+            assert!(collection.major);
+            assert_eq!(collection.frozen_owners, 1);
+            retry_owned(
+                Deadline::contention(),
+                stopped,
+                |stopped| stopped.complete(),
+                |failure| match contention::rendezvous(&failure.reason) {
+                    Retry::Busy => ControlFlow::Continue(failure.into_stopped()),
+                    Retry::Refuse => ControlFlow::Break(failure),
+                },
+            )
+            .expect("HOF fixture resume");
+            let cleanup = retry_owned(
+                Deadline::contention(),
+                owner,
+                |owner| owner.retire_rooted(&[]),
+                |failure| match contention::rendezvous(&failure.reason) {
+                    Retry::Busy => ControlFlow::Continue(failure.into_owner()),
+                    Retry::Refuse => ControlFlow::Break(failure),
+                },
+            )
+            .map_err(|failure| format!("HOF fixture retirement: {failure:?}"));
+            eprintln!(
+                "NMJIT_N4_HOF_CLEANUP_COLLECTION_DRAINED {}",
+                collection.epoch
+            );
             let (collector, keeper) = era.finish().expect("HOF fixture total finish");
             drop(collector);
             drop(keeper);
