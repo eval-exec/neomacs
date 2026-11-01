@@ -63,17 +63,21 @@ fn oracle_prop_jit_flonum_signed_zero_and_nan() {
     (byte-compile (lambda (a b c) (/ (- (* a b) c) b))))
   (dotimes (_ 3000) (neovm--jit-flonum-bits 1.5 2.0 0.5))
   (format "%S"
-          (list (neovm--jit-flonum-bits -0.0 1.0 0.0)
-                (neovm--jit-flonum-bits 0.0 -1.0 0.0)
-                (neovm--jit-flonum-bits -0.0 -0.0 -0.0)
-                (neovm--jit-flonum-bits 1.0e+INF 1.0 0.0)
-                (neovm--jit-flonum-bits -1.0e+INF 2.0 1.0)
-                (neovm--jit-flonum-bits -0.0e+NaN 1.0 0.0)
-                (neovm--jit-flonum-bits 1.0 0.0e+NaN 0.0)
-                (neovm--jit-flonum-bits 0.0 0.0 0.0)
-                (neovm--jit-flonum-bits 1.0 0.0 1.0))))"#;
+          ;; The signed zero and the infinities are IEEE and exact; the sign
+          ;; of an invalid-operation NaN is host hardware (x86-64 -0.0e+NaN,
+          ;; arm64 0.0e+NaN), so normalize NaN results to a class sentinel.
+          (mapcar (lambda (v) (if (and (floatp v) (isnan v)) :nan v))
+                  (list (neovm--jit-flonum-bits -0.0 1.0 0.0)
+                        (neovm--jit-flonum-bits 0.0 -1.0 0.0)
+                        (neovm--jit-flonum-bits -0.0 -0.0 -0.0)
+                        (neovm--jit-flonum-bits 1.0e+INF 1.0 0.0)
+                        (neovm--jit-flonum-bits -1.0e+INF 2.0 1.0)
+                        (neovm--jit-flonum-bits -0.0e+NaN 1.0 0.0)
+                        (neovm--jit-flonum-bits 1.0 0.0e+NaN 0.0)
+                        (neovm--jit-flonum-bits 0.0 0.0 0.0)
+                        (neovm--jit-flonum-bits 1.0 0.0 1.0)))))"#;
     let expect = expect_test::expect![[
-        r#""OK \"(-0.0 0.0 -0.0e+NaN 1.0e+INF -1.0e+INF -0.0e+NaN 0.0e+NaN -0.0e+NaN -1.0e+INF)\"""#
+        r#""OK \"(-0.0 0.0 :nan 1.0e+INF -1.0e+INF :nan :nan :nan -1.0e+INF)\"""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
