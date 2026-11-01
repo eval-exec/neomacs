@@ -2739,43 +2739,6 @@ enum CommandLoopExit {
     Call(Value),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum ResumeTarget {
-    CommandLoopExit,
-    CommandLoopTopLevel,
-    InterpreterCatch,
-    InterpreterConditionCase {
-        handler_index: usize,
-        condition_stack_base: usize,
-    },
-    /// GNU safe_funcall's Qt barrier. The index identifies a live handler
-    /// on its owning Context's mutator; it is never shared across Contexts.
-    SafeFuncall {
-        condition_stack_base: usize,
-    },
-    /// GNU `menu_item_eval_property`'s Qerror barrier. Unlike the Qt
-    /// `SafeFuncall` barrier, only `error` and its subclasses are caught:
-    /// `quit` and throws with an outer catch keep unwinding.
-    MenuItemProperty {
-        condition_stack_base: usize,
-    },
-    VmCatch {
-        resume_id: u64,
-        target: u32,
-        stack_len: usize,
-        spec_depth: usize,
-        bind_stack_len: usize,
-    },
-    VmConditionCase {
-        resume_id: u64,
-        target: u32,
-        stack_len: usize,
-        spec_depth: usize,
-        bind_stack_len: usize,
-    },
-}
-
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub(crate) enum ConditionFrame {
@@ -3626,12 +3589,6 @@ static_assertions::const_assert_eq!(
     std::mem::size_of::<Option<super::load::LoadupDumpMode>>(),
     1
 );
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ShutdownRequest {
-    pub exit_code: i32,
-    pub restart: bool,
-}
 
 /// Whether Lisp forms may still be evaluated in this session.
 ///
@@ -7576,6 +7533,8 @@ mod hash_test_gc_inhibit;
 
 mod attention;
 mod minibuffer_window;
+pub(crate) use super::value::flow_vocab::ResumeTarget;
+pub use super::value::flow_vocab::ShutdownRequest;
 pub use attention::QuitRequest;
 pub(crate) use attention::{ASYNC_ATTENTION, AsyncSource, AttentionMask};
 

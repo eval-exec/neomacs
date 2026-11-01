@@ -58,6 +58,7 @@ pub(crate) enum FunctionSourceIdentity {
 }
 
 pub mod buffer_vocab;
+pub mod flow_vocab;
 pub mod positions;
 
 // Re-export tagged types for downstream use.

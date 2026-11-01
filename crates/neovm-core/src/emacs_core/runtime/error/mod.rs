@@ -9,8 +9,8 @@ use std::error::Error;
 use std::fmt::{self, Formatter};
 
 use super::intern::{SymId, intern, resolve_sym};
+use super::value::flow_vocab::ResumeTarget;
 use super::value::{Value, ValueKind};
-use crate::emacs_core::eval::ResumeTarget;
 use crate::tagged::SymbolMode;
 use strum::IntoStaticStr;
 
@@ -50,7 +50,7 @@ pub enum EvalError {
         pin: InFlightRoots,
     },
     /// `kill-emacs` reached this boundary: not an error, an exit request.
-    Shutdown(super::eval::ShutdownRequest),
+    Shutdown(super::value::flow_vocab::ShutdownRequest),
 }
 
 /// Opaque signal state crossing the public error boundary. Its owning pin
@@ -207,7 +207,7 @@ pub enum FlowKind {
     /// (`dynamic_module.rs`) hands the module a signal named `kill-emacs`, and
     /// a module that clears it still exits, because the recorded request — not
     /// the propagating variant — is what the evaluator acts on.
-    Shutdown(super::eval::ShutdownRequest),
+    Shutdown(super::value::flow_vocab::ShutdownRequest),
 }
 
 mod flow_word;
@@ -221,7 +221,7 @@ pub enum FlowRef<'a> {
     Signal(&'a SignalData),
     Throw(&'a ThrowData),
     ThreadBlocked(&'a ThreadBlockedData),
-    Shutdown(super::eval::ShutdownRequest),
+    Shutdown(super::value::flow_vocab::ShutdownRequest),
 }
 
 /// Views of a `Result<T, Flow>` whose error side is a [`FlowKind`] /
