@@ -76,7 +76,11 @@ fn oracle_number_to_string_float_and_type_edges() {
 (list
  (number-to-string 1000000000000000000000001)
  (number-to-string -0.0)
- (number-to-string (/ 0.0 0.0))
+ ;; number-to-string of an invalid-operation NaN differs only in the SIGN
+ ;; of the NaN between hosts (x86-64 -0.0e+NaN, arm64 0.0e+NaN); assert
+ ;; GNU's printed shape, never one host's sign.
+ (let ((s (number-to-string (/ 0.0 0.0))))
+   (if (string-match-p "\\`[-+]?0\\.0e\\+NaN\\'" s) :nan s))
  (number-to-string (/ 1.0 0.0))
  (number-to-string (/ -1.0 0.0))
  (condition-case err
@@ -85,7 +89,7 @@ fn oracle_number_to_string_float_and_type_edges() {
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK (\"1000000000000000000000001\" \"-0.0\" \"-0.0e+NaN\" \"1.0e+INF\" \"-1.0e+INF\" (wrong-type-argument (numberp \"42\")))""#
+        r#""OK (\"1000000000000000000000001\" \"-0.0\" :nan \"1.0e+INF\" \"-1.0e+INF\" (wrong-type-argument (numberp \"42\")))""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
