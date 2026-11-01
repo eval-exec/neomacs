@@ -358,11 +358,13 @@ fn oracle_prop_string_comparison_mixed_case_locale() {
 // string-collate-lessp / string-collate-equalp
 // ---------------------------------------------------------------------------
 
-#[test]
-fn oracle_prop_string_comparison_collate_functions() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
+crate::common::platform_twin_test!(
+    TwinHost::Linux,
+    oracle_prop_string_comparison_collate_functions,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(list
+        let form = r#"(list
   ;; string-collate-lessp uses locale-aware ordering
   ;; With nil locale, uses current locale
   (string-collate-lessp "abc" "abd")
@@ -379,15 +381,18 @@ fn oracle_prop_string_comparison_collate_functions() {
   ;; IGNORE-CASE parameter
   (string-collate-equalp "Hello" "hello" nil t)
   (string-collate-lessp "A" "b" nil t))"#;
-    let expect = expect_test::expect![[r#""OK (t nil nil t nil t t t t t)""#]];
-    crate::common::assert_oracle_parity_expect(form, expect);
-}
+        let expect = expect_test::expect![[r#""OK (t nil nil t nil t t t t t)""#]];
+        crate::common::assert_oracle_parity_expect(form, expect);
+    }
+);
 
-#[test]
-fn oracle_prop_string_collate_argument_semantics() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
+crate::common::platform_twin_test!(
+    TwinHost::Linux,
+    oracle_prop_string_collate_argument_semantics,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(list
+        let form = r#"(list
   ;; GNU accepts symbols for S1/S2 by comparing their print names.
   (string-collate-lessp 'alpha 'beta "POSIX")
   (string-collate-equalp 'same "same" "POSIX")
@@ -398,17 +403,20 @@ fn oracle_prop_string_collate_argument_semantics() {
   (condition-case err
       (string-collate-equalp "a" "a" 'not-a-locale)
     (error (list (car err) (cadr err)))))"#;
-    let expect = expect_test::expect![[
-        r#""OK (t t (wrong-type-argument stringp) (wrong-type-argument stringp))""#
-    ]];
-    crate::common::assert_oracle_parity_expect(form, expect);
-}
+        let expect = expect_test::expect![[
+            r#""OK (t t (wrong-type-argument stringp) (wrong-type-argument stringp))""#
+        ]];
+        crate::common::assert_oracle_parity_expect(form, expect);
+    }
+);
 
-#[test]
-fn oracle_prop_string_collate_invalid_locale_semantics() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
+crate::common::platform_twin_test!(
+    TwinHost::Linux,
+    oracle_prop_string_collate_invalid_locale_semantics,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let form = r#"(list
+        let form = r#"(list
   ;; GNU's str_collate opens explicit locale strings with newlocale.
   ;; Invalid locale names signal `error' instead of falling back to byte comparison.
   (condition-case err
@@ -417,9 +425,10 @@ fn oracle_prop_string_collate_invalid_locale_semantics() {
   (condition-case err
       (string-collate-equalp "a" "a" "neomacs-invalid-locale")
     (error (car err))))"#;
-    let expect = expect_test::expect![[r#""OK (error error)""#]];
-    crate::common::assert_oracle_parity_expect(form, expect);
-}
+        let expect = expect_test::expect![[r#""OK (error error)""#]];
+        crate::common::assert_oracle_parity_expect(form, expect);
+    }
+);
 
 // ---------------------------------------------------------------------------
 // Edge cases and comprehensive combination tests
@@ -498,3 +507,79 @@ fn oracle_prop_string_comparison_sort_predicates() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+// The three Darwin collate twins: without __STDC_ISO_10646__ GNU's
+// string-collate-* are the case-sensitive string-lessp/string-equal fallback,
+// so the locale-type checks, the invalid-locale error and IGNORE-CASE behave
+// as below.  Neo matches the reference on the mac (measured live).  The three
+// Linux tests keep their collating expectations under cfg(linux).
+
+crate::common::platform_twin_test!(
+    TwinHost::Macos,
+    oracle_prop_string_comparison_collate_functions_macos,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
+
+        let form = r#"(list
+  ;; string-collate-lessp uses locale-aware ordering
+  ;; With nil locale, uses current locale
+  (string-collate-lessp "abc" "abd")
+  (string-collate-lessp "abd" "abc")
+  ;; Equal strings
+  (string-collate-lessp "same" "same")
+  ;; string-collate-equalp: locale-aware equality
+  (string-collate-equalp "hello" "hello")
+  (string-collate-equalp "hello" "world")
+  ;; With explicit locale "POSIX" (basic ASCII ordering)
+  (string-collate-lessp "a" "b" "POSIX")
+  (string-collate-lessp "A" "a" "POSIX")
+  (string-collate-equalp "abc" "abc" "POSIX")
+  ;; IGNORE-CASE parameter
+  (string-collate-equalp "Hello" "hello" nil t)
+  (string-collate-lessp "A" "b" nil t))"#;
+        let expect = expect_test::expect![[r#""OK (t nil nil t nil t t t nil t)""#]];
+        crate::common::assert_oracle_parity_expect(form, expect);
+    }
+);
+
+crate::common::platform_twin_test!(
+    TwinHost::Macos,
+    oracle_prop_string_collate_argument_semantics_macos,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
+
+        let form = r#"(list
+  ;; GNU accepts symbols for S1/S2 by comparing their print names.
+  (string-collate-lessp 'alpha 'beta "POSIX")
+  (string-collate-equalp 'same "same" "POSIX")
+  ;; GNU's fns.c checks that non-nil LOCALE is a string before calling str_collate.
+  (condition-case err
+      (string-collate-lessp "a" "b" 42)
+    (error (list (car err) (cadr err))))
+  (condition-case err
+      (string-collate-equalp "a" "a" 'not-a-locale)
+    (error (list (car err) (cadr err)))))"#;
+        let expect = expect_test::expect![[r#""OK (t t t t)""#]];
+        crate::common::assert_oracle_parity_expect(form, expect);
+    }
+);
+
+crate::common::platform_twin_test!(
+    TwinHost::Macos,
+    oracle_prop_string_collate_invalid_locale_semantics_macos,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
+
+        let form = r#"(list
+  ;; GNU's str_collate opens explicit locale strings with newlocale.
+  ;; Invalid locale names signal `error' instead of falling back to byte comparison.
+  (condition-case err
+      (string-collate-lessp "a" "b" "neomacs-invalid-locale")
+    (error (car err)))
+  (condition-case err
+      (string-collate-equalp "a" "a" "neomacs-invalid-locale")
+    (error (car err))))"#;
+        let expect = expect_test::expect![[r#""OK (t t)""#]];
+        crate::common::assert_oracle_parity_expect(form, expect);
+    }
+);
