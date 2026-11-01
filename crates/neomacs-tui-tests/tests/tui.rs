@@ -89,6 +89,8 @@ mod issue_445_ibuffer_filter_groups;
 mod issue_446_align_to_hscroll;
 #[path = "issue_470.rs"]
 mod issue_470;
+#[path = "issue_621_mouse_drag_selection.rs"]
+mod issue_621_mouse_drag_selection;
 #[path = "issue_654_centered_cursor.rs"]
 mod issue_654_centered_cursor;
 #[path = "issue_656_kill_minibuffer.rs"]
