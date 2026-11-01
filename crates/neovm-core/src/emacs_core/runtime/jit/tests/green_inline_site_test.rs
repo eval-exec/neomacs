@@ -155,6 +155,122 @@ fn release_revalidation_emitted() -> u64 {
     crate::emacs_core::jit::compile::lowering::release_revalidations_emitted()
 }
 
+/// Per-ISA machine-op witnesses for the structural assertions below. The
+/// dump is masked (`captured_code` keeps mnemonics and operand shapes,
+/// never encodings or addresses), so each witness matches a SHAPE only the
+/// baked lowering can produce in these bodies — never a shim name, which
+/// the dump renders as a bare `load_ext_name userextnameN` and which a
+/// name-absence check could therefore never catch.
+///
+/// A target without an arm here fails to COMPILE this file rather than
+/// silently skipping the assertions: extend the module in the same change
+/// that first lowers the JIT for a new ISA.
+#[cfg(target_arch = "x86_64")]
+mod baked_op_witnesses {
+    /// `andq %r..`: a register-register AND. Tag checks test immediates,
+    /// so a register operand is the baked `logand`.
+    pub fn register_register_and(text: &str) -> bool {
+        text.contains("andq %r")
+    }
+
+    /// The lowering's named remainder sequence (no other division exists
+    /// in these bodies).
+    pub fn truncating_remainder(text: &str) -> bool {
+        text.contains("checked_srem_seq")
+    }
+
+    /// `shrq $0x3f`: the sign-bit extract of GNU's floor-sign adjustment
+    /// (nothing else in the body shifts by 63).
+    pub fn floor_sign_adjustment(text: &str) -> bool {
+        text.contains("shrq $0x3f")
+    }
+
+    /// `addb $0x1`: the every-255th back-edge poll's counter bump — a
+    /// byte add no fused-loop-free body can produce.
+    pub fn back_edge_poll_bump(text: &str) -> bool {
+        text.contains("addb $0x1")
+    }
+
+    /// `movq -3(%r..)`: the fused cursor's inline car deref at the cons
+    /// tag bias (the spec-call fallback hands the cons to the shim).
+    pub fn inline_car_deref(text: &str) -> bool {
+        text.contains("movq -3(%r")
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+mod baked_op_witnesses {
+    fn is_reg(s: &str) -> bool {
+        let rest = s.strip_prefix(['x', 'w']).unwrap_or("");
+        !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+    }
+
+    /// `and xN, xM, xK` — a register-register AND. Tag checks test
+    /// immediates (`and x3, x19, #3`), so a register third operand is the
+    /// baked `logand` (or the sign path's own `and w2, w2, w4`, pinned
+    /// together with the remainder and floor-sign witnesses).
+    pub fn register_register_and(text: &str) -> bool {
+        text.lines().any(|line| {
+            let Some(rest) = line.trim().strip_prefix("and ") else {
+                return false;
+            };
+            let ops: Vec<&str> = rest.split(", ").collect();
+            ops.len() == 3 && is_reg(ops[0]) && is_reg(ops[1]) && is_reg(ops[2])
+        })
+    }
+
+    /// `sdiv` + `msub`: the truncating remainder pair (nothing else in
+    /// these bodies divides).
+    pub fn truncating_remainder(text: &str) -> bool {
+        text.contains("sdiv") && text.contains("msub")
+    }
+
+    /// `cset xN, lt`: the signed flag extract feeding GNU's floor-sign
+    /// `csel` (the only `lt` condition extract in these bodies).
+    pub fn floor_sign_adjustment(text: &str) -> bool {
+        text.lines()
+            .any(|line| line.trim().starts_with("cset ") && line.trim().ends_with(", lt"))
+    }
+
+    /// The every-255th back-edge poll: a same-register `add N, N, #1`
+    /// whose 255 mask of THAT register follows within two lines — either
+    /// `ands wzr, N, #255` (register-allocated counter) or `and N, N, #255`
+    /// (spilled counter). A bare same-register bump is NOT a witness:
+    /// cursor index bumps and slot counters also add `#1` to themselves.
+    pub fn back_edge_poll_bump(text: &str) -> bool {
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        (0..lines.len()).any(|i| {
+            let Some(rest) = lines[i].strip_prefix("add ") else {
+                return false;
+            };
+            let mut ops = rest.split(", ");
+            let Some(dst) = ops.next() else {
+                return false;
+            };
+            if !is_reg(dst) || ops.next() != Some(dst) || ops.next() != Some("#1") {
+                return false;
+            }
+            lines[i + 1..(i + 3).min(lines.len())].iter().any(|l| {
+                *l == format!("ands wzr, {dst}, #255") || *l == format!("and {dst}, {dst}, #255")
+            })
+        })
+    }
+
+    /// `ldur xN, [xM, #-3]`: the fused cursor's inline car deref at the
+    /// cons tag bias (the spec-call fallback hands the cons to the shim).
+    pub fn inline_car_deref(text: &str) -> bool {
+        text.lines()
+            .any(|line| line.trim().starts_with("ldur ") && line.contains("#-3]"))
+    }
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+mod baked_op_witnesses {
+    compile_error!(
+        "no baked-op witnesses for this target; add them alongside its first JIT lowering"
+    );
+}
+
 /// Green and sim lower the intrinsic-loop leaf IDENTICALLY: with the guard
 /// gone from the non-reentrant arith sites there is no green-only emission
 /// left in the loop's compiled code (the pre-lever-1 leaf carried +23 CLIF
@@ -191,19 +307,19 @@ fn green_intrinsic_loop_leaf_is_sim_identical() {
     // logand is a register-register AND (tag checks test immediates, they
     // never AND two registers), and `mod i 7` bakes the remainder op plus
     // GNU's floor-sign adjustment — truncate-rem then add the divisor when
-    // the signs disagree (`shrq $0x3f` extracts that sign bit; nothing else
-    // in this body shifts by 63).
+    // the signs disagree (the ISA's sign extract; nothing else in this
+    // body extracts a signed flag).
     let text = green.join("\n");
     assert!(
-        text.contains("andq %r"),
+        baked_op_witnesses::register_register_and(&text),
         "logand must be baked as a register AND: {text}"
     );
     assert!(
-        text.contains("checked_srem_seq"),
+        baked_op_witnesses::truncating_remainder(&text),
         "mod must be baked as a remainder machine op: {text}"
     );
     assert!(
-        text.contains("shrq $0x3f"),
+        baked_op_witnesses::floor_sign_adjustment(&text),
         "mod must bake GNU's floor-sign adjustment: {text}"
     );
 }
@@ -365,19 +481,21 @@ fn hof_only_leaf_emits_no_release_revalidation() {
     let text = code.join("\n");
     // Admission witness: the map loop is NATIVE in this leaf. The dump's
     // masking hides shim names AND pool-loaded constants (the callback's 750
-    // lives behind a masked `movabsq $0xADDR` pool address, so no immediate
-    // ever appears), but the fused cursor leaves two plain instructions
-    // nothing else in this body can produce: the every-255 back-edge poll's
-    // counter bump (no fused loop => no back-edge anywhere in this body) and
-    // the cursor's inline car deref (the spec-call fallback hands the cons
-    // to the shim and never derefs it here).
+    // lives behind a masked pool address, so no immediate ever appears), but
+    // the fused cursor leaves two plain instruction shapes nothing else in
+    // this body can produce: the every-255 back-edge poll's counter bump
+    // plus its mask on the SAME register (no fused loop => no back-edge
+    // anywhere in this body; a bare `+1` bump is not a witness — index and
+    // slot counters bump themselves too) and the cursor's inline car deref
+    // at the cons tag bias (the spec-call fallback hands the cons to the
+    // shim and never derefs it here).
     assert!(
-        text.contains("addb $0x1"),
+        baked_op_witnesses::back_edge_poll_bump(&text),
         "admission check: the native map loop's back-edge poll must be \
          inside the leaf\n{text}"
     );
     assert!(
-        text.contains("movq -3(%r"),
+        baked_op_witnesses::inline_car_deref(&text),
         "admission check: the cursor's inline car deref must be inside the \
          leaf\n{text}"
     );
