@@ -66,6 +66,32 @@ fn frame_or_buffer_changed_p_tracks_gnu_state_vector() {
     );
 }
 
+/// GNU sizes the fresh vector from every live buffer with no name filter:
+/// `FOR_EACH_LIVE_BUFFER n += 3` (src/dispnew.c:7116-7122). The leading-space
+/// filter applies only when entries are compared and recorded, so adding a
+/// hidden buffer still grows the reallocated vector by exactly three slots.
+#[test]
+fn hidden_buffers_are_counted_in_the_state_vector_size() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r##"(let ((var 'neb-hidden-size-state) hidden delta)
+  (unwind-protect
+      (progn
+        (set var nil)
+        ;; A far-oversized vector forces GNU's reallocation branch, whose
+        ;; fresh length is n + 20 for the current live-buffer count.
+        (set var (make-vector 4000 'lambda))
+        (frame-or-buffer-changed-p var)
+        (let ((before (length (symbol-value var))))
+          (setq hidden (generate-new-buffer " *neb-size-hidden*"))
+          (set var (make-vector 4000 'lambda))
+          (frame-or-buffer-changed-p var)
+          (setq delta (- (length (symbol-value var)) before)))
+        delta)
+    (when (buffer-live-p hidden) (kill-buffer hidden))))"##;
+    let (gnu, neomacs) = eval_oracle_and_neovm(form);
+    assert_ok_eq("3", &gnu, &neomacs);
+}
+
 #[test]
 fn ibuffer_auto_mode_initializes_its_state_vector() {
     return_if_neovm_enable_oracle_proptest_not_set!();
