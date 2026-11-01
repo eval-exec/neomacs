@@ -23,6 +23,12 @@ pub(crate) enum FixtureReceipt {
 /// Test-only adapter; the production root-bank leaves remain parent-private.
 pub(crate) struct ExecutionTestHomes;
 impl ExecutionTestHomes {
+    /// Test-only observation through the existing GC-owned root adapter. No
+    /// raw managed word is exported by a production activation interface.
+    pub(crate) fn word(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> usize {
+        home.word_for_test(run)
+    }
+
     pub(crate) fn read(home: &OwnerRootSlot<'_>, run: &RunAccess<'_, '_>) -> ImmediateResult {
         ImmediateResult::from_word(home.word_for_test(run))
             .expect("scalar result home is immediate")

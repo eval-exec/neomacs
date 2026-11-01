@@ -56,13 +56,13 @@ fn history<'era>(
         query(run, destination, &mut inputs, &original),
         Ok(FunctionSelection::Selected)
     );
-    let result = destination.word_for_test(run);
+    let result = ExecutionTestHomes::word(destination, run);
     assert_answer(operation, 0, input, result);
     assert_eq!(
         query(run, destination, &mut inputs, &original),
         Err(ParallelEntryError::Hof(HofError::ConsumedInput))
     );
-    assert_eq!(destination.word_for_test(run), result);
+    assert_eq!(ExecutionTestHomes::word(destination, run), result);
     run.sym_unary_fset_into(&inputs.callback, &replacement, &mut destination.clone())
         .unwrap();
     inputs.singleton = HofSingleton::new(
@@ -70,18 +70,23 @@ fn history<'era>(
         ImmediateResult::from_word(TaggedValue::fixnum(7).bits()).unwrap(),
     )
     .unwrap();
-    let before = destination.word_for_test(run);
+    let before = ExecutionTestHomes::word(destination, run);
     assert_eq!(
         query(run, destination, &mut inputs, &original),
         Ok(FunctionSelection::Changed)
     );
-    assert_eq!(destination.word_for_test(run), before);
+    assert_eq!(ExecutionTestHomes::word(destination, run), before);
     let input = inputs.singleton.word_for_test(run);
     assert_eq!(
         query(run, destination, &mut inputs, &replacement),
         Ok(FunctionSelection::Selected)
     );
-    assert_answer(operation, 3, input, destination.word_for_test(run));
+    assert_answer(
+        operation,
+        3,
+        input,
+        ExecutionTestHomes::word(destination, run),
+    );
 }
 fn with_native(
     backing: PlainSymbolBacking,
@@ -179,7 +184,7 @@ fn nmjit_n4_native_hof_refuses_redefined_unbound_mapper() {
                     &mut home.clone(),
                 )
                 .unwrap();
-                let before = home.word_for_test(run);
+                let before = ExecutionTestHomes::word(home, run);
                 assert_eq!(
                     code.run(
                         admission,
@@ -193,10 +198,10 @@ fn nmjit_n4_native_hof_refuses_redefined_unbound_mapper() {
                     ),
                     Ok(FunctionSelection::Changed)
                 );
-                assert_eq!(home.word_for_test(run), before);
+                assert_eq!(ExecutionTestHomes::word(home, run), before);
                 run.sym_fmakunbound_into(inputs.mapper.symbol(), &mut home.clone())
                     .unwrap();
-                let before = home.word_for_test(run);
+                let before = ExecutionTestHomes::word(home, run);
                 assert_eq!(
                     code.run(
                         admission,
@@ -210,7 +215,7 @@ fn nmjit_n4_native_hof_refuses_redefined_unbound_mapper() {
                     ),
                     Ok(FunctionSelection::Changed)
                 );
-                assert_eq!(home.word_for_test(run), before);
+                assert_eq!(ExecutionTestHomes::word(home, run), before);
             },
         )
         .unwrap();
@@ -347,12 +352,12 @@ fn nmjit_n4_hof_abi_published_list_mutation_cannot_reuse_captured_element() {
                 slice.store_cdr(&list, &list).unwrap();
             })
             .unwrap();
-            let before = home.word_for_test(run);
+            let before = ExecutionTestHomes::word(home, run);
             assert_eq!(
                 rust_query(admission, run, home, &mut inputs, &expected),
                 Err(ParallelEntryError::Hof(HofError::ConsumedInput))
             );
-            assert_eq!(home.word_for_test(run), before);
+            assert_eq!(ExecutionTestHomes::word(home, run), before);
             eprintln!("NMJIT_N4_HOF_PUBLISHED_INPUT_REUSE_REFUSED");
         },
     );

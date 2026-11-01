@@ -136,4 +136,4 @@ static_assertions::assert_not_impl_any!(ParallelCompiledHofCode: Sync);
 #[path = "hof/tests.rs"]
 mod tests;
 #[cfg(test)]
-pub(super) use tests::manifest as manifest_for_test;
+pub(crate) use tests::manifest as manifest_for_test;
