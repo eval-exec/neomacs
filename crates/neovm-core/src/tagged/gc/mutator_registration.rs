@@ -28,9 +28,10 @@ pub(crate) use execution::{
 #[cfg(test)]
 pub(crate) use execution::{
     CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,
-    ExecutionTestRetry, ExecutionTestSeed, HofTestInputs, execution_test_retry,
-    with_test_prepared_cell_execution, with_test_prepared_execution, with_test_prepared_hof_cohort,
-    with_test_prepared_hof_execution,
+    ExecutionTestRetry, ExecutionTestSeed, HofTestInputs, PublicationFacts, PublicationInputs,
+    execution_test_retry, with_test_prepared_cell_execution, with_test_prepared_execution,
+    with_test_prepared_hof_cohort, with_test_prepared_hof_execution,
+    with_test_prepared_publication_cohort,
 };
 mod wrappers;
 #[cfg(test)]

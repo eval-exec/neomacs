@@ -10,7 +10,10 @@ use super::super::symbol_functions::retry::{self as contention, Deadline, Retry,
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
-pub(crate) use cohort::{CohortPhase, CohortSize, prepared_hof_cohort};
+pub(crate) use cohort::{
+    CohortPhase, CohortSize, PublicationFacts, PublicationInputs, prepared_hof_cohort,
+    prepared_publication_cohort,
+};
 pub(crate) use hof::{HofTestInputs, prepared_hof_fixture};
 use std::ops::ControlFlow;
 

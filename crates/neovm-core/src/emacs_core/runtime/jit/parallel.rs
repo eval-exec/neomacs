@@ -308,3 +308,7 @@ pub(crate) use hof::manifest_for_test as hof_manifest_for_test;
 #[cfg(test)]
 #[path = "parallel/tests/owner_handoff_test.rs"]
 mod owner_handoff_tests;
+
+#[cfg(test)]
+#[path = "parallel/tests/publication_test.rs"]
+mod publication_tests;

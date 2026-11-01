@@ -1,10 +1,15 @@
 //! Owned compiled entries return before every published stop; no JIT grace receipt.
+#[path = "cohort/inputs.rs"]
+mod inputs;
 use super::hof::{FixtureParameters, builtin, definition, spelling};
 use super::*;
 use crate::emacs_core::eval::register_global_subr_entry;
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::function_write_hooks::HofOperation;
 use crate::tagged::gc::{PreparedHofBuiltin, PreparedUnaryFunction};
+use inputs::{CohortInputs, Scenario, ScenarioSeed};
+pub(crate) use inputs::{PublicationFacts, PublicationInputs};
+use std::cell::RefCell;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 #[derive(Clone, Copy, Debug)]
@@ -177,8 +182,7 @@ fn seed<'era>(
     ))
 }
 
-/// Cold compilation returns owned values, one moved to each actual owner.
-/// The keeper alone retains the era; workers receive no Context or heap loan.
+/// Small original fixture: no publication names, padding or extra root homes.
 pub(crate) fn prepared_hof_cohort<P: Send>(
     backing: PlainSymbolBacking,
     operation: HofOperation,
@@ -194,6 +198,66 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
     ) -> Result<(), String>
     + Sync,
 ) -> FixtureReceipt {
+    prepared_cohort(
+        backing,
+        operation,
+        size,
+        Scenario::Handoff,
+        prepare,
+        |code, admission, run, destination, inputs, phase| match inputs {
+            CohortInputs::Handoff(inputs) => work(code, admission, run, destination, inputs, phase),
+            CohortInputs::Publication(_) => Err("publication inputs in handoff fixture".into()),
+        },
+    )
+}
+/// Distinct publication history: operands exist before registry-only gaps.
+pub(crate) fn prepared_publication_cohort<P: Send>(
+    backing: PlainSymbolBacking,
+    operation: HofOperation,
+    size: CohortSize,
+    prepare: impl Fn(&Gen1Admission<'_>) -> P,
+    work: impl for<'era, 'owner> Fn(
+        &P,
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+        &mut PublicationInputs<'era>,
+        CohortPhase,
+    ) -> Result<(), String>
+    + Sync,
+) -> FixtureReceipt {
+    prepared_cohort(
+        backing,
+        operation,
+        size,
+        Scenario::Publication,
+        prepare,
+        |code, admission, run, destination, inputs, phase| match inputs {
+            CohortInputs::Publication(inputs) => {
+                work(code, admission, run, destination, inputs, phase)
+            }
+            CohortInputs::Handoff(_) => Err("handoff inputs in publication fixture".into()),
+        },
+    )
+}
+/// Cold compilation returns owned values, one moved to each actual owner.
+/// The keeper alone retains the era; workers receive no Context or heap loan.
+fn prepared_cohort<P: Send>(
+    backing: PlainSymbolBacking,
+    operation: HofOperation,
+    size: CohortSize,
+    scenario: Scenario,
+    prepare: impl Fn(&Gen1Admission<'_>) -> P,
+    work: impl for<'era, 'owner> Fn(
+        &P,
+        &ParallelExecutionAdmission<'era>,
+        &mut RunAccess<'owner, 'era>,
+        &OwnerRootSlot<'era>,
+        &mut CohortInputs<'era>,
+        CohortPhase,
+    ) -> Result<(), String>
+    + Sync,
+) -> FixtureReceipt {
     for kind in [HofOperation::Mapc, HofOperation::Mapcar] {
         register_global_subr_entry(intern(spelling(kind)), builtin(kind));
     }
@@ -202,6 +266,7 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
     let parameter = intern("nmjit-native-cohort-ordinary-parameter");
     let replacement_id = intern("nmjit-native-cohort-replacement");
     let mapper_replacement_id = intern("nmjit-native-cohort-mapper-replacement");
+    let scenario_seed = RefCell::new(ScenarioSeed::Handoff);
     let outcome = Context::try_with_test_symbol_backing_init_era(
         backing,
         |obarray, id| {
@@ -219,6 +284,7 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
                 mapper_replacement_id,
                 definition(FixtureParameters::Nullary, 123),
             );
+            *scenario_seed.borrow_mut() = scenario.initialize(obarray, size);
         },
         |mut proof, id| {
             let frozen = proof
@@ -260,10 +326,16 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
             let mapper = era
                 .prepare_hof_builtin(operation, &mapper_key)
                 .expect("cohort builtin preparation");
+            let prepared_inputs =
+                std::mem::replace(&mut *scenario_seed.borrow_mut(), ScenarioSeed::Handoff)
+                    .prepare(&era);
             era.start_cons_storage().expect("cohort cons storage");
             let admission = era.execution_admission();
             let permits = (0..size.count())
-                .map(|index| era.register(index as u64 + 1, 32).expect("cohort permit"))
+                .map(|index| {
+                    era.register(index as u64 + 1, scenario.capacity())
+                        .expect("cohort permit")
+                })
                 .collect::<Vec<_>>();
             let (controller, workers) = std::thread::scope(|scope| {
                 let (events_tx, events_rx) = mpsc::channel();
@@ -274,6 +346,7 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
                     commands.0.push(command_tx);
                     let events = events_tx.clone();
                     let work = &work;
+                    let prepared_inputs = &prepared_inputs;
                     let admission = &admission;
                     let heap = era.heap_identity();
                     joins.push(scope.spawn(move || -> Result<(), String> {
@@ -304,14 +377,18 @@ pub(crate) fn prepared_hof_cohort<P: Send>(
                             if result.is_ok() {
                                 result = with_run(&mut owner, |run| {
                                     if frame.is_none() {
-                                        frame = Some(seed(
+                                        let (destination, hof) = seed(
                                             run,
                                             mapper,
                                             callback,
                                             callback_symbol,
                                             &replacement_key,
                                             &mapper_replacement_key,
-                                        )?);
+                                        )?;
+                                        frame = Some((
+                                            destination,
+                                            prepared_inputs.seed(index, run, hof)?,
+                                        ));
                                     }
                                     let (destination, inputs) =
                                         frame.as_mut().ok_or("cohort frame absent")?;

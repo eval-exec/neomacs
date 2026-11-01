@@ -38,7 +38,7 @@ static_assertions::assert_not_impl_any!(Kernels: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(Kernels: Sync);
 
-fn registration(error: &RegistrationError) -> ExecutionTestRetry {
+pub(super) fn registration(error: &RegistrationError) -> ExecutionTestRetry {
     match error {
         RegistrationError::Busy => ExecutionTestRetry::Busy,
         RegistrationError::WrongHeap
@@ -57,7 +57,7 @@ fn registration(error: &RegistrationError) -> ExecutionTestRetry {
         | RegistrationError::PendingYoung => ExecutionTestRetry::Refuse,
     }
 }
-fn function(error: &FunctionError) -> ExecutionTestRetry {
+pub(super) fn function(error: &FunctionError) -> ExecutionTestRetry {
     match error {
         FunctionError::Authority(error) => registration(error),
         FunctionError::VoidFunction
@@ -90,7 +90,9 @@ fn contention(error: &ParallelEntryError) -> ExecutionTestRetry {
         | ParallelEntryError::UnexpectedEntryKind => ExecutionTestRetry::Refuse,
     }
 }
-fn retry<T>(operation: impl FnMut() -> Result<T, ParallelEntryError>) -> Result<T, String> {
+pub(super) fn retry<T>(
+    operation: impl FnMut() -> Result<T, ParallelEntryError>,
+) -> Result<T, String> {
     execution_test_retry(ExecutionTestDeadline::contention(), operation, contention)
         .map_err(|error| format!("native owner entry: {error:?}"))
 }

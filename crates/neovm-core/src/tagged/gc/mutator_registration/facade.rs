@@ -12,6 +12,7 @@ pub(crate) use super::{
 pub(crate) use super::{
     CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,
     ExecutionTestRetry, ExecutionTestSeed, GenericProofEra, GenericProofEraFinishFailure,
-    HofTestInputs, ProofEra, execution_test_retry, with_test_prepared_cell_execution,
-    with_test_prepared_execution, with_test_prepared_hof_cohort, with_test_prepared_hof_execution,
+    HofTestInputs, ProofEra, PublicationFacts, PublicationInputs, execution_test_retry,
+    with_test_prepared_cell_execution, with_test_prepared_execution, with_test_prepared_hof_cohort,
+    with_test_prepared_hof_execution, with_test_prepared_publication_cohort,
 };
