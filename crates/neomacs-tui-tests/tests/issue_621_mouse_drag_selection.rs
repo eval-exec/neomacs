@@ -3,8 +3,8 @@
 //! The editors load a fixture that enables `xterm-mouse-mode` before the
 //! command loop starts and records the region state in `post-command-hook`
 //! right after the drag command.  The host sends an SGR press/motion/release
-//! drag once the fixture signals readiness; a timer writes the state and
-//! exits the editor.
+//! drag once the fixture signals readiness; the fixture writes the state and
+//! exits shortly after mouse-set-region, with a watchdog fallback.
 
 use neomacs_tui_tests::{TuiProcessOutcome, TuiSession, TuiTerminalConfig};
 use std::path::Path;
@@ -24,6 +24,10 @@ fn fixture(ready: &Path, out: &Path) -> String {
 (goto-char (point-min))
 (set-window-start (selected-window) (point-min))
 (setq issue621-state nil)
+(defun issue621-finish ()
+  (with-temp-file {out:?}
+    (prin1 issue621-state (current-buffer)))
+  (kill-emacs 0))
 (add-hook 'post-command-hook
           (lambda ()
             (when (memq this-command
@@ -32,13 +36,14 @@ fn fixture(ready: &Path, out: &Path) -> String {
                     (list this-command
                           (region-active-p)
                           (ignore-errors (mark))
-                          (point))))))
+                          (point)))
+              ;; The drag release runs mouse-set-region; report promptly so
+              ;; a slow sibling startup cannot let the watchdog win.
+              (when (eq this-command 'mouse-set-region)
+                (run-with-timer 0.5 nil #'issue621-finish)))))
 (with-temp-file {ready:?} (insert "ready"))
-(run-with-timer 4 nil
-  (lambda ()
-    (with-temp-file {out:?}
-      (prin1 issue621-state (current-buffer)))
-    (kill-emacs 0)))
+;; Fallback for a missing or misclassified drag command.
+(run-with-timer 30 nil #'issue621-finish)
 "#,
         ready = ready,
         out = out
@@ -97,14 +102,16 @@ fn a_tty_mouse_drag_leaves_the_region_active_like_gnu() {
     std::thread::sleep(Duration::from_millis(300));
     gnu.send(DRAG);
     neo.send(DRAG);
+    // Allow the 30 second watchdog to report a state mismatch instead of
+    // turning a missing drag command into a process timeout.
     assert_eq!(
-        gnu.run_to_completion(Duration::from_secs(15)),
+        gnu.run_to_completion(Duration::from_secs(40)),
         TuiProcessOutcome::Exited,
         "GNU drag probe did not exit; grid:\n{}",
         gnu.text_grid().join("\n")
     );
     assert_eq!(
-        neo.run_to_completion(Duration::from_secs(15)),
+        neo.run_to_completion(Duration::from_secs(40)),
         TuiProcessOutcome::Exited,
         "Neomacs drag probe did not exit; grid:\n{}",
         neo.text_grid().join("\n")
