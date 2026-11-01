@@ -627,6 +627,18 @@ jobs:
     steps:
       - *checkout
       - *prepare_workspace_tmp
+      - name: Restore pinned MELPA source cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target/melpa/source-package-cache
+            target/melpa/source-build-tools
+          # Content-addressed by pin revision and tool revision; the pin set
+          # hash decides when to roll the key, and restore-keys keeps the
+          # still-matching entries usable when one pin moves.
+          key: melpa-source-packages-${{ hashFiles('crates/neomacs-infra/src/packages/melpa-package-lock.tsv') }}
+          restore-keys: |
+            melpa-source-packages-
       - name: Configure fast APT mirror
         uses: ./.github/actions/configure-apt-mirror
       - name: Install Linux ecosystem dependencies

@@ -34,10 +34,10 @@ pub use install::{
 };
 pub use seal::{ProvisionedSealReport, verify_provisioned};
 pub use source_lock::{
-    CLATTER_PIN, LockedPackageSource, PreparedSourceInstall, SourceBuild, TELEGA_PIN,
-    locked_melpa_install_plan, locked_melpa_source, locked_melpa_sources,
-    preflight_locked_melpa_packages, prepare_cached_locked_melpa_package,
-    prepare_cached_locked_package_plan,
+    CLATTER_PIN, LockedPackageSource, MirrorRepository, PreparedSourceInstall, SourceAcquisition,
+    SourceBuild, SourceOrigin, SourceUnavailable, TELEGA_PIN, locked_melpa_install_plan,
+    locked_melpa_source, locked_melpa_sources, preflight_locked_melpa_packages,
+    prepare_cached_locked_melpa_package, prepare_cached_locked_package_plan,
 };
 
 use std::path::{Path, PathBuf};

@@ -1,4 +1,6 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -695,35 +697,197 @@ fn prepare_git_checkout(
     })
 }
 
-fn prepare_source_checkout(
-    source: LockedPackageSource<'_>,
-    directory: &Path,
-    timeout: std::time::Duration,
-) -> Result<u64, String> {
-    match prepare_git_checkout(directory, source.repository, source.revision, timeout) {
-        result @ Ok(_) => result,
-        Err(primary_error) => {
-            let Some(fallback_repository) = source.fallback_repository else {
-                return Err(primary_error);
-            };
-            if directory.exists() {
-                fs::remove_dir_all(directory).map_err(|error| {
-                    format!(
-                        "failed to reset source checkout {} before fallback: {error}",
-                        directory.display()
-                    )
-                })?;
+/// The Savannah Git host serving GNU repositories: GNU ELPA, NonGNU ELPA, and
+/// standalone GNU projects such as AUCTeX.
+const SAVANNAH_GIT_PREFIX: &str = "https://git.savannah.gnu.org/git/";
+
+/// The per-package emacsmirror GitHub repositories.  They carry the same
+/// commit shas as their Savannah upstreams, so the pinned revision alone
+/// authenticates the content fetched from them.
+const EMACS_MIRROR_PREFIX: &str = "https://github.com/emacsmirror/";
+
+/// Where a pinned source revision is acquired from.
+///
+/// The lock row records the revision and the acquisition repositories; the
+/// mirror half of a GNU row is derived from the package name rather than
+/// stored as a list of URLs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceOrigin<'a> {
+    /// The Savannah-hosted GNU repository recorded in the lock row.
+    Savannah(&'a str),
+    /// A mirror carrying the same pinned commit sha.
+    Mirror(MirrorRepository<'a>),
+    /// A non-Savannah acquisition repository recorded in the lock row.
+    Recorded(&'a str),
+}
+
+/// A mirror repository for a pinned source revision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MirrorRepository<'a> {
+    /// The per-package emacsmirror GitHub repository of a GNU source,
+    /// derived from the package name.  The lock stores no mirror URL for it.
+    EmacsPackage(&'a str),
+    /// A mirror repository URL recorded in the lock row.
+    Recorded(&'a str),
+}
+
+impl<'a> SourceOrigin<'a> {
+    /// The HTTPS repository this origin fetches from.
+    pub fn repository(self) -> Cow<'a, str> {
+        match self {
+            Self::Savannah(repository) | Self::Recorded(repository) => Cow::Borrowed(repository),
+            Self::Mirror(MirrorRepository::Recorded(repository)) => Cow::Borrowed(repository),
+            Self::Mirror(MirrorRepository::EmacsPackage(package)) => {
+                Cow::Owned(format!("{EMACS_MIRROR_PREFIX}{package}"))
             }
-            prepare_git_checkout(directory, fallback_repository, source.revision, timeout).map_err(
-                |fallback_error| {
-                    format!(
-                        "primary source repository {} failed:\n{primary_error}\nfallback source repository {fallback_repository} failed:\n{fallback_error}",
-                        source.repository
-                    )
-                },
-            )
         }
     }
+}
+
+impl fmt::Display for SourceOrigin<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Savannah(repository) => write!(formatter, "Savannah({repository})"),
+            Self::Mirror(MirrorRepository::EmacsPackage(package)) => {
+                write!(formatter, "Mirror(EmacsPackage({package}))")
+            }
+            Self::Mirror(MirrorRepository::Recorded(repository)) => {
+                write!(formatter, "Mirror(Recorded({repository}))")
+            }
+            Self::Recorded(repository) => write!(formatter, "Recorded({repository})"),
+        }
+    }
+}
+
+/// The ordered origins a locked source row may fetch its pinned revision from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceAcquisition<'a> {
+    primary: SourceOrigin<'a>,
+    mirror: Option<SourceOrigin<'a>>,
+}
+
+impl<'a> SourceAcquisition<'a> {
+    /// The acquisition plan recorded for `source`.
+    ///
+    /// A Savannah-hosted GNU row without an explicit mirror falls back to the
+    /// per-package emacsmirror repository at the same revision.  An explicit
+    /// fallback is retained: the exact per-package emacsmirror URL is typed
+    /// as [`MirrorRepository::EmacsPackage`], any other recorded URL stays a
+    /// recorded mirror.  Non-Savannah rows keep their single recorded origin
+    /// unless the lock names a mirror.
+    pub fn for_source(source: LockedPackageSource<'a>) -> Self {
+        let primary = if source.repository.starts_with(SAVANNAH_GIT_PREFIX) {
+            SourceOrigin::Savannah(source.repository)
+        } else {
+            SourceOrigin::Recorded(source.repository)
+        };
+        let mirror = match source.fallback_repository {
+            Some(repository) if is_emacs_package_mirror(repository, source.name) => Some(
+                SourceOrigin::Mirror(MirrorRepository::EmacsPackage(source.name)),
+            ),
+            Some(repository) => Some(SourceOrigin::Mirror(MirrorRepository::Recorded(repository))),
+            None if matches!(primary, SourceOrigin::Savannah(_)) => Some(SourceOrigin::Mirror(
+                MirrorRepository::EmacsPackage(source.name),
+            )),
+            None => None,
+        };
+        Self { primary, mirror }
+    }
+
+    /// The ordered origins to try, primary first.
+    pub fn origins(self) -> impl Iterator<Item = SourceOrigin<'a>> {
+        std::iter::once(self.primary).chain(self.mirror)
+    }
+}
+
+fn is_emacs_package_mirror(repository: &str, package: &str) -> bool {
+    repository.strip_prefix(EMACS_MIRROR_PREFIX) == Some(package)
+}
+
+/// One origin attempted while acquiring a pinned revision, with its error.
+#[derive(Debug, Eq, PartialEq)]
+struct SourceOriginAttempt<'a> {
+    origin: SourceOrigin<'a>,
+    error: String,
+}
+
+/// A pinned revision that no recorded origin could provide.
+///
+/// Constructed only by [`prepare_source_checkout`] after every typed origin
+/// failed, so a preparation failure names the origins that were tried instead
+/// of surfacing as a generic fetch error.
+#[derive(Debug, Eq, PartialEq)]
+pub struct SourceUnavailable<'a> {
+    package: &'a str,
+    revision: &'a str,
+    attempts: Vec<SourceOriginAttempt<'a>>,
+}
+
+impl fmt::Display for SourceUnavailable<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "SourceUnavailable {{ package: {:?}, revision: {:?}, origins: [",
+            self.package, self.revision
+        )?;
+        for (index, attempt) in self.attempts.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            write!(formatter, "{}", attempt.origin)?;
+        }
+        formatter.write_str("] }")?;
+        for attempt in &self.attempts {
+            write!(formatter, "\n{} failed:\n{}", attempt.origin, attempt.error)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SourceUnavailable<'_> {}
+
+/// A checkout of the pinned revision and the origin that provided it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PreparedSourceCheckout<'a> {
+    commit_time: u64,
+    origin: SourceOrigin<'a>,
+}
+
+fn prepare_source_checkout<'a>(
+    source: LockedPackageSource<'a>,
+    directory: &Path,
+    timeout: std::time::Duration,
+) -> Result<PreparedSourceCheckout<'a>, SourceUnavailable<'a>> {
+    let mut attempts = Vec::new();
+    for origin in SourceAcquisition::for_source(source).origins() {
+        if directory.exists()
+            && let Err(error) = fs::remove_dir_all(directory)
+        {
+            attempts.push(SourceOriginAttempt {
+                origin,
+                error: format!(
+                    "failed to reset source checkout {}: {error}",
+                    directory.display()
+                ),
+            });
+            continue;
+        }
+        let repository = origin.repository();
+        match prepare_git_checkout(directory, &repository, source.revision, timeout) {
+            Ok(commit_time) => {
+                return Ok(PreparedSourceCheckout {
+                    commit_time,
+                    origin,
+                });
+            }
+            Err(error) => attempts.push(SourceOriginAttempt { origin, error }),
+        }
+    }
+    Err(SourceUnavailable {
+        package: source.name,
+        revision: source.revision,
+        attempts,
+    })
 }
 
 fn prepare_tool_checkout(
@@ -1201,9 +1365,9 @@ fn prepare_cached_source_artifact(
     prepare_cached_source_artifact_with_tools(driver, source, SOURCE_BUILD_TOOLS)
 }
 
-fn prepare_cached_source_artifact_with_tools(
+fn prepare_cached_source_artifact_with_tools<'a>(
     driver: &dyn PackageInstallDriver,
-    source: LockedPackageSource<'_>,
+    source: LockedPackageSource<'a>,
     tools: SourceBuildTools<'_>,
 ) -> Result<PathBuf, String> {
     let root = crate::melpa_cache_root()
@@ -1243,6 +1407,7 @@ fn prepare_cached_source_artifact_with_tools(
         .join(format!("{}-{}.tar", source.name, source.version));
     let ready = root.join("ready");
     let failed = root.join("failed");
+    let source_origin_marker = root.join("source-origin");
     let expected = format!(
         "{}melpa-recipes\t{}\t{}\npackage-build\t{}\t{}\n",
         source.identity(),
@@ -1281,7 +1446,7 @@ fn prepare_cached_source_artifact_with_tools(
             })?;
         }
     }
-    for marker in [&ready, &failed] {
+    for marker in [&ready, &failed, &source_origin_marker] {
         if marker.exists() {
             fs::remove_file(marker).map_err(|error| {
                 format!(
@@ -1312,7 +1477,7 @@ fn prepare_cached_source_artifact_with_tools(
         })?;
     }
 
-    let build_result = (|| {
+    let build_result = (|| -> Result<SourceOrigin<'a>, String> {
         let melpa = prepare_tool_checkout(
             "melpa",
             tools.melpa_repository,
@@ -1326,7 +1491,9 @@ fn prepare_cached_source_artifact_with_tools(
             driver.timeout(),
         )?;
         let working = root.join("working").join(source.name);
-        let commit_time = prepare_source_checkout(source, &working, driver.timeout())?;
+        let checkout = prepare_source_checkout(source, &working, driver.timeout())
+            .map_err(|error| error.to_string())?;
+        let commit_time = checkout.commit_time;
         let recipes = match source.build {
             SourceBuild::MelpaRecipe => melpa.join("recipes"),
             SourceBuild::DefaultFiles | SourceBuild::AuctexRuntime | SourceBuild::Files(_) => {
@@ -1395,15 +1562,35 @@ fn prepare_cached_source_artifact_with_tools(
                 output.status.code()
             ));
         }
-        Ok(())
+        Ok(checkout.origin)
     })();
-    if let Err(error) = build_result {
-        return Err(publish_package_preparation_failure(
-            &failed,
-            &failure_prefix,
-            error,
-        ));
-    }
+    let source_origin = match build_result {
+        Ok(origin) => origin,
+        Err(error) => {
+            return Err(publish_package_preparation_failure(
+                &failed,
+                &failure_prefix,
+                error,
+            ));
+        }
+    };
+
+    // Record the typed origin that provided the pinned revision beside the
+    // ready marker.  The artifact is authenticated by the revision sha, so
+    // the origin is provenance, not part of the cache identity.
+    let origin_tmp = root.join(format!("source-origin.{}.tmp", std::process::id()));
+    fs::write(&origin_tmp, format!("{source_origin}\n")).map_err(|error| {
+        format!(
+            "failed to write source origin marker {}: {error}",
+            origin_tmp.display()
+        )
+    })?;
+    fs::rename(&origin_tmp, &source_origin_marker).map_err(|error| {
+        format!(
+            "failed to publish source origin marker {}: {error}",
+            source_origin_marker.display()
+        )
+    })?;
 
     let marker_tmp = root.join(format!("ready.{}.tmp", std::process::id()));
     fs::write(&marker_tmp, &expected).map_err(|error| {
