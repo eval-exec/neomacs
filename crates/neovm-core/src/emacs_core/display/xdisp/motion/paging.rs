@@ -27,6 +27,24 @@ enum ScrollAmount {
     Page(i64),
 }
 
+/// A display-row start and the accessible end have different scrolling
+/// semantics. In particular, EOF can reveal a clipped final row instead of
+/// becoming a new window-start. Keep callers from treating it as a row.
+enum ScrollTarget {
+    Row(LispCharPos1),
+    EndOfBuffer,
+}
+
+impl ScrollTarget {
+    fn from_position(position: LispCharPos1, end: LispCharPos1) -> Self {
+        if position >= end {
+            Self::EndOfBuffer
+        } else {
+            Self::Row(position)
+        }
+    }
+}
+
 impl ScrollAmount {
     fn from_argument(arg: Option<Value>, direction: i64) -> Self {
         match arg {
@@ -88,7 +106,7 @@ impl RowMeasurer {
         origin: LispCharPos1,
         delta: i64,
         line_height: i64,
-    ) -> Result<LispCharPos1, Flow> {
+    ) -> Result<ScrollTarget, Flow> {
         // The goal is in pixels. Measure its extent directly instead of
         // repeatedly guessing a visual-row count for mixed-height text.
         let mut height = i64::try_from(delta.unsigned_abs())
@@ -162,6 +180,22 @@ impl RowMeasurer {
                         {
                             target += 1;
                         }
+                        // GNU's iterator moves towards ZV (window.c:6502-6530):
+                        // a goal past the last row, or the "ensure we actually
+                        // do move" step from that row, leaves it at ZV itself.
+                        // Without a final newline no row starts at ZV, so
+                        // report EOF to the caller (:6536-6562) instead of
+                        // pretending the last row's start is a destination.
+                        // The caller retains the final-row geometry to apply
+                        // GNU's partially visible last-line exception before
+                        // reporting end-of-buffer (:6543-6553).
+                        let last = rows.last().expect("origin row");
+                        if last.end_buffer_pos == Some(accessible.end_lisp())
+                            && (goal >= last.y.saturating_add(last.height)
+                                || rows[target].start_buffer_pos <= Some(origin))
+                        {
+                            return Ok(ScrollTarget::EndOfBuffer);
+                        }
                     } else if delta < 0 {
                         while target > 0 && rows[target].start_buffer_pos >= Some(origin) {
                             target -= 1;
@@ -169,6 +203,9 @@ impl RowMeasurer {
                     }
                     return rows[target]
                         .start_buffer_pos
+                        .map(|position| {
+                            ScrollTarget::from_position(position, accessible.end_lisp())
+                        })
                         .ok_or_else(|| failure("Scroll row has no source position"));
                 }
             } else if rows.last().and_then(|row| row.end_buffer_pos) == Some(accessible.end_lisp())
@@ -396,6 +433,7 @@ fn plan_scroll(
     };
     let accessible = measurer.accessible(eval)?;
     start = start.clamp(accessible.start_lisp(), accessible.end_lisp());
+    let viewport_start = start;
     let Some(snapshot) = measurer.pixel_rows(eval, start, height + hidden_top)? else {
         return Ok(None);
     };
@@ -459,7 +497,10 @@ fn plan_scroll(
         }));
     }
     if point_geometry.is_none_or(|(_, top, bottom)| top >= height || bottom <= 0) {
-        start = measurer.pixels(eval, point, -(height / 2), line_height)?;
+        start = match measurer.pixels(eval, point, -(height / 2), line_height)? {
+            ScrollTarget::Row(position) => position,
+            ScrollTarget::EndOfBuffer => accessible.end_lisp(),
+        };
     }
     let new_start = match amount {
         ScrollAmount::Page(_) => {
@@ -480,12 +521,12 @@ fn plan_scroll(
                         .filter(|target| *target > start)
                 });
             match covered {
-                Some(target) => target,
+                Some(target) => ScrollTarget::from_position(target, accessible.end_lisp()),
                 None => measurer.pixels(eval, start, delta, line_height)?,
             }
         }
         ScrollAmount::Rows(rows) => {
-            super::resolve(
+            let target = super::resolve(
                 eval,
                 MotionRequest {
                     buffer: buffer_id,
@@ -496,12 +537,45 @@ fn plan_scroll(
                 },
             )?
             .ok_or_else(|| failure("Scroll row producer disappeared"))?
-            .target
+            .target;
+            ScrollTarget::from_position(target, accessible.end_lisp())
         }
     };
-    if delta > 0 && new_start >= accessible.end_lisp() {
-        return Err(signal(LispCondition::EndOfBuffer, vec![]));
-    }
+    let new_start = match new_start {
+        ScrollTarget::Row(position) => position,
+        ScrollTarget::EndOfBuffer if delta <= 0 => accessible.end_lisp(),
+        ScrollTarget::EndOfBuffer => {
+            // GNU window.c:6543-6553 fits a partially visible final row even
+            // when auto-window-vscroll is nil. Pixel queries retain that row's
+            // full metrics, so reaching ZV need not discard its geometry.
+            let end_snapshot = measurer
+                .pixel_rows(eval, start, height + hidden_top)?
+                .ok_or_else(|| failure("Scroll row producer disappeared"))?;
+            let end_rows = snapshot_text_rows(&end_snapshot);
+            if let Some((first, last)) = end_rows.first().zip(end_rows.last())
+                && last.end_buffer_pos == Some(accessible.end_lisp())
+            {
+                let top = last.y - first.y - hidden_top;
+                let bottom = top + last.height;
+                if top < height && bottom > height {
+                    return Ok(Some(ScrollPlan {
+                        goal: eval.scroll_goal,
+                        viewport: WindowScrollUpdate {
+                            frame: frame_id,
+                            window: window_id,
+                            buffer: buffer_id,
+                            start: viewport_start,
+                            // GNU continues point adjustment from its iterator
+                            // at ZV after fitting the line (:6610-6674).
+                            point: accessible.end_lisp(),
+                            hidden_top_pixels: (bottom - height).min(i32::MAX as i64) as i32,
+                        },
+                    }));
+                }
+            }
+            return Err(signal(LispCondition::EndOfBuffer, vec![]));
+        }
+    };
     if delta < 0 && new_start == start && hidden_top == 0 {
         return Err(signal(LispCondition::BeginningOfBuffer, vec![]));
     }
