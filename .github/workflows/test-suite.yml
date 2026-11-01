@@ -293,6 +293,7 @@ jobs:
       # workflow change cannot fix, so they stay on the Linux shards until
       # their families get the same macOS-keyed treatment.
       - name: Run the macOS oracle-parity families
+        if: ${{ !cancelled() }}
         env:
           # The identity pins the canonical oracle environment gives GNU on
           # Linux.  GNU prefers $NAME over the passwd GECOS (src/editfns.c:
