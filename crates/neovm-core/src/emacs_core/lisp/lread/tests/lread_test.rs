@@ -29,6 +29,112 @@ fn eval_buffer_evaluates_current_buffer_forms() {
     );
 }
 
+/// GNU's reader consults `read-symbol-shorthands` while reading
+/// (src/lread.c:4956-5010), so `eval-buffer` applies a buffer-local or
+/// dynamically bound value, not only the file-load path (issue #658).
+#[test]
+fn eval_buffer_applies_read_symbol_shorthands_from_the_current_binding() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    ev.buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("(setq oi-unit-local 7)");
+    ev.eval_str(
+        "(progn
+           (make-local-variable 'read-symbol-shorthands)
+           (set 'read-symbol-shorthands '((\"oi-\" . \"gptel-openrouter-\"))))",
+    )
+    .expect("install buffer-local shorthands");
+    builtin_eval_buffer(&mut ev, vec![]).expect("eval-buffer");
+    assert_eq!(
+        ev.obarray
+            .symbol_value_copied("gptel-openrouter-unit-local"),
+        Some(Value::fixnum(7)),
+        "a buffer-local shorthand must rewrite the evaluated symbol"
+    );
+    assert_eq!(
+        ev.obarray.symbol_value_copied("oi-unit-local"),
+        None,
+        "the short spelling must not be interned as a variable"
+    );
+
+    ev.buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert("(setq zz-unit-dynamic 9)");
+    ev.eval_str(
+        "(let ((read-symbol-shorthands '((\"zz-\" . \"longzz-\"))))
+           (eval-buffer))",
+    )
+    .expect("eval-buffer under a dynamic binding");
+    assert_eq!(
+        ev.obarray.symbol_value_copied("longzz-unit-dynamic"),
+        Some(Value::fixnum(9)),
+        "a dynamically bound shorthand must rewrite the evaluated symbol"
+    );
+    assert_eq!(ev.obarray.symbol_value_copied("zz-unit-dynamic"), None);
+}
+
+#[test]
+fn eval_buffer_refreshes_read_symbol_shorthands_between_forms() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    ev.buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert(
+            "(setq aa-unit-midbuffer 1)\n\
+             (setq read-symbol-shorthands '((\"bb-\" . \"longbb-\")))\n\
+             (setq bb-unit-midbuffer 2)\n",
+        );
+    ev.eval_str(
+        "(progn
+           (make-local-variable 'read-symbol-shorthands)
+           (set 'read-symbol-shorthands '((\"aa-\" . \"longaa-\"))))",
+    )
+    .expect("install buffer-local shorthands");
+    builtin_eval_buffer(&mut ev, vec![]).expect("eval-buffer");
+    assert_eq!(
+        ev.obarray.symbol_value_copied("longaa-unit-midbuffer"),
+        Some(Value::fixnum(1)),
+        "the first form must use the binding in effect when it is read"
+    );
+    assert_eq!(
+        ev.obarray.symbol_value_copied("longbb-unit-midbuffer"),
+        Some(Value::fixnum(2)),
+        "a form that changes the binding must affect the forms after it"
+    );
+    assert_eq!(ev.obarray.symbol_value_copied("aa-unit-midbuffer"), None);
+    assert_eq!(ev.obarray.symbol_value_copied("bb-unit-midbuffer"), None);
+}
+
+#[test]
+fn eval_buffer_read_uses_the_current_read_symbol_shorthands() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    ev.buffers
+        .current_buffer_mut()
+        .expect("current buffer")
+        .insert(
+            "(setq read-symbol-shorthands '((\"rd-\" . \"longrd-\")))\n\
+             (setq gptel-unit-captured (symbol-name (read)))\n\
+             rd-unit-live\n",
+        );
+    ev.eval_str(
+        "(progn
+           (make-local-variable 'read-symbol-shorthands)
+           (set 'read-symbol-shorthands '((\"aa-\" . \"longaa-\"))))",
+    )
+    .expect("install buffer-local shorthands");
+    builtin_eval_buffer(&mut ev, vec![]).expect("eval-buffer");
+    assert_eq!(
+        ev.obarray.symbol_value_copied("gptel-unit-captured"),
+        Some(Value::string("longrd-unit-live")),
+        "(read) must consult the binding that is current when it runs"
+    );
+}
+
 #[test]
 fn eval_buffer_with_custom_reader_eagerly_expands_compiler_macros_in_lexical_functions() {
     crate::test_utils::init_test_tracing();

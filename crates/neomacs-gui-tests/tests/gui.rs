@@ -58,6 +58,9 @@ mod dual_width_fixed_pitch;
 #[path = "eob_overlay_motion.rs"]
 mod eob_overlay_motion;
 
+#[path = "eval_buffer_shorthands_gui_oracle.rs"]
+mod eval_buffer_shorthands_gui_oracle;
+
 #[path = "extended_keysyms.rs"]
 mod extended_keysyms;
 

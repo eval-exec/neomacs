@@ -174,7 +174,7 @@ fn eval_forms_from_lisp_source_streaming(
         source: source_value,
         eof_source,
         pos: start_pos,
-        shorthands: None,
+        shorthands: super::eval::LoadReadShorthands::CurrentBinding,
     });
 
     let loop_result: Result<(), super::error::Flow> = (|| {
@@ -186,8 +186,15 @@ fn eval_forms_from_lisp_source_streaming(
                 .last()
                 .expect("load-read cursor present during readevalloop")
                 .pos;
+            // GNU's reader consults the special variable at every symbol
+            // lookup (src/lread.c:4956-5010), and readevalloop evaluates each
+            // form before reading the next, so an evaluated form can change
+            // the binding for later forms.  Resolve it before every top-level
+            // read; a byte-backed source cannot run Lisp mid-form, so one form
+            // still reads with a fixed snapshot.
+            let shorthands = super::reader::current_read_symbol_shorthands(eval);
             let read_result = read_source
-                .read_one(pos, eval.variables())
+                .read_one_with_shorthands(pos, eval.variables(), shorthands.as_ref())
                 .map_err(|error| signal_reader_error_for_eval_source(error, eof_source))?;
             let Some((form, next_pos)) = read_result else {
                 break;
