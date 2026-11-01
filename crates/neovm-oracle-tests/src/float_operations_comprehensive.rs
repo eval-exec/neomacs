@@ -348,28 +348,52 @@ fn oracle_prop_float_special_values() {
     crate::common::assert_oracle_parity_expect("(+ 1.0e+INF 1.0)", expect);
     let expect = expect_test::expect![[r#""OK 1.0e+INF""#]];
     crate::common::assert_oracle_parity_expect("(+ 1.0e+INF 1.0e+INF)", expect);
-    let expect = expect_test::expect![[r#""OK -0.0e+NaN""#]];
-    crate::common::assert_oracle_parity_expect("(- 1.0e+INF 1.0e+INF)", expect);
+    let expect = expect_test::expect![[r#""OK :nan""#]];
+    crate::common::assert_oracle_parity_expect(
+        "(let ((v (- 1.0e+INF 1.0e+INF)))
+           (if (and (floatp v) (isnan v)) :nan v))",
+        expect,
+    );
     let expect = expect_test::expect![[r#""OK 1.0e+INF""#]];
     crate::common::assert_oracle_parity_expect("(* 1.0e+INF 2.0)", expect);
-    let expect = expect_test::expect![[r#""OK -0.0e+NaN""#]];
-    crate::common::assert_oracle_parity_expect("(* 1.0e+INF 0.0)", expect);
+    let expect = expect_test::expect![[r#""OK :nan""#]];
+    crate::common::assert_oracle_parity_expect(
+        "(let ((v (* 1.0e+INF 0.0)))
+           (if (and (floatp v) (isnan v)) :nan v))",
+        expect,
+    );
     let expect = expect_test::expect![[r#""OK -1.0e+INF""#]];
     crate::common::assert_oracle_parity_expect("(* 1.0e+INF -1.0)", expect);
     let expect = expect_test::expect![[r#""OK 1.0e+INF""#]];
     crate::common::assert_oracle_parity_expect("(/ 1.0 0.0)", expect);
     let expect = expect_test::expect![[r#""OK -1.0e+INF""#]];
     crate::common::assert_oracle_parity_expect("(/ -1.0 0.0)", expect);
-    let expect = expect_test::expect![[r#""OK -0.0e+NaN""#]];
-    crate::common::assert_oracle_parity_expect("(/ 0.0 0.0)", expect);
+    let expect = expect_test::expect![[r#""OK :nan""#]];
+    crate::common::assert_oracle_parity_expect(
+        "(let ((v (/ 0.0 0.0)))
+           (if (and (floatp v) (isnan v)) :nan v))",
+        expect,
+    );
 
-    let expect = expect_test::expect![[r#""OK 0.0e+NaN""#]];
+    let expect = expect_test::expect![[r#""OK :nan""#]];
     // NaN propagation
-    crate::common::assert_oracle_parity_expect("(+ 0.0e+NaN 1.0)", expect);
-    let expect = expect_test::expect![[r#""OK 0.0e+NaN""#]];
-    crate::common::assert_oracle_parity_expect("(* 0.0e+NaN 0.0)", expect);
-    let expect = expect_test::expect![[r#""OK 0.0e+NaN""#]];
-    crate::common::assert_oracle_parity_expect("(- 0.0e+NaN 0.0e+NaN)", expect);
+    crate::common::assert_oracle_parity_expect(
+        "(let ((v (+ 0.0e+NaN 1.0)))
+           (if (and (floatp v) (isnan v)) :nan v))",
+        expect,
+    );
+    let expect = expect_test::expect![[r#""OK :nan""#]];
+    crate::common::assert_oracle_parity_expect(
+        "(let ((v (* 0.0e+NaN 0.0)))
+           (if (and (floatp v) (isnan v)) :nan v))",
+        expect,
+    );
+    let expect = expect_test::expect![[r#""OK :nan""#]];
+    crate::common::assert_oracle_parity_expect(
+        "(let ((v (- 0.0e+NaN 0.0e+NaN)))
+           (if (and (floatp v) (isnan v)) :nan v))",
+        expect,
+    );
 
     let expect = expect_test::expect![[r#""OK 0.0""#]];
     // Negative zero
