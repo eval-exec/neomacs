@@ -149,6 +149,7 @@ jobs:
           name: scroll120-gui
       - name: Unpack frozen runtime and GUI archive
         run: |
+          mkdir -p "$TMPDIR/nextest"
           tar xzf scroll120-runtime.tar.gz
           cargo nextest list --archive-file scroll120-gui.tar.zst \
             --extract-to "$TMPDIR/nextest" --workspace-remap "$GITHUB_WORKSPACE" \
