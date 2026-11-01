@@ -16,8 +16,8 @@ use neomacs_tui_tests::pair::{boot_pair, eval_expression_one};
 fn mouse_position_in_root_frame_answers_on_a_tty() {
     let (mut gnu, mut neo) = boot_pair("");
     let dir = tempfile::tempdir().expect("temporary directory");
-    let gnu_out = dir.path().join("issue-661-gnu.out");
-    let neo_out = dir.path().join("issue-661-neomacs.out");
+    let gnu_out = dir.path().join("issue-660-gnu.out");
+    let neo_out = dir.path().join("issue-660-neomacs.out");
     let form = |out: &std::path::Path| {
         format!(
             r##"(let* ((known
