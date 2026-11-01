@@ -115,12 +115,24 @@ impl Database {
 
 /// Carrier park (Green S-track): reset this crate's classified thread-local
 /// state. Registered with the neovm-core carrier pool by the editor binary.
+/// The only thread-local this crate owns is the native padding sink, which
+/// exists on the targets that build `native`; elsewhere there is nothing to
+/// reset and the step is a no-op.
 pub fn reset_carrier_tls() {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     native::padding::reset_carrier_tls();
 }
 
-/// Debug-only fingerprint of this crate's carrier TLS.
+/// Debug-only fingerprint of this crate's carrier TLS. Zero on targets
+/// without the native padding sink: no thread-local state exists there.
 #[cfg(debug_assertions)]
 pub fn carrier_tls_fingerprint() -> u64 {
-    native::padding::carrier_tls_fingerprint()
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        native::padding::carrier_tls_fingerprint()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        0
+    }
 }
