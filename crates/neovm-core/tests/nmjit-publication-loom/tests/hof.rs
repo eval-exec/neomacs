@@ -458,7 +458,9 @@ fn select(
 fn update(runtime: &Arc<Runtime>, update: Update) -> UpdateOutcome {
     match Writer::acquire(runtime) {
         Ok(writer) => {
-            thread::yield_now();
+            // These modeled mutex operations already expose optional switches.
+            // A forced yield while WRITER is held would make a gap reader run
+            // early, see Busy, and suppress the completed-writer counterexample.
             writer.update(update);
             UpdateOutcome::Committed
         }

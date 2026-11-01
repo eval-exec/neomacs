@@ -180,3 +180,9 @@ They drop the modeled runtime before asserting the exact named witness. This
 keeps a deliberate witness from unwinding live Loom RAII state; it does not
 move the observation, remove a contender or change the violated invariant.
 Preparation controls likewise join and drop their runtime before asserting.
+
+Writer acquisition, protected update and release are separate modeled mutex
+operations and therefore provide optional interleavings. They contain no forced
+yield while WRITER is held: such a yield would force the gap reader to observe
+Busy before the writer can finish, suppressing the split-reader counterexample.
+Busy remains an allowed one-attempt outcome with no retry or progress assumption.
