@@ -16,6 +16,11 @@
 //! GNU's manual `scroll-tests--scroll-margin-whole-window` measurement) and
 //! the window's text height.
 
+use std::io::ErrorKind;
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use neomacs_tui_tests::TuiSession;
 use neomacs_tui_tests::pair::{boot_pair, eval_expression_one};
 
 fn centered_cursor_samples() -> (String, String) {
@@ -23,7 +28,10 @@ fn centered_cursor_samples() -> (String, String) {
     let dir = tempfile::tempdir().expect("temporary directory");
     let gnu_out = dir.path().join("issue-654-gnu.out");
     let neo_out = dir.path().join("issue-654-neomacs.out");
-    let form = |path: &std::path::Path| {
+    // The samples are staged under another name and published by rename, so
+    // the file exists only once it is complete.
+    let form = |path: &Path| {
+        let staging = path.with_extension("part");
         format!(
             r##"(let ((buffer (get-buffer-create "*issue-654-center*")))
   (unwind-protect
@@ -43,18 +51,47 @@ fn centered_cursor_samples() -> (String, String) {
             (forward-line 1)
             (sit-for 0)
             (push (count-lines (window-start) (window-point)) samples))
-          (with-temp-file {path:?}
-            (prin1 (list height (nreverse samples)) (current-buffer)))))
+          (with-temp-file {staging:?}
+            (prin1 (list height (nreverse samples)) (current-buffer)))
+          (rename-file {staging:?} {path:?} t)))
     (kill-buffer buffer)))"##,
+            staging = staging,
             path = path
         )
     };
     eval_expression_one(&mut gnu, &form(&gnu_out));
     eval_expression_one(&mut neo, &form(&neo_out));
     (
-        std::fs::read_to_string(&gnu_out).expect("GNU centered-cursor samples"),
-        std::fs::read_to_string(&neo_out).expect("Neomacs centered-cursor samples"),
+        published_samples(&mut gnu, &gnu_out, "GNU"),
+        published_samples(&mut neo, &neo_out, "Neomacs"),
     )
+}
+
+/// Read EDITOR's sample file once the form has published it.
+///
+/// `eval_expression_one` returns when the `M-:` prompt leaves the screen,
+/// which happens at the form's first `sit-for` redisplay, while the sixty
+/// motions are still running; the published file is the completion signal.
+/// Any other error, and the deadline, fail with the editor's screen so a form
+/// that signalled is told apart from one that was slow.
+fn published_samples(session: &mut TuiSession, path: &Path, editor: &str) -> String {
+    const DEADLINE: Duration = Duration::from_secs(60);
+    const POLL: Duration = Duration::from_millis(100);
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        match std::fs::read_to_string(path) {
+            Ok(text) => return text,
+            Err(error) if error.kind() == ErrorKind::NotFound && Instant::now() < deadline => {
+                // Keep draining the editor's output while waiting.
+                session.read_until(POLL, |_| false);
+            }
+            Err(error) => panic!(
+                "{editor} centered-cursor samples at {}: {error}\n{}",
+                path.display(),
+                session.text_grid().join("\n")
+            ),
+        }
+    }
 }
 
 /// The screen row GNU keeps point on once the window starts following it.
