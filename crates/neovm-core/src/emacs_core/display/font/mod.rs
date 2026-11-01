@@ -4183,14 +4183,11 @@ struct FontShapeDriverScope<'context> {
 }
 
 impl FontShapeDriverScope<'_> {
-    fn run(
-        context: &mut super::eval::Context,
-        shape: impl FnOnce(&mut super::eval::Context, &mut FontShapeFn) -> EvalResult,
-    ) -> EvalResult {
+    fn run(context: &mut super::eval::Context, gstring: Value, direction: Value) -> EvalResult {
         let driver = context.font_shape_fn.take();
         let mut scope = FontShapeDriverScope { context, driver };
         match scope.driver.as_mut() {
-            Some(driver) => shape(scope.context, driver),
+            Some(driver) => shape_gstring_with_driver(scope.context, driver, gstring, direction),
             // GNU: `font->driver->shape == NULL` → the value is nil.
             None => Ok(Value::NIL),
         }
@@ -4234,77 +4231,86 @@ pub(crate) fn font_shape_gstring(eval: &mut super::eval::Context, args: Vec<Valu
         ));
     }
 
-    FontShapeDriverScope::run(eval, |eval, shape_driver| {
-        // Try at most three times with a larger gstring each time
-        // (src/font.c Ffont_shape_gstring).
-        let mut gstring = args[0];
-        let mut shaped_count = None;
-        for _ in 0..3 {
-            match shape_driver(eval, gstring.clone(), args[1]) {
-                GstringShapeOutcome::Shaped(n) => {
-                    shaped_count = Some(n);
-                    break;
-                }
-                GstringShapeOutcome::NeedLargerGlyphs => {
-                    gstring = grow_gstring_glyphs(gstring);
-                }
-                GstringShapeOutcome::NotShapable => return Ok(Value::NIL),
-            }
-        }
-        let Some(n) = shaped_count else {
-            return Ok(Value::NIL);
-        };
-        if n == 0 {
-            return Ok(Value::NIL);
-        }
+    FontShapeDriverScope::run(eval, args[0], args[1])
+}
 
-        let glyph_slots =
-            n.clamp(0, (gstring.as_vector_data().expect("g").len() - 2) as i64) as usize;
-        {
-            // GNU: LGSTRING_SET_GLYPH (gstring, n, nil) — truncate at the count.
-            if 2 + glyph_slots < gstring.as_vector_data().expect("g").len() {
-                gstring.set_vector_slot(2 + glyph_slots, Value::NIL);
+// Keep shaping's validation/cache walk outside the driver's restoration scope.
+// The non-generic call gives the RAII owner one normal return and one unwind
+// edge without changing the GNU retry, validation or caching rules.
+#[inline(never)]
+fn shape_gstring_with_driver(
+    eval: &mut super::eval::Context,
+    shape_driver: &mut FontShapeFn,
+    mut gstring: Value,
+    direction: Value,
+) -> EvalResult {
+    // Try at most three times with a larger gstring each time
+    // (src/font.c Ffont_shape_gstring).
+    let mut shaped_count = None;
+    for _ in 0..3 {
+        match shape_driver(eval, gstring.clone(), direction) {
+            GstringShapeOutcome::Shaped(n) => {
+                shaped_count = Some(n);
+                break;
             }
-            // Cluster coverage validation: glyph[0].from == 0; every glyph's
-            // from <= to; same from shares the same to; otherwise from ==
-            // previous to + 1 (src/font.c Ffont_shape_gstring).
-            let mut covered_to: Option<i64> = None;
-            for index in 0..glyph_slots {
-                let glyph_slot = gstring.as_vector_data().expect("g")[2 + index].clone();
-                let Some(glyph) = glyph_slot.as_vector_data() else {
-                    break;
-                };
-                let (from, to) = match (glyph[0].as_int(), glyph[1].as_int()) {
-                    (Some(f), Some(t)) => (f, t),
-                    _ => return Ok(Value::NIL),
-                };
-                let valid = match covered_to {
-                    None => from == 0 && to >= from,
-                    Some(prev_to) => {
-                        (from == covered_to.unwrap_or(i64::MIN) && to == prev_to)
-                            || (from == prev_to + 1 && to >= from)
-                    }
-                };
-                if !valid {
-                    return Ok(Value::NIL);
-                }
-                covered_to = Some(to);
+            GstringShapeOutcome::NeedLargerGlyphs => {
+                gstring = grow_gstring_glyphs(gstring);
             }
+            GstringShapeOutcome::NotShapable => return Ok(Value::NIL),
         }
-        composition_gstring_adjust_zero_width(&gstring);
+    }
+    let Some(n) = shaped_count else {
+        return Ok(Value::NIL);
+    };
+    if n == 0 {
+        return Ok(Value::NIL);
+    }
 
-        // GNU: composition_gstring_put_cache — store the shaped gstring keyed by
-        // the header and stamp its ID slot; a later call with the same header
-        // returns the cached gstring instead of re-shaping.
-        let cache_key = gstring_shape_cache_key(&gstring);
-        if let Some(cached) = eval.gstring_shape_cache.get(&cache_key) {
-            return Ok(cached.clone());
+    let glyph_slots = n.clamp(0, (gstring.as_vector_data().expect("g").len() - 2) as i64) as usize;
+    {
+        // GNU: LGSTRING_SET_GLYPH (gstring, n, nil) — truncate at the count.
+        if 2 + glyph_slots < gstring.as_vector_data().expect("g").len() {
+            gstring.set_vector_slot(2 + glyph_slots, Value::NIL);
         }
-        let id = eval.gstring_shape_cache.len() as i64;
-        gstring.set_vector_slot(1, Value::fixnum(id));
-        eval.gstring_shape_cache.insert(cache_key, gstring.clone());
-        Ok(gstring)
-    })
+        // Cluster coverage validation: glyph[0].from == 0; every glyph's
+        // from <= to; same from shares the same to; otherwise from ==
+        // previous to + 1 (src/font.c Ffont_shape_gstring).
+        let mut covered_to: Option<i64> = None;
+        for index in 0..glyph_slots {
+            let glyph_slot = gstring.as_vector_data().expect("g")[2 + index].clone();
+            let Some(glyph) = glyph_slot.as_vector_data() else {
+                break;
+            };
+            let (from, to) = match (glyph[0].as_int(), glyph[1].as_int()) {
+                (Some(f), Some(t)) => (f, t),
+                _ => return Ok(Value::NIL),
+            };
+            let valid = match covered_to {
+                None => from == 0 && to >= from,
+                Some(prev_to) => {
+                    (from == covered_to.unwrap_or(i64::MIN) && to == prev_to)
+                        || (from == prev_to + 1 && to >= from)
+                }
+            };
+            if !valid {
+                return Ok(Value::NIL);
+            }
+            covered_to = Some(to);
+        }
+    }
+    composition_gstring_adjust_zero_width(&gstring);
+
+    // GNU: composition_gstring_put_cache — store the shaped gstring keyed by
+    // the header and stamp its ID slot; a later call with the same header
+    // returns the cached gstring instead of re-shaping.
+    let cache_key = gstring_shape_cache_key(&gstring);
+    if let Some(cached) = eval.gstring_shape_cache.get(&cache_key) {
+        return Ok(cached.clone());
+    }
+    let id = eval.gstring_shape_cache.len() as i64;
+    gstring.set_vector_slot(1, Value::fixnum(id));
+    eval.gstring_shape_cache.insert(cache_key, gstring.clone());
+    Ok(gstring)
 }
 
 /// GNU `composition_gstring_adjust_zero_width` (src/composite.c:798):
