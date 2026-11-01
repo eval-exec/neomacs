@@ -116,7 +116,7 @@ jobs:
         run: |
           scripts/ci/setup-linux.sh ecosystem
           sudo apt-get install -y --no-install-recommends \
-            linux-tools-common linux-tools-generic
+            linux-tools-common linux-tools-generic strace binutils
           # The hosted Azure kernel may not have a matching -tools package in APT.
           # Use the provisioned portable perf directly, as in the local capture.
           # Ubuntu's per-kernel perf entries are symlinks into linux-tools-<version>.
@@ -160,12 +160,16 @@ jobs:
         run: |
           python3 - <<'PY'
           import collections
+          import contextlib
           import datetime
           import hashlib
           import json
           import os
           from pathlib import Path
           import re
+          import select
+          import shutil
+          import signal
           import statistics
           import subprocess
           import time
@@ -190,8 +194,9 @@ jobs:
               'harness_sha256': hashlib.sha256(H.read_bytes()).hexdigest(),
               'affinity': sorted(os.sched_getaffinity(0)),
               'protocol': 'Exactly five alternating plain/rich pairs, no retries; existing assertions unchanged. '
-                          '199Hz CPU/switch capture and existing presentation logs on every cell. '
-                          'Profiled timings, not an uninstrumented renderer budget.',
+                          'Acknowledged pre-spawn system-wide 199Hz CPU capture; scheduler user callchains/wakeups '
+                          'or explicit strace fallback; timestamped descendant thread/maps inventories. '
+                          'Existing presentation logs; diagnostic timings, not a renderer budget.',
               'cells': [],
           }
 
@@ -223,7 +228,7 @@ jobs:
           FRAME = re.compile(r'^\s*[a-f0-9]+\s+(.+?)\s+\(([^()]*)\)\s*$')
 
 
-          def analyze(row, report, log_path, perf_path):
+          def analyze(row, report, log_path, perf_path, scheduler, tids):
               samples = []
               switches = collections.defaultdict(list)
               names = {}
@@ -240,7 +245,7 @@ jobs:
                           ns = int(sec) * 10**9 + int(frac.ljust(9, '0'))
                           names[tid] = comm
                           if event.startswith('cpu-clock:u:'):
-                              current = {'comm': comm, 'tid': tid, 'time_ns': ns, 'stack': []}
+                              current = {'comm': comm, 'pid': int(pid), 'tid': tid, 'time_ns': ns, 'stack': []}
                           elif event.startswith('PERF_RECORD_SWITCH'):
                               switches[tid].append((ns, ' IN' in event))
                       elif current is not None:
@@ -252,6 +257,18 @@ jobs:
                               current = None
               if current is not None:
                   samples.append(current)
+              # CPU data is system-wide: restrict sample ownership using the recorded process identity.
+              samples = [s for s in samples if s['pid'] == row['editor_pid']]
+              names = {tid: thread['comm'] for tid, thread in tids.items()}
+              # Derive on-CPU intervals from explicit tracepoint prev/next payloads, not CPU-wide
+              # switch metadata headers. The strace fallback cannot supply these intervals.
+              switches.clear()
+              for event in scheduler:
+                  if event['payload'].startswith('sched:sched_switch:'):
+                      prev = int(re.search(r'prev_pid=(\d+)', event['payload'])[1])
+                      nxt = int(re.search(r'next_pid=(\d+)', event['payload'])[1])
+                      switches[prev].append((event['time_ns'], False))
+                      switches[nxt].append((event['time_ns'], True))
               receipts = report['samples']
               def first(s):
                   return min(s[k] for k in ['projected_presented_ns', 'presented_ns']
@@ -261,7 +278,7 @@ jobs:
               active = [s for s in samples if lo <= s['time_ns'] <= hi]
               assert active, 'No CPU samples during input window'
               def role(s):
-                  name = s['comm']
+                  name = names.get(s['tid'], s['comm'])
                   if name.startswith('llvmpipe'):
                       return 'llvmpipe'
                   if name == 'gpu-device':
@@ -303,7 +320,10 @@ jobs:
                       ns = int(re.search(r'nanoseconds: (\d+)', line)[1])
                       confirmed[(layout, sec * 10**9 + ns)] = serial
               evaluator_tids = [tid for tid, name in names.items() if name.startswith('neomacs-evaluat')]
-              assert evaluator_tids and switches[row['editor_pid']], 'Missing UI/evaluator switch data'
+              assert evaluator_tids, 'Missing evaluator identity in timestamped inventory'
+              if row['scheduler_mode'] == 'sched-tracepoints':
+                  assert switches[row['editor_pid']] and all(switches[t] for t in evaluator_tids), \
+                      'Missing UI/evaluator scheduler payloads'
               timeline = []
               for s in sorted(receipts, key=lambda r: first(r) - r['received_ns'], reverse=True)[:24]:
                   start, end = s['received_ns'], first(s)
@@ -317,12 +337,18 @@ jobs:
                       'response_ms': (end - start) / 1e6,
                       'receive_to_request_ms': (request - start) / 1e6,
                       'request_to_present_ms': (end - request) / 1e6,
-                      'UI_on_cpu_ms': on_cpu(row['editor_pid'], start, end),
-                      'evaluator_on_cpu_ms': sum(on_cpu(tid, start, end) for tid in evaluator_tids),
+                      'UI_on_cpu_ms': on_cpu(row['editor_pid'], start, end) if scheduler else None,
+                      'evaluator_on_cpu_ms': sum(on_cpu(tid, start, end) for tid in evaluator_tids) if scheduler else None,
                       'sample_roles': dict(collections.Counter(role(x) for x in active
                                                                if start <= x['time_ns'] <= end)),
                   })
+              thread_coverage = {}
+              for tid, thread in tids.items():
+                  thread_coverage[tid] = {'comm': thread['comm'],
+                                          'samples': sum(s['tid'] == tid for s in active),
+                                          'scheduler_transitions': len(switches[tid])}
               return {
+                  'thread_coverage': thread_coverage,
                   'cpu_samples': len(active),
                   'sample_roles': dict(collections.Counter(role(s) for s in active)),
                   'sample_threads': dict(collections.Counter(s['comm'] for s in active)),
@@ -331,14 +357,335 @@ jobs:
                                     for s in active),
                   'clock_offset_drift_ns': max(offsets) - min(offsets),
                   'worst_24': timeline,
-                  'tail_medians': {key: median([r[key] for r in timeline]) for key in
+                  'tail_medians': {key: median([r[key] for r in timeline if r[key] is not None]) for key in
                                    ['response_ms', 'receive_to_request_ms', 'request_to_present_ms',
                                     'UI_on_cpu_ms', 'evaluator_on_cpu_ms']},
               }
 
 
+          class CleanupFailure(RuntimeError):
+              """Do not advance to another scenario when an owned process may still be alive."""
+
+
+          class OwnedProcesses:
+              def __init__(self):
+                  self.handles = {}
+
+              def __enter__(self):
+                  return self
+
+              def add(self, pid, ancestor):
+                  if pid in self.handles:
+                      if not select.select([self.handles[pid]], [], [], 0)[0]:
+                          return
+                      os.close(self.handles.pop(pid))
+                  fd = os.pidfd_open(pid)
+                  # Open the stable handle before checking ancestry. A ready pidfd means the
+                  # checked /proc PID might already name a replacement; never adopt that handle.
+                  if not descendant(pid, ancestor) or select.select([fd], [], [], 0)[0]:
+                      os.close(fd)
+                      raise ProcessLookupError('Descendant exited or changed before adoption')
+                  self.handles[pid] = fd
+
+              def __exit__(self, *_):
+                  try:
+                      remaining = {pid: fd for pid, fd in self.handles.items()
+                                   if not select.select([fd], [], [], 0)[0]}
+                      for sig in [signal.SIGTERM, signal.SIGKILL]:
+                          for fd in remaining.values():
+                              try:
+                                  signal.pidfd_send_signal(fd, sig)
+                              except ProcessLookupError:
+                                  pass
+                          deadline = time.monotonic() + 5
+                          while remaining and time.monotonic() < deadline:
+                              ready, _, _ = select.select(list(remaining.values()), [], [], .05)
+                              remaining = {pid: fd for pid, fd in remaining.items() if fd not in ready}
+                          if not remaining:
+                              break
+                      if remaining:
+                          raise CleanupFailure(f'Owned descendants did not exit: {sorted(remaining)}')
+                  finally:
+                      for fd in self.handles.values():
+                          os.close(fd)
+                      self.handles.clear()
+
+
+          class Recorder:
+              """Own one bounded recorder and its readiness/cleanup resources."""
+              def __init__(self, directory, name, events):
+                  self.directory, self.name, self.events = directory, name, events
+                  self.process = None
+                  self.fds = []
+                  self.log = None
+                  self.exit = None
+                  self.started_ns = None
+
+              def __enter__(self):
+                  try:
+                      control, ack = [self.directory / f'{self.name}.{suffix}'
+                                      for suffix in ['control', 'ack']]
+                      for path in [control, ack]:
+                          os.mkfifo(path)
+                      self.fds = [os.open(path, os.O_RDWR | os.O_NONBLOCK) for path in [control, ack]]
+                      self.log = (self.directory / f'{self.name}-record.out').open('w')
+                      command = ['sudo', '-n', PERF, 'record', '-a', '-C', CPU_LIST,
+                                 '--clockid', 'mono', '--sample-cpu', '-m', '8M',
+                                 '--call-graph', 'dwarf,16384', '--delay=-1',
+                                 '--control', f'fifo:{control},{ack}',
+                                 '-o', str(self.directory / f'{self.name}.data'), *self.events]
+                      self.log.write(json.dumps(command) + '\n')
+                      self.log.flush()
+                      self.process = subprocess.Popen(command, stdout=self.log,
+                                                      stderr=subprocess.STDOUT, start_new_session=True)
+                      os.write(self.fds[0], b'enable\n')
+                      deadline = time.monotonic() + 15
+                      reply = b''
+                      while time.monotonic() < deadline:
+                          if self.process.poll() is not None:
+                              raise RuntimeError(f'{self.name} recorder exited before readiness: '
+                                                 f'{self.process.returncode}')
+                          ready, _, _ = select.select([self.fds[1]], [], [], .05)
+                          if ready:
+                              reply += os.read(self.fds[1], 1024)
+                              if b'ack\n' in reply:
+                                  self.started_ns = time.monotonic_ns()
+                                  self.log.write(f'enabled_ack_monotonic_ns={self.started_ns}\n')
+                                  self.log.flush()
+                                  return self
+                      raise TimeoutError(f'{self.name} recorder did not acknowledge enable')
+                  except BaseException:
+                      self.__exit__(None, None, None)
+                      raise
+
+              def __exit__(self, *_):
+                  try:
+                      if self.process is not None:
+                          if self.process.poll() is None:
+                              # This session contains only our sudo/perf child, never another capture.
+                              subprocess.run(['sudo', '-n', 'kill', '-INT', '--',
+                                              f'-{self.process.pid}'], check=False)
+                          try:
+                              self.exit = self.process.wait(timeout=30)
+                          except subprocess.TimeoutExpired:
+                              subprocess.run(['sudo', '-n', 'kill', '-TERM', '--',
+                                              f'-{self.process.pid}'], check=False)
+                              try:
+                                  self.exit = self.process.wait(timeout=10)
+                              except subprocess.TimeoutExpired:
+                                  subprocess.run(['sudo', '-n', 'kill', '-KILL', '--',
+                                                  f'-{self.process.pid}'], check=False)
+                                  try:
+                                      self.exit = self.process.wait(timeout=10)
+                                  except subprocess.TimeoutExpired as error:
+                                      raise CleanupFailure('Recorder did not exit') from error
+                  finally:
+                      for fd in self.fds:
+                          os.close(fd)
+                      self.fds = []
+                      if self.log is not None:
+                          self.log.close()
+                          self.log = None
+
+
+          CPU_EVENTS = ['-e', 'cpu-clock:u', '-F', '199', '--switch-events']
+          SCHED_EVENTS = ['-e', 'sched:sched_switch', '-e', 'sched:sched_wakeup',
+                          '-e', 'sched:sched_wakeup_new', '-c', '1']
+          CPU_LIST = ','.join(map(str, sorted(os.sched_getaffinity(0))))
+          DSO_PATHS = {str(B)}
+
+
+          def decode(directory, name):
+              fields = 'comm,pid,tid,time,event,ip,sym,dso'
+              if name == 'sched':
+                  fields += ',trace'
+              with (directory / f'{name}-script.out').open('w') as log, \
+                      (directory / f'{name}-decode.out').open('w') as errors:
+                  subprocess.run(['sudo', '-n', PERF, 'script', '-i',
+                                  str(directory / f'{name}.data'), '--ns', '--max-stack', '128',
+                                  '--show-switch-events', '--show-task-events', '-F', fields],
+                                 stdout=log, stderr=errors, check=True)
+              # Stream the raw reader; never materialize a multi-GB ASCII stack/hex dump.
+              matches = []
+              with (directory / f'{name}-integrity.out').open('w') as log:
+                  with subprocess.Popen(['sudo', '-n', PERF, 'script', '-D', '-i',
+                                         str(directory / f'{name}.data')], stdout=subprocess.PIPE,
+                                        stderr=log, text=True) as raw:
+                      for line in raw.stdout:
+                          if re.search(r'PERF_RECORD_(?:LOST|LOST_SAMPLES|THROTTLE|UNTHROTTLE)\b', line):
+                              matches.append(line.rstrip())
+                              log.write(line)
+                      if raw.wait() != 0:
+                          raise RuntimeError(f'{name} integrity reader failed')
+              return matches
+
+
+          def scheduler_events(path):
+              events, current = [], None
+              for line in path.read_text().splitlines():
+                  match = HEADER.match(line)
+                  if match:
+                      current = None
+                      comm, pid, tid, sec, frac, event = match.groups()
+                      if not event.startswith('sched:'):
+                          continue
+                      current = {'comm': comm, 'pid': int(pid), 'tid': int(tid),
+                                 'time_ns': int(sec) * 10**9 + int(frac.ljust(9, '0')),
+                                 'payload': event, 'stack': []}
+                      events.append(current)
+                  elif current is not None:
+                      frame = FRAME.match(line)
+                      if frame:
+                          current['stack'].append(frame.groups())
+              return events
+
+
+          def inspect_capabilities():
+              P = O / 'readiness'
+              P.mkdir()
+              status = {'perf_event_paranoid': Path('/proc/sys/kernel/perf_event_paranoid').read_text().strip(),
+                        'stack_method': 'dwarf,16384; release CFI + symbols, no forced frame pointers',
+                        'scheduler_mode': 'not-tested'}
+              with (P / 'tools.out').open('w') as log:
+                  for command in [[PERF, 'version', '--build-options'], ['strace', '-V'],
+                                  ['readelf', '--wide', '--sections', str(B)], ['readelf', '-n', str(B)]]:
+                      subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+              sections = subprocess.check_output(['readelf', '--wide', '--sections', str(B)], text=True)
+              assert '.eh_frame' in sections and '.symtab' in sections, 'Release CFI/symbol table missing'
+              # Tracefs may exist but not be mounted in the hosted VM. Preserve both outcomes.
+              with (P / 'tracefs.out').open('w') as log:
+                  subprocess.run(['sudo', '-n', 'bash', '-c',
+                                  'if ! test -r /sys/kernel/tracing/events/sched/sched_switch/id; then '
+                                  'mount -t tracefs tracefs /sys/kernel/tracing; fi; '
+                                  'ls -ld /sys/kernel/tracing /sys/kernel/debug/tracing; '
+                                  'cat /sys/kernel/tracing/events/sched/sched_{switch,wakeup,wakeup_new}/id'],
+                                 stdout=log, stderr=subprocess.STDOUT, check=False)
+              with Recorder(P, 'cpu', CPU_EVENTS) as cpu:
+                  try:
+                      with Recorder(P, 'sched', SCHED_EVENTS) as sched:
+                          # One capability probe, not a scenario retry: force a real user-space sleep/wakeup.
+                          subprocess.run(['python3', '-c', 'import time; time.sleep(.15)'], check=True)
+                      assert sched.exit in [0, 130, -2], sched.exit
+                      loss = decode(P, 'sched')
+                      events = scheduler_events(P / 'sched-script.out')
+                      outgoing = [e for e in events if e['payload'].startswith('sched:sched_switch:')]
+                      wakes = [e for e in events if e['payload'].startswith('sched:sched_wakeup:')]
+                      user_chains = [e for e in outgoing if any(dso.startswith('/') and
+                                     '[kernel' not in dso for _, dso in e['stack'])]
+                      assert outgoing and wakes and user_chains and not loss, \
+                          ('Scheduler trace unusable', len(outgoing), len(wakes), len(user_chains), loss)
+                      status.update(scheduler_mode='sched-tracepoints', switch_events=len(outgoing),
+                                    wakeup_events=len(wakes), user_switch_chains=len(user_chains))
+                  except (RuntimeError, TimeoutError, AssertionError, subprocess.SubprocessError) as error:
+                      if isinstance(error, CleanupFailure):
+                          raise
+                      status.update(scheduler_mode='strace-fallback', scheduler_error=repr(error))
+                      # Prove this strace supports user stack unwinding before any scenario starts.
+                      subprocess.run(['strace', '-f', '-k', '-o', str(P / 'strace-probe.out'),
+                                      '--', 'true'], check=True)
+              assert cpu.exit in [0, 130, -2], cpu.exit
+              assert not decode(P, 'cpu'), 'CPU capture lost/throttled events during readiness'
+              for path in P.glob('*.data'):
+                  subprocess.run(['sudo', '-n', 'chmod', 'a+r', str(path)], check=True)
+              (O / 'capture-capabilities.json').write_text(json.dumps(status, indent=2) + '\n')
+              print('Capture capabilities:', json.dumps(status), flush=True)
+              return status
+
+
+          def inventory(test_pid, row, stream, owner):
+              """Timestamp all owned descendant TIDs, not just the initial perf attach snapshot."""
+              stamp = clock_pair()
+              processes = []
+              for proc in Path('/proc').iterdir():
+                  if not proc.name.isdigit() or not descendant(int(proc.name), test_pid):
+                      continue
+                  try:
+                      pid = int(proc.name)
+                      owner.add(pid, test_pid)
+                      argv = (proc / 'cmdline').read_bytes().split(b'\0')
+                      if argv and argv[0] == os.fsencode(B):
+                          if 'editor_pid' in row:
+                              assert row['editor_pid'] == pid, 'Editor identity changed'
+                          row['editor_pid'] = pid
+                      threads = []
+                      for task in (proc / 'task').iterdir():
+                          try:
+                              fields = (task / 'stat').read_text().rsplit(')', 1)[1].split()
+                              threads.append({'tid': int(task.name), 'comm': (task / 'comm').read_text().strip(),
+                                              'state': fields[0], 'utime_ticks': int(fields[11]),
+                                              'stime_ticks': int(fields[12]), 'start_ticks': int(fields[19]),
+                                              'processor': int(fields[36]), 'wchan': (task / 'wchan').read_text()})
+                          except (FileNotFoundError, ProcessLookupError, PermissionError):
+                              pass
+                      maps = (proc / 'maps').read_text()
+                      digest = hashlib.sha256(maps.encode()).hexdigest()[:16]
+                      maps_file = stream.parent / f'maps-{pid}-{digest}.out'
+                      if not maps_file.exists():
+                          maps_file.write_text(maps)
+                      for line in maps.splitlines():
+                          fields = line.split(None, 5)
+                          if len(fields) == 6 and fields[5].startswith('/'):
+                              DSO_PATHS.add(fields[5].removesuffix(' (deleted)'))
+                      processes.append({'pid': pid, 'argv': os.fsdecode(b' '.join(argv)),
+                                        'maps': maps_file.name, 'threads': threads})
+                  except (FileNotFoundError, ProcessLookupError, PermissionError):
+                      pass
+              stream.write(json.dumps({'clock_pair': stamp, 'processes': processes,
+                                       'finished_monotonic_ns': time.monotonic_ns()}) + '\n')
+              stream.flush()
+
+
+          def blocked_ui_intervals(row, events):
+              ui = row['editor_pid']
+              pending, spans = None, []
+              for event in events:
+                  payload, ns = event['payload'], event['time_ns']
+                  if payload.startswith('sched:sched_switch:'):
+                      prev = int(re.search(r'prev_pid=(\d+)', payload)[1])
+                      nxt = int(re.search(r'next_pid=(\d+)', payload)[1])
+                      if nxt == ui and pending is not None:
+                          pending['resumed_ns'] = ns
+                          pending['off_cpu_ms'] = (ns - pending['switched_out_ns']) / 1e6
+                          spans.append(pending)
+                          pending = None
+                      if prev == ui:
+                          pending = {'switched_out_ns': ns,
+                                     'prev_state': re.search(r'prev_state=(\S+)', payload)[1],
+                                     'switch_out_stack': event['stack'], 'wakeup': None}
+                  elif payload.startswith(('sched:sched_wakeup:', 'sched:sched_wakeup_new:')):
+                      target = int(re.search(r'\bpid=(\d+)', payload)[1])
+                      if target == ui and pending is not None and pending['wakeup'] is None:
+                          pending['wakeup'] = {'time_ns': ns, 'waker_pid': event['pid'],
+                                               'waker_tid': event['tid'], 'waker_comm': event['comm'],
+                                               'payload': payload, 'stack': event['stack']}
+              return spans
+
+
+          def preserve_symbols():
+              # Copy after timing; preserve exact loaded paths for offline --symfs symbolization.
+              root = O / 'symfs'
+              records = []
+              for name in sorted(DSO_PATHS):
+                  path = Path(name)
+                  try:
+                      with path.open('rb') as stream:
+                          if stream.read(4) != b'\x7fELF':
+                              continue
+                      target = root / path.relative_to('/')
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(path, target)
+                      records.append({'path': name, 'bytes': target.stat().st_size,
+                                      'sha256': hashlib.sha256(target.read_bytes()).hexdigest()})
+                  except (FileNotFoundError, PermissionError, OSError) as error:
+                      records.append({'path': name, 'error': repr(error)})
+              (O / 'symbols.json').write_text(json.dumps(records, indent=2) + '\n')
+              subprocess.run(['tar', 'czf', str(O / 'symbols.tar.gz'), '-C', str(root), '.'], check=True)
+              shutil.rmtree(root)
+
+
           save()
-          assert len(result['affinity']) == 4, 'This protocol requires the four-core CI runner class'
+          assert len(result['affinity']) == os.cpu_count() == 4, \
+              'This protocol requires the complete four-logical-CPU CI runner'
           with (O / 'environment.out').open('w') as log:
               subprocess.run(['bash', '-c', 'uname -a; lscpu; free -m; "$SCROLL120_PERF" version; sway --version; '
                               'dpkg-query -W mesa-vulkan-drivers libllvm20 sway; '
@@ -348,6 +695,9 @@ jobs:
               subprocess.run(['sudo', '-n', PERF, 'stat', '-e', 'cpu-clock:u', '--', 'true'],
                              stdout=log, stderr=subprocess.STDOUT, check=True)
 
+          capabilities = inspect_capabilities()
+          result['capture_capabilities'] = capabilities
+          save()
           for scene, rep in PLAN:
               C = O / f'{scene}-{rep}'
               C.mkdir()
@@ -356,6 +706,7 @@ jobs:
               env.update(CARGO_TARGET_DIR=str(target), NEXTEST_WORKSPACE_ROOT=str(W),
                          NEOMACS_RUNTIME_ROOT=str(W), NEOMACS_GUI_TEST_BINARY=str(B),
                          LD_LIBRARY_PATH=str(extracted / 'target/nextest/libdirs/host'),
+                         PERF_BUILDID_DIR=str(C / 'perf-buildid'),
                          NEOMACS_GUI_SCROLL_LOG='warn,neomacs_display_runtime::render_thread::bootstrap=info,'
                          'neomacs_display_runtime::presentation_feedback::wayland=debug,'
                          'neomacs_display_runtime::input_scroll=debug,'
@@ -363,60 +714,64 @@ jobs:
               for key in ['RUST_LOG', 'NEOMACS_GUI_SCROLL_TIMING_ONLY', 'NEOMACS_GUI_SCROLL_STREAM_INPUTS',
                           'WAYLAND_DEBUG', 'NEOMACS_LAYOUT_STATS_FILE']:
                   env.pop(key, None)
-              row = {'scene': scene, 'rep': rep, 'clock_pair_start': clock_pair()}
+              row = {'scene': scene, 'rep': rep, 'clock_pair_start': clock_pair(),
+                     'scheduler_mode': capabilities['scheduler_mode']}
               result['cells'].append(row)
-              recorder = None
               test = None
+              recorders = []
               try:
-                  with (C / 'test.out').open('w') as log, (C / 'perf-record.out').open('w') as perf_log:
-                      test = subprocess.Popen([str(H), '--exact',
-                          f'native_scrolling::continuous_120hz_scroll_in_large_{scene}_buffer',
-                          '--nocapture', '--test-threads', '1'], env=env, stdout=log, stderr=subprocess.STDOUT)
-                      deadline = time.monotonic() + 20
-                      editor = None
-                      while test.poll() is None and time.monotonic() < deadline:
-                          matches = []
-                          for proc in Path('/proc').iterdir():
-                              if not proc.name.isdigit():
-                                  continue
-                              try:
-                                  argv = (proc / 'cmdline').read_bytes().split(b'\0')
-                                  if argv[0] == os.fsencode(B) and descendant(int(proc.name), test.pid):
-                                      matches.append(int(proc.name))
-                              except (FileNotFoundError, PermissionError, ProcessLookupError):
-                                  pass
-                          if matches:
-                              assert len(matches) == 1, matches
-                              editor = matches[0]
-                              break
-                          time.sleep(.01)
-                      assert editor is not None, 'Editor did not start'
-                      row['editor_pid'] = editor
-                      recorder = subprocess.Popen(['sudo', '-n', PERF, 'record', '-o', str(C / 'perf.data'),
-                          '--clockid', 'mono', '-e', 'cpu-clock:u', '-F', '199', '--sample-cpu',
-                          '--switch-events', '--call-graph', 'dwarf,8192', '-p', str(editor)],
-                          stdout=perf_log, stderr=subprocess.STDOUT)
-                      row['test_exit'] = test.wait(timeout=180)
+                  with contextlib.ExitStack() as cleanup, (C / 'test.out').open('w') as log, \
+                          (C / 'threads.jsonl').open('w') as threads:
+                      # Acknowledged system-wide recording precedes harness/editor/Mesa startup.
+                      cpu = cleanup.enter_context(Recorder(C, 'cpu', CPU_EVENTS))
+                      recorders.append(cpu)
+                      if row['scheduler_mode'] == 'sched-tracepoints':
+                          sched = cleanup.enter_context(Recorder(C, 'sched', SCHED_EVENTS))
+                          recorders.append(sched)
+                      command = [str(H), '--exact',
+                                 f'native_scrolling::continuous_120hz_scroll_in_large_{scene}_buffer',
+                                 '--nocapture', '--test-threads', '1']
+                      if row['scheduler_mode'] == 'strace-fallback':
+                          # Trace all descendants from exec, including the UI before its first input.
+                          command = ['strace', '-ff', '-ttt', '-T', '-k', '-s', '128',
+                                     '-e', 'trace=ioctl,futex,poll,ppoll,epoll_wait,epoll_pwait,'
+                                     'epoll_pwait2,pselect6,nanosleep,clock_nanosleep',
+                                     '-o', str(C / 'ui-strace'), '--', *command]
+                      row['capture_enabled_ns'] = {r.name: r.started_ns for r in recorders}
+                      row['test_spawn_monotonic_ns'] = time.monotonic_ns()
+                      assert all(t < row['test_spawn_monotonic_ns']
+                                 for t in row['capture_enabled_ns'].values())
+                      owner = cleanup.enter_context(OwnedProcesses())
+                      test = subprocess.Popen(command, env=env, stdout=log,
+                                              stderr=subprocess.STDOUT, start_new_session=True)
+                      owner.add(test.pid, test.pid)
+                      deadline = time.monotonic() + 180
+                      while test.poll() is None:
+                          inventory(test.pid, row, threads, owner)
+                          assert all(r.process.poll() is None for r in recorders), \
+                              'Recorder exited during scenario'
+                          if time.monotonic() >= deadline:
+                              raise TimeoutError('Scenario exceeded 180 seconds')
+                          time.sleep(.05)
+                      row['test_exit'] = test.wait()
                   row['clock_pair_end'] = clock_pair()
+                  row['recorder_exits'] = {r.name: r.exit for r in recorders}
+                  assert all(r.exit in [0, 130, -2] for r in recorders), row['recorder_exits']
               except Exception as error:
+                  if isinstance(error, CleanupFailure):
+                      row['capture_error'] = repr(error)
+                      save()
+                      raise
                   row['capture_error'] = repr(error)
+                  row['clock_pair_end'] = clock_pair()
               finally:
-                  if test is not None and test.poll() is None:
-                      test.terminate()
-                      test.wait(timeout=10)
-                  if recorder is not None:
-                      if recorder.poll() is None:
-                          # The sudo recorder is our own child; never signal other editors/captures.
-                          subprocess.run(['sudo', '-n', 'kill', '-INT', str(recorder.pid)], check=True)
-                      row['perf_exit'] = recorder.wait(timeout=30)
+                  if test is not None:
+                      try:
+                          test.wait(timeout=10)
+                      except subprocess.TimeoutExpired as error:
+                          raise CleanupFailure('Harness not reaped after descendant cleanup') from error
                   save()
               try:
-                  assert 'capture_error' not in row, row['capture_error']
-                  assert row['perf_exit'] in [0, 130, -2], row
-                  with (C / 'perf-script.out').open('w') as log:
-                      subprocess.run(['sudo', '-n', PERF, 'script', '-i', str(C / 'perf.data'), '--ns',
-                          '--show-switch-events', '-F', 'comm,pid,tid,time,event,ip,sym,dso'],
-                          stdout=log, stderr=subprocess.STDOUT, check=True)
                   reports = list(target.rglob('continuous-presentations.json'))
                   assert len(reports) == 1, reports
                   report = json.loads(reports[0].read_text())
@@ -427,20 +782,59 @@ jobs:
                   assert 'type=Cpu, backend=Vulkan' in row['adapter'] and 'llvmpipe' in row['adapter'], row
                   assert row['compositor'].strip() == 'pixman', row
                   assert row['report']['received_receipts'] == 480 and row['report']['invalid_clocks'] == 0, row
-                  analysis = analyze(row, report, reports[0].with_name('neomacs.log'), C / 'perf-script.out')
+                  assert 'capture_error' not in row, row['capture_error']
+                  loss = {r.name: decode(C, r.name) for r in recorders}
+                  row['loss_or_throttle_records'] = loss
+                  assert not any(loss.values()), loss
+                  assert 'editor_pid' in row, 'No editor descendant found in timestamped inventory'
+                  events = scheduler_events(C / 'sched-script.out') \
+                      if row['scheduler_mode'] == 'sched-tracepoints' else []
+                  inventory_rows = [json.loads(line) for line in (C / 'threads.jsonl').read_text().splitlines()]
+                  tids = {}
+                  for snapshot in inventory_rows:
+                      for proc in snapshot['processes']:
+                          if proc['pid'] == row['editor_pid']:
+                              for thread in proc['threads']:
+                                  tids[thread['tid']] = thread
+                  assert tids, 'No editor thread inventory'
+                  (C / 'thread-identities.json').write_text(json.dumps(tids, indent=2) + '\n')
+                  spans = blocked_ui_intervals(row, events)
+                  (C / 'ui-offcpu.json').write_text(json.dumps(spans, indent=2) + '\n')
+                  # Never discard wakeups by the waker's PID: filter by the payload's target TID.
+                  owned_events = []
+                  for event in events:
+                      payload = event['payload']
+                      ids = re.findall(r'\b(?:prev_pid|next_pid|pid)=(\d+)', payload)
+                      if any(int(tid) in tids for tid in ids):
+                          owned_events.append(event)
+                  (C / 'editor-scheduler.json').write_text(json.dumps(owned_events, indent=2) + '\n')
+                  row['longest_ui_waits'] = sorted(spans, key=lambda s: s['off_cpu_ms'], reverse=True)[:5]
+                  row['ui_switch_out_chains'] = sum(bool(s['switch_out_stack']) for s in spans)
+                  row['ui_user_switch_out_chains'] = sum(any(dso.startswith('/') and '[kernel' not in dso
+                                                             for _, dso in s['switch_out_stack']) for s in spans)
+                  row['editor_scheduler_events'] = len(owned_events)
+                  analysis = analyze(row, report, reports[0].with_name('neomacs.log'),
+                                     C / 'cpu-script.out', events, tids)
                   (C / 'analysis.json').write_text(json.dumps(analysis, indent=2) + '\n')
                   row['analysis'] = analysis
+                  if row['scheduler_mode'] == 'sched-tracepoints':
+                      assert row['ui_user_switch_out_chains'] > 0, 'No symbolizable UI switch-out user chains'
               except Exception as error:
                   row['analysis_error'] = repr(error)
-              if (C / 'perf.data').exists():
-                  subprocess.run(['sudo', '-n', 'chmod', 'a+r', str(C / 'perf.data')], check=True)
+              if 'editor_pid' in row:
+                  jit_map = Path(f"/tmp/perf-{row['editor_pid']}.map")
+                  if jit_map.exists():
+                      shutil.copy2(jit_map, C / f"jit-perf-{row['editor_pid']}.map.out")
+              for path in C.glob('*.data'):
+                  subprocess.run(['sudo', '-n', 'chmod', 'a+r', str(path)], check=True)
               save()
               print(scene, rep, json.dumps(row.get('report', {})), row.get('analysis_error', ''), flush=True)
+          preserve_symbols()
 
           with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
               summary.write('## Frozen 120 Hz cohort (profiled, no retries)\n\n')
               summary.write(f"Source `{result['source']}`; product `{result['product_sha256']}`. "
-                            'Only existing test assertions decide pass/fail. Stage medians are separate, '
+                            'Test results use existing assertions; capture integrity is checked separately. '
                             'non-additive statistics. GNU comparison is not performed by this workflow.\n\n')
               for scene in ['plain', 'rich']:
                   cells = [r for r in result['cells'] if r['scene'] == scene]
@@ -459,6 +853,13 @@ jobs:
                       counts = ' / '.join(str(roles.get(k, 0)) for k in ['llvmpipe', 'gpu-device', 'evaluator', 'UI'])
                       summary.write(f"| {r['rep']} | {r.get('test_exit', 'missing')} | " +
                                     ' | '.join(formatted) + f' | {counts} |\n')
+                      summary.write(f"\nCapture: {r['scheduler_mode']}; UI user switch-out chains: "
+                                    f"{r.get('ui_user_switch_out_chains', 'unavailable')}.\n\n")
+                      for wait in r.get('longest_ui_waits', []):
+                          chain = [symbol for symbol, dso in wait['switch_out_stack'] if dso.startswith('/')]
+                          summary.write(f"UI off-CPU {wait['off_cpu_ms']:.3f} ms; "
+                                        f"state {wait['prev_state']}; user chain: " +
+                                        ' → '.join(chain[:8]) + '\n\n')
                       for key in ['capture_error', 'analysis_error']:
                           if key in r:
                               summary.write(f"\n{scene}-{r['rep']} **{key}:** `{r[key]}`\n\n")
@@ -480,7 +881,9 @@ jobs:
             tmp/scroll120-cohort/**/*.jsonl
             tmp/scroll120-cohort/**/*.out
             tmp/scroll120-cohort/**/*.log
-            tmp/scroll120-cohort/**/perf.data
+            tmp/scroll120-cohort/**/*.data
+            tmp/scroll120-cohort/**/ui-strace*
+            tmp/scroll120-cohort/symbols.tar.gz
             tmp/scroll120-cohort/**/stderr
             tmp/scroll120-cohort/**/stdout
             tmp/scroll120-sha256.txt
