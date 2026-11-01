@@ -133,7 +133,7 @@ static_assertions::assert_not_impl_any!(ParallelCompiledHofCode: Clone, Copy);
 static_assertions::assert_not_impl_any!(ParallelCompiledHofCode: Sync);
 
 #[cfg(test)]
-#[path = "hof/tests.rs"]
+#[path = "hof/tests/mapping_test.rs"]
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::manifest as manifest_for_test;

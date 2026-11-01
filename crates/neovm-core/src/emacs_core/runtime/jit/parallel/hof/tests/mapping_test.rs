@@ -7,7 +7,7 @@ use crate::tagged::gc::{
 use crate::tagged::value::TaggedValue;
 
 fn oracle() -> [&'static str; 6] {
-    include_str!("../tests/hof_oracle.expected")
+    include_str!("../../tests/hof_oracle.expected")
         .lines()
         .collect::<Vec<_>>()
         .try_into()
@@ -387,7 +387,7 @@ fn nmjit_n4_hof_fixture_noop_and_unwind_teardown() {
 }
 #[test]
 fn nmjit_n4_hof_scope_source_guard_test() {
-    let source = include_str!("../hof.rs");
+    let source = include_str!("../../hof.rs");
     let leaf = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/tagged/gc/mutator_registration/execution/hof.rs"
