@@ -46,7 +46,7 @@ use crate::emacs_core::value::Value;
 use crate::tagged::header::AtomicTaggedValue;
 use std::cell::UnsafeCell;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 // ===========================================================================
 // The flags byte
@@ -584,6 +584,43 @@ pub(crate) enum DumpedCell {
     Alias(SymId),
 }
 
+/// Universal plist-head publication clock (P10).
+///
+/// Process-global rather than an `Obarray` field: the one head-store seam
+/// below must also run from cell construction and pdump reconstruction, which
+/// have no `Obarray`.  A bump before an era is published is harmless because
+/// nothing reads the clock yet; afterwards it is the snapshot-invalidation
+/// clock (P10-a2).  It is not TLS.
+static PLIST_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// The current plist-head epoch.  One Acquire load is the per-signal freshness
+/// check of the P10 snapshot store; in P10-a1 only the tests read it.
+#[cfg(test)]
+#[inline(always)]
+pub(crate) fn plist_epoch() -> u64 {
+    PLIST_EPOCH.load(Ordering::Acquire)
+}
+
+/// Advance the plist-head clock.  Release publishes the head store that
+/// precedes it; `fetch_add` means a concurrent bumper cannot lose this one.
+#[inline]
+fn note_plist_head_store() {
+    PLIST_EPOCH.fetch_add(1, Ordering::Release);
+}
+
+/// The ONE production store of a symbol's plist head.
+///
+/// Publishes the head through the cell's atomic contract and advances the
+/// universal clock.  The architecture guard requires `plist.store_atomic(` to
+/// appear in production only inside this function: the `put`/`setplist`
+/// primitives, `replace_symbol_plist_id`, construction (`publish_fill`) and
+/// pdump reconstruction (`from_dump`) all route through it.
+#[inline]
+pub(crate) fn store_plist_head(symbol: &mut LispSymbol, plist: Value) {
+    symbol.plist.store_atomic(plist);
+    note_plist_head_store();
+}
+
 impl LispSymbol {
     /// A fully-initialized EMPTY obarray slot: `name == `[`SYMBOL_NAME_SENTINEL`]
     /// with the arm defaults GNU gives a freshly-interned symbol (Plainval /
@@ -650,7 +687,7 @@ impl LispSymbol {
         sym.flags.set_redirect(redirect);
         sym.val = word;
         sym.function = function.into();
-        sym.plist = plist.into();
+        store_plist_head(&mut sym, plist);
         sym
     }
 
@@ -684,10 +721,11 @@ impl LispSymbol {
     #[inline]
     pub(super) fn publish_fill(&mut self, src: LispSymbol) {
         let published_name = src.name.load(Ordering::Relaxed);
+        let plist = src.plist.get();
         self.flags = src.flags.clone();
         self.val = src.val.clone();
         self.function = src.function;
-        self.plist = src.plist;
+        store_plist_head(self, plist);
         self.interned_global = src.interned_global;
         self.function_unbound = src.function_unbound;
         // Terminal Release: publishes the arm writes above to the GC scan's

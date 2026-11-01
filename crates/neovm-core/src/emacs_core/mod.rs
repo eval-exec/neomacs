@@ -506,3 +506,7 @@ mod architecture_host_effect_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/unsafe_shim_guard_test.rs"]
 mod architecture_unsafe_shim_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/plist_head_seam_guard_test.rs"]
+mod architecture_plist_head_seam_guard_test;

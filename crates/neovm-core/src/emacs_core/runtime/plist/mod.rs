@@ -10,7 +10,9 @@ use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use crate::emacs_core::intern::{SymId, intern};
-use crate::emacs_core::symbol::{Obarray, SymbolPlistSnapshot, SymbolPropertyRevision};
+use crate::emacs_core::symbol::{
+    Obarray, SymbolPlistSnapshot, SymbolPropertyRevision, store_plist_head,
+};
 use crate::emacs_core::value::{Value, eq_value, eq_value_swp};
 
 #[cfg(test)]
@@ -443,7 +445,7 @@ impl Obarray {
             plist_put(sym.plist.get(), Value::from_sym_id(intern(prop)), value)?;
         // SATB: retain the plist cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        sym.plist.store_atomic(new_plist);
+        store_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
         Ok(())
     }
@@ -463,7 +465,7 @@ impl Obarray {
         let (new_plist, _changed) = plist_put(sym.plist.get(), Value::from_sym_id(prop), value)?;
         // SATB: retain the plist cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        sym.plist.store_atomic(new_plist);
+        store_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
         Ok(())
     }

@@ -51,10 +51,13 @@ pub(crate) enum CanonicalWrite {
     /// The cell is a thread projection: the owner-aware caller routes it.
     Projected,
 }
+#[cfg(test)]
+pub(crate) use cell::plist_epoch;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 pub(crate) use cell::{
     BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
+    store_plist_head,
 };
 pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(test)]
@@ -4427,7 +4430,7 @@ impl Obarray {
         let sym = self.ensure_symbol_id(symbol);
         // SATB: retain the plist cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        sym.plist.store_atomic(new_plist);
+        store_plist_head(sym, new_plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -4439,7 +4442,7 @@ impl Obarray {
         let sym = self.ensure_symbol_id(symbol);
         // SATB: retain the plist cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.plist.get());
-        sym.plist.store_atomic(plist);
+        store_plist_head(sym, plist);
         SymbolPropertyRevision::changed(symbol);
     }
 
@@ -5207,6 +5210,10 @@ mod copied_value_tests;
 #[cfg(test)]
 #[path = "tests/canonical_dispatch_test.rs"]
 mod canonical_dispatch_tests;
+
+#[cfg(test)]
+#[path = "tests/plist_epoch_test.rs"]
+mod plist_epoch_tests;
 
 /// The pre-`CanonicalAccess` spellings, for tests, which set up and inspect
 /// canonical storage. Production code names its reason
