@@ -262,14 +262,17 @@ impl ParallelCompiledNamedCode {
         }
     }
 }
+static_assertions::assert_impl_all!(ParallelCompiledNamedCode: Send);
 static_assertions::assert_not_impl_any!(ParallelCompiledNamedCode: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(ParallelCompiledNamedCode: Sync);
 
+static_assertions::assert_impl_all!(ParallelCompiledCellCode: Send);
 static_assertions::assert_not_impl_any!(ParallelCompiledCellCode: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(ParallelCompiledCellCode: Sync);
 
+static_assertions::assert_impl_all!(ParallelCompiledCode: Send);
 static_assertions::assert_not_impl_any!(ParallelCompiledCode: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(ParallelCompiledCode: Sync);
@@ -301,3 +304,7 @@ pub(crate) use identity_tests::named_manifest as named_manifest_for_test;
 
 #[cfg(test)]
 pub(crate) use hof::manifest_for_test as hof_manifest_for_test;
+
+#[cfg(test)]
+#[path = "parallel/tests/owner_handoff_test.rs"]
+mod owner_handoff_tests;

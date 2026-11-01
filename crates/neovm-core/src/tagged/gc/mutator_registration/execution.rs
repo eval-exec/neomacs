@@ -159,9 +159,10 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use tests::{
-    ExecutionTestHomes, FixtureReceipt as ExecutionFixtureReceipt,
-    FixtureSeed as ExecutionTestSeed, HofTestInputs,
-    prepared_cell_fixture as with_test_prepared_cell_execution,
+    CohortPhase, CohortSize, ExecutionTestDeadline, ExecutionTestHomes, ExecutionTestRetry,
+    FixtureReceipt as ExecutionFixtureReceipt, FixtureSeed as ExecutionTestSeed, HofTestInputs,
+    execution_test_retry, prepared_cell_fixture as with_test_prepared_cell_execution,
     prepared_fixture as with_test_prepared_execution,
+    prepared_hof_cohort as with_test_prepared_hof_cohort,
     prepared_hof_fixture as with_test_prepared_hof_execution,
 };

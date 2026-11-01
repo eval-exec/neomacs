@@ -10,7 +10,8 @@ pub(crate) use super::{
 
 #[cfg(test)]
 pub(crate) use super::{
-    ExecutionFixtureReceipt, ExecutionTestHomes, ExecutionTestSeed, GenericProofEra,
-    GenericProofEraFinishFailure, HofTestInputs, ProofEra, with_test_prepared_cell_execution,
-    with_test_prepared_execution, with_test_prepared_hof_execution,
+    CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,
+    ExecutionTestRetry, ExecutionTestSeed, GenericProofEra, GenericProofEraFinishFailure,
+    HofTestInputs, ProofEra, execution_test_retry, with_test_prepared_cell_execution,
+    with_test_prepared_execution, with_test_prepared_hof_cohort, with_test_prepared_hof_execution,
 };

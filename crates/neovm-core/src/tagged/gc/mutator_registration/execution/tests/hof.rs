@@ -17,14 +17,14 @@ pub(crate) struct HofTestInputs<'era> {
     pub(crate) mapper_replacement: OwnerRootSlot<'era>,
 }
 
-fn spelling(operation: HofOperation) -> &'static str {
+pub(super) fn spelling(operation: HofOperation) -> &'static str {
     match operation {
         HofOperation::Mapc => "mapc",
         HofOperation::Mapcar => "mapcar",
     }
 }
 
-fn builtin(operation: HofOperation) -> SubrEntry {
+pub(super) fn builtin(operation: HofOperation) -> SubrEntry {
     let body: SubrFn2 = match operation {
         HofOperation::Mapc => crate::emacs_core::builtins::builtin_mapc_2,
         HofOperation::Mapcar => crate::emacs_core::builtins::builtin_mapcar_2,
@@ -50,12 +50,12 @@ fn reconcile_retry(error: &ReconcileError) -> Retry {
     }
 }
 
-enum FixtureParameters {
+pub(super) enum FixtureParameters {
     Nullary,
     Unary(crate::emacs_core::intern::SymId),
 }
 
-fn definition(parameter: FixtureParameters, answer: i64) -> TaggedValue {
+pub(super) fn definition(parameter: FixtureParameters, answer: i64) -> TaggedValue {
     let parameters = match parameter {
         FixtureParameters::Unary(parameter) => {
             TaggedValue::cons(TaggedValue::from_sym_id(parameter), TaggedValue::NIL)

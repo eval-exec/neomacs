@@ -128,6 +128,7 @@ impl ParallelCompiledHofCode {
         }
     }
 }
+static_assertions::assert_impl_all!(ParallelCompiledHofCode: Send);
 static_assertions::assert_not_impl_any!(ParallelCompiledHofCode: Clone, Copy);
 #[cfg(feature = "jit")]
 static_assertions::assert_not_impl_any!(ParallelCompiledHofCode: Sync);

@@ -1,10 +1,16 @@
 //! Real collector admission, resident owner roots and activation cleanup.
+#[path = "tests/cohort.rs"]
+mod cohort;
 #[path = "tests/hof.rs"]
 mod hof;
+pub(crate) use super::super::retry::{
+    Deadline as ExecutionTestDeadline, Retry as ExecutionTestRetry, retry as execution_test_retry,
+};
 use super::super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
+pub(crate) use cohort::{CohortPhase, CohortSize, prepared_hof_cohort};
 pub(crate) use hof::{HofTestInputs, prepared_hof_fixture};
 use std::ops::ControlFlow;
 
