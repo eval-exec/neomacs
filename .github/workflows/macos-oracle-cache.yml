@@ -41,7 +41,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # The action restores the entry, builds it on a miss with
-      # scripts/ci/build-gnu-oracle.sh (Darwin macos-batch profile), attests
+      # scripts/ci/build-gnu-oracle.sh (Darwin macos-ns profile), attests
       # the result, and saves the attested tree from its own inline step.
       - name: Set up GNU Emacs oracle (macOS)
         uses: ./.github/actions/setup-gnu-emacs-macos

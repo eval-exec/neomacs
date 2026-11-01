@@ -2,13 +2,17 @@ name: 'Set up GNU Emacs oracle (macOS)'
 description: >-
   Install the GNU Emacs that the macOS neovm-core and oracle-parity suites run
   against: the pinned parity reference built from the exact emacs-mirror commit
-  by the one recipe (scripts/ci/build-gnu-oracle.sh), whose Darwin profile is a
-  window-system-less build (--without-x --without-ns) with the kqueue
-  notification backend.  The version string is not an identity, so the smoke
-  step asserts the configured features and configure line
-  (scripts/ci/check-gnu-oracle.sh), and the tests resolve the same binary
-  through the attested resolver (NEOVM_FORCE_ORACLE_PATH, attested against
-  parity-reference.toml by neomacs-test-oracle).
+  by the one recipe (scripts/ci/build-gnu-oracle.sh), whose Darwin default
+  profile is an NS build (--with-ns --disable-ns-self-contained --without-x)
+  with the kqueue notification backend.  NS answers --batch without a display,
+  so CI needs no X server, and GNU registers syms_of_image and syms_of_fontset
+  only under HAVE_NS/HAVE_WINDOW_SYSTEM (src/emacs.c) -- the window-system
+  surface a GUI Neomacs is compared against.  The version string is not an
+  identity, so the smoke step asserts the configured features, the NS/image
+  surface and the configure line (scripts/ci/check-gnu-oracle.sh), and the
+  tests resolve the same binary through the attested resolver
+  (NEOVM_FORCE_ORACLE_PATH, attested against parity-reference.toml by
+  neomacs-test-oracle).
 
   This is the macOS sibling of .github/actions/setup-gnu-emacs.  It differs
   only in the host: the recipe's Darwin profile replaces the GTK3 line, the
@@ -46,12 +50,14 @@ inputs:
     default: "1"
   profile:
     description: >-
-      The build-gnu-oracle.sh Darwin profile.  macos-batch is the
-      characterized CI reference (--without-x --without-ns); macos-x11 is the
-      opt-in window-system comparison profile.  The cache key carries the
-      profile, so switching it rebuilds instead of restoring a different GNU.
+      The build-gnu-oracle.sh Darwin profile.  macos-ns is the CI reference
+      (--with-ns --disable-ns-self-contained --without-x); macos-batch is the
+      pre-NS reference kept for reproduction (no CI job builds it), and
+      macos-x11 is the opt-in window-system comparison profile.  The cache key
+      carries the profile, so switching it rebuilds instead of restoring a
+      different GNU.
     required: false
-    default: "macos-batch"
+    default: "macos-ns"
 
 runs:
   using: 'composite'
@@ -111,10 +117,15 @@ runs:
         HOMEBREW_NO_INSTALL_CLEANUP: "1"
       run: |
         # Needed on a cache HIT too: the cached oracle links Homebrew's
-        # gnutls, so a job that restores it without the library present has an
-        # Emacs that cannot start.  autoconf/automake/texinfo/pkgconf are
-        # build-only, but Homebrew makes an already-installed formula a
-        # no-op, so one list keeps the hit and miss paths identical.
+        # gnutls, librsvg and libwebp, so a job that restores it without the
+        # libraries present has an Emacs that cannot start.  autoconf/
+        # automake/texinfo/pkgconf are build-only, but Homebrew makes an
+        # already-installed formula a no-op, so one list keeps the hit and
+        # miss paths identical.
+        #
+        # librsvg and libwebp are the NS profile's explicit svg/webp
+        # providers; png/jpeg/gif/tiff and heic come from AppKit through the
+        # native image API and need no Homebrew library.
         #
         # libxml2 is deliberately NOT installed: the characterized macOS
         # oracle took the SDK's libxml2 through configure's fallback probe
@@ -127,7 +138,7 @@ runs:
         # Installing it on the hit path keeps both paths identical, and the
         # step below proves the dylib a cache HIT restored the oracle with.
         set -euo pipefail
-        brew install autoconf automake texinfo pkgconf gnutls libfaketime
+        brew install autoconf automake texinfo pkgconf gnutls librsvg webp tree-sitter lcms2 libfaketime
 
     - name: Locate libfaketime for the frozen-clock oracle cases
       id: faketime
@@ -151,7 +162,10 @@ runs:
         # Homebrew's pkgconf finds gnutls only when told where Homebrew keeps
         # pkg-config files; without it the --with-gnutls=ifavailable line
         # silently produces a different oracle and the smoke step rejects it.
-        export PKG_CONFIG_PATH="$(brew --prefix gnutls)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        # The main prefix carries librsvg's and libwebp's .pc files (the NS
+        # profile's svg/webp providers); gnutls is keg-only, so its own
+        # prefix is added explicitly.
+        export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix gnutls)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
         EMACS_ORACLE_WORKDIR="$RUNNER_TEMP" \
           "$GITHUB_WORKSPACE/scripts/ci/build-gnu-oracle.sh" \
           "$EMACS_COMMIT" /opt/gnu-emacs-oracle

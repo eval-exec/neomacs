@@ -16,10 +16,25 @@
 #
 # The configure line is load-bearing, not a preference.  On Linux a TTY-only
 # build (no GTK3/X11) lacks the 107 window-system mouse bindings, and their
-# long keys shift every describe-bindings block's alignment.  On macOS there is
-# no X server in CI, so the characterized oracle is --without-x --without-ns;
-# the questions the macOS suite asks it (long-double formatting, load suffixes,
-# kqueue notification, time zones, raw-byte file names) are batch behaviors.
+# long keys shift every describe-bindings block's alignment.  On macOS the
+# reference is an NS build (--with-ns --disable-ns-self-contained --without-x):
+# GNU registers syms_of_image (image.c: x-bitmap-file-path at image.c:13268,
+# image-types) and syms_of_fontset (set-fontset-font, fontset.c:2250) only
+# under HAVE_WINDOW_SYSTEM/HAVE_NS (src/emacs.c), and Neomacs presents its own
+# GUI window system (`neo`), so a window-system-less reference compares a GUI
+# editor against a batch one.  NS answers --batch without a display, so the
+# "no X server in CI" argument never applied to it.  png/jpeg/gif/tiff and
+# heic come from AppKit through the native image API
+# (HAVE_NATIVE_IMAGE_API, nsimage.m ns_can_use_native_image_api); the four C
+# image libraries are disabled explicitly so the oracle does not depend on
+# the runner's floating Homebrew copies and the native path is exercised.
+# svg and webp are enabled from Homebrew librsvg/libwebp because GNU's NS
+# default probes them (`--with-rsvg`, `--with-webp`, both default-on and
+# looked up with pkg-config) and the AppKit UTI answer for those two depends
+# on the macOS version; ImageMagick stays off: it adds a floating dependency
+# and formats the compared surface does not use.  A --without-x --without-ns
+# build (macos-batch) remains available as an opt-in profile for reproducing
+# the pre-NS baseline; no CI job builds it.
 # On both hosts a native-comp build ships inline docstrings where a canonical
 # byte-compiled build has lazy (#$ . N) references, so doc-slot-4 oracle
 # records differ, and --without-compress-install keeps the installed Lisp tree
@@ -35,7 +50,8 @@
 # built into $prefix, configure finds it through $prefix/lib/pkgconfig, and
 # the installed executables get a RUNPATH that puts $prefix/lib first, so a CI
 # cache HIT resolves it without a compiler, LD_LIBRARY_PATH, or the system's
-# tree-sitter.  The macOS oracle is a batch reference and builds none.
+# tree-sitter.  The macOS NS oracle builds none (an NS build does not need
+# X11, and the pinned grammars are a Linux-reference input).
 #
 # A change here -- including the Tree-sitter pin below -- is a recipe change:
 # bump `cache-version` in the setup actions so CI rebuilds its cache.
@@ -75,9 +91,12 @@ readonly prefix=$2
 readonly workdir=${3:-${EMACS_ORACLE_WORKDIR:-${TMPDIR:-/tmp}}}
 readonly repo=${EMACS_ORACLE_REPO:-https://github.com/emacs-mirror/emacs.git}
 # A host family can offer more than one characterized reference.  The macOS
-# CI action builds the default `macos-batch` oracle; `EMACS_ORACLE_PROFILE=
-# macos-x11` builds the X11-window-system profile used to compare the
-# window-system Lisp surface against the Linux reference (decision (a)).
+# CI action builds the default `macos-ns` oracle; `EMACS_ORACLE_PROFILE=
+# macos-batch` builds the window-system-less profile that the pre-NS macOS
+# numbers were measured against (opt-in reproduction only; no CI job builds
+# it), and `EMACS_ORACLE_PROFILE=macos-x11` builds the X11-window-system
+# profile used to compare the window-system Lisp surface against the Linux
+# reference (decision (a)).
 readonly profile_override=${EMACS_ORACLE_PROFILE:-}
 # GNU/Linux has nproc; Darwin does not (and its bash 3.2 does not either).
 if [[ $(uname -s) == Darwin ]]; then
@@ -106,15 +125,16 @@ log() { printf 'build-gnu-oracle: %s\n' "$*" >&2; }
 # what that commit is configured with.  There is one recipe per host family,
 # because a window system is not portable: the Linux oracle is a GTK3 build
 # whose window-system bindings and face realization the TUI/describe-bindings
-# parity depends on, while macOS CI has neither X11 nor NS and its neovm-core
-# parity questions (long double formatting, load suffixes, file notification,
-# time zones, file names) are batch behaviors.  macOS also offers a second,
-# opt-in profile via EMACS_ORACLE_PROFILE=macos-x11: Homebrew X11 libraries
-# without an X toolkit, no XQuartz and no sudo, used to compare the
-# window-system Lisp surface against the Linux reference (decision (a)).  The
-# profile is recorded in the manifest and asserted by check-gnu-oracle.sh, and
-# the cache key in each setup action hashes this file, so changing a line
-# rebuilds the oracle.
+# parity depends on, and the macOS oracle is an NS build whose window-system
+# Lisp surface (image.c, fontset.c, ns-* names) is what Neomacs's own GUI
+# window system is compared against.  macOS also offers two opt-in profiles:
+# macos-batch (--without-x --without-ns), the reference the pre-NS macOS
+# numbers were measured against, and macos-x11 (Homebrew X11 libraries without
+# an X toolkit, no XQuartz and no sudo), used to compare the window-system
+# Lisp surface against the Linux reference (decision (a)).  The profile is
+# recorded in the manifest and asserted by check-gnu-oracle.sh, and the cache
+# key in each setup action hashes this file, so changing a line rebuilds the
+# oracle.
 case $(uname -s) in
     Darwin)
         if [[ $profile_override == macos-x11 ]]; then
@@ -166,18 +186,46 @@ case $(uname -s) in
                 --x-includes="$brew_prefix/include:$brew_gmp/include"
                 --x-libraries="$brew_prefix/lib:$brew_gmp/lib"
             )
-        else
-            if [[ -n $profile_override && $profile_override != macos-batch ]]; then
-                echo "build-gnu-oracle: profile '$profile_override' is not available on $(uname -s)" >&2
-                exit 2
-            fi
-            profile=macos-batch
+        elif [[ -z $profile_override || $profile_override == macos-ns ]]; then
+            profile=macos-ns
             configure_args=(
-                # No window system: CI has no X server, and an NS build would
-                # answer different face questions than the reference the macOS
-                # suite was characterized against.
+                # An NS build: GNU registers syms_of_image (image.c; the
+                # window-system Lisp surface, x-bitmap-file-path, image-types)
+                # and syms_of_fontset (set-fontset-font) only under
+                # HAVE_NS/HAVE_WINDOW_SYSTEM (src/emacs.c), and Neomacs
+                # presents its own GUI window system.  NS answers --batch
+                # without a display, so CI needs no X server.
+                --with-ns
+                # The standard $prefix layout (bin/emacs + share/emacs/...)
+                # instead of an Emacs.app bundle, so the attested resolver and
+                # the installed-Lisp checks work as on the other profiles.
+                --disable-ns-self-contained
                 --without-x
-                --without-ns
+                # AppKit provides png/jpeg/gif/tiff and heic through the native
+                # image API (image.c:13147-13186 and 13226-13246; nsimage.m
+                # ns_can_use_native_image_api).  The C libraries stay off so
+                # the oracle does not depend on the runner's floating copies
+                # and the native path is the one exercised.
+                --with-native-image-api
+                --without-png
+                --without-jpeg
+                --without-tiff
+                --without-gif
+                # svg/webp are GNU's default-on probes; enable them explicitly
+                # from Homebrew librsvg/libwebp so their availability does not
+                # depend on the macOS version's UTI set.  ImageMagick adds a
+                # floating dependency and no format the compared surface uses.
+                --with-rsvg
+                --with-webp
+                --without-imagemagick
+                # The Linux reference is a tree-sitter + lcms2 build and a
+                # --without-sqlite3 build.  Pinning the same surface keeps
+                # host-to-host comparisons about the window system rather
+                # than about which Homebrew libraries happened to be
+                # installed; check-gnu-oracle.sh requires/forbids these.
+                --with-tree-sitter
+                --with-lcms2
+                --without-sqlite3
                 --with-native-compilation=no
                 --without-compress-install
                 # Darwin's file-notify backend (src/kqueue.c); asking for it
@@ -189,6 +237,24 @@ case $(uname -s) in
                 --with-sound=no
                 --without-dbus
             )
+        elif [[ $profile_override == macos-batch ]]; then
+            profile=macos-batch
+            configure_args=(
+                # Opt-in only: the pre-NS macOS reference (no window system).
+                --without-x
+                --without-ns
+                --with-native-compilation=no
+                --without-compress-install
+                --with-file-notification=kqueue
+                --with-gnutls=ifavailable
+                --with-xml2=ifavailable
+                --with-libgmp=ifavailable
+                --with-sound=no
+                --without-dbus
+            )
+        else
+            echo "build-gnu-oracle: profile '$profile_override' is not available on $(uname -s)" >&2
+            exit 2
         fi
         ;;
     *)
@@ -222,9 +288,8 @@ case $(uname -s) in
             # Neomacs half that compares against it) fail with "Initial
             # settings are not isolated" / "Startup ignored desktop font".
             # The CI image and the NixOS shell both provide gio >= 2.26.
-            # The macOS profile needs no flag: its action installs no glib,
-            # so configure omits GSettings there (and the macos-batch check
-            # forbids it).
+            # The macOS profiles need no flag: the action installs no glib,
+            # so configure omits GSettings there (and their checks forbid it).
             --without-libsystemd
             --without-selinux
             --without-gpm
@@ -278,6 +343,16 @@ log "autogen.sh"
 # generation.  CI exports none of them; be explicit rather than trusting the
 # caller's environment.
 unset CFLAGS CPPFLAGS LDFLAGS
+
+if [[ $profile == macos-ns ]]; then
+    # librsvg and libwebp are looked up with pkg-config, and Homebrew's gnutls
+    # is keg-only, so its .pc file is not on the default search path.  The
+    # path is a build-environment input, not a configure argument, so it does
+    # not enter system-configuration-options; the installed oracle links the
+    # libraries at run time (the setup action installs them on a cache hit
+    # too).
+    export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix gnutls)/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
 
 if [[ $profile == macos-x11 ]]; then
     # PNG, WEBP, librsvg, lcms2, freetype and tree-sitter are found through
@@ -393,6 +468,19 @@ mkdir -p "$manifest_dir"
     if [[ $profile == linux-gtk3 ]]; then
         printf 'tree_sitter_version=%s\n' "$tree_sitter_version"
         printf 'tree_sitter_sha256=%s\n' "$tree_sitter_sha256"
+    fi
+    if [[ $profile == macos-ns ]]; then
+        # The NS window-system surface the macOS reference is characterized
+        # by.  `ns` is provided by src/nsterm.m:11749 in syms_of_nsterm, so it
+        # is true in --batch.  native-image is the AppKit image API
+        # (nsimage.m ns_can_use_native_image_api); image-types is recorded
+        # because the AppKit UTI set is an OS input.
+        printf 'ns_feature=%s\n' \
+            "$("$prefix/bin/emacs" --batch --quick --eval '(princ (if (featurep (quote ns)) "yes" "no"))')"
+        printf 'native_image_api=%s\n' \
+            "$("$prefix/bin/emacs" --batch --quick --eval '(princ (if (image-type-available-p (quote native-image)) "yes" "no"))')"
+        printf 'image_types=%s\n' \
+            "$("$prefix/bin/emacs" --batch --quick --eval '(prin1 image-types)')"
     fi
     # The full configure invocation, prefix first, exactly as it was run.
     printf 'configure_arg=--prefix=%s\n' "$prefix"

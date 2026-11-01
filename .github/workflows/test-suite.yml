@@ -206,9 +206,8 @@ jobs:
 
   # The Darwin arm of the same suite.  A separate job, not a matrix arm,
   # because it shares nothing with Linux beyond the test sources: the runtime
-  # and test binaries are compiled on the Mac, and the oracle is a
-  # window-system-less GNU built by the recipe's Darwin profile
-  # (setup-gnu-emacs-macos).  It runs the neovm-core package and then the
+  # and test binaries are compiled on the Mac, and the oracle is an NS GNU
+  # built by the recipe's Darwin profile (setup-gnu-emacs-macos).  It runs the neovm-core package and then the
   # host-hermetic oracle-parity families -- the org/divergence/file/process
   # selection of package neovm-oracle-tests whose expectations hold on both
   # hosts after the macOS-keyed fixes -- in Verify mode, so those

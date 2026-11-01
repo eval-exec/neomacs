@@ -12,8 +12,8 @@
 # The job exists so the Darwin parity work cannot rot: the suite runs the
 # neovm-core package (unit and integration tests, including the oracle
 # families that spawn GNU) against the pinned macOS GNU built by
-# scripts/ci/build-gnu-oracle.sh (Darwin profile, window-system-less with
-# kqueue).  A missing or different oracle fails in the checker below; nothing
+# scripts/ci/build-gnu-oracle.sh (Darwin NS profile with kqueue; an NS build
+# answers --batch without a display).  A missing or different oracle fails in the checker below; nothing
 # is skipped.
 set -euo pipefail
 

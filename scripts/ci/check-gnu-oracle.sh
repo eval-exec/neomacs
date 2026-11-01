@@ -11,7 +11,9 @@
 # build differs from the pinned reference, because a divergence measured
 # against a different GNU is not a divergence.  The manifest's `profile` line
 # selects the host family's expectations: `linux-gtk3` (the default for
-# manifests written before the line existed) or `macos-batch`.
+# manifests written before the line existed), `macos-ns` (the macOS CI
+# reference), `macos-batch` (the pre-NS macOS reference, opt-in only) or
+# `macos-x11` (opt-in window-system comparison).
 #
 # The checks, and what each one catches:
 #   * emacs-version is the pinned release.
@@ -21,11 +23,16 @@
 #     the face fixtures use.  A TTY-only build succeeds and reports the same
 #     version, but is a different oracle: it lacks 107 window-system mouse
 #     bindings, and their long keys shift every describe-bindings block one
-#     tab-width wider.  macos-batch: PDUMPER/KQUEUE/GNUTLS/LIBXML2/MODULES/
-#     THREADS and no window system, because that is the macOS reference the
-#     suite was characterized against.
+#     tab-width wider.  macos-ns: NS/PDUMPER/KQUEUE/GNUTLS/LIBXML2/MODULES/
+#     THREADS plus the explicitly enabled RSVG/WEBP, with (featurep 'ns)
+#     true and the AppKit native image API covering png/jpeg/gif/tiff/heic
+#     (src/image.c:13147-13186, 13226-13246; src/nsterm.m:11749 provides
+#     `ns`).  Macos-batch: PDUMPER/KQUEUE/GNUTLS/LIBXML2/MODULES/THREADS and
+#     no window system, because that is the reference the pre-NS macOS
+#     numbers were measured against.
 #   * ...and does NOT have NATIVE_COMP or the features configure was told to
-#     disable (linux-gtk3: GCONF/SOUND/LIBSYSTEMD; macos-batch also GSETTINGS).
+#     disable (linux-gtk3: GCONF/SOUND/LIBSYSTEMD; the macOS profiles also
+#     GSETTINGS, macos-ns additionally X11/GTK3/PGTK/IMAGEMAGICK).
 #     A native-comp build ships inline docstrings where canonical byte-compiled
 #     Lisp has lazy (#$ . N) references, which changes preloaded doc slot 4.
 #   * GSETTINGS is present on linux-gtk3: the desktop-font scenarios read the
@@ -78,6 +85,9 @@ tree_sitter_version=
 tree_sitter_sha256=
 manifest_system_configuration=
 manifest_x_bitmap_file_path=
+manifest_ns_feature=
+manifest_native_image_api=
+manifest_image_types=
 # Manifests written before the profile line are the Linux GTK3 oracle.
 profile=linux-gtk3
 configure_args=()
@@ -93,6 +103,9 @@ while IFS= read -r line; do
         system_configuration=*) manifest_system_configuration=${line#system_configuration=} ;;
         x_bitmap_file_path=*) manifest_x_bitmap_file_path=${line#x_bitmap_file_path=} ;;
         tree_sitter_sha256=*) tree_sitter_sha256=${line#tree_sitter_sha256=} ;;
+        ns_feature=*) manifest_ns_feature=${line#ns_feature=} ;;
+        native_image_api=*) manifest_native_image_api=${line#native_image_api=} ;;
+        image_types=*) manifest_image_types=${line#image_types=} ;;
         configure_arg=*) configure_args+=("${line#configure_arg=}") ;;
         configure_env=*) configure_env+=("${line#configure_env=}") ;;
     esac
@@ -166,6 +179,34 @@ The window system is required: without X11/GTK3 the oracle lacks the
 window-system mouse bindings that keep describe-bindings aligned."
         fi
         ;;
+    macos-ns)
+        # The macOS CI reference: an NS build.  GNU registers syms_of_image
+        # (image.c; x-bitmap-file-path, image-types) and syms_of_fontset
+        # (set-fontset-font) only under HAVE_WINDOW_SYSTEM/HAVE_NS
+        # (src/emacs.c), and Neomacs presents its own GUI window system, so
+        # the window-system surface is the point of this profile.  NS answers
+        # --batch without a display.  kqueue is the Darwin notification
+        # backend; RSVG/WEBP are enabled explicitly from Homebrew librsvg and
+        # libwebp; the AppKit native image API covers png/jpeg/gif/tiff/heic
+        # (image.c:13147-13186, 13226-13246) and HAVE_NS covers xpm, so the C
+        # image libraries are deliberately absent.
+        for want in NS PDUMPER KQUEUE GNUTLS LIBXML2 MODULES THREADS RSVG WEBP TREE_SITTER LCMS2; do
+            case " $features " in
+                *" $want "*) ;;
+                *) missing="$missing $want" ;;
+            esac
+        done
+        for forbidden in NATIVE_COMP X11 GTK3 PGTK GCONF GSETTINGS SOUND LIBSYSTEMD IMAGEMAGICK SQLITE3; do
+            case " $features " in
+                *" $forbidden "*) missing="$missing -$forbidden" ;;
+            esac
+        done
+        if [[ -n $missing ]]; then
+            fail "GNU oracle configuration does not match the pinned macOS NS reference; wrong:$missing
+The NS window system is required: a --without-ns build has no syms_of_image/
+syms_of_fontset and compares a GUI Neomacs against a batch GNU."
+        fi
+        ;;
     macos-batch)
         # The macOS parity reference is deliberately window-system-less
         # (CI has no X server, and an NS build answers different face
@@ -222,6 +263,34 @@ differs from the Linux reference."
         fail "$manifest records unknown profile '$profile'"
         ;;
 esac
+
+if [[ $profile == macos-ns ]]; then
+    # The window-system identity.  src/nsterm.m:11749 provides `ns` from
+    # syms_of_nsterm, so it is true even in --batch; an NS build's window
+    # system surface (syms_of_image, syms_of_fontset) is what the macOS
+    # reference is.
+    ns_feature=$("$emacs" --batch --quick --eval '(princ (if (featurep (quote ns)) "yes" "no"))')
+    [[ $ns_feature == yes ]] || fail "(featurep 'ns) is $ns_feature; the oracle is not an NS build"
+    if [[ -n $manifest_ns_feature && $manifest_ns_feature != "$ns_feature" ]]; then
+        fail "oracle reports (featurep 'ns) $ns_feature, manifest records $manifest_ns_feature"
+    fi
+    native_image_api=$("$emacs" --batch --quick --eval '(princ (if (image-type-available-p (quote native-image)) "yes" "no"))')
+    [[ $native_image_api == yes ]] || fail "the AppKit native image API is unavailable; the NS oracle lost its image surface"
+    if [[ -n $manifest_native_image_api && $manifest_native_image_api != "$native_image_api" ]]; then
+        fail "oracle reports native-image $native_image_api, manifest records $manifest_native_image_api"
+    fi
+    # AppKit provides png/jpeg/gif/tiff/heic; HAVE_NS provides xpm; the
+    # explicitly enabled librsvg and libwebp provide svg and webp
+    # (src/image.c:13140-13246).
+    for image_type in png jpeg gif tiff xpm svg webp heic; do
+        got_image=$("$emacs" --batch --quick --eval "(princ (if (image-type-available-p (quote $image_type)) \"yes\" \"no\"))")
+        [[ $got_image == yes ]] || fail "image type '$image_type' is unavailable in the NS oracle"
+    done
+    if [[ -n $manifest_image_types ]]; then
+        got_image_types=$("$emacs" --batch --quick --eval '(prin1 image-types)')
+        [[ $got_image_types == "$manifest_image_types" ]] || fail "oracle image-types $got_image_types, manifest records $manifest_image_types"
+    fi
+fi
 
 # The prefix is the one legitimate difference between CI's oracle and a local
 # one, so strip it before comparing the rest of the configure line verbatim.
