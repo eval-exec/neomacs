@@ -158,8 +158,14 @@ impl ThreadManager {
     }
 
     pub fn signal_thread(&mut self, native: u64, error: Value) {
+        if let Some(thread) = self.live_value(native) {
+            self.signal_thread_for_value(thread, error);
+        }
+    }
+
+    pub(crate) fn signal_thread_for_value(&mut self, value: Value, error: Value) {
         let signal = split_signal_binding_value(error);
-        self.update_thread(native, |thread| {
+        self.update_thread_value(value, |thread| {
             thread.last_error = Some(error);
             let (symbol, data) = signal.unwrap_or((Value::NIL, Value::NIL));
             thread.error_symbol = symbol;
@@ -168,9 +174,11 @@ impl ThreadManager {
                 ThreadPhase::Active(RunState::Blocked) => thread.event_object = Value::NIL,
                 ThreadPhase::New
                 | ThreadPhase::Active(RunState::Running)
-                | ThreadPhase::Completing(_)
-                | ThreadPhase::Terminal(_) => {
+                | ThreadPhase::Completing(_) => {
                     thread.phase = ThreadPhase::Completing(ThreadOutcome::Signaled);
+                }
+                ThreadPhase::Terminal(_) => {
+                    thread.phase = ThreadPhase::Terminal(ThreadOutcome::Signaled);
                 }
             }
         });
@@ -421,8 +429,14 @@ impl ThreadManager {
     }
 
     pub fn set_thread_error(&mut self, native: u64, symbol: Value, data: Value) {
+        if let Some(thread) = self.live_value(native) {
+            self.set_thread_error_for_value(thread, symbol, data);
+        }
+    }
+
+    pub(crate) fn set_thread_error_for_value(&mut self, value: Value, symbol: Value, data: Value) {
         let error = Value::cons(symbol, data);
-        self.update_thread(native, |thread| {
+        self.update_thread_value(value, |thread| {
             thread.error_symbol = symbol;
             thread.error_data = data;
             thread.last_error = Some(error);

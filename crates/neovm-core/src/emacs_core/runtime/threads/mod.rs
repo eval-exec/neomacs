@@ -724,10 +724,10 @@ pub(crate) fn builtin_thread_signal(
         return Ok(Value::NIL);
     }
     if ctx.green_threads_running() {
-        return ctx.green_thread_signal(id, error_symbol, data);
+        return ctx.green_thread_signal(args[0], error_symbol, data);
     }
     ctx.threads
-        .signal_thread(id, Value::cons(error_symbol, data));
+        .signal_thread_for_value(args[0], Value::cons(error_symbol, data));
     Ok(Value::NIL)
 }
 

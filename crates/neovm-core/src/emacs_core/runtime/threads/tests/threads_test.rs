@@ -996,6 +996,66 @@ fn test_builtin_thread_signal_preserves_raw_symbol_identity_through_join() {
     }
 }
 
+/// GNU thread.c:985-991,1004-1031 stores an injected error in the actual
+/// thread object even after exit; Fthread_join:1135-1143 re-raises that error.
+/// A retained joined thread must not need a live native registration to signal.
+fn signal_joined_terminal_thread(mode: super::super::eval::ThreadingMode) {
+    let mut eval = Context::new_with_threading(mode);
+    let thread = eval
+        .eval_str("(setq p15-signal-retained-thread (make-thread (lambda () 42)))")
+        .unwrap();
+    assert_eq!(
+        builtin_thread_join(&mut eval, vec![thread]).unwrap(),
+        Value::fixnum(42)
+    );
+    let native = tagged_object_id(&thread, ThreadingKind::Thread).unwrap();
+    assert!(eval.threads.thread_handle(native).is_none());
+    eval.gc_collect_exact();
+
+    let raw_symbol =
+        crate::emacs_core::intern::intern_lisp_string(&LispString::from_unibyte(vec![0xff]));
+    let data = Value::cons(Value::string("terminal signal"), Value::fixnum(17));
+    assert_eq!(
+        builtin_thread_signal(
+            &mut eval,
+            vec![thread, Value::from_sym_id(raw_symbol), data],
+        )
+        .unwrap(),
+        Value::NIL
+    );
+    eval.gc_collect_exact();
+
+    match builtin_thread_join(&mut eval, vec![thread]).kinded() {
+        Err(FlowKind::Signal(sig)) => {
+            assert_eq!(sig.symbol, raw_symbol);
+            assert_eq!(sig.raw_data, Some(data));
+        }
+        other => panic!("joined terminal thread lost its injected raw signal: {other:?}"),
+    }
+    assert!(eval.threads.thread_handle(native).is_none());
+    assert!(
+        builtin_thread_live_p(&mut eval, vec![thread])
+            .unwrap()
+            .is_nil()
+    );
+    assert!(
+        builtin_thread_last_error(&mut eval, vec![])
+            .unwrap()
+            .is_nil()
+    );
+    eval.green_teardown();
+}
+
+#[test]
+fn p15_signal_joined_terminal_thread_sim() {
+    signal_joined_terminal_thread(super::super::eval::ThreadingMode::Sim);
+}
+
+#[test]
+fn p15_signal_joined_terminal_thread_green() {
+    signal_joined_terminal_thread(super::super::eval::ThreadingMode::Green);
+}
+
 #[test]
 fn test_builtin_thread_last_error_cleanup() {
     crate::test_utils::init_test_tracing();

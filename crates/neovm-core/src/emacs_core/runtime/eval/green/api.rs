@@ -83,12 +83,14 @@ impl Context {
     /// (`src/thread.c:1002-1021`), exactly as GNU does.
     pub(crate) fn green_thread_signal(
         &mut self,
-        id: u64,
+        thread: Value,
         symbol: Value,
         data: Value,
     ) -> EvalResult {
+        let id = crate::emacs_core::threads::expect_thread_id(&self.threads, &thread)?;
         debug_assert_ne!(id, 0, "the main thread receives a THREAD_EVENT");
-        self.threads.set_thread_error(id, symbol, data);
+        self.threads
+            .set_thread_error_for_value(thread, symbol, data);
         let key = ThreadKey::from_id(id);
         let control = self.green_control();
         if matches!(
