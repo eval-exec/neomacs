@@ -205,6 +205,29 @@ mod tests {
             "/src/tagged/gc/function_write_hooks.rs"
         ));
         assert!(!lower.contains("crate::emacs_core"));
+        assert!(!lower.contains("type Symbol:"));
+        assert!(
+            !lower.contains("AtomicU64::new"),
+            "observer must reuse the existing publisher"
+        );
+        let implementation = include_str!("function_write_hooks.rs");
+        assert!(
+            implementation
+                .lines()
+                .any(|line| line == "impl FunctionWriteHooks for Baton {")
+        );
+        assert!(
+            !implementation
+                .lines()
+                .any(|line| line.starts_with("impl FunctionWriteHooks for ")
+                    && line != "impl FunctionWriteHooks for Baton {")
+        );
+        let keeper = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/tagged/gc/mutator_registration/keeper.rs"
+        ));
+        assert!(keeper.contains("FunctionWriteHooks"));
+
         let writer = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/tagged/gc/mutator_registration/symbol_authority/functions/write.rs"

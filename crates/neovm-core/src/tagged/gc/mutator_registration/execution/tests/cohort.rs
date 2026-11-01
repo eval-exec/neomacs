@@ -534,11 +534,10 @@ fn prepared_cohort<P: Send>(
                         contention::retry(
                             Deadline::contention(),
                             || {
-                                stopped
-                                    .symbols()
-                                    .map_err(ReconcileError::Stop)?
-                                    .reconcile_functions()
-                                    .map_err(ReconcileError::Function)
+                                era.reconcile_functions(
+                                    &mut stopped.symbols().map_err(ReconcileError::Stop)?,
+                                )
+                                .map_err(ReconcileError::Function)
                             },
                             reconcile_retry,
                         )

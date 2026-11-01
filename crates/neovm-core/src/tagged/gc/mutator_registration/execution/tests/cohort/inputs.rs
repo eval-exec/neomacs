@@ -1,5 +1,6 @@
 //! Publication-only cold operands; the small handoff fixture allocates none.
 use super::*;
+use crate::emacs_core::eval::world::WorldEra as ParallelHeapEra;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::symbol::Obarray;
 use crate::tagged::gc::FunctionActivation;

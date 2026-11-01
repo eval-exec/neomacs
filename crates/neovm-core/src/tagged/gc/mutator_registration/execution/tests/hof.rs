@@ -237,10 +237,7 @@ pub(crate) fn prepared_hof_fixture<P>(
             contention::retry(
                 Deadline::contention(),
                 || {
-                    stopped
-                        .symbols()
-                        .map_err(ReconcileError::Stop)?
-                        .reconcile_functions()
+                    era.reconcile_functions(&mut stopped.symbols().map_err(ReconcileError::Stop)?)
                         .map_err(ReconcileError::Function)
                 },
                 reconcile_retry,

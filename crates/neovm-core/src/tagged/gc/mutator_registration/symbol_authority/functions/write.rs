@@ -167,6 +167,13 @@ impl<K: EraKeeper> EraCore<'_, K> {
             }
         }
         let symbols = &registry.symbols;
+        let designator = keeper.keeper_designator()?;
+        if designator.heap() != registry.heap {
+            return Err(RegistrationError::WrongHeap.into());
+        }
+        symbols
+            .backing
+            .check_root_designators(designator.obarray(), designator.projections())?;
         symbols.validate(key, registry)?;
         if !word::writer_enter(&symbols.word) {
             return Err(RegistrationError::Busy.into());
@@ -338,7 +345,7 @@ impl KeeperSymbols<'_> {
     /// The retained serial keeper owns these TLS caches. Original admission
     /// retirement occurs in its current returning Context receiver, before
     /// serial execution; no header pointer can outlive that receiver's loan.
-    pub(crate) fn reconcile_functions<K: EraKeeper>(
+    fn reconcile_functions<K: EraKeeper>(
         &mut self,
         keeper: &K,
         designator: &super::super::KeeperWorldDesignator<'_>,

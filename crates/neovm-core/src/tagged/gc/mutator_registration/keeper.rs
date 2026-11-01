@@ -61,6 +61,10 @@ static_assertions::assert_not_impl_any!(FrozenLegacyRoots: Send, Sync, Clone, Co
 /// original manager identities must agree, and a successful designator borrow
 /// must keep those allocations live and excluded from serial execution.
 /// Dropping or leaking the keeper must preserve its existing retention rules.
+/// Its FunctionWriteHooks must describe this same keeper's compiler and canonical
+/// registrations; stopped cache eviction precedes the internal-write epoch move.
+/// Running owners receive only the typed observer of that registration publisher,
+/// never a keeper reference or compiler callback.
 pub unsafe trait EraKeeper: super::super::function_write_hooks::FunctionWriteHooks {
     fn keeper_designator(&self) -> Result<KeeperWorldDesignator<'_>, RegistrationError>;
     fn parallel_heap_identity(&self) -> HeapIdentity;

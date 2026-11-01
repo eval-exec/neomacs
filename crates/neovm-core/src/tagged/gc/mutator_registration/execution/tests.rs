@@ -217,11 +217,10 @@ pub(crate) fn prepared_cell_fixture<P>(
                 | FixtureSeed::UnsupportedFunction => {}
                 FixtureSeed::WritableFunctionDefinition | FixtureSeed::WritableFunctionTwin => {
                     let mut stopped = era.stop().expect("function fixture stop");
-                    stopped
-                        .symbols()
-                        .expect("stopped symbol authority")
-                        .reconcile_functions()
-                        .expect("function fixture reconciliation");
+                    era.reconcile_functions(
+                        &mut stopped.symbols().expect("stopped symbol authority"),
+                    )
+                    .expect("function fixture reconciliation");
                     stopped
                         .trace(|_, _| Ok(()))
                         .expect("function fixture stopped trace");
