@@ -1,11 +1,12 @@
 //! Platform-defined answers that GNU propagates from the host C library and
 //! process API, checked against GNU's answer on whichever host runs the suite.
 //!
-//! Both probes are byte-identical to GNU on Linux and macOS: snapshot mode
-//! compares the Linux record, live mode compares the running GNU.  They must
-//! not pin a host's answer in the engine.  See `arithmetic::builtin_div`
-//! (GNU `Fquo`, src/data.c) and `process::builtins::process_tty_foreground_group`
-//! (GNU `emacs_get_tty_pgrp`, src/process.c:7003).
+//! Snapshot mode selects the compile-time host's record; live modes select the
+//! attested GNU reference's record through the typed `host_expect!` helper.
+//! The answers must not be pinned unconditionally in the engine.  See
+//! `arithmetic::builtin_div` (GNU `Fquo`, src/data.c) and
+//! `process::builtins::process_tty_foreground_group` (GNU
+//! `emacs_get_tty_pgrp`, src/process.c:7003).
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -16,9 +17,10 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 fn oracle_float_invalid_nan_sign_follows_the_host_hardware() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[
-        r#""OK (\"-0.0e+NaN\" \"1.0e+INF\" \"-1.0e+INF\" \"0.0e+NaN\" \"0.0e+NaN\")""#
-    ]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (\"-0.0e+NaN\" \"1.0e+INF\" \"-1.0e+INF\" \"0.0e+NaN\" \"0.0e+NaN\")""#,
+        MacosDarwin => r#""OK (\"0.0e+NaN\" \"1.0e+INF\" \"-1.0e+INF\" \"0.0e+NaN\" \"0.0e+NaN\")""#,
+    );
     crate::common::assert_oracle_parity_expect(
         r#"(list (number-to-string (/ 0.0 0.0))
                  (number-to-string (/ 10.0 0.0))
@@ -36,7 +38,10 @@ fn oracle_float_invalid_nan_sign_follows_the_host_hardware() {
 fn oracle_process_running_child_p_matches_the_host_pipe_probe() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (t t)""#]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK (t t)""#,
+        MacosDarwin => r#""OK (t 0)""#,
+    );
     crate::common::assert_oracle_parity_expect(
         r#"(let* ((ready nil)
                   (proc (make-process
