@@ -2807,6 +2807,8 @@ pub use mutator_registration::{
     SymbolRef, TableMut, TableRef, YoungWorkerLoan,
 };
 
+#[cfg(test)]
+pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
 pub(crate) use mutator_registration::facade::*;
 
 mod alloc_region;
