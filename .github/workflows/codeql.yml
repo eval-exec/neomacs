@@ -53,6 +53,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zstd
 
       - name: Initialize CodeQL
+        id: init
         uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           # CodeQL 2.26.4 regresses Rust analysis enough to terminate the hosted runner.
@@ -63,11 +64,15 @@ jobs:
 
       # Analysis and upload are separate steps so that a failed upload can be
       # retried without re-running the 15 min Rust analysis. Since
-      # 2026-10-31 16:07Z every Rust upload on main has died in the analyze
-      # action's own upload with "We couldn't respond to your request in
-      # time" (the code-scanning SARIF endpoint's 60 s gateway timeout; the
-      # same upload took 11 s at 11:09Z and the analysis itself completes
-      # normally), so one attempt per run is not enough.
+      # 2026-10-31 16:07Z every Rust upload on main has died with "We couldn't
+      # respond to your request in time" (the code-scanning SARIF endpoint's
+      # 60 s gateway timeout; the same upload took 11 s at 11:09Z and the
+      # analysis itself completes normally). The retry cannot use the
+      # upload-sarif action: the codeql-action allows one upload per job per
+      # category and aborts the second ("only one run of the codeql/analyze or
+      # codeql/upload-sarif actions is allowed per job per tool/category", seen
+      # on 01cbf77c5b), so the attempts go through the CodeQL CLI the init
+      # step installed. The SARIF already carries the category set by analyze.
       - name: Analyze
         uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
@@ -75,34 +80,22 @@ jobs:
           upload: never
           output: ${{ runner.temp }}/codeql-sarif
 
-      - name: Upload SARIF
-        id: upload-sarif
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
-        with:
-          sarif_file: ${{ runner.temp }}/codeql-sarif
-          category: /language:${{ matrix.language }}
-
-      - name: Wait before the second upload attempt
-        if: steps.upload-sarif.outcome == 'failure'
-        run: sleep 120
-
-      - name: Upload SARIF (second attempt)
-        id: upload-sarif-retry
-        if: steps.upload-sarif.outcome == 'failure'
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
-        with:
-          sarif_file: ${{ runner.temp }}/codeql-sarif
-          category: /language:${{ matrix.language }}
-
-      - name: Wait before the third upload attempt
-        if: steps.upload-sarif-retry.outcome == 'failure'
-        run: sleep 300
-
-      - name: Upload SARIF (third attempt)
-        if: steps.upload-sarif-retry.outcome == 'failure'
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
-        with:
-          sarif_file: ${{ runner.temp }}/codeql-sarif
-          category: /language:${{ matrix.language }}
+      - name: Upload SARIF (up to three attempts)
+        env:
+          CODEQL: ${{ steps.init.outputs.codeql-path }}
+          SARIF: ${{ runner.temp }}/codeql-sarif/${{ matrix.language }}.sarif
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          ls -l "$(dirname "$SARIF")"
+          printf 'sarif bytes=%s gzip=%s\n' "$(stat -c %s "$SARIF")" "$(gzip -c "$SARIF" | wc -c)"
+          for attempt in 1 2 3; do
+            if printf '%s' "$GH_TOKEN" | "$CODEQL" github upload-results \
+                 --repository="$GITHUB_REPOSITORY" --ref="$GITHUB_REF" --commit="$GITHUB_SHA" \
+                 --sarif="$SARIF" --github-auth-stdin; then
+              echo "upload attempt $attempt succeeded"; exit 0
+            fi
+            echo "upload attempt $attempt failed"
+            [ "$attempt" -lt 3 ] && sleep $((attempt * 120))
+          done
+          exit 1
