@@ -16,18 +16,26 @@ fn oracle_get_load_suffixes_skips_compressed_module_representations() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let form = r#"
-(let ((load-suffixes (list module-file-suffix ".elc" ".el"))
-      (load-file-rep-suffixes '("" ".gz" ".br"))
-      (jka-compr-load-suffixes '(".gz")))
-  (get-load-suffixes))
+(let* ((module module-file-suffix)
+       (load-suffixes (list module ".elc" ".el"))
+       (load-file-rep-suffixes '("" ".gz" ".br"))
+       (jka-compr-load-suffixes '(".gz"))
+       (suffixes (get-load-suffixes)))
+  ;; The module representation is .so on Linux and .dylib on Darwin; replace
+  ;; that one host token with a sentinel so the suffix RULES, not the host's
+  ;; module naming, are what the probe reports.
+  (mapcar (lambda (s)
+            (if (and module (string-prefix-p module s))
+                (concat "[MODULE]" (substring s (length module)))
+              s))
+          suffixes))
 "#;
 
     let expect = expect_test::expect![[
-        r#""OK (\".so\" \".so.br\" \".elc\" \".elc.gz\" \".elc.br\" \".el\" \".el.gz\" \".el.br\")""#
+        r#""OK (\"[MODULE]\" \"[MODULE].br\" \".elc\" \".elc.gz\" \".elc.br\" \".el\" \".el.gz\" \".el.br\")""#
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
-
 #[test]
 fn oracle_require_honors_live_load_suffix_order() {
     return_if_neovm_enable_oracle_proptest_not_set!();
