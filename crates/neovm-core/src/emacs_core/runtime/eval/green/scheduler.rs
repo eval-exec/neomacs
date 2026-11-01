@@ -214,6 +214,16 @@ pub(super) enum Wake {
         key: HostRequestKey,
         baton: Baton,
     },
+    /// Resume the exact published owner step, without a terminal or signal hop.
+    OwnerStep {
+        key: HostRequestKey,
+        baton: Baton,
+    },
+    /// Continue an admitted semantic operation; do not dispatch its actor again.
+    ContinuationTurn {
+        key: HostRequestKey,
+        baton: Baton,
+    },
     /// Reenter the owned native driver without restoring main's Lisp owner.
     NativePump {
         baton: Baton,
@@ -223,9 +233,11 @@ pub(super) enum Wake {
 impl Wake {
     fn baton(&self) -> &Baton {
         match self {
-            Self::Resume(baton) | Self::ServiceTurn { baton, .. } | Self::NativePump { baton } => {
-                baton
-            }
+            Self::Resume(baton)
+            | Self::ServiceTurn { baton, .. }
+            | Self::OwnerStep { baton, .. }
+            | Self::ContinuationTurn { baton, .. }
+            | Self::NativePump { baton } => baton,
         }
     }
 }
@@ -247,12 +259,39 @@ enum ServicePhase {
     RealWait,
     Reacquiring,
     ServingAfterWait,
+    Continuing(ContinuationEligibility),
+    Resuming(ContinuationEligibility),
+    Ended(EndedContinuationPhase),
+}
+
+/// The retirement seam preserves the exact continuation phase it observed.
+/// Absence from the indexed wait registry cannot construct this authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndedContinuationPhase {
+    Continuing(ContinuationEligibility),
+    Resuming(ContinuationEligibility),
+}
+
+/// Genuine GNU release history survives any number of intermediate hops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ContinuationEligibility {
+    Reserved,
+    Released,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ServiceMetadata {
     requester: ThreadKey,
     phase: ServicePhase,
+}
+
+/// Only an explicit exit fact authorizes native-only cleanup. A live or
+/// unobserved owner keeps its continuation and resume authority retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContinuationProgress {
+    NotContinuing,
+    AwaitingOwner,
+    OwnerEnded,
 }
 
 /// Linear reservation held beside the World-owned host root record.
@@ -264,9 +303,35 @@ pub(super) struct ReservedServiceSlice {
     _confined: PhantomData<Rc<()>>,
 }
 
+/// Proof that this exact service's requester has ended in its owning World.
+/// The held serial Baton prevents another owner transition during cleanup.
+#[derive(Debug)]
+#[must_use]
+pub(super) struct EndedServiceOwner {
+    key: HostRequestKey,
+    requester: ThreadKey,
+    _confined: PhantomData<Rc<()>>,
+}
+
+impl EndedServiceOwner {
+    pub(super) fn key(&self) -> HostRequestKey {
+        self.key
+    }
+
+    pub(super) fn requester(&self) -> ThreadKey {
+        self.requester
+    }
+}
+
+static_assertions::assert_not_impl_any!(EndedServiceOwner: Send, Sync, Clone, Copy);
+
 impl ReservedServiceSlice {
     pub(super) fn key(&self) -> HostRequestKey {
         self.key
+    }
+
+    pub(super) fn requester(&self) -> ThreadKey {
+        self.requester
     }
 }
 
@@ -280,6 +345,12 @@ pub(super) struct ServiceTransferPlan {
     requester: ThreadKey,
     _confined: PhantomData<Rc<()>>,
 }
+impl ServiceTransferPlan {
+    pub(super) fn requester(&self) -> ThreadKey {
+        self.requester
+    }
+}
+
 static_assertions::assert_not_impl_any!(ServiceTransferPlan: Send, Sync, Clone, Copy);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -358,6 +429,29 @@ pub(super) struct ServiceAcquireRefusal {
 pub(super) enum ServiceReturn {
     Sent,
     ResumeMain(Baton),
+    ResumeOwnerStep { key: HostRequestKey, baton: Baton },
+}
+
+/// Metadata prepared while the registry still owns its linear slice. It is
+/// revalidated with the held Baton after every World borrow has ended.
+pub(super) struct OwnerResumePlan {
+    key: HostRequestKey,
+    requester: ThreadKey,
+    eligibility: ContinuationEligibility,
+}
+
+pub(super) struct IntermediateReturnPlan {
+    key: HostRequestKey,
+    requester: ThreadKey,
+    eligibility: ContinuationEligibility,
+}
+
+/// A nonterminal return never clears the parent's scheduler reservation.
+#[derive(Debug)]
+#[must_use]
+pub(super) enum IntermediateReturn {
+    Sent,
+    LocalMain { key: HostRequestKey, baton: Baton },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -378,6 +472,7 @@ enum PickNext {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeTurn {
     Service(HostRequestKey),
+    Continuation(HostRequestKey),
     Pump,
 }
 
@@ -1253,6 +1348,602 @@ impl Control {
         })
     }
 
+    /// Sealed local-owner admission. Routed admission still refuses main.
+    pub(super) fn reserve_local_service(
+        &self,
+        registration: &HostParkRegistration,
+    ) -> Result<ReservedServiceSlice, ServiceRefusal> {
+        let mut state = self.state();
+        if state.closing {
+            return Err(ServiceRefusal::Closing);
+        }
+        if registration.owner() != ThreadKey::Main
+            || state.main_os_thread != Some(std::thread::current().id())
+        {
+            return Err(ServiceRefusal::WrongMainThread);
+        }
+        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Running) {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        if state.services.contains_key(&registration.key()) {
+            return Err(ServiceRefusal::DuplicateRequest);
+        }
+        state.services.insert(
+            registration.key(),
+            ServiceMetadata {
+                requester: ThreadKey::Main,
+                phase: ServicePhase::Reserved,
+            },
+        );
+        Ok(ReservedServiceSlice {
+            key: registration.key(),
+            requester: ThreadKey::Main,
+            _confined: PhantomData,
+        })
+    }
+
+    fn transfer_local_metadata(
+        state: &mut ControlState,
+        key: HostRequestKey,
+        requester: ThreadKey,
+        main_os: std::thread::ThreadId,
+    ) -> Result<(), ServiceRefusal> {
+        if state.closing {
+            return Err(ServiceRefusal::Closing);
+        }
+        if state.main_os_thread != Some(main_os) || requester != ThreadKey::Main {
+            return Err(ServiceRefusal::WrongMainThread);
+        }
+        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Running) {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let Some(metadata) = state.services.get_mut(&key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != ThreadKey::Main || metadata.phase != ServicePhase::Reserved {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        metadata.phase = ServicePhase::Serving;
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+        Ok(())
+    }
+
+    /// Enter local native service after canonical owner/root publication.
+    pub(super) fn transfer_local_service(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<Wake, ServiceTransferRefusal> {
+        let result = Self::transfer_local_metadata(
+            &mut self.state(),
+            slice.key,
+            slice.requester,
+            std::thread::current().id(),
+        );
+        match result {
+            Ok(()) => Ok(Wake::ServiceTurn {
+                key: slice.key,
+                baton,
+            }),
+            Err(reason) => Err(ServiceTransferRefusal { reason, baton }),
+        }
+    }
+
+    /// Consume the plan only after all registry/actor borrows have ended.
+    /// Local service never sends to or receives from main's own channel.
+    pub(super) fn transfer_prepared_local_service(
+        &self,
+        plan: ServiceTransferPlan,
+        baton: Baton,
+    ) -> Result<Wake, ServiceTransferRefusal> {
+        let result = Self::transfer_local_metadata(
+            &mut self.state(),
+            plan.key,
+            plan.requester,
+            std::thread::current().id(),
+        );
+        match result {
+            Ok(()) => Ok(Wake::ServiceTurn {
+                key: plan.key,
+                baton,
+            }),
+            Err(reason) => Err(ServiceTransferRefusal { reason, baton }),
+        }
+    }
+
+    fn intermediate_metadata(
+        state: &mut ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        Self::intermediate_metadata_for(state, slice.key, slice.requester)
+    }
+
+    fn intermediate_metadata_for(
+        state: &mut ControlState,
+        key: HostRequestKey,
+        requester: ThreadKey,
+    ) -> Result<(), ServiceRefusal> {
+        if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Serving(key)) {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        if requester != ThreadKey::Main
+            && state.waits.get(&requester) != Some(&Wait::HostRequest(key))
+        {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let Some(metadata) = state.services.get_mut(&key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != requester {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let eligibility = match metadata.phase {
+            ServicePhase::Serving => ContinuationEligibility::Reserved,
+            ServicePhase::ServingAfterWait => ContinuationEligibility::Released,
+            ServicePhase::Reserved
+            | ServicePhase::PendingNative
+            | ServicePhase::RealWait
+            | ServicePhase::Reacquiring
+            | ServicePhase::Continuing(_)
+            | ServicePhase::Resuming(_)
+            | ServicePhase::Ended(_) => {
+                return Err(ServiceRefusal::WrongServiceState);
+            }
+        };
+        metadata.phase = ServicePhase::Continuing(eligibility);
+        if requester != ThreadKey::Main {
+            Self::set_wait(state, requester, Wait::Runnable);
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        }
+        state.physical.insert(requester, OwnerLocation::Running);
+        Ok(())
+    }
+
+    /// The caller retains the linear slice beside its published owner step.
+    /// Neither this hop nor its wake creates FIFO or signal eligibility.
+    pub(super) fn return_to_requester_intermediate(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<IntermediateReturn, ServiceTransferRefusal> {
+        let plan = match self.prepare_intermediate_return(slice) {
+            Ok(plan) => plan,
+            Err(reason) => return Err(ServiceTransferRefusal { reason, baton }),
+        };
+        self.return_prepared_intermediate(plan, baton)
+    }
+
+    pub(super) fn prepare_intermediate_return(
+        &self,
+        slice: &ReservedServiceSlice,
+    ) -> Result<IntermediateReturnPlan, ServiceRefusal> {
+        let state = self.state();
+        let Some(metadata) = state.services.get(&slice.key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != slice.requester {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let eligibility = match metadata.phase {
+            ServicePhase::Serving => ContinuationEligibility::Reserved,
+            ServicePhase::ServingAfterWait => ContinuationEligibility::Released,
+            ServicePhase::Reserved
+            | ServicePhase::PendingNative
+            | ServicePhase::RealWait
+            | ServicePhase::Reacquiring
+            | ServicePhase::Continuing(_)
+            | ServicePhase::Resuming(_)
+            | ServicePhase::Ended(_) => return Err(ServiceRefusal::WrongServiceState),
+        };
+        Ok(IntermediateReturnPlan {
+            key: slice.key,
+            requester: slice.requester,
+            eligibility,
+        })
+    }
+
+    pub(super) fn return_prepared_intermediate(
+        &self,
+        plan: IntermediateReturnPlan,
+        baton: Baton,
+    ) -> Result<IntermediateReturn, ServiceTransferRefusal> {
+        let mut state = self.state();
+        let result = if state.main_os_thread != Some(std::thread::current().id()) {
+            Err(ServiceRefusal::WrongMainThread)
+        } else if !state.services.get(&plan.key).is_some_and(|metadata| {
+            metadata.requester == plan.requester
+                && metadata.phase
+                    == match plan.eligibility {
+                        ContinuationEligibility::Reserved => ServicePhase::Serving,
+                        ContinuationEligibility::Released => ServicePhase::ServingAfterWait,
+                    }
+        }) {
+            Err(ServiceRefusal::WrongServiceState)
+        } else {
+            Self::intermediate_metadata_for(&mut state, plan.key, plan.requester)
+        };
+        if let Err(reason) = result {
+            return Err(ServiceTransferRefusal { reason, baton });
+        }
+        drop(state);
+        if plan.requester == ThreadKey::Main {
+            Ok(IntermediateReturn::LocalMain {
+                key: plan.key,
+                baton,
+            })
+        } else {
+            self.send_wake(
+                plan.requester,
+                Wake::OwnerStep {
+                    key: plan.key,
+                    baton,
+                },
+            );
+            Ok(IntermediateReturn::Sent)
+        }
+    }
+
+    fn resume_owner_metadata(
+        state: &mut ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        Self::resume_owner_metadata_for(state, slice.key, slice.requester)
+    }
+
+    fn resume_owner_metadata_for(
+        state: &mut ControlState,
+        key: HostRequestKey,
+        requester: ThreadKey,
+    ) -> Result<(), ServiceRefusal> {
+        if state.physical.get(&requester) != Some(&OwnerLocation::Running)
+            || state.waits.get(&requester) != Some(&Wait::Runnable)
+        {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let Some(metadata) = state.services.get_mut(&key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != requester {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let eligibility = match metadata.phase {
+            ServicePhase::Continuing(eligibility) => eligibility,
+            ServicePhase::Reserved
+            | ServicePhase::Serving
+            | ServicePhase::ServingAfterWait
+            | ServicePhase::PendingNative
+            | ServicePhase::RealWait
+            | ServicePhase::Reacquiring
+            | ServicePhase::Resuming(_)
+            | ServicePhase::Ended(_) => return Err(ServiceRefusal::WrongServiceState),
+        };
+        metadata.phase = ServicePhase::Resuming(eligibility);
+        if requester != ThreadKey::Main {
+            Self::set_wait(state, requester, Wait::HostRequest(key));
+            state.physical.insert(requester, OwnerLocation::Receiving);
+        }
+        Ok(())
+    }
+
+    /// Continue an existing parent even after close; no new actor publication.
+    /// A native main first reacquires physically before accepting this Baton.
+    pub(super) fn resume_owner_step(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
+        let plan = match self.prepare_owner_resume(slice) {
+            Ok(plan) => plan,
+            Err(reason) => return Err(ServiceTransferRefusal { reason, baton }),
+        };
+        self.resume_prepared_owner_step(plan, baton)
+    }
+
+    pub(super) fn prepare_owner_resume(
+        &self,
+        slice: &ReservedServiceSlice,
+    ) -> Result<OwnerResumePlan, ServiceRefusal> {
+        let state = self.state();
+        let Some(metadata) = state.services.get(&slice.key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        if metadata.requester != slice.requester {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        let ServicePhase::Continuing(eligibility) = metadata.phase else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        Ok(OwnerResumePlan {
+            key: slice.key,
+            requester: slice.requester,
+            eligibility,
+        })
+    }
+
+    pub(super) fn resume_prepared_owner_step(
+        &self,
+        plan: OwnerResumePlan,
+        baton: Baton,
+    ) -> Result<ServiceTransfer, ServiceTransferRefusal> {
+        let mut state = self.state();
+        if plan.requester == ThreadKey::Main {
+            return Err(ServiceTransferRefusal {
+                reason: ServiceRefusal::MainIsRequester,
+                baton,
+            });
+        }
+        if !state.services.get(&plan.key).is_some_and(|metadata| {
+            metadata.requester == plan.requester
+                && metadata.phase == ServicePhase::Continuing(plan.eligibility)
+        }) {
+            return Err(ServiceTransferRefusal {
+                reason: ServiceRefusal::WrongServiceState,
+                baton,
+            });
+        }
+        if !matches!(
+            state.physical.get(&ThreadKey::Main),
+            Some(OwnerLocation::Receiving | OwnerLocation::NativeReleased)
+        ) {
+            return Err(ServiceTransferRefusal {
+                reason: ServiceRefusal::MainUnavailable,
+                baton,
+            });
+        }
+        if let Err(reason) = Self::resume_owner_metadata_for(&mut state, plan.key, plan.requester) {
+            return Err(ServiceTransferRefusal { reason, baton });
+        }
+        state.pending_services.push_back(plan.key);
+        drop(state);
+        self.nudge_main(crate::host_effect::wake::ControlNudge::HostServiceReady);
+        let mut state = self.state();
+        loop {
+            if let Some(turn) = Self::pick_service(&mut state) {
+                drop(state);
+                self.send_wake(ThreadKey::Main, Self::native_wake(turn, baton));
+                return Ok(ServiceTransfer::Dispatched);
+            }
+            state = self
+                .metadata_changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    fn resume_local_metadata(
+        state: &mut ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        Self::resume_local_metadata_for(state, slice.key, slice.requester)
+    }
+
+    fn resume_local_metadata_for(
+        state: &mut ControlState,
+        key: HostRequestKey,
+        requester: ThreadKey,
+    ) -> Result<(), ServiceRefusal> {
+        if requester != ThreadKey::Main {
+            return Err(ServiceRefusal::MainIsRequester);
+        }
+        Self::resume_owner_metadata_for(state, key, requester)?;
+        let Some(metadata) = state.services.get_mut(&key) else {
+            return Err(ServiceRefusal::WrongServiceState);
+        };
+        let eligibility = match metadata.phase {
+            ServicePhase::Resuming(eligibility) => eligibility,
+            ServicePhase::Reserved
+            | ServicePhase::Serving
+            | ServicePhase::ServingAfterWait
+            | ServicePhase::PendingNative
+            | ServicePhase::RealWait
+            | ServicePhase::Reacquiring
+            | ServicePhase::Continuing(_)
+            | ServicePhase::Ended(_) => return Err(ServiceRefusal::WrongServiceState),
+        };
+        metadata.phase = match eligibility {
+            ContinuationEligibility::Reserved => ServicePhase::Serving,
+            ContinuationEligibility::Released => ServicePhase::ServingAfterWait,
+        };
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+        Ok(())
+    }
+
+    pub(super) fn resume_local_owner_step(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<Wake, ServiceTransferRefusal> {
+        let plan = match self.prepare_owner_resume(slice) {
+            Ok(plan) => plan,
+            Err(reason) => return Err(ServiceTransferRefusal { reason, baton }),
+        };
+        self.resume_prepared_local_owner_step(plan, baton)
+    }
+
+    pub(super) fn resume_prepared_local_owner_step(
+        &self,
+        plan: OwnerResumePlan,
+        baton: Baton,
+    ) -> Result<Wake, ServiceTransferRefusal> {
+        let mut state = self.state();
+        if plan.requester != ThreadKey::Main
+            || state.main_os_thread != Some(std::thread::current().id())
+        {
+            return Err(ServiceTransferRefusal {
+                reason: ServiceRefusal::WrongMainThread,
+                baton,
+            });
+        }
+        if !state.services.get(&plan.key).is_some_and(|metadata| {
+            metadata.requester == plan.requester
+                && metadata.phase == ServicePhase::Continuing(plan.eligibility)
+        }) {
+            return Err(ServiceTransferRefusal {
+                reason: ServiceRefusal::WrongServiceState,
+                baton,
+            });
+        }
+        if let Err(reason) = Self::resume_local_metadata_for(&mut state, plan.key, plan.requester) {
+            return Err(ServiceTransferRefusal { reason, baton });
+        }
+        Ok(Wake::ContinuationTurn {
+            key: plan.key,
+            baton,
+        })
+    }
+
+    /// Only a semantically final local result clears the parent's reservation.
+    pub(super) fn return_from_local_service(
+        &self,
+        slice: ReservedServiceSlice,
+        baton: Baton,
+    ) -> Result<ServiceReturn, ServiceReturnRefusal> {
+        let mut state = self.state();
+        if slice.requester != ThreadKey::Main
+            || state.main_os_thread != Some(std::thread::current().id())
+            || state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Serving(slice.key))
+            || !state.services.get(&slice.key).is_some_and(|metadata| {
+                metadata.requester == ThreadKey::Main
+                    && matches!(
+                        metadata.phase,
+                        ServicePhase::Serving | ServicePhase::ServingAfterWait
+                    )
+            })
+        {
+            return Err(ServiceReturnRefusal {
+                reason: ServiceRefusal::WrongServiceState,
+                slice,
+                baton,
+            });
+        }
+        state.services.remove(&slice.key);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Running);
+        Ok(ServiceReturn::ResumeMain(baton))
+    }
+
+    /// Native settlement does not acknowledge a dead owner. It only removes
+    /// the exact ended continuation's scheduler reservation before quiescent drain.
+    pub(super) fn ended_service_owner(
+        &self,
+        slice: &ReservedServiceSlice,
+        baton: &Baton,
+    ) -> Result<EndedServiceOwner, ServiceRefusal> {
+        let runtime = baton.green_runtime();
+        if !baton.held_here()
+            || !runtime
+                .as_ref()
+                .is_some_and(|runtime| std::ptr::eq(self, std::sync::Arc::as_ptr(&runtime.control)))
+        {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        Self::validate_ended_continuation(&self.state(), slice)?;
+        Ok(EndedServiceOwner {
+            key: slice.key,
+            requester: slice.requester,
+            _confined: PhantomData,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn ended_service_owner_for_test(
+        key: HostRequestKey,
+        requester: ThreadKey,
+        baton: &Baton,
+    ) -> EndedServiceOwner {
+        let runtime = baton.green_runtime();
+        let control = &runtime.as_ref().unwrap().control;
+        {
+            let mut state = control.state();
+            Self::set_wait(&mut state, requester, Wait::Exited);
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester,
+                    phase: ServicePhase::Continuing(ContinuationEligibility::Released),
+                },
+            );
+        }
+        let slice = ReservedServiceSlice {
+            key,
+            requester,
+            _confined: PhantomData,
+        };
+        control.ended_service_owner(&slice, baton).unwrap()
+    }
+
+    pub(super) fn finish_ended_continuation(
+        &self,
+        slice: ReservedServiceSlice,
+        settled: SettledHostCall,
+        baton: &Baton,
+    ) -> Result<(), ServiceCancelRefusal> {
+        let mut state = self.state();
+        let result = if !baton.held_here()
+            || settled.key() != slice.key
+            || settled.owner() != slice.requester
+        {
+            Err(ServiceRefusal::WrongServiceState)
+        } else {
+            Self::finish_ended_continuation_metadata(&mut state, &slice)
+        };
+        if let Err(reason) = result {
+            return Err(ServiceCancelRefusal {
+                reason,
+                slice,
+                settled,
+            });
+        }
+        drop(state);
+        self.notify_select();
+        Ok(())
+    }
+
+    fn finish_ended_continuation_metadata(
+        state: &mut ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        Self::validate_ended_continuation(state, slice)?;
+        state.services.remove(&slice.key);
+        // Queue entries are metadata, not roots; removing this exact key cannot
+        // consume a different parent's continuation or ordinary ready ticket.
+        state.pending_services.retain(|key| *key != slice.key);
+        Ok(())
+    }
+
+    fn validate_ended_continuation(
+        state: &ControlState,
+        slice: &ReservedServiceSlice,
+    ) -> Result<(), ServiceRefusal> {
+        if !state.services.get(&slice.key).is_some_and(|metadata| {
+            metadata.requester == slice.requester
+                && Self::continuation_progress(&state.waits, metadata)
+                    == ContinuationProgress::OwnerEnded
+        }) {
+            return Err(ServiceRefusal::WrongServiceState);
+        }
+        Ok(())
+    }
+
+    /// GNU-real waits release every active parent in this owner's nested
+    /// continuation ancestry. Artificial service/owner hops never call this.
+    fn note_continuation_release(state: &mut ControlState, requester: ThreadKey) {
+        for metadata in state.services.values_mut() {
+            if metadata.requester == requester {
+                if let ServicePhase::Continuing(eligibility) = &mut metadata.phase {
+                    *eligibility = ContinuationEligibility::Released;
+                }
+            }
+        }
+    }
+
     /// Only the rooted registration, never a generic wake, starts a service.
     /// Main's original wait and its ordinary FIFO position remain untouched.
     #[allow(
@@ -1397,6 +2088,8 @@ impl Control {
         let mut state = self.state();
         let reason = if state.main_os_thread != Some(std::thread::current().id()) {
             Some(ServiceRefusal::WrongMainThread)
+        } else if slice.requester == ThreadKey::Main {
+            Some(ServiceRefusal::MainIsRequester)
         } else if state.physical.get(&ThreadKey::Main) != Some(&OwnerLocation::Serving(slice.key))
             || state.waits.get(&slice.requester) != Some(&Wait::HostRequest(slice.key))
             || !state.services.get(&slice.key).is_some_and(|metadata| {
@@ -1474,13 +2167,21 @@ impl Control {
                         self.send_wake(target, Wake::NativePump { baton });
                         Ok(ServiceReturn::Sent)
                     }
+                    Wake::ContinuationTurn { key, baton } => {
+                        self.send_wake(target, Wake::ContinuationTurn { key, baton });
+                        Ok(ServiceReturn::Sent)
+                    }
+                    Wake::OwnerStep { .. } => std::process::abort(),
                 }
             }
             Some(
                 ServicePhase::Reserved
                 | ServicePhase::PendingNative
                 | ServicePhase::RealWait
-                | ServicePhase::Reacquiring,
+                | ServicePhase::Reacquiring
+                | ServicePhase::Continuing(_)
+                | ServicePhase::Resuming(_)
+                | ServicePhase::Ended(_),
             )
             | None => std::process::abort(),
         }
@@ -1510,6 +2211,7 @@ impl Control {
                 baton,
             });
         }
+        Self::note_continuation_release(&mut state, slice.requester);
         if let Some(metadata) = state.services.get_mut(&slice.key) {
             metadata.phase = ServicePhase::RealWait;
         }
@@ -1582,6 +2284,8 @@ impl Control {
                     Ok(
                         Wake::Resume(baton)
                         | Wake::ServiceTurn { baton, .. }
+                        | Wake::OwnerStep { baton, .. }
+                        | Wake::ContinuationTurn { baton, .. }
                         | Wake::NativePump { baton },
                     ) => Err(ServiceAcquireRefusal {
                         reason: ServiceRefusal::WrongServiceState,
@@ -1633,7 +2337,10 @@ impl Control {
             ServicePhase::Reserved
             | ServicePhase::PendingNative
             | ServicePhase::RealWait
-            | ServicePhase::Reacquiring => return Err(ServiceRefusal::WrongServiceState),
+            | ServicePhase::Reacquiring
+            | ServicePhase::Continuing(_)
+            | ServicePhase::Resuming(_)
+            | ServicePhase::Ended(_) => return Err(ServiceRefusal::WrongServiceState),
         };
         state
             .physical
@@ -1679,7 +2386,10 @@ impl Control {
             ServicePhase::Reserved
             | ServicePhase::Serving
             | ServicePhase::Reacquiring
-            | ServicePhase::ServingAfterWait => return Err(ServiceRefusal::WrongServiceState),
+            | ServicePhase::ServingAfterWait
+            | ServicePhase::Continuing(_)
+            | ServicePhase::Resuming(_)
+            | ServicePhase::Ended(_) => return Err(ServiceRefusal::WrongServiceState),
         };
         state
             .physical
@@ -1706,6 +2416,16 @@ impl Control {
         };
         if let Some(reason) = reason {
             return Err(ServiceTransferRefusal { reason, baton });
+        }
+        let releasing: Vec<_> = state
+            .services
+            .values()
+            .filter_map(|metadata| {
+                (metadata.phase == ServicePhase::PendingNative).then_some(metadata.requester)
+            })
+            .collect();
+        for requester in releasing {
+            Self::note_continuation_release(&mut state, requester);
         }
         for metadata in state.services.values_mut() {
             if metadata.phase == ServicePhase::PendingNative {
@@ -1810,6 +2530,16 @@ impl Control {
         if let Some(turn) = Self::pick_queued_service(state) {
             return NativePumpChoice::Native(turn);
         }
+        if state.services.values().any(|metadata| {
+            Self::continuation_progress(&state.waits, metadata) == ContinuationProgress::OwnerEnded
+        }) {
+            // A different request's genuine release cannot admit main's Lisp
+            // ahead of an ended requester's retained native cleanup.
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+            return NativePumpChoice::Native(NativeTurn::Pump);
+        }
         let released = state
             .services
             .values()
@@ -1818,20 +2548,24 @@ impl Control {
             .services
             .values()
             .any(|metadata| metadata.phase == ServicePhase::PendingNative);
-        match purpose {
-            NativePumpPurpose::Serving => {
-                if released
-                    && !reserved
-                    && state.waits.get(&ThreadKey::Main) == Some(&Wait::Runnable)
-                {
-                    let _ = Self::pop_ready(state, ReadySelection::NativeMainAcquire);
-                    state
-                        .physical
-                        .insert(ThreadKey::Main, OwnerLocation::Running);
-                    return NativePumpChoice::OriginalMain;
-                }
-            }
-            NativePumpPurpose::Draining => {}
+        let local_native = state.services.values().any(|metadata| {
+            metadata.requester == ThreadKey::Main
+                && !matches!(metadata.phase, ServicePhase::Continuing(_))
+        });
+        let main_eligible = match purpose {
+            NativePumpPurpose::Serving => released || state.services.is_empty(),
+            NativePumpPurpose::Draining => state.services.is_empty(),
+        };
+        if main_eligible
+            && !reserved
+            && !local_native
+            && state.waits.get(&ThreadKey::Main) == Some(&Wait::Runnable)
+        {
+            let _ = Self::pop_ready(state, ReadySelection::NativeMainAcquire);
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::Running);
+            return NativePumpChoice::OriginalMain;
         }
         state
             .physical
@@ -1979,6 +2713,7 @@ impl Control {
             .lock()
             .unwrap()
             .push(MainNativeWaitEvent::Released);
+        Self::note_continuation_release(&mut state, ThreadKey::Main);
         Self::set_wait(&mut state, ThreadKey::Main, Wait::Select { wait_end });
         state
             .physical
@@ -2630,7 +3365,10 @@ impl Control {
                         | ServicePhase::Serving
                         | ServicePhase::PendingNative
                         | ServicePhase::RealWait
-                        | ServicePhase::ServingAfterWait => {}
+                        | ServicePhase::ServingAfterWait
+                        | ServicePhase::Continuing(_)
+                        | ServicePhase::Resuming(_)
+                        | ServicePhase::Ended(_) => {}
                     }
                 }
             }
@@ -2651,7 +3389,34 @@ impl Control {
                         .insert(ThreadKey::Main, OwnerLocation::Serving(key));
                     return Some(NativeTurn::Service(key));
                 }
+                ServicePhase::Resuming(eligibility) => {
+                    if Self::continuation_progress(&state.waits, metadata)
+                        == ContinuationProgress::OwnerEnded
+                    {
+                        // Preserve the exact phase until actual native cleanup
+                        // consumes it. Never send an owner wake to an ended stack.
+                        state
+                            .physical
+                            .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+                        return Some(NativeTurn::Pump);
+                    }
+                    metadata.phase = match eligibility {
+                        ContinuationEligibility::Reserved => ServicePhase::Serving,
+                        ContinuationEligibility::Released => ServicePhase::ServingAfterWait,
+                    };
+                    state
+                        .physical
+                        .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+                    return Some(NativeTurn::Continuation(key));
+                }
+                ServicePhase::Ended(_) => {
+                    state
+                        .physical
+                        .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+                    return Some(NativeTurn::Pump);
+                }
                 ServicePhase::Serving
+                | ServicePhase::Continuing(_)
                 | ServicePhase::PendingNative
                 | ServicePhase::RealWait
                 | ServicePhase::Reacquiring
@@ -2661,12 +3426,42 @@ impl Control {
         None
     }
 
+    fn continuation_progress(
+        waits: &BTreeMap<ThreadKey, Wait>,
+        metadata: &ServiceMetadata,
+    ) -> ContinuationProgress {
+        match metadata.phase {
+            ServicePhase::Ended(_) => ContinuationProgress::OwnerEnded,
+            ServicePhase::Continuing(_) | ServicePhase::Resuming(_) => {
+                match waits.get(&metadata.requester) {
+                    Some(Wait::Exited) => ContinuationProgress::OwnerEnded,
+                    Some(
+                        Wait::Runnable
+                        | Wait::Join(_)
+                        | Wait::Mutex(_)
+                        | Wait::Condition(_)
+                        | Wait::Select { .. }
+                        | Wait::HostRequest(_),
+                    )
+                    | None => ContinuationProgress::AwaitingOwner,
+                }
+            }
+            ServicePhase::Reserved
+            | ServicePhase::Serving
+            | ServicePhase::PendingNative
+            | ServicePhase::RealWait
+            | ServicePhase::Reacquiring
+            | ServicePhase::ServingAfterWait => ContinuationProgress::NotContinuing,
+        }
+    }
+
     fn pending_native(state: &ControlState) -> NativeWork {
         if state.services.values().any(|metadata| {
             matches!(
                 metadata.phase,
                 ServicePhase::PendingNative | ServicePhase::RealWait
-            )
+            ) || Self::continuation_progress(&state.waits, metadata)
+                == ContinuationProgress::OwnerEnded
         }) {
             NativeWork::Ready
         } else {
@@ -2707,10 +3502,12 @@ impl Control {
                 .get(key)
                 .is_some_and(|metadata| metadata.phase == ServicePhase::Reacquiring),
         }) || state.pending_services.iter().any(|key| {
-            state
-                .services
-                .get(key)
-                .is_some_and(|metadata| metadata.phase == ServicePhase::Reserved)
+            state.services.get(key).is_some_and(|metadata| {
+                matches!(
+                    metadata.phase,
+                    ServicePhase::Reserved | ServicePhase::Resuming(_) | ServicePhase::Ended(_)
+                )
+            })
         }) {
             NativeWork::Ready
         } else {
@@ -2726,6 +3523,7 @@ impl Control {
     fn native_wake(turn: NativeTurn, baton: Baton) -> Wake {
         match turn {
             NativeTurn::Service(key) => Wake::ServiceTurn { key, baton },
+            NativeTurn::Continuation(key) => Wake::ContinuationTurn { key, baton },
             NativeTurn::Pump => Wake::NativePump { baton },
         }
     }
@@ -2774,6 +3572,10 @@ impl Control {
                     return Wake::ServiceTurn { key, baton };
                 }
                 Wake::NativePump { baton } => return Wake::NativePump { baton },
+                Wake::OwnerStep { key, baton } => return Wake::OwnerStep { key, baton },
+                Wake::ContinuationTurn { key, baton } => {
+                    return Wake::ContinuationTurn { key, baton };
+                }
                 Wake::Resume(baton) => {
                     let key = Self::intercept_ready(&mut self.state(), me);
                     match key {
@@ -2909,12 +3711,35 @@ impl Control {
     /// ended fact stays typed (`exited` reads an absent wait as ended) and
     /// joiners keep observing it. No production code removes a key piecemeal
     /// beside `set_wait`: this seam releases the wait, its index entries and
-    /// counts, the sender and the physical location together.
+    /// counts, the sender and the physical location together. Before discarding
+    /// an observed exit, retain in-flight continuation authority in its service
+    /// record. Arbitrary absence cannot authorize native cleanup.
     fn remove_key(state: &mut ControlState, key: ThreadKey) {
         debug_assert!(
             matches!(state.waits.get(&key), Some(Wait::Exited) | None),
             "remove_key follows the exit publication, not a pause"
         );
+        if state.waits.get(&key) == Some(&Wait::Exited) {
+            for metadata in state.services.values_mut() {
+                if metadata.requester == key {
+                    metadata.phase = match metadata.phase {
+                        ServicePhase::Continuing(eligibility) => {
+                            ServicePhase::Ended(EndedContinuationPhase::Continuing(eligibility))
+                        }
+                        ServicePhase::Resuming(eligibility) => {
+                            ServicePhase::Ended(EndedContinuationPhase::Resuming(eligibility))
+                        }
+                        ServicePhase::Reserved
+                        | ServicePhase::Serving
+                        | ServicePhase::PendingNative
+                        | ServicePhase::RealWait
+                        | ServicePhase::Reacquiring
+                        | ServicePhase::ServingAfterWait
+                        | ServicePhase::Ended(_) => metadata.phase,
+                    };
+                }
+            }
+        }
         state.waits.remove(&key);
         state.senders.remove(&key);
         state.physical.remove(&key);
@@ -3036,6 +3861,7 @@ impl Control {
         }
         {
             let mut state = self.state();
+            Self::note_continuation_release(&mut state, me);
             Self::set_wait(&mut state, me, wait);
             state.physical.insert(me, OwnerLocation::Receiving);
             if wait == Wait::Runnable {
@@ -3168,6 +3994,798 @@ mod tests {
 
     fn host_key() -> HostRequestKey {
         HostRequestKey::for_test(NonZeroU64::MIN)
+    }
+
+    fn continuation_slice(key: HostRequestKey, requester: ThreadKey) -> ReservedServiceSlice {
+        ReservedServiceSlice {
+            key,
+            requester,
+            _confined: PhantomData,
+        }
+    }
+
+    #[test]
+    fn ended_service_owner_mint_accepts_exact_world_and_preserves_sibling_reservations() {
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let baton = owner.start_green_runtime().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        let sibling = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let slice = continuation_slice(key, requester);
+        let sibling_phase = ServicePhase::Continuing(ContinuationEligibility::Reserved);
+        for phase in [
+            ServicePhase::Continuing(ContinuationEligibility::Reserved),
+            ServicePhase::Continuing(ContinuationEligibility::Released),
+            ServicePhase::Resuming(ContinuationEligibility::Reserved),
+            ServicePhase::Resuming(ContinuationEligibility::Released),
+        ] {
+            {
+                let mut state = control.state();
+                Control::set_wait(&mut state, requester, Wait::Exited);
+                state
+                    .services
+                    .insert(key, ServiceMetadata { requester, phase });
+                state.services.insert(
+                    sibling,
+                    ServiceMetadata {
+                        requester,
+                        phase: sibling_phase,
+                    },
+                );
+                state.pending_services = VecDeque::from([sibling, key]);
+            }
+            assert!(baton.held_here());
+            let ended = control.ended_service_owner(&slice, &baton).unwrap();
+            assert_eq!(ended.key(), key);
+            assert_eq!(ended.requester(), requester);
+            let state = control.state();
+            assert_eq!(state.services.len(), 2);
+            assert_eq!(state.services[&key].requester, requester);
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(state.services[&sibling].requester, requester);
+            assert_eq!(state.services[&sibling].phase, sibling_phase);
+            assert_eq!(state.pending_services, VecDeque::from([sibling, key]));
+            assert_eq!(state.waits[&requester], Wait::Exited);
+        }
+    }
+
+    #[test]
+    fn ended_continuation_authority_survives_indexed_whole_key_retirement() {
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let baton = owner.start_green_runtime().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let other = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let key = host_key();
+        let nested = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let sibling = HostRequestKey::for_test(NonZeroU64::new(3).unwrap());
+        let original = Wait::Join(other);
+        let nested_phase = ServicePhase::Continuing(ContinuationEligibility::Reserved);
+        let sibling_phase = ServicePhase::Reserved;
+        let slice = continuation_slice(key, requester);
+        for (phase, ended_phase) in [
+            (
+                ServicePhase::Continuing(ContinuationEligibility::Reserved),
+                EndedContinuationPhase::Continuing(ContinuationEligibility::Reserved),
+            ),
+            (
+                ServicePhase::Continuing(ContinuationEligibility::Released),
+                EndedContinuationPhase::Continuing(ContinuationEligibility::Released),
+            ),
+            (
+                ServicePhase::Resuming(ContinuationEligibility::Reserved),
+                EndedContinuationPhase::Resuming(ContinuationEligibility::Reserved),
+            ),
+            (
+                ServicePhase::Resuming(ContinuationEligibility::Released),
+                EndedContinuationPhase::Resuming(ContinuationEligibility::Released),
+            ),
+        ] {
+            {
+                let mut state = control.state();
+                Control::set_wait(&mut state, ThreadKey::Main, original);
+                Control::set_wait(&mut state, requester, Wait::Exited);
+                Control::set_wait(&mut state, other, Wait::HostRequest(sibling));
+                state
+                    .physical
+                    .insert(ThreadKey::Main, OwnerLocation::Receiving);
+                state
+                    .services
+                    .insert(key, ServiceMetadata { requester, phase });
+                state.services.insert(
+                    nested,
+                    ServiceMetadata {
+                        requester,
+                        phase: nested_phase,
+                    },
+                );
+                state.services.insert(
+                    sibling,
+                    ServiceMetadata {
+                        requester: other,
+                        phase: sibling_phase,
+                    },
+                );
+                state.pending_services = VecDeque::from([key, sibling]);
+                Control::remove_key(&mut state, requester);
+                assert!(!state.waits.contains_key(&requester));
+                assert!(!state.senders.contains_key(&requester));
+                assert!(!state.physical.contains_key(&requester));
+                assert_eq!(state.services[&key].phase, ServicePhase::Ended(ended_phase));
+                assert_eq!(
+                    state.services[&nested].phase,
+                    ServicePhase::Ended(EndedContinuationPhase::Continuing(
+                        ContinuationEligibility::Reserved
+                    ))
+                );
+                assert_eq!(state.services[&sibling].phase, sibling_phase);
+                assert_eq!(Control::pending_native(&state), NativeWork::Ready);
+                assert_eq!(Control::queued_native_work(&state), NativeWork::Ready);
+                assert_eq!(Control::pick_service(&mut state), Some(NativeTurn::Pump));
+                assert_eq!(state.waits[&ThreadKey::Main], original);
+                assert!(state.ready.is_empty());
+            }
+            let ended = control.ended_service_owner(&slice, &baton).unwrap();
+            assert_eq!(ended.key(), key);
+            assert_eq!(ended.requester(), requester);
+            let mut state = control.state();
+            // Test the metadata removal without manufacturing a native settlement
+            // receipt. Production can remove it only after the actor settles.
+            Control::finish_ended_continuation_metadata(&mut state, &slice).unwrap();
+            assert!(!state.services.contains_key(&key));
+            assert!(state.services.contains_key(&nested));
+            assert_eq!(state.services[&sibling].phase, sibling_phase);
+            assert_eq!(state.waits[&other], Wait::HostRequest(sibling));
+            assert!(!state.waits.contains_key(&requester));
+            assert_eq!(state.waits[&ThreadKey::Main], original);
+        }
+    }
+
+    #[test]
+    fn indexed_removal_without_observed_exit_cannot_mint_continuation_authority() {
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        for phase in [
+            ServicePhase::Continuing(ContinuationEligibility::Reserved),
+            ServicePhase::Continuing(ContinuationEligibility::Released),
+            ServicePhase::Resuming(ContinuationEligibility::Reserved),
+            ServicePhase::Resuming(ContinuationEligibility::Released),
+        ] {
+            let mut state = ControlState::default();
+            state
+                .services
+                .insert(key, ServiceMetadata { requester, phase });
+            Control::remove_key(&mut state, requester);
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(Control::pending_native(&state), NativeWork::Idle);
+            assert_eq!(
+                Control::validate_ended_continuation(&state, &continuation_slice(key, requester)),
+                Err(ServiceRefusal::WrongServiceState)
+            );
+        }
+    }
+
+    #[test]
+    fn ended_service_owner_mint_rejects_live_requester_without_consuming_reservation() {
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let baton = owner.start_green_runtime().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        let slice = continuation_slice(key, requester);
+        let phase = ServicePhase::Continuing(ContinuationEligibility::Released);
+        for wait in [Wait::Runnable, Wait::HostRequest(key)] {
+            {
+                let mut state = control.state();
+                Control::set_wait(&mut state, requester, wait);
+                state
+                    .services
+                    .insert(key, ServiceMetadata { requester, phase });
+                state.pending_services = VecDeque::from([key]);
+            }
+            assert_eq!(
+                control.ended_service_owner(&slice, &baton).unwrap_err(),
+                ServiceRefusal::WrongServiceState
+            );
+            let state = control.state();
+            assert_eq!(state.services.len(), 1);
+            assert_eq!(state.services[&key].requester, requester);
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(state.pending_services, VecDeque::from([key]));
+            assert_eq!(state.waits[&requester], wait);
+        }
+    }
+
+    #[test]
+    fn ended_service_owner_mint_rejects_foreign_control_with_matching_ended_metadata() {
+        use crate::emacs_core::eval::{Context, ThreadingMode};
+
+        let mut owner = Context::new_with_threading(ThreadingMode::Green);
+        let baton = owner.start_green_runtime().unwrap();
+        let control = owner.with_green_runtime(|runtime| std::sync::Arc::clone(&runtime.control));
+        let foreign = Control::default();
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        let slice = continuation_slice(key, requester);
+        let phase = ServicePhase::Resuming(ContinuationEligibility::Released);
+        for scheduler in [control.as_ref(), &foreign] {
+            let mut state = scheduler.state();
+            Control::set_wait(&mut state, requester, Wait::Exited);
+            state
+                .services
+                .insert(key, ServiceMetadata { requester, phase });
+            state.pending_services = VecDeque::from([key]);
+        }
+        assert!(baton.held_here());
+        assert_eq!(
+            foreign.ended_service_owner(&slice, &baton).unwrap_err(),
+            ServiceRefusal::WrongServiceState
+        );
+        let ended = control.ended_service_owner(&slice, &baton).unwrap();
+        assert_eq!(ended.key(), key);
+        assert_eq!(ended.requester(), requester);
+        for scheduler in [control.as_ref(), &foreign] {
+            let state = scheduler.state();
+            assert_eq!(state.services.len(), 1);
+            assert_eq!(state.services[&key].requester, requester);
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(state.pending_services, VecDeque::from([key]));
+            assert_eq!(state.waits[&requester], Wait::Exited);
+        }
+    }
+
+    #[test]
+    fn ended_owner_continuation_selects_native_cleanup_driver_without_resuming_main() {
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        let original = Wait::Join(requester);
+        for phase in [
+            ServicePhase::Continuing(ContinuationEligibility::Reserved),
+            ServicePhase::Continuing(ContinuationEligibility::Released),
+            ServicePhase::Resuming(ContinuationEligibility::Reserved),
+            ServicePhase::Resuming(ContinuationEligibility::Released),
+        ] {
+            let mut state = ControlState::default();
+            Control::set_wait(&mut state, ThreadKey::Main, original);
+            Control::set_wait(&mut state, requester, Wait::Runnable);
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::Receiving);
+            state
+                .services
+                .insert(key, ServiceMetadata { requester, phase });
+            assert_eq!(Control::pending_native(&state), NativeWork::Idle);
+            assert_eq!(
+                Control::pick_service(&mut state),
+                None,
+                "a live continuation must not become runnable native cleanup"
+            );
+            Control::set_wait(&mut state, requester, Wait::Exited);
+            assert_eq!(Control::pending_native(&state), NativeWork::Ready);
+            assert_eq!(Control::pick_service(&mut state), Some(NativeTurn::Pump));
+            assert_eq!(
+                state.services[&key].phase, phase,
+                "native cleanup needs the exact ended-phase proof"
+            );
+            assert_eq!(
+                Control::validate_ended_continuation(&state, &continuation_slice(key, requester)),
+                Ok(())
+            );
+            assert_eq!(state.waits[&ThreadKey::Main], original);
+            assert_eq!(state.waits[&requester], Wait::Exited);
+            assert_eq!(
+                state.physical[&ThreadKey::Main],
+                OwnerLocation::NativeDriving
+            );
+            assert!(state.ready.is_empty());
+        }
+        let mut unknown = ControlState::default();
+        unknown.services.insert(
+            key,
+            ServiceMetadata {
+                requester,
+                phase: ServicePhase::Continuing(ContinuationEligibility::Released),
+            },
+        );
+        assert_eq!(
+            Control::pending_native(&unknown),
+            NativeWork::Idle,
+            "an absent owner record is not an explicit exit proof"
+        );
+    }
+
+    #[test]
+    fn ended_owner_queued_resume_keeps_phase_and_other_service_reservation() {
+        let ended = ThreadKey::Worker(NonZeroU64::MIN);
+        let live = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let key = host_key();
+        let sibling = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let phase = ServicePhase::Resuming(ContinuationEligibility::Released);
+        let original = Wait::Join(live);
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, original);
+        Control::set_wait(&mut state, ended, Wait::Exited);
+        Control::set_wait(&mut state, live, Wait::HostRequest(sibling));
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester: ended,
+                phase,
+            },
+        );
+        state.services.insert(
+            sibling,
+            ServiceMetadata {
+                requester: live,
+                phase: ServicePhase::Reserved,
+            },
+        );
+        state.pending_services = VecDeque::from([key, sibling]);
+        assert_eq!(
+            Control::pick_service(&mut state),
+            Some(NativeTurn::Pump),
+            "an ended resume must never select a requester ContinuationTurn"
+        );
+        assert_eq!(state.services[&key].phase, phase);
+        assert_eq!(
+            Control::validate_ended_continuation(&state, &continuation_slice(key, ended)),
+            Ok(())
+        );
+        assert_eq!(state.services[&sibling].phase, ServicePhase::Reserved);
+        assert_eq!(state.pending_services, VecDeque::from([sibling]));
+        assert_eq!(state.waits[&ThreadKey::Main], original);
+        assert_eq!(state.waits[&live], Wait::HostRequest(sibling));
+        assert!(state.ready.is_empty());
+        // This private metadata transition is tested independently of the
+        // production settlement mint; it cannot acknowledge or retire roots.
+        assert_eq!(
+            Control::finish_ended_continuation_metadata(
+                &mut state,
+                &continuation_slice(key, ended)
+            ),
+            Ok(())
+        );
+        assert!(!state.services.contains_key(&key));
+        assert_eq!(state.services[&sibling].phase, ServicePhase::Reserved);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        assert_eq!(
+            Control::pick_service(&mut state),
+            Some(NativeTurn::Service(sibling))
+        );
+        assert_eq!(state.waits[&ThreadKey::Main], original);
+    }
+
+    #[test]
+    fn ended_owner_cleanup_precedes_unrelated_real_wait_main_eligibility() {
+        let ended = ThreadKey::Worker(NonZeroU64::MIN);
+        let other = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let key = host_key();
+        let unrelated = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        for phase in [
+            ServicePhase::Continuing(ContinuationEligibility::Reserved),
+            ServicePhase::Continuing(ContinuationEligibility::Released),
+            ServicePhase::Resuming(ContinuationEligibility::Reserved),
+            ServicePhase::Resuming(ContinuationEligibility::Released),
+        ] {
+            let mut state = ControlState::default();
+            Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+            Control::set_wait(&mut state, ended, Wait::Exited);
+            Control::set_wait(&mut state, other, Wait::HostRequest(unrelated));
+            Control::enqueue_ready(&mut state, ThreadKey::Main);
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: ended,
+                    phase,
+                },
+            );
+            state.services.insert(
+                unrelated,
+                ServiceMetadata {
+                    requester: other,
+                    phase: ServicePhase::RealWait,
+                },
+            );
+            assert!(matches!(
+                Control::choose_native_metadata(&mut state, NativePumpPurpose::Serving),
+                NativePumpChoice::Native(NativeTurn::Pump)
+            ));
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(state.services[&unrelated].phase, ServicePhase::RealWait);
+            assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+            assert_eq!(
+                state.ready.front(),
+                Some(&ThreadKey::Main),
+                "cleanup cannot consume main's ordinary FIFO eligibility"
+            );
+            Control::finish_ended_continuation_metadata(
+                &mut state,
+                &continuation_slice(key, ended),
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    Control::choose_native_metadata(&mut state, NativePumpPurpose::Serving),
+                    NativePumpChoice::OriginalMain
+                ),
+                "the unrelated real wait keeps its original eligibility after exact cleanup"
+            );
+            assert!(state.ready.is_empty());
+        }
+    }
+
+    #[test]
+    fn settled_last_ended_continuation_returns_main_its_existing_ready_turn() {
+        let ended = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        for purpose in [NativePumpPurpose::Serving, NativePumpPurpose::Draining] {
+            let mut state = ControlState::default();
+            Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+            Control::enqueue_ready(&mut state, ThreadKey::Main);
+            Control::set_wait(&mut state, ended, Wait::Exited);
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: ended,
+                    phase: ServicePhase::Continuing(ContinuationEligibility::Reserved),
+                },
+            );
+            Control::remove_key(&mut state, ended);
+            assert!(matches!(
+                Control::choose_native_metadata(&mut state, purpose),
+                NativePumpChoice::Native(NativeTurn::Pump)
+            ));
+            assert_eq!(state.ready.front(), Some(&ThreadKey::Main));
+            // This tests only the scheduler transition, not a manufactured actor
+            // receipt. Production removes it through finish_ended_continuation.
+            Control::finish_ended_continuation_metadata(
+                &mut state,
+                &continuation_slice(key, ended),
+            )
+            .unwrap();
+            assert!(matches!(
+                Control::choose_native_metadata(&mut state, purpose),
+                NativePumpChoice::OriginalMain
+            ));
+            assert!(state.services.is_empty());
+            assert!(state.ready.is_empty());
+            assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+            assert_eq!(state.physical[&ThreadKey::Main], OwnerLocation::Running);
+            assert!(!state.waits.contains_key(&ended));
+        }
+    }
+
+    #[test]
+    fn ended_owner_continuation_exit_notifies_registered_native_source() {
+        use crate::host_effect::wake::{ControlDestination, ControlNudge, ControlWakeOutcome};
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let manager = crate::emacs_core::process::ProcessManager::new();
+        let control = Control::default();
+        let _main = control.register_main();
+        let _worker = control.register_worker(worker);
+        control.install_select(manager.green_select_handle());
+        let key = host_key();
+        let phase = ServicePhase::Continuing(ContinuationEligibility::Released);
+        {
+            let mut state = control.state();
+            Control::set_wait(&mut state, ThreadKey::Main, Wait::Join(worker));
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::NativeReleased);
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: worker,
+                    phase,
+                },
+            );
+            assert_eq!(Control::pending_native(&state), NativeWork::Idle);
+        }
+        let source = control.native_pump_source().unwrap();
+        let armed = source.arm(ControlDestination::NativeMain).unwrap();
+        assert_eq!(armed.poll(), None);
+        control.publish_owner_exit(worker);
+        assert_eq!(
+            armed.poll(),
+            Some(ControlWakeOutcome::ControlReady(
+                ControlNudge::SchedulerReady
+            ))
+        );
+        let state = control.state();
+        assert_eq!(
+            Control::pending_native(&state),
+            NativeWork::Ready,
+            "the exit fact must be durable before native readiness is observed"
+        );
+        assert_eq!(state.services[&key].phase, phase);
+        assert_eq!(state.waits[&worker], Wait::Exited);
+        assert_eq!(
+            state.physical[&ThreadKey::Main],
+            OwnerLocation::NativeReleased,
+            "the notification cannot fabricate physical reacquisition"
+        );
+    }
+
+    #[test]
+    fn intermediate_return_retains_parent_and_preserves_main_wait_and_fifo() {
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let waiting_for = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let queued = ThreadKey::Worker(NonZeroU64::new(3).unwrap());
+        let key = host_key();
+        let slice = continuation_slice(key, requester);
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Join(waiting_for));
+        Control::set_wait(&mut state, requester, Wait::HostRequest(key));
+        Control::set_wait(&mut state, queued, Wait::Runnable);
+        Control::enqueue_ready(&mut state, queued);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester,
+                phase: ServicePhase::Serving,
+            },
+        );
+        assert_eq!(Control::intermediate_metadata(&mut state, &slice), Ok(()));
+        assert_eq!(
+            state.services[&key].phase,
+            ServicePhase::Continuing(ContinuationEligibility::Reserved)
+        );
+        assert_eq!(state.waits[&ThreadKey::Main], Wait::Join(waiting_for));
+        assert_eq!(state.waits[&requester], Wait::Runnable);
+        assert_eq!(state.physical[&requester], OwnerLocation::Running);
+        assert_eq!(state.physical[&ThreadKey::Main], OwnerLocation::Receiving);
+        assert_eq!(
+            state.ready.iter().copied().collect::<Vec<_>>(),
+            vec![queued]
+        );
+        assert!(!Control::service_ready(&state));
+        assert_eq!(Control::pending_native(&state), NativeWork::Idle);
+    }
+
+    #[test]
+    fn continuing_release_marks_nested_ancestry_but_not_another_owner() {
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let other = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let parent = host_key();
+        let child = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let foreign = HostRequestKey::for_test(NonZeroU64::new(3).unwrap());
+        let mut state = ControlState::default();
+        for (key, owner) in [(parent, requester), (child, requester), (foreign, other)] {
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: owner,
+                    phase: ServicePhase::Continuing(ContinuationEligibility::Reserved),
+                },
+            );
+        }
+        Control::note_continuation_release(&mut state, requester);
+        for key in [parent, child] {
+            assert_eq!(
+                state.services[&key].phase,
+                ServicePhase::Continuing(ContinuationEligibility::Released)
+            );
+        }
+        assert_eq!(
+            state.services[&foreign].phase,
+            ServicePhase::Continuing(ContinuationEligibility::Reserved)
+        );
+        assert_eq!(Control::pending_native(&state), NativeWork::Idle);
+    }
+
+    #[test]
+    fn continuation_resume_retains_real_release_across_close_and_queued_native_turn() {
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        let slice = continuation_slice(key, requester);
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Join(requester));
+        Control::set_wait(&mut state, requester, Wait::Runnable);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Receiving);
+        state.physical.insert(requester, OwnerLocation::Running);
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester,
+                phase: ServicePhase::Continuing(ContinuationEligibility::Released),
+            },
+        );
+        state.closing = true;
+        assert_eq!(Control::resume_owner_metadata(&mut state, &slice), Ok(()));
+        state.pending_services.push_back(key);
+        assert_eq!(
+            state.services[&key].phase,
+            ServicePhase::Resuming(ContinuationEligibility::Released)
+        );
+        assert_eq!(state.waits[&requester], Wait::HostRequest(key));
+        assert!(state.ready.is_empty());
+        assert_eq!(
+            Control::pick_service(&mut state),
+            Some(NativeTurn::Continuation(key))
+        );
+        assert_eq!(state.services[&key].phase, ServicePhase::ServingAfterWait);
+        assert_eq!(state.waits[&ThreadKey::Main], Wait::Join(requester));
+    }
+
+    #[test]
+    fn prepared_local_transfer_preserves_main_wait_and_ordinary_fifo() {
+        let key = host_key();
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let mut state = ControlState::default();
+        state.main_os_thread = Some(std::thread::current().id());
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+        Control::set_wait(&mut state, worker, Wait::Runnable);
+        Control::enqueue_ready(&mut state, worker);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Running);
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester: ThreadKey::Main,
+                phase: ServicePhase::Reserved,
+            },
+        );
+        assert_eq!(
+            Control::transfer_local_metadata(
+                &mut state,
+                key,
+                ThreadKey::Main,
+                std::thread::current().id()
+            ),
+            Ok(())
+        );
+        assert_eq!(state.services[&key].phase, ServicePhase::Serving);
+        assert_eq!(
+            state.physical[&ThreadKey::Main],
+            OwnerLocation::Serving(key)
+        );
+        assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+        assert_eq!(
+            state.ready.iter().copied().collect::<Vec<_>>(),
+            vec![worker]
+        );
+    }
+
+    #[test]
+    fn local_intermediate_round_trip_never_changes_main_wait_or_enqueues_it() {
+        let key = host_key();
+        let slice = continuation_slice(key, ThreadKey::Main);
+        for phase in [ServicePhase::Serving, ServicePhase::ServingAfterWait] {
+            let mut state = ControlState::default();
+            Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+            state
+                .physical
+                .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester: ThreadKey::Main,
+                    phase,
+                },
+            );
+            assert_eq!(Control::intermediate_metadata(&mut state, &slice), Ok(()));
+            assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+            assert_eq!(state.physical[&ThreadKey::Main], OwnerLocation::Running);
+            assert!(state.ready.is_empty());
+            assert_eq!(Control::resume_local_metadata(&mut state, &slice), Ok(()));
+            assert_eq!(state.services[&key].phase, phase);
+            assert_eq!(
+                state.physical[&ThreadKey::Main],
+                OwnerLocation::Serving(key)
+            );
+            assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+            assert!(state.ready.is_empty());
+        }
+    }
+
+    #[test]
+    fn pending_local_native_request_cannot_resume_unrelated_main_before_done() {
+        let key = host_key();
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, ThreadKey::Main, Wait::Runnable);
+        Control::enqueue_ready(&mut state, ThreadKey::Main);
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::NativeDriving);
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester: ThreadKey::Main,
+                phase: ServicePhase::RealWait,
+            },
+        );
+        assert!(matches!(
+            Control::choose_native_metadata(&mut state, NativePumpPurpose::Serving),
+            NativePumpChoice::Native(NativeTurn::Pump)
+        ));
+        assert_eq!(state.ready.front(), Some(&ThreadKey::Main));
+        assert_eq!(state.waits[&ThreadKey::Main], Wait::Runnable);
+    }
+
+    #[test]
+    fn ended_continuation_cleanup_refuses_live_owner_and_keeps_nested_parent() {
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let key = host_key();
+        let parent = HostRequestKey::for_test(NonZeroU64::new(2).unwrap());
+        let slice = continuation_slice(key, requester);
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, requester, Wait::Runnable);
+        for key in [key, parent] {
+            state.services.insert(
+                key,
+                ServiceMetadata {
+                    requester,
+                    phase: ServicePhase::Continuing(ContinuationEligibility::Released),
+                },
+            );
+        }
+        assert_eq!(
+            Control::finish_ended_continuation_metadata(&mut state, &slice),
+            Err(ServiceRefusal::WrongServiceState)
+        );
+        assert!(state.services.contains_key(&key));
+        Control::set_wait(&mut state, requester, Wait::Exited);
+        assert_eq!(
+            Control::finish_ended_continuation_metadata(&mut state, &slice),
+            Ok(())
+        );
+        assert!(!state.services.contains_key(&key));
+        assert!(state.services.contains_key(&parent));
+        assert_eq!(state.waits[&requester], Wait::Exited);
+    }
+
+    #[test]
+    fn wrong_intermediate_slice_does_not_consume_the_rightful_reservation() {
+        let key = host_key();
+        let requester = ThreadKey::Worker(NonZeroU64::MIN);
+        let foreign = ThreadKey::Worker(NonZeroU64::new(2).unwrap());
+        let mut state = ControlState::default();
+        Control::set_wait(&mut state, foreign, Wait::HostRequest(key));
+        state
+            .physical
+            .insert(ThreadKey::Main, OwnerLocation::Serving(key));
+        state.services.insert(
+            key,
+            ServiceMetadata {
+                requester,
+                phase: ServicePhase::Serving,
+            },
+        );
+        let wrong = continuation_slice(key, foreign);
+        assert_eq!(
+            Control::intermediate_metadata(&mut state, &wrong),
+            Err(ServiceRefusal::WrongServiceState)
+        );
+        assert_eq!(state.services[&key].phase, ServicePhase::Serving);
+        assert_eq!(
+            state.physical[&ThreadKey::Main],
+            OwnerLocation::Serving(key)
+        );
+        assert_eq!(state.waits[&foreign], Wait::HostRequest(key));
     }
 
     #[test]

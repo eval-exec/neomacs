@@ -244,7 +244,7 @@ fn terminal_root_case<K: RegisteredRecord>(
                 &owner.tagged_heap,
                 ThreadKey::Main,
                 key,
-                &[result],
+                &[Value::fixnum(-23), result, Value::NIL, result, Value::T],
             )
         }
         .unwrap();
@@ -252,7 +252,10 @@ fn terminal_root_case<K: RegisteredRecord>(
         registry
             .hosts()
             .with_registered_roots(&restored, key, &output, |roots| {
-                assert_eq!(roots, &[result])
+                assert_eq!(
+                    roots,
+                    &[Value::fixnum(-23), result, Value::NIL, result, Value::T]
+                )
             })
             .unwrap();
         let (_, port) = MessagePlan::from_registered(OwnedNativeData::None, arguments)

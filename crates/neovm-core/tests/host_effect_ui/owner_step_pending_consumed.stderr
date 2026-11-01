@@ -1,0 +1,25 @@
+error[E0382]: use of moved value: `pending`
+ --> tests/host_effect_ui/owner_step_pending_consumed.rs:7:13
+  |
+5 | fn cannot_claim_twice(pending: PendingOwnerStep<'static, u64>, key: OwnerStepKey<u64>) {
+  |                       ------- move occurs because `pending` has type `PendingOwnerStep<'_, u64>`, which does not implement the `Copy` trait
+6 |     let _ = pending.claim(key);
+  |                     ---------- `pending` moved due to this method call
+7 |     let _ = pending.claim(key);
+  |             ^^^^^^^ value used here after move
+  |
+note: `PendingOwnerStep::<'s, O>::claim` takes ownership of the receiver `self`, which moves `pending`
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+  |               pub(crate) fn claim(self, expected: OwnerStepKey<O>) -> Result<ClaimedOwnerStep<'s, O>, RejectedOwnerStep<Self>> {
+  |                                   ^^^^
+...
+  | / step_families!(
+  | |     (
+  | |         Redisplay,
+  | |         redisplay,
+... |
+  | |     ),
+  | | );
+  | |_- in this macro invocation
+  = note: this error originates in the macro `step_families` (in Nightly builds, run with -Z macro-backtrace for more info)

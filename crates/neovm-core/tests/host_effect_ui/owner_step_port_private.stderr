@@ -1,0 +1,11 @@
+error[E0451]: fields `key`, `_kind` and `_requester` of struct `OwnerResumePort` are private
+  --> tests/host_effect_ui/owner_step_port_private.rs:8:9
+   |
+ 7 |     let _ = OwnerResumePort::<CallbackStep, u64> {
+   |             ------------------------------------ in this type
+ 8 |         key,
+   |         ^^^ private field
+ 9 |         _kind: PhantomData,
+   |         ^^^^^ private field
+10 |         _requester: PhantomData,
+   |         ^^^^^^^^^^ private field

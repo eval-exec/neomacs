@@ -4,6 +4,8 @@
 #[cfg(feature = "contract-fixtures")]
 fn host_effect_compile_contracts() {
     let cases = trybuild::TestCases::new();
+    // Includes actual-source owner-step privacy/linearity fixtures and the
+    // contract-only variant on the real closed owner-frame schema.
     cases.pass("tests/host_effect_pass/*.rs");
     cases.compile_fail("tests/host_effect_ui/*.rs");
 }

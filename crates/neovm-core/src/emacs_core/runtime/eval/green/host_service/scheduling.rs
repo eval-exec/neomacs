@@ -2,15 +2,16 @@
 
 use super::super::super::world::Baton;
 use super::super::scheduler::{
-    Control, NativeRelease, ReservedServiceSlice, ServiceReturn, ServiceTransfer,
-    ServiceTransferPlan, Wake,
+    Control, EndedServiceOwner, NativeRelease, OwnerResumePlan, ReservedServiceSlice,
+    ServiceRefusal, ServiceReturn, ServiceTransfer, ServiceTransferPlan, ThreadKey, Wake,
 };
+use super::owner_steps::StepKey;
 use super::transport::{
     self, Acknowledgement, CancelReason, CloseProgress, CompletionDisposition, DeliveryStatus,
     DispatchPoll, DispatchTicket, HostClient, HostWaiter, NativeDispatch, NativeOutcome,
     NativeSettlement, Publication, ServiceTransport, TerminalRead, TerminalReceipt,
 };
-use super::{HostRequestKey, HostRootError, PreparedHostCall, RootsRetired};
+use super::{HostRequestKey, HostRootError, PreparedHostCall, RootsRetired, SettledHostCall};
 use crate::host_effect::contracts::OwnedNativeData;
 use crate::host_effect::native_pending::{NativeAdapterStep, PendingNativeOperation};
 use std::collections::BTreeMap;
@@ -20,6 +21,12 @@ use std::sync::mpsc::Receiver;
 
 use crate::host_effect::wake::native_wait::NativeWaitHandoff;
 pub(in crate::emacs_core::eval::green) use crate::host_effect::wake::native_wait::RealWaitPermit;
+
+impl super::pending::ContinuationReservation for ReservedServiceSlice {
+    fn continuation_request(&self) -> HostRequestKey {
+        self.key()
+    }
+}
 
 #[derive(Default)]
 pub(in crate::emacs_core::eval::green) enum ServiceRuntime {
@@ -36,6 +43,9 @@ pub(in crate::emacs_core::eval::green) struct ServiceSession {
     deferred_terminals: BTreeMap<HostRequestKey, HostTerminal>,
     /// Linear actor-issued obligations; no derived host state is cached.
     dispatched: BTreeMap<HostRequestKey, NativeDispatch>,
+    /// Saved linear service authority while its original owner executes.
+    /// Native affine attempt storage remains in main's receive-owned pump.
+    owner_continuations: BTreeMap<HostRequestKey, OwnerContinuation>,
     #[cfg(test)]
     driver: FixtureDriver,
     #[cfg(test)]
@@ -58,6 +68,38 @@ pub(in crate::emacs_core::eval::green) struct HostTerminal {
     pub(in crate::emacs_core::eval::green) key: HostRequestKey,
     pub(in crate::emacs_core::eval::green) settlement: NativeSettlement,
     receipt: TerminalReceipt,
+}
+
+pub(super) struct OwnerContinuation {
+    pub(super) step: StepKey,
+    pub(super) slice: ReservedServiceSlice,
+    pub(super) ticket: DispatchTicket,
+}
+
+/// Issued only after consuming the actor's actual dispatch completion. A key
+/// or cancellation hint cannot authorize revoking a live root obligation.
+#[must_use]
+pub(super) struct NativeCleanupSettled {
+    key: HostRequestKey,
+}
+
+impl NativeCleanupSettled {
+    pub(super) fn key(&self) -> HostRequestKey {
+        self.key
+    }
+}
+
+/// Linear proof that admission/transport reached a terminal before any native
+/// callback ran. Construction stays private to those authoritative outcomes.
+#[must_use]
+pub(super) struct UnstartedHostCall {
+    key: HostRequestKey,
+}
+
+impl UnstartedHostCall {
+    pub(super) fn key(&self) -> HostRequestKey {
+        self.key
+    }
 }
 
 /// Local publication refusal retains the unconsumed scheduler obligation.
@@ -101,6 +143,7 @@ impl ServiceRuntime {
                 reservations: BTreeMap::new(),
                 deferred_terminals: BTreeMap::new(),
                 dispatched: BTreeMap::new(),
+                owner_continuations: BTreeMap::new(),
                 #[cfg(test)]
                 driver: FixtureDriver::Unavailable,
                 #[cfg(test)]
@@ -237,7 +280,10 @@ impl ServiceRuntime {
                 .reservations
                 .remove(&key)
                 .ok_or(HostRootError::UnknownRequest)?;
-            return Ok(NativeTurn::AlreadySettled { slice });
+            return Ok(NativeTurn::AlreadySettled {
+                slice,
+                unstarted: UnstartedHostCall { key },
+            });
         }
         let dispatch = match session.dispatched.remove(&key) {
             Some(dispatch) => Some(dispatch),
@@ -289,7 +335,10 @@ impl ServiceRuntime {
                     .reservations
                     .remove(&key)
                     .ok_or(HostRootError::UnknownRequest)?;
-                NativeTurn::AlreadySettled { slice }
+                NativeTurn::AlreadySettled {
+                    slice,
+                    unstarted: UnstartedHostCall { key },
+                }
             }
         };
         Ok(turn)
@@ -299,15 +348,73 @@ impl ServiceRuntime {
         &mut self,
         ticket: DispatchTicket,
         outcome: NativeOutcome,
-    ) -> Result<(), HostRootError> {
+    ) -> Result<NativeCleanupSettled, HostRootError> {
         let session = match self {
             Self::Open(session) => session,
             Self::Dormant => return Err(HostRootError::UnknownRequest),
         };
         match session.transport.complete(ticket.settle(outcome)) {
-            CompletionDisposition::Settled(_) => Ok(()),
+            CompletionDisposition::Settled(key) => Ok(NativeCleanupSettled { key }),
             CompletionDisposition::Rejected { .. } => Err(HostRootError::WrongStage),
         }
+    }
+
+    pub(super) fn save_owner_continuation(
+        &mut self,
+        continuation: OwnerContinuation,
+    ) -> Result<(), OwnerContinuation> {
+        let Self::Open(session) = self else {
+            return Err(continuation);
+        };
+        let key = continuation.step.parent();
+        if key != continuation.slice.key() || session.owner_continuations.contains_key(&key) {
+            return Err(continuation);
+        }
+        session.owner_continuations.insert(key, continuation);
+        Ok(())
+    }
+
+    pub(super) fn take_owner_continuation(
+        &mut self,
+        parent: HostRequestKey,
+    ) -> Result<OwnerContinuation, HostRootError> {
+        let Self::Open(session) = self else {
+            return Err(HostRootError::UnknownRequest);
+        };
+        session
+            .owner_continuations
+            .remove(&parent)
+            .ok_or(HostRootError::UnknownRequest)
+    }
+
+    pub(super) fn owner_continuation_keys(&self) -> Vec<HostRequestKey> {
+        match self {
+            Self::Dormant => Vec::new(),
+            Self::Open(session) => session.owner_continuations.keys().copied().collect(),
+        }
+    }
+
+    /// Consume a saved continuation only with its owning scheduler's explicit
+    /// exit proof. An unknown/live requester retains all linear obligations.
+    pub(super) fn take_ended_owner_continuation(
+        &mut self,
+        control: &Control,
+        baton: &Baton,
+    ) -> Option<(OwnerContinuation, EndedServiceOwner)> {
+        let Self::Open(session) = self else {
+            return None;
+        };
+        let (key, ended) = session
+            .owner_continuations
+            .iter()
+            .find_map(|(key, saved)| {
+                control
+                    .ended_service_owner(&saved.slice, baton)
+                    .ok()
+                    .map(|ended| (*key, ended))
+            })?;
+        let saved = session.owner_continuations.remove(&key)?;
+        Some((saved, ended))
     }
 
     pub(super) fn native_observations(&mut self) -> Vec<transport::ControlObservation> {
@@ -468,6 +575,7 @@ enum NativeTurn {
     },
     AlreadySettled {
         slice: ReservedServiceSlice,
+        unstarted: UnstartedHostCall,
     },
 }
 
@@ -514,14 +622,16 @@ impl<'receive> MainServiceTurn<'receive> {
         serve: impl FnOnce(&mut NativeServiceScope<'_>) -> NativeOutcome,
     ) -> ServedSlice {
         let Self {
-            key,
+            key: _,
             baton,
             control,
             receiver,
             turn,
         } = self;
-        let (baton, slice) = match turn {
-            NativeTurn::AlreadySettled { slice } => (baton, slice),
+        match turn {
+            NativeTurn::AlreadySettled { slice, unstarted } => {
+                finish_unstarted_native_turn(baton, slice, unstarted)
+            }
             NativeTurn::Dispatch {
                 slice,
                 ticket,
@@ -535,26 +645,15 @@ impl<'receive> MainServiceTurn<'receive> {
                 };
                 let outcome = serve(&mut scope);
                 let (baton, slice) = scope.into_authority();
-                {
-                    let runtime = baton.green_runtime();
-                    let Some(runtime) = runtime.as_ref() else {
-                        unreachable_service()
-                    };
-                    let mut registry = runtime.parked.borrow_mut();
-                    if let Err(error) = registry.services.complete(ticket, outcome) {
-                        fatal_service(error);
-                    }
-                }
-                (baton, slice)
+                complete_native_turn(baton, slice, ticket, outcome)
             }
-        };
-        finish_native_turn(key, baton, slice)
+        }
     }
 
     /// The owned path returns a pending native record, never a borrowed scope.
     pub(super) fn serve_step(
         self,
-        start: impl FnOnce(HostRequestKey, OwnedNativeData) -> NativeAdapterStep,
+        start: impl FnOnce(HostRequestKey, OwnedNativeData) -> NativeAdapterStep<StepKey>,
     ) -> ServiceStep {
         let Self {
             key,
@@ -564,25 +663,14 @@ impl<'receive> MainServiceTurn<'receive> {
             turn,
         } = self;
         match turn {
-            NativeTurn::AlreadySettled { slice } => {
-                ServiceStep::Complete(finish_native_turn(key, baton, slice))
+            NativeTurn::AlreadySettled { slice, unstarted } => {
+                ServiceStep::Complete(finish_unstarted_native_turn(baton, slice, unstarted))
             }
             NativeTurn::Dispatch {
                 slice,
                 ticket,
                 native,
-            } => match start(key, native) {
-                NativeAdapterStep::Complete(outcome) => {
-                    ServiceStep::Complete(complete_native_turn(baton, slice, ticket, outcome))
-                }
-                NativeAdapterStep::Pending(operation) => ServiceStep::Pending {
-                    baton,
-                    slice,
-                    ticket,
-                    operation,
-                },
-                NativeAdapterStep::RequiresOwner(never) => match never {},
-            },
+            } => advance_native_step(baton, slice, ticket, start(key, native)),
         }
     }
 }
@@ -595,6 +683,44 @@ pub(super) enum ServiceStep {
         ticket: DispatchTicket,
         operation: PendingNativeOperation,
     },
+    Owner {
+        baton: Baton,
+        continuation: OwnerContinuation,
+    },
+}
+
+/// One classification for initial dispatch and every physical/owner resume.
+/// Only the Complete arm consumes the dispatch ticket and settles the parent.
+pub(super) fn advance_native_step(
+    baton: Baton,
+    slice: ReservedServiceSlice,
+    ticket: DispatchTicket,
+    step: NativeAdapterStep<StepKey>,
+) -> ServiceStep {
+    match step {
+        NativeAdapterStep::Complete(outcome) => {
+            ServiceStep::Complete(complete_native_turn(baton, slice, ticket, outcome))
+        }
+        NativeAdapterStep::Pending(operation) => ServiceStep::Pending {
+            baton,
+            slice,
+            ticket,
+            operation,
+        },
+        NativeAdapterStep::RequiresOwner(step) => {
+            if step.parent() != slice.key() || step.owner() != slice.requester() {
+                unreachable_service();
+            }
+            ServiceStep::Owner {
+                baton,
+                continuation: OwnerContinuation {
+                    step,
+                    slice,
+                    ticket,
+                },
+            }
+        }
+    }
 }
 
 pub(super) fn complete_native_turn(
@@ -603,35 +729,159 @@ pub(super) fn complete_native_turn(
     ticket: DispatchTicket,
     outcome: NativeOutcome,
 ) -> ServedSlice {
-    let key = slice.key();
-    {
-        let runtime = baton.green_runtime();
-        let Some(runtime) = runtime.as_ref() else {
-            unreachable_service()
-        };
-        let mut registry = runtime.parked.borrow_mut();
-        if let Err(error) = registry.services.complete(ticket, outcome) {
-            fatal_service(error);
-        }
-    }
-    finish_native_turn(key, baton, slice)
+    drop(settle_native_dispatch(&baton, &slice, ticket, outcome));
+    ServedSlice { baton, slice }
 }
 
-fn finish_native_turn(
-    key: HostRequestKey,
+/// One settlement rule for live and ended continuations. The consuming receipt
+/// chooses the scheduler return path; neither path can bypass actor completion.
+fn settle_native_dispatch(
+    baton: &Baton,
+    slice: &ReservedServiceSlice,
+    ticket: DispatchTicket,
+    outcome: NativeOutcome,
+) -> SettledHostCall {
+    let runtime = baton.green_runtime();
+    let Some(runtime) = runtime.as_ref() else {
+        unreachable_service()
+    };
+    let mut registry = runtime.parked.borrow_mut();
+    let settled = match registry.services.complete(ticket, outcome) {
+        Ok(settled) => settled,
+        Err(error) => fatal_service(error),
+    };
+    if settled.key() != slice.key()
+        || registry
+            .hosts()
+            .finish_native_owner_step(baton, settled)
+            .is_err()
+    {
+        unreachable_service();
+    }
+    match registry.hosts().settle(slice.key()) {
+        Ok(settled) => settled,
+        Err(error) => fatal_service(error),
+    }
+}
+
+/// Dead-owner cleanup has no requester return or acknowledgement. The actual
+/// actor settlement consumes revocation first; roots remain for quiescent drain.
+pub(super) fn complete_ended_native_turn(
     baton: Baton,
     slice: ReservedServiceSlice,
+    ticket: DispatchTicket,
+    ended: EndedServiceOwner,
+    outcome: NativeOutcome,
+    control: &Control,
+) -> Baton {
+    if ended.key() != slice.key() || ended.requester() != slice.requester() {
+        unreachable_service();
+    }
+    let settled = settle_native_dispatch(&baton, &slice, ticket, outcome);
+    if control
+        .finish_ended_continuation(slice, settled, &baton)
+        .is_err()
+    {
+        unreachable_service();
+    }
+    baton
+}
+
+/// Called only after the requester has canonically republished its newest
+/// owner image. Validation borrows end before the scheduler can wait or send.
+pub(in crate::emacs_core::eval::green) fn resume_owner_step(
+    parent: HostRequestKey,
+    baton: Baton,
+    control: &Control,
+    receiver: &Receiver<Wake>,
+) -> Wake {
+    enum Route {
+        Local(OwnerResumePlan),
+        Routed(OwnerResumePlan),
+    }
+    let route = {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            unreachable_service()
+        };
+        let registry = runtime.parked.borrow();
+        let ServiceRuntime::Open(session) = &registry.services else {
+            unreachable_service()
+        };
+        let Some(saved) = session.owner_continuations.get(&parent) else {
+            unreachable_service()
+        };
+        if registry
+            .hosts
+            .validate_owner_completion(&baton, saved.step)
+            .is_err()
+        {
+            unreachable_service();
+        }
+        let plan = match control.prepare_owner_resume(&saved.slice) {
+            Ok(plan) => plan,
+            Err(_) => unreachable_service(),
+        };
+        match saved.slice.requester() {
+            super::super::scheduler::ThreadKey::Main => Route::Local(plan),
+            super::super::scheduler::ThreadKey::Worker(_) => Route::Routed(plan),
+        }
+    };
+    match route {
+        Route::Local(plan) => match control.resume_prepared_local_owner_step(plan, baton) {
+            Ok(wake) => wake,
+            Err(_) => unreachable_service(),
+        },
+        Route::Routed(plan) => {
+            match control.resume_prepared_owner_step(plan, baton) {
+                Ok(ServiceTransfer::Dispatched) => {}
+                Ok(ServiceTransfer::Queued(_)) | Err(_) => unreachable_service(),
+            }
+            match receiver.recv() {
+                Ok(wake) => wake,
+                Err(_) => unreachable_service(),
+            }
+        }
+    }
+}
+
+fn settle_unstarted_host_call(
+    registry: &mut super::WorldRootRegistry,
+    baton: &Baton,
+    unstarted: UnstartedHostCall,
+) -> SettledHostCall {
+    let key = unstarted.key();
+    if registry
+        .hosts()
+        .finish_unstarted_owner_step(baton, unstarted)
+        .is_err()
+    {
+        unreachable_service();
+    }
+    match registry.hosts().settle(key) {
+        Ok(settled) => settled,
+        Err(error) => fatal_service(error),
+    }
+}
+
+fn finish_unstarted_native_turn(
+    baton: Baton,
+    slice: ReservedServiceSlice,
+    unstarted: UnstartedHostCall,
 ) -> ServedSlice {
+    if slice.key() != unstarted.key() {
+        unreachable_service();
+    }
     {
         let runtime = baton.green_runtime();
         let Some(runtime) = runtime.as_ref() else {
             unreachable_service()
         };
-        let mut registry = runtime.parked.borrow_mut();
-        match registry.hosts().settle(key) {
-            Ok(settled) => drop(settled),
-            Err(error) => fatal_service(error),
-        }
+        drop(settle_unstarted_host_call(
+            &mut runtime.parked.borrow_mut(),
+            &baton,
+            unstarted,
+        ));
     }
     ServedSlice { baton, slice }
 }
@@ -646,7 +896,12 @@ impl ServedSlice {
         self,
         control: &Control,
     ) -> ServiceReturn {
-        match control.return_from_service(self.slice, self.baton) {
+        let returned = if self.slice.requester() == super::super::scheduler::ThreadKey::Main {
+            control.return_from_local_service(self.slice, self.baton)
+        } else {
+            control.return_from_service(self.slice, self.baton)
+        };
+        match returned {
             Ok(returned) => returned,
             Err(refusal) => {
                 tracing::error!(?refusal.reason, "host service lost its scheduler reservation");
@@ -806,10 +1061,54 @@ pub(in crate::emacs_core::eval::green) enum FixtureDriver {
     Unavailable,
     Installed(Box<dyn FnOnce(&mut NativeServiceScope<'_>) -> NativeOutcome + Send>),
     Owned(super::pump::FixtureNativeDriver),
+    Semantic(super::pump::FixtureSemanticDriver),
+    SemanticCleanup {
+        driver: super::pump::FixtureSemanticDriver,
+        cleanup: super::pump::FixtureCleanupDriver,
+    },
 }
 
 #[cfg(test)]
 impl ServiceRuntime {
+    /// Preserve an actual actor-issued dispatch and waiter for lifecycle controls.
+    pub(super) fn native_dispatch_for_test(
+        &mut self,
+        key: HostRequestKey,
+    ) -> (DispatchTicket, HostWaiter) {
+        let session = self.session();
+        let Publication::Delivered(waiter) = session.client.publish(key, OwnedNativeData::None)
+        else {
+            panic!("test actor publication was closed")
+        };
+        session.transport.drain_commands();
+        let DispatchPoll::Ready(dispatch) = session.transport.dispatch_next() else {
+            panic!("test actor did not dispatch its publication")
+        };
+        let (ticket, native) = dispatch.into_parts();
+        drop(native);
+        (ticket, waiter)
+    }
+
+    pub(super) fn complete_native_dispatch_for_test(
+        &mut self,
+        ticket: DispatchTicket,
+        outcome: NativeOutcome,
+    ) -> NativeCleanupSettled {
+        self.complete(ticket, outcome).unwrap()
+    }
+
+    /// Exercise actual actor publication, dispatch and completion rather than
+    /// constructing the native-settlement proof from a correlation key.
+    pub(super) fn native_cleanup_settled_for_test(
+        &mut self,
+        key: HostRequestKey,
+    ) -> NativeCleanupSettled {
+        let (ticket, waiter) = self.native_dispatch_for_test(key);
+        let settled = self.complete_native_dispatch_for_test(ticket, NativeOutcome::HostClosed);
+        waiter.finish();
+        settled
+    }
+
     pub(in crate::emacs_core::eval::green) fn install_fixture_completion(
         &mut self,
         sender: std::sync::mpsc::Sender<FixtureGcCompleted>,
@@ -852,6 +1151,34 @@ impl ServiceRuntime {
         self.session().driver = FixtureDriver::Owned(driver);
     }
 
+    pub(in crate::emacs_core::eval::green) fn install_semantic_fixture_driver(
+        &mut self,
+        driver: super::pump::FixtureSemanticDriver,
+    ) {
+        self.session().driver = FixtureDriver::Semantic(driver);
+    }
+
+    pub(super) fn install_cleanup_fixture_driver(
+        &mut self,
+        driver: super::pump::FixtureSemanticDriver,
+        cleanup: super::pump::FixtureCleanupDriver,
+    ) {
+        self.session().driver = FixtureDriver::SemanticCleanup { driver, cleanup };
+    }
+
+    /// Fault injection retires the actual publication receiver before any
+    /// request exists. The stored client then reports ReceiverClosed naturally.
+    pub(super) fn retire_publication_receiver_for_test(&mut self) {
+        let session = self.session();
+        assert!(session.reservations.is_empty());
+        assert!(session.waiters.is_empty());
+        assert!(session.deferred_terminals.is_empty());
+        assert!(session.dispatched.is_empty());
+        assert!(session.owner_continuations.is_empty());
+        let (_, replacement) = transport::channel();
+        session.transport = replacement;
+    }
+
     pub(in crate::emacs_core::eval::green) fn take_fixture_driver(&mut self) -> FixtureDriver {
         std::mem::replace(&mut self.session().driver, FixtureDriver::Unavailable)
     }
@@ -880,6 +1207,10 @@ pub(in crate::emacs_core::eval::green) fn serve_main_wake(
                 return turn.serve(driver).return_to_requester(control);
             }
             FixtureDriver::Owned(driver) => pump.install_fixture_driver(driver),
+            FixtureDriver::Semantic(driver) => pump.install_semantic_fixture_driver(driver),
+            FixtureDriver::SemanticCleanup { driver, cleanup } => {
+                pump.install_cleanup_fixture_driver(driver, cleanup)
+            }
             FixtureDriver::Unavailable => {}
         }
     }
@@ -906,17 +1237,29 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
             fatal_service(error);
         }
         let reservation = match registry.hosts().registration(key) {
-            Ok(registration) => control.reserve_service(registration),
+            Ok(registration) => match registration.owner() {
+                ThreadKey::Main => control.reserve_local_service(registration),
+                ThreadKey::Worker(_) => control.reserve_service(registration),
+            },
             Err(error) => fatal_service(error),
         };
         match reservation {
-            Err(_) => {
+            Err(ServiceRefusal::DuplicateRequest) => unreachable_service(),
+            Err(
+                ServiceRefusal::Closing
+                | ServiceRefusal::MainUnavailable
+                | ServiceRefusal::MainIsRequester
+                | ServiceRefusal::RequesterUnavailable
+                | ServiceRefusal::WrongServiceState
+                | ServiceRefusal::WrongMainThread,
+            ) => {
                 // No scheduler reservation or actor admission exists. Roots
                 // still receive a durable terminal before the owner restores.
-                match registry.hosts().settle(key) {
-                    Ok(settled) => drop(settled),
-                    Err(error) => fatal_service(error),
-                }
+                drop(settle_unstarted_host_call(
+                    &mut registry,
+                    &baton,
+                    UnstartedHostCall { key },
+                ));
                 Err(HostResume::Refused {
                     key,
                     settlement: NativeSettlement::Completed(NativeOutcome::HostClosed),
@@ -924,10 +1267,14 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
             }
             Ok(reservation) => match registry.services.publish(key, native, reservation) {
                 Err(refusal) => {
-                    let settled = match registry.hosts().settle(key) {
-                        Ok(settled) => settled,
-                        Err(error) => fatal_service(error),
-                    };
+                    if !matches!(refusal.error, HostRootError::Closed) {
+                        fatal_service(refusal.error);
+                    }
+                    let settled = settle_unstarted_host_call(
+                        &mut registry,
+                        &baton,
+                        UnstartedHostCall { key },
+                    );
                     if let Err(refusal) =
                         control.cancel_current_service(refusal.reservation, settled, &baton)
                     {
@@ -953,6 +1300,21 @@ pub(in crate::emacs_core::eval::green) fn dispatch_host(
         Ok(plan) => plan,
         Err(resume) => return (Wake::Resume(baton), resume),
     };
+    // The typed plan is consumed after the registry borrow has ended. Main's
+    // local route enters the same native receive driver without a self-send.
+    match plan.requester() {
+        ThreadKey::Main => {
+            return match control.transfer_prepared_local_service(plan, baton) {
+                Ok(wake) => (wake, HostResume::Actor(key)),
+                Err(refusal) => {
+                    tracing::debug!(?refusal.reason, "local host transfer refused before native dispatch");
+                    suppress_with_baton(&refusal.baton, key, control);
+                    (Wake::Resume(refusal.baton), HostResume::Actor(key))
+                }
+            };
+        }
+        ThreadKey::Worker(_) => {}
+    }
     let transfer = match control.transfer_prepared_service(plan, baton) {
         Ok(ServiceTransfer::Queued(baton)) => {
             // Main may still be inside a real native release. R2 queues until
@@ -1014,10 +1376,7 @@ fn suppress_reserved(
         Ok(slice) => slice,
         Err(error) => fatal_service(error),
     };
-    let settled = match registry.hosts().settle(key) {
-        Ok(settled) => settled,
-        Err(error) => fatal_service(error),
-    };
+    let settled = settle_unstarted_host_call(registry, baton, UnstartedHostCall { key });
     if let Err(refusal) = control.cancel_current_service(slice, settled, baton) {
         tracing::error!(?refusal.reason, "host transfer refusal cannot restore requester");
         unreachable_service();
@@ -1033,6 +1392,7 @@ fn unreachable_service() -> ! {
     std::process::abort()
 }
 
+static_assertions::assert_not_impl_any!(UnstartedHostCall: Clone, Copy);
 static_assertions::assert_not_impl_any!(PublishRefusal: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(RetirementRefusal: Clone, Copy);
 static_assertions::assert_not_impl_any!(HostTerminal: Clone, Copy);
@@ -1041,3 +1401,11 @@ static_assertions::assert_not_impl_any!(MainServiceTurn<'static>: Send, Sync, Cl
 
 static_assertions::assert_not_impl_any!(ServedSlice: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(NativeServiceScope<'static>: Send, Sync, Clone, Copy);
+
+#[cfg(test)]
+#[path = "tests/unstarted.rs"]
+mod unstarted_tests;
+
+#[cfg(test)]
+#[path = "tests/local_main.rs"]
+mod local_main_tests;

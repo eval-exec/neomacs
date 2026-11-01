@@ -21,12 +21,21 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[allow(
+    dead_code,
+    reason = "owner-step adapters remain dormant until hosted qualification"
+)]
+mod owner_steps;
 mod pending;
+mod registered_payload;
+pub(super) use owner_steps::StepKey;
+use registered_payload::RegisteredPayload;
 mod pump;
 mod scheduling;
 mod transport;
 pub(super) use pump::{MainNativeDrain, OwnerReceive};
 pub(super) use scheduling::RealWaitPermit;
+pub(super) use scheduling::resume_owner_step;
 pub(super) use scheduling::{HostResume, dispatch_host};
 pub(super) use transport::NativeSettlement;
 
@@ -109,6 +118,8 @@ enum RecordState {
     Published(HostParkRegistration),
     TerminalAwaitingOwner,
     OwnerAcknowledged,
+    /// Unpublished admission was consumed; remaining roots are drain-only.
+    Abandoned,
 }
 
 #[derive(Debug)]
@@ -118,6 +129,7 @@ struct Record {
     roots: Vec<RootBatchLease>,
     registered: BTreeMap<RootRecordId, RegisteredSlot>,
     next_record: NonZeroU64,
+    steps: owner_steps::OwnerSteps,
 }
 
 /// A slot indexes the leases retained by one request, never a Lisp position.
@@ -128,6 +140,14 @@ struct RootSlot(usize);
 struct RegisteredSlot {
     kind: RecordKind,
     slot: RootSlot,
+    payload: RegisteredPayload,
+    origin: RecordOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordOrigin {
+    Request,
+    OwnerStep(owner_steps::StepKey),
 }
 
 /// Authority borrowed from the actual restored owner, not a caller-supplied id.
@@ -187,6 +207,11 @@ pub(super) struct PreparedHostCall {
     owner: ThreadKey,
     _confined: PhantomData<Rc<()>>,
 }
+
+/// Original-owner admission consumed before publication; roots remain retained
+/// until collector preflight and explicit retirement, or World quiescent drain.
+#[must_use = "retire after collector preflight, or retain for quiescent drain"]
+pub(super) struct AbandonedHostCall(PreparedHostCall);
 
 /// Minted only after the owner's ordinary parked census is published.
 #[derive(Debug)]
@@ -366,7 +391,8 @@ impl WorldRootRegistry {
             RecordState::Prepared => {}
             RecordState::Published(_)
             | RecordState::TerminalAwaitingOwner
-            | RecordState::OwnerAcknowledged => return Err(HostRootError::WrongStage),
+            | RecordState::OwnerAcknowledged
+            | RecordState::Abandoned => return Err(HostRootError::WrongStage),
         }
         let key = prepared.key;
         record.state = RecordState::Published(
@@ -411,6 +437,50 @@ impl HostRegistry {
             records: BTreeMap::new(),
         }
     }
+
+    /// Stop new admission while retaining already-published continuations.
+    /// This is the cold close boundary; it grants no owner execution authority.
+    pub(super) fn begin_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+        if !baton.held_here() {
+            return Err(HostRootError::BatonRequired);
+        }
+        let actual = baton.parallel_heap_identity();
+        if actual != self.heap {
+            return Err(HostRootError::ForeignHeap {
+                expected: self.heap,
+                actual,
+            });
+        }
+        match self.session {
+            SessionState::Dormant | SessionState::Open(_) => {
+                self.session = SessionState::Closing;
+            }
+            SessionState::Closing | SessionState::Closed => {}
+        }
+        Ok(())
+    }
+
+    /// Reflect the actor's FIFO close observation only after earlier individual
+    /// cancellation observations have been recorded. Closing admission alone
+    /// must not overtake an already enqueued requester intent.
+    fn observe_session_closing(&mut self, baton: &Baton) -> Result<(), HostRootError> {
+        self.begin_closing(baton)?;
+        for record in self.records.values_mut() {
+            match record.state {
+                RecordState::Published(_) => {
+                    record
+                        .steps
+                        .request_interruption(transport::CancelReason::SessionClosing);
+                }
+                RecordState::Prepared
+                | RecordState::TerminalAwaitingOwner
+                | RecordState::OwnerAcknowledged
+                | RecordState::Abandoned => {}
+            }
+        }
+        Ok(())
+    }
+
     fn next_key(&mut self) -> Result<HostRequestKey, HostRootError> {
         if matches!(self.session, SessionState::Dormant) {
             self.session = SessionState::Open(OpenSession {
@@ -434,6 +504,69 @@ impl HostRegistry {
         self.records
             .get_mut(&key)
             .ok_or(HostRootError::UnknownRequest)
+    }
+
+    /// Consume unpublished admission and revoke materialization before collector
+    /// preflight. Dropping this handle retains the record for quiescent drain.
+    pub(super) fn abandon_prepared(
+        &mut self,
+        baton: &Baton,
+        heap: &TaggedHeap,
+        owner: ThreadKey,
+        call: PreparedHostCall,
+    ) -> Result<AbandonedHostCall, HostRootError> {
+        self.validate_access(baton, heap)?;
+        if call.owner != owner {
+            return Err(HostRootError::ForeignOwner);
+        }
+        let record = self.record_mut(call.key)?;
+        if record.owner != owner {
+            return Err(HostRootError::ForeignOwner);
+        }
+        match record.state {
+            RecordState::Prepared => record.state = RecordState::Abandoned,
+            RecordState::Published(_)
+            | RecordState::TerminalAwaitingOwner
+            | RecordState::OwnerAcknowledged
+            | RecordState::Abandoned => return Err(HostRootError::WrongStage),
+        }
+        Ok(AbandonedHostCall(call))
+    }
+
+    /// Original owner has completed canonical collector preflight, outside all
+    /// registry borrows. Never retire a lease directly from an active GC driver.
+    pub(super) fn retire_abandoned(
+        &mut self,
+        baton: &Baton,
+        heap: &TaggedHeap,
+        owner: ThreadKey,
+        abandoned: AbandonedHostCall,
+    ) -> Result<(), HostRootError> {
+        self.validate_access(baton, heap)?;
+        let call = abandoned.0;
+        if call.owner != owner {
+            return Err(HostRootError::ForeignOwner);
+        }
+        let record = self.record_mut(call.key)?;
+        if record.owner != owner {
+            return Err(HostRootError::ForeignOwner);
+        }
+        if !matches!(record.state, RecordState::Abandoned) {
+            return Err(HostRootError::WrongStage);
+        }
+        let before = record.roots.len();
+        if let Err(error) = Self::finish_roots(record) {
+            if record.roots.len() != before {
+                // At least one liveness change committed. Keep every remaining
+                // lease in the World and fail-stop, as restored-owner retirement
+                // does, before exposing a partly-retired operation to Lisp.
+                tracing::error!(%error, "prepared host abandonment partially retired its roots");
+                std::process::abort();
+            }
+            return Err(error);
+        }
+        self.records.remove(&call.key);
+        Ok(())
     }
 
     /// Register live original-owner roots; native endpoints receive only key.
@@ -483,6 +616,7 @@ impl HostRegistry {
                 roots: vec![lease],
                 registered: BTreeMap::new(),
                 next_record: NonZeroU64::MIN,
+                steps: owner_steps::OwnerSteps::default(),
             },
         );
         Ok(PreparedHostCall {
@@ -510,11 +644,33 @@ impl HostRegistry {
         if matches!(self.session, SessionState::Closing | SessionState::Closed) {
             return Err(HostRootError::Closed);
         }
+        // SAFETY: the public-to-this-owner entry validated ordinary admission;
+        // its caller guarantees live original-owner roots for this extent.
+        unsafe { self.register_record(baton, heap, owner, key, roots) }
+    }
+
+    /// Single registration implementation for ordinary and validated admitted
+    /// continuation access. The latter may finish cleanup during Closing.
+    ///
+    /// # Safety
+    /// Same live original-owner roots and no-GC extent as `register`.
+    unsafe fn register_record<K: RegisteredRecord>(
+        &mut self,
+        baton: &Baton,
+        heap: &TaggedHeap,
+        owner: ThreadKey,
+        key: HostRequestKey,
+        roots: &[TaggedValue],
+    ) -> Result<RegisteredRootRef<'static, K>, HostRootError> {
+        self.validate_access(baton, heap)?;
         let record = self.record_mut(key)?;
         if record.owner != owner {
             return Err(HostRootError::ForeignOwner);
         }
-        if matches!(record.state, RecordState::OwnerAcknowledged) {
+        if matches!(
+            record.state,
+            RecordState::OwnerAcknowledged | RecordState::Abandoned
+        ) {
             return Err(HostRootError::WrongStage);
         }
         let id = RootRecordId::from_owner_id(record.next_record);
@@ -522,6 +678,10 @@ impl HostRegistry {
             .next_record
             .checked_add(1)
             .ok_or(HostRootError::IdentityExhausted)?;
+        // RootBatch retains only traced words. Keep the semantic slot recipe
+        // with this registered record so immediates and duplicate positions
+        // survive decoding without retaining an unrooted heap-word copy.
+        let payload = RegisteredPayload::new(roots);
         let prepared = baton.prepare_parked_batch(heap, roots.len())?;
         // SAFETY: original-owner input roots remain live under the held Baton;
         // the private caller promises no GC, callback or handoff in this extent.
@@ -543,6 +703,8 @@ impl HostRegistry {
             RegisteredSlot {
                 kind: reference.kind(),
                 slot,
+                payload,
+                origin: RecordOrigin::Request,
             },
         );
         record.next_record = next;
@@ -588,7 +750,10 @@ impl HostRegistry {
         if record.owner != restored.owner {
             return Err(HostRootError::ForeignOwner);
         }
-        if matches!(record.state, RecordState::OwnerAcknowledged) {
+        if matches!(
+            record.state,
+            RecordState::OwnerAcknowledged | RecordState::Abandoned
+        ) {
             return Err(HostRootError::WrongStage);
         }
         let registration = record
@@ -602,12 +767,16 @@ impl HostRegistry {
             .roots
             .get(registration.slot.0)
             .ok_or(HostRootError::ForeignRecord)?;
-        let reader = lease.reader(heap)?;
         let mut roots = Vec::with_capacity(lease.root_count());
+        let mut values = vec![TaggedValue::NIL; registration.payload.len()];
+        let reader = lease.reader(heap)?;
         reader.append_roots(&mut roots);
-        let result = read(&roots);
+        let decoded = registration.payload.copy_into(&roots, &mut values);
+        // Finish even if checked decoding rejects a corrupt slot recipe. A
+        // reader's Drop records abandonment; it is not successful completion.
         reader.finish()?;
-        Ok(result)
+        decoded?;
+        Ok(read(&values))
     }
 
     pub(super) fn registration(
@@ -623,12 +792,16 @@ impl HostRegistry {
             RecordState::Published(registration) => Ok(registration),
             RecordState::Prepared
             | RecordState::TerminalAwaitingOwner
-            | RecordState::OwnerAcknowledged => Err(HostRootError::WrongStage),
+            | RecordState::OwnerAcknowledged
+            | RecordState::Abandoned => Err(HostRootError::WrongStage),
         }
     }
 
     pub(super) fn settle(&mut self, key: HostRequestKey) -> Result<SettledHostCall, HostRootError> {
         let record = self.record_mut(key)?;
+        if !record.steps.can_settle() {
+            return Err(HostRootError::WrongStage);
+        }
         match record.state {
             RecordState::Published(_) => {
                 record.state = RecordState::TerminalAwaitingOwner;
@@ -640,7 +813,8 @@ impl HostRegistry {
             }
             RecordState::Prepared
             | RecordState::TerminalAwaitingOwner
-            | RecordState::OwnerAcknowledged => Err(HostRootError::WrongStage),
+            | RecordState::OwnerAcknowledged
+            | RecordState::Abandoned => Err(HostRootError::WrongStage),
         }
     }
 
@@ -660,9 +834,10 @@ impl HostRegistry {
                 record.state = RecordState::OwnerAcknowledged;
                 Ok(OwnerAcknowledged { key, restored })
             }
-            RecordState::Prepared | RecordState::Published(_) | RecordState::OwnerAcknowledged => {
-                Err(HostRootError::WrongStage)
-            }
+            RecordState::Prepared
+            | RecordState::Published(_)
+            | RecordState::OwnerAcknowledged
+            | RecordState::Abandoned => Err(HostRootError::WrongStage),
         }
     }
 
@@ -809,6 +984,7 @@ static_assertions::assert_not_impl_any!(RestoredHostOwner<'static>: Send, Sync, 
 static_assertions::assert_not_impl_any!(OwnerAcknowledged<'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(RetirementBlocked<'static>: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(PreparedHostCall: Send, Sync, Clone, Copy);
+static_assertions::assert_not_impl_any!(AbandonedHostCall: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(HostParkRegistration: Send, Sync, Clone, Copy);
 static_assertions::assert_not_impl_any!(DrainBlocked: Send, Sync, Clone, Copy);
 
@@ -819,3 +995,11 @@ mod tests;
 #[cfg(test)]
 #[path = "host_service/tests/runtime.rs"]
 mod runtime_tests;
+
+#[cfg(test)]
+#[path = "host_service/tests/owner_runtime.rs"]
+mod owner_runtime_tests;
+
+#[cfg(test)]
+#[path = "host_service/tests/prepublication.rs"]
+mod prepublication_tests;

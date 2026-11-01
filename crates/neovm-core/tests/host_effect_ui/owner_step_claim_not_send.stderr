@@ -1,0 +1,39 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+ --> tests/host_effect_ui/owner_step_claim_not_send.rs:7:20
+  |
+7 |     require_send::<ClaimedOwnerStep<'static, u64>>();
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<()>` cannot be sent between threads safely
+  |
+  = help: within `ClaimedOwnerStep<'static, u64>`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `std::marker::PhantomData<Rc<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `OwnerResumePort<RedisplayStep, u64>`
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+  | pub(crate) struct OwnerResumePort<K: OwnerStepKind, O> {
+  |                   ^^^^^^^^^^^^^^^
+note: required because it appears within the type `OwnerStepClaim<'static, RedisplayStep, u64>`
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+  | pub(crate) struct OwnerStepClaim<'s, K: OwnerStepKind, O> {
+  |                   ^^^^^^^^^^^^^^
+note: required because it appears within the type `ClaimedOwnerStep<'static, u64>`
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+  |           pub(crate) enum ClaimedOwnerStep<'s, O> { $($variant(OwnerStepClaim<'s, $kind, O>),)+ }
+  |                           ^^^^^^^^^^^^^^^^
+...
+  | / step_families!(
+  | |     (
+  | |         Redisplay,
+  | |         redisplay,
+... |
+  | |     ),
+  | | );
+  | |_- in this macro invocation
+note: required by a bound in `require_send`
+ --> tests/host_effect_ui/owner_step_claim_not_send.rs:5:20
+  |
+5 | fn require_send<T: Send>() {}
+  |                    ^^^^ required by this bound in `require_send`
+  = note: this error originates in the macro `step_families` (in Nightly builds, run with -Z macro-backtrace for more info)

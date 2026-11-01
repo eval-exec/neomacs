@@ -17,6 +17,32 @@ pub(super) trait PendingReservation {
     fn key(&self) -> HostRequestKey;
 }
 
+/// Continuation insertion can survive closed admission only for the exact
+/// previously reserved service. Private fields cannot be forged from a key.
+pub(super) struct ContinuationInsertion {
+    key: HostRequestKey,
+}
+
+/// Implemented only by the canonical reserved service slice in the scheduler
+/// adapter. This private static seam keeps the pending store independent of
+/// scheduler storage without exposing a key-only admission constructor.
+pub(super) trait ContinuationReservation {
+    fn continuation_request(&self) -> HostRequestKey;
+}
+
+impl ContinuationInsertion {
+    pub(super) fn from_service(slice: &impl ContinuationReservation) -> Self {
+        Self {
+            key: slice.continuation_request(),
+        }
+    }
+}
+
+enum InsertAdmission {
+    New,
+    Continuing(ContinuationInsertion),
+}
+
 struct PendingEntry<R> {
     operation: PendingNativeOperation,
     reservation: R,
@@ -107,16 +133,44 @@ impl<R: PendingReservation> NativePendingCalls<R> {
         operation: PendingNativeOperation,
         reservation: R,
     ) -> Result<(), RejectedPending<R>> {
+        self.insert_authorized(operation, reservation, InsertAdmission::New)
+    }
+
+    pub(super) fn insert_continuation(
+        &mut self,
+        operation: PendingNativeOperation,
+        reservation: R,
+        admission: ContinuationInsertion,
+    ) -> Result<(), RejectedPending<R>> {
+        self.insert_authorized(
+            operation,
+            reservation,
+            InsertAdmission::Continuing(admission),
+        )
+    }
+
+    fn insert_authorized(
+        &mut self,
+        mut operation: PendingNativeOperation,
+        reservation: R,
+        admission: InsertAdmission,
+    ) -> Result<(), RejectedPending<R>> {
         let key = operation.key();
-        let refusal = if key != reservation.key() {
+        let continuation = match admission {
+            InsertAdmission::New => None,
+            InsertAdmission::Continuing(admission) => Some(admission.key),
+        };
+        let refusal = if key != reservation.key()
+            || continuation.is_some_and(|parent| parent != key)
+        {
             Some(PendingInsertRefusal::WrongKey)
         } else {
             match self.admission {
-                Admission::Closed => Some(PendingInsertRefusal::Closed),
-                Admission::Open if self.entries.contains_key(&key) => {
+                Admission::Closed if continuation.is_none() => Some(PendingInsertRefusal::Closed),
+                Admission::Open | Admission::Closed if self.entries.contains_key(&key) => {
                     Some(PendingInsertRefusal::DuplicateKey)
                 }
-                Admission::Open => None,
+                Admission::Open | Admission::Closed => None,
             }
         };
         if let Some(reason) = refusal {
@@ -125,6 +179,9 @@ impl<R: PendingReservation> NativePendingCalls<R> {
                 reservation,
                 reason,
             });
+        }
+        if self.admission == Admission::Closed {
+            operation.request_cancel(CancelReason::SessionClosing);
         }
         self.entries.insert(
             key,

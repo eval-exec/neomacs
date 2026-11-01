@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/host_effect_ui/owner_step_result_no_raw_value.rs:6:39
+  |
+6 |     let _ = OwnerStepResult::Callback(value);
+  |             ------------------------- ^^^^^ expected `RegisteredRootRef<'_, ...>`, found `TaggedValue`
+  |             |
+  |             arguments to this enum variant are incorrect
+  |
+  = note: expected struct `owner::contracts::RegisteredRootRef<'_, owner::contracts::CallbackStepResult>`
+             found struct `TaggedValue`
+note: tuple variant defined here
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+  |         Callback,
+  |         ^^^^^^^^

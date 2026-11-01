@@ -19,6 +19,18 @@ source_paths=(
     'src/emacs_core/runtime/eval/green/host_service/scheduling.rs'
     'src/emacs_core/runtime/eval/green/host_service/transport.rs'
     'src/emacs_core/runtime/eval/green/host_service/tests/runtime.rs'
+    'src/host_effect/contracts.rs'
+    'src/host_effect/owner_step.rs'
+    'src/host_effect/tests/owner_step_test.rs'
+    'src/emacs_core/runtime/eval/green/host_service/owner_steps.rs'
+    'src/emacs_core/runtime/eval/green/host_service/registered_payload.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/owner_steps.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/registered_payload.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/owner_runtime.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/semantic_pump.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/local_main.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/unstarted.rs'
+    'src/emacs_core/runtime/eval/green/host_service/tests/prepublication.rs'
     'src/emacs_core/system/process/green_select.rs'
     'src/host_effect/native_pending.rs'
     'src/host_effect/native_outcome.rs'
@@ -26,14 +38,26 @@ source_paths=(
     'src/host_effect/wake/native_wait.rs'
 )
 source_hashes=(
-    '3e1fb935bb5006de271ce2caaa472ebbf4a062ae102db2f11521f972024183bf'
-    '1f10de6b4bac7e3864bb4495e58f9dea5e3b1014de66ae8fddc82c34c1aa06cc'
-    '6babe0bdd00b704be321045e3b66b8c12fbfc28558a8cb6be52f6b4589324b09'
-    '8f49ea0b24843a24862059202e76a0fe7bffcfba00ca8d591d569e13367c7792'
-    '8377e5c9b967498df0fc22016b17a277f9d6cc07c5537975295ffac45081b630'
-    '036a0ae104efdcff433efdfe3c3991f8c9d185e9c56e7b99e316edd5cd32ff4a'
+    '90d3e40a8e4d68ae02f8bae113e20367713b194e6cf8e6febb9be95ea3e4fdc6'
+    '5deed51fd440f3e040097e7ba92409302d79c3a3d90de2981119c09c325fb65d'
+    'faf39b34a0666a4f4653afcccbca35c86071fdaa03b649bf75a6d1b5c49f5b5a'
+    '13e7132bc4d802f2c14a083ee8a02370fed937a0db5aefe91c08c6719693d74f'
+    'fd5cc4e3d1ddee97e0436416ba14d3f2eb5f0b130a3d50004952650f14a88bc3'
+    'ddecb8d2ff95559f9341ee4955d4718a10b86c4f05bd27a5da25c475d59f643a'
     'd39f205e89ecd607d793715f3f7009ceccd136deb85989c830a38657cf050b4b'
     '4096430dcd45f7829e9752bd00635b9241ab8bbd67bd0d16993ceeab31fb5a6d'
+    '068aade6166a7958f7a5108af031090cad7f3e24a0ce953acbb6031d12063a53'
+    '67ba28ff49ebef50616b3771e6ac290722658255902de638e24764eaca4e3c6f'
+    '701d52d9853e342d81b4de728ab2fe6a45f39e91b715abd15fc2cf0782aa5d31'
+    '567d037a520352cb20538235fb27837559ae68692de0683181a44083059ce3a4'
+    '71dcf98847b4c4446b27234eaec5b98cd507e4ff22bd57070aad96ba3da6c0ed'
+    '6272b058278b244415f864429c768de9535f311ebc8738e73399923f023bd0da'
+    '8f898e06a66c6f9f29f7b6b15ec135b4a632e628714c12acf2120bf24c5e95d9'
+    '4a8d093ecfeb53b73572be0eb054f9a61b84d65baf67fcc65554f05c19ecad71'
+    '8d310914cf93f20491a1f4b46a4f5abf10f3e9c355ba3c5ea68122f6b94738d7'
+    '893d0f5c81cbce13c50e87ad554ebe99d32cc8da9be0b4f11f9ba64a1979638b'
+    'ece4e38efd0a7aa17cec1d2ac8a32ae9b739dde0f6298f384f320e75da6dcfda'
+    '05a097f4fbef1ecc9437f9b9f3bdf90992ecc9dad8dc319f2505d120de5190e7'
     'c87cab72fa3a0d20954b2cb18b2ebc71aff217ea156835e29fd03a748abba36a'
     '7275fe554bb8c5134395012bc6a2c33b813958025d160672ef871be94ec667a1'
     'a2d75c4f9a710d362a983a7d779c45902d1ec6505490a2390fb44a0eac63976f'
@@ -98,7 +122,7 @@ for generation in 1 0; do
         --locked --offline -p neovm-core --lib --target "$target" \
         -Z build-std=std,panic_abort \
         --config-file "$harness_dir/green-tsan-nextest.toml" \
-        -E 'test(/host_service::runtime_tests::/)' \
+        -E 'test(/host_service::/)' \
         --test-threads 1 --retries 0 --no-tests fail --no-fail-fast
     printf 'TSAN_REAL_GREEN_PUMP_GEN%s_PASS\n' "$generation"
 done

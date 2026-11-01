@@ -1,0 +1,23 @@
+error[E0308]: mismatched types
+ --> tests/host_effect_ui/owner_step_flow_no_raw_flow.rs:6:35
+  |
+6 |     let _ = OwnerStepResult::Flow(flow);
+  |             --------------------- ^^^^ expected `RegisteredOwnerFlow<'_>`, found `Flow`
+  |             |
+  |             arguments to this enum variant are incorrect
+  |
+note: tuple variant defined here
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+  |               Flow(RegisteredOwnerFlow<'s>),
+  |               ^^^^
+...
+  | / step_families!(
+  | |     (
+  | |         Redisplay,
+  | |         redisplay,
+... |
+  | |     ),
+  | | );
+  | |_- in this macro invocation
+  = note: this error originates in the macro `step_families` (in Nightly builds, run with -Z macro-backtrace for more info)

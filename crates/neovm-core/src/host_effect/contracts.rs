@@ -211,7 +211,17 @@ macro_rules! families {
         /// Closed record vocabulary shared with the root-retaining owner.
         mod record_kind {
             #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-            pub enum RecordKind { $($input, $output,)+ Condition, ThreadSignal }
+            pub enum RecordKind {
+                $($input, $output,)+ Condition, ThreadSignal,
+                RedisplayStepArguments, RedisplayStepResult,
+                DisplayQueryStepArguments, DisplayQueryStepResult,
+                FontStepArguments, FontStepResult,
+                SelectionStepArguments, SelectionStepResult,
+                CallbackStepArguments, CallbackStepResult,
+                RestoreStepArguments, RestoreStepResult,
+                OwnerExecutionFrame, OwnerRestoreFrame,
+                OwnerSignalFlow, OwnerThrowFlow, OwnerBlockedFlow, OwnerShutdownFlow,
+            }
         }
         pub(crate) use record_kind::RecordKind;
         $(
@@ -359,6 +369,40 @@ families!(
         CallbackArguments,
         CallbackResult
     ),
+);
+
+// Intermediate records belong to the existing parent request. They neither
+// create a terminal callback RPC nor grant native code heap access.
+macro_rules! owner_step_records {
+    ($(($record:ident, $kind:ident)),+ $(,)?) => {$ (
+        #[doc = "Sealed registered owner-continuation payload; no public root mint."]
+        pub enum $record {}
+        impl sealed::Record for $record {
+            const KIND: RecordKind = RecordKind::$kind;
+        }
+        impl RegisteredRecord for $record {}
+    )+};
+}
+
+owner_step_records!(
+    (RedisplayStepArguments, RedisplayStepArguments),
+    (RedisplayStepResult, RedisplayStepResult),
+    (DisplayQueryStepArguments, DisplayQueryStepArguments),
+    (DisplayQueryStepResult, DisplayQueryStepResult),
+    (FontStepArguments, FontStepArguments),
+    (FontStepResult, FontStepResult),
+    (SelectionStepArguments, SelectionStepArguments),
+    (SelectionStepResult, SelectionStepResult),
+    (CallbackStepArguments, CallbackStepArguments),
+    (CallbackStepResult, CallbackStepResult),
+    (RestoreStepArguments, RestoreStepArguments),
+    (RestoreStepResult, RestoreStepResult),
+    (OwnerExecutionFrameRecord, OwnerExecutionFrame),
+    (OwnerRestoreFrameRecord, OwnerRestoreFrame),
+    (OwnerSignalFlowRecord, OwnerSignalFlow),
+    (OwnerThrowFlowRecord, OwnerThrowFlow),
+    (OwnerBlockedFlowRecord, OwnerBlockedFlow),
+    (OwnerShutdownFlowRecord, OwnerShutdownFlow),
 );
 
 /// Error payload identity; the symbol/data remain in the registered control record.

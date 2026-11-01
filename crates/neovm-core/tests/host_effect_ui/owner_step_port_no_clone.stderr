@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `OwnerResumePort<CallbackStep, u64>: Clone` is not satisfied
+ --> tests/host_effect_ui/owner_step_port_no_clone.rs:7:21
+  |
+7 |     require_clone::<OwnerResumePort<CallbackStep, u64>>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Clone` is not implemented for `OwnerResumePort<CallbackStep, u64>`
+  |
+note: required by a bound in `require_clone`
+ --> tests/host_effect_ui/owner_step_port_no_clone.rs:5:21
+  |
+5 | fn require_clone<T: Clone>() {}
+  |                     ^^^^^ required by this bound in `require_clone`
+help: consider annotating `OwnerResumePort<CallbackStep, u64>` with `#[derive(Clone)]`
+ --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+  |
+    + #[derive(Clone)]
+    | pub(crate) struct OwnerResumePort<K: OwnerStepKind, O> {
+    |

@@ -1,0 +1,26 @@
+error[E0382]: use of moved value: `claim`
+  --> tests/host_effect_ui/owner_step_claim_consumed.rs:11:13
+   |
+ 6 |     claim: ClaimedOwnerStep<'static, u64>,
+   |     ----- move occurs because `claim` has type `ClaimedOwnerStep<'_, u64>`, which does not implement the `Copy` trait
+...
+10 |     let _ = claim.complete(first);
+   |                   --------------- `claim` moved due to this method call
+11 |     let _ = claim.complete(second);
+   |             ^^^^^ value used here after move
+   |
+note: `ClaimedOwnerStep::<'s, O>::complete` takes ownership of the receiver `self`, which moves `claim`
+  --> tests/host_effect_ui/support/../../../src/host_effect/owner_step.rs
+   |
+   |               pub(crate) fn complete(self, result: OwnerStepResult<'s>) -> Result<OwnerStepCompletion<'s, O>, RejectedOwnerStep<(Se...
+   |                                      ^^^^
+...
+   | / step_families!(
+   | |     (
+   | |         Redisplay,
+   | |         redisplay,
+...  |
+   | |     ),
+   | | );
+   | |_- in this macro invocation
+   = note: this error originates in the macro `step_families` (in Nightly builds, run with -Z macro-backtrace for more info)

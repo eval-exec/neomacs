@@ -9,7 +9,8 @@ use super::super::world::Baton;
 use super::super::{Context, Flow, Value};
 use super::carrier::CarrierJob;
 use super::host_service::{
-    self, MainNativeDrain, NativeSettlement, OwnerReceive, PreparedHostCall, RestoredHostOwner,
+    self, HostRequestKey, MainNativeDrain, NativeSettlement, OwnerReceive, PreparedHostCall,
+    RestoredHostOwner, StepKey,
 };
 use super::scheduler::{
     Control, Handoff, Lifecycle, NativeRelease, SchedulerIndexInconsistency, ServiceReturn,
@@ -64,6 +65,8 @@ enum ParkRequest {
         call: PreparedHostCall,
         native: OwnedNativeData,
     },
+    /// The already-admitted parent's next closed semantic turn.
+    HostContinue(HostRequestKey),
 }
 
 /// The consumer runs only on its restored requesting owner. It cannot borrow
@@ -74,11 +77,54 @@ enum ParkRequest {
 )]
 enum ParkCompletion<'owner> {
     Ordinary,
+    /// Published parent roots remain live; there is no terminal acknowledgement.
+    Intermediate(StepKey),
     MainNative(std::io::Result<crate::host_effect::wake::ControlWakeOutcome>),
     Host {
         owner: &'owner RestoredHostOwner<'owner>,
         settlement: &'owner NativeSettlement,
     },
+}
+
+/// One canonical park may finish the parent or return its next owner step.
+/// The terminal decoder is never invoked for an intermediate return.
+#[allow(
+    dead_code,
+    reason = "owned host adapters are installed in a later range"
+)]
+pub(super) enum HostOwnerTurn<R> {
+    Final(R),
+    NeedOwner(StepKey),
+}
+
+/// Native service selects this disposition before any owner state is restored.
+/// It contains only metadata; materialization waits for the canonical restore.
+enum OwnerRestore {
+    Ordinary,
+    Intermediate(StepKey),
+}
+
+struct RestoringTurn {
+    baton: Baton,
+    disposition: OwnerRestore,
+}
+
+impl RestoringTurn {
+    fn ordinary(baton: Baton) -> Self {
+        Self {
+            baton,
+            disposition: OwnerRestore::Ordinary,
+        }
+    }
+
+    /// Initial carrier entry and an ordinary native input wait cannot consume
+    /// another invocation's intermediate owner continuation.
+    fn into_ordinary_baton(self) -> Baton {
+        match self.disposition {
+            OwnerRestore::Ordinary => self.baton,
+            OwnerRestore::Intermediate(_) => std::process::abort(),
+        }
+    }
 }
 
 /// Holds native/scheduler ownership only while main's Context is published.
@@ -118,12 +164,10 @@ impl NativeWaitHandoff for MainNativeHandoff<'_> {
         let wake = self
             .control
             .reacquire_main_wait(release, self.receiver.as_channel());
-        self.authority = MainWaitAuthority::Held(receive_owner_turn(
-            ThreadKey::Main,
-            wake,
-            self.control,
-            self.receiver,
-        ));
+        self.authority = MainWaitAuthority::Held(
+            receive_owner_turn(ThreadKey::Main, wake, self.control, self.receiver)
+                .into_ordinary_baton(),
+        );
     }
     #[cfg(test)]
     fn physical_block_entered(&mut self) {
@@ -167,6 +211,30 @@ pub(crate) struct GreenSeat {
     pub(super) parked_root_batch: Option<crate::tagged::transport::PreparedRootBatch>,
     #[cfg(feature = "jit")]
     pub(super) parked_jit_scratch: crate::emacs_core::jit::green_owner::ParkedJitScratch,
+}
+
+impl GreenSeat {
+    pub(super) fn take_owner_step_baton(&mut self) -> Result<Baton, host_service::HostRootError> {
+        self.baton
+            .take()
+            .ok_or(host_service::HostRootError::BatonRequired)
+    }
+
+    pub(super) fn restore_owner_step_baton(&mut self, baton: Baton) {
+        if self.baton.is_some() {
+            tracing::error!("owner step attempted to duplicate its Green Baton");
+            std::process::abort();
+        }
+        self.baton = Some(baton);
+    }
+
+    pub(super) fn owner_step_receive(
+        &mut self,
+    ) -> Result<&mut OwnerReceive, host_service::HostRootError> {
+        self.receiver
+            .as_mut()
+            .ok_or(host_service::HostRootError::OwnerNotParked)
+    }
 }
 
 // Wake envelopes change only the cold channel payload, never the owner slot.
@@ -282,8 +350,73 @@ impl Context {
     pub(crate) fn green_park(&mut self, wait: Wait) -> Result<(), Flow> {
         self.green_park_impl(ParkRequest::Ordinary(wait), |completion| match completion {
             ParkCompletion::Ordinary => Ok(()),
-            ParkCompletion::Host { .. } | ParkCompletion::MainNative(_) => std::process::abort(),
+            ParkCompletion::Host { .. }
+            | ParkCompletion::Intermediate(_)
+            | ParkCompletion::MainNative(_) => std::process::abort(),
         })
+    }
+
+    /// Consume unpublished admission before collector preflight. Every registry
+    /// borrow ends before Context drains a collector; failure leaves drain-only
+    /// roots in the World and cannot expose stale registered records.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn green_abandon_prepared_host_call(
+        &mut self,
+        call: PreparedHostCall,
+    ) -> Result<(), Flow> {
+        fn root_error(error: host_service::HostRootError) -> Flow {
+            signal(LispCondition::Error, vec![Value::string(error.to_string())])
+        }
+        let abandoned = self
+            .with_held_host_registry(|registry, baton, heap, owner| {
+                registry.abandon_prepared(baton, heap, owner, call)
+            })
+            .map_err(root_error)?;
+        self.prepare_parked_root_retirement()?;
+        self.with_held_host_registry(|registry, baton, heap, owner| {
+            registry.retire_abandoned(baton, heap, owner, abandoned)
+        })
+        .map_err(root_error)
+    }
+
+    /// Borrow the seated Baton in place. No take/restore pair or registry borrow
+    /// survives the closure, and the closure receives no evaluator access.
+    fn with_held_host_registry<R>(
+        &mut self,
+        operation: impl FnOnce(
+            &mut host_service::HostRegistry,
+            &Baton,
+            &crate::tagged::gc::TaggedHeap,
+            ThreadKey,
+        ) -> Result<R, host_service::HostRootError>,
+    ) -> Result<R, host_service::HostRootError> {
+        let heap = &self.tagged_heap;
+        let seat = self
+            .owner
+            .slab_mut()
+            .and_then(|slab| slab.green_seat_mut())
+            .ok_or(host_service::HostRootError::ForeignOwner)?;
+        let baton = seat
+            .baton
+            .as_ref()
+            .ok_or(host_service::HostRootError::BatonRequired)?;
+        let runtime = baton.green_runtime();
+        let runtime = runtime
+            .as_ref()
+            .ok_or(host_service::HostRootError::BatonRequired)?;
+        operation(runtime.parked.borrow_mut().hosts(), baton, heap, seat.key)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn abandon_unpublished_park_request(&mut self, request: ParkRequest) -> Result<(), Flow> {
+        match request {
+            ParkRequest::Host { call, native: _ } => self.green_abandon_prepared_host_call(call),
+            ParkRequest::Ordinary(_)
+            | ParkRequest::HostContinue(_)
+            | ParkRequest::MainNative { .. } => Ok(()),
+        }
     }
 
     /// Reserve request roots while this original owner still holds the Baton.
@@ -340,6 +473,57 @@ impl Context {
             ParkRequest::Host { call, native },
             |completion| match completion {
                 ParkCompletion::Host { owner, settlement } => consume(owner, settlement),
+                ParkCompletion::Ordinary
+                | ParkCompletion::Intermediate(_)
+                | ParkCompletion::MainNative(_) => std::process::abort(),
+            },
+        )
+    }
+
+    /// One suspendable routed turn. The immutable terminal decoder is invoked
+    /// only when native semantic completion has actually settled the parent.
+    #[allow(
+        dead_code,
+        reason = "owned host adapters are installed in a later range"
+    )]
+    #[cold]
+    pub(super) fn green_host_call_turn<R>(
+        &mut self,
+        call: PreparedHostCall,
+        native: OwnedNativeData,
+        consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, Flow>,
+    ) -> Result<HostOwnerTurn<R>, Flow> {
+        self.green_park_impl(
+            ParkRequest::Host { call, native },
+            |completion| match completion {
+                ParkCompletion::Host { owner, settlement } => {
+                    consume(owner, settlement).map(HostOwnerTurn::Final)
+                }
+                ParkCompletion::Intermediate(step) => Ok(HostOwnerTurn::NeedOwner(step)),
+                ParkCompletion::Ordinary | ParkCompletion::MainNative(_) => std::process::abort(),
+            },
+        )
+    }
+
+    /// Continue after the registered owner frame has published its typed result.
+    /// No new parent publication, FIFO hop or automatic signal check is added.
+    #[allow(
+        dead_code,
+        reason = "owned host adapters are installed in a later range"
+    )]
+    #[cold]
+    pub(super) fn green_continue_host_turn<R>(
+        &mut self,
+        parent: HostRequestKey,
+        consume: impl FnOnce(&RestoredHostOwner<'_>, &NativeSettlement) -> Result<R, Flow>,
+    ) -> Result<HostOwnerTurn<R>, Flow> {
+        self.green_park_impl(
+            ParkRequest::HostContinue(parent),
+            |completion| match completion {
+                ParkCompletion::Host { owner, settlement } => {
+                    consume(owner, settlement).map(HostOwnerTurn::Final)
+                }
+                ParkCompletion::Intermediate(step) => Ok(HostOwnerTurn::NeedOwner(step)),
                 ParkCompletion::Ordinary | ParkCompletion::MainNative(_) => std::process::abort(),
             },
         )
@@ -353,7 +537,9 @@ impl Context {
         let Some(seat) = self.green_seat() else {
             return match request {
                 ParkRequest::Ordinary(_) => consume(ParkCompletion::Ordinary),
-                ParkRequest::Host { .. } | ParkRequest::MainNative { .. } => Err(signal(
+                ParkRequest::Host { .. }
+                | ParkRequest::HostContinue(_)
+                | ParkRequest::MainNative { .. } => Err(signal(
                     LispCondition::Error,
                     vec![Value::string("Host request requires a Green owner")],
                 )),
@@ -362,11 +548,15 @@ impl Context {
         let key = seat.key;
         let control = Arc::clone(&seat.control);
         if let Some(refusal) = switch_refusal(self) {
+            self.abandon_unpublished_park_request(request)?;
             return Err(signal("error", vec![Value::string(refusal)]));
         }
         // A failed retirement kept the restored owner's lease in the World.
         // Finish that obligation before publishing another census for this key.
-        self.finish_retained_parked_roots(key)?;
+        if let Err(error) = self.finish_retained_parked_roots(key) {
+            self.abandon_unpublished_park_request(request)?;
+            return Err(error);
+        }
         // Capture exact sources before any binding exchange. Operand roots
         // are copied below from trace_roots' jit_window on this owner only.
         #[cfg(feature = "jit")]
@@ -376,7 +566,13 @@ impl Context {
             let prepared =
                 crate::emacs_core::jit::green_owner::ParkedJit::prepare_reusing(self, &mut scratch);
             self.green_seat().expect("seated above").parked_jit_scratch = scratch;
-            prepared.map_err(|error| signal("error", vec![Value::string(error.to_string())]))?
+            match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.abandon_unpublished_park_request(request)?;
+                    return Err(signal("error", vec![Value::string(error.to_string())]));
+                }
+            }
         };
         let parked = self.park_owner();
         #[allow(unused_mut)]
@@ -391,6 +587,7 @@ impl Context {
                     &mut self.green_seat().expect("seated above").parked_jit_scratch,
                 );
                 self.resume_owner(parked);
+                self.abandon_unpublished_park_request(request)?;
                 return Err(signal("error", vec![Value::string($error.to_string())]));
             }};
         }
@@ -489,6 +686,15 @@ impl Context {
                 );
                 (Ok(wake), Some(resume), None)
             }
+            ParkRequest::HostContinue(parent) => {
+                let wake =
+                    host_service::resume_owner_step(parent, baton, &control, receiver.as_channel());
+                (
+                    Ok(wake),
+                    Some(host_service::HostResume::Actor(parent)),
+                    None,
+                )
+            }
         };
         let (wake, verdict) = match outcome {
             Ok(wake) => (wake, None),
@@ -502,7 +708,8 @@ impl Context {
         };
         // A service turn must not restore main's Lisp continuation, JIT pins,
         // bindings or TLS, or consume its original semantic Wait.
-        let baton = receive_owner_turn(key, wake, &control, &mut receiver);
+        let RestoringTurn { baton, disposition } =
+            receive_owner_turn(key, wake, &control, &mut receiver);
         // Only the returning continuation refreshes its private dispatch
         // header from canonical cells. A peer's function write updates its own
         // header, so comparing our stale header would miss that redefinition.
@@ -574,15 +781,24 @@ impl Context {
         crate::emacs_core::regex::reset_regex_thread_locals();
         // Registered results/errors are decoded, acknowledged and retired on
         // this restored owner BEFORE its ordinary parked publication retires.
-        let completion = match host_resume {
-            Some(resume) => {
-                host_service::finish_owner_reply(self, &baton, resume, |owner, settlement| {
-                    consume(ParkCompletion::Host { owner, settlement })
-                })
+        let completion = match disposition {
+            OwnerRestore::Intermediate(step) => {
+                // This is only a metadata return. The registered frame will be
+                // materialized after this complete restore and census retirement.
+                // Do not decode a terminal, acknowledge the parent, or raise a
+                // pending signal at an artificial owner/native hop.
+                consume(ParkCompletion::Intermediate(step))
             }
-            None => match native_resume {
-                Some(result) => consume(ParkCompletion::MainNative(result)),
-                None => consume(ParkCompletion::Ordinary),
+            OwnerRestore::Ordinary => match host_resume {
+                Some(resume) => {
+                    host_service::finish_owner_reply(self, &baton, resume, |owner, settlement| {
+                        consume(ParkCompletion::Host { owner, settlement })
+                    })
+                }
+                None => match native_resume {
+                    Some(result) => consume(ParkCompletion::MainNative(result)),
+                    None => consume(ParkCompletion::Ordinary),
+                },
             },
         };
         self.green_seat().expect("restored owner is seated").baton = Some(baton);
@@ -736,9 +952,9 @@ impl Context {
                                     )
                                 })
                             }
-                            ParkCompletion::Ordinary | ParkCompletion::Host { .. } => {
-                                std::process::abort()
-                            }
+                            ParkCompletion::Ordinary
+                            | ParkCompletion::Intermediate(_)
+                            | ParkCompletion::Host { .. } => std::process::abort(),
                         },
                     )?;
                 }
@@ -1066,14 +1282,24 @@ fn receive_owner_turn(
     mut wake: Wake,
     control: &Control,
     receiver: &mut OwnerReceive,
-) -> Baton {
+) -> RestoringTurn {
     let _abort_on_panic = AbortOnPanic;
     loop {
         wake = control.intercept_acquire(key, wake, receiver.as_channel());
         let result = match wake {
             Wake::Resume(baton) => {
                 baton.enter();
-                return baton;
+                return RestoringTurn::ordinary(baton);
+            }
+            Wake::OwnerStep { key: parent, baton } => {
+                return restoring_owner_step(key, parent, baton);
+            }
+            Wake::ContinuationTurn { key: parent, baton } => {
+                if key != ThreadKey::Main {
+                    tracing::error!(?key, "native continuation addressed a non-main owner");
+                    std::process::abort();
+                }
+                receiver.continue_owner_step(parent, baton, control)
             }
             Wake::ServiceTurn {
                 key: request,
@@ -1098,7 +1324,10 @@ fn receive_owner_turn(
             // steal a ready original main turn merely because A remains pending.
             ServiceReturn::ResumeMain(baton) => {
                 baton.enter();
-                return baton;
+                return RestoringTurn::ordinary(baton);
+            }
+            ServiceReturn::ResumeOwnerStep { key: parent, baton } => {
+                return restoring_owner_step(key, parent, baton);
             }
             ServiceReturn::Sent => {
                 wake = match receiver.as_channel().recv() {
@@ -1107,6 +1336,35 @@ fn receive_owner_turn(
                 };
             }
         }
+    }
+}
+
+/// An OwnerStep wake carries no execution authority. Resolve the durable
+/// expected step under the Baton; heap materialization happens only after the
+/// original owner's JIT/carried/binding restoration has completed.
+fn restoring_owner_step(owner: ThreadKey, parent: HostRequestKey, baton: Baton) -> RestoringTurn {
+    baton.enter();
+    let step = {
+        let runtime = baton.green_runtime();
+        let Some(runtime) = runtime.as_ref() else {
+            std::process::abort();
+        };
+        let mut parked = runtime.parked.borrow_mut();
+        match parked.hosts().awaiting_owner_step(parent) {
+            Ok(step) if step.owner() == owner => step,
+            Ok(_) | Err(_) => {
+                tracing::error!(
+                    ?owner,
+                    ?parent,
+                    "owner-step wake lost its durable requester correlation"
+                );
+                std::process::abort();
+            }
+        }
+    };
+    RestoringTurn {
+        baton,
+        disposition: OwnerRestore::Intermediate(step),
     }
 }
 
@@ -1158,7 +1416,7 @@ pub(super) fn run_carrier_job(
         crate::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
         "carrier job starts with a stale TAGGED_HEAP TLS pointer"
     );
-    let baton = receive_owner_turn(key, wake, &control, &mut receiver);
+    let baton = receive_owner_turn(key, wake, &control, &mut receiver).into_ordinary_baton();
     baton.enter();
     set_job_thread_name(key);
     #[cfg(feature = "jit")]

@@ -796,3 +796,6 @@ fn artificial_hop_delivers_signal_is_rejected() {
 
 #[path = "pending_native.rs"]
 mod pending_native;
+
+#[path = "owner_bridge.rs"]
+mod owner_bridge;
