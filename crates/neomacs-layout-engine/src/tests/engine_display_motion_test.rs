@@ -1501,6 +1501,84 @@ fn page_scrolling_a_tall_first_row_uses_pixels_and_returns_to_the_same_viewport(
     );
 }
 
+/// GNU window_scroll_pixel_based moves its iterator towards ZV
+/// (src/window.c:6502-6530).  When the page goal lies past the last screen
+/// line, or the "ensure we actually do move" step starts on that line, the
+/// iterator stops at ZV itself, and a forward scroll that reaches ZV signals
+/// `end-of-buffer' without moving (:6536-6562).  Text that does not end in a
+/// newline has no row starting at ZV, so this must not depend on one.
+/// `mwheel-scroll' loops on `(scroll-up)' until it gets that signal.
+#[test]
+fn page_scroll_reaching_zv_without_final_newline_signals_end_of_buffer() {
+    let mut eval = Context::new();
+    let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("page-to-zv", 400, 160, buffer);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .expect("frame")
+        .window_system = Some(Value::symbol("neomacs"));
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    eval.install_window_layout_query(move |eval, frame, window, scope| {
+        match query.query_window_layout(eval, frame, window, scope) {
+            Ok(query) => WindowLayoutQueryOutcome::Ready(query),
+            Err(error) => WindowLayoutQueryOutcome::Failed(error),
+        }
+    });
+    let result = eval
+        .eval_str(
+            r#"(let ((noninteractive nil)
+            (auto-window-vscroll t)
+            (scroll-preserve-screen-position nil)
+            (next-screen-context-lines 2)
+            (try (lambda (form)
+                   (condition-case nil (progn (funcall form) 'moved)
+                     (end-of-buffer 'end-of-buffer))))
+            (setup (lambda (text start)
+                     (widen) (erase-buffer) (insert text)
+                     (goto-char start)
+                     (set-window-vscroll nil 0 t)
+                     (set-window-start nil start t))))
+      (list
+       ;; Window starting on a last line that has no newline.
+       (progn (funcall setup "a\nb\nlast" 5)
+              (list (funcall try (lambda () (scroll-up)))
+                    (funcall try (lambda () (scroll-up 1)))
+                    (window-start) (point)))
+       ;; The page goal lies below the last line of such a buffer.
+       (progn (funcall setup "a\nb\nlast" 1)
+              (list (funcall try (lambda () (scroll-up))) (window-start) (point)))
+       ;; The same with a final newline, which already worked.
+       (progn (funcall setup "a\nb\nlast\n" 1)
+              (list (funcall try (lambda () (scroll-up))) (window-start) (point)))
+       ;; ZV is the accessible end, here in the middle of a line.
+       (progn (funcall setup "a\nb\nlast line\nmore\n" 1)
+              (narrow-to-region 1 9)
+              (list (funcall try (lambda () (scroll-up))) (window-start) (point)))
+       ;; A last line taller than a page that still fits in the window:
+       ;; the "ensure we actually do move" step from it reaches ZV.
+       (progn (funcall setup "a\nb\nX" 5)
+              (put-text-property 5 6 'display '(space :height (112)))
+              (list (funcall try (lambda () (scroll-up))) (window-start) (point)))
+       ;; A goal that lands inside the last line stops at that line's
+       ;; start, as GNU's iterator does; it is not a scroll to ZV.
+       (progn (funcall setup
+                       (concat (mapconcat #'identity (make-list 40 "row") "\n")
+                               "\nlast")
+                       1)
+              (put-text-property 161 162 'display '(space :height (48)))
+              (goto-char (point-max))
+              (list (funcall try (lambda () (scroll-up))) (window-start) (point)))))"#,
+        )
+        .expect("page scrolls towards ZV");
+    assert_eq!(
+        neovm_core::emacs_core::print::print_value(&result),
+        "((end-of-buffer end-of-buffer 5 5) (end-of-buffer 1 1) (end-of-buffer 1 1) \
+         (end-of-buffer 1 1) (end-of-buffer 5 5) (moved 161 165))"
+    );
+}
+
 #[test]
 fn vertical_motion_measures_replacements_outside_the_presented_viewport() {
     let mut eval = Context::new();
