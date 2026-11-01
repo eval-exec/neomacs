@@ -1,0 +1,474 @@
+name: Dispatch-only 120 Hz scroll cohort
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scroll120-cohort-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    name: CI release runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: mkdir -p "$TMPDIR"
+      - uses: ./.github/actions/install-build-deps
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-shared-runtime-linux-x86_64
+          cache-shared-key: linux-x86_64-release
+          cache-save-if: "false"
+      # Same product recipe and runtime archive as test-suite.yml, without
+      # that workflow's unrelated ERT/package-install probes.
+      - name: Build fresh CI release runtime
+        run: cargo xtask fresh-build --release
+      - name: Package runtime
+        run: |
+          test -x target/release/neomacs
+          test -f target/release/neomacs.pdump
+          test -f lisp/international/charscript.el
+          test -f lisp/international/charprop.el
+          tar czf scroll120-runtime.tar.gz \
+            target/release/neomacs target/release/neomacs.pdump lisp etc
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scroll120-runtime
+          path: scroll120-runtime.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  harness:
+    name: CI GUI nextest archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: mkdir -p "$TMPDIR"
+      - uses: ./.github/actions/install-build-deps
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ci-workspace-archive-linux-x86_64
+          cache-shared-key: linux-x86_64-archive-release
+          cache-save-if: "false"
+          install-nextest: true
+      - name: Free runner disk and add swap (same archive build envelope)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo fallocate -l 16G /swapfile-archive
+          sudo chmod 600 /swapfile-archive
+          sudo mkswap /swapfile-archive
+          sudo swapon /swapfile-archive
+          df -h /
+          free -m
+      # The GUI target has the same archive codegen as the workspace archive;
+      # building unrelated test executables buys no evidence for this cohort.
+      - name: Archive GUI target
+        run: >-
+          cargo nextest archive --locked --release
+          -p neomacs-gui-tests --test gui
+          --archive-file scroll120-gui.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scroll120-gui
+          path: scroll120-gui.tar.zst
+          if-no-files-found: error
+          retention-days: 3
+
+  cohort:
+    name: Five plain/rich pairs with stage attribution
+    needs: [runtime, harness]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      TMPDIR: ${{ github.workspace }}/tmp
+      NEOMACS_GUI_TEST_BACKEND: x11
+      WGPU_BACKEND: vulkan
+      LP_NUM_THREADS: "4"
+      NEOMACS_GUI_SWAY_RENDERER: pixman
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: mkdir -p "$TMPDIR"
+      - uses: ./.github/actions/configure-apt-mirror
+      # Same ecosystem/font provisioning as the real-GUI job. These scenarios
+      # launch their own headless Sway; Weston/labwc are not used by this path.
+      - name: Install CI GUI ecosystem and perf
+        run: |
+          scripts/ci/setup-linux.sh ecosystem
+          sudo apt-get install -y --no-install-recommends \
+            linux-tools-common linux-tools-generic
+          # The hosted Azure kernel may not have a matching -tools package in APT.
+          # Use the provisioned portable perf directly, as in the local capture.
+          mapfile -t perf_bins < <(find /usr/lib/linux-tools -type f -name perf | sort -V)
+          test "${#perf_bins[@]}" -gt 0
+          echo "SCROLL120_PERF=${perf_bins[-1]}" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
+          cache-key: ci-scroll120-cohort-runner
+          install-nextest: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scroll120-runtime
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scroll120-gui
+      - name: Unpack frozen runtime and GUI archive
+        run: |
+          tar xzf scroll120-runtime.tar.gz
+          cargo nextest list --archive-file scroll120-gui.tar.zst \
+            --extract-to "$TMPDIR/nextest" --workspace-remap "$GITHUB_WORKSPACE" \
+            --message-format json > "$TMPDIR/scroll120-list.json"
+          sha256sum scroll120-runtime.tar.gz scroll120-gui.tar.zst \
+            target/release/neomacs target/release/neomacs.pdump > "$TMPDIR/scroll120-sha256.txt"
+      - name: Capture exactly five plain/rich pairs (existing assertions)
+        run: |
+          python3 - <<'PY'
+          import collections
+          import datetime
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import statistics
+          import subprocess
+          import time
+
+          W = Path.cwd()
+          O = W / 'tmp/scroll120-cohort'
+          O.mkdir(exist_ok=False)
+          B = W / 'target/release/neomacs'
+          extracted = W / 'tmp/nextest'
+          binaries = [p for p in extracted.rglob('gui-*')
+                      if re.fullmatch(r'gui-[0-9a-f]+', p.name) and os.access(p, os.X_OK)]
+          assert len(binaries) == 1, binaries
+          H = binaries[0]
+          PERF = os.environ['SCROLL120_PERF']
+          PLAN = [('plain', 1), ('rich', 1), ('rich', 2), ('plain', 2),
+                  ('plain', 3), ('rich', 3), ('rich', 4), ('plain', 4),
+                  ('plain', 5), ('rich', 5)]
+          result = {
+              'source': os.environ['GITHUB_SHA'],
+              'run': os.environ['GITHUB_RUN_ID'],
+              'product_sha256': hashlib.sha256(B.read_bytes()).hexdigest(),
+              'harness_sha256': hashlib.sha256(H.read_bytes()).hexdigest(),
+              'affinity': sorted(os.sched_getaffinity(0)),
+              'protocol': 'Exactly five alternating plain/rich pairs, no retries; existing assertions unchanged. '
+                          '199Hz CPU/switch capture and existing presentation logs on every cell. '
+                          'Profiled timings, not an uninstrumented renderer budget.',
+              'cells': [],
+          }
+
+          def save():
+              (O / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+
+
+          def clock_pair():
+              return {'wall_ns': time.time_ns(), 'monotonic_ns': time.monotonic_ns()}
+
+
+          def median(values):
+              return statistics.median(values) if values else None
+
+
+          def descendant(pid, ancestor):
+              while pid > 1:
+                  if pid == ancestor:
+                      return True
+                  try:
+                      # The comm field can contain spaces or parentheses.
+                      pid = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+                  except (FileNotFoundError, ProcessLookupError, PermissionError):
+                      return False
+              return False
+
+
+          HEADER = re.compile(r'^\s*(.*?)\s+(\d+)/(\d+)\s+(\d+)\.(\d+):\s+(.*)$')
+          FRAME = re.compile(r'^\s*[a-f0-9]+\s+(.+?)\s+\(([^()]*)\)\s*$')
+
+
+          def analyze(row, report, log_path, perf_path):
+              samples = []
+              switches = collections.defaultdict(list)
+              names = {}
+              current = None
+              with perf_path.open() as stream:
+                  for line in stream:
+                      match = HEADER.match(line)
+                      if match:
+                          if current is not None:
+                              samples.append(current)
+                              current = None
+                          comm, pid, tid, sec, frac, event = match.groups()
+                          tid = int(tid)
+                          ns = int(sec) * 10**9 + int(frac.ljust(9, '0'))
+                          names[tid] = comm
+                          if event.startswith('cpu-clock:u:'):
+                              current = {'comm': comm, 'tid': tid, 'time_ns': ns, 'stack': []}
+                          elif event.startswith('PERF_RECORD_SWITCH'):
+                              switches[tid].append((ns, ' IN' in event))
+                      elif current is not None:
+                          frame = FRAME.match(line)
+                          if frame:
+                              current['stack'].append(frame.groups())
+                          elif not line.strip():
+                              samples.append(current)
+                              current = None
+              if current is not None:
+                  samples.append(current)
+              receipts = report['samples']
+              def first(s):
+                  return min(s[k] for k in ['projected_presented_ns', 'presented_ns']
+                             if isinstance(s.get(k), int))
+              lo = min(s['received_ns'] for s in receipts)
+              hi = max(first(s) for s in receipts)
+              active = [s for s in samples if lo <= s['time_ns'] <= hi]
+              assert active, 'No CPU samples during input window'
+              def role(s):
+                  name = s['comm']
+                  if name.startswith('llvmpipe'):
+                      return 'llvmpipe'
+                  if name == 'gpu-device':
+                      return 'gpu-device'
+                  if name.startswith('neomacs-evaluat'):
+                      return 'evaluator'
+                  if s['tid'] == row['editor_pid']:
+                      return 'UI'
+                  return 'other'
+              def on_cpu(tid, start, end):
+                  total = 0
+                  on = None
+                  for ns, inside in switches[tid]:
+                      if ns > end:
+                          break
+                      if inside:
+                          on = ns
+                      elif on is not None:
+                          total += max(0, min(ns, end) - max(on, start))
+                          on = None
+                  if on is not None:
+                      total += max(0, end - max(on, start))
+                  return total / 1e6
+              offsets = [c['wall_ns'] - c['monotonic_ns']
+                         for c in [row['clock_pair_start'], row['clock_pair_end']]]
+              assert max(offsets) - min(offsets) < 1_000_000, 'Clock offset moved by >=1ms'
+              offset = sum(offsets) // 2
+              requests = {}
+              confirmed = {}
+              for line in log_path.read_text().splitlines():
+                  if 'requested native presentation feedback' in line:
+                      serial = int(re.search(r'serial: (\d+)', line)[1])
+                      stamp = datetime.datetime.fromisoformat(line.split()[0].replace('Z', '+00:00'))
+                      requests[serial] = int(stamp.timestamp()) * 10**9 + stamp.microsecond * 1000 - offset
+                  elif 'native presentation confirmed' in line:
+                      serial = int(re.search(r'serial: (\d+)', line)[1])
+                      layout = int(re.search(r'layout: PresentationId\((\d+)\)', line)[1])
+                      sec = int(re.search(r'seconds: (\d+)', line)[1])
+                      ns = int(re.search(r'nanoseconds: (\d+)', line)[1])
+                      confirmed[(layout, sec * 10**9 + ns)] = serial
+              evaluator_tids = [tid for tid, name in names.items() if name.startswith('neomacs-evaluat')]
+              assert evaluator_tids and switches[row['editor_pid']], 'Missing UI/evaluator switch data'
+              timeline = []
+              for s in sorted(receipts, key=lambda r: first(r) - r['received_ns'], reverse=True)[:24]:
+                  start, end = s['received_ns'], first(s)
+                  projected = s.get('projected_presented_ns') == end
+                  serial = s['projected_submission'] if projected else confirmed.get((s['presentation'], end))
+                  request = requests.get(serial)
+                  assert request is not None, ('No matching submission', s)
+                  timeline.append({
+                      'input': s['input'], 'received_ns': start, 'first_presented_ns': end,
+                      'first_projected': projected, 'submission': serial,
+                      'response_ms': (end - start) / 1e6,
+                      'receive_to_request_ms': (request - start) / 1e6,
+                      'request_to_present_ms': (end - request) / 1e6,
+                      'UI_on_cpu_ms': on_cpu(row['editor_pid'], start, end),
+                      'evaluator_on_cpu_ms': sum(on_cpu(tid, start, end) for tid in evaluator_tids),
+                      'sample_roles': dict(collections.Counter(role(x) for x in active
+                                                               if start <= x['time_ns'] <= end)),
+                  })
+              return {
+                  'cpu_samples': len(active),
+                  'sample_roles': dict(collections.Counter(role(s) for s in active)),
+                  'sample_threads': dict(collections.Counter(s['comm'] for s in active)),
+                  'GC_samples': sum(any(key in '\n'.join(f[0] for f in s['stack'])
+                                       for key in ['gc_collect', 'gc_safe_point', 'gc_mark', 'gc_sweep'])
+                                    for s in active),
+                  'clock_offset_drift_ns': max(offsets) - min(offsets),
+                  'worst_24': timeline,
+                  'tail_medians': {key: median([r[key] for r in timeline]) for key in
+                                   ['response_ms', 'receive_to_request_ms', 'request_to_present_ms',
+                                    'UI_on_cpu_ms', 'evaluator_on_cpu_ms']},
+              }
+
+
+          save()
+          assert len(result['affinity']) == 4, 'This protocol requires the four-core CI runner class'
+          with (O / 'environment.out').open('w') as log:
+              subprocess.run(['bash', '-c', 'uname -a; lscpu; free -m; "$SCROLL120_PERF" version; sway --version; '
+                              'dpkg-query -W mesa-vulkan-drivers libllvm20 sway; '
+                              'cat /proc/sys/kernel/perf_event_paranoid; env | sort'],
+                             stdout=log, stderr=subprocess.STDOUT, check=True)
+          with (O / 'perf-readiness.out').open('w') as log:
+              subprocess.run(['sudo', '-n', PERF, 'stat', '-e', 'cpu-clock:u', '--', 'true'],
+                             stdout=log, stderr=subprocess.STDOUT, check=True)
+
+          for scene, rep in PLAN:
+              C = O / f'{scene}-{rep}'
+              C.mkdir()
+              target = C / 'artifacts'
+              env = os.environ.copy()
+              env.update(CARGO_TARGET_DIR=str(target), NEXTEST_WORKSPACE_ROOT=str(W),
+                         NEOMACS_RUNTIME_ROOT=str(W), NEOMACS_GUI_TEST_BINARY=str(B),
+                         LD_LIBRARY_PATH=str(extracted / 'target/nextest/libdirs/host'),
+                         NEOMACS_GUI_SCROLL_LOG='warn,neomacs_display_runtime::render_thread::bootstrap=info,'
+                         'neomacs_display_runtime::presentation_feedback::wayland=debug,'
+                         'neomacs_display_runtime::input_scroll=debug,'
+                         'neomacs_display_runtime::render_thread::frame_stats=debug')
+              for key in ['RUST_LOG', 'NEOMACS_GUI_SCROLL_TIMING_ONLY', 'NEOMACS_GUI_SCROLL_STREAM_INPUTS',
+                          'WAYLAND_DEBUG', 'NEOMACS_LAYOUT_STATS_FILE']:
+                  env.pop(key, None)
+              row = {'scene': scene, 'rep': rep, 'clock_pair_start': clock_pair()}
+              result['cells'].append(row)
+              recorder = None
+              test = None
+              try:
+                  with (C / 'test.out').open('w') as log, (C / 'perf-record.out').open('w') as perf_log:
+                      test = subprocess.Popen([str(H), '--exact',
+                          f'native_scrolling::continuous_120hz_scroll_in_large_{scene}_buffer',
+                          '--nocapture', '--test-threads', '1'], env=env, stdout=log, stderr=subprocess.STDOUT)
+                      deadline = time.monotonic() + 20
+                      editor = None
+                      while test.poll() is None and time.monotonic() < deadline:
+                          matches = []
+                          for proc in Path('/proc').iterdir():
+                              if not proc.name.isdigit():
+                                  continue
+                              try:
+                                  argv = (proc / 'cmdline').read_bytes().split(b'\0')
+                                  if argv[0] == os.fsencode(B) and descendant(int(proc.name), test.pid):
+                                      matches.append(int(proc.name))
+                              except (FileNotFoundError, PermissionError, ProcessLookupError):
+                                  pass
+                          if matches:
+                              assert len(matches) == 1, matches
+                              editor = matches[0]
+                              break
+                          time.sleep(.01)
+                      assert editor is not None, 'Editor did not start'
+                      row['editor_pid'] = editor
+                      recorder = subprocess.Popen(['sudo', '-n', PERF, 'record', '-o', str(C / 'perf.data'),
+                          '--clockid', 'mono', '-e', 'cpu-clock:u', '-F', '199', '--sample-cpu',
+                          '--switch-events', '--call-graph', 'dwarf,8192', '-p', str(editor)],
+                          stdout=perf_log, stderr=subprocess.STDOUT)
+                      row['test_exit'] = test.wait(timeout=180)
+                  row['clock_pair_end'] = clock_pair()
+              except Exception as error:
+                  row['capture_error'] = repr(error)
+              finally:
+                  if test is not None and test.poll() is None:
+                      test.terminate()
+                      test.wait(timeout=10)
+                  if recorder is not None:
+                      if recorder.poll() is None:
+                          # The sudo recorder is our own child; never signal other editors/captures.
+                          subprocess.run(['sudo', '-n', 'kill', '-INT', str(recorder.pid)], check=True)
+                      row['perf_exit'] = recorder.wait(timeout=30)
+                  save()
+              try:
+                  assert 'capture_error' not in row, row['capture_error']
+                  assert row['perf_exit'] in [0, 130, -2], row
+                  with (C / 'perf-script.out').open('w') as log:
+                      subprocess.run(['sudo', '-n', PERF, 'script', '-i', str(C / 'perf.data'), '--ns',
+                          '--show-switch-events', '-F', 'comm,pid,tid,time,event,ip,sym,dso'],
+                          stdout=log, stderr=subprocess.STDOUT, check=True)
+                  reports = list(target.rglob('continuous-presentations.json'))
+                  assert len(reports) == 1, reports
+                  report = json.loads(reports[0].read_text())
+                  row['report'] = {key: value for key, value in report['report'].items()
+                                   if not isinstance(value, list)}
+                  row['adapter'] = report['editor_adapter']
+                  row['compositor'] = report['sway_renderer_request']
+                  assert 'type=Cpu, backend=Vulkan' in row['adapter'] and 'llvmpipe' in row['adapter'], row
+                  assert row['compositor'].strip() == 'pixman', row
+                  assert row['report']['received_receipts'] == 480 and row['report']['invalid_clocks'] == 0, row
+                  analysis = analyze(row, report, reports[0].with_name('neomacs.log'), C / 'perf-script.out')
+                  (C / 'analysis.json').write_text(json.dumps(analysis, indent=2) + '\n')
+                  row['analysis'] = analysis
+              except Exception as error:
+                  row['analysis_error'] = repr(error)
+              if (C / 'perf.data').exists():
+                  subprocess.run(['sudo', '-n', 'chmod', 'a+r', str(C / 'perf.data')], check=True)
+              save()
+              print(scene, rep, json.dumps(row.get('report', {})), row.get('analysis_error', ''), flush=True)
+
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as summary:
+              summary.write('## Frozen 120 Hz cohort (profiled, no retries)\n\n')
+              summary.write(f"Source `{result['source']}`; product `{result['product_sha256']}`. "
+                            'Only existing test assertions decide pass/fail. Stage medians are separate, '
+                            'non-additive statistics. GNU comparison is not performed by this workflow.\n\n')
+              for scene in ['plain', 'rich']:
+                  cells = [r for r in result['cells'] if r['scene'] == scene]
+                  values = [r.get('report', {}).get('p95_response_ms') for r in cells]
+                  summary.write(f'**{scene} five p95s (ms):** {values}\n\n')
+                  summary.write('| Rep | Test exit | Response tail median | Receipt→request | Request→present | '
+                                'UI CPU | Evaluator CPU | CPU samples: llvmpipe / gpu-device / evaluator / UI |\n'
+                                '|---:|---:|---:|---:|---:|---:|---:|---|\n')
+                  for r in cells:
+                      a = r.get('analysis', {})
+                      m = a.get('tail_medians', {})
+                      values = [m.get(k) for k in ['response_ms', 'receive_to_request_ms',
+                                 'request_to_present_ms', 'UI_on_cpu_ms', 'evaluator_on_cpu_ms']]
+                      formatted = ['missing' if v is None else f'{v:.3f}' for v in values]
+                      roles = a.get('sample_roles', {})
+                      counts = ' / '.join(str(roles.get(k, 0)) for k in ['llvmpipe', 'gpu-device', 'evaluator', 'UI'])
+                      summary.write(f"| {r['rep']} | {r.get('test_exit', 'missing')} | " +
+                                    ' | '.join(formatted) + f' | {counts} |\n')
+                      for key in ['capture_error', 'analysis_error']:
+                          if key in r:
+                              summary.write(f"\n{scene}-{r['rep']} **{key}:** `{r[key]}`\n\n")
+                  summary.write('\n')
+          assert hashlib.sha256(B.read_bytes()).hexdigest() == result['product_sha256']
+          assert len(result['cells']) == 10
+          # Keep all failures visible after all ten planned cells; never retry or relax a threshold.
+          raise SystemExit(0 if all(r.get('test_exit') == 0 and 'analysis_error' not in r
+                                   and 'capture_error' not in r for r in result['cells']) else 1)
+          PY
+      - name: Upload receipts, timelines and raw CPU captures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scroll120-cohort-${{ github.run_id }}
+          # Explicit regular files only: compositor sockets/locks are not ZIP entries.
+          path: |
+            tmp/scroll120-cohort/**/*.json
+            tmp/scroll120-cohort/**/*.jsonl
+            tmp/scroll120-cohort/**/*.out
+            tmp/scroll120-cohort/**/*.log
+            tmp/scroll120-cohort/**/perf.data
+            tmp/scroll120-cohort/**/stderr
+            tmp/scroll120-cohort/**/stdout
+            tmp/scroll120-sha256.txt
+            tmp/scroll120-list.json
+          if-no-files-found: error
+          retention-days: 7
