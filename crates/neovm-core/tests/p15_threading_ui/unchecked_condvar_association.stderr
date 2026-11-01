@@ -1,0 +1,8 @@
+error[E0451]: field `association` of struct `CondVarPayload` is private
+ --> tests/p15_threading_ui/unchecked_condvar_association.rs:9:9
+  |
+6 |     let _condition = threading::CondVarPayload {
+  |                      ------------------------- in this type
+...
+9 |         association,
+  |         ^^^^^^^^^^^ private field

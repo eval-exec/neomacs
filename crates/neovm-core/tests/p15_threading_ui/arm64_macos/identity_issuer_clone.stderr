@@ -1,0 +1,14 @@
+error[E0599]: no method named `clone` found for struct `ThreadIds` in the current scope
+ --> tests/p15_threading_ui/arm64_macos/../identity_issuer_clone.rs
+  |
+  |     let _copy = ids.clone();
+  |                     ^^^^^ method not found in `ThreadIds`
+  |
+ ::: tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct ThreadIds {
+  | --------------------------- method `clone` not found for this struct
+  |
+  = help: items from traits can only be used if the trait is implemented and in scope
+  = note: the following trait defines an item `clone`, perhaps you need to implement it:
+          candidate #1: `Clone`

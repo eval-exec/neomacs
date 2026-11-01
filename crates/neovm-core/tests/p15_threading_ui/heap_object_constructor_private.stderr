@@ -1,0 +1,35 @@
+error[E0603]: struct `CondVarObj` is private
+ --> tests/p15_threading_ui/heap_object_constructor_private.rs:1:34
+  |
+1 | use neovm_core::tagged::header::{CondVarObj, MutexObj, ThreadObj};
+  |                                  ^^^^^^^^^^ private struct
+  |
+note: the struct `CondVarObj` is defined here
+ --> src/tagged/header.rs
+  |
+  | pub(crate) struct CondVarObj {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: struct `MutexObj` is private
+ --> tests/p15_threading_ui/heap_object_constructor_private.rs:1:46
+  |
+1 | use neovm_core::tagged::header::{CondVarObj, MutexObj, ThreadObj};
+  |                                              ^^^^^^^^ private struct
+  |
+note: the struct `MutexObj` is defined here
+ --> src/tagged/header.rs
+  |
+  | pub(crate) struct MutexObj {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: struct `ThreadObj` is private
+ --> tests/p15_threading_ui/heap_object_constructor_private.rs:1:56
+  |
+1 | use neovm_core::tagged::header::{CondVarObj, MutexObj, ThreadObj};
+  |                                                        ^^^^^^^^^ private struct
+  |
+note: the struct `ThreadObj` is defined here
+ --> src/tagged/header.rs
+  |
+  | pub(crate) struct ThreadObj {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,23 @@
+error[E0603]: struct `CondVarHandle` is private
+ --> tests/p15_threading_ui/runtime_handle_private.rs:1:39
+  |
+1 | use neovm_core::emacs_core::threads::{CondVarHandle, MutexHandle};
+  |                                       ^^^^^^^^^^^^^ private struct
+  |
+note: the struct `CondVarHandle` is defined here
+ --> src/emacs_core/runtime/threads/mod.rs
+  |
+  | pub(crate) struct CondVarHandle {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0603]: struct `MutexHandle` is private
+ --> tests/p15_threading_ui/runtime_handle_private.rs:1:54
+  |
+1 | use neovm_core::emacs_core::threads::{CondVarHandle, MutexHandle};
+  |                                                      ^^^^^^^^^^^ private struct
+  |
+note: the struct `MutexHandle` is defined here
+ --> src/emacs_core/runtime/threads/mod.rs
+  |
+  | pub(crate) struct MutexHandle {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

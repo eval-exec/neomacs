@@ -1,0 +1,21 @@
+error[E0603]: tuple struct constructor `ThreadName` is private
+ --> tests/p15_threading_ui/unchecked_thread_name.rs:6:28
+  |
+6 |     let _name = threading::ThreadName(tagged::value::TaggedValue::fixnum(7));
+  |                            ^^^^^^^^^^ private tuple struct constructor
+  |
+ ::: tests/p15_threading_ui/../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct ThreadName(TaggedValue);
+  |                              ----------- a constructor is private if any of the fields is private
+  |
+note: the tuple struct constructor `ThreadName` is defined here
+ --> tests/p15_threading_ui/../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct ThreadName(TaggedValue);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider making the field publicly accessible
+ --> tests/p15_threading_ui/../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct ThreadName(pub TaggedValue);
+  |                              +++

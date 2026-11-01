@@ -91,3 +91,20 @@ mod host_effect_contracts;
 
 #[path = "intern_shared_contracts.rs"]
 mod intern_shared_contracts;
+
+#[test]
+#[cfg(feature = "contract-fixtures")]
+fn p15_threading_compile_contracts() {
+    let cases = trybuild::TestCases::new();
+    // The lower-source fixtures compile the production payload/id definitions;
+    // private facade fixtures additionally name the actual allocator/handles.
+    // The pass control ensures a missing shim dependency is never accepted as
+    // the intended identity, constructor or ownership rejection.
+    cases.pass("tests/p15_threading_pass/*.rs");
+    for fixture in fixture_target::FixtureTarget::current().fixtures(
+        "tests/p15_threading_ui",
+        "tests/p15_threading_ui/arm64_macos",
+    ) {
+        cases.compile_fail(fixture);
+    }
+}

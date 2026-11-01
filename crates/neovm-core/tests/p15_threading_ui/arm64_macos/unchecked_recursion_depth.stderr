@@ -1,0 +1,21 @@
+error[E0603]: tuple struct constructor `RecursionDepth` is private
+ --> tests/p15_threading_ui/arm64_macos/../unchecked_recursion_depth.rs
+  |
+  |     let _depth = threading::RecursionDepth(depth);
+  |                             ^^^^^^^^^^^^^^ private tuple struct constructor
+  |
+ ::: tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct RecursionDepth(NonZeroU32);
+  |                                  ---------- a constructor is private if any of the fields is private
+  |
+note: the tuple struct constructor `RecursionDepth` is defined here
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct RecursionDepth(NonZeroU32);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider making the field publicly accessible
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct RecursionDepth(pub NonZeroU32);
+  |                                  +++

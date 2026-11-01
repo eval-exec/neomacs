@@ -1,0 +1,27 @@
+error[E0599]: the associated function or constant `check` exists for struct `ThreadTransfer<ThreadPayload>`, but its trait bounds were not satisfied
+ --> tests/p15_threading_ui/arm64_macos/../payload_send.rs
+  |
+  |     ThreadTransfer::<threading::ThreadPayload>::check();
+  |                                                 ^^^^^ associated function or constant cannot be called on `ThreadTransfer<ThreadPayload>` due to unsatisfied trait bounds
+  |
+ ::: tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/heap_types/threading.rs
+  |
+  | pub(crate) struct ThreadPayload {
+  | ------------------------------- doesn't satisfy `ThreadPayload: Send`
+  |
+ ::: tests/p15_threading_ui/arm64_macos/../../thread_safety_ui/support/thread_bounds.rs
+  |
+  | pub struct ThreadTransfer<T>(PhantomData<T>);
+  | ---------------------------- associated function or constant `check` not found for this struct
+  |
+  = note: the following trait bounds were not satisfied:
+          `*const (): Send`
+          which is required by `ThreadPayload: Send`
+  = help: items from traits can only be used if the trait is in scope
+help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
+ --> tests/p15_threading_ui/arm64_macos/payload_send.rs:1:1
+  |
+1 + use objc2::__macro_helpers::class::DoesNotImplDrop;
+  |
+1 + use objc2::__macro_helpers::class::MainThreadOnlyDoesNotImplSendSync;
+  |

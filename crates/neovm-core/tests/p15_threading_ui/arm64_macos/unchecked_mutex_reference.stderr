@@ -1,0 +1,9 @@
+error[E0451]: fields `id` and `value` of struct `MutexReference` are private
+ --> tests/p15_threading_ui/arm64_macos/../unchecked_mutex_reference.rs
+  |
+  |     let _edge = threading::MutexReference {
+  |                 ------------------------- in this type
+  |         id,
+  |         ^^ private field
+  |         value: tagged::value::TaggedValue::NIL,
+  |         ^^^^^ private field
