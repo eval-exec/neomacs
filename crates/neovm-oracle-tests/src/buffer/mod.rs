@@ -6,6 +6,7 @@ mod file_name_semantics;
 mod forwarded_slot_predicate_semantics;
 mod frame_or_buffer_changed_semantics;
 mod hash_semantics;
+mod kill_buffer_minibuffer_semantics;
 mod last_name_semantics;
 mod line_statistics_semantics;
 mod list_other_buffer_semantics;
