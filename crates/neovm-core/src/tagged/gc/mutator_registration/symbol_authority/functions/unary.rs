@@ -11,6 +11,35 @@ pub(crate) struct PreparedUnaryFunction {
     parameter: constant::UnaryParameter,
 }
 
+impl PreparedUnaryFunction {
+    pub(super) fn key(&self) -> &SymbolHandle {
+        &self.key
+    }
+    pub(super) fn shape(&self) -> CallShape {
+        CallShape::UnaryScalar(self.parameter)
+    }
+}
+
+/// One rule for the rooted immediate argument admitted by these constant bodies.
+pub(super) fn check_argument(
+    run: &RunAccess<'_, '_>,
+    argument: &OwnerRootSlot<'_>,
+) -> Result<(), FunctionError> {
+    globals::check_home(run, argument)?;
+    let value = run
+        .owner
+        .local
+        .as_ref()
+        .and_then(|local| local.root_scratch.get(argument.index))
+        .ok_or(RegistrationError::StaleRegistration)?
+        .value();
+    if value.is_nil() || value.is_t() || value.is_fixnum() {
+        Ok(())
+    } else {
+        Err(FunctionError::UnsupportedDefinition)
+    }
+}
+
 impl<K: EraKeeper> EraCore<'_, K> {
     pub(crate) fn prepare_unary_function_symbol(
         &self,
@@ -54,25 +83,10 @@ impl<'era> RunAccess<'_, 'era> {
         argument: &OwnerRootSlot<'era>,
         activation: &mut FunctionActivation<'era>,
     ) -> Result<FunctionSelection, FunctionError> {
-        globals::check_home(self, argument)?;
-        let value = self
-            .owner
-            .local
-            .as_ref()
-            .and_then(|local| local.root_scratch.get(argument.index))
-            .ok_or(RegistrationError::StaleRegistration)?
-            .value();
-        if !(value.is_nil() || value.is_t() || value.is_fixnum()) {
-            return Err(FunctionError::UnsupportedDefinition);
-        }
+        check_argument(self, argument)?;
         // The sole ordinary formal is unused by this constant body. There is
         // no dynamic call, mutation or observable binding within the kernel.
-        self.named_call_begin_with_shape(
-            &callback.key,
-            expected,
-            activation,
-            CallShape::UnaryScalar(callback.parameter),
-        )
+        self.named_call_begin_with_shape(callback.key(), expected, activation, callback.shape())
     }
 
     /// Only this capability can publish a replacement with the same prepared

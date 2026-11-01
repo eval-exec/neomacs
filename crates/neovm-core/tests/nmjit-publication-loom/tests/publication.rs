@@ -73,7 +73,11 @@ fn native_atomic_load_initializes_whole_descriptor() {
     // Cranelift's atomic_load is SeqCst, stronger than the required Acquire.
     // Model that exact reader edge against the production Release writer.
     support::exhaustive(3, || {
-        initialization(Publication::Release, Observation::NativeSeqCst, "NATIVE_INITIALIZATION")
+        initialization(
+            Publication::Release,
+            Observation::NativeSeqCst,
+            "NATIVE_INITIALIZATION",
+        )
     });
 }
 

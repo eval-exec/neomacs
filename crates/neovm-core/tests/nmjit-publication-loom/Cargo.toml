@@ -23,3 +23,7 @@ path = "tests/publication.rs"
 [[test]]
 name = "grace"
 path = "tests/grace.rs"
+
+[[test]]
+name = "hof"
+path = "tests/hof.rs"

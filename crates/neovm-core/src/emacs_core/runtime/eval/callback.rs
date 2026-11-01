@@ -1,5 +1,6 @@
 //! Activation-local native callback dispatch using the legacy funcall protocol.
 use super::*;
+use crate::tagged::gc::function_write_hooks::{HofRegistrationClock, HofRegistrationEpoch};
 #[cfg(not(feature = "vm-profile"))]
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -34,6 +35,18 @@ pub(crate) fn native_callback_cache_enabled() -> bool {
 /// reading a native body. This does not change the registry's synchronization
 /// contract or permit concurrent writes to the same Lisp function object.
 static NATIVE_REGISTRATION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Observe completed native registration/reset publication without consulting
+/// a mutator's TLS registry or reading any static subr metadata.
+pub(crate) fn native_registration_clock() -> HofRegistrationClock {
+    // SAFETY: this is the sole completed registration/reset publication clock;
+    // its existing writer publishes Release after the full metadata update.
+    unsafe { HofRegistrationClock::from_publisher(&NATIVE_REGISTRATION_GENERATION) }
+}
+
+pub(crate) fn native_registration_generation() -> HofRegistrationEpoch {
+    HofRegistrationEpoch::from_observed(NATIVE_REGISTRATION_GENERATION.load(Ordering::Acquire))
+}
 
 pub(super) fn publish_native_registration() {
     NATIVE_REGISTRATION_GENERATION

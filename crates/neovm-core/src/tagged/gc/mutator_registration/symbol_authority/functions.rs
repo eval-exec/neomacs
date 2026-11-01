@@ -1,7 +1,9 @@
 //! Direct function-cell answers move into owner roots under symbol authority.
 mod call;
 mod constant;
+mod hof;
 mod name;
+pub(crate) use hof::PreparedHofBuiltin;
 mod unary;
 pub(super) use constant::{CallShape, ReturnSubset};
 #[cfg(test)]

@@ -5,7 +5,7 @@ It has no engine dependency, product feature, new TLS, unsafe memory or generate
 code. The lockfile uses the reviewed p3sym model dependency versions. N1 changes
 no production storage or admission API.
 
-There are **22 cases: 13 positive histories and 9 negative controls**. A negative
+There are **26 cases: 15 positive histories and 11 negative controls**. A negative
 case passes only when its exact invariant witness is found. The caught failure
 is checked against the first panic line, so an unrelated setup/branch-limit
 failure cannot qualify. No test is ignored. No try-acquisition is unwrapped.
@@ -44,11 +44,12 @@ the model author; the parent orchestrator produces qualification receipts.
 
 ## Case inventory
 
-`publication` contains eleven cases:
+`publication` contains twelve cases:
 
 | Case | Exploration | Obligation/witness |
 | --- | --- | --- |
 | release_acquire_initializes_whole_descriptor | exhaustive, max_threads=3 | descriptor publication orders bound and chunk arm |
+| native_atomic_load_initializes_whole_descriptor | exhaustive, max_threads=3 | native SeqCst load establishes the required descriptor initialization edge |
 | immutable_descriptor_cannot_mix_bound_and_table | exhaustive, max_threads=3 | one descriptor identity chooses bound and array |
 | two_writers_publish_only_owned_initialized_tables | bounded, max_threads=4 | two serialized growth commits; current allocation always owned |
 | capacity_move_and_clean_refusal_keep_published_table | exhaustive, max_threads=3 | serial spine move cannot change independent reader table; charge remains |
@@ -118,3 +119,58 @@ The integer atomic ID stands in for the eventual AtomicPtr ABI. This is a model
 boundary, not a proposed raw-integer production interface. Compile-negative
 tests, not Loom, establish private constructors, GEN1 admission, confinement and
 non-conversion from proof/serial entry types.
+
+## N4 HOF selection extension
+
+The separate `hof` target adds seven bounded cases, using the same per-case
+receipt/witness helpers and `NMJIT_PREEMPTIONS=2/3` qualification:
+
+| Case | Obligation/witness |
+| --- | --- |
+| same_counted_reader_covers_mapper_callback_and_private_root | two readers may select coherent old/new callback snapshots; one counted lease covers canonical mapper identity, callback version/definition and private-root installation |
+| negative_split_readers_mix_mapper_guard_and_callback_selection | HOF_MIXED_BUILTIN_AND_CALLBACK |
+| negative_reader_release_precedes_private_root_contract | HOF_UNROOTED_CALLBACK_SELECTION |
+| registration_clock_change_refuses_stale_prepared_builtin | one Acquire snapshot of the existing native registration clock while the symbol reader holds both cells; stale receipts refuse |
+| negative_ignored_stamp_accepts_stale_native_registration | HOF_STALE_NATIVE_REGISTRATION |
+| bracketed_preparation_refuses_changed_registration_generation | stamp the original verified generation; changed bracketing loads refuse |
+| negative_postload_only_blesses_mixed_preparation_generation | HOF_MIXED_PREPARATION_GENERATION |
+
+The mapper and callback are different symbol cells. The writer performs two
+separate try-acquired WRITER primitives, releasing between mapper redefinition
+and callback redefinition. Either operation can independently return Busy, as
+can reader acquisition; each actor attempts finitely many program operations
+without retries or progress assumptions. Thus the positive admits old/new
+callback selections only when the mapper remains canonical at the exact
+callback-selection instant. A new callback with a still-canonical mapper is
+legal when the mapper write refused Busy. The split-lease negative can instead
+combine an earlier canonical guard with a callback snapshot selected while the
+mapper is already noncanonical; no atomic multi-symbol writer is invented.
+
+A mutex models individual counted-word operations and protected snapshot/root
+accesses; it is not held across the reader lease. Callback version and
+definition update together under their one symbol primitive. Each activation
+stays IN_SLICE throughout selection and has its own private home, independently
+of other owners' roots. The root negative checks the stronger prescribed
+root-before-reader-release contract at release, before installing that home.
+It does **not** model a stop, sweep or reclamation during the gap: IN_SLICE
+still blocks stop-all, and a real function journal can retain old definitions.
+Actual tracing/reclamation obligations remain with the grace/engine fixtures.
+These models do not prove the engine's authority-word implementation, memory
+ordering, generated HOF lowering or source/definition provenance. The model
+author has not run these cases; the parent owns frozen-chain qualification.
+
+Native registration is a separate semantic publisher, not a symbol writer.
+Preparation alone copies its metadata under its existing guard; runtime reads
+only the publication clock. Registration writes metadata before its Release
+clock update, the semantic commit. An old selection can linearize at its
+Acquire observation before a later commit, while a fresh selection after a
+joined completed registration must refuse the stale receipt. Neither model
+permits a running native-metadata dereference or asserts that symbol authority
+synchronizes native registration. The complete suite has 30 cases (17 positive,
+13 negative controls); qualification records each case at bounds 2 and 3.
+
+The native writer releases its metadata guard before publishing the clock,
+matching the engine. Preparation reads the clock before its guarded copy and
+compares the clock again afterward, including refused verification paths.
+A postload-only receipt can otherwise bless old verified metadata with a new
+registration generation. The mixed-preparation negative names that witness.

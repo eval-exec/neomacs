@@ -303,6 +303,14 @@ macro_rules! era_operations {
                 self.core.prepare_function_symbol(key)
             }
 
+            pub(crate) fn prepare_hof_builtin(
+                &self,
+                operation: super::super::function_write_hooks::HofOperation,
+                key: &SymbolHandle,
+            ) -> Result<symbol_authority::PreparedHofBuiltin, FunctionError> {
+                self.core.prepare_hof_builtin(operation, key)
+            }
+
             pub(crate) fn prepare_unary_function_symbol(
                 &self,
                 key: &SymbolHandle,

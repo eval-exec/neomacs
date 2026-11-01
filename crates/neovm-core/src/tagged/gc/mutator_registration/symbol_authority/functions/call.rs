@@ -153,6 +153,16 @@ impl<'era> RunAccess<'_, 'era> {
         activation: &mut FunctionActivation<'era>,
         shape: CallShape,
     ) -> Result<FunctionSelection, FunctionError> {
+        self.check_named_operands(expected, activation)?;
+        self.symbol_ref(symbol)?
+            .select_named(OwnerRootIndex::from(expected), activation, shape)
+    }
+
+    pub(super) fn check_named_operands(
+        &self,
+        expected: &OwnerRootSlot<'era>,
+        activation: &FunctionActivation<'era>,
+    ) -> Result<(), FunctionError> {
         check_run(self)?;
         globals::check_home(self, expected)?;
         globals::check_home(self, &activation.home)?;
@@ -162,8 +172,7 @@ impl<'era> RunAccess<'_, 'era> {
         if matches!(activation.state, ActivationState::Selected { .. }) {
             return Err(FunctionError::ActiveActivation);
         }
-        self.symbol_ref(symbol)?
-            .select_named(OwnerRootIndex::from(expected), activation, shape)
+        Ok(())
     }
 
     pub fn sym_call_begin(
@@ -274,7 +283,7 @@ impl<'era> RunAccess<'_, 'era> {
 }
 
 impl SymbolRef<'_, '_, '_> {
-    fn select_named(
+    pub(super) fn select_named(
         &mut self,
         expected: OwnerRootIndex,
         activation: &mut FunctionActivation<'_>,
