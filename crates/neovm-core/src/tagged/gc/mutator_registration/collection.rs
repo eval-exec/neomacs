@@ -13,6 +13,10 @@ use super::*;
 #[path = "weak_policy_tests.rs"]
 mod weak_policy_tests;
 
+#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
+#[path = "threading_payload_tests.rs"]
+mod threading_payload_tests;
+
 pub type CollectionError = RendezvousError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -143,7 +147,37 @@ fn supported_with_weak(
                         Ok(())
                     }
                 }
-                _ => Ok(()),
+                // These own mutable Lisp edges, not just native identities.
+                // The keeper job retains its real AllStopped scope across
+                // full/minor tracing and sweep; both child dispatches use
+                // the concrete payload's exhaustive visit_children schema.
+                VecLikeType::Thread | VecLikeType::Mutex | VecLikeType::CondVar => Ok(()),
+                // Every admitted non-threading kind is named so a new tag
+                // requires an explicit stopped-collection policy decision.
+                VecLikeType::Vector
+                | VecLikeType::Bignum
+                | VecLikeType::Marker
+                | VecLikeType::Overlay
+                | VecLikeType::SymbolWithPos
+                | VecLikeType::Process
+                | VecLikeType::Frame
+                | VecLikeType::Window
+                | VecLikeType::BoolVector
+                | VecLikeType::Buffer
+                | VecLikeType::Obarray
+                | VecLikeType::Terminal
+                | VecLikeType::WindowConfiguration
+                | VecLikeType::Subr
+                | VecLikeType::Xwidget
+                | VecLikeType::XwidgetView
+                | VecLikeType::Lambda
+                | VecLikeType::CharTable
+                | VecLikeType::SubCharTable
+                | VecLikeType::Record
+                | VecLikeType::Font
+                | VecLikeType::Macro
+                | VecLikeType::ByteCode
+                | VecLikeType::Timer => Ok(()),
             }
         }
     };
