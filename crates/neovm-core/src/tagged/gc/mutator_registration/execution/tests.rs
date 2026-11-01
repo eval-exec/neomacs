@@ -352,8 +352,9 @@ fn nmjit_n4_immediate_native_result_decode_is_total() {
 fn nmjit_n4_execution_production_only_source_guard_test() {
     let wrappers = include_str!("../wrappers.rs");
     let (production, proof) = wrappers
-        .split_once("#[cfg(test)]\nimpl<'heap> ProofEra<'heap>")
+        .split_once("#[cfg(test)]\nimpl<'heap, K: EraKeeper> ProofEra<'heap, K>")
         .expect("distinct wrapper definitions");
+    assert!(production.contains("impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K>"));
     assert!(production.contains("pub fn execution_admission"));
     assert!(!proof.contains("fn execution_admission"));
     let execution = include_str!("../execution.rs");

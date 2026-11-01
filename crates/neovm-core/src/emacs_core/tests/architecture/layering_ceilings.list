@@ -75,7 +75,7 @@ keyboard_input coding 2
 keyboard_input emacs_char 2
 tagged bytecode 7
 tagged error 12
-tagged eval 13
+tagged eval 12
 tagged intern 21
 tagged jit 1
 tagged pdump 2

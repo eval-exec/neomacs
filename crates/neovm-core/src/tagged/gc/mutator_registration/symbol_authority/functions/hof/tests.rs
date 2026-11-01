@@ -427,8 +427,18 @@ fn nmjit_n4_hof_guard_source_guard_test() {
             "running HOF leaf contains {excluded}"
         );
     }
+    assert_eq!(running.matches(".registration_clock.snapshot()").count(), 1);
+    let clock = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/tagged/gc/function_write_hooks.rs"
+    ));
+    assert!(clock.contains("self.0.load(Ordering::Acquire)"));
     assert!(
-        running.find(".hof_registration_epoch()").unwrap()
+        !clock.contains("AtomicU64::new"),
+        "the observer cannot duplicate the publisher"
+    );
+    assert!(
+        running.find(".registration_clock.snapshot()").unwrap()
             < running.find(".read_function(").unwrap()
     );
 }
