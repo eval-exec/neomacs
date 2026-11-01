@@ -32,8 +32,7 @@ fn divergence_char_fold_multi() {
     );
 }
 
-#[test]
-fn divergence_unicode_collation() {
+crate::common::platform_twin_test!(TwinHost::Linux, divergence_unicode_collation, {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     let expect = expect_test::expect![[r#""OK (t t t)""#]];
@@ -44,7 +43,7 @@ fn divergence_unicode_collation() {
   (string-collate-lessp "a" "b"))"#,
         expect,
     );
-}
+});
 
 #[test]
 fn divergence_get_unicode_property_all() {
@@ -200,3 +199,21 @@ fn divergence_emoji_flag_composition_regexps() {
         expect,
     );
 }
+
+// Darwin libc does not define __STDC_ISO_10646__, so GNU compiles the
+// string-lessp/string-equal fallback in string-collate-* (src/fns.c:601-694):
+// the IGNORE-CASE argument is ignored and the first answer is nil.  Neo
+// matches the reference on the mac (measured live).  The Linux test keeps the
+// collating answer under cfg(linux).
+crate::common::platform_twin_test!(TwinHost::Macos, divergence_unicode_collation_macos, {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[r#""OK (nil t t)""#]];
+    crate::common::assert_oracle_parity_expect(
+        r#"(list
+  (string-collate-equalp "hello" "HELLO" nil t)
+  (string-collate-equalp "hello" "hello")
+  (string-collate-lessp "a" "b"))"#,
+        expect,
+    );
+});
