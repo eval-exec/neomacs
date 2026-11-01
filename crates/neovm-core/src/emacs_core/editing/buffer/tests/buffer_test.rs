@@ -442,7 +442,7 @@ mod conversion_byte_boundary;
 #[path = "tsb_boundary_numbers.rs"]
 mod tsb_boundary_numbers;
 
-/// GNU buffer.c:1981 ("Don't kill the minibuffer now current"): `kill-buffer`
+/// GNU buffer.c:1998-2000 ("Don't kill the minibuffer now current"): `kill-buffer`
 /// of the buffer shown in the selected frame's minibuffer window returns nil
 /// and kills nothing, so no ordinary buffer is ever swapped into it.
 #[test]
