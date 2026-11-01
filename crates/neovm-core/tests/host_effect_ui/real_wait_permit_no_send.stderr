@@ -1,0 +1,19 @@
+error[E0277]: `Rc<()>` cannot be sent between threads safely
+ --> tests/host_effect_ui/real_wait_permit_no_send.rs:7:21
+  |
+7 |     requires_send::<owner::wake::native_wait::RealWaitPermit>();
+  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Rc<()>` cannot be sent between threads safely
+  |
+  = help: within `RealWaitPermit`, the trait `Send` is not implemented for `Rc<()>`
+note: required because it appears within the type `PhantomData<Rc<()>>`
+ --> $RUST/core/src/marker.rs
+note: required because it appears within the type `RealWaitPermit`
+ --> tests/host_effect_ui/support/../../../src/host_effect/wake/native_wait.rs
+  |
+  | pub(crate) struct RealWaitPermit {
+  |                   ^^^^^^^^^^^^^^
+note: required by a bound in `requires_send`
+ --> tests/host_effect_ui/real_wait_permit_no_send.rs:4:21
+  |
+4 | fn requires_send<T: Send>() {}
+  |                     ^^^^ required by this bound in `requires_send`

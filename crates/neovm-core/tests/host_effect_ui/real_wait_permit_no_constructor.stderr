@@ -1,0 +1,26 @@
+error[E0599]: no associated function or constant named `new` found for struct `RealWaitPermit` in the current scope
+ --> tests/host_effect_ui/real_wait_permit_no_constructor.rs:7:35
+  |
+7 |     let _forged = RealWaitPermit::new();
+  |                                   ^^^ associated function or constant not found in `RealWaitPermit`
+  |
+ ::: tests/host_effect_ui/support/../../../src/host_effect/wake/native_wait.rs
+  |
+  | pub(crate) struct RealWaitPermit {
+  | -------------------------------- associated function or constant `new` not found for this struct
+  |
+  = help: items from traits can only be used if the trait is implemented and in scope
+  = note: the following traits define an item `new`, perhaps you need to implement one of them:
+          candidate #1: `cranelift_assembler_x64::api::AsReg`
+          candidate #2: `cranelift_codegen::machinst::MachInstEmitState`
+          candidate #3: `cranelift_entity::EntityRef`
+          candidate #4: `crypto_common::KeyInit`
+          candidate #5: `crypto_common::KeyIvInit`
+          candidate #6: `crypto_common::TryKeyInit`
+          candidate #7: `digest::block_api::VariableOutputCore`
+          candidate #8: `digest::digest::Digest`
+          candidate #9: `gimli::read::lookup::PubStuffEntry`
+          candidate #10: `itertools::adaptors::coalesce::CountItem`
+          candidate #11: `parking_lot_core::thread_parker::ThreadParkerT`
+          candidate #12: `ring::aead::BoundKey`
+          candidate #13: `typenum::marker_traits::Bit`
