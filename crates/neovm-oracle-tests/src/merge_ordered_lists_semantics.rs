@@ -78,14 +78,19 @@ fn oracle_prop_merge_ordered_lists_uses_eql_and_avoids_mutating_outer_list() {
        (lists (list (list one-a nan-a 'tail)
                     nil
                     (list one-b nan-b))))
-  (list
-   (merge-ordered-lists lists)
-   lists
-   (eq (cadr lists) nil)))
+  (let* ((merged (merge-ordered-lists lists))
+         ;; NaN is eql only by representation here, and its invalid-operation
+         ;; SIGN is host hardware (x86-64 -0.0e+NaN, arm64 0.0e+NaN); keep
+         ;; the merge order and the no-mutation property, normalize the class.
+         (norm (lambda (l)
+                 (mapcar (lambda (x)
+                           (if (and (floatp x) (isnan x)) :nan x))
+                         l))))
+    (list (funcall norm merged)
+          (mapcar (lambda (l) (if l (funcall norm l) l)) lists)
+          (eq (cadr lists) nil))))
 "#;
 
-    let expect = expect_test::expect![[
-        r#""OK ((1 -0.0e+NaN tail) ((1 -0.0e+NaN tail) nil (1 -0.0e+NaN)) t)""#
-    ]];
+    let expect = expect_test::expect![[r#""OK ((1 :nan tail) ((1 :nan tail) nil (1 :nan)) t)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
