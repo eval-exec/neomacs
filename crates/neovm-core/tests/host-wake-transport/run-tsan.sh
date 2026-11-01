@@ -18,7 +18,7 @@ source_paths=(
 source_hashes=(
     '2b8719ede980f176ce8a660ce26e52d0918cd3dc63fa94d0d8d61fc9f3b3dad2'
     '74b286788d30e9903a6b91048debfd423b13efa9c05ddef28842b76181a54233'
-    '5cebeea2f7c1b3bb49db8e6e9bafeb0789b1f198c8a8bbc6287b9bd6093f90af'
+    '366bda39a7ef68e7f0cd9d4107e74b23fb6ce98a0ab614d733ab9a66161014e2'
 )
 for index in "${!source_paths[@]}"; do
     source_file="$harness_dir/../../${source_paths[$index]}"

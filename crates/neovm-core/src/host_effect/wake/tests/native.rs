@@ -347,6 +347,12 @@ fn foreign_first_loopback_peer_fails_closed_without_reading_its_data() {
 fn negative_omitting_only_peer_validation_accepts_foreign_wake_injection() {
     use std::io::{Read, Write};
     let listener = LoopbackWakeListener::bind().unwrap();
+    // Darwin resets an unaccepted queued connection when the final listener
+    // closes. Keep this fixture's private writer connected through TCP_NODELAY;
+    // otherwise EINVAL masks the foreign-reader injection being tested. The
+    // production constructor still closes its own listener after one accept.
+    #[cfg(target_vendor = "apple")]
+    let pending_listener = listener.0.try_clone().unwrap();
     let address = listener.0.local_addr().unwrap();
     let mut foreign =
         std::net::TcpStream::connect_timeout(&address, LOOPBACK_WAKE_CONNECT_TIMEOUT).unwrap();
@@ -356,6 +362,13 @@ fn negative_omitting_only_peer_validation_accepts_foreign_wake_injection() {
     let mut unchecked = listener
         .into_pair_with(|reader, _peer, writer| Ok(LoopbackWakePair { reader, writer }))
         .unwrap();
+    #[cfg(target_vendor = "apple")]
+    let _private_peer = {
+        let (peer, address) = pending_listener.accept().unwrap();
+        assert_eq!(address, unchecked.writer.local_addr().unwrap());
+        drop(pending_listener);
+        peer
+    };
     assert_eq!(unchecked.reader.peer_addr().unwrap(), foreign_address);
     assert_ne!(
         unchecked.reader.peer_addr().unwrap(),
