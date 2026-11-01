@@ -284,9 +284,10 @@ fn oracle_compare_case_table_file_name_completion_and_ignored_suffix() {
           (nreverse answers)))
     (delete-directory dir t)))
 "#;
-    let expect = expect_test::expect![[
-        r#""OK ((t nil (\"école\" (\"école\")) (nil nil nil nil (\"keep.\" (\"keep.A\" \"keep.x\")))) (t t (\"éc\" (\"Éclair\" \"École\" \"école\")) (\"Ic\" (\"Icarus\" \"Icon\") \"İc\" (\"İcat\" \"İcone\") (\"keep.A\" (\"keep.A\" \"keep.x\")))) (nil nil (\"école\" (\"école\")) (nil nil nil nil (\"keep.\" (\"keep.A\" \"keep.x\")))) (nil t (\"école\" (\"école\")) (\"Ic\" (\"Icarus\" \"Icon\") nil nil (\"keep.A\" (\"keep.A\" \"keep.x\")))))""#
-    ]];
+    let expect = crate::common::host_expect!(
+        LinuxGnu => r#""OK ((t nil (\"école\" (\"école\")) (nil nil nil nil (\"keep.\" (\"keep.A\" \"keep.x\")))) (t t (\"éc\" (\"Éclair\" \"École\" \"école\")) (\"Ic\" (\"Icarus\" \"Icon\") \"İc\" (\"İcat\" \"İcone\") (\"keep.A\" (\"keep.A\" \"keep.x\")))) (nil nil (\"école\" (\"école\")) (nil nil nil nil (\"keep.\" (\"keep.A\" \"keep.x\")))) (nil t (\"école\" (\"école\")) (\"Ic\" (\"Icarus\" \"Icon\") nil nil (\"keep.A\" (\"keep.A\" \"keep.x\")))))""#,
+        MacosDarwin => r#""OK ((t nil (nil nil) (nil nil nil nil (\"keep.\" (\"keep.A\" \"keep.x\")))) (t t (\"Éc\" (\"Éclair\" \"École\")) (\"Ic\" (\"Icarus\" \"Icon\") \"İc\" (\"İcat\" \"İcone\") (\"keep.A\" (\"keep.A\" \"keep.x\")))) (nil nil (nil nil) (nil nil nil nil (\"keep.\" (\"keep.A\" \"keep.x\")))) (nil t (nil nil) (\"Ic\" (\"Icarus\" \"Icon\") nil nil (\"keep.A\" (\"keep.A\" \"keep.x\")))))""#,
+    );
     crate::common::assert_oracle_parity_with_shared_tempdir_expect(form, expect);
 }
 
