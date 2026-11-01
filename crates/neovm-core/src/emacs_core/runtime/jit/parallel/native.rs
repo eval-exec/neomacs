@@ -422,3 +422,7 @@ fn slot_backing_from_descriptor(
     b.switch_to_block(joined);
     Ok(b.block_params(joined)[0])
 }
+
+#[cfg(test)]
+#[path = "native/tests/lowering_test.rs"]
+mod lowering_tests;
