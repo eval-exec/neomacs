@@ -5776,6 +5776,90 @@ fn expect_inserted_char_count(value: &Value) -> Result<i64, Flow> {
     Ok(inserted)
 }
 
+/// INSERTED as GNU takes it from a file name handler's value
+/// (src/fileio.c:4166-4168): N from `(FILE N)` when N is a fixnum in
+/// `[0, ZV - PT]` of the buffer current after the handler; 0 otherwise.
+fn handler_reported_inserted_chars(
+    eval: &Context,
+    current_id: crate::buffer::BufferId,
+    handler_result: Value,
+) -> i64 {
+    if !handler_result.is_cons() {
+        return 0;
+    }
+    let rest = handler_result.cons_cdr();
+    if !rest.is_cons() {
+        return 0;
+    }
+    let Some(count) = rest.cons_car().as_fixnum() else {
+        return 0;
+    };
+    let room_after_point = eval.buffers.get(current_id).map_or(0, |buf| {
+        buf.point_max_char_pos()
+            .get()
+            .saturating_sub(buf.point_char_pos().get())
+    });
+    match i64::try_from(room_after_point) {
+        Ok(room) if (0..=room).contains(&count) => count,
+        _ => 0,
+    }
+}
+
+/// The rest of `insert-file-contents` once a file name handler has done the
+/// reading.  GNU's handler branch does `goto handled` (src/fileio.c:4163-4171)
+/// rather than returning, so the handler's insertion still gets the VISIT
+/// bookkeeping (:5148-5169), `after-insert-file-set-coding`, `format-decode`
+/// and `after-insert-file-functions` (:5174-5306).  No coding system was
+/// decided here, so `last-coding-system-used` stays whatever the handler left
+/// (:5171-5172).  The handler's own value is returned unless it is nil
+/// (:5331-5332).
+fn finish_handled_insert_file_contents(
+    eval: &mut Context,
+    filename: &crate::heap_types::LispString,
+    handler_result: Value,
+    visit: bool,
+    replace_requested: bool,
+    empty_undo_list_p: bool,
+) -> EvalResult {
+    // GNU continues with whatever buffer is current after the handler.
+    let current_id = current_buffer_id_or_error(&eval.buffers)?;
+    let inserted = handler_reported_inserted_chars(eval, current_id, handler_result);
+
+    if visit {
+        if empty_undo_list_p {
+            let _ = eval
+                .buffers
+                .configure_buffer_undo_list(current_id, Value::NIL);
+        }
+        // SAVE_MODIFF = MODIFF; BUF_AUTOSAVE_MODIFF = MODIFF;
+        // save_length = Z - BEG (:5160-5162).  The modtime, file name and
+        // lock are left to the handler (:5153-5158 and :5163-5168 only run
+        // without one).
+        let _ = eval.buffers.set_buffer_modified_flag(current_id, false);
+        let _ = eval.buffers.set_buffer_auto_saved(current_id);
+        if let Some(buf) = eval.buffers.get_mut(current_id) {
+            let size = i64::try_from(buf.total_char_len().get()).unwrap_or(i64::MAX);
+            buf.set_buffer_local("buffer-saved-size", Value::fixnum(size));
+        }
+    }
+
+    let roots = eval.save_specpdl_roots();
+    eval.push_specpdl_root(handler_result);
+    let pipeline_result =
+        run_after_insert_file_pipeline(eval, current_id, visit, replace_requested, inserted);
+    eval.restore_specpdl_roots(roots);
+    let inserted = pipeline_result?;
+
+    if handler_result.is_nil() {
+        Ok(Value::list(vec![
+            Value::heap_string(filename.clone()),
+            Value::fixnum(inserted),
+        ]))
+    } else {
+        Ok(handler_result)
+    }
+}
+
 fn run_after_insert_file_pipeline(
     eval: &mut Context,
     current_id: crate::buffer::BufferId,
@@ -6629,6 +6713,15 @@ pub(crate) fn builtin_insert_file_contents(
     expect_min_args("insert-file-contents", &args, 1)?;
     expect_max_args("insert-file-contents", &args, 5)?;
 
+    let visit = args.get(1).is_some_and(|v| v.is_truthy());
+    let replace_requested = args.get(4).is_some_and(|v| !v.is_nil());
+    // GNU decides this on entry (src/fileio.c:4125-4127), before a file name
+    // handler gets to insert anything into the buffer.
+    let empty_undo_list_p = eval
+        .buffers
+        .current_buffer()
+        .is_some_and(|buf| visit && buf.get_undo_list().is_nil() && buf.is_text_empty());
+
     let coding_val = eval.visible_variable_value_or_nil("coding-system-for-read");
     let coding_system_for_read: Option<String> = match coding_val.kind() {
         ValueKind::Nil => None,
@@ -6659,15 +6752,15 @@ pub(crate) fn builtin_insert_file_contents(
         None,
         handler_args,
     )? {
-        return Ok(result);
+        return finish_handled_insert_file_contents(
+            eval,
+            &resolved,
+            result,
+            visit,
+            replace_requested,
+            empty_undo_list_p,
+        );
     }
-    let visit = args.get(1).is_some_and(|v| v.is_truthy());
-    let replace_requested = args.get(4).is_some_and(|v| !v.is_nil());
-
-    let empty_undo_list_p = eval
-        .buffers
-        .current_buffer()
-        .is_some_and(|buf| visit && buf.get_undo_list().is_nil() && buf.is_text_empty());
 
     let current_id = current_buffer_id_or_error(&eval.buffers)?;
     {

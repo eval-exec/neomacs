@@ -5554,6 +5554,74 @@ fn insert_file_contents_visit_decodes_text_enriched_formats() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A file name handler only replaces the *reading* part of
+/// `insert-file-contents`: GNU's handler branch takes INSERTED from the
+/// handler's `(FILE N)` and does `goto handled` (src/fileio.c:4163-4171), so
+/// the post-insert tail still runs -- the VISIT bookkeeping (:5148-5169),
+/// `after-insert-file-set-coding` (:5174-5184), `format-decode` and
+/// `after-insert-file-functions` (:5189-5306) -- and the handler's own value
+/// is returned (:5331-5332).  jka-compr and TRAMP rely on this to get
+/// `buffer-file-coding-system` derived from `last-coding-system-used`.
+///
+/// Expected values are derived from that GNU 31.1 source.
+#[test]
+fn insert_file_contents_runs_post_insert_steps_after_a_file_name_handler() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(
+        r#"
+        (progn
+          (defvar vm-ifc-log nil)
+          (defun vm-ifc-handler (operation &rest args)
+            (if (eq operation 'insert-file-contents)
+                (progn
+                  (save-excursion (insert "h\u00e9llo"))
+                  (setq last-coding-system-used 'utf-8-unix)
+                  (list (car args) 5))
+              (let ((inhibit-file-name-handlers
+                     (cons 'vm-ifc-handler inhibit-file-name-handlers))
+                    (inhibit-file-name-operation operation))
+                (apply operation args))))
+          nil)
+        (let ((file-name-handler-alist '(("\\`/vm-ifc:" . vm-ifc-handler)))
+              (after-insert-file-functions
+               (list (lambda (n) (push (list 'after-insert n (point)) vm-ifc-log) nil))))
+          (setq vm-ifc-log nil)
+          (with-temp-buffer
+            (setq buffer-file-coding-system 'undecided)
+            (let ((ret (insert-file-contents "/vm-ifc:x")))
+              (list ret buffer-file-coding-system vm-ifc-log (buffer-string) (point)))))
+        (let ((file-name-handler-alist '(("\\`/vm-ifc:" . vm-ifc-handler)))
+              (after-insert-file-functions
+               (list (lambda (n)
+                       (push (list 'after-insert n (buffer-modified-p)) vm-ifc-log)
+                       nil))))
+          (setq vm-ifc-log nil)
+          (let ((buf (generate-new-buffer "vm-ifc-visit")))
+            (unwind-protect
+                (with-current-buffer buf
+                  (setq buffer-file-coding-system 'undecided)
+                  (let ((ret (insert-file-contents "/vm-ifc:x" t)))
+                    (list ret buffer-file-coding-system vm-ifc-log
+                          (buffer-modified-p) buffer-undo-list)))
+              (kill-buffer buf))))
+        "#,
+    );
+    assert_eq!(results[0], "OK nil");
+    // No VISIT: the coding system is derived and the hooks see the
+    // handler's count with point before the inserted text.
+    assert_eq!(
+        results[1],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1)) "héllo" 1)"#
+    );
+    // VISIT: the buffer is already marked unmodified when the hooks run
+    // (SAVE_MODIFF = MODIFF before format-decode), and the undo list the
+    // handler's insertion produced in an empty buffer is discarded.
+    assert_eq!(
+        results[2],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 nil)) nil nil)"#
+    );
+}
+
 #[test]
 fn test_insert_file_contents_beg_end_semantics() {
     crate::test_utils::init_test_tracing();
