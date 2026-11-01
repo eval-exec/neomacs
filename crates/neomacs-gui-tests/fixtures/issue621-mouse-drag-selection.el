@@ -56,4 +56,11 @@
 (with-temp-file (getenv "NEOMACS_ISSUE621_READY")
   (insert "ready"))
 ;; Fallback: slow window mapping must not record nil before the drag.
-(run-with-timer 30 nil #'issue621-finish)
+;; Without a drag there is nothing to report, so exit non-zero instead of
+;; writing a nil state that only surfaces later as a parse error.
+(run-with-timer
+ 30 nil
+ (lambda ()
+   (if issue621-state
+       (issue621-finish)
+     (kill-emacs 2))))
