@@ -885,18 +885,32 @@ fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
     let mut editor_pid: Option<u32> = None;
     let mut scope_path: Option<PathBuf> = None;
     while started.elapsed() < Duration::from_secs(24 * 3600) {
+        // The run's own transient systemd scope (`run-*.scope`): the sandbox
+        // wrapper is moved into it by systemd-run --scope. Once the editor is
+        // identified it works too, but the wrapper is visible from the first
+        // tick. Only a transient scope is accepted: the user manager's
+        // app.slice would leak unrelated accounting (a parent scope's
+        // memory.peak was observed as a constant 13,264,428 KiB in receipts).
+        let root_scope =
+            transient_scope_of(root_pid).or_else(|| editor_pid.and_then(transient_scope_of));
         let mut pids = process_tree(root_pid);
-        let matched = cmdline_matches(needle);
-        for pid in &matched {
-            if !pids.contains(pid) {
-                pids.push(*pid);
+        if editor_pid.is_none() {
+            // A bare cmdline match is not enough to own a process: several
+            // soak runs can execute the same row concurrently (different
+            // receipts and sandboxes), and a global match kept this sampler
+            // alive forever on another run's editor. Scope the match to this
+            // run's own sandbox scope, and only while the editor is unknown.
+            for pid in scoped_cmdline_matches(needle, root_scope.as_deref()) {
+                if !pids.contains(&pid) {
+                    pids.push(pid);
+                }
             }
         }
         if pids.is_empty() {
             break;
         }
         if editor_pid.is_none() {
-            for pid in &matched {
+            for pid in &pids {
                 if is_editor_process(*pid) {
                     editor_pid = Some(*pid);
                     break;
@@ -904,9 +918,7 @@ fn sample_rss(root_pid: u32, needle: &str) -> Sampled {
             }
         }
         if scope_path.is_none() {
-            if let Some(pid) = editor_pid.or_else(|| pids.first().copied()) {
-                scope_path = scope_of(pid);
-            }
+            scope_path = root_scope.clone();
         }
         if let Some(path) = &scope_path {
             read_scope(path, &mut scope);
@@ -1003,6 +1015,19 @@ fn scope_of(pid: u32) -> Option<PathBuf> {
     None
 }
 
+/// `scope_of`, restricted to a transient systemd `run-*.scope` -- the
+/// sandbox's own scope. Anything else (the user manager's app.slice, a
+/// session scope) mixes unrelated accounting into the receipt.
+fn transient_scope_of(pid: u32) -> Option<PathBuf> {
+    let path = scope_of(pid)?;
+    let name = path.file_name()?.to_str()?;
+    if name.starts_with("run-") {
+        Some(path)
+    } else {
+        None
+    }
+}
+
 fn read_scope(path: &Path, scope: &mut ScopeStats) {
     if let Ok(text) = fs::read_to_string(path.join("memory.peak")) {
         if let Ok(bytes) = text.trim().parse::<u64>() {
@@ -1084,6 +1109,17 @@ fn cmdline_matches(needle: &str) -> Vec<u32> {
         }
     }
     out
+}
+
+/// Row-name cmdline matches restricted to the run's own sandbox scope.
+fn scoped_cmdline_matches(needle: &str, root_scope: Option<&Path>) -> Vec<u32> {
+    let Some(root_scope) = root_scope else {
+        return Vec::new();
+    };
+    cmdline_matches(needle)
+        .into_iter()
+        .filter(|pid| scope_of(*pid).as_deref() == Some(root_scope))
+        .collect()
 }
 
 /// Descendants of `root` (inclusive) by walking /proc ppid links.
