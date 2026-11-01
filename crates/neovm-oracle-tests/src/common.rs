@@ -342,6 +342,97 @@ mod host_key_tests {
     }
 }
 
+/// The compile-time host a platform test belongs to.
+///
+/// This is a cfg-derived key, not a runtime `uname` probe.  The twin tests are
+/// compiled only for their own variant (see [`platform_twin_test`]), and the
+/// const assertions below reject the other host selecting a twin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlatformKey {
+    Linux,
+    Macos,
+}
+
+impl PlatformKey {
+    pub(crate) const fn current() -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            Self::Linux
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::Macos
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            panic!("platform twin: twins are defined only for linux and macos")
+        }
+    }
+}
+
+/// Which host a platform test (the Linux expectation or its mac twin) is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TwinHost {
+    Linux,
+    Macos,
+}
+
+impl TwinHost {
+    pub(crate) const fn runs_on(self, key: PlatformKey) -> bool {
+        matches!(
+            (self, key),
+            (TwinHost::Linux, PlatformKey::Linux) | (TwinHost::Macos, PlatformKey::Macos)
+        )
+    }
+}
+
+// Compile-time proof that the current host does not select the other twin.
+#[cfg(target_os = "linux")]
+const _: () = assert!(!TwinHost::Macos.runs_on(PlatformKey::current()));
+#[cfg(target_os = "macos")]
+const _: () = assert!(!TwinHost::Linux.runs_on(PlatformKey::current()));
+
+/// Emit a test compiled only for `$host`.
+///
+/// The host is a typed [`TwinHost`] variant; the macro maps it to the
+/// compile-time cfg, so the other host's binary does not contain the test at
+/// all.  The signed expectation stays with the Linux test; the twin carries
+/// the reference's no-feature answer.
+macro_rules! platform_twin_test {
+    (TwinHost::Linux, $name:ident, $body:block) => {
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn $name() $body
+    };
+    (TwinHost::Macos, $name:ident, $body:block) => {
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn $name() $body
+    };
+}
+pub(crate) use platform_twin_test;
+
+#[cfg(test)]
+mod platform_key_tests {
+    use super::*;
+
+    #[test]
+    fn platform_twins_run_only_on_their_host() {
+        assert!(TwinHost::Linux.runs_on(PlatformKey::Linux));
+        assert!(!TwinHost::Linux.runs_on(PlatformKey::Macos));
+        assert!(TwinHost::Macos.runs_on(PlatformKey::Macos));
+        assert!(!TwinHost::Macos.runs_on(PlatformKey::Linux));
+        assert_eq!(
+            PlatformKey::current(),
+            if cfg!(target_os = "linux") {
+                PlatformKey::Linux
+            } else {
+                PlatformKey::Macos
+            }
+        );
+    }
+}
+
 /// Whether a GNU oracle may be run.
 ///
 /// Resolution either returns an attested oracle or fails loudly; there is no
