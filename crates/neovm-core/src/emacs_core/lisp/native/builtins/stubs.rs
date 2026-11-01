@@ -1219,7 +1219,18 @@ pub(crate) fn builtin_mouse_position_in_root_frame(
         };
         x += frame.left_pos;
         y += frame.top_pos;
-        current = eval.frames.frame_parent_id(id);
+        let parent = frame.parent_frame;
+        let Some(parent_id) = parent.as_frame_id().map(crate::window::FrameId) else {
+            break;
+        };
+        if eval.frames.get(parent_id).is_none() {
+            // A surviving child can reference a parent that delete-frame
+            // removed: Neomacs does not yet soft-delete children the way GNU
+            // does (src/frame.c:2645-2664).  The root position cannot be
+            // computed without that ancestor's offset.
+            return Ok(Value::NIL);
+        }
+        current = Some(parent_id);
     }
     Ok(Value::cons(Value::fixnum(x), Value::fixnum(y)))
 }

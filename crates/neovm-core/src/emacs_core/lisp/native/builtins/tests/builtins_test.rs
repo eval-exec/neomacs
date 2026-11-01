@@ -11725,16 +11725,16 @@ fn mouse_position_in_root_frame_walks_parent_frames() {
         frame.top_pos = 4;
     }
     let buffer = eval.buffers.current_buffer_id().expect("current buffer");
-    let child_id = eval.frames.create_frame("issue661-child", 80, 24, buffer);
+    let child_id = eval.frames.create_frame("issue660-child", 80, 24, buffer);
     if let Some(frame) = eval.frames.get_mut(child_id) {
         frame.left_pos = 5;
         frame.top_pos = 6;
         frame.parent_frame = Value::make_frame(parent_id);
     }
-    eval.store_variable_by_name("issue661-child-frame", Value::make_frame(child_id.0));
+    eval.store_variable_by_name("issue660-child-frame", Value::make_frame(child_id.0));
     eval.eval_str(
         "(setq mouse-position-function
-               (lambda (_pos) (cons issue661-child-frame (cons 19 45))))",
+               (lambda (_pos) (cons issue660-child-frame (cons 19 45))))",
     )
     .expect("install mouse-position-function");
 
@@ -11751,10 +11751,37 @@ fn mouse_position_in_root_frame_walks_parent_frames() {
 fn mouse_position_in_root_frame_rejects_a_frame_that_no_longer_exists() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
-    eval.store_variable_by_name("issue661-dead-frame", Value::make_frame(999_999));
+    eval.store_variable_by_name("issue660-dead-frame", Value::make_frame(999_999));
     eval.eval_str(
         "(setq mouse-position-function
-               (lambda (_pos) (cons issue661-dead-frame (cons 5 6))))",
+               (lambda (_pos) (cons issue660-dead-frame (cons 5 6))))",
+    )
+    .expect("install mouse-position-function");
+
+    let pos = dispatch_builtin(&mut eval, "mouse-position-in-root-frame", vec![])
+        .expect("mouse-position-in-root-frame should resolve")
+        .expect("mouse-position-in-root-frame should evaluate");
+    assert_eq!(pos, Value::NIL);
+}
+
+#[test]
+fn mouse_position_in_root_frame_rejects_a_missing_ancestor_frame() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let buffer = eval.buffers.current_buffer_id().expect("current buffer");
+    let child_id = eval.frames.create_frame("issue660-orphan", 80, 24, buffer);
+    if let Some(frame) = eval.frames.get_mut(child_id) {
+        frame.left_pos = 5;
+        frame.top_pos = 6;
+        // Neomacs delete-frame does not yet soft-delete a parent's children
+        // the way GNU does (src/frame.c:2645-2664), so a surviving child can
+        // still reference a frame that is no longer in the store.
+        frame.parent_frame = Value::make_frame(999_999);
+    }
+    eval.store_variable_by_name("issue660-orphan-frame", Value::make_frame(child_id.0));
+    eval.eval_str(
+        "(setq mouse-position-function
+               (lambda (_pos) (cons issue660-orphan-frame (cons 19 45))))",
     )
     .expect("install mouse-position-function");
 
