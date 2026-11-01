@@ -746,20 +746,14 @@ pub fn runtime_startup_context() -> Context {
     }
 }
 
-/// Format a bootstrap failure without walking a payload that may have died
-/// with the failed evaluator.
+/// Format a bootstrap failure that already owns its pre-teardown rendering.
 ///
-/// The bootstrap paths render the error while their heap is alive and hand
-/// that rendering over; a `Signal`'s data values are heap strings, so reading
-/// them here (after the evaluator was dropped) is a use-after-free. The
-/// captured rendering names the failing load/autoload; the fallback is the
-/// address-safe `Debug` shape.
-fn format_bootstrap_error(error: &crate::emacs_core::error::EvalError) -> String {
-    #[cfg(test)]
-    if let Some(rendered) = crate::emacs_core::load::take_bootstrap_failure_rendering() {
-        return format!("{rendered} | error={error:?}");
-    }
-    format!("{error:?}")
+/// The bootstrap paths render the diagnostic while their heap is alive and
+/// return it as an owned [`crate::emacs_core::load::BootstrapError`]; reading
+/// a raw `EvalError` here could walk a payload that died with the failed
+/// evaluator.
+fn format_bootstrap_error(error: &crate::emacs_core::load::BootstrapError) -> String {
+    error.to_string()
 }
 
 /// Evaluate FORMS in a cached runtime-startup evaluator and return formatted

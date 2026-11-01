@@ -20,30 +20,41 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
-/// The last bootstrap failure rendered while its evaluator heap was alive.
+/// A bootstrap or runtime-startup failure with an owned rendering.
 ///
 /// A bootstrap `EvalError::Signal` names heap strings that die with the failed
-/// evaluator, so a caller must not walk its payload afterwards. Diagnostic
-/// callers (the test bootstrap helper) take this pre-teardown rendering
-/// instead. Test-only: production callers render at the failure site into
-/// their own log.
-#[cfg(test)]
-static BOOTSTRAP_FAILURE_RENDERING: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// evaluator, so it must not be returned to a caller after that heap is
+/// dropped (formatting or holding it would walk a dead payload). The bootstrap
+/// paths render the diagnostic while the heap is still alive and carry that
+/// owned text here; callers may then hold, log, return or format the error
+/// after teardown, and no test-only side channel is needed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BootstrapError {
+    message: String,
+}
 
-#[cfg(test)]
-fn record_bootstrap_failure_rendering(rendered: &str) {
-    if let Ok(mut slot) = BOOTSTRAP_FAILURE_RENDERING.lock() {
-        *slot = Some(rendered.to_string());
+impl BootstrapError {
+    fn rendered(message: String) -> Self {
+        Self { message }
+    }
+
+    /// The diagnostic rendered while the failing evaluator's heap was alive.
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
-/// Take the last pre-teardown bootstrap failure rendering (test support).
-#[cfg(test)]
-pub(crate) fn take_bootstrap_failure_rendering() -> Option<String> {
-    BOOTSTRAP_FAILURE_RENDERING
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take())
+impl std::fmt::Display for BootstrapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BootstrapError {}
+
+/// Render an evaluator error while its heap is alive and own the result.
+fn bootstrap_error_in_state(eval: &super::eval::Context, err: &EvalError) -> BootstrapError {
+    BootstrapError::rendered(format_eval_error_in_state(eval, err))
 }
 
 fn load_string_text(value: &Value) -> Option<String> {
@@ -6140,7 +6151,7 @@ fn maybe_trace_bootstrap_macro_perf(eval: &super::eval::Context) {
     }
 }
 
-pub fn create_bootstrap_evaluator() -> Result<super::eval::Context, EvalError> {
+pub fn create_bootstrap_evaluator() -> Result<super::eval::Context, BootstrapError> {
     create_bootstrap_evaluator_with_features(&[])
 }
 
@@ -6269,14 +6280,14 @@ fn apply_loadup_invocation(eval: &mut super::eval::Context, invocation: &LoadupI
 
 pub fn create_bootstrap_evaluator_with_features(
     extra_features: &[&str],
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     create_bootstrap_evaluator_for_loadup(extra_features, &LoadupInvocation::PreloadOnly)
 }
 
 pub fn create_bootstrap_evaluator_for_loadup(
     extra_features: &[&str],
     invocation: &LoadupInvocation,
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     // Discover the runtime root (contains lisp/ and etc/).
     let project_root = runtime_project_root();
     let lisp_dir = project_root.join("lisp");
@@ -6310,7 +6321,9 @@ pub fn create_bootstrap_evaluator_for_loadup(
             "create_bootstrap_evaluator_with_features: provided-features={bootstrap_features:?}"
         ));
         if bootstrap_features.iter().any(|feature| feature == "x") {
-            install_bootstrap_x_window_system_vars(&mut eval)?;
+            if let Err(err) = install_bootstrap_x_window_system_vars(&mut eval) {
+                return Err(bootstrap_error_in_state(&eval, &err));
+            }
             maybe_trace_bootstrap_step(
                 "create_bootstrap_evaluator_with_features: installed-x-window-system-vars",
             );
@@ -6454,13 +6467,11 @@ pub fn create_bootstrap_evaluator_for_loadup(
                     tracing::info!("loadup.el completed (kill-emacs after dump)");
                 } else {
                     let rendered = format_eval_error_in_state(&eval, &e);
-                    #[cfg(test)]
-                    record_bootstrap_failure_rendering(&rendered);
                     tracing::error!("loadup.el failed: {rendered}");
                     maybe_trace_bootstrap_step(format!(
                         "create_bootstrap_evaluator_with_features: loadup-failed={rendered}"
                     ));
-                    return Err(e);
+                    return Err(BootstrapError::rendered(rendered));
                 }
             }
         }
@@ -6484,9 +6495,8 @@ pub fn create_bootstrap_evaluator_for_loadup(
         let _ = eval.frames.delete_frame(bootstrap_frame_id);
         match invocation {
             LoadupInvocation::PreloadOnly => {
-                eval.frames
-                    .retire_source_preload_window_sequences()
-                    .map_err(|refusal| match refusal {
+                if let Err(refusal) = eval.frames.retire_source_preload_window_sequences() {
+                    let err = match refusal {
                         crate::window::SourcePreloadWindowRetirementRefusal::LiveFramesRemain => {
                             EvalError::signal(
                                 intern("error"),
@@ -6496,7 +6506,9 @@ pub fn create_bootstrap_evaluator_for_loadup(
                                 None,
                             )
                         }
-                    })?;
+                    };
+                    return Err(bootstrap_error_in_state(&eval, &err));
+                }
             }
             LoadupInvocation::Dump(_) => {}
         }
@@ -6521,27 +6533,25 @@ pub fn create_bootstrap_evaluator_for_loadup(
 /// The dump file is invalidated by the bootstrap image schema version and
 /// by a fingerprint of the runtime root's Lisp sources. Set
 /// `NEOVM_DISABLE_PDUMP=1` to force fresh bootstrap.
-pub fn create_bootstrap_evaluator_cached() -> Result<super::eval::Context, EvalError> {
+pub fn create_bootstrap_evaluator_cached() -> Result<super::eval::Context, BootstrapError> {
     create_bootstrap_evaluator_cached_with_features(&[])
 }
 
-pub fn create_runtime_startup_evaluator() -> Result<super::eval::Context, EvalError> {
+pub fn create_runtime_startup_evaluator() -> Result<super::eval::Context, BootstrapError> {
     create_runtime_startup_evaluator_with_features(&[])
 }
 
 pub(crate) fn create_runtime_startup_evaluator_at_path(
     extra_features: &[&str],
     dump_path: &Path,
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     let mut eval = create_bootstrap_evaluator_cached_at_path(extra_features, dump_path)?;
     if let Err(err) = apply_runtime_startup_state(&mut eval) {
         // Render while the evaluator heap is still alive: the caller's
         // cleanup purges the heap, leaving the signal payload unprintable.
         let rendered = format_eval_error_in_state(&eval, &err);
-        #[cfg(test)]
-        record_bootstrap_failure_rendering(&rendered);
         tracing::error!("runtime startup after bootstrap failed: {rendered}");
-        return Err(err);
+        return Err(BootstrapError::rendered(rendered));
     }
     maybe_run_after_pdump_load_hook(&mut eval);
 
@@ -6550,19 +6560,19 @@ pub(crate) fn create_runtime_startup_evaluator_at_path(
 
 pub fn create_runtime_startup_evaluator_with_features(
     extra_features: &[&str],
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     let project_root = runtime_project_root();
     let dump_path = bootstrap_dump_path(&project_root, extra_features);
     create_runtime_startup_evaluator_at_path(extra_features, &dump_path)
 }
 
-pub fn create_runtime_startup_evaluator_cached() -> Result<super::eval::Context, EvalError> {
+pub fn create_runtime_startup_evaluator_cached() -> Result<super::eval::Context, BootstrapError> {
     create_runtime_startup_evaluator()
 }
 
 pub fn create_runtime_startup_evaluator_cached_with_features(
     extra_features: &[&str],
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     create_runtime_startup_evaluator_with_features(extra_features)
 }
 
@@ -6737,7 +6747,7 @@ pub fn maybe_run_after_pdump_load_hook(eval: &mut super::eval::Context) -> bool 
 
 pub fn create_bootstrap_evaluator_cached_with_features(
     extra_features: &[&str],
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     let project_root = runtime_project_root();
     let dump_path = bootstrap_dump_path(&project_root, extra_features);
     create_bootstrap_evaluator_cached_at_path(extra_features, &dump_path)
@@ -6746,22 +6756,20 @@ pub fn create_bootstrap_evaluator_cached_with_features(
 pub(crate) fn create_bootstrap_evaluator_cached_at_path(
     extra_features: &[&str],
     dump_path: &Path,
-) -> Result<super::eval::Context, EvalError> {
+) -> Result<super::eval::Context, BootstrapError> {
     use super::pdump;
 
     fn finalize_or_log(
         eval: &mut super::eval::Context,
         project_root: &Path,
         context: &str,
-    ) -> Result<(), EvalError> {
+    ) -> Result<(), BootstrapError> {
         match finalize_cached_bootstrap_eval(eval, project_root, RuntimeImageRole::Bootstrap) {
             Ok(()) => Ok(()),
             Err(err) => {
                 let rendered = format_eval_error_in_state(eval, &err);
-                #[cfg(test)]
-                record_bootstrap_failure_rendering(&rendered);
                 tracing::error!("{context}: {rendered}");
-                Err(err)
+                Err(BootstrapError::rendered(rendered))
             }
         }
     }
@@ -6770,7 +6778,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
         dump_path: &Path,
         project_root: &Path,
         log_context: &str,
-    ) -> Result<Option<super::eval::Context>, EvalError> {
+    ) -> Result<Option<super::eval::Context>, BootstrapError> {
         let start = std::time::Instant::now();
         match pdump::load_from_dump(dump_path) {
             Ok(mut eval) => {
@@ -6960,6 +6968,9 @@ pub(crate) fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+#[cfg(test)]
+#[path = "tests/bootstrap_error_test.rs"]
+mod bootstrap_error_tests;
 #[cfg(test)]
 #[path = "tests/eager_failure_test.rs"]
 mod eager_failure_tests;
