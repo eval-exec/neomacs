@@ -8,7 +8,7 @@ use std::rc::Rc;
 /// Identity only: this proof grants no manager reference or running access.
 /// Its borrow retains the keeper, and it cannot cross an owner thread.
 #[derive(Clone, Copy)]
-pub(crate) struct KeeperWorldDesignator<'b> {
+pub struct KeeperWorldDesignator<'b> {
     heap: HeapIdentity,
     obarray: NonNull<Obarray>,
     projections: NonNull<RefCell<ThreadProjectionTable>>,

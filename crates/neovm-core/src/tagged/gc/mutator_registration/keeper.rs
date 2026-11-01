@@ -61,7 +61,7 @@ static_assertions::assert_not_impl_any!(FrozenLegacyRoots: Send, Sync, Clone, Co
 /// original manager identities must agree, and a successful designator borrow
 /// must keep those allocations live and excluded from serial execution.
 /// Dropping or leaking the keeper must preserve its existing retention rules.
-pub(crate) unsafe trait EraKeeper {
+pub unsafe trait EraKeeper {
     fn keeper_designator(&self) -> Result<KeeperWorldDesignator<'_>, RegistrationError>;
     fn parallel_heap_identity(&self) -> HeapIdentity;
 }

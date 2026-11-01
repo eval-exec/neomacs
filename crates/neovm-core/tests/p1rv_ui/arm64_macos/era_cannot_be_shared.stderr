@@ -1,13 +1,13 @@
-error[E0599]: the associated function or constant `check` exists for struct `ThreadSharing<ParallelHeapEra<'static>>`, but its trait bounds were not satisfied
+error[E0599]: the associated function or constant `check` exists for struct `ThreadSharing<ParallelHeapEra<'static, eval::world::green_owner::Baton>>`, but its trait bounds were not satisfied
  --> tests/p1rv_ui/arm64_macos/../era_cannot_be_shared.rs
   |
   |     ThreadSharing::<ParallelHeapEra<'static>>::check();
-  |                                                ^^^^^ associated function or constant cannot be called on `ThreadSharing<ParallelHeapEra<'static>>` due to unsatisfied trait bounds
+  |                                                ^^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
   |
  ::: src/tagged/gc/mutator_registration/wrappers.rs
   |
-  | pub struct ParallelHeapEra<'heap> {
-  | --------------------------------- doesn't satisfy `ParallelHeapEra<'static>: Sync`
+  | pub struct ParallelHeapEra<'heap, K: EraKeeper> {
+  | ----------------------------------------------- doesn't satisfy `_: Sync`
   |
  ::: tests/p1rv_ui/arm64_macos/../../thread_safety_ui/support/thread_bounds.rs
   |
@@ -16,237 +16,237 @@ error[E0599]: the associated function or constant `check` exists for struct `Thr
   |
   = note: the following trait bounds were not satisfied:
           `RefCell<Option<QuiescentCollector<'static>>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<Option<gc::facade_mark::cons_suspend::SuspendedConsCollector<'static>>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<()>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<eval::owner_bindings::OwnerSlabRegistry>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<ThreadProjectionTable>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<eval::admission::ThreadingMode>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<Option<std::boxed::Box<eval::green::GreenRuntime>>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<Option<ThreadId>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<TaggedHeap>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut (): Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<owned_roots::OwnedRootRegistry>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<neovm_core::emacs_core::Obarray>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<Vec<SymId>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<VariableWatcherList>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<HashSet<SymId>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<AutoloadManager>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<treesit::TreeSitterManager>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<FrameManager>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<CodingSystemManager>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<eval::MacroPerfStats>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<neovm_core::buffer::buffer::BufferStorage>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<eval::global_state::GlobalState>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut (): Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut GcHeader: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const (): Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const (): Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut GcHeader: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<u8>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut HashTableObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut FinalizerObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut *mut MarkerObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Cell<Option<shared::PointBeforeCommand>>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<face::FaceStorage>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<HashMap<LispFaceId, TaggedValue>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<neomacs_display_protocol::tty_palette::TtyPalette>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<xdisp::mode_line_output::OutputState>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<eval::owner_bindings::OwnerSlab>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<CanonicalArm>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `std::sync::mpsc::Receiver<gc::gc_thread::ConcurrentMarkResult>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<usize>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut u8: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut ConsCell: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut FloatObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut VecLikeHeader: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut StringObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const u8: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Cell<Vec<TaggedValue>>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Cell<*const ()>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut TaggedHeap: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut HashTableObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut FinalizerObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut *mut MarkerObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<()>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `std::rc::Weak<[TaggedValue]>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut VectorObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut ByteCodeObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut LambdaObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut MacroObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut RecordObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut SymbolWithPosObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut MarkerObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut BignumObj: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<[Cell<usize>; 8192]>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<LispBufferLocalValue>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<LispFwd>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut u8: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut ConsCell: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut FloatObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut VecLikeHeader: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut StringObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `OnceCell<collection_reads::store_state::ObservationWorld>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<*mut TaggedHeap>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<()>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const c_void: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const tree_sitter::ffi::TSTree: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<ccl::CclRegistry>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<charset::CharsetRegistry>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<xfaces::FaceAttrState>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<neovm_core::emacs_core::terminal::pure::TerminalLispRegistry>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<builtins::collections::HashTableTestRegistry>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<builtins::file_notify::FileNotifyState>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<HashMap<i64, builtins::hooks::WindowConfigurationSnapshot>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `RefCell<Vec<Option<dynamic_module::GlobalRefEntry>>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Cell<Vec<TaggedValue>>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Cell<*const ()>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<u64>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<NonNull<[Cell<usize>; 8192]>>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<collection_reads::JournalPolicy>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<bool>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Cell<gc::barrier_window::BarrierWindow>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<collection_reads::store_state::WorldObservations>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<RefCell<neovm_core::buffer::buffer_text::BufferTextStorage>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Cell<VisitedFileModtime>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<RefCell<shared::SharedUndoStateInner>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut VectorObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut ByteCodeObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut LambdaObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut MacroObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut RecordObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut SymbolWithPosObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut MarkerObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut BignumObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const LispSymbol: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const Atomic<u32>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<MarkerObj>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<window::word_wrap::CachedWordWrapPolicy>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `NonNull<()>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<Vec<AutomaticCompositionSpan>>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `(dyn std::any::Any + 'static): Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `UnsafeCell<TaggedValue>: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const AtomicTaggedValue: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const TaggedValue: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*const CharTableObj: Sync`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `Rc<OverlayList>: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `(dyn for<'a> Fn(&'a LispString) -> Vec<LispString> + 'static): Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
           `*mut emacs_value_tag: Send`
-          which is required by `ParallelHeapEra<'static>: Sync`
+          which is required by `ParallelHeapEra<'static, eval::world::green_owner::Baton>: Sync`
   = help: items from traits can only be used if the trait is in scope
 help: the following traits which provide `check` are implemented but not in scope; perhaps you want to import one of them
  --> tests/p1rv_ui/arm64_macos/era_cannot_be_shared.rs:1:1
