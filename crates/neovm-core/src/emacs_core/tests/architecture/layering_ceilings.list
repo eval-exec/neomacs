@@ -1,5 +1,5 @@
 g0 eval 21
-g0 top:buffer 2
+g0 top:buffer 1
 buffer builtins 6
 buffer chartable 1
 buffer composite 13

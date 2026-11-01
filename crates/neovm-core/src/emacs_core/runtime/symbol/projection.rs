@@ -21,7 +21,7 @@
 //! (`eval::owner_bindings`), and no Lisp runs while a cell is revealed.
 
 use super::cell::{ArmMut, RevealedCell};
-use super::{Obarray, SymId, SymbolTrappedWrite};
+use super::{BufferLocalView, Obarray, SymId, SymbolTrappedWrite};
 use crate::emacs_core::forward::{
     BuiltinForwarder, CanonicalArm, CanonicalBlv, FwdRef, ThreadProjectionDescriptor,
     ThreadProjectionTable,
@@ -527,17 +527,18 @@ impl Obarray {
     /// `variable-binding-locus` refuses a nil `where_buf`, re-deriving from
     /// the buffer itself and answering with the object it allocates there.
     /// The next read after the object exists swaps the cache in as usual.
-    pub(crate) fn read_projected_localized(
+    pub(crate) fn read_projected_localized<B: BufferLocalView>(
         &self,
         id: SymId,
         blv: CanonicalBlv,
-        buffer: Option<&crate::buffer::Buffer>,
+        buffer: Option<&B>,
     ) -> crate::emacs_core::value::Value {
         let blv_ptr = blv.blv().as_ptr();
         match buffer {
             Some(buffer) => {
-                let target_buf =
-                    crate::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer.id));
+                let target_buf = crate::tagged::gc::with_tagged_heap(|heap| {
+                    heap.buffer_value(buffer.buffer_id())
+                });
                 match target_buf {
                     // SAFETY: a projection's localized arm names a record this
                     // obarray's BLV pool owns (it was the cell's record when the
@@ -545,12 +546,11 @@ impl Obarray {
                     // is held across the call.
                     Some(target_buf) => unsafe {
                         Self::read_blv_with_lookup(blv_ptr, target_buf, || {
-                            buffer.local_variable_binding_cell(id).unwrap_or(Value::NIL)
+                            buffer.local_binding_cell(id).unwrap_or(Value::NIL)
                         })
                     },
                     None => {
-                        let found_cell =
-                            buffer.local_variable_binding_cell(id).unwrap_or(Value::NIL);
+                        let found_cell = buffer.local_binding_cell(id).unwrap_or(Value::NIL);
                         let found = !found_cell.is_nil();
                         // SAFETY: as above; the same stores
                         // `read_blv_with_lookup` makes on its miss, so a

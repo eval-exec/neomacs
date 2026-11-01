@@ -412,3 +412,179 @@ fn projected_localized_read_allocates_nothing_without_the_buffer_object() {
         buffer_object().is_some_and(|value| crate::emacs_core::value::eq_value(&value, &object))
     );
 }
+
+/// A different view type makes the value-layer boundary explicit and counts
+/// local-cell lookups independently of the BLV cache's returned value.
+struct ProjectionBufferProbe<'a> {
+    buffer: &'a crate::buffer::Buffer,
+    local_cell_reads: &'a std::cell::Cell<usize>,
+}
+
+impl crate::emacs_core::value::buffer_vocab::BufferLocalView for ProjectionBufferProbe<'_> {
+    fn buffer_id(&self) -> crate::emacs_core::value::buffer_vocab::BufferId {
+        self.buffer.id
+    }
+
+    fn slot_value(&self, slot: crate::emacs_core::value::buffer_vocab::BufferSlot) -> Value {
+        self.buffer.slots[slot.index()]
+    }
+
+    fn local_binding(&self, id: SymId, localized: bool) -> Option<Value> {
+        self.buffer.get_buffer_local_by_sym_id_gated(id, localized)
+    }
+
+    fn local_binding_cell(&self, id: SymId) -> Option<Value> {
+        self.local_cell_reads.set(self.local_cell_reads.get() + 1);
+        self.buffer.local_variable_binding_cell(id)
+    }
+}
+
+#[test]
+fn projected_localized_generic_view_keeps_cache_hits_lazy() {
+    let mut ev = fixture();
+    let id = intern("tpr-local");
+    let buffer_id = ev.buffers.create_buffer("tpr-generic-registered");
+    ev.buffers
+        .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4547))
+        .expect("local binding");
+    let object = Value::make_buffer(buffer_id);
+    project(&mut ev, "tpr-local");
+    let CanonicalArm::Localized(blv) = projection_of(&ev, id).arm() else {
+        panic!("localized projection")
+    };
+    let reads = std::cell::Cell::new(0);
+    let view = ProjectionBufferProbe {
+        buffer: ev.buffers.get(buffer_id).expect("buffer"),
+        local_cell_reads: &reads,
+    };
+    let allocated = ev.tagged_heap.allocated_count();
+    assert_eq!(
+        ev.obarray.read_projected_localized(id, blv, Some(&view)),
+        Value::fixnum(4547)
+    );
+    assert_eq!(reads.get(), 1, "first read loads the new buffer's cell");
+    // SAFETY: this obarray owns the projected BLV and no reference to the
+    // record is retained across a read that may refresh its cache.
+    unsafe {
+        let cache = &*blv.blv().as_ptr();
+        assert_eq!(cache.where_buf.get(), object);
+        assert_eq!(cache.where_buf_id, buffer_id.0);
+        assert!(cache.found);
+        assert_eq!(
+            Some(cache.valcell.get()),
+            view.buffer.local_variable_binding_cell(id)
+        );
+        assert_eq!(
+            cache.alist_epoch,
+            crate::emacs_core::symbol::blv_alist_epoch()
+        );
+    }
+    assert_eq!(
+        ev.obarray.read_projected_localized(id, blv, Some(&view)),
+        Value::fixnum(4547)
+    );
+    assert_eq!(reads.get(), 1, "cache hit must not resolve the cell again");
+    assert_eq!(
+        ev.obarray
+            .read_projected_localized(id, blv, None::<&ProjectionBufferProbe<'_>>),
+        Value::fixnum(4545)
+    );
+    assert_eq!(reads.get(), 1, "bufferless default needs no local lookup");
+    // SAFETY: same owned BLV; the preceding bufferless read has completed.
+    unsafe {
+        assert_eq!((*blv.blv().as_ptr()).where_buf.get(), object);
+        assert!((*blv.blv().as_ptr()).found);
+    }
+    assert_eq!(ev.tagged_heap.allocated_count(), allocated);
+}
+
+#[test]
+fn projected_localized_generic_view_keeps_unregistered_cache_locus_nil() {
+    let mut ev = fixture();
+    let id = intern("tpr-local");
+    let buffer_id = ev.buffers.create_buffer("tpr-generic-unregistered");
+    project(&mut ev, "tpr-local");
+    let CanonicalArm::Localized(blv) = projection_of(&ev, id).arm() else {
+        panic!("localized projection")
+    };
+    let reads = std::cell::Cell::new(0);
+    {
+        let view = ProjectionBufferProbe {
+            buffer: ev.buffers.get(buffer_id).expect("buffer"),
+            local_cell_reads: &reads,
+        };
+        for expected_reads in 1..=2 {
+            assert_eq!(
+                ev.obarray.read_projected_localized(id, blv, Some(&view)),
+                Value::fixnum(4545)
+            );
+            assert_eq!(reads.get(), expected_reads);
+            // SAFETY: the projected BLV is owned by this obarray; inspect
+            // only after each cache-writing read has returned.
+            unsafe {
+                let cache = &*blv.blv().as_ptr();
+                assert!(cache.where_buf.get().is_nil());
+                assert_eq!(cache.where_buf_id, crate::emacs_core::symbol::NO_WHERE_BUF);
+                assert!(!cache.found);
+                assert_eq!(cache.valcell.get(), cache.defcell.get());
+                assert_eq!(
+                    cache.alist_epoch,
+                    crate::emacs_core::symbol::blv_alist_epoch()
+                );
+            }
+        }
+    }
+    ev.buffers
+        .set_buffer_local_property_by_sym_id(buffer_id, id, Value::fixnum(4548))
+        .expect("new local binding");
+    let view = ProjectionBufferProbe {
+        buffer: ev.buffers.get(buffer_id).expect("buffer"),
+        local_cell_reads: &reads,
+    };
+    let allocated = ev.tagged_heap.allocated_count();
+    assert_eq!(
+        ev.obarray.read_projected_localized(id, blv, Some(&view)),
+        Value::fixnum(4548)
+    );
+    assert_eq!(reads.get(), 3);
+    // SAFETY: same owned BLV; no cache writer overlaps these assertions.
+    unsafe {
+        let cache = &*blv.blv().as_ptr();
+        assert!(cache.where_buf.get().is_nil());
+        assert_eq!(cache.where_buf_id, crate::emacs_core::symbol::NO_WHERE_BUF);
+        assert!(cache.found);
+        assert_eq!(
+            Some(cache.valcell.get()),
+            view.buffer.local_variable_binding_cell(id)
+        );
+        assert_eq!(
+            cache.alist_epoch,
+            crate::emacs_core::symbol::blv_alist_epoch()
+        );
+    }
+    assert!(crate::tagged::gc::with_tagged_heap(|heap| heap.buffer_value(buffer_id)).is_none());
+    assert_eq!(ev.tagged_heap.allocated_count(), allocated);
+}
+
+#[test]
+fn projected_localized_alias_preserves_local_void_and_bound_default() {
+    let mut ev = fixture();
+    ev.eval_str("(defvaralias 'tpr-local-alias 'tpr-local)")
+        .expect("localized alias");
+    project(&mut ev, "tpr-local");
+    assert_eq!(vm_read(&mut ev, "tpr-local-alias"), "4546");
+    assert_eq!(eval_read(&mut ev, "tpr-local-alias"), "4546");
+    ev.eval_str("(makunbound 'tpr-local)")
+        .expect("void local binding");
+    assert!(matches!(
+        ev.find_symbol_value_by_id(intern("tpr-local-alias")),
+        Ok(SymbolValueLookup::Unbound)
+    ));
+    assert_eq!(
+        print_value(
+            &ev.eval_str("(list (boundp 'tpr-local-alias) (default-value 'tpr-local-alias))")
+                .expect("void alias and bound default")
+        ),
+        "(nil 4545)"
+    );
+}
