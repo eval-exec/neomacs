@@ -298,6 +298,10 @@ mod carrier_pool_tests;
 mod collector_spawn_failure_tests;
 
 #[cfg(test)]
+#[path = "../tests/green_spawn_refusal_test.rs"]
+mod spawn_refusal_tests;
+
+#[cfg(test)]
 #[path = "../tests/green_parked_root_equivalence_test.rs"]
 mod parked_root_equivalence_tests;
 

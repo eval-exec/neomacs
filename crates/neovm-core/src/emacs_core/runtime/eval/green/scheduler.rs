@@ -1592,6 +1592,32 @@ impl Control {
         receiver
     }
 
+    /// Undo `register_worker` for a worker whose carrier OS thread never
+    /// started (`make-thread` spawn refusal). The worker never held the
+    /// Baton and its Lisp handle was never returned, so no joiner, mutex,
+    /// condition, host request, or service can name it.
+    ///
+    /// The ready turn is invalidated through the seam: `set_wait` marks the
+    /// worker non-Runnable, so `pop_ready`'s retain drops the stale turn. A
+    /// stale Runnable turn would be picked and block the scheduler on a
+    /// carrier that does not exist.
+    pub(super) fn unregister_worker(&self, key: ThreadKey) {
+        let mut state = self.state();
+        Self::set_wait(&mut state, key, Wait::Exited);
+        state.senders.remove(&key);
+        state.waits.remove(&key);
+        state.physical.remove(&key);
+    }
+
+    /// Test-only: whether any scheduler record still names KEY.
+    #[cfg(test)]
+    pub(super) fn worker_registered_for_test(&self, key: ThreadKey) -> bool {
+        let state = self.state();
+        state.senders.contains_key(&key)
+            || state.waits.contains_key(&key)
+            || state.physical.contains_key(&key)
+    }
+
     /// Whether KEY has ended.
     pub(crate) fn exited(&self, key: ThreadKey) -> bool {
         matches!(self.state().waits.get(&key), Some(Wait::Exited) | None)

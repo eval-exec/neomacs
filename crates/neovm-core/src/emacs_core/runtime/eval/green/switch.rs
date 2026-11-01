@@ -986,7 +986,24 @@ impl Context {
         // Reuse an idle carrier when one is parked, otherwise spawn one. The
         // Lisp thread object above is already fresh; only the OS executor is
         // recycled.
-        self.with_green_runtime(|runtime| runtime.carriers.dispatch(job));
+        if let Err(refusal) = self.with_green_runtime(|runtime| runtime.carriers.dispatch(job)) {
+            // GNU `make-thread` (src/thread.c:933-938) restores the previous
+            // situation (the never-started thread never appears in
+            // `all-threads`) and then signals; the same resource failure must
+            // not abort the editor. Undo every Lisp-side and scheduler-side
+            // registration before the signal.
+            let refused = refusal.job.key;
+            self.with_green_runtime(|runtime| {
+                runtime.pending_starts.borrow_mut().remove(&refused);
+            });
+            control.unregister_worker(refused);
+            self.threads.discard_unstarted_thread(id);
+            drop(refusal);
+            return Err(signal(
+                "error",
+                vec![Value::string("Could not start a new thread")],
+            ));
+        }
         Ok(handle)
     }
 

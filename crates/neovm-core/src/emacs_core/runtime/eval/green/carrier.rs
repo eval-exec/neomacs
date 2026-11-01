@@ -52,6 +52,24 @@ pub(super) struct CarrierJob {
     pub(super) reused: bool,
 }
 
+/// A carrier OS thread could not be created. `dispatch` hands the whole
+/// unstarted job back (not just its key): the caller owns the undo of the
+/// Lisp-side registration, and the receiver inside the job must close the
+/// channel before the scheduler entry is dropped.
+pub(super) struct SpawnRefusal {
+    pub(super) job: CarrierJob,
+    pub(super) error: std::io::Error,
+}
+
+impl std::fmt::Debug for SpawnRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpawnRefusal")
+            .field("key", &self.job.key)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The typed lifecycle of one live carrier.
 enum CarrierSlot {
     /// Parked, no Baton, no World state; blocked on its job channel.
@@ -95,6 +113,14 @@ impl PoolInner {
 /// take their next job without the Baton.
 pub(super) struct PoolShared {
     inner: Mutex<PoolInner>,
+    /// Test-only: the next fresh spawn fails before any OS thread exists, so
+    /// the refusal/undo path is deterministic. Per pool (no global or env
+    /// knob), consumed by one spawn.
+    #[cfg(test)]
+    fail_next_spawn: std::sync::atomic::AtomicBool,
+    /// Test-only: the worker key of the last refused spawn.
+    #[cfg(test)]
+    last_refusal: Mutex<Option<ThreadKey>>,
 }
 
 impl PoolShared {
@@ -117,17 +143,42 @@ impl CarrierPool {
         Self {
             shared: Arc::new(PoolShared {
                 inner: Mutex::new(PoolInner::new()),
+                #[cfg(test)]
+                fail_next_spawn: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                last_refusal: Mutex::new(None),
             }),
         }
     }
 
-    /// Dispatch `job`: reuse an idle carrier, or spawn a fresh one.
-    pub(super) fn dispatch(&self, job: CarrierJob) {
+    /// Test-only: make the next fresh carrier spawn fail without creating an
+    /// OS thread.
+    #[cfg(test)]
+    pub(super) fn inject_spawn_failure(&self) {
+        self.shared
+            .fail_next_spawn
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Test-only: the worker key of the last refused spawn, if any.
+    #[cfg(test)]
+    pub(super) fn last_refusal_for_test(&self) -> Option<ThreadKey> {
+        *self
+            .shared
+            .last_refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Dispatch `job`: reuse an idle carrier, or spawn a fresh one. A refused
+    /// OS-thread creation hands the job back; the caller undoes the Lisp-side
+    /// registration and signals.
+    pub(super) fn dispatch(&self, job: CarrierJob) -> Result<(), SpawnRefusal> {
         let job = match self.take_idle_job_slot(job) {
-            Ok(()) => return,
+            Ok(()) => return Ok(()),
             Err(job) => job,
         };
-        self.spawn(job);
+        self.spawn(job)
     }
 
     fn take_idle_job_slot(&self, mut job: CarrierJob) -> Result<(), CarrierJob> {
@@ -162,7 +213,7 @@ impl CarrierPool {
         }
     }
 
-    fn spawn(&self, job: CarrierJob) {
+    fn spawn(&self, job: CarrierJob) -> Result<(), SpawnRefusal> {
         let id = {
             let mut inner = self.shared.lock();
             // Only a seated Lisp thread holding the Baton dispatches, and
@@ -177,9 +228,34 @@ impl CarrierPool {
             inner.slots.insert(id, CarrierSlot::Running);
             id
         };
+        #[cfg(test)]
+        if self
+            .shared
+            .fail_next_spawn
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(self.refuse_spawn(
+                id,
+                job,
+                std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "injected carrier spawn failure",
+                ),
+            ));
+        }
         let shared = Arc::clone(&self.shared);
+        // `Builder::spawn` consumes (and drops) its closure on failure, so the
+        // job is parked in a cell the new thread takes from; a failed spawn
+        // leaves it there for the caller to recover.
+        let handoff = Arc::new(Mutex::new(Some(job)));
+        let for_carrier = Arc::clone(&handoff);
         let builder = std::thread::Builder::new().name(format!("neovm-carrier-{}", id.0));
         match builder.spawn(move || {
+            let job = for_carrier
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .expect("a carrier takes its job exactly once");
             #[cfg(test)]
             LIVE_CARRIERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             carrier_loop(job, shared, id);
@@ -188,12 +264,31 @@ impl CarrierPool {
         }) {
             Ok(handle) => {
                 self.shared.lock().handles.insert(id, handle);
+                Ok(())
             }
             Err(error) => {
-                self.shared.lock().slots.insert(id, CarrierSlot::Draining);
-                panic!("spawning a Lisp thread's carrier OS thread: {error}");
+                let job = handoff
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                    .expect("an unstarted carrier keeps its job");
+                Err(self.refuse_spawn(id, job, error))
             }
         }
+    }
+
+    /// Mark the reserved slot dead and hand the job back to the caller.
+    fn refuse_spawn(&self, id: CarrierId, job: CarrierJob, error: std::io::Error) -> SpawnRefusal {
+        self.shared.lock().slots.insert(id, CarrierSlot::Draining);
+        #[cfg(test)]
+        {
+            *self
+                .shared
+                .last_refusal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(job.key);
+        }
+        SpawnRefusal { job, error }
     }
 
     /// Wake and join every carrier. Called from the main owner's teardown
