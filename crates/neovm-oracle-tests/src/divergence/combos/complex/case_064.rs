@@ -103,17 +103,43 @@ fn div_cx64_timer_repeated_invocation_in_order() {
     let expect = expect_test::expect![[r#""OK (t 0 t (:once))""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let (fire-seq)
-  (let ((timer (run-with-timer 0 0.001 (lambda () (push (length fire-seq) fire-seq)))))
-    (sit-for 0.02)
-    (cancel-timer timer)
-    (let ((first (nreverse fire-seq)))
-      (setq fire-seq nil)
-      (let ((once (run-with-timer 0 nil (lambda () (push :once fire-seq)))))
-        (sit-for 0.02)
-        (list (> (length first) 1) (car first)
-              (= (car (last first)) (1- (length first)))
-              (nreverse fire-seq))))))
+(let (fire-seq repeat-done once-done timer)
+  ;; A wait's deadline precedes the next timer_check in GNU.  Descheduling
+  ;; after the first callback can consume all 20 ms without a second firing.
+  ;; Observe completion instead; the clock below is only a failure bound.
+  (setq timer
+        (run-with-timer
+         0 0.001
+         (lambda ()
+           (push (length fire-seq) fire-seq)
+           (when (> (length fire-seq) 1)
+             (setq repeat-done t)
+             (cancel-timer timer)))))
+  (unwind-protect
+      (let ((deadline (+ (float-time) 10)))
+        (while (not repeat-done)
+          (when (> (float-time) deadline)
+            (error "Repeating timer did not complete"))
+          (sit-for 0.02))
+        (let ((first (nreverse fire-seq)))
+          (setq fire-seq nil)
+          (let ((once (run-with-timer
+                       0 nil
+                       (lambda ()
+                         (push :once fire-seq)
+                         (setq once-done t))))
+                (deadline (+ (float-time) 10)))
+            (unwind-protect
+                (progn
+                  (while (not once-done)
+                    (when (> (float-time) deadline)
+                      (error "One-shot timer did not complete"))
+                    (sit-for 0.02))
+                  (list (> (length first) 1) (car first)
+                        (= (car (last first)) (1- (length first)))
+                        (nreverse fire-seq)))
+              (cancel-timer once)))))
+    (cancel-timer timer)))
 "##,
         expect,
     );
