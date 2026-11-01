@@ -1,3 +1,31 @@
+/// Whether `pid` is still executing.  `kill -0` cannot answer this: it also
+/// succeeds for a zombie, and a descendant orphaned by its group leader is
+/// reaped by its new parent (init or a subreaper) asynchronously, after the
+/// kill and after its pipe ends have closed.  A zombie has terminated; only its
+/// reaping is outstanding.  `ps` prints no state and fails for a reaped pid.
+#[cfg(unix)]
+fn descendant_state(pid: &str) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .expect("query descendant process state");
+    let state = String::from_utf8(output.stdout)
+        .expect("ps state is UTF-8")
+        .trim()
+        .to_string();
+    (output.status.success() && !state.is_empty()).then_some(state)
+}
+
+#[cfg(unix)]
+fn assert_descendant_terminated(pid: &str, what: &str) {
+    if let Some(state) = descendant_state(pid) {
+        assert!(
+            state.starts_with('Z'),
+            "{what} {pid} is still running (ps state {state})"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn timeout_kills_the_complete_child_process_group() {
@@ -19,14 +47,7 @@ fn timeout_kills_the_complete_child_process_group() {
         .trim()
         .to_string();
     assert!(!child_pid.is_empty());
-    assert!(
-        !Command::new("kill")
-            .args(["-0", &child_pid])
-            .status()
-            .expect("query child process")
-            .success(),
-        "timed-out descendant {child_pid} survived its process group"
-    );
+    assert_descendant_terminated(&child_pid, "timed-out descendant");
 }
 
 #[cfg(unix)]
@@ -50,14 +71,7 @@ fn timeout_still_kills_the_group_when_its_leader_exits_first() {
         .trim()
         .to_string();
     assert!(!child_pid.is_empty());
-    assert!(
-        !Command::new("kill")
-            .args(["-0", &child_pid])
-            .status()
-            .expect("query child process")
-            .success(),
-        "descendant {child_pid} survived after its group leader exited"
-    );
+    assert_descendant_terminated(&child_pid, "descendant of an exited group leader");
 }
 
 #[cfg(unix)]
@@ -94,12 +108,5 @@ fn private_pty_timeout_kills_a_hup_ignoring_session_child() {
         .expect("PTY child published its pid")
         .trim()
         .to_string();
-    assert!(
-        !Command::new("kill")
-            .args(["-0", &child_pid])
-            .status()
-            .expect("query PTY child")
-            .success(),
-        "HUP-ignoring PTY child {child_pid} survived its runner timeout"
-    );
+    assert_descendant_terminated(&child_pid, "HUP-ignoring PTY child");
 }
