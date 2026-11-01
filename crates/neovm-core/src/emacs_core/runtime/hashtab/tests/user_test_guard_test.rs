@@ -1,4 +1,6 @@
 use super::*;
+use crate::emacs_core::builtins::hash_user_test::with_user_test_guard;
+use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::HashTableTest;
 
 /// The Rev R2 nesting count as seen by assertions: 0 outside any user test,
@@ -9,6 +11,16 @@ fn depth(table: Value) -> u8 {
         .unwrap()
         .test_depth
         .load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// The accounting entry point is context-free so the hash-table module does
+/// not name the evaluator; supply its Context pieces here.
+fn inhibited_user_test_since_gc(context: &mut Context, bytes_since_gc: usize) -> Option<i128> {
+    super::inhibited_user_test_since_gc(
+        context.user_test_gc_accounting_pointer(),
+        bytes_since_gc,
+        |accounting| context.user_test_gc_entry_threshold(accounting),
+    )
 }
 
 fn fixture() -> (Context, Value) {

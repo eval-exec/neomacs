@@ -52,9 +52,7 @@ pub(crate) fn hash_test_parity_enabled() -> bool {
 }
 
 mod user_test_guard;
-pub(crate) use user_test_guard::{
-    gc_threshold_integer_fallback, inhibited_user_test_since_gc, with_user_test_guard,
-};
+pub(crate) use user_test_guard::{gc_threshold_integer_fallback, inhibited_user_test_since_gc};
 
 const SXHASH_MAX_DEPTH: usize = 3;
 pub(crate) const SXHASH_MAX_LEN: usize = 7;

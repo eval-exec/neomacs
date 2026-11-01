@@ -1317,8 +1317,12 @@ pub(crate) fn builtin_garbage_collect_maybe(
     }
     let threshold = eval.tagged_heap.gc_threshold();
     let since_gc = if inhibited {
-        super::super::hashtab::inhibited_user_test_since_gc(eval, since_gc)
-            .unwrap_or(since_gc as i128)
+        super::super::hashtab::inhibited_user_test_since_gc(
+            eval.user_test_gc_accounting_pointer(),
+            since_gc,
+            |accounting| eval.user_test_gc_entry_threshold(accounting),
+        )
+        .unwrap_or(since_gc as i128)
     } else {
         since_gc as i128
     };

@@ -3,8 +3,8 @@
 use super::super::cold_gc::ConcurrentHashMutatorState;
 use super::super::{TaggedHeap, clear_tagged_heap_if_installed, knobs, set_tagged_heap};
 use super::*;
+use crate::emacs_core::builtins::hash_user_test::with_user_test_guard;
 use crate::emacs_core::eval::Context;
-use crate::emacs_core::hashtab::with_user_test_guard;
 use crate::emacs_core::intern::intern_uninterned;
 use crate::emacs_core::value::{HashKey, HashTableTest, HashTableWeakness, LispHashTable};
 use crate::tagged::header::ImageResident;
