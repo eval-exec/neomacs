@@ -740,7 +740,45 @@ pub(crate) fn with_legacy_gc<T>(create: impl FnOnce() -> T) -> T {
 /// Create a cached runtime-startup evaluator for tests that need the full
 /// GNU bootstrap surface.
 pub fn runtime_startup_context() -> Context {
-    create_runtime_startup_evaluator_cached().expect("bootstrap")
+    match create_runtime_startup_evaluator_cached() {
+        Ok(context) => context,
+        Err(error) => panic!("bootstrap: {}", format_bootstrap_error(&error)),
+    }
+}
+
+/// Format a bootstrap failure with its Lisp error data.  The bare `Debug`
+/// of a signal prints heap strings as `String@0x…`, hiding the message that
+/// names the failing load/autoload; print the string contents and the extra
+/// data values instead.
+fn format_bootstrap_error(error: &crate::emacs_core::error::EvalError) -> String {
+    use crate::emacs_core::error::EvalError;
+    match error {
+        EvalError::Signal {
+            symbol,
+            data,
+            raw_data,
+            ..
+        } => {
+            let data = data
+                .iter()
+                .map(format_bootstrap_value)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let raw = raw_data
+                .as_ref()
+                .map(format_bootstrap_value)
+                .unwrap_or_else(|| "nil".to_string());
+            format!("signal {symbol:?} data [{data}] raw_data {raw}")
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+fn format_bootstrap_value(value: &Value) -> String {
+    match value.as_str_owned() {
+        Some(text) => format!("{text:?}"),
+        None => format!("{value:?}"),
+    }
 }
 
 /// Evaluate FORMS in a cached runtime-startup evaluator and return formatted
