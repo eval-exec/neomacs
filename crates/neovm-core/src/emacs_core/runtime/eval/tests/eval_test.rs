@@ -4823,6 +4823,17 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
             }],
         }]);
 
+    // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
+    // so model the complete click gesture.
+    ev.command_loop.keyboard.pending_input_events.push_back(
+        crate::keyboard::InputEvent::MousePress {
+            button: crate::keyboard::MouseButton::Left,
+            x: click_x,
+            y: click_y,
+            modifiers: crate::keyboard::Modifiers::none(),
+            target_frame_id: fid.0,
+        },
+    );
     ev.command_loop.keyboard.pending_input_events.push_back(
         crate::keyboard::InputEvent::MouseRelease {
             button: crate::keyboard::MouseButton::Left,
@@ -5539,6 +5550,17 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
             }],
         }]);
 
+    // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
+    // so model the complete click gesture.
+    ev.command_loop.keyboard.pending_input_events.push_back(
+        crate::keyboard::InputEvent::MousePress {
+            button: crate::keyboard::MouseButton::Left,
+            x: click_x,
+            y: click_y,
+            modifiers: crate::keyboard::Modifiers::none(),
+            target_frame_id: fid.0,
+        },
+    );
     ev.command_loop.keyboard.pending_input_events.push_back(
         crate::keyboard::InputEvent::MouseRelease {
             button: crate::keyboard::MouseButton::Left,
@@ -5629,6 +5651,17 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
             rows: Vec::new(),
         }]);
 
+    // GNU drops an up event with no matching down (src/keyboard.c:6628-6632),
+    // so model the complete click gesture.
+    ev.command_loop.keyboard.pending_input_events.push_back(
+        crate::keyboard::InputEvent::MousePress {
+            button: crate::keyboard::MouseButton::Left,
+            x: click_x,
+            y: click_y,
+            modifiers: crate::keyboard::Modifiers::none(),
+            target_frame_id: fid.0,
+        },
+    );
     ev.command_loop.keyboard.pending_input_events.push_back(
         crate::keyboard::InputEvent::MouseRelease {
             button: crate::keyboard::MouseButton::Left,
