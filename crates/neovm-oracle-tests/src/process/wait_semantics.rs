@@ -196,13 +196,15 @@ fn process_send_string_rejects_network_server_like_gnu() {
     );
 }
 
-#[test]
-fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
-    return_if_neovm_enable_oracle_proptest_not_set!();
+crate::common::platform_twin_test!(
+    TwinHost::Linux,
+    make_network_process_nowait_hostname_dns_failure_is_async_like_gnu,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (connect nil failed nil)""#]];
-    crate::common::assert_oracle_parity_expect(
-        r#"
+        let expect = expect_test::expect![[r#""OK (connect nil failed nil)""#]];
+        crate::common::assert_oracle_parity_expect(
+            r#"
 (let ((p nil))
   (unwind-protect
       (progn
@@ -220,6 +222,44 @@ fn make_network_process_nowait_hostname_dns_failure_is_async_like_gnu() {
     (when p
       (delete-process p))))
 "#,
-        expect,
-    );
-}
+            expect,
+        );
+    }
+);
+
+// On Darwin GNU's :nowait hostname failure is synchronous: getaddrinfo's
+// error is signalled from make-network-process itself.  Neo matches the
+// reference on the mac (measured live).  The Linux async test keeps its
+// expectation under cfg(linux).
+crate::common::platform_twin_test!(
+    TwinHost::Macos,
+    make_network_process_nowait_hostname_dns_failure_is_synchronous_on_macos,
+    {
+        return_if_neovm_enable_oracle_proptest_not_set!();
+
+        let expect = expect_test::expect![[
+            r#""ERR (error \"-bad.example/9 nodename nor servname provided, or not known\")""#
+        ]];
+        crate::common::assert_oracle_parity_expect(
+            r#"
+(let ((p nil))
+  (unwind-protect
+      (progn
+        (setq p
+              (make-network-process
+               :name "nowait-dns-fail-oracle"
+               :host "-bad.example"
+               :service 9
+               :nowait t
+               :noquery t))
+        (list (process-status p)
+              (accept-process-output p 1)
+              (process-status p)
+              (process-live-p p)))
+    (when p
+      (delete-process p))))
+"#,
+            expect,
+        );
+    }
+);
