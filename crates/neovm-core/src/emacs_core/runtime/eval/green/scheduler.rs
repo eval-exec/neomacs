@@ -1597,16 +1597,16 @@ impl Control {
     /// Baton and its Lisp handle was never returned, so no joiner, mutex,
     /// condition, host request, or service can name it.
     ///
-    /// The ready turn is invalidated through the seam: `set_wait` marks the
-    /// worker non-Runnable, so `pop_ready`'s retain drops the stale turn. A
-    /// stale Runnable turn would be picked and block the scheduler on a
-    /// carrier that does not exist.
+    /// The ready turn is invalidated through the seam: `set_wait` publishes
+    /// the typed exit and `retire_exited` removes the record, so `pop_ready`'s
+    /// retain drops the stale turn. A stale Runnable turn would be picked and
+    /// block the scheduler on a carrier that does not exist.
     pub(super) fn unregister_worker(&self, key: ThreadKey) {
         let mut state = self.state();
         Self::set_wait(&mut state, key, Wait::Exited);
-        state.senders.remove(&key);
-        state.waits.remove(&key);
-        state.physical.remove(&key);
+        // Whole-key removal goes through the seam; this path no longer writes
+        // waits/senders/physical directly beside `set_wait`.
+        Self::remove_key(&mut state, key);
     }
 
     /// Test-only: whether any scheduler record still names KEY.
@@ -2124,6 +2124,26 @@ impl Control {
         state.waits.insert(key, wait);
     }
 
+    /// Remove every scheduler record that names an ended thread. This is the
+    /// single whole-key removal seam: `unregister_worker` and `finish` call it
+    /// only after publishing `Wait::Exited` through [`Self::set_wait`], so the
+    /// ended fact stays typed (`exited` reads an absent wait as ended) and
+    /// joiners keep observing it. Whole-key removal must stay here, never as
+    /// direct map writes beside `set_wait`: when the scheduler scan indexes
+    /// land, this is where their counts and per-object waiter sets are
+    /// released after the `Exited` transition.
+    fn remove_key(state: &mut ControlState, key: ThreadKey) {
+        debug_assert!(
+            matches!(state.waits.get(&key), Some(Wait::Exited) | None),
+            "remove_key follows the exit publication, not a pause"
+        );
+        state.waits.remove(&key);
+        state.senders.remove(&key);
+        state.physical.remove(&key);
+        // No ready-queue edit is needed: `pop_ready` drops a stale turn whose
+        // wait is not `Runnable` (or whose key no longer has one).
+    }
+
     fn enqueue_ready(state: &mut ControlState, key: ThreadKey) {
         // A native main can already have been woken while its physical wait
         // still excluded it. Preserve that FIFO place without a duplicate turn.
@@ -2279,6 +2299,14 @@ impl Control {
     /// Baton in turn.
     pub(crate) fn finish(&self, me: ThreadKey, baton: Baton) {
         self.publish_owner_exit(me);
+        // A finished thread must stop charging the scheduler (P11 soak
+        // finding #2): the joiners and the native main already observed the
+        // exit publication above, and the record goes before the Baton can
+        // move, so the next owner never selects or scans a dead entry.
+        {
+            let mut state = self.state();
+            Self::remove_key(&mut state, me);
+        }
         let next = self.pick_next().or_else(|| {
             let mut state = self.state();
             state.closing = true;
@@ -3090,5 +3118,34 @@ mod tests {
             "the unexpired selector admits last, key order among the waiting"
         );
         assert!(state.ready.is_empty());
+    }
+
+    #[test]
+    fn a_retired_worker_is_exited_and_leaves_no_record_or_turn() {
+        let control = Control::default();
+        let _main_receiver = control.register_main();
+        let worker = ThreadKey::Worker(NonZeroU64::MIN);
+        let _worker_receiver = control.register_worker(worker);
+        {
+            let mut state = control.state();
+            Control::set_wait(&mut state, worker, Wait::Exited);
+            Control::remove_key(&mut state, worker);
+        }
+        assert!(control.exited(worker), "absence keeps the ended fact typed");
+        assert!(!control.worker_registered_for_test(worker));
+        assert_eq!(
+            control.registry_sizes_for_test(),
+            (1, 1),
+            "only main remains charged after retirement"
+        );
+        assert_eq!(
+            Control::pick(&mut control.state()),
+            None,
+            "the retired worker's stale Runnable turn must not be selected"
+        );
+        assert!(
+            control.state().ready.is_empty(),
+            "pop_ready dropped the retired worker's stale turn"
+        );
     }
 }
