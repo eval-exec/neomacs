@@ -5555,13 +5555,16 @@ fn insert_file_contents_visit_decodes_text_enriched_formats() {
 }
 
 /// A file name handler only replaces the *reading* part of
-/// `insert-file-contents`: GNU's handler branch takes INSERTED from the
-/// handler's `(FILE N)` and does `goto handled` (src/fileio.c:4163-4171), so
-/// the post-insert tail still runs -- the VISIT bookkeeping (:5148-5169),
-/// `after-insert-file-set-coding` (:5174-5184), `format-decode` and
+/// `insert-file-contents`.  GNU refuses a read-only buffer before calling it
+/// (src/fileio.c:4146-4147); afterwards the handler branch takes INSERTED
+/// from the handler's `(FILE N)` when N fits after point (:4168-4170) and
+/// does `goto handled` (:4171), so the post-insert tail still runs -- the
+/// VISIT bookkeeping (:5148-5169), `after-insert-file-set-coding`
+/// (:5174-5184), and, when INSERTED > 0, `format-decode` and
 /// `after-insert-file-functions` (:5189-5306) -- and the handler's own value
-/// is returned (:5331-5332).  jka-compr and TRAMP rely on this to get
-/// `buffer-file-coding-system` derived from `last-coding-system-used`.
+/// is returned, or `(FILE INSERTED)` when it is nil (:5331-5332).  Handlers
+/// that decode the text themselves (jka-compr, epa-file, url-handlers) rely
+/// on this for `buffer-file-coding-system`.
 ///
 /// Expected values are derived from that GNU 31.1 source.
 #[test]
@@ -5571,55 +5574,81 @@ fn insert_file_contents_runs_post_insert_steps_after_a_file_name_handler() {
         r#"
         (progn
           (defvar vm-ifc-log nil)
+          (defvar vm-ifc-calls 0)
+          (defvar vm-ifc-result 5)
           (defun vm-ifc-handler (operation &rest args)
             (if (eq operation 'insert-file-contents)
                 (progn
+                  (setq vm-ifc-calls (1+ vm-ifc-calls))
                   (save-excursion (insert "h\u00e9llo"))
                   (setq last-coding-system-used 'utf-8-unix)
-                  (list (car args) 5))
+                  (and vm-ifc-result (list (car args) vm-ifc-result)))
               (let ((inhibit-file-name-handlers
                      (cons 'vm-ifc-handler inhibit-file-name-handlers))
                     (inhibit-file-name-operation operation))
                 (apply operation args))))
+          (defmacro vm-ifc-with (&rest body)
+            `(let ((file-name-handler-alist '(("\\`/vm-ifc:" . vm-ifc-handler)))
+                   (after-insert-file-functions
+                    (list (lambda (n)
+                            (push (list 'after-insert n (point) (buffer-modified-p))
+                                  vm-ifc-log)
+                            nil))))
+               (setq vm-ifc-log nil vm-ifc-calls 0)
+               ,@body))
           nil)
-        (let ((file-name-handler-alist '(("\\`/vm-ifc:" . vm-ifc-handler)))
-              (after-insert-file-functions
-               (list (lambda (n) (push (list 'after-insert n (point)) vm-ifc-log) nil))))
-          (setq vm-ifc-log nil)
-          (with-temp-buffer
-            (setq buffer-file-coding-system 'undecided)
-            (let ((ret (insert-file-contents "/vm-ifc:x")))
-              (list ret buffer-file-coding-system vm-ifc-log (buffer-string) (point)))))
-        (let ((file-name-handler-alist '(("\\`/vm-ifc:" . vm-ifc-handler)))
-              (after-insert-file-functions
-               (list (lambda (n)
-                       (push (list 'after-insert n (buffer-modified-p)) vm-ifc-log)
-                       nil))))
-          (setq vm-ifc-log nil)
-          (let ((buf (generate-new-buffer "vm-ifc-visit")))
-            (unwind-protect
-                (with-current-buffer buf
-                  (setq buffer-file-coding-system 'undecided)
-                  (let ((ret (insert-file-contents "/vm-ifc:x" t)))
-                    (list ret buffer-file-coding-system vm-ifc-log
-                          (buffer-modified-p) buffer-undo-list)))
-              (kill-buffer buf))))
+        (vm-ifc-with
+         (with-temp-buffer
+           (setq buffer-file-coding-system 'undecided)
+           (list (insert-file-contents "/vm-ifc:x")
+                 buffer-file-coding-system vm-ifc-log (buffer-string))))
+        (vm-ifc-with
+         (let ((buf (generate-new-buffer "vm-ifc-visit")))
+           (unwind-protect
+               (with-current-buffer buf
+                 (setq buffer-file-coding-system 'undecided)
+                 (list (insert-file-contents "/vm-ifc:x" t)
+                       buffer-file-coding-system vm-ifc-log
+                       (buffer-modified-p) buffer-undo-list buffer-saved-size))
+             (kill-buffer buf))))
+        (let ((vm-ifc-result 99))
+          (vm-ifc-with
+           (with-temp-buffer
+             (setq buffer-file-coding-system 'undecided)
+             (list (insert-file-contents "/vm-ifc:x")
+                   buffer-file-coding-system vm-ifc-log))))
+        (let ((vm-ifc-result nil))
+          (vm-ifc-with
+           (with-temp-buffer
+             (list (insert-file-contents "/vm-ifc:x") vm-ifc-log))))
+        (vm-ifc-with
+         (with-temp-buffer
+           (setq buffer-read-only t)
+           (list (condition-case err (insert-file-contents "/vm-ifc:x")
+                   (buffer-read-only (car err)))
+                 vm-ifc-calls)))
         "#,
     );
     assert_eq!(results[0], "OK nil");
-    // No VISIT: the coding system is derived and the hooks see the
-    // handler's count with point before the inserted text.
+    // The coding system follows `last-coding-system-used`, and the hook sees
+    // the handler's count with point before the inserted text.
     assert_eq!(
         results[1],
-        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1)) "héllo" 1)"#
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 t)) "héllo")"#
     );
-    // VISIT: the buffer is already marked unmodified when the hooks run
-    // (SAVE_MODIFF = MODIFF before format-decode), and the undo list the
-    // handler's insertion produced in an empty buffer is discarded.
+    // VISIT: the buffer is already unmodified when the hook runs, the undo
+    // list of an initially empty buffer is discarded, and save_length is set.
     assert_eq!(
         results[2],
-        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 nil)) nil nil)"#
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 nil)) nil nil 5)"#
     );
+    // N beyond ZV - PT: INSERTED is 0, so the coding system is still set but
+    // `format-decode` and the hooks are skipped; the value is the handler's.
+    assert_eq!(results[3], r#"OK (("/vm-ifc:x" 99) utf-8-unix nil)"#);
+    // A nil value is replaced by (FILE INSERTED).
+    assert_eq!(results[4], r#"OK (("/vm-ifc:x" 0) nil)"#);
+    // A read-only buffer is refused before the handler is called.
+    assert_eq!(results[5], "OK (buffer-read-only 0)");
 }
 
 #[test]

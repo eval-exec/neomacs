@@ -5777,30 +5777,21 @@ fn expect_inserted_char_count(value: &Value) -> Result<i64, Flow> {
 }
 
 /// INSERTED as GNU takes it from a file name handler's value
-/// (src/fileio.c:4166-4168): N from `(FILE N)` when N is a fixnum in
-/// `[0, ZV - PT]` of the buffer current after the handler; 0 otherwise.
-fn handler_reported_inserted_chars(
-    eval: &Context,
-    current_id: crate::buffer::BufferId,
-    handler_result: Value,
-) -> i64 {
-    if !handler_result.is_cons() {
-        return 0;
-    }
-    let rest = handler_result.cons_cdr();
-    if !rest.is_cons() {
-        return 0;
-    }
-    let Some(count) = rest.cons_car().as_fixnum() else {
-        return 0;
+/// (src/fileio.c:4168-4170): N from `(FILE N)` when N is a fixnum in
+/// `[0, ZV - PT]`; 0 otherwise.  jka-compr, for one, reports a count that
+/// can exceed `ZV - PT`, and then gets no `format-decode` or hooks.
+fn handler_reported_inserted_chars(buf: &crate::buffer::Buffer, handler_result: Value) -> i64 {
+    let count = if handler_result.is_cons() && handler_result.cons_cdr().is_cons() {
+        handler_result.cons_cdr().cons_car().as_fixnum()
+    } else {
+        None
     };
-    let room_after_point = eval.buffers.get(current_id).map_or(0, |buf| {
-        buf.point_max_char_pos()
-            .get()
-            .saturating_sub(buf.point_char_pos().get())
-    });
-    match i64::try_from(room_after_point) {
-        Ok(room) if (0..=room).contains(&count) => count,
+    let room = buf
+        .point_max_char_pos()
+        .saturating_offset_from(buf.point_char_pos())
+        .get();
+    match (count, i64::try_from(room)) {
+        (Some(count), Ok(room)) if (0..=room).contains(&count) => count,
         _ => 0,
     }
 }
@@ -5823,7 +5814,12 @@ fn finish_handled_insert_file_contents(
 ) -> EvalResult {
     // GNU continues with whatever buffer is current after the handler.
     let current_id = current_buffer_id_or_error(&eval.buffers)?;
-    let inserted = handler_reported_inserted_chars(eval, current_id, handler_result);
+    let inserted = handler_reported_inserted_chars(
+        eval.buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
+        handler_result,
+    );
 
     if visit {
         if empty_undo_list_p {
@@ -6722,6 +6718,31 @@ pub(crate) fn builtin_insert_file_contents(
         .current_buffer()
         .is_some_and(|buf| visit && buf.get_undo_list().is_nil() && buf.is_text_empty());
 
+    // GNU refuses these before expanding the name or calling a file name
+    // handler (src/fileio.c:4143-4147).
+    {
+        let current_id = current_buffer_id_or_error(&eval.buffers)?;
+        let buf = eval
+            .buffers
+            .get(current_id)
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        if visit && buf.base_buffer.is_some() {
+            return Err(signal(
+                "error",
+                vec![Value::string(
+                    "Cannot do file visiting in an indirect buffer",
+                )],
+            ));
+        }
+        if crate::emacs_core::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
+        {
+            return Err(signal(
+                LispCondition::BufferReadOnly,
+                vec![Value::make_buffer(current_id)],
+            ));
+        }
+    }
+
     let coding_val = eval.visible_variable_value_or_nil("coding-system-for-read");
     let coding_system_for_read: Option<String> = match coding_val.kind() {
         ValueKind::Nil => None,
@@ -6776,27 +6797,12 @@ pub(crate) fn builtin_insert_file_contents(
                 vec![Value::string("Attempt to visit less than an entire file")],
             ));
         }
-        if visit && buf.base_buffer.is_some() {
-            return Err(signal(
-                "error",
-                vec![Value::string(
-                    "Cannot do file visiting in an indirect buffer",
-                )],
-            ));
-        }
         if visit && !replace_requested && !buf.is_text_empty() {
             return Err(signal(
                 "error",
                 vec![Value::string(
                     "Cannot do file visiting in a non-empty buffer",
                 )],
-            ));
-        }
-        if crate::emacs_core::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
-        {
-            return Err(signal(
-                LispCondition::BufferReadOnly,
-                vec![Value::make_buffer(current_id)],
             ));
         }
     }
