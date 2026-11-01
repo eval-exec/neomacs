@@ -140,7 +140,10 @@ fn div_cx509_window_system() {
     return_if_neovm_enable_oracle_proptest_not_set!();
     let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
-        r##"(window-system)
+        r##"(if (and neovm--oracle-window-system
+              (eq (window-system) neovm--oracle-window-system))
+       :identity
+     (window-system))
 "##,
         expect,
     );

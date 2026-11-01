@@ -13,6 +13,7 @@ use neomacs_test_oracle::CapturedEvaluation;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 
 #[path = "oracle_sandbox.rs"]
 pub(crate) mod oracle_sandbox;
@@ -968,7 +969,7 @@ impl EvalProgram {
         }
     }
 
-    fn configure_command(self, command: &mut PinnedCommand) {
+    fn configure_command(self, command: &mut PinnedCommand, identity: WindowSystemIdentity) {
         command.args([
             "--batch",
             "-Q",
@@ -976,9 +977,9 @@ impl EvalProgram {
             NATIVE_COMP_SUPPRESSION_PRELUDE,
             "--eval",
             ORACLE_TEST_SUPPORT_PRELUDE,
-            "--eval",
-            self.source(),
         ]);
+        let identity_defvar = identity.prelude_defvar();
+        command.args(["--eval", identity_defvar.as_str(), "--eval", self.source()]);
     }
 }
 
@@ -1012,6 +1013,195 @@ impl OracleEngine {
 }
 
 // ---------------------------------------------------------------------------
+// Window-system identity
+// ---------------------------------------------------------------------------
+
+/// A GNU window system, as minted by the GNU build's C code.
+///
+/// GNU's window-system identity is not a Lisp constant: each backend's
+/// `syms_of_*` provides the build's own symbol, and `window-system`,
+/// `initial-window-system`, `framep`, `window-system-default-frame-alist`,
+/// `window-system-for-display` and the `display-*` predicates report it.  The
+/// symbol is an identity, not a capability: Neomacs answers its own `neo` for
+/// the same positions (user decision, 2026-11-01: `neo` is Neomacs's intended
+/// window-system identity).  A test therefore compares these positions against
+/// the running engine's symbol, never a literal.
+///
+/// This enum is the harness's single identity table.  Adding a GNU backend is
+/// adding a variant here; every variant cites the `Fprovide` that mints it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GnuWindowSystem {
+    /// `Fprovide (Qns)` at `src/nsterm.m:11749`.
+    Ns,
+    /// `Fprovide (Qpgtk)` at `src/pgtkterm.c:7557`.
+    Pgtk,
+    /// `Fprovide (Qx)` at `src/xfns.c:10498`.
+    X,
+    /// `Fprovide (Qw32)` at `src/w32term.c:8396`.
+    W32,
+    /// `Fprovide (Qhaiku)` at `src/haikuterm.c:4884`.
+    Haiku,
+    /// `Fprovide (Qandroid)` at `src/androidterm.c:6984`.
+    Android,
+}
+
+impl GnuWindowSystem {
+    /// Every GNU window system the harness maps, in detection priority order.
+    ///
+    /// The order is load-bearing: a pure-GTK build provides `pgtk` and not
+    /// `x`, while every X-toolkit build provides `x`; the rest are disjoint
+    /// system types.  `ns` and `pgtk` are checked before `x` for the same
+    /// reason.
+    pub(crate) const ALL: [GnuWindowSystem; 6] = [
+        Self::Ns,
+        Self::Pgtk,
+        Self::X,
+        Self::W32,
+        Self::Haiku,
+        Self::Android,
+    ];
+
+    /// The whole symbol GNU answers for this window system.
+    pub(crate) const fn symbol(self) -> &'static str {
+        match self {
+            Self::Ns => "ns",
+            Self::Pgtk => "pgtk",
+            Self::X => "x",
+            Self::W32 => "w32",
+            Self::Haiku => "haiku",
+            Self::Android => "android",
+        }
+    }
+
+    /// The feature GNU's build provides for it: the same symbol, minted by the
+    /// backend's `Fprovide`, so `(featurep 'ns)` is t on the NS oracle.
+    pub(crate) const fn feature(self) -> &'static str {
+        self.symbol()
+    }
+}
+
+/// The window-system identity a running engine answers.
+///
+/// The harness defines `neovm--oracle-window-system` in each engine to this
+/// value's symbol, so a form can state an identity position relative to the
+/// engine (`(eq (framep f) neovm--oracle-window-system)`) instead of a
+/// literal.  `Gnu(None)` is a GNU build without a window system (the opt-in
+/// `macos-batch` profile): it is explicit, not a guess -- the variable is then
+/// nil, and an identity assertion fails rather than silently accepting a
+/// wrong symbol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowSystemIdentity {
+    Gnu(Option<GnuWindowSystem>),
+    Neovm,
+}
+
+impl WindowSystemIdentity {
+    /// Neomacs's window-system symbol (its intended identity).
+    pub(crate) const NEOVM_SYMBOL: &'static str = "neo";
+
+    /// The whole symbol this engine answers for identity positions, or nil.
+    pub(crate) const fn symbol(self) -> Option<&'static str> {
+        match self {
+            Self::Gnu(Some(window_system)) => Some(window_system.symbol()),
+            Self::Gnu(None) => None,
+            Self::Neovm => Some(Self::NEOVM_SYMBOL),
+        }
+    }
+
+    /// The `--eval` form that defines the identity variable in one engine.
+    fn prelude_defvar(self) -> String {
+        let value = match self.symbol() {
+            Some(symbol) => format!("'{symbol}"),
+            None => "nil".to_string(),
+        };
+        format!(
+            "(defvar neovm--oracle-window-system {value} \
+             \"The running engine's window-system identity: GNU's build symbol \
+             (ns, x, pgtk, w32, haiku, android) or Neomacs's `neo`.  Identity-valued \
+             positions are compared against this whole symbol, never a literal.\")"
+        )
+    }
+}
+
+/// The attested GNU oracle's window system, detected once from its features.
+///
+/// GNU mints the symbol in C (the `Fprovide` sites on [`GnuWindowSystem`]);
+/// the feature set is the only runtime witness of which backend the attested
+/// binary was built with.  The probe is a fixed form run through the attested
+/// oracle (never a user form) and is cached for the process.
+fn gnu_window_system(oracle_bin: &Path) -> Option<GnuWindowSystem> {
+    static DETECTED: OnceLock<Option<GnuWindowSystem>> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        const DETECT: &str = "(princ (cond ((featurep 'ns) \"ns\") \
+             ((featurep 'pgtk) \"pgtk\") ((featurep 'x) \"x\") \
+             ((featurep 'w32) \"w32\") ((featurep 'haiku) \"haiku\") \
+             ((featurep 'android) \"android\") (t \"\")))";
+        let output = Command::new(oracle_bin)
+            .args(["--batch", "-Q", "--eval", DETECT])
+            .stdin(Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let symbol = String::from_utf8_lossy(&output.stdout);
+        GnuWindowSystem::ALL
+            .iter()
+            .copied()
+            .find(|window_system| window_system.feature() == symbol.trim())
+    })
+}
+
+#[cfg(test)]
+mod window_system_identity_tests {
+    use super::*;
+
+    #[test]
+    fn the_mapping_is_the_typed_gnu_set() {
+        let symbols: Vec<&str> = GnuWindowSystem::ALL
+            .iter()
+            .map(|window_system| window_system.symbol())
+            .collect();
+        assert_eq!(symbols, ["ns", "pgtk", "x", "w32", "haiku", "android"]);
+        for window_system in GnuWindowSystem::ALL {
+            assert_eq!(window_system.feature(), window_system.symbol());
+        }
+    }
+
+    #[test]
+    fn the_mapping_matches_whole_symbols_only() {
+        // The table is an exact whole-symbol lookup: a value that merely
+        // starts with an identity symbol (or embeds one) is not tolerated.
+        assert!(
+            GnuWindowSystem::ALL
+                .iter()
+                .any(|window_system| window_system.symbol() == "ns")
+        );
+        assert!(
+            !GnuWindowSystem::ALL
+                .iter()
+                .any(|window_system| window_system.symbol() == "ns-other")
+        );
+    }
+
+    #[test]
+    fn the_prelude_defines_each_engines_own_symbol() {
+        let gnu = WindowSystemIdentity::Gnu(Some(GnuWindowSystem::Ns)).prelude_defvar();
+        assert!(gnu.contains("neovm--oracle-window-system 'ns"), "{gnu}");
+        let neovm = WindowSystemIdentity::Neovm.prelude_defvar();
+        assert!(
+            neovm.contains("neovm--oracle-window-system 'neo"),
+            "{neovm}"
+        );
+        let no_window_system = WindowSystemIdentity::Gnu(None).prelude_defvar();
+        assert!(
+            no_window_system.contains("neovm--oracle-window-system nil"),
+            "{no_window_system}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Oracle (GNU Emacs) subprocess evaluation
 // ---------------------------------------------------------------------------
 
@@ -1029,7 +1219,8 @@ fn run_oracle_eval_with_sandbox(
     sandbox.configure(&mut cmd);
     cmd.env(OracleEngine::ENV, OracleEngine::Gnu.as_env_value());
     cmd.env("EMACSNATIVELOADPATH", "/dev/null");
-    eval_program.configure_command(&mut cmd);
+    let identity = WindowSystemIdentity::Gnu(gnu_window_system(&oracle_bin));
+    eval_program.configure_command(&mut cmd, identity);
 
     apply_virtual_memory_limit(&mut cmd, mem_limit);
 
@@ -1138,7 +1329,7 @@ fn run_neomacs_binary_eval_with_sandbox(
     let mut cmd = sandbox.pinned_command(&neomacs_bin);
     sandbox.configure(&mut cmd);
     cmd.env(OracleEngine::ENV, OracleEngine::Neomacs.as_env_value());
-    eval_program.configure_command(&mut cmd);
+    eval_program.configure_command(&mut cmd, WindowSystemIdentity::Neovm);
 
     if let Some(mem_limit) = neomacs_binary_mem_limit_bytes() {
         apply_virtual_memory_limit(&mut cmd, mem_limit);

@@ -84,7 +84,7 @@ fn divergence_frame_parameters() {
             (integerp (or (plist-get params 'height) 0))
             (frame-live-p f)
             (framep f)
-            (memq (framep f) '(x w32 ns pc t))
+            (memq (framep f) (list neovm--oracle-window-system t))
             (not (framep 'nonexistent-xxx)))))) "#,
         expect,
     );
