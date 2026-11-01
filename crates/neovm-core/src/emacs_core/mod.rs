@@ -510,3 +510,7 @@ mod architecture_unsafe_shim_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/parallel_exec_substrate_test.rs"]
+mod architecture_parallel_exec_substrate_test;

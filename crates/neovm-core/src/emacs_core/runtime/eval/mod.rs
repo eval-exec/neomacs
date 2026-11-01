@@ -69,6 +69,8 @@ mod lexical_symbols;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
 pub(crate) use callback::{CheckedNativeCallback, native_callback_cache_enabled};
 pub(crate) mod parallel_entry;
+#[allow(dead_code)] // Dormant E4-S0 executor substrate; E4 stage 1 consumes it.
+pub(crate) mod parallel_exec;
 mod subr_layout;
 mod subrs;
 #[cfg(test)]
