@@ -128,10 +128,13 @@ fn org_icalendar_export_deadline_schedule_repeater_combo() {
                      (replace-regexp-in-string
                       "DTSTAMP:[0-9TZ]+"
                       "DTSTAMP:<stamp>"
+                      ;; FIXEDCASE: macOS `uuidgen' emits upper-case
+                      ;; UUIDs, and without it the case-preserving
+                      ;; replacement upcases the placeholder to <UID>.
                       (replace-regexp-in-string
                        "UID:[^\n]+"
                        "UID:<uid>"
-                       ics)))))
+                       ics t)))))
               (list (not (null (string-match-p "BEGIN:VCALENDAR" ics)))
                     (not (null (string-match-p "BEGIN:VEVENT" ics)))
                     (not (null (string-match-p "BEGIN:VTODO" ics)))
@@ -198,10 +201,13 @@ fn org_icalendar_combine_agenda_files_filter_hook_combo() {
                    (replace-regexp-in-string
                     "DTSTAMP:[0-9TZ]+"
                     "DTSTAMP:<stamp>"
+                    ;; FIXEDCASE: macOS `uuidgen' emits upper-case
+                    ;; UUIDs, and without it the case-preserving
+                    ;; replacement upcases the placeholder to <UID>.
                     (replace-regexp-in-string
                      "UID:[^\n]+"
                      "UID:<uid>"
-                     ics)))))
+                     ics t)))))
             (list (sort saved #'string<)
                   (not (null (string-match-p "X-WR-CALNAME:Combined Name" ics)))
                   (not (null (string-match-p "X-WR-CALDESC:Combined Description" ics)))

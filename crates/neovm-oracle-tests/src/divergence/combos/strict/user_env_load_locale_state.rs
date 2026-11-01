@@ -63,15 +63,19 @@ fn div_g0_doc_directory() {
 #[test]
 fn div_g0_load_state() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t (\".so\" \".elc\" \".el\") nil t)""#]];
-    crate::common::assert_oracle_parity_expect(
+    // `load-suffixes' is a build fact: on Darwin configure sets
+    // DYNAMIC_LIB_SUFFIX to ".dylib" (configure.ac:5028) and `init_lread'
+    // conses MODULES_SUFFIX and MODULES_SECONDARY_SUFFIX onto ".elc"
+    // (src/lread.c:5623-5629), so the list carries one more entry than on
+    // GNU/Linux.  The local GNU is the oracle for which suffixes this host's
+    // editor loads; the Linux list is not a portable literal.
+    crate::common::assert_oracle_parity(
         r##"
 (list (> (length load-path) 5)
       load-suffixes
       load-file-name
       (stringp source-directory))
 "##,
-        expect,
     );
 }
 
@@ -93,31 +97,30 @@ fn div_g0_locale_and_coding_default() {
 #[test]
 fn div_g0_emacs_state_safe() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t gnu/linux nil 7)""#]];
-    crate::common::assert_oracle_parity_expect(
+    // `system-type' is one of the host facts GNU itself reports differently
+    // per platform (`gnu/linux' vs `darwin'); the shapes around it are
+    // stable.  Derive all four values from the local GNU at run time.
+    crate::common::assert_oracle_parity(
         r##"
 (list (integerp (emacs-pid))
       system-type
       (vectorp (memory-use-counts))
       (length (memory-use-counts)))
 "##,
-        expect,
     );
 }
 
 #[test]
 fn div_g0_system_configuration_triple() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK \"x86_64-pc-linux-gnu\"""#]];
     // GNU records the configure-time `config.guess` triple.  On GNU/Linux
-    // that is the canonical system triple; on Darwin config.guess appends
-    // the build host's kernel release
-    // (`aarch64-apple-darwin$UNAME_RELEASE`, build-aux/config.guess:1457),
-    // so the raw string is a host input, not a Neo constant.  Pin it at the
-    // reference seam: the build manifest records the value the oracle was
-    // configured with, and a live run must still see that exact value.  The
-    // parity assertion below then compares Neo against a GNU whose host
-    // input is proven, not against one that has drifted from its recipe.
+    // that is the canonical system triple (`x86_64-pc-linux-gnu`); on Darwin
+    // config.guess appends the build host's kernel release
+    // (`aarch64-apple-darwin$UNAME_RELEASE`, build-aux/config.guess:1457), so
+    // the raw string is a host input, not a Neo constant.  Pin the GNU side at
+    // the reference seam (the build manifest records the value the oracle was
+    // configured with, and a live run must still see it), then compare Neo
+    // against that same GNU: the local GNU's own triple is the expectation.
     if crate::common::oracle_mode_runs_live_gnu()
         && let Some(recorded) = crate::common::reference_manifest_value("system_configuration")
     {
@@ -133,11 +136,10 @@ fn div_g0_system_configuration_triple() {
             live.trim()
         );
     }
-    crate::common::assert_oracle_parity_expect(
+    crate::common::assert_oracle_parity(
         r##"
 system-configuration
 "##,
-        expect,
     );
 }
 

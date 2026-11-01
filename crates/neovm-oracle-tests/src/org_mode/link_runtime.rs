@@ -877,7 +877,13 @@ fn org_link_open_file_search_targets_combo() {
         r##"(progn
   (require 'org)
   (require 'ol)
-  (let ((file (make-temp-file "org-link-open-file" nil ".org")))
+  ;; macOS's default file application is `open %s' (org.el
+  ;; org-file-apps-macos), so a double-prefix open hands the file to the OS
+  ;; launcher and never resolves the search target in a buffer.  Pin the
+  ;; system entry to the in-editor opener: this probe is about search-target
+  ;; resolution, not the host's file launcher.
+  (let ((file (make-temp-file "org-link-open-file" nil ".org"))
+        (org-file-apps '((system . emacs))))
     (unwind-protect
         (progn
           (with-temp-file file

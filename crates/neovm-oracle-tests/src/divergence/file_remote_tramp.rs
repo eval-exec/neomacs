@@ -67,12 +67,18 @@ fn divergence_archive_functions() {
 fn divergence_tilde_expansion() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
-    let expect = expect_test::expect![[r#""OK (\"[ORACLE-HOME]/\" t \"/root/\" t)""#]];
+    // `~root' expands to the passwd home of uid 0, which is "/root" on
+    // GNU/Linux and "/var/root" on macOS.  Print the relation between the two
+    // expansions instead of the host path, the way [ORACLE-HOME] pins the
+    // sandbox home: the contract is that `~root/' is the directory form of
+    // `~root', not that every host keeps root's home in one place.
+    let expect = expect_test::expect![[r#""OK (\"[ORACLE-HOME]/\" t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r#"(list
   (expand-file-name "~/")
   (string= (expand-file-name "~/") (concat (getenv "HOME") "/"))
-  (expand-file-name "~root/")
+  (string= (expand-file-name "~root/")
+           (file-name-as-directory (expand-file-name "~root")))
   (file-name-absolute-p "~/test"))"#,
         expect,
     );

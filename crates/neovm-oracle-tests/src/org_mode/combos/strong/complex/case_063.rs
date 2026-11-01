@@ -16,7 +16,14 @@ fn combo63_babel_python_integration() {
   (condition-case nil
       (require 'ob-python)
     (error nil))
+  ;; The nonsession python command defaults to "python" (GNU
+  ;; lisp/org/ob-python.el:70-72); macOS ships only "python3", so an unpinned
+  ;; probe records an interpreter the host happens to have (or exits 127).
+  ;; State the tool this probe needs and select it explicitly.
+  (unless (executable-find "python3")
+    (error "oracle probe requires python3 on PATH"))
   (let ((org-confirm-babel-evaluate nil)
+        (org-babel-python-command "python3")
         (r '()))
     (push (list :ob-python-loaded (featurep 'ob-python)) r)
     (condition-case nil

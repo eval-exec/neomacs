@@ -201,10 +201,13 @@ fn org_icalendar_export_todo_schedule_deadline_combo() {
             (replace-regexp-in-string
              "DTSTAMP:[0-9TZ]+"
              "DTSTAMP:<stamp>"
+             ;; FIXEDCASE: macOS `uuidgen' emits upper-case UUIDs, and
+             ;; without it the case-preserving replacement upcases the
+             ;; placeholder to <UID>.
              (replace-regexp-in-string
               "UID:\\(TS1\\|TODO\\)-[^\n]+"
               "UID:\\1-<uid>"
-              ical))))
+              ical t))))
       (list (not (null (string-match-p "BEGIN:VEVENT" ical)))
             (not (null (string-match-p "BEGIN:VTODO" ical)))
             (not (null (string-match-p "SUMMARY:Event" ical)))

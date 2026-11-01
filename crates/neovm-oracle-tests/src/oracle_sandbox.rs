@@ -230,6 +230,22 @@ impl OracleSandbox {
             "NEOVM_ORACLE_RESULT_NORMALIZATION",
             self.result_normalization.as_env_value(),
         );
+        // Every editor, and every child it spawns, sees one hermetic git
+        // environment: the host's system config and its default branch are
+        // inputs, not oracle facts.  `org-attach-git' reports the branch of a
+        // fresh repository, and `git init' names it from
+        // `init.defaultBranch' (Apple Git sets "main" in /etc/gitconfig,
+        // GNU/Linux distributions leave "master"), so an unpinned probe
+        // records the host's git configuration.  This is the same pinning the
+        // board's Magit fixture applies to its repository builder
+        // (`crates/neomacs-perf/src/harness/scenarios/editor_workload.rs'):
+        // ignore the system config and state the branch.  HOME is already the
+        // sandbox's empty home, so no global config is read either.
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "init.defaultBranch")
+            .env("GIT_CONFIG_VALUE_0", "master");
 
         let scratch_root = self.case_root.path();
         let explicit_tmpdir = self

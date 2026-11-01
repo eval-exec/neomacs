@@ -32,15 +32,17 @@ fn div_cx428_process_command_buffer() {
 #[test]
 fn div_cx428_network_interface() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""OK (t ([127 0 0 1 0] [0 0 0 0 0] [255 0 0 0 0] (772 . [0 0 0 0 0 0]) (running loopback up)))""#
-    ]];
-    crate::common::assert_oracle_parity_expect(
+    // The loopback interface is "lo" on GNU/Linux and "lo0" on Darwin, and
+    // GNU answers nil for an interface name the host does not have:
+    // `network_interface_info' asks the kernel about IFNAME and returns nil
+    // when the ioctl finds no interface (src/process.c:4485; the DEFUN at
+    // 4677-4696).  The name->answer pair is therefore a host fact: compare
+    // Neo against the local GNU, never against a Linux literal.
+    crate::common::assert_oracle_parity(
         r##"
 (list (condition-case e (listp (network-interface-list)) (error (car e)))
       (condition-case e (network-interface-info "lo") (error (car e))))
 "##,
-        expect,
     );
 }
 
@@ -79,18 +81,19 @@ fn div_cx428_file_backup_remote() {
 #[test]
 fn div_cx428_file_symlink() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t nil \"/tmp\")""#]];
+    // /tmp is a real directory on GNU/Linux and a symlink to private/tmp on
+    // macOS.  Assert the file-truename contract instead of the host's layout:
+    // the system temp dir exists, its truename is a directory, it names the
+    // same file, and the truename is already canonical.
+    let expect = expect_test::expect![[r#""OK (t t t t)""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((target (make-temp-file "neo-cx428-target-"))
-      (link (make-temp-file "neo-cx428-link-")))
-  (delete-file link)
-  (make-symbolic-link target link)
-  (unwind-protect
-      (list (file-exists-p "/tmp")
-      (file-symlink-p "/tmp")
-      (file-truename "/tmp"))
-))"##,
+(let ((true (file-truename "/tmp")))
+  (list (file-exists-p "/tmp")
+        (file-directory-p true)
+        (file-equal-p "/tmp" true)
+        (equal true (file-truename true))))
+"##,
         expect,
     );
 }
@@ -119,18 +122,22 @@ fn div_cx428_executable_find() {
 #[test]
 fn div_cx428_user_real_uid_gid() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[r#""OK (t t t)""#]];
-    crate::common::assert_oracle_parity_expect(
+    // A temporary file's group is inherited from its directory, so a setgid
+    // or shared worktree can hold a different group than the process gid; the
+    // old file-group relation asserted that layout, not GNU's group-gid.
+    // Assert the process and file-owner contract that holds on every host and
+    // compare Neo against the local GNU.
+    crate::common::assert_oracle_parity(
         r##"
 (let ((path (make-temp-file "neo-cx428-owner-")))
   (unwind-protect
       (let ((attributes (file-attributes path 'integer)))
-        (list (= (user-real-uid) (file-attribute-user-id attributes))
-              (= (group-gid) (file-attribute-group-id attributes))
+        (list (= (user-real-uid) (user-uid))
+              (= (user-real-uid) (file-attribute-user-id attributes))
+              (integerp (group-gid))
               (stringp (user-real-login-name))))
     (delete-file path)))
 "##,
-        expect,
     );
 }
 
@@ -199,12 +206,19 @@ fn div_cx428_list_packages() {
 #[test]
 fn div_cx428_face_font() {
     return_if_neovm_enable_oracle_proptest_not_set!();
+    // A build without a window system (--without-x, the macOS CI oracle
+    // profile) makes GNU's `face-font' answer the frame-type sentinel "tty"
+    // (or "ms-dos"/"w32term") instead of the font set on the face
+    // (src/xfaces.c:4468-4472); a window-system build answers the realized
+    // font or nil.  Normalize the sentinel so one contract holds against
+    // either reference profile: the face is valid and its font is either nil
+    // or a real font name.
     let expect = expect_test::expect![[r#""OK nil""#]];
     crate::common::assert_oracle_parity_expect(
         r##"
-(let ((f (make-face 'neo-cx428-ff)))
-  (set-face-font f "Monospace-10")
-  (face-font f))
+(let* ((f (make-face 'neo-cx428-ff))
+       (font (progn (set-face-font f "Monospace-10") (face-font f))))
+  (if (member font '("tty" "ms-dos" "w32term")) nil font))
 "##,
         expect,
     );

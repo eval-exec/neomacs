@@ -3043,9 +3043,15 @@ fn div_core_divergence_surface_case_table_word_casing_combo() {
 #[test]
 fn div_core_divergence_surface_process_attributes_running_child_combo() {
     return_if_neovm_enable_oracle_proptest_not_set!();
-    let expect = expect_test::expect![[
-        r#""OK (t t \"/bin/sh -c echo\\\\ ready;\\\\ read\\\\ line\" \"\")""#
-    ]];
+    // The sampled facts are OS facts: GNU/Darwin answers a fixnum 0 from
+    // process-running-child-p where GNU/Linux answers t (src/process.c:
+    // 7049-7057: TIOCGPGRP reports process group 0 for a pipe on Darwin and
+    // `make_fixnum' returns it, while the Linux ioctl fails and the function
+    // falls through to t), and Darwin reports an unescaped argv and a nil
+    // ttname where Linux escapes spaces and reports "".  The probe already
+    // normalizes a pipe ttname; the rest must come from the local GNU at run
+    // time, not from a GNU/Linux transcript.
+    //
     // Divergence surfaced 2026-06-24:
     // GNU Emacs: OK (t "/bin/sh -c sleep\\ 0.2" "")
     // Neomacs:   OK (nil "/bin/sh -c sleep 0.2" "pipe:[...]")
@@ -3055,7 +3061,7 @@ fn div_core_divergence_surface_process_attributes_running_child_combo() {
     // `sh -c "sleep 0.2"' the sample raced the child's own exec: a loaded
     // host saw the not-yet-exec'd "[sh]" (empty cmdline) in both editors, and
     // bash's single-command exec turns the child into "sleep 0.2" later on.
-    crate::common::assert_oracle_parity_expect(
+    crate::common::assert_oracle_parity(
         r##"
 (let* ((ready nil)
        (proc (make-process
@@ -3081,7 +3087,6 @@ fn div_core_divergence_surface_process_attributes_running_child_combo() {
     (when (process-live-p proc)
       (delete-process proc))))
 "##,
-        expect,
     );
 }
 

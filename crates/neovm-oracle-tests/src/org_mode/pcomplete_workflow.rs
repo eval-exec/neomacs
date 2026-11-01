@@ -293,8 +293,15 @@ fn org_pcomplete_repeated_options_babel_searchhead_combo() {
   (require 'ob-core)
   (require 'ob-shell)
   (require 'ox)
+  (require 'ispell)
+  ;; ispell.el's default dictionary is whatever the host has at
+  ;; /usr/share/dict/words: GNU/Linux CI has none, macOS does, so an unpinned
+  ;; run records the host's word lists.  Pin the plain word-list search to
+  ;; "none" so the ispell completion path answers the same on every host.
   (with-temp-buffer
-    (let ((buffer-file-name "/tmp/org-pcomplete-report.org")
+    (let ((ispell-complete-word-dict nil)
+          (ispell-alternate-dictionary nil)
+          (buffer-file-name "/tmp/org-pcomplete-report.org")
           (org-file-tags '("filetag" "shared"))
           (org-link-abbrev-alist-local
            '(("bug" . "https://bugs.example/%s")
