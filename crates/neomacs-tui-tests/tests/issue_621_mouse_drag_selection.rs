@@ -24,9 +24,18 @@ fn fixture(ready: &Path, out: &Path) -> String {
 (goto-char (point-min))
 (set-window-start (selected-window) (point-min))
 (setq issue621-state nil)
+(setq issue621-buffer (current-buffer))
 (defun issue621-finish ()
-  (with-temp-file {out:?}
-    (prin1 issue621-state (current-buffer)))
+  (let ((state
+         ;; Report the drag buffer's state when the timer fires, after the
+         ;; command loop's active-region cleanup has had a chance to run.
+         (with-current-buffer issue621-buffer
+           (list (car issue621-state)
+                 (region-active-p)
+                 (ignore-errors (mark))
+                 (point)))))
+    (with-temp-file {out:?}
+      (prin1 state (current-buffer))))
   (kill-emacs 0))
 (add-hook 'post-command-hook
           (lambda ()
