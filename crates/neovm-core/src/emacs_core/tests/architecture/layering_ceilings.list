@@ -1,3 +1,4 @@
+g0 extern:neomacs_display_protocol 3
 buffer builtins 6
 buffer chartable 1
 buffer composite 13
@@ -42,9 +43,7 @@ frontend_events value 2
 fuzz_support emacs_char 1
 fuzz_support regex_emacs 1
 fuzz_support syntax 1
-gc_trace value 1
-heap_types emacs_char 4
-heap_types value 4
+heap_types top:buffer 5
 image_identity value 1
 keyboard (root) 1
 keyboard autoload 2
@@ -52,7 +51,7 @@ keyboard builtins 12
 keyboard dbusbind 3
 keyboard display_host 9
 keyboard emacs_char 5
-keyboard error 51
+keyboard error 52
 keyboard eval 17
 keyboard forward 2
 keyboard hook_runtime 8
@@ -70,11 +69,12 @@ keyboard wait 1
 keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
-tagged error 12
+tagged bytecode 7
 tagged eval 12
-tagged intern 22
-tagged symbol 9
-tagged value 22
+tagged process 5
+tagged top:buffer 6
+tagged top:tls_scope 2
+tagged extern:neomacs_display_protocol 7
 window category 2
 window chartable 1
 window display_spec 3
