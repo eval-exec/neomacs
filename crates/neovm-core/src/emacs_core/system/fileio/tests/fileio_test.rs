@@ -5554,6 +5554,78 @@ fn insert_file_contents_visit_decodes_text_enriched_formats() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// A file name handler only replaces the *reading* part of
+/// `insert-file-contents`.  GNU refuses a read-only buffer before calling it
+/// (src/fileio.c:4146-4147); afterwards the handler branch takes INSERTED
+/// from the handler's `(FILE N)` when N fits after point (:4168-4170) and
+/// does `goto handled` (:4171), so the post-insert tail still runs -- the
+/// VISIT bookkeeping (:5148-5169), `after-insert-file-set-coding`
+/// (:5174-5184), and, when INSERTED > 0, `format-decode` and
+/// `after-insert-file-functions` (:5189-5306) -- and the handler's own value
+/// is returned, or `(FILE INSERTED)` when it is nil (:5331-5332).  Handlers
+/// that decode the text themselves (jka-compr, epa-file, url-handlers) rely
+/// on this for `buffer-file-coding-system`.
+///
+/// Expected values are verified against the pinned GNU 31.1 oracle below.
+#[test]
+fn insert_file_contents_runs_post_insert_steps_after_a_file_name_handler() {
+    crate::test_utils::init_test_tracing();
+    let results = bootstrap_eval(include_str!("insert_file_handler.el"));
+    assert_eq!(results[0], "OK nil");
+    // The coding system follows `last-coding-system-used`, and the hook sees
+    // the handler's count with point before the inserted text.
+    assert_eq!(
+        results[1],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 t)) "héllo")"#
+    );
+    // VISIT: the buffer is already unmodified when the hook runs, the undo
+    // list of an initially empty buffer is discarded, and save_length is set.
+    assert_eq!(
+        results[2],
+        r#"OK (("/vm-ifc:x" 5) utf-8-unix ((after-insert 5 1 nil)) nil nil 5)"#
+    );
+    // N beyond ZV - PT: INSERTED is 0, so the coding system is still set but
+    // `format-decode` and the hooks are skipped; the value is the handler's.
+    assert_eq!(results[3], r#"OK (("/vm-ifc:x" 99) utf-8-unix nil)"#);
+    // A nil value is replaced by (FILE INSERTED).
+    assert_eq!(results[4], r#"OK (("/vm-ifc:x" 0) nil)"#);
+    // A read-only buffer is refused before the handler is called.
+    assert_eq!(results[5], "OK (buffer-read-only 0)");
+    // Indirect-buffer visits are refused before dispatch too.
+    assert_eq!(
+        results[6],
+        r#"OK ("Cannot do file visiting in an indirect buffer" 0)"#
+    );
+    // Decode runs before the hook, and an out-of-range count skips both.
+    assert_eq!(
+        results[7],
+        r#"OK ((("/vm-ifc:x" 5) ((format-decode 5 1 nil) (after-insert 5 1 t))) (("/vm-ifc:x" 99) nil))"#
+    );
+}
+
+#[test]
+fn insert_file_contents_handler_matches_live_gnu() {
+    crate::test_utils::init_test_tracing();
+    let forms = include_str!("insert_file_handler.el");
+    let gnu_form =
+        format!("(mapc (lambda (form) (princ \"OK \") (prin1 (eval form)) (terpri)) '({forms}))");
+    let output = crate::test_utils::gnu_probe_command()
+        .args(["-Q", "--batch", "--eval", &gnu_form])
+        .output()
+        .expect("run pinned GNU Emacs oracle");
+    assert!(
+        output.status.success(),
+        "GNU handler oracle failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let gnu = String::from_utf8(output.stdout).expect("GNU oracle UTF-8 output");
+    assert_eq!(
+        bootstrap_eval(forms),
+        gnu.lines().collect::<Vec<_>>(),
+        "file name handler post-insert behavior must match pinned GNU"
+    );
+}
+
 #[test]
 fn test_insert_file_contents_beg_end_semantics() {
     crate::test_utils::init_test_tracing();
