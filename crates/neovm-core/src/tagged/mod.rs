@@ -10,6 +10,7 @@ pub mod collection_reads;
 pub mod gc;
 pub mod header;
 pub mod mutate;
+pub(crate) mod pdump_image;
 pub mod symbol_marks;
 pub mod transport;
 pub mod value;
@@ -18,3 +19,7 @@ pub use value::SymbolMode;
 #[cfg(test)]
 #[path = "tests/tagged_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/pdump_image_test.rs"]
+mod pdump_image_tests;

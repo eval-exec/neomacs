@@ -1082,7 +1082,7 @@ impl<'a> LoadDecoder<'a> {
             VecLikeType::ByteCode => {
                 // Self-contained bytecode: the extras region after the
                 // struct carries what the descriptor used to (see
-                // `mapped_heap::BytecodeExtras`).
+                // `tagged::pdump_image::BytecodeExtras`).
                 //
                 // Extras present => the LAZY STUB was BAKED into the image
                 // at dump time (v15): the mapped bytes already ARE
@@ -1955,7 +1955,7 @@ impl<'a> LoadDecoder<'a> {
     }
 
     /// Rebuild a ByteCodeFunction from the image extras region (see
-    /// `mapped_heap::BytecodeExtras`) — the self-contained replacement for
+    /// `tagged::pdump_image::BytecodeExtras`) — the self-contained replacement for
     /// the object-extra descriptor. Runs after the value-fixup pass, so the
     /// metadata and extra-slot words read as final tagged values.
     fn populate_bytecode_from_extras(
@@ -1966,7 +1966,8 @@ impl<'a> LoadDecoder<'a> {
         // (The lazy materializer `materialize_bytecode_from_extras_at` below
         // is the loader-state-free twin of this pass; keep their decode
         // logic in lockstep.)
-        use crate::emacs_core::pdump::mapped_heap::{
+        use crate::emacs_core::pdump::mapped_heap::unnamed_params;
+        use crate::tagged::pdump_image::{
             BC_FLAG_HAS_DOCSTRING, BC_FLAG_HAS_GNU, BC_FLAG_HAS_REST, BytecodeExtras,
         };
         let Some(extras_span) = self.bytecode_extras_span(id) else {
@@ -2031,7 +2032,7 @@ impl<'a> LoadDecoder<'a> {
         }
         let header: BytecodeExtras = bytemuck::pod_read_unaligned(&bytes[..header_len]);
         StackDepth::try_from(header.max_stack).map_err(DumpError::BytecodeStackDepth)?;
-        header.unnamed_params()?;
+        unnamed_params(&header)?;
         let flags = header.flags;
 
         // v14 STUB-FINALIZE: the placeholder already wrote the lazy stub;
@@ -2708,7 +2709,8 @@ fn dump_lisp_string(string: &LispString) -> DumpLispString {
 /// # Safety
 /// `value` must satisfy the preconditions above.
 pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCodeFunction {
-    use crate::emacs_core::pdump::mapped_heap::{
+    use crate::emacs_core::pdump::mapped_heap::unnamed_params;
+    use crate::tagged::pdump_image::{
         BC_FLAG_HAS_ARGLIST, BC_FLAG_HAS_DOC_FORM, BC_FLAG_HAS_DOCSTRING, BC_FLAG_HAS_ENV,
         BC_FLAG_HAS_GNU, BC_FLAG_HAS_INTERACTIVE, BC_FLAG_HAS_REST, BC_FLAG_LEXICAL,
         BC_FLAG_OPS_SEALED, BytecodeExtras,
@@ -2737,8 +2739,7 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
     let optional = ids.split_off(header.n_required as usize);
     // SAFETY: stub finalization checked the tag, depth and fixed-up arglist
     // mode before publishing any stub to the evaluator or GC.
-    let params = header
-        .unnamed_params()
+    let params = unnamed_params(&header)
         .expect("load-validated parameter metadata")
         .unwrap_or_else(|| {
             FunctionParams::Named(LambdaParams {
@@ -2882,7 +2883,7 @@ pub(crate) unsafe fn stub_interactive_probe(
     obj: *const crate::tagged::header::ByteCodeObj,
     extras_len: usize,
 ) -> crate::emacs_core::value::BytecodeInteractiveProbe {
-    use crate::emacs_core::pdump::mapped_heap::{
+    use crate::tagged::pdump_image::{
         BC_FLAG_HAS_DOC_FORM, BC_FLAG_HAS_DOCSTRING, BC_FLAG_HAS_INTERACTIVE, BytecodeExtras,
     };
     let base = obj as *const u8;
@@ -2921,15 +2922,15 @@ pub(crate) unsafe fn stub_params_required_only(
     obj: *const crate::tagged::header::ByteCodeObj,
     extras_len: usize,
 ) -> bool {
-    use crate::emacs_core::pdump::mapped_heap::{BC_FLAG_HAS_REST, BytecodeExtras};
+    use crate::emacs_core::pdump::mapped_heap::unnamed_params;
+    use crate::tagged::pdump_image::{BC_FLAG_HAS_REST, BytecodeExtras};
     debug_assert!(extras_len >= std::mem::size_of::<BytecodeExtras>());
     let extras_ptr = unsafe {
         (obj as *const u8).add(std::mem::size_of::<crate::tagged::header::ByteCodeObj>())
     };
     let header: BytecodeExtras =
         unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
-    header
-        .unnamed_params()
+    unnamed_params(&header)
         .expect("load-validated parameter metadata")
         .map_or(
             header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0,
@@ -2947,17 +2948,15 @@ pub(crate) unsafe fn stub_required_only_arity(
     obj: *const crate::tagged::header::ByteCodeObj,
     extras_len: usize,
 ) -> Option<usize> {
-    use crate::emacs_core::pdump::mapped_heap::{BC_FLAG_HAS_REST, BytecodeExtras};
+    use crate::emacs_core::pdump::mapped_heap::unnamed_params;
+    use crate::tagged::pdump_image::{BC_FLAG_HAS_REST, BytecodeExtras};
     debug_assert!(extras_len >= std::mem::size_of::<BytecodeExtras>());
     let extras_ptr = unsafe {
         (obj as *const u8).add(std::mem::size_of::<crate::tagged::header::ByteCodeObj>())
     };
     let header: BytecodeExtras =
         unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
-    match header
-        .unnamed_params()
-        .expect("load-validated parameter metadata")
-    {
+    match unnamed_params(&header).expect("load-validated parameter metadata") {
         Some(params) => params.fixed_arity(),
         None => (header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0)
             .then_some(header.n_required as usize),

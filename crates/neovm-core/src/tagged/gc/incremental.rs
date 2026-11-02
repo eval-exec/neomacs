@@ -1037,7 +1037,7 @@ impl TaggedHeap {
                 // struct vectors, and nothing allocates under GC.
                 if data.is_pdump_stub() {
                     unsafe {
-                        crate::emacs_core::pdump::mapped_heap::for_each_stub_bytecode_child(
+                        crate::tagged::pdump_image::for_each_stub_bytecode_child(
                             obj,
                             data.closure_slot_count,
                             |child| self.mark_or_push_child(child, "bytecode-stub-image"),

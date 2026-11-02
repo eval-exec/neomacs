@@ -399,7 +399,7 @@ fn object_needs_extra(obj: &DumpHeapObject) -> bool {
     }
     // Gnu-instruction bytecode is self-contained: everything the descriptor
     // carried rides the extras region after the mapped ByteCodeObj (see
-    // `mapped_heap::BytecodeExtras`); its span length exceeding
+    // `tagged::pdump_image::BytecodeExtras`); its span length exceeding
     // `size_of::<ByteCodeObj>()` is the load-side signal. Decoded-instruction
     // functions (hand-assembled tests) stay descriptor-driven.
     if let DumpHeapObject::ByteCode(function) = obj

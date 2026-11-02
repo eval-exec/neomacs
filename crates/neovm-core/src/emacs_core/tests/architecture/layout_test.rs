@@ -328,6 +328,12 @@ fn bytecode_obj_is_only_named_by_its_chokepoints() {
         "tagged/gc/gc_thread.rs",
         "tagged/gc/incremental.rs",
         "tagged/gc/mark_sweep.rs",
+        // The mapped-stub image walker: the GC-side reader of a lazy stub's
+        // PATCHED image words. It exists precisely so the collector legs do
+        // not materialize or read the empty ByteCodeFunction vectors; the
+        // pdump writer and every loader validation stay upper (this module
+        // holds only the layout type, flags and the synchronous walker).
+        "tagged/pdump_image.rs",
         // The gc-memory-telemetry heap walker sizes objects by header type,
         // like the sweep above; it is diagnostics only (default-off feature).
         "tagged/gc/memory_inventory.rs",

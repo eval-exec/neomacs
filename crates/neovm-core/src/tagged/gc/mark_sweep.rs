@@ -1511,7 +1511,7 @@ impl TaggedHeap {
                     // materializing or allocating (GC context). On a stub,
                     // closure_slot_count carries the extras length.
                     if data.is_pdump_stub() {
-                        crate::emacs_core::pdump::mapped_heap::for_each_stub_bytecode_child(
+                        crate::tagged::pdump_image::for_each_stub_bytecode_child(
                             obj,
                             data.closure_slot_count,
                             |child| sink.child(child),

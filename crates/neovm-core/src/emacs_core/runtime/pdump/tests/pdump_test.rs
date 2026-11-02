@@ -2379,17 +2379,34 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     // Hand-assembled GNU function with every extras facet: params (required
-    // + optional + rest), docstring, interactive spec, and a constants pool
-    // holding a heap cons only the stub's mapped words keep alive.
-    // Body: constant0; return  ->  returns the cons.
-    let secret = Value::cons(Value::fixnum(77), Value::symbol("pdump-lazy-tail"));
+    // + optional + rest), docstring, interactive spec, a heap-valued constant
+    // and a heap-valued extra slot. Both values are hash tables: the loader
+    // allocates them OUTSIDE the dump image, so after load the only thing
+    // that keeps them alive is the stub walker's constant / extra-slot
+    // emission during the collector cycle (an image-resident cons would be
+    // permanent-black under the dump partition and could not witness the
+    // walker at all).
+    // Body: constant0; return  ->  returns the constant hash table.
+    let secret_hash = eval
+        .eval_str(
+            "(let ((h (make-hash-table :test 'eq))) \
+             (puthash 'pdump-lazy-key 'pdump-lazy-value h) h)",
+        )
+        .expect("constant hash-table fixture");
+    let extra_hash = eval
+        .eval_str(
+            "(let ((h (make-hash-table :test 'eq))) \
+             (puthash 'pdump-lazy-extra-key 'pdump-lazy-extra-value h) h)",
+        )
+        .expect("extra-slot hash-table fixture");
     let mut function = ByteCodeFunction::new(LambdaParams {
         required: vec![crate::emacs_core::intern::intern("pdump-lazy-a")],
         optional: vec![crate::emacs_core::intern::intern("pdump-lazy-b")],
         rest: Some(crate::emacs_core::intern::intern("pdump-lazy-c")),
     });
     function.ops = vec![Op::Constant(0), Op::Return];
-    function.constants = vec![secret].into();
+    function.constants = vec![secret_hash].into();
+    function.extra_slots = vec![extra_hash];
     function.max_stack = crate::emacs_core::bytecode::StackDepth::for_test(8);
     function.lexical = true;
     function.docstring = Some(crate::heap_types::LispString::from_unibyte(
@@ -2433,19 +2450,32 @@ fn lazy_stub_survives_gc_and_materializes_on_first_call() {
         );
     }
 
-    // A full GC cycle with the stub un-materialized: its constants live only
-    // in the mapped image words — the stub tracing legs must keep the
-    // secret cons alive.
+    // A full GC cycle with the stub un-materialized: the hash tables live
+    // only in the mapped image words — the stub tracing legs must emit the
+    // constant and extra-slot words so both heap objects survive.
     loaded
         .eval_str("(garbage-collect)")
         .expect("gc with live stubs should succeed");
 
-    // First call materializes and runs; the cons must have survived (UAF
-    // check), and the params must have round-tripped as runtime symbols.
+    // First call materializes and runs; both hash tables must have survived
+    // (UAF check for the constant and extra-slots emissions), and the params
+    // must have round-tripped as runtime symbols.
     let result = loaded
-        .eval_str("(funcall (symbol-value 'pdump-lazy-probe) 5)")
+        .eval_str(
+            "(let ((r (funcall (symbol-value 'pdump-lazy-probe) 5))) \
+                 (list (gethash 'pdump-lazy-key r) \
+                       (gethash 'pdump-lazy-extra-key \
+                                (aref (symbol-value 'pdump-lazy-probe) 6))))",
+        )
         .expect("first call of a lazy stub should materialize and run");
-    assert_eq!(format!("{result}"), "(77 . pdump-lazy-tail)");
+    assert_eq!(
+        format!("{result}"),
+        "(pdump-lazy-value pdump-lazy-extra-value)"
+    );
+    let materialized = func
+        .bytecode_data_if_materialized()
+        .expect("the call must have materialized the stub");
+    assert_eq!(materialized.extra_slots.len(), 1);
     if was_stub {
         let data = func
             .bytecode_data_if_materialized()

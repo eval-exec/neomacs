@@ -1,8 +1,9 @@
 use crate::emacs_core::bytecode::StackDepth;
 use crate::emacs_core::pdump::DumpError;
-use crate::emacs_core::pdump::mapped_heap::{BC_FLAG_HAS_ARGLIST, BytecodeExtras};
+use crate::emacs_core::pdump::mapped_heap::unnamed_params;
 use crate::emacs_core::pdump::types::DumpFunctionParamsKind;
 use crate::emacs_core::value::Value;
+use crate::tagged::pdump_image::{BC_FLAG_HAS_ARGLIST, BytecodeExtras};
 
 fn empty_header() -> BytecodeExtras {
     bytemuck::Zeroable::zeroed()
@@ -13,7 +14,7 @@ fn p6_pdump_mapped_parameter_header_rejects_unknown_kind() {
     let mut header = empty_header();
     header.params_kind = u8::MAX;
     assert!(matches!(
-        header.unnamed_params(),
+        unnamed_params(&header),
         Err(DumpError::BytecodeParameterKind(_))
     ));
 }
@@ -25,14 +26,14 @@ fn p6_pdump_mapped_parameter_header_rejects_inconsistent_arglist() {
     header.flags = BC_FLAG_HAS_ARGLIST;
     header.arglist_word = Value::NIL.bits() as u64;
     assert!(matches!(
-        header.unnamed_params(),
+        unnamed_params(&header),
         Err(DumpError::BytecodeParameterShape)
     ));
     header.arglist_word = Value::fixnum(-1).bits() as u64;
-    assert!(header.unnamed_params().unwrap().is_some());
+    assert!(unnamed_params(&header).unwrap().is_some());
     header.n_required = 1;
     assert!(matches!(
-        header.unnamed_params(),
+        unnamed_params(&header),
         Err(DumpError::BytecodeParameterShape)
     ));
 }
