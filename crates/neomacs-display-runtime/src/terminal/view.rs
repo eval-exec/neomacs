@@ -86,10 +86,6 @@ impl NeomacsEventProxy {
 }
 
 impl EventListener for NeomacsEventProxy {
-    fn event(&self) -> (Option<RioEvent>, bool) {
-        (None, false)
-    }
-
     fn send_event(&self, event: RioEvent, _window_id: WindowId) {
         match event {
             RioEvent::PtyWrite(_route, text) => {
@@ -97,12 +93,12 @@ impl EventListener for NeomacsEventProxy {
                     .lock()
                     .extend_from_slice(text.as_bytes());
             }
-            RioEvent::Title(title) => {
+            RioEvent::Title(_route, title) => {
                 tracing::debug!("Terminal {}: title changed to '{}'", self.id, title);
                 *self.pending_title.lock() = Some(title);
                 self.notify_wakeup();
             }
-            RioEvent::Bell => {
+            RioEvent::Bell(_route) => {
                 tracing::debug!("Terminal {}: bell", self.id);
             }
             _ => {}

@@ -355,7 +355,7 @@ webview2-com = "0.39.1"
 url = "2"
 
 # Terminal emulation
-rio-vt = "0.5.3"
+rio-vt = "0.5.29"
 parking_lot = "0.12"
 portable-pty = "0.9"
 smallvec = "1.13"

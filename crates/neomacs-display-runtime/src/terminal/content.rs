@@ -87,7 +87,7 @@ impl TerminalContent {
     pub fn from_term<T: EventListener>(term: &Crosswords<T>) -> Self {
         let num_cols = term.columns();
         let num_lines = term.screen_lines();
-        let styles = term.grid.style_set.styles();
+        let styles = term.grid.styles();
 
         let default_fg = Color::WHITE;
         let default_bg = Color::BLACK;
