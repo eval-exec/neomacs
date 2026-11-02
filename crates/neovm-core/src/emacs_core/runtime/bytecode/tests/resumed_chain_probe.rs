@@ -23,6 +23,7 @@
 //! address is reused within a run.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::SpecBinding;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

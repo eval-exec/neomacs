@@ -3,6 +3,7 @@
 //! events, even when the same physical store repeatedly leaves native code.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::{cache, compile};
 use crate::emacs_core::value::LambdaParams;
 

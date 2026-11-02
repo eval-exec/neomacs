@@ -20,6 +20,7 @@
 //!
 //! Only built with the `jit` feature (links Cranelift).
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_module::{Linkage, Module, default_libcall_names};

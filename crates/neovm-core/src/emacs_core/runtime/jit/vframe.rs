@@ -6,6 +6,7 @@
 //! never in metadata. Readback copies them into a mutator-owned payload;
 //! that payload must reach `Vm::run_resumed_chain` before a Lisp safepoint.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::{ChainBacktrace, ChainLink};
 use crate::emacs_core::eval::Context;

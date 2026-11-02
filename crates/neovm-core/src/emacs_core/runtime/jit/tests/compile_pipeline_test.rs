@@ -2,6 +2,7 @@
 //! and phase timers through the real cache seams.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::stats::{self, CompileOrigin, CompilePhase};
 use crate::emacs_core::value::LambdaParams;

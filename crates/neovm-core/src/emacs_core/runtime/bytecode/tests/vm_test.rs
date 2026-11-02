@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::LispCharPos1;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt};
 use crate::emacs_core::eval::{ConditionFrame, Context, GuiFrameHostSize, ResumeTarget};

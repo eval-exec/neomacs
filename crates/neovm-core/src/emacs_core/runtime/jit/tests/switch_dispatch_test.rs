@@ -3,6 +3,7 @@
 //! must be the interpreter's for every shape of dispatch value.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 

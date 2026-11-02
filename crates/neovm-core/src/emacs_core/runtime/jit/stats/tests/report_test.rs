@@ -1,5 +1,6 @@
 use super::report::{FinalReport, LeafReportRow, T2Line, ranked_leaves};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 fn stats_with(compiles: u64, entries: u64, mir_taken: u64) -> CompileStats {
     CompileStats {

@@ -4,6 +4,7 @@
 //! store semantics are frozen67; mutation uses real Aset and bytecode Call.
 //! Context, roots, plans, proofs and override settings belong to this mutator.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::function;

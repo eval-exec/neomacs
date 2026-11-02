@@ -1,5 +1,6 @@
 //! Direct-cell named selection and virtual-only F-I1 admission.
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile::{self, Inline2Mode, force_inline2_for_test};
 use crate::emacs_core::jit::inline;

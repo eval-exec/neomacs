@@ -10,6 +10,7 @@
 //! what a later background compile needs.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::NumericFeedback;
 
 thread_local! {

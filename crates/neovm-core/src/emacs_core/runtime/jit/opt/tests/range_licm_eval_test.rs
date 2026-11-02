@@ -16,6 +16,7 @@ use super::ir::*;
 use super::mem::{AliasClass, Effects};
 use super::passes::{bools, fold, licm, range, reps_lift};
 use super::types::{Range, TypeSet};
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::{

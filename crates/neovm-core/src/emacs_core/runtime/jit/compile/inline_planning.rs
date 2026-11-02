@@ -5,6 +5,7 @@
 //! are rooted by the fused constant pool. It adds no runtime cache or shared
 //! mutable Lisp state. Knob parsing remains in `knobs`.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::rc::Rc;
 
 use super::{CompileRequest, Inline2Mode, active_numeric_feedback, jit_inline2_mode};

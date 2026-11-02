@@ -1870,7 +1870,7 @@ pub struct MacroObj {
 #[repr(C)]
 pub struct ByteCodeObj {
     pub header: VecLikeHeader,
-    pub data: crate::emacs_core::bytecode::ByteCodeFunction,
+    pub data: crate::tagged::bytecode::chunk::ByteCodeFunction,
     /// The Lisp objects GNU keeps in closure slots 1 and 2, handed out by
     /// `aref` (see [`ByteCodeSlotObjects`]). Outside `data` on purpose: a
     /// lazy pdump stub is materialized by overwriting `data`, and these

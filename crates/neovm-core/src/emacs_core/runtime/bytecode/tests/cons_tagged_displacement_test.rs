@@ -3,6 +3,7 @@
 //! this additionally detects swapped or incorrectly displaced car/cdr reads.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::decode::parse_arglist_descriptor;
 use crate::emacs_core::eval::Context;
 use crate::tagged::collection_reads::capture;

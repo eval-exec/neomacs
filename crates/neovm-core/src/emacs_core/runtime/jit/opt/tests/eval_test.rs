@@ -4,6 +4,7 @@
 use super::build::{BuildInput, build};
 use super::eval::{Inputs, Outcome, evaluate};
 use super::ir::{Func, ParamShape, ValueBits};
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;

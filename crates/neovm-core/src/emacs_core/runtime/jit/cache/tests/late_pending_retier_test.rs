@@ -2,6 +2,7 @@
 //! Sync + held publication makes the pending interval independent of workers.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::ReoptLevel;

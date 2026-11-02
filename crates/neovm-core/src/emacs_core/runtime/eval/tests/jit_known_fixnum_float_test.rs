@@ -12,6 +12,7 @@
 //! say 4.0. Live from the float lowering (92e2dc18f) until this fix.
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::decode::{decode_gnu_bytecode, parse_arglist_descriptor};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::{Value, ValueKind};

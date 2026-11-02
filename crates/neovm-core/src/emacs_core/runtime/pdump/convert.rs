@@ -1,5 +1,6 @@
 //! Conversions between runtime types and pdump snapshot types.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 

@@ -2,6 +2,7 @@ use super::asm_dump::force_asm_dump_for_test;
 use super::perf_map::label_parts;
 use super::{ObserveOverride, force_observe_for_test};
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::{LambdaParams, Value};

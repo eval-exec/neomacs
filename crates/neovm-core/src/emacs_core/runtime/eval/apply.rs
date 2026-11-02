@@ -4,6 +4,8 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
+#[cfg(feature = "jit")]
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// The GC root that keeps an interpreted callable alive for one
 /// [`Context::apply_lambda`] call.

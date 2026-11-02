@@ -2,6 +2,7 @@
 
 use super::compile_pipeline_tests::function;
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 struct Settings;
 impl Settings {

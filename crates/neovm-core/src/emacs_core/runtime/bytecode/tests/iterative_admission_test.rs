@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 fn admission_function(argdesc: i64, max_stack: usize, bytes: Vec<u8>) -> ByteCodeFunction {
     let params = FunctionParams::try_from(Value::fixnum(argdesc)).unwrap();
@@ -151,6 +152,87 @@ fn bytecode_lazy_iterative_admission_preserves_shared_layout_and_eager_fallback(
     assert_eq!(
         std::mem::offset_of!(LazyGnuCode, proof),
         std::mem::offset_of!(OriginalPrefix, proof)
+    );
+    // The decoded payload the hot projection returns: run_loop inlines these
+    // three field projections, so freeze their layout beside LazyGnuCode's.
+    struct OriginalDecoded {
+        ops: Vec<Op>,
+        byte_offset_map: Vec<crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry>,
+        stack_verified: bool,
+    }
+    assert_eq!(
+        std::mem::offset_of!(DecodedGnuCode, ops),
+        std::mem::offset_of!(OriginalDecoded, ops)
+    );
+    assert_eq!(
+        std::mem::offset_of!(DecodedGnuCode, byte_offset_map),
+        std::mem::offset_of!(OriginalDecoded, byte_offset_map)
+    );
+    assert_eq!(
+        std::mem::offset_of!(DecodedGnuCode, stack_verified),
+        std::mem::offset_of!(OriginalDecoded, stack_verified)
+    );
+    // The enclosing function projection: the VM admission/decode path reads
+    // these ByteCodeFunction fields before it reaches the lazy cell. Pin the
+    // same field order/types in a frozen mirror; adding, reordering or
+    // retyping a field moves the real offsets and fails here.
+    struct OriginalFunction {
+        source_id: u64,
+        ops: Vec<Op>,
+        ops_sealed: bool,
+        stack_verified: bool,
+        constants: crate::tagged::header::LispValueVec,
+        max_stack: StackDepth,
+        params: FunctionParams,
+        arglist: Value,
+        lexical: bool,
+        env: Option<Value>,
+        gnu_byte_offset_map: Option<Vec<crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry>>,
+        gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
+        docstring: Option<crate::heap_types::LispString>,
+        doc_form: Option<Value>,
+        interactive: Option<Value>,
+        closure_slot_count: usize,
+        extra_slots: Vec<Value>,
+        #[cfg(feature = "jit")]
+        runtime: Option<crate::emacs_core::jit::Runtime>,
+        lazy_gnu_code: Option<std::sync::Arc<LazyGnuCode>>,
+    }
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, ops),
+        std::mem::offset_of!(OriginalFunction, ops)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, constants),
+        std::mem::offset_of!(OriginalFunction, constants)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, max_stack),
+        std::mem::offset_of!(OriginalFunction, max_stack)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, params),
+        std::mem::offset_of!(OriginalFunction, params)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, arglist),
+        std::mem::offset_of!(OriginalFunction, arglist)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, lexical),
+        std::mem::offset_of!(OriginalFunction, lexical)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, env),
+        std::mem::offset_of!(OriginalFunction, env)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, gnu_bytecode_bytes),
+        std::mem::offset_of!(OriginalFunction, gnu_bytecode_bytes)
+    );
+    assert_eq!(
+        std::mem::offset_of!(ByteCodeFunction, lazy_gnu_code),
+        std::mem::offset_of!(OriginalFunction, lazy_gnu_code)
     );
     fn require_shared<T: Send + Sync>() {}
     require_shared::<LazyGnuCode>();

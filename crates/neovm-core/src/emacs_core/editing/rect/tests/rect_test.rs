@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::autoload::is_autoload_value;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::format_eval_result;
 use crate::test_utils::{

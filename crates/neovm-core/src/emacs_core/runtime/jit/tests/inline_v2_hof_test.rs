@@ -2,6 +2,7 @@
 //! credit use the same callback metadata the native loop consumes.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::{self, Inline2Mode};
 use crate::emacs_core::value::LambdaParams;
 

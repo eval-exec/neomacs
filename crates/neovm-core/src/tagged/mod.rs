@@ -6,6 +6,7 @@
 //!
 //! This matches GNU Emacs's `Lisp_Object` design exactly.
 
+pub(crate) mod bytecode;
 pub mod collection_reads;
 pub mod gc;
 pub mod header;

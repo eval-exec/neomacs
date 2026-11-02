@@ -2,6 +2,7 @@
 //! sites. Fixtures are refreshed exclusively from GNU with UPDATE_EXPECT=1.
 //! Threading: each test owns its evaluator, roots, and debugger observations.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::print::print_value;
 use std::path::PathBuf;

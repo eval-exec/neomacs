@@ -3,6 +3,7 @@
 //! name activation-local SSA values, never a TLS or cross-mutator Lisp cache.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// One straight-line capture increment, with no incoming edge after its
 /// constant load. The dup preserves this exact cell under the car/add1 result.

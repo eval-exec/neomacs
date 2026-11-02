@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,

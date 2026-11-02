@@ -2,6 +2,7 @@
 //! Threading: every plan, context and temporary root belongs to this invocation;
 //! these tests introduce no runtime caches or compiler-worker Lisp ownership.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::{
     Context, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,

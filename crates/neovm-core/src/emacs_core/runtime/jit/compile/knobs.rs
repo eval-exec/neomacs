@@ -5,6 +5,7 @@
 
 /// Whether an unresolved Switch table participates in ops-only loop policy.
 /// Threading: immutable scalar compile configuration; no Lisp state or cache.
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, strum::EnumString)]
 pub(crate) enum SwitchLoopPolicy {
     #[default]

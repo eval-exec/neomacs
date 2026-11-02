@@ -4,6 +4,7 @@
 //! `NEOVM_JIT_HOF_INLINE=off`, compiles without a v2 front.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::compile;
 use crate::emacs_core::print::print_value;

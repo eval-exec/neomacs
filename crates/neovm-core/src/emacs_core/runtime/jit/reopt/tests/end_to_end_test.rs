@@ -9,6 +9,7 @@
 //! argument is made right before its call and each result is printed at once.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::jit::cache::{cache_entry_kind_for_test, compiled_leaf_ptr_for_test};

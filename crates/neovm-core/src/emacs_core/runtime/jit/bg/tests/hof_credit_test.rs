@@ -8,6 +8,7 @@
 //! around it, and the leaf installed once the worker is done must inline the
 //! warm callback loop.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::time::Duration;
 
 use super::*;

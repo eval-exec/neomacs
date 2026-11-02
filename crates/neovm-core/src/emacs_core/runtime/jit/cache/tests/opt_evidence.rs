@@ -8,6 +8,7 @@ use super::super::{
     try_run_osr, try_run_osr_probe,
 };
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, opcode::Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;

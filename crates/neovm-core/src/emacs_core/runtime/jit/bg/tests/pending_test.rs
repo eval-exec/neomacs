@@ -4,6 +4,7 @@
 //! T-G2 and the removals that supersede a pending leaf.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::cache;

@@ -3,6 +3,7 @@
 
 use super::super::compile_pipeline_tests::{captured_clif, function};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 #[derive(Clone, Copy, Debug, strum::IntoStaticStr)]
 enum RootCountField {

@@ -1,6 +1,7 @@
 //! The bytecode fuser: splicing a constant-bytecode callee into its caller
 //! must produce a body the INTERPRETER runs exactly as it ran the call.
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::error::FlowResultExt as _;

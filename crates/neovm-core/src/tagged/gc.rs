@@ -32,11 +32,11 @@
 
 use super::header::*;
 use super::value::TaggedValue;
-use crate::emacs_core::bytecode::Op;
-use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::HashTableWeakness;
 use crate::heap_types::LispStringStorageKind;
+use crate::tagged::bytecode::chunk::GnuByteOffsetMapEntry;
+use crate::tagged::bytecode::opcode::Op;
 use crate::tagged::symbol_marks::SymbolMarkBits;
 use malachite::integer::Integer;
 use rustc_hash::{FxHashMap, FxHashSet};

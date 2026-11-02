@@ -3,6 +3,7 @@
 //! code; native capture/deopt parity is tested by the runtime lane.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::{self, Inline2Mode};
 use crate::emacs_core::value::LambdaParams;
 

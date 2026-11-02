@@ -3,6 +3,7 @@
 //! body answers the same through either ABI, on every exit.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::default_libcall_names;

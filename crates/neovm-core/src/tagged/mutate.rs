@@ -4,10 +4,10 @@
 //! tagged runtime.
 
 use crate::buffer::text_props::TextPropertyTable;
-#[cfg(test)]
-use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::value::LispHashTable;
 use crate::heap_types::{LispMarker, LispString, OverlayData};
+#[cfg(test)]
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 
 use super::collection_reads::{StoreState, WriteProjection, record_projected_write_in_store};
 use super::gc::{

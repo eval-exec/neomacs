@@ -13,6 +13,7 @@ use super::ir::*;
 use super::mem::{AliasClass, Effects};
 use super::passes::gvn;
 use super::types::TypeSet;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::{
     Context, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,

@@ -660,7 +660,7 @@ impl TaggedHeap {
     #[inline(never)]
     pub fn alloc_bytecode(
         &mut self,
-        data: crate::emacs_core::bytecode::ByteCodeFunction,
+        data: crate::tagged::bytecode::chunk::ByteCodeFunction,
     ) -> TaggedValue {
         let ptr = self.bytecode_arena.alloc_slot();
         unsafe {
@@ -705,7 +705,7 @@ impl TaggedHeap {
     #[inline(never)]
     pub fn alloc_bytecode_instance(
         &mut self,
-        proto: &crate::emacs_core::bytecode::ByteCodeFunction,
+        proto: &crate::tagged::bytecode::chunk::ByteCodeFunction,
         constants: LispValueVec,
         code: TaggedValue,
     ) -> TaggedValue {
@@ -714,8 +714,8 @@ impl TaggedHeap {
             "instantiating an unmaterialized pdump stub"
         );
         #[cfg(test)]
-        crate::emacs_core::bytecode::chunk::note_bytecode_function_clone_for_test();
-        let crate::emacs_core::bytecode::ByteCodeFunction {
+        crate::tagged::bytecode::chunk::note_bytecode_function_clone_for_test();
+        let crate::tagged::bytecode::chunk::ByteCodeFunction {
             source_id,
             ops,
             ops_sealed,

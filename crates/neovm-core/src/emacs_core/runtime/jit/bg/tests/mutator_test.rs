@@ -1,6 +1,7 @@
 //! Independent mutators share only backend jobs, never their Lisp roots.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 

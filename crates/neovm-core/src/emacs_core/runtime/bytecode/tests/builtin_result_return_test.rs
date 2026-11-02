@@ -9,6 +9,7 @@
 //! and the inline ones, `Bchar_after`); and the specpdl is balanced after.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;

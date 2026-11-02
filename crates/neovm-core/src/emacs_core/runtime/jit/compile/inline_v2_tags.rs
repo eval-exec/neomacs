@@ -4,6 +4,7 @@
 //! object. All state is compile-local Rust data borrowing the compiling
 //! mutator's rooted constant pool. No runtime cache or shared mutable state.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::collections::{BTreeMap, HashMap};
 
 use super::{FusedBody, HofKind, HofSite, RegionKind};

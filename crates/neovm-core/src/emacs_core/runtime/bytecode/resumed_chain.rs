@@ -35,6 +35,7 @@
 //! state and publishes none, so concurrent mutators each resume their own.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// How an inlined frame was entered: the call shape whose frame push, depth
 /// accounting and pop a chain resume reproduces. Threading: immutable call

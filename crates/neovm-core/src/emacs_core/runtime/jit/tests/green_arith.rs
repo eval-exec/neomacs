@@ -9,6 +9,7 @@
 //! symbol and delivers the NEW definition — GNU's observable behavior, not
 //! the baked op.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
 use crate::emacs_core::error::{EvalResult, signal};
 use crate::emacs_core::eval::{Context, ThreadingMode};

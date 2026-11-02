@@ -7,7 +7,8 @@
 //! Cranelift type and no evaluator `Context`, and stores no Lisp `Value`; the
 //! only value-layer references are the G0 `intern`/`value` vocabulary.
 //!
-//! T1-pre moves the definitions only: every impl, function and test stays in
+//! T1-pre moved the definitions and the layout-identical data methods; the
+//! JIT policy impls (dispatch, cache, compile, recording) stay in
 //! `emacs_core::jit`, so the generated code of the gated functions is
 //! unchanged. Fields are crate-visible because those upper impl blocks still
 //! touch them; the extraction API is the peer-reviewed privacy ledger, not
@@ -116,7 +117,14 @@ pub struct RuntimeState {
     /// cache (`cache`). Monotonic and never reused, so a freed function's
     /// stale cache entry can never be mis-looked-up after the (non-moving) GC
     /// reuses its address — a new function gets a new id. Reset to 0 on clone.
-    pub(crate) compiled_id: AtomicU64,
+    ///
+    /// Authority MINT (T1 privacy ledger A2): the dispatcher selects executable
+    /// code by this id without a stored source-identity check in the cache
+    /// entry, so this layer stores an OPAQUE word and never mints or validates
+    /// it. The only writer is [`set_compiled_id_word`] (unsafe; the upper layer
+    /// vouches that the word is its fresh mint for this source, attached to
+    /// exactly one function source).
+    compiled_id: AtomicU64,
     /// Set by the AOT preload prepopulate (R2-C3) when this function's leaf was
     /// inserted into the compiled cache at startup: `dispatch` then serves the
     /// prewarmed native leaf FROM CALL 1 instead of interpreting until the heat
@@ -144,9 +152,9 @@ pub struct RuntimeState {
     /// before several mutators enter the same source concurrently: the epoch
     /// supplies neither cache ownership nor an atomic pointer/epoch pair.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) leaf_slot: AtomicU64,
+    leaf_slot: AtomicU64,
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) leaf_slot_epoch: AtomicU64,
+    leaf_slot_epoch: AtomicU64,
     /// Widest `make-closure` patch seen for this source: the number of leading
     /// constant slots that hold PER-INSTANCE captured values (the prototype
     /// carries placeholder symbols `V0..Vn` there — `byte-compile-make-closure`).
@@ -219,4 +227,120 @@ pub struct RuntimeState {
 #[derive(Debug)]
 pub struct Runtime {
     pub(crate) shared: std::sync::Arc<RuntimeState>,
+}
+
+impl RuntimeState {
+    /// A fresh source state: every counter cold, no feedback, no retreat, no
+    /// armed leaf. Constructing the owned cells directly keeps this a `const
+    /// fn` and keeps the lower layer free of upper constructor calls.
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            heat: AtomicU32::new(0),
+            native_rejected_epoch: AtomicU64::new(0),
+            profit_deferred_heat: AtomicU32::new(0),
+            feedback: feedback::SourceFeedback {
+                ops: FeedbackVec {
+                    slots: OnceLock::new(),
+                },
+                calls: OnceLock::new(),
+            },
+            compiled_id: AtomicU64::new(0),
+            aot_prewarmed: std::sync::atomic::AtomicBool::new(false),
+            numeric_feedback_consumed: std::sync::atomic::AtomicBool::new(false),
+            leaf_slot: AtomicU64::new(0),
+            leaf_slot_epoch: AtomicU64::new(0),
+            patched_prefix: AtomicU32::new(0),
+            reopt_count: std::sync::atomic::AtomicU8::new(0),
+            t2_reopts: std::sync::atomic::AtomicU8::new(0),
+            aot_retiered: std::sync::atomic::AtomicBool::new(false),
+            reopt_level: std::sync::atomic::AtomicU8::new(0),
+            site_retreat: retreat::SiteRetreatTable(OnceLock::new()),
+            // HofCallerBit::Unknown (0): the cached HOF classification has
+            // not been computed yet.
+            hof_caller: std::sync::atomic::AtomicU8::new(0),
+            #[cfg(test)]
+            force_interpret: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// This state's compiled-cache id word (0 = unassigned). The word is
+    /// opaque here: the upper layer minted it and owns its meaning; this layer
+    /// only stores and returns it.
+    #[inline(always)]
+    pub(crate) fn compiled_id_word(&self) -> u64 {
+        self.compiled_id.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The armed leaf word when `epoch` is the arm epoch. The word is opaque
+    /// here: an upper source encoded a live `CompiledLeaf` address; this layer
+    /// never dereferences it and never names the compiler type.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn armed_leaf_word(&self, epoch: u64) -> Option<std::num::NonZeroU64> {
+        let word = self.leaf_slot.load(std::sync::atomic::Ordering::Relaxed);
+        if word == 0
+            || self
+                .leaf_slot_epoch
+                .load(std::sync::atomic::Ordering::Relaxed)
+                != epoch
+        {
+            return None;
+        }
+        std::num::NonZeroU64::new(word)
+    }
+
+    /// Empty the direct-entry slot. Safe: clearing removes an executable
+    /// target and can never install one; the reader also requires the epoch.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn disarm_leaf_slot(&self) {
+        self.leaf_slot
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Arm the direct-entry slot with an opaque executable-target word.
+///
+/// # Safety
+/// `word` must be the address of a live upper `CompiledLeaf` that stays
+/// allocated as long as this arm can be probed (the cache retires leaves
+/// without freeing them), armed and probed on the SAME mutator (P7.11
+/// confinement: the cache owner and its Cell-based deopt storage are
+/// thread-confined), and `epoch` must be the live `cache::leaf_slot_epoch()`
+/// at the arm. The epoch is stored before the word, both `Relaxed`; the
+/// reader accepts the word only under the same epoch.
+#[cfg(feature = "jit")]
+#[inline(always)]
+pub unsafe fn set_leaf_slot_word(rt: &RuntimeState, word: u64, epoch: u64) {
+    rt.leaf_slot_epoch
+        .store(epoch, std::sync::atomic::Ordering::Relaxed);
+    rt.leaf_slot
+        .store(word, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Install a fresh compiled-cache identity word, returning the id that won.
+///
+/// # Safety
+/// `fresh` must be the upper layer's fresh mint for this source
+/// (`NEXT_COMPILED_ID::fetch_add(1, Relaxed) + 1`; never 0, never
+/// caller-supplied, never reused), and `rt` must be attached to exactly ONE
+/// function source (the A2/A3 attach seal: `ByteCodeFunction::runtime` is
+/// crate-private and is only constructed for its own source, then shared by
+/// that source's clones). This layer neither mints nor validates the word:
+/// storing a caller-chosen word would let one function's cache entry select
+/// another source's executable code. The orderings are part of the contract
+/// (`compare_exchange` is `AcqRel`/`Acquire`, as the identity publication has
+/// always been); a 0 word stays reserved for "unassigned".
+#[inline(always)]
+pub unsafe fn set_compiled_id_word(rt: &RuntimeState, fresh: u64) -> u64 {
+    match rt.compiled_id.compare_exchange(
+        0,
+        fresh,
+        std::sync::atomic::Ordering::AcqRel,
+        std::sync::atomic::Ordering::Acquire,
+    ) {
+        Ok(_) => fresh,
+        // Another thread won the race; adopt its id, discard ours.
+        Err(actual) => actual,
+    }
 }

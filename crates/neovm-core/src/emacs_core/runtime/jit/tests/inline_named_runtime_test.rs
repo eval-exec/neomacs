@@ -3,6 +3,7 @@
 //! successful ordinary out-call cannot silently satisfy these regressions.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::error::{Flow, FlowRef};
 use crate::emacs_core::eval::{Context, push_scratch_gc_root};

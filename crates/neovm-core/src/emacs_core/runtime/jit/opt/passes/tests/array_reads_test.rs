@@ -4,6 +4,7 @@
 //! Context precedes all symbols/heap constants; plans/tables are compiler-owned.
 
 use super::super::array_reads::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile::{analyze_cfg, compile_pipeline_tests::function};

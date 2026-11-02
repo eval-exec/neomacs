@@ -6,6 +6,7 @@
 //! one or two arguments, the function alone for any other count.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::FlowRef;
 use crate::emacs_core::eval::{Context, SpecBinding};
 use crate::emacs_core::intern::intern;

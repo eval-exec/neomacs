@@ -4,6 +4,7 @@
 //! mark, owner tracking, an image owner) must still reach it.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;

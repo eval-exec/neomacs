@@ -5,6 +5,7 @@
 //! (and no table is built).
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::feedback::{
     CallTarget, FeedbackMode, SiteShape, force_feedback_mode_for_test,

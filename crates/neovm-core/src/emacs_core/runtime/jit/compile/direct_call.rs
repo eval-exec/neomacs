@@ -54,6 +54,7 @@ use super::spec_slot::{
     SPEC_SLOT_LEAF_OFFSET,
 };
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 

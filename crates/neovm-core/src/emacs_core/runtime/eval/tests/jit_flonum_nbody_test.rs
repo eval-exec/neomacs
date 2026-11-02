@@ -15,6 +15,7 @@
 //! The JIT copy of the bodies must stay bit-identical to an interpreter copy
 //! for 1,000 steps.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::decode::{decode_gnu_bytecode, parse_arglist_descriptor};
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::eval::Context;

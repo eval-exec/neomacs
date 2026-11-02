@@ -7,6 +7,7 @@
 
 use super::shims::{EQ_SLOW_CALLS, SYMBOLP_SLOW_CALLS};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;

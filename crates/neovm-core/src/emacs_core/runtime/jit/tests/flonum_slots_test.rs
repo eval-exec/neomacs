@@ -9,6 +9,7 @@
 //! must stay `eq`, and two results must be distinct objects.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::Context;

@@ -6,6 +6,7 @@
 
 use super::compile_pipeline_tests::function;
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::{
     push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };

@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use cranelift_codegen::ir::UserFuncName;
 use cranelift_frontend::FunctionBuilderContext;
 use cranelift_module::{Module, default_libcall_names};

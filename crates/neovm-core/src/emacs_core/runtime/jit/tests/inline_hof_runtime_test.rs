@@ -1,6 +1,7 @@
 //! Native list mapping and cold HOF transfer, including side effects that
 //! must not replay, cursor mutations, exact roots and callback entry guards.
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::{ChainBacktrace, ChainLink};
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};

@@ -8,6 +8,7 @@
 //! belong to the compiling mutator, whose fused body's constant pool roots
 //! every template. No mutable Lisp state is cached or shared across mutators.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::collections::BTreeMap;
 
 use super::FusedBody;

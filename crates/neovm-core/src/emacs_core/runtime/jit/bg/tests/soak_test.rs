@@ -6,6 +6,7 @@
 //! random points, while a callee is redefined mid-run and the collector
 //! runs.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::time::Duration;
 
 use super::*;

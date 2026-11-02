@@ -68,6 +68,7 @@
 //! code: it flows as its `usize` bit pattern (`i64` in CLIF), exactly as the
 //! interpreter stores it.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 pub(crate) mod body_analysis;
 pub(crate) mod param_shape;
 

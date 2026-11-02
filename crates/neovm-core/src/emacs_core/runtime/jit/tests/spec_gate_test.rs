@@ -5,6 +5,7 @@
 //! every state of the epoch, the compiler overrides and the force harness.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::{AttentionMask, Context};
 use crate::emacs_core::intern::intern;

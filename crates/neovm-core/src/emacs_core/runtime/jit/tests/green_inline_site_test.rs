@@ -10,6 +10,7 @@
 //! (`InlineSiteReentry::MayReenter`).
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::StackDepth;
 use crate::emacs_core::error::{FlowKind, FlowRef};
 use crate::emacs_core::eval::ThreadingMode;

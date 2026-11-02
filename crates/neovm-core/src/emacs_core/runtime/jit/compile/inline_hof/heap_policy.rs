@@ -2,6 +2,7 @@
 //! Threading: this reads the compiling mutator's immutable fused annotations;
 //! no heap pointer or Lisp value is cached across compilations or mutators.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::inline;
 

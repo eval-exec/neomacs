@@ -3,6 +3,7 @@
 //! Comparing exact lattice snapshots adds no instructions to feedback recording.
 use super::super::compile::{LeafTier, jit_tier2_policy};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::jit::feedback::CallTarget;

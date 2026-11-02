@@ -2,6 +2,7 @@
 //! invalidated jobs cannot remove it, and install never re-arms old slots.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::cache;

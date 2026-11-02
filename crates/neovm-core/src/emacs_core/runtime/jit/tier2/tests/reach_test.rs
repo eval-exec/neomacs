@@ -1,6 +1,7 @@
 //! X7's recursive form: a hot leaf entered through its own spec slots
 //! upgrades, unlinks the self pointers, and serves the remaining recursion.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;

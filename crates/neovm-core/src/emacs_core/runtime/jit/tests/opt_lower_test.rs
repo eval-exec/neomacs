@@ -1,6 +1,7 @@
 //! Passes-off opt lowering is a real native tier, with baseline observation
 //! and exact deopt state. Threading: contexts/leaves are owned by each test.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function, mask_code_text};

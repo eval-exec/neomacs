@@ -3,6 +3,7 @@
 //! every error remain local to their original consumer. Nothing escapes into
 //! a compiled leaf or a backend worker.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::marker::PhantomData;

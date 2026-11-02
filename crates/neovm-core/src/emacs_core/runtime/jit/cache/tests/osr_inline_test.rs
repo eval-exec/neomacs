@@ -2,6 +2,7 @@
 //! fused instruction stream and attributing deopt feedback to its callee.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::jit::compile::{self, Inline2Mode};

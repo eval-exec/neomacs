@@ -1,6 +1,7 @@
 //! Installed native leaves, never prepared again after actual C5 relocation.
 use super::compile::VARREF_SHIM_CALLS;
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 fn run_installed(ctx: &mut Context, source: Value) -> usize {
     let f = source.get_bytecode_data().expect("retained native source");

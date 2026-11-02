@@ -3,6 +3,7 @@
 //! come from forced Tier-0 execution. Threading: contexts, roots and compiler
 //! overrides are test-owned and restored; no new runtime state is introduced.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function};

@@ -1,6 +1,7 @@
 //! The worker queue (P2.4 B12): class order (T-Q1) and the caps with their
 //! drop policy (T-Q2).
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::time::Duration;
 
 use super::*;

@@ -17,6 +17,7 @@
 
 use super::{CacheEntry, DeferReason, EntryLeaves, OSR_PENDING, install_osr_pending};
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 use crate::emacs_core::jit::compile::{self, CompileRequest};
 use crate::emacs_core::jit::tier2::CompileTier;

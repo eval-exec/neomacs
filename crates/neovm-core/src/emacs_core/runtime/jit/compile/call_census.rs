@@ -20,6 +20,7 @@
 //! while mutators run need not describe one instant across all cells.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// Who a counted call site calls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,7 +209,8 @@ fn armed_leaf_of(callee: Value) -> Result<&'static CompiledLeaf, CallShape> {
     let epoch = crate::emacs_core::jit::cache::leaf_slot_epoch();
     let leaf = bc
         .jit_runtime()
-        .armed_leaf_slot(epoch)
+        .armed_leaf_word(epoch)
+        .map(|word| word.get() as *const CompiledLeaf)
         .ok_or(CallShape::Unarmed)?;
     // SAFETY: armed under the current leaf-slot epoch (every retire and
     // clear bumps it, and retired leaves stay allocated); the census reads

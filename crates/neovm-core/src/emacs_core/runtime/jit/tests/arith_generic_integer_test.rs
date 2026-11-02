@@ -5,6 +5,7 @@
 //! every-guard-fails harness.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;

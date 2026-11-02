@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// GNU `Fprogn` (eval.c:440-445) reads the rest of the body list BEFORE
 /// evaluating each form; a form that mutates its own containing list must

@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use object::{Object, ObjectSymbol};
 
 /// R1c-1 gate: a pure leaf's object bytes parse via `object::File`, the entry

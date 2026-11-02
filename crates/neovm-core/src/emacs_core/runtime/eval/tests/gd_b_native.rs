@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// Owns JIT test overrides on the test thread that installed them.
 /// The thread-local extent ends on this same thread when the guard drops.

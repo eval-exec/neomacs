@@ -3,6 +3,7 @@
 //! the production entry and readback tests separately prove native transfer.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::FlowRef;
 use crate::emacs_core::eval::{BcFrame, ConditionFrame, Context, ResumeTarget};
 use crate::emacs_core::value::LambdaParams;

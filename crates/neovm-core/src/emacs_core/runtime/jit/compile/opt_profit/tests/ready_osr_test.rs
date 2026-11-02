@@ -5,6 +5,7 @@
 use super::frontend_tests::{Settings, count_loop};
 use super::lists_frontend_tests::{list_loop, normalize};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{captured_clif, function};
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;

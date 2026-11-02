@@ -8,6 +8,7 @@
 
 use super::super::*;
 use super::{FeedbackSnapshot, NumericFeedbackScope};
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::feedback::arrays::ArrayKindMask;
 
 /// Additional owned compiler masks, keeping the complete main snapshot intact.

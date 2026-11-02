@@ -2,6 +2,7 @@
 //! site's first call into an uncompiled callee defers the callee's backend;
 //! the site takes the strict call path until the leaf is installed. T-F1.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::time::Duration;
 
 use super::*;

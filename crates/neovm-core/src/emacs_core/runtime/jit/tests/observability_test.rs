@@ -2,6 +2,7 @@
 //! (`LeafObs`), counted once at each cold exit.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::value::LambdaParams;
 

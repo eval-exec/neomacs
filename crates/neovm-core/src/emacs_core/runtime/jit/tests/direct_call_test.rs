@@ -10,6 +10,7 @@
 //! `NEOVM_JIT_FORCE_SLOW_SPEC`, and the interpreter.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 

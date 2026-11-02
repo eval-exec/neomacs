@@ -6,6 +6,7 @@
 //! object held by a dumped owner, so the write barrier must remember the
 //! owner or the next collection frees it.
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 fn eval(ctx: &mut Context, src: &str) -> Value {
     let v = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));

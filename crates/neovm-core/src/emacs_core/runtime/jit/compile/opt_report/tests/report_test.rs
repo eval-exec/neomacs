@@ -2,6 +2,7 @@
 //! Threading: all compiler overrides, report files, leaves and Contexts are
 //! owned by one test invocation; no process environment variable is changed.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

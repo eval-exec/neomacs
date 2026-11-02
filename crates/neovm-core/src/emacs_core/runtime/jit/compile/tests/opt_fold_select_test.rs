@@ -2,6 +2,7 @@
 //! Threading: all plans and runtime contexts belong to one test invocation;
 //! overrides hold compiler settings only and are restored on scope exit.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::function;

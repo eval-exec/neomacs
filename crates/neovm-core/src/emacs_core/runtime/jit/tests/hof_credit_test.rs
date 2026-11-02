@@ -2,6 +2,7 @@
 //! heat for the callbacks it drives; a caller without one, a short mapping,
 //! an already compiled caller and the off knob gain nothing.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile;
 

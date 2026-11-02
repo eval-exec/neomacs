@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::vm::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;

@@ -70,13 +70,12 @@ keyboard wait 1
 keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
-tagged bytecode 7
 tagged error 12
 tagged eval 12
-tagged intern 21
+tagged intern 22
 tagged process 5
 tagged symbol 9
-tagged value 21
+tagged value 22
 window category 2
 window chartable 1
 window display_spec 3

@@ -2,6 +2,7 @@
 //! leaf is compiling interprets on without latching its frame, and a later
 //! wrap transfers once the leaf is installed. T-O1 and T-O2.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::sync::atomic::Ordering;
 
 use super::*;

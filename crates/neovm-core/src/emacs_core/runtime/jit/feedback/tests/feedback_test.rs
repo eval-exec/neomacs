@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::LambdaParams;
 

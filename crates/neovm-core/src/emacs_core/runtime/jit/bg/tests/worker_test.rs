@@ -1,6 +1,7 @@
 //! The worker thread (P2.4 B7): entry tier-ups compiled off the eval
 //! thread. T-L1, T-L4, T-L5 with a real worker, T-S1 for `on`, and T-S5.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::time::Duration;
 
 use super::*;

@@ -10,6 +10,7 @@
 //! f64 arm lands, and the end-to-end GNU differential alongside it.
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::decode::{decode_gnu_bytecode, parse_arglist_descriptor};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;

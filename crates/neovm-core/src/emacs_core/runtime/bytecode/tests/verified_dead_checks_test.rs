@@ -4,6 +4,7 @@
 //! unsafe accesses too. No arbitrary decoder-fuzz program is executed.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::decode::{
     decode_gnu_bytecode, parse_arglist_descriptor, verify_stack_effects,
 };

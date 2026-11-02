@@ -2,6 +2,7 @@
 //! differential tests in the independent IR evaluator and native lowering.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::{ByteCodeFunction, GnuByteOffsetMapEntry};
 use crate::emacs_core::jit::compile::analyze_cfg;
 use crate::emacs_core::value::{HashTableTest, LambdaParams, Value as LispValue};

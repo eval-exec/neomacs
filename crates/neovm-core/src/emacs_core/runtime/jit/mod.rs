@@ -160,7 +160,7 @@
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::emacs_core::intern::SymId;
 
@@ -850,30 +850,6 @@ impl RuntimeState {
     /// `NEOVM_JIT_THRESHOLD` still overrides per process.
     pub const HOT_THRESHOLD: u32 = 1_000;
 
-    #[inline]
-    pub const fn new() -> Self {
-        Self {
-            heat: AtomicU32::new(0),
-            native_rejected_epoch: AtomicU64::new(0),
-            profit_deferred_heat: AtomicU32::new(0),
-            feedback: feedback::SourceFeedback::new(),
-            compiled_id: AtomicU64::new(0),
-            aot_prewarmed: std::sync::atomic::AtomicBool::new(false),
-            numeric_feedback_consumed: std::sync::atomic::AtomicBool::new(false),
-            leaf_slot: AtomicU64::new(0),
-            leaf_slot_epoch: AtomicU64::new(0),
-            patched_prefix: AtomicU32::new(0),
-            reopt_count: std::sync::atomic::AtomicU8::new(0),
-            t2_reopts: std::sync::atomic::AtomicU8::new(0),
-            aot_retiered: std::sync::atomic::AtomicBool::new(false),
-            reopt_level: std::sync::atomic::AtomicU8::new(0),
-            site_retreat: retreat::SiteRetreatTable::new(),
-            hof_caller: std::sync::atomic::AtomicU8::new(HofCallerBit::Unknown as u8),
-            #[cfg(test)]
-            force_interpret: std::sync::atomic::AtomicBool::new(false),
-        }
-    }
-
     /// Number of leading constant slots that are per-instance (`make-closure`
     /// patched) for this source; 0 for a plain function.
     #[inline]
@@ -1162,22 +1138,27 @@ impl RuntimeState {
 
     /// This function's compiled-cache id, assigning a fresh process-unique one
     /// on first call (idempotent under races). Used only by [`cache`].
+    ///
+    /// This is the single production caller of the lower writer
+    /// [`set_compiled_id_word`] (T1 privacy ledger A2, a MINT). See the
+    /// `SAFETY` note below for the mint and attach invariants.
     #[inline]
     pub fn compiled_id_or_assign(&self) -> u64 {
-        let cur = self.compiled_id.load(Ordering::Acquire);
+        let cur = self.compiled_id_word();
         if cur != 0 {
             return cur;
         }
         // `+ 1` keeps 0 reserved for "unassigned".
         let fresh = NEXT_COMPILED_ID.fetch_add(1, Ordering::Relaxed) + 1;
-        match self
-            .compiled_id
-            .compare_exchange(0, fresh, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => fresh,
-            // Another thread won the race; adopt its id, discard ours.
-            Err(actual) => actual,
-        }
+        // SAFETY: `fresh` is this crate's fresh mint for THIS source
+        // (`NEXT_COMPILED_ID` is monotone, never reused, never caller-supplied
+        // and `+ 1` skips the reserved 0), and `self` is the source's own
+        // `RuntimeState`: `ByteCodeFunction::runtime` is crate-private and only
+        // ever constructed for its own function, then shared by that source's
+        // clones (the A2/A3 attach seal). Storing a foreign word would let one
+        // function's cache entry select another source's executable code; that
+        // cannot happen through this caller.
+        unsafe { crate::emacs_core::value::jit_runtime::set_compiled_id_word(self, fresh) }
     }
 
     /// This function's compiled-cache id if one was ALREADY assigned (it has been
@@ -1186,7 +1167,7 @@ impl RuntimeState {
     /// for the many never-compiled bound functions it walks past.
     #[inline]
     pub fn compiled_id(&self) -> Option<u64> {
-        let cur = self.compiled_id.load(Ordering::Acquire);
+        let cur = self.compiled_id_word();
         (cur != 0).then_some(cur)
     }
 
@@ -1227,28 +1208,6 @@ impl RuntimeState {
     #[cfg(all(feature = "jit", test))]
     pub(crate) fn force_interpret_for_test(&self) -> bool {
         self.force_interpret.load(Ordering::Relaxed)
-    }
-
-    /// The leaf armed for the direct stack entry, if it was armed under
-    /// `epoch` (the current `cache::leaf_slot_epoch()`); a stale slot reads
-    /// as empty and is re-armed through the cache by the tier-up entry.
-    #[cfg(feature = "jit")]
-    #[inline]
-    pub(crate) fn armed_leaf_slot(&self, epoch: u64) -> Option<*const compile::CompiledLeaf> {
-        let ptr = self.leaf_slot.load(Ordering::Relaxed);
-        (ptr != 0 && self.leaf_slot_epoch.load(Ordering::Relaxed) == epoch)
-            .then_some(ptr as *const compile::CompiledLeaf)
-    }
-
-    /// Arm the direct stack entry with a leaf resolved from the cache under
-    /// `epoch` on the same mutator that later probes it. These Relaxed stores
-    /// do not publish a consistent pair to other mutators; the cache owner and
-    /// its Cell-based deopt storage remain thread-confined (P7.11).
-    #[cfg(feature = "jit")]
-    #[inline(always)]
-    pub(crate) fn arm_leaf_slot(&self, leaf: *const compile::CompiledLeaf, epoch: u64) {
-        self.leaf_slot_epoch.store(epoch, Ordering::Relaxed);
-        self.leaf_slot.store(leaf as u64, Ordering::Relaxed);
     }
 
     #[inline]
@@ -1487,14 +1446,6 @@ impl RuntimeState {
             .map_or(0, retreat::SiteRetreat::count)
     }
 
-    /// Empty the interpreter's direct-entry leaf slot: only this source's
-    /// slot can hold this source's leaf, so an invalidation disarms it here
-    /// instead of bumping the global `cache::leaf_slot_epoch`.
-    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn disarm_leaf_slot(&self) {
-        self.leaf_slot.store(0, Ordering::Relaxed);
-    }
-
     /// Stop serving this source as AOT-prewarmed: `dispatch_sized` would
     /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
@@ -1602,4 +1553,33 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     }
     #[cfg(not(feature = "jit"))]
     let _ = h;
+}
+
+/// Test helpers for the armed-leaf slot. Production arming goes through the
+/// lower `unsafe set_leaf_slot_word` from the single `cache::arm_leaf_slot`
+/// call site; tests keep the old typed read/write spellings.
+#[cfg(all(feature = "jit", test))]
+impl RuntimeState {
+    pub(crate) fn armed_leaf_slot(&self, epoch: u64) -> Option<*const compile::CompiledLeaf> {
+        self.armed_leaf_word(epoch)
+            .map(|word| word.get() as *const compile::CompiledLeaf)
+    }
+}
+
+/// Compile-contract seam for the writer MINTs (T1 privacy ledger A1/A2).
+///
+/// `set_leaf_slot_word` and `set_compiled_id_word` are `unsafe`; a safe call
+/// to either must be rejected with E0133. Present only in `contract-fixtures`
+/// builds; never a production surface.
+#[cfg(feature = "contract-fixtures")]
+#[doc(hidden)]
+pub mod contract_fixture {
+    pub use crate::emacs_core::value::jit_runtime::{
+        Runtime, set_compiled_id_word, set_leaf_slot_word,
+    };
+
+    /// A fresh, unattached source state for the negative fixture.
+    pub fn fixture_runtime() -> Runtime {
+        Runtime::new()
+    }
 }

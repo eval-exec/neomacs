@@ -2,6 +2,7 @@
 //! leaves; no generated code or owner-local leaf pointer crosses OS threads.
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
@@ -156,7 +157,15 @@ fn green_owner_turn_invalidates_shared_source_leaf_slots() {
     let source = function(vec![Op::StackRef(0), Op::Add1, Op::Return], vec![]);
     let leaf = cache::resolve_compiled_leaf_ptr(&mut context, &source).expect("compiled source");
     let epoch = cache::leaf_slot_epoch();
-    source.jit_runtime().arm_leaf_slot(leaf, epoch);
+    // SAFETY: test-only; `leaf` was resolved by the cache under `epoch` and
+    // stays allocated for the test's duration.
+    unsafe {
+        crate::emacs_core::value::jit_runtime::set_leaf_slot_word(
+            source.jit_runtime(),
+            leaf as u64,
+            epoch,
+        );
+    }
     assert_eq!(source.jit_runtime().armed_leaf_slot(epoch), Some(leaf));
 
     green_owner::begin_owner_turn();
@@ -169,7 +178,14 @@ fn green_owner_turn_invalidates_shared_source_leaf_slots() {
         "handoff invalidates shared admission without freeing owner code"
     );
 
-    source.jit_runtime().arm_leaf_slot(leaf, returning_epoch);
+    // SAFETY: test-only; the same live leaf under the current epoch.
+    unsafe {
+        crate::emacs_core::value::jit_runtime::set_leaf_slot_word(
+            source.jit_runtime(),
+            leaf as u64,
+            returning_epoch,
+        );
+    }
     assert_eq!(
         source.jit_runtime().armed_leaf_slot(returning_epoch),
         Some(leaf)

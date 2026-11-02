@@ -1,6 +1,7 @@
 //! Fold regressions use the independent IR evaluator and the real Tier-0 ops.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::opt::{

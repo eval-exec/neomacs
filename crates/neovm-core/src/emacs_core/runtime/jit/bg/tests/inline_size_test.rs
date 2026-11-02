@@ -2,6 +2,7 @@
 //! first-sight or entry backend runs in line, a larger one goes to a worker;
 //! an upgrade always defers.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::sync::atomic::Ordering;
 
 use super::*;

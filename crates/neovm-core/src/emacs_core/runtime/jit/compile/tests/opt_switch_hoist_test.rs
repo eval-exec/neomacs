@@ -3,6 +3,7 @@
 //! switch_dispatch tests. Compiler settings and roots belong to this test only.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::knobs::{
     force_inline_switch_for_test, force_switch_hoist_for_test,
 };

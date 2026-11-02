@@ -2,6 +2,7 @@
 //! retires before the leaked cleanup runs. Their observable values must live.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::{bg, cache, compile};
 
 struct HeldPending;

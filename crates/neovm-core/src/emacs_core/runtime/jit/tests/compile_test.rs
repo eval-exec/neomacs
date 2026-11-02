@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::jit::test_support::{prepare_entry, prepare_osr, settle};
 use crate::emacs_core::value::LambdaParams;

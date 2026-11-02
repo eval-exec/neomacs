@@ -1,6 +1,7 @@
 //! Source attribution for a synthetic virtual-frame exit; no native chain
 //! producer is enabled by this stage.
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::{cache, compile};
 use crate::emacs_core::value::LambdaParams;
 

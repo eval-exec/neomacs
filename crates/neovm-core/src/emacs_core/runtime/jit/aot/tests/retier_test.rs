@@ -1,6 +1,7 @@
 //! AOT entry credit, cached-call reach and replacement publication (P4.2 A5).
 #![cfg(target_os = "linux")]
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::sync::atomic::Ordering;
 
 use super::*;

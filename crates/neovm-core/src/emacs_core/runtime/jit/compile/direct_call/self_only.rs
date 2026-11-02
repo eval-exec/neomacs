@@ -7,6 +7,7 @@
 
 use super::super::jit_layout::runtime_identity_word;
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 
 std::thread_local! {

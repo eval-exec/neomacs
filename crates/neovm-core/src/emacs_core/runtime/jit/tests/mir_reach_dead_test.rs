@@ -4,6 +4,7 @@
 //! MIR with the bit, and stays exactly where it was without it.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::stats;

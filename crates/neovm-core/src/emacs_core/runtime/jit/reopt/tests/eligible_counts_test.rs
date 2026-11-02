@@ -3,6 +3,7 @@
 //! from cold guards; no native producer is needed to expose the inherited bug.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::{cache, compile, stats};
 use crate::emacs_core::value::LambdaParams;
 

@@ -17,6 +17,7 @@
 
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
@@ -3036,7 +3037,9 @@ pub(crate) fn armed_leaf_for_stack_call(
     nargs: usize,
 ) -> Option<(*const CompiledLeaf, usize, bool)> {
     let rt = func.jit_runtime();
-    let leaf = rt.armed_leaf_slot(leaf_slot_epoch())?;
+    // The lower layer hands back an opaque word; the arm contract makes it a
+    // live `CompiledLeaf` address under this epoch (same mutator, P7.11).
+    let leaf = rt.armed_leaf_word(leaf_slot_epoch())?.get() as *const CompiledLeaf;
     #[cfg(test)]
     if rt.force_interpret_for_test() {
         return None;
@@ -3076,7 +3079,9 @@ pub(crate) fn armed_leaf_for_native_call(
     nargs: usize,
 ) -> Option<*const CompiledLeaf> {
     let rt = func.jit_runtime();
-    let leaf = rt.armed_leaf_slot(leaf_slot_epoch())?;
+    // The lower layer hands back an opaque word; the arm contract makes it a
+    // live `CompiledLeaf` address under this epoch (same mutator, P7.11).
+    let leaf = rt.armed_leaf_word(leaf_slot_epoch())?.get() as *const CompiledLeaf;
     #[cfg(test)]
     if rt.force_interpret_for_test() {
         return None;
@@ -3125,11 +3130,17 @@ pub(crate) fn run_armed_leaf(
 pub(crate) fn arm_leaf_slot(ctx: *mut Context, func: &ByteCodeFunction) {
     let rt = func.jit_runtime();
     let epoch = leaf_slot_epoch();
-    if rt.armed_leaf_slot(epoch).is_some() {
+    if rt.armed_leaf_word(epoch).is_some() {
         return;
     }
     if let Some(leaf) = resolve_compiled_leaf_ptr(ctx, func) {
-        rt.arm_leaf_slot(leaf, epoch);
+        // SAFETY: `leaf` was resolved from this source's cache entry while the
+        // entry is live and under `epoch`; the cache retires leaves without
+        // freeing them, and the slot is armed and probed on this same mutator
+        // (P7.11). The epoch is stored before the word, both Relaxed.
+        unsafe {
+            crate::emacs_core::value::jit_runtime::set_leaf_slot_word(rt, leaf as u64, epoch);
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 
 use super::stack_guard::stack_guards_emitted_for_test;
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::native_stack::{
     JIT_STACK_RED_ZONE, grow_tracking_jit_limit, jit_stack_limit_here,

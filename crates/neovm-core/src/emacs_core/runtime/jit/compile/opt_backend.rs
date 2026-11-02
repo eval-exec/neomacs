@@ -4,6 +4,7 @@
 //! the synchronous source/front owner and are never dereferenced by IR code.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::jit::opt::{build, ir};
 

@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::value::{HashTableTest, HashTableWeakness, LambdaParams};
 
 /// `constant key; constant table; switch; goto 8; constant 10; return;

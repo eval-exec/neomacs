@@ -2,6 +2,7 @@
 //! install on the owning mutator before observing one execution. Preparation
 //! never executes a Lisp body or changes the selected compilation mode.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::{bytecode::ByteCodeFunction, eval::Context};
 use std::time::Duration;
 

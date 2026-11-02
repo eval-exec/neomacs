@@ -3,6 +3,7 @@
 //! precise snapshot before transferring it to Tier-0.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::{Flow, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::{Context, push_scratch_gc_root};
 use crate::emacs_core::jit::compile::{self, CompiledLeaf, Inline2Mode, NativeRun};

@@ -13,6 +13,7 @@
 //! compilation. Published metadata is immutable; no running Lisp state is
 //! cached here or shared between mutators.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 

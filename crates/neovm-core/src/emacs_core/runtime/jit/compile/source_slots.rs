@@ -30,6 +30,7 @@ use super::dispatch::{FastRun, call_spec_finish, call_spec_framed_run};
 use super::jit_layout::{BYTECODE_RUNTIME_WORD_OFFSET, VECLIKE_TYPE_TAG_OFFSET};
 use super::lowering::{RtCtx, band_imm_p, icmp_imm_p};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::AttentionMask;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::jit::feedback::{CallTarget, SiteShape};
@@ -361,9 +362,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
     // it, deciding everything before the heat moves: a declined call runs
     // the generic shim, whose own probe must see the same heat.
     let epoch = crate::emacs_core::jit::cache::leaf_slot_epoch();
-    let Some(ptr) = rt.armed_leaf_slot(epoch) else {
+    let Some(word) = rt.armed_leaf_word(epoch) else {
         return source_slot_declined();
     };
+    let ptr = word.get() as *const CompiledLeaf;
     #[cfg(test)]
     if rt.force_interpret_for_test() {
         return source_slot_declined();

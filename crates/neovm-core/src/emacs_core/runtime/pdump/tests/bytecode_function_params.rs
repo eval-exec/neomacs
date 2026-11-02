@@ -1,3 +1,4 @@
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::StackDepth;
 use crate::emacs_core::pdump::DumpError;
 use crate::emacs_core::pdump::mapped_heap::unnamed_params;

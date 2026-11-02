@@ -3,6 +3,7 @@
 //! This test seeds numeric feedback so it exercises native generic arithmetic,
 //! independently of tier-up thresholds or the inline/fuser environment.
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::FlowKind;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::value::LambdaParams;

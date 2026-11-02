@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
 };

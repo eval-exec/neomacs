@@ -3,6 +3,7 @@
 //! Threading: plans, contexts and temporary roots are invocation-owned; scoped
 //! overrides contain compiler settings only and are restored on scope exit.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function};

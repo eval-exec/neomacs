@@ -2,6 +2,7 @@
 //! Threading: all contexts, roots, Rc leaves and counter snapshots are
 //! owned by this invocation's mutator. No new runtime cache/state is introduced.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::*;

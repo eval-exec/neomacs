@@ -33,6 +33,7 @@
 //! every source it saw, so no source address is reused while the site
 //! remembers it (no ABA).
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 #[path = "feedback/arrays.rs"]
 pub(crate) mod arrays;
 

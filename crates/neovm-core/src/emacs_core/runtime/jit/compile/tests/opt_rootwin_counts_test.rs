@@ -2,6 +2,7 @@
 //! body on the same compiler thread. Threading: each test owns its native leaves
 //! and context; the backend mode scope restores the exact previous override.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function};

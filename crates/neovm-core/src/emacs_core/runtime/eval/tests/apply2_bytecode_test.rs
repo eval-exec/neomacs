@@ -3,6 +3,7 @@
 //! collection roots and unwind protocol as the general apply path.
 
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt};
 use crate::emacs_core::eval::{

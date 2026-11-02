@@ -18,6 +18,7 @@
 //! is silent — a tracing-only report would vanish or pollute. Nothing is
 //! printed unless a knob asks for it, and stdout is never written.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::cell::Cell;
 use std::io::Write;
 use std::sync::OnceLock;

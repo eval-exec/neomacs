@@ -3,6 +3,7 @@
 //! pending/latch integration is covered by osr_pending_test.rs.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::cache::{self, OsrProbe};

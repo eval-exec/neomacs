@@ -2,6 +2,7 @@
 //! Threading: each fixture owns its Context and leaves; existing compiler-test
 //! overrides are scoped to this test's compiler thread and restored on drop.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::*;

@@ -12,6 +12,7 @@ use super::inline_vars::{
 };
 use super::shims::{UNBIND_SHIM_CALLS, VARBIND_SHIM_CALLS, VARREF_SHIM_CALLS, VARSET_SHIM_CALLS};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;

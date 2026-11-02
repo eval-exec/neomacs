@@ -1,4 +1,5 @@
 //! Real native calls and installed inline dependencies across owned eras.
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 #[path = "p3sym_functions_test/intern_growth.rs"]
 mod intern_growth;
 #[path = "p3sym_functions_test/receiver.rs"]

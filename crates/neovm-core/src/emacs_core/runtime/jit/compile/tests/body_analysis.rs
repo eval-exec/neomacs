@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::{
     Context, push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };

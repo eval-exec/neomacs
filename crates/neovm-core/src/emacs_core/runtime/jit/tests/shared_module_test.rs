@@ -4,6 +4,7 @@
 //! bookkeeping stays bounded however many leaves a thread compiles.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::stats;
 use crate::emacs_core::value::LambdaParams;

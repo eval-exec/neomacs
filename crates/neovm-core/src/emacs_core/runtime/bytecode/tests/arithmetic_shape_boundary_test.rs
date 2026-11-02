@@ -4,6 +4,7 @@
 //! Keep this module separate from the lever-5 verifier corpus.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::decode::parse_arglist_descriptor;
 use crate::emacs_core::error::{EvalResult, FlowKind};
 use crate::emacs_core::eval::Context;

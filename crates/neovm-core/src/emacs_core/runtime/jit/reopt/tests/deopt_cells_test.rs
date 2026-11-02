@@ -3,6 +3,7 @@
 //! `chain` from one deopt out of the next.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::{
     DeoptCells, DeoptResume, NativeRun, force_deopt_for_test, lower_nullary_leaf,
 };

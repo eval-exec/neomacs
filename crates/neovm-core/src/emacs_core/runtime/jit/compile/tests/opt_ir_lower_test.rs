@@ -2,6 +2,7 @@
 //! Native behavior must follow the IR. Threading: plans, contexts and roots
 //! belong to one test invocation; overrides contain compiler settings only.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function};

@@ -8,6 +8,7 @@
 //! Threading: source constants, scratch roots, Context and candidate metadata
 //! belong to one test invocation/mutator. No TLS/cache/shared state is added.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::{
     Context, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,

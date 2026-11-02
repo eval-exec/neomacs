@@ -1,5 +1,6 @@
 //! P2.3's annotated fuser front and legacy-MIR refusal.
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::mask_runtime_addresses;
 use crate::emacs_core::jit::compile::lowering;

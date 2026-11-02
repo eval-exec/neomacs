@@ -1,5 +1,6 @@
 //! Compact opt helper admission and service through the normal native seam.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::*;

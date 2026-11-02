@@ -6,6 +6,7 @@
 //! interpreter's.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;

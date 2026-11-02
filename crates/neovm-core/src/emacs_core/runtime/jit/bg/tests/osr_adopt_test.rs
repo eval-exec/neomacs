@@ -2,6 +2,7 @@
 //! job instead of compiling the body a second time; once the entry job has
 //! settled, a loop still running gets its own OSR leaf.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::sync::atomic::Ordering;
 
 use super::*;

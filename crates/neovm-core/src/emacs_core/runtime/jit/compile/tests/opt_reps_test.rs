@@ -3,6 +3,7 @@
 //! come from forced Tier-0 execution. Threading: plans, roots and compiler-only
 //! overrides belong to one test invocation and are restored on exit.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function};

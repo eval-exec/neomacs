@@ -1,6 +1,7 @@
 //! The per-pc retreat word and its lazily allocated table.
 
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 
 /// The bits are distinct, fit the low byte, and leave the count byte alone.
 #[test]

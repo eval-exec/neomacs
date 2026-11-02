@@ -14,6 +14,7 @@ use super::boolean::BoolResultMode;
 use super::inline_frames::{Frames, HofChainState};
 use super::lowering::{self, RegionDeopt};
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::inline::{HofKind, HofSite};
 use cranelift_codegen::ir::StackSlotKind;
 

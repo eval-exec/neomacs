@@ -40,6 +40,7 @@
 use super::compile::analyze_cfg;
 use super::compile::body_analysis::CompileBody;
 use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;

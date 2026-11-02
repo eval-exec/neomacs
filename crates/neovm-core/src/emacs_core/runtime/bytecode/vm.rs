@@ -1,5 +1,6 @@
 //! Bytecode virtual machine — stack-based interpreter.
 
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use std::sync::OnceLock;
 
 use smallvec::SmallVec;

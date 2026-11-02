@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use direct_call::DirectSelfHeat;
 
 #[test]

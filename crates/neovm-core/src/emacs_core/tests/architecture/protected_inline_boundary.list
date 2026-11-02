@@ -46,9 +46,9 @@ never	emacs_core/lisp/native/builtins/symbols.rs	put_in_obarray_values	run_loop
 never	emacs_core/lisp/native/builtins/symbols.rs	symbol_function_by_id	run_loop
 never	emacs_core/lisp/native/builtins/symbols.rs	symbol_property_get	run_loop
 never	emacs_core/lisp/native/builtins/types.rs	builtin_equal_2	run_loop
-never	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as Clone>::clone	run_loop
-never	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::initialize_lazy_iterative_admission	run_loop
-never	emacs_core/runtime/bytecode/chunk.rs	LazyGnuCode::decode	run_loop,apply1
+never	tagged/bytecode/chunk.rs	<ByteCodeFunction as Clone>::clone	run_loop
+never	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::initialize_lazy_iterative_admission	run_loop
+never	emacs_core/runtime/bytecode/chunk.rs	decode_lazy_gnu_code	run_loop,apply1
 never	emacs_core/runtime/bytecode/vm.rs	<InterpreterFrameAuxStack as Drop>::drop	run_loop	# unique auxiliary-owner teardown; semantic unwind boundary, not an inferred protected-neutral tuning hint
 never	emacs_core/runtime/bytecode/vm.rs	Vm::assign_var_id	run_loop
 never	emacs_core/runtime/bytecode/vm.rs	Vm::bytecode_depth_exceeded	run_loop
@@ -116,9 +116,9 @@ always	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcdr_2	run_loop,in
 always	emacs_core/lisp/native/builtins/cons_list.rs	nthcdr_impl	run_loop,inline
 always	emacs_core/lisp/native/builtins/cons_list.rs	unobserved_list_scan	run_loop,inline
 always	emacs_core/lisp/native/builtins/symbols.rs	builtin_put_3	run_loop,inline
-always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::executes_sealed_ops	run_loop,inline
-always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::is_pdump_stub	run_loop,apply1,funcall_general_untraced,inline
-always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::jit_runtime	run_loop,apply1,inline
+always	tagged/bytecode/chunk.rs	ByteCodeFunction::executes_sealed_ops	run_loop,inline
+always	tagged/bytecode/chunk.rs	ByteCodeFunction::is_pdump_stub	run_loop,apply1,funcall_general_untraced,inline
+always	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::jit_runtime	run_loop,apply1,inline
 always	emacs_core/runtime/bytecode/vm.rs	ActiveCodeView::of	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	BytecodeTierPolicy::records_call_feedback	run_loop,inline
 always	emacs_core/runtime/bytecode/vm.rs	ConsumedCallOperandRootSlot::from_args_start	run_loop,inline
@@ -231,9 +231,9 @@ exempt	emacs_core/lisp/native/builtins/from_value.rs	<SymId as FromValue>::from_
 exempt	emacs_core/lisp/native/builtins/hooks.rs	SavedWindowConfiguration::capture	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/lisp/native/builtins/symbols.rs	builtin_get_2	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/lisp/native/builtins/symbols.rs	builtin_symbol_function_1	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
-exempt	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::executable_ops	run_loop,apply1	# inlined in apply1, run_loop but called out of line in run_loop: no single attribute matches both
-exempt	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::executes_verified_ops	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
-exempt	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::verifier_entry_depth	run_loop,apply1	# called at the protected site, inlined at 2 other sites: never would re-tune them
+exempt	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::executable_ops	run_loop,apply1	# inlined in apply1, run_loop but called out of line in run_loop: no single attribute matches both
+exempt	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::executes_verified_ops	run_loop	# inlined at the protected site, called out of line by 2 other functions: always would re-tune them
+exempt	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::verifier_entry_depth	run_loop,apply1	# called at the protected site, inlined at 2 other sites: never would re-tune them
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerReturn::new	run_loop	# called by Vm::install_iterative_interpreter_frame, but leaves no code at the protected site (folded, cfg-gated or debug-only)
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterCallerStack::with_storage	run_loop,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/bytecode/vm.rs	InterpreterDriverDepth::from_suspended_callers	run_loop	# called by Vm::complete_interpreter_frame_value, but leaves no code at the protected site (folded, cfg-gated or debug-only)
@@ -352,7 +352,7 @@ always	emacs_core/runtime/eval/command_loop.rs	Context::gc_safe_point_exact_shou
 always	emacs_core/runtime/eval/tree_walk.rs	Context::enter_interpreted_eval_depth	apply1,MapCallee::call,inline
 always	emacs_core/runtime/jit/cache.rs	leaf_slot_epoch	apply1,inline
 always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::accepts	apply1,inline
-always	emacs_core/runtime/jit/mod.rs	RuntimeState::arm_leaf_slot	apply1,inline
+always	emacs_core/runtime/value/jit_runtime/mod.rs	set_leaf_slot_word	apply1,inline
 always	emacs_core/runtime/jit/mod.rs	RuntimeState::bump_heat	apply1,inline
 always	emacs_core/runtime/jit/stats.rs	record_dispatch	apply1,inline
 always	emacs_core/runtime/jit/stats.rs	summary_enabled	apply1,run_armed_leaf,inline
@@ -378,7 +378,7 @@ exempt	emacs_core/runtime/forward/mod.rs	LispBoolFwd::set	apply1,MapCallee::call
 exempt	emacs_core/runtime/jit/cache.rs	arm_leaf_slot	apply1,inline	# outside the verified protected-neutral subset; retain no inline attribute; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/jit/cache.rs	armed_leaf_for_stack_call	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/jit/cache.rs	note_seam_interp_fallback	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
-exempt	emacs_core/runtime/jit/mod.rs	RuntimeState::armed_leaf_slot	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
+exempt	emacs_core/runtime/value/jit_runtime/mod.rs	RuntimeState::armed_leaf_word	apply1,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/jit/mod.rs	RuntimeState::dispatch_sized	apply1	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
 exempt	emacs_core/runtime/jit/mod.rs	retier_heat	apply1	# inlined at the protected site, called out of line by 1 other functions: always would re-tune them
 exempt	emacs_core/runtime/symbol/mod.rs	Obarray::debug_on_next_call_bool_fwd	apply1,MapCallee::call,inline	# outside the verified protected-neutral subset; retain #[inline]; extending the subset needs all protected pre-LTO bodies, inline trees and level-3 contracts to pass
@@ -397,7 +397,7 @@ generated	emacs_core/runtime/eval/mod.rs	lambda_symbol	funcall_general_untraced	
 never	emacs_core/runtime/jit/cache.rs	direct_call_cold	run_armed_leaf
 never	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native_outlined	run_armed_leaf
 never	emacs_core/runtime/jit/stats.rs	record_native_entry_enabled	run_armed_leaf
-always	emacs_core/runtime/bytecode/chunk.rs	ByteCodeFunction::jit_constant_base	run_armed_leaf,inline
+always	emacs_core/runtime/bytecode/chunk.rs	<ByteCodeFunction as ByteCodeFunctionExt>::jit_constant_base	run_armed_leaf,inline
 always	emacs_core/runtime/jit/cache.rs	run_resolved_leaf_native	run_armed_leaf,inline
 always	emacs_core/runtime/jit/compile/leaf.rs	CompiledLeaf::entry_call_raw_memory	run_armed_leaf,inline
 always	emacs_core/runtime/jit/stats.rs	record_native_entry	run_armed_leaf,inline
