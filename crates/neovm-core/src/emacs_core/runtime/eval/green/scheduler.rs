@@ -2875,7 +2875,7 @@ impl Control {
 }
 
 #[cfg(test)]
-#[path = "scheduler_index_tests.rs"]
+#[path = "../tests/green_scheduler_index_test.rs"]
 mod index_tests;
 
 #[cfg(test)]
