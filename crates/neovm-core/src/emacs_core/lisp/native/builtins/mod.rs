@@ -469,7 +469,7 @@ pub(crate) use file_notify::{BACKEND_SUBRS, REMOVE_WATCH_SEMANTICS, RemoveWatchS
 pub(crate) mod fringe_bitmap;
 pub(crate) mod fringe_standard_bitmaps;
 pub(crate) mod gnutls;
-pub(crate) mod hash_user_test;
+pub(crate) mod hash_user_callback;
 pub(crate) mod higher_order;
 mod hooks;
 pub(crate) mod keymaps;

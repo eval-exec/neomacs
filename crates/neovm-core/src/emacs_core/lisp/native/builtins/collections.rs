@@ -992,7 +992,7 @@ fn hash_table_user_defined_call(
     args: impl Into<LispArgVec>,
 ) -> EvalResult {
     if super::super::hashtab::hash_test_parity_enabled() {
-        return super::hash_user_test::with_user_test_guard(eval, table, |eval| {
+        return super::hash_user_callback::with_user_test_guard(eval, table, |eval| {
             eval.apply(function, args)
         });
     }

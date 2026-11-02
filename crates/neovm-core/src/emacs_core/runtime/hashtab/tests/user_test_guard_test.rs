@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::builtins::hash_user_test::with_user_test_guard;
+use crate::emacs_core::builtins::hash_user_callback::with_user_test_guard;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::HashTableTest;
 
