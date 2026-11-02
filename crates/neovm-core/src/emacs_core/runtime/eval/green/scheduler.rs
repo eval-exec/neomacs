@@ -408,13 +408,14 @@ impl WaitMap {
                 self.runnable_count -= 1;
             }
             Wait::Select { wait_end } => {
-                debug_assert!(
-                    self.select_index
-                        .remove(&DeadlineKey { wait_end, key })
-                        .is_some(),
-                    "Select wait was not indexed"
-                );
-                debug_assert!(self.select_keys.remove(&key), "Select key was not indexed");
+                // The removals run in every build; only the checks are debug.
+                // Inside `debug_assert!` they vanished from release builds and
+                // left retired waits indexed, which the deadlock verdict then
+                // counted as live (false "All threads are blocked").
+                let indexed = self.select_index.remove(&DeadlineKey { wait_end, key });
+                debug_assert!(indexed.is_some(), "Select wait was not indexed");
+                let keyed = self.select_keys.remove(&key);
+                debug_assert!(keyed, "Select key was not indexed");
             }
             Wait::Join(target) => Self::remove_waiter(&mut self.join_waiters, target, key),
             Wait::Mutex(id) => Self::remove_waiter(&mut self.mutex_waiters, id, key),
@@ -432,7 +433,8 @@ impl WaitMap {
             debug_assert!(false, "waiter object missing from its index");
             return;
         };
-        debug_assert!(set.remove(&key), "waiter was not indexed under its object");
+        let removed = set.remove(&key);
+        debug_assert!(removed, "waiter was not indexed under its object");
         if set.is_empty() {
             waiters.remove(&object);
         }
