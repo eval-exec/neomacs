@@ -10,49 +10,107 @@
 //!
 //! The scan parses every source file of the crate and walks the token trees of
 //! each debug-assertion macro, so comments and string literals never match. A
-//! method call named in [`STATE_CHANGING_METHODS`] is a violation. The fix is
-//! always the same: perform the call in a `let`, then assert on the result.
+//! method call named in [`STATE_CHANGING_METHODS`], or starting with one of the
+//! crate's mutator prefixes in [`STATE_CHANGING_PREFIXES`] (`note_`, `set_`,
+//! `enqueue_`, ...), is a violation. The fix is always the same: perform the
+//! call in a `let`, then assert on the result.
 
 use std::path::{Path, PathBuf};
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::{self, Visit};
 
-/// Container, cell and atomic methods that change the receiver's state.
+/// Container, cell, lock, channel, iterator and atomic methods that change the
+/// receiver's (or a shared) state.
 const STATE_CHANGING_METHODS: &[&str] = &[
+    "advance",
     "append",
+    "borrow_mut",
     "clear",
     "compare_exchange",
     "compare_exchange_weak",
+    "dedup",
     "drain",
     "entry",
     "extend",
     "fetch_add",
     "fetch_and",
+    "fetch_max",
+    "fetch_min",
+    "fetch_nand",
     "fetch_or",
     "fetch_sub",
+    "fetch_update",
+    "fetch_xor",
+    "fill",
     "get_or_insert",
     "get_or_insert_with",
     "insert",
+    "invalidate",
+    "lock",
+    "next",
     "or_default",
     "or_insert",
     "or_insert_with",
     "pop",
-    "pop_back",
-    "pop_front",
     "push",
-    "push_back",
-    "push_front",
+    "recv",
     "remove",
     "replace",
+    "resize",
     "retain",
+    "reverse",
+    "send",
     "set",
+    "sort",
+    "sort_unstable",
+    "split_off",
     "store",
     "swap",
-    "swap_remove",
     "take",
     "truncate",
+    "try_lock",
+    "try_recv",
 ];
+
+/// The crate names its mutators by convention (`push_back`, `pop_ready`,
+/// `remove_key`, `set_wait`, `store_plist_head`, `note_root_overwrite`,
+/// `record_heap_write`, `enqueue_ready`, ...). Getters use other prefixes:
+/// `mark_phase()` and `alloc_regions_open()` are pure queries and stay allowed.
+const STATE_CHANGING_PREFIXES: &[&str] = &[
+    "acquire_",
+    "advance_",
+    "enqueue_",
+    "insert_",
+    "install_",
+    "note_",
+    "notify_",
+    "pop_",
+    "push_",
+    "record_",
+    "register_",
+    "release_",
+    "remove_",
+    "reset_",
+    "retire_",
+    "set_",
+    "store_",
+    "swap_",
+    "take_",
+    "unregister_",
+    "wake_",
+];
+
+/// Prefix matches that are queries, not mutations.
+const QUERY_EXCEPTIONS: &[&str] = &["take_while"];
+
+fn is_state_changing(name: &str) -> bool {
+    STATE_CHANGING_METHODS.contains(&name)
+        || (STATE_CHANGING_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+            && !QUERY_EXCEPTIONS.contains(&name))
+}
 
 const DEBUG_ASSERTIONS: &[&str] = &["debug_assert", "debug_assert_eq", "debug_assert_ne"];
 
@@ -80,9 +138,7 @@ fn state_changing_calls(tokens: TokenStream, found: &mut Vec<(String, usize)>) {
                     continue;
                 };
                 let name = name.to_string();
-                if arguments.delimiter() == Delimiter::Parenthesis
-                    && STATE_CHANGING_METHODS.contains(&name.as_str())
-                {
+                if arguments.delimiter() == Delimiter::Parenthesis && is_state_changing(&name) {
                     found.push((name, punct.span().start().line));
                 }
             }
@@ -161,6 +217,19 @@ fn the_scan_flags_a_mutation_inside_a_debug_assertion() {
             let removed = set.remove(&3);
             debug_assert!(removed);
             debug_assert!(set.contains(&4));
+            debug_assert!(state.note_root_overwrite(5));
+            debug_assert!(
+                v.iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .is_empty()
+                    || {
+                        v.retain(|x| *x > 0);
+                        true
+                    }
+            );
+            debug_assert!(state.mark_phase().is_idle());
+            debug_assert!(v.iter().take_while(|x| **x > 0).count() < 9);
         }
     "#;
     let parsed = syn::parse_file(source).expect("fixture parses");
@@ -169,7 +238,9 @@ fn the_scan_flags_a_mutation_inside_a_debug_assertion() {
         violations: Vec::new(),
     };
     scan.visit_file(&parsed);
-    assert_eq!(scan.violations.len(), 2, "{:#?}", scan.violations);
+    assert_eq!(scan.violations.len(), 4, "{:#?}", scan.violations);
     assert!(scan.violations[0].contains("`.remove(..)`"));
     assert!(scan.violations[1].contains("`.pop(..)`"));
+    assert!(scan.violations[2].contains("`.note_root_overwrite(..)`"));
+    assert!(scan.violations[3].contains("`.retain(..)`"));
 }

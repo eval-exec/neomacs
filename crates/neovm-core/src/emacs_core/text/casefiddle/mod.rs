@@ -1071,8 +1071,10 @@ fn changed_char_span(old: &LispString, new: &CasedRegion) -> Option<CasingChange
             last_new_end = output_end;
         }
     }
-    debug_assert!(expansions.next().is_none());
-    debug_assert!(output.next().is_none());
+    let leftover_expansion = expansions.next();
+    let leftover_output = output.next();
+    debug_assert!(leftover_expansion.is_none());
+    debug_assert!(leftover_output.is_none());
     first.map(|first| CasingChangedSpan {
         offset: crate::buffer::CharLen::new(first),
         old_len: crate::buffer::CharLen::new(last_old_end - first),
