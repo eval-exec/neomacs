@@ -12,7 +12,8 @@ use super::host_service::{
     self, MainNativeDrain, NativeSettlement, OwnerReceive, PreparedHostCall, RestoredHostOwner,
 };
 use super::scheduler::{
-    Control, Handoff, Lifecycle, NativeRelease, ServiceReturn, ThreadKey, Wait, Wake,
+    Control, Handoff, Lifecycle, NativeRelease, SchedulerIndexInconsistency, ServiceReturn,
+    ThreadKey, Wait, Wake,
 };
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::signal;
@@ -26,6 +27,15 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 pub(crate) use crate::host_effect::wake::SelectTurn;
+
+/// What the scheduler concluded when no owner could run.
+enum DeadlockVerdict {
+    /// No runnable owner and the wait index agrees: the GNU deadlock signal.
+    Blocked,
+    /// No runnable owner but the wait index disagrees with the wait map: a
+    /// typed internal error instead of the misleading deadlock message.
+    IndexInconsistent(SchedulerIndexInconsistency),
+}
 
 /// Waits that gave the Baton up (tests read it).
 #[cfg(test)]
@@ -480,9 +490,15 @@ impl Context {
                 (Ok(wake), Some(resume), None)
             }
         };
-        let (wake, deadlocked) = match outcome {
-            Ok(wake) => (wake, false),
-            Err(Handoff::NoRunnable(baton)) => (Wake::Resume(baton), true),
+        let (wake, verdict) = match outcome {
+            Ok(wake) => (wake, None),
+            Err(Handoff::NoRunnable { baton, invariant }) => {
+                let verdict = match invariant {
+                    Ok(()) => DeadlockVerdict::Blocked,
+                    Err(error) => DeadlockVerdict::IndexInconsistent(error),
+                };
+                (Wake::Resume(baton), Some(verdict))
+            }
         };
         // A service turn must not restore main's Lisp continuation, JIT pins,
         // bindings or TLS, or consume its original semantic Wait.
@@ -579,14 +595,26 @@ impl Context {
             return Err(Flow::shutdown(request));
         }
         retirement?;
-        if deadlocked {
-            return Err(signal(
-                "error",
-                vec![Value::string(
-                    "All threads are blocked: this one would wait forever \
-                     (GNU Emacs hangs here; neomacs signals)",
-                )],
-            ));
+        match verdict {
+            Some(DeadlockVerdict::Blocked) => {
+                return Err(signal(
+                    "error",
+                    vec![Value::string(
+                        "All threads are blocked: this one would wait forever \
+                         (GNU Emacs hangs here; neomacs signals)",
+                    )],
+                ));
+            }
+            Some(DeadlockVerdict::IndexInconsistent(error)) => {
+                let message = format!(
+                    "neomacs internal error: scheduler wait-index invariant violated: {error}"
+                );
+                // A handler may swallow the signal; the log keeps the
+                // maintenance bug visible. Cold path, so this costs nothing.
+                tracing::error!("{message}");
+                return Err(signal("error", vec![Value::string(message)]));
+            }
+            None => {}
         }
         completion
     }

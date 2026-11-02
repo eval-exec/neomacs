@@ -127,7 +127,82 @@ pub(crate) enum Lifecycle {
 pub(crate) enum Handoff {
     /// No other thread can run and the caller waits for something only a
     /// running thread could give it: GNU would hang (neomacs signals).
-    NoRunnable(Baton),
+    /// `invariant` is the wait-index predicate evaluated under the same state
+    /// lock that decided no owner could run; carrying it out of that critical
+    /// section keeps a later transition from rewriting the evidence.
+    NoRunnable {
+        baton: Baton,
+        invariant: Result<(), SchedulerIndexInconsistency>,
+    },
+}
+
+/// One violated wait-index invariant. Cold-path diagnostics only; it never
+/// repairs the index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WaitIndexKind {
+    SelectDeadline,
+    SelectKeys,
+    JoinWaiters,
+    MutexWaiters,
+    ConditionWaiters,
+    RunnableCount,
+    SelectIndexCount,
+    SelectKeysCount,
+    JoinWaiterCount,
+    MutexWaiterCount,
+    ConditionWaiterCount,
+    ReadySlotCount,
+    ReadySlotEntry,
+    ReadyKeyNotRunnable,
+}
+
+/// The first violated wait-index invariant: the index's view of KEY and the
+/// wait map's view of the same key (or the two counts for a count check).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SchedulerIndexInconsistency {
+    pub(crate) kind: WaitIndexKind,
+    pub(crate) key: Option<ThreadKey>,
+    pub(crate) index_view: String,
+    pub(crate) wait_view: String,
+}
+
+impl SchedulerIndexInconsistency {
+    fn new(
+        kind: WaitIndexKind,
+        key: Option<ThreadKey>,
+        index_view: String,
+        wait_view: String,
+    ) -> Self {
+        Self {
+            kind,
+            key,
+            index_view,
+            wait_view,
+        }
+    }
+}
+
+impl std::fmt::Display for SchedulerIndexInconsistency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.kind)?;
+        if let Some(key) = self.key {
+            write!(f, " key={key:?}")?;
+        }
+        write!(f, ": index={} wait-map={}", self.index_view, self.wait_view)
+    }
+}
+
+/// Test-only fault hook for the release verdict test: skip exactly one
+/// Condition index removal, reproducing the released SCHEDIDX bug without a
+/// production knob. Absent from non-test builds, and from debug test builds
+/// where the per-transition checker would catch the skipped removal first.
+#[cfg(all(test, not(debug_assertions)))]
+static SKIP_NEXT_CONDITION_INDEX_REMOVAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(all(test, not(debug_assertions)))]
+pub(crate) fn skip_next_condition_index_removal_for_test() {
+    SKIP_NEXT_CONDITION_INDEX_REMOVAL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// A native service turn does not resume main's suspended Lisp continuation.
@@ -291,6 +366,15 @@ enum NextOwner {
     Native(NativeTurn),
 }
 
+/// The owner-selection loop's outcome. `NoRunnable` carries the wait-index
+/// predicate evaluated inside the same critical section that found no owner;
+/// a check taken after the lock is dropped could see a state a later
+/// transition has already re-synced.
+enum PickNext {
+    Owner(NextOwner),
+    NoRunnable(Result<(), SchedulerIndexInconsistency>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeTurn {
     Service(HostRequestKey),
@@ -419,9 +503,20 @@ impl WaitMap {
             }
             Wait::Join(target) => Self::remove_waiter(&mut self.join_waiters, target, key),
             Wait::Mutex(id) => Self::remove_waiter(&mut self.mutex_waiters, id, key),
-            Wait::Condition(id) => Self::remove_waiter(&mut self.condition_waiters, id, key),
+            Wait::Condition(id) => {
+                #[cfg(all(test, not(debug_assertions)))]
+                if Self::take_condition_index_skip_for_test() {
+                    return;
+                }
+                Self::remove_waiter(&mut self.condition_waiters, id, key)
+            }
             Wait::HostRequest(_) | Wait::Exited => {}
         }
+    }
+
+    #[cfg(all(test, not(debug_assertions)))]
+    fn take_condition_index_skip_for_test() -> bool {
+        SKIP_NEXT_CONDITION_INDEX_REMOVAL.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
     fn remove_waiter<K: Ord>(
@@ -440,8 +535,10 @@ impl WaitMap {
         }
     }
 
-    #[cfg(debug_assertions)]
-    fn check_invariants(&self) {
+    /// The single wait-index predicate. Debug builds run it at every
+    /// transition seam; every build runs it at the cold deadlock verdict.
+    /// It only reports: no mutation, no repair.
+    fn verify(&self) -> Result<(), SchedulerIndexInconsistency> {
         let mut runnable = 0usize;
         let mut selects = 0usize;
         let mut joiners = 0usize;
@@ -452,70 +549,209 @@ impl WaitMap {
                 Wait::Runnable => runnable += 1,
                 Wait::Select { wait_end } => {
                     selects += 1;
-                    debug_assert!(
-                        self.select_index.contains_key(&DeadlineKey {
-                            wait_end,
-                            key: *key
-                        }),
-                        "Select wait missing from the deadline index"
-                    );
-                    debug_assert!(self.select_keys.contains(key), "Select key missing");
+                    if !self.select_index.contains_key(&DeadlineKey {
+                        wait_end,
+                        key: *key,
+                    }) {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::SelectDeadline,
+                            Some(*key),
+                            format!("select_index lacks (deadline={wait_end:?}, key={key:?})"),
+                            format!("by_key[{key:?}]=Select {{ wait_end: {wait_end:?} }}"),
+                        ));
+                    }
+                    if !self.select_keys.contains(key) {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::SelectKeys,
+                            Some(*key),
+                            format!("select_keys lacks {key:?}"),
+                            format!("by_key[{key:?}]=Select {{ wait_end: {wait_end:?} }}"),
+                        ));
+                    }
                 }
                 Wait::Join(target) => {
                     joiners += 1;
-                    debug_assert!(
-                        self.join_waiters
-                            .get(&target)
-                            .is_some_and(|set| set.contains(key)),
-                        "join waiter missing from its object set"
-                    );
+                    if !self
+                        .join_waiters
+                        .get(&target)
+                        .is_some_and(|set| set.contains(key))
+                    {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::JoinWaiters,
+                            Some(*key),
+                            format!("join_waiters[{target:?}] lacks {key:?}"),
+                            format!("by_key[{key:?}]=Join({target:?})"),
+                        ));
+                    }
                 }
                 Wait::Mutex(id) => {
                     mutexes += 1;
-                    debug_assert!(
-                        self.mutex_waiters
-                            .get(&id)
-                            .is_some_and(|set| set.contains(key)),
-                        "mutex waiter missing from its object set"
-                    );
+                    if !self
+                        .mutex_waiters
+                        .get(&id)
+                        .is_some_and(|set| set.contains(key))
+                    {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::MutexWaiters,
+                            Some(*key),
+                            format!("mutex_waiters[{id:?}] lacks {key:?}"),
+                            format!("by_key[{key:?}]=Mutex({id:?})"),
+                        ));
+                    }
                 }
                 Wait::Condition(id) => {
                     conditions += 1;
-                    debug_assert!(
-                        self.condition_waiters
-                            .get(&id)
-                            .is_some_and(|set| set.contains(key)),
-                        "condition waiter missing from its object set"
-                    );
+                    if !self
+                        .condition_waiters
+                        .get(&id)
+                        .is_some_and(|set| set.contains(key))
+                    {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::ConditionWaiters,
+                            Some(*key),
+                            format!("condition_waiters[{id:?}] lacks {key:?}"),
+                            format!("by_key[{key:?}]=Condition({id:?})"),
+                        ));
+                    }
                 }
                 Wait::HostRequest(_) | Wait::Exited => {}
             }
         }
-        debug_assert_eq!(runnable, self.runnable_count);
-        debug_assert_eq!(selects, self.select_index.len());
-        debug_assert_eq!(selects, self.select_keys.len());
-        debug_assert_eq!(
-            joiners,
-            self.join_waiters.values().map(BTreeSet::len).sum::<usize>()
-        );
-        debug_assert_eq!(
-            mutexes,
-            self.mutex_waiters
-                .values()
-                .map(BTreeSet::len)
-                .sum::<usize>()
-        );
-        debug_assert_eq!(
-            conditions,
-            self.condition_waiters
-                .values()
-                .map(BTreeSet::len)
-                .sum::<usize>()
-        );
+        // Reverse direction: no index entry may name a key whose current wait
+        // is a different kind, Exited, or Runnable.
+        for deadline in self.select_index.keys() {
+            let DeadlineKey { wait_end, key } = *deadline;
+            match self.by_key.get(&key) {
+                Some(Wait::Select { wait_end: current }) if *current == wait_end => {}
+                other => {
+                    return Err(SchedulerIndexInconsistency::new(
+                        WaitIndexKind::SelectDeadline,
+                        Some(key),
+                        format!("select_index has (deadline={wait_end:?}, key={key:?})"),
+                        format!("by_key[{key:?}]={other:?}"),
+                    ));
+                }
+            }
+        }
+        for key in &self.select_keys {
+            match self.by_key.get(key) {
+                Some(Wait::Select { .. }) => {}
+                other => {
+                    return Err(SchedulerIndexInconsistency::new(
+                        WaitIndexKind::SelectKeys,
+                        Some(*key),
+                        format!("select_keys contains {key:?}"),
+                        format!("by_key[{key:?}]={other:?}"),
+                    ));
+                }
+            }
+        }
+        for (target, set) in &self.join_waiters {
+            for key in set {
+                match self.by_key.get(key) {
+                    Some(Wait::Join(current)) if *current == *target => {}
+                    other => {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::JoinWaiters,
+                            Some(*key),
+                            format!("join_waiters[{target:?}] contains {key:?}"),
+                            format!("by_key[{key:?}]={other:?}"),
+                        ));
+                    }
+                }
+            }
+        }
+        for (id, set) in &self.mutex_waiters {
+            for key in set {
+                match self.by_key.get(key) {
+                    Some(Wait::Mutex(current)) if *current == *id => {}
+                    other => {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::MutexWaiters,
+                            Some(*key),
+                            format!("mutex_waiters[{id:?}] contains {key:?}"),
+                            format!("by_key[{key:?}]={other:?}"),
+                        ));
+                    }
+                }
+            }
+        }
+        for (id, set) in &self.condition_waiters {
+            for key in set {
+                match self.by_key.get(key) {
+                    Some(Wait::Condition(current)) if *current == *id => {}
+                    other => {
+                        return Err(SchedulerIndexInconsistency::new(
+                            WaitIndexKind::ConditionWaiters,
+                            Some(*key),
+                            format!("condition_waiters[{id:?}] contains {key:?}"),
+                            format!("by_key[{key:?}]={other:?}"),
+                        ));
+                    }
+                }
+            }
+        }
+        if runnable != self.runnable_count {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::RunnableCount,
+                None,
+                format!("runnable_count={}", self.runnable_count),
+                format!("Runnable waits={runnable}"),
+            ));
+        }
+        if selects != self.select_index.len() {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::SelectIndexCount,
+                None,
+                format!("select_index.len()={}", self.select_index.len()),
+                format!("Select waits={selects}"),
+            ));
+        }
+        if selects != self.select_keys.len() {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::SelectKeysCount,
+                None,
+                format!("select_keys.len()={}", self.select_keys.len()),
+                format!("Select waits={selects}"),
+            ));
+        }
+        let join_entries = self.join_waiters.values().map(BTreeSet::len).sum::<usize>();
+        if joiners != join_entries {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::JoinWaiterCount,
+                None,
+                format!("join_waiters entries={join_entries}"),
+                format!("Join waits={joiners}"),
+            ));
+        }
+        let mutex_entries = self
+            .mutex_waiters
+            .values()
+            .map(BTreeSet::len)
+            .sum::<usize>();
+        if mutexes != mutex_entries {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::MutexWaiterCount,
+                None,
+                format!("mutex_waiters entries={mutex_entries}"),
+                format!("Mutex waits={mutexes}"),
+            ));
+        }
+        let condition_entries = self
+            .condition_waiters
+            .values()
+            .map(BTreeSet::len)
+            .sum::<usize>();
+        if conditions != condition_entries {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::ConditionWaiterCount,
+                None,
+                format!("condition_waiters entries={condition_entries}"),
+                format!("Condition waits={conditions}"),
+            ));
+        }
+        Ok(())
     }
-
-    #[cfg(not(debug_assertions))]
-    fn check_invariants(&self) {}
 }
 
 impl std::ops::Deref for WaitMap {
@@ -666,28 +902,48 @@ impl ReadyQueue {
         self.valid_count - usize::from(self.is_queued(me))
     }
 
-    #[cfg(debug_assertions)]
-    fn check_invariants(&self) {
+    /// The ready part of the shared invariant predicate: a queued slot has a
+    /// matching entry and belongs to a Runnable key; valid_count is exact.
+    fn verify(&self, waits: &WaitMap) -> Result<(), SchedulerIndexInconsistency> {
         let queued = self
             .slots
             .values()
             .filter(|slot| matches!(slot, ReadySlot::Queued(_)))
             .count();
-        debug_assert_eq!(queued, self.valid_count, "queued slot count != valid_count");
+        if queued != self.valid_count {
+            return Err(SchedulerIndexInconsistency::new(
+                WaitIndexKind::ReadySlotCount,
+                None,
+                format!("valid_count={}", self.valid_count),
+                format!("queued slots={queued}"),
+            ));
+        }
         for (key, slot) in &self.slots {
             if let ReadySlot::Queued(ticket) = slot {
-                debug_assert!(
-                    self.entries
-                        .iter()
-                        .any(|(entry, entry_ticket)| entry == key && entry_ticket == ticket),
-                    "queued slot has no matching ready entry"
-                );
+                if !self
+                    .entries
+                    .iter()
+                    .any(|(entry, entry_ticket)| entry == key && entry_ticket == ticket)
+                {
+                    return Err(SchedulerIndexInconsistency::new(
+                        WaitIndexKind::ReadySlotEntry,
+                        Some(*key),
+                        format!("slots[{key:?}]=Queued({ticket:?})"),
+                        "ready entries hold no matching ticket".to_owned(),
+                    ));
+                }
+                if waits.get(key) != Some(&Wait::Runnable) {
+                    return Err(SchedulerIndexInconsistency::new(
+                        WaitIndexKind::ReadyKeyNotRunnable,
+                        Some(*key),
+                        format!("ready slot Queued({ticket:?})"),
+                        format!("by_key[{key:?}]={:?}", waits.get(key)),
+                    ));
+                }
             }
         }
+        Ok(())
     }
-
-    #[cfg(not(debug_assertions))]
-    fn check_invariants(&self) {}
 
     // --- cfg(test) surface for the pinned scheduler tests ----------------
     #[cfg(test)]
@@ -760,6 +1016,17 @@ struct ControlState {
     pending_services: VecDeque<HostRequestKey>,
     pending_acquires: VecDeque<NativeAcquire>,
     main_os_thread: Option<std::thread::ThreadId>,
+}
+
+impl ControlState {
+    /// The one wait-index predicate: wait map and ready queue. Debug builds
+    /// call it at every transition seam; release builds call it only at the
+    /// cold deadlock verdict. It only reports; it never repairs.
+    fn verify_invariants(&self) -> Result<(), SchedulerIndexInconsistency> {
+        self.waits.verify()?;
+        self.ready.verify(&self.waits)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1177,12 +1444,15 @@ impl Control {
             Some(ServicePhase::ServingAfterWait) => {
                 Self::enqueue_ready(&mut state, slice.requester);
                 drop(state);
-                let Some(next) = self.pick_next() else {
-                    return Err(ServiceReturnRefusal {
-                        reason: ServiceRefusal::WrongServiceState,
-                        slice,
-                        baton,
-                    });
+                let next = match self.pick_next() {
+                    PickNext::Owner(next) => next,
+                    PickNext::NoRunnable(_) => {
+                        return Err(ServiceReturnRefusal {
+                            reason: ServiceRefusal::WrongServiceState,
+                            slice,
+                            baton,
+                        });
+                    }
                 };
                 let (target, wake) = Self::wake_for(next, baton);
                 match wake {
@@ -2541,7 +2811,7 @@ impl Control {
 
     /// Choose an owner, blocking only while every owner is parked. The
     /// Baton stays local and no World cell is read during this OS wait.
-    fn pick_next(&self) -> Option<NextOwner> {
+    fn pick_next(&self) -> PickNext {
         loop {
             // Register BEFORE checking scheduler predicates. A transition
             // between this check and the OS block advances the same snapshot;
@@ -2560,10 +2830,10 @@ impl Control {
                     Self::wake_selects(&mut state);
                 }
                 if let Some(turn) = Self::pick_service(&mut state) {
-                    return Some(NextOwner::Native(turn));
+                    return PickNext::Owner(NextOwner::Native(turn));
                 }
                 match Self::pick(&mut state) {
-                    Some((key, None)) => return Some(NextOwner::Resume(key)),
+                    Some((key, None)) => return PickNext::Owner(NextOwner::Resume(key)),
                     Some((_, Some(deadline))) => deadline,
                     None => {
                         if state.physical.get(&ThreadKey::Main)
@@ -2582,7 +2852,7 @@ impl Control {
                             );
                             continue;
                         }
-                        return None;
+                        return PickNext::NoRunnable(Self::verify_invariants(&state));
                     }
                 }
             };
@@ -2597,10 +2867,10 @@ impl Control {
                 // Recheck under the same lock used by the notifier: an acquire
                 // between the initial scan and this wait must not be lost.
                 if let Some(turn) = Self::pick_service(&mut state) {
-                    return Some(NextOwner::Native(turn));
+                    return PickNext::Owner(NextOwner::Native(turn));
                 }
                 if let Some((key, None)) = Self::pick(&mut state) {
-                    return Some(NextOwner::Resume(key));
+                    return PickNext::Owner(NextOwner::Resume(key));
                 }
                 drop(
                     self.metadata_changed
@@ -2720,26 +2990,28 @@ impl Control {
         None
     }
 
-    /// Debug cross-structure contract: every wait is indexed under exactly
-    /// one bucket and every queued ready turn belongs to a Runnable key.
+    /// Debug per-transition contract: the same predicate the release deadlock
+    /// verdict runs, so both builds agree on what an inconsistent index is.
     #[cfg(debug_assertions)]
     fn check_invariants(state: &ControlState) {
-        state.waits.check_invariants();
-        state.ready.check_invariants();
-        for (key, slot) in &state.ready.slots {
-            if matches!(slot, ReadySlot::Queued(_)) {
-                debug_assert_eq!(
-                    state.waits.get(key),
-                    Some(&Wait::Runnable),
-                    "queued turn for a non-Runnable key"
-                );
-            }
+        if let Err(error) = state.verify_invariants() {
+            panic!("scheduler wait-index invariant violated: {error}");
         }
     }
 
     #[cfg(not(debug_assertions))]
     fn check_invariants(state: &ControlState) {
         let _ = state;
+    }
+
+    /// Cold verdict check: every build runs the same predicate when the
+    /// scheduler decides no owner can run. The caller passes the state it
+    /// decided on, so the verdict and the predicate share one lock
+    /// acquisition; it never repairs the index.
+    #[cold]
+    #[inline(never)]
+    fn verify_invariants(state: &ControlState) -> Result<(), SchedulerIndexInconsistency> {
+        state.verify_invariants()
     }
 
     /// Hand the Baton on from ME, which waits for WAIT, and block until it
@@ -2754,7 +3026,13 @@ impl Control {
         if matches!(wait, Wait::HostRequest(_)) {
             // Host parks require their linear reservation and publication
             // plan. In particular, NoRunnable must not revive a host waiter.
-            return Err(Handoff::NoRunnable(baton));
+            // This refusal is itself a deadlock verdict, so check the index
+            // under the state that produces it.
+            let invariant = {
+                let state = self.state();
+                Self::verify_invariants(&state)
+            };
+            return Err(Handoff::NoRunnable { baton, invariant });
         }
         {
             let mut state = self.state();
@@ -2768,11 +3046,14 @@ impl Control {
         if let Wait::Select { wait_end } = wait {
             self.observe_select_park_for_test(me, wait_end);
         }
-        let Some(next) = self.pick_next() else {
-            let mut state = self.state();
-            Self::set_wait(&mut state, me, Wait::Runnable);
-            state.physical.insert(me, OwnerLocation::Running);
-            return Err(Handoff::NoRunnable(baton));
+        let next = match self.pick_next() {
+            PickNext::Owner(next) => next,
+            PickNext::NoRunnable(invariant) => {
+                let mut state = self.state();
+                Self::set_wait(&mut state, me, Wait::Runnable);
+                state.physical.insert(me, OwnerLocation::Running);
+                return Err(Handoff::NoRunnable { baton, invariant });
+            }
         };
         let (target, wake) = Self::wake_for(next, baton);
         if target == me {
@@ -2832,20 +3113,23 @@ impl Control {
             let mut state = self.state();
             Self::remove_key(&mut state, me);
         }
-        let next = self.pick_next().or_else(|| {
-            let mut state = self.state();
-            state.closing = true;
-            let blocked: Vec<ThreadKey> = state
-                .waits
-                .iter()
-                .filter(|(_, wait)| !matches!(wait, Wait::Exited))
-                .map(|(key, _)| *key)
-                .collect();
-            for key in blocked {
-                Self::wake_locked(&mut state, key);
+        let next = match self.pick_next() {
+            PickNext::Owner(next) => Some(next),
+            PickNext::NoRunnable(_) => {
+                let mut state = self.state();
+                state.closing = true;
+                let blocked: Vec<ThreadKey> = state
+                    .waits
+                    .iter()
+                    .filter(|(_, wait)| !matches!(wait, Wait::Exited))
+                    .map(|(key, _)| *key)
+                    .collect();
+                for key in blocked {
+                    Self::wake_locked(&mut state, key);
+                }
+                Self::pick(&mut state).map(|(next, _)| NextOwner::Resume(next))
             }
-            Self::pick(&mut state).map(|(next, _)| NextOwner::Resume(next))
-        });
+        };
         match next {
             Some(next) => {
                 let (target, wake) = Self::wake_for(next, baton);
