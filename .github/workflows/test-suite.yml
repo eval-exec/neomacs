@@ -830,6 +830,27 @@ jobs:
             --workspace-remap "$GITHUB_WORKSPACE" \
             --no-fail-fast
 
+      - name: Install software OpenGL runtime
+        run: sudo apt-get install -y libegl1 libegl-mesa0 libgl1-mesa-dri
+
+      - name: Render with compute-less OpenGL
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          EGL_PLATFORM: surfaceless
+          MESA_GL_VERSION_OVERRIDE: "3.3"
+          MESA_GLES_VERSION_OVERRIDE: "3.0"
+          MESA_GLSL_VERSION_OVERRIDE: "330"
+          MESA_EXTENSION_OVERRIDE: -GL_ARB_compute_shader
+        run: |
+          cargo nextest run \
+            --archive-file neomacs-workspace-tests.tar.zst \
+            --extract-to "$TMPDIR/nextest" \
+            --extract-overwrite \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            --run-ignored only \
+            -E 'package(neomacs-renderer-wgpu) and test(compute_less_gl)' \
+            --no-fail-fast
+
   neomacs-prefix-face-tui-parity:
     name: GNU prefix face TUI parity (linux x86_64)
     if: ${{ github.event_name != 'schedule' }}
