@@ -761,6 +761,59 @@ fn the_last_thread_to_block_is_told_that_all_threads_are_blocked() {
     );
 }
 
+/// A stale wait-index entry must surface as the typed internal error at the
+/// deadlock verdict, not as the GNU deadlock message. Release-only: in debug
+/// builds the per-transition checker catches the skipped removal at the seam
+/// first, by design. The fault hook is `cfg(all(test, not(debug_assertions)))`
+/// and absent from production.
+#[cfg(not(debug_assertions))]
+#[test]
+fn a_stale_condition_index_reports_the_scheduler_invariant_at_the_deadlock_verdict() {
+    let mut ev = green();
+    // The bare Context has the primitive null but no Lisp definition of not.
+    eval(&mut ev, "(fset 'not 'null)");
+    let form = "(eval '(let* ((mutex (make-mutex)) (cv (make-condition-variable mutex))
+                       (ready nil) (go nil) (worker nil))
+                 (mutex-lock mutex)
+                 (setq worker
+                       (make-thread
+                        (lambda ()
+                          (mutex-lock mutex)
+                          (setq ready t)
+                          (condition-notify cv)
+                          (while (not go) (condition-wait cv))
+                          (mutex-unlock mutex))))
+                 (while (not ready) (condition-wait cv))
+                 (setq go t)
+                 (condition-notify cv)
+                 (mutex-unlock mutex)
+                 (thread-join worker)) t)";
+    let clean = eval(&mut ev, form);
+    assert!(
+        !clean.starts_with("ERR"),
+        "the clean handshake must complete: {clean}"
+    );
+    assert_eq!(
+        clean, "nil",
+        "the handshake returns the joined worker's value"
+    );
+
+    super::scheduler::skip_next_condition_index_removal_for_test();
+    let stale = eval(&mut ev, form);
+    assert!(
+        stale.contains("neomacs internal error: scheduler wait-index invariant violated"),
+        "a stale index must report the typed invariant, got {stale}"
+    );
+    assert!(
+        stale.contains("ConditionWaiters") && stale.contains("key=Main"),
+        "the report names the index and the key: {stale}"
+    );
+    assert!(
+        !stale.contains("All threads are blocked"),
+        "the stale index must not be reported as the GNU deadlock: {stale}"
+    );
+}
+
 #[test]
 fn kill_emacs_in_a_thread_exits_from_main_without_cleanups() {
     let mut ev = green();
