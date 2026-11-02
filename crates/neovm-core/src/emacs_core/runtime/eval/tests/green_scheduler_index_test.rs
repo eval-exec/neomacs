@@ -907,8 +907,8 @@ fn wake_one_picks_the_smallest_waiting_key() {
     );
 }
 
-/// The production scheduler must not grow direct `waits.insert` or raw
-/// `ready` queue writes again (peer amendment 4; the seams are the only
+/// The production scheduler must not grow direct `waits.insert`/`waits.remove`
+/// or raw `ready` queue writes again (peer amendment 4; the seams are the only
 /// writers). The cfg(test) module is exempt.
 #[test]
 fn production_wait_writes_go_through_the_seams() {
@@ -940,6 +940,25 @@ fn production_wait_writes_go_through_the_seams() {
     assert!(
         inserts[0] > set_wait && inserts[0] < set_wait_end,
         "the only wait-map write must sit inside fn set_wait"
+    );
+
+    let removes: Vec<usize> = production
+        .match_indices("waits.remove(")
+        .map(|(offset, _)| offset)
+        .collect();
+    assert_eq!(
+        removes.len(),
+        1,
+        "production may remove wait-map entries only inside remove_key"
+    );
+    let remove_key = production.find("fn remove_key(").expect("remove_key seam");
+    let remove_key_end = remove_key
+        + production[remove_key..]
+            .find("\n    }")
+            .expect("remove_key end");
+    assert!(
+        removes[0] > remove_key && removes[0] < remove_key_end,
+        "the only wait-map removal must sit inside fn remove_key"
     );
     for raw in [
         "ready.push_back(",
