@@ -7662,6 +7662,7 @@ pub(crate) mod signal_entry;
 mod signal_room;
 
 mod allocation_flow;
+pub(crate) use allocation_flow::AllocationFailureContextExt;
 mod construct;
 mod dispatch_class;
 mod form_head_cache;

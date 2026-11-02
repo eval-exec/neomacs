@@ -2,6 +2,7 @@ use super::*;
 use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
+use crate::emacs_core::eval::AllocationFailureContextExt;
 use crate::emacs_core::eval::LispArgVec;
 use crate::emacs_core::hashtab::hash_key_to_visible_value;
 use crate::emacs_core::heap_registry::{HeapRegistryHandle, HeapRegistrySlot};

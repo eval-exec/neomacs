@@ -4,6 +4,7 @@ use super::{
 };
 use crate::emacs_core::alloc::AllocationFailure;
 use crate::emacs_core::error::{FlowKind, SignalDelivery};
+use crate::emacs_core::eval::AllocationFailureContextExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 

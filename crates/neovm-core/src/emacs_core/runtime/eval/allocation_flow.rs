@@ -10,8 +10,12 @@ use crate::emacs_core::intern::intern;
 
 use super::Context;
 
-impl AllocationFailure {
-    pub(crate) fn into_flow_in_context(self, context: &Context) -> Flow {
+pub(crate) trait AllocationFailureContextExt {
+    fn into_flow_in_context(self, context: &Context) -> Flow;
+}
+
+impl AllocationFailureContextExt for AllocationFailure {
+    fn into_flow_in_context(self, context: &Context) -> Flow {
         match self {
             Self::Lisp(flow) => flow,
             Self::MemoryExhausted(_) | Self::NullAllocation | Self::InvalidLayout(_) => context
