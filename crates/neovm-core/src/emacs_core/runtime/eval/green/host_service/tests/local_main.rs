@@ -403,9 +403,13 @@ fn local_two_hops(owner: &mut Context) -> EvalResult {
                         owner.gc_collect_exact();
                         if hops == 1 {
                             // A genuine nested join restores the same callback
-                            // frame after another Lisp owner collects.
-                            let child = owner.eval_str("(thread-join (make-thread (lambda () (let ((s2-local-binding 'child)) (garbage-collect) (unless (eq (s2-local-child-request) t) (signal 'error nil)) 'nested-done))))").unwrap();
+                            // frame after another Lisp owner collects. The bare
+                            // Context has no subr.el macros; use the core `if`
+                            // so the nested host request actually executes.
+                            assert_eq!(print_value(&owner.eval_str("(thread-last-error t)").unwrap()), "nil");
+                            let child = owner.eval_str("(thread-join (make-thread (lambda () (let ((s2-local-binding 'child)) (garbage-collect) (if (eq (s2-local-child-request) t) nil (signal 'error nil)) 'nested-done))))").unwrap();
                             assert_eq!(print_value(&child), "nested-done");
+                            assert_eq!(print_value(&owner.eval_str("(thread-last-error)").unwrap()), "nil", "the nested owner must finish without a hidden Lisp error");
                             owner.gc_collect_exact();
                         } else {
                             assert_eq!(hops, 2);
