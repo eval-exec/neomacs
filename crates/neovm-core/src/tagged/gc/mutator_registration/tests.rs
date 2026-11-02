@@ -2,6 +2,8 @@ use super::ProofEraFinishFailure as EraFinishFailure;
 use super::image::PublishedGcWork;
 use super::*;
 use crate::emacs_core::eval::Context;
+#[cfg(test)]
+use crate::emacs_core::eval::world::WorldProofEraExt;
 use crate::tagged::gc::ProofEra as ParallelHeapEra;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::value::TaggedValue;

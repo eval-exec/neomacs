@@ -5,6 +5,7 @@ mod inputs;
 use super::hof::{FixtureParameters, builtin, definition, spelling};
 use super::*;
 use crate::emacs_core::eval::register_global_subr_entry;
+use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::function_write_hooks::HofOperation;
 use crate::tagged::gc::{PreparedHofBuiltin, PreparedUnaryFunction};

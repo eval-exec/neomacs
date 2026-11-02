@@ -28,9 +28,27 @@ pub(crate) fn prepare_keeper_backing(
     Ok((epoch, backing))
 }
 
-impl<'heap> gc::ParallelHeapEra<'heap, Baton> {
+/// World-keeper entry points for the production multi-mutator era.
+///
+/// The era type is value-layer data; admitting it needs this World's `Baton`
+/// keeper and its retained-epoch adapter, so the two constructors stay upper
+/// as an extension trait on the moved type.
+pub(crate) trait ParallelHeapEraWorldExt<'heap>: Sized {
+    fn admit(
+        admission: gc::Gen1Admission<'heap>,
+        keeper: Baton,
+    ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>>;
+
+    fn admit_rooted(
+        admission: gc::Gen1Admission<'heap>,
+        keeper: Baton,
+        roots: gc::FrozenLegacyRoots,
+    ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>>;
+}
+
+impl<'heap> ParallelHeapEraWorldExt<'heap> for gc::ParallelHeapEra<'heap, Baton> {
     #[cold]
-    pub(crate) fn admit(
+    fn admit(
         admission: gc::Gen1Admission<'heap>,
         keeper: Baton,
     ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>> {
@@ -40,7 +58,7 @@ impl<'heap> gc::ParallelHeapEra<'heap, Baton> {
     }
 
     #[cold]
-    pub(crate) fn admit_rooted(
+    fn admit_rooted(
         admission: gc::Gen1Admission<'heap>,
         keeper: Baton,
         roots: gc::FrozenLegacyRoots,
@@ -51,10 +69,30 @@ impl<'heap> gc::ParallelHeapEra<'heap, Baton> {
     }
 }
 
+/// World-keeper test entry points for the restricted proof era.
 #[cfg(test)]
-impl<'heap> gc::GenericProofEra<'heap, Baton> {
+pub(crate) trait WorldProofEraExt<'heap>: Sized {
+    fn admit(
+        collector: gc::QuiescentCollector<'heap>,
+        keeper: Baton,
+    ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>>;
+    fn admit_rooted(
+        collector: gc::QuiescentCollector<'heap>,
+        keeper: Baton,
+        roots: gc::FrozenLegacyRoots,
+    ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>>;
+    fn admit_rooted_with_weak_tables_for_test(
+        collector: gc::QuiescentCollector<'heap>,
+        keeper: Baton,
+        roots: gc::FrozenLegacyRoots,
+        tables: &[TaggedValue],
+    ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>>;
+}
+
+#[cfg(test)]
+impl<'heap> WorldProofEraExt<'heap> for gc::GenericProofEra<'heap, Baton> {
     #[cold]
-    pub(crate) fn admit(
+    fn admit(
         collector: gc::QuiescentCollector<'heap>,
         keeper: Baton,
     ) -> Result<Self, gc::EraAdmissionFailure<'heap, Baton>> {
@@ -62,7 +100,7 @@ impl<'heap> gc::GenericProofEra<'heap, Baton> {
         unsafe { Self::admit_with(collector, keeper, prepare_keeper_backing) }
     }
     #[cold]
-    pub(crate) fn admit_rooted(
+    fn admit_rooted(
         collector: gc::QuiescentCollector<'heap>,
         keeper: Baton,
         roots: gc::FrozenLegacyRoots,
@@ -71,7 +109,7 @@ impl<'heap> gc::GenericProofEra<'heap, Baton> {
         unsafe { Self::admit_rooted_with(collector, keeper, roots, prepare_keeper_backing) }
     }
     #[cold]
-    pub(crate) fn admit_rooted_with_weak_tables_for_test(
+    fn admit_rooted_with_weak_tables_for_test(
         collector: gc::QuiescentCollector<'heap>,
         keeper: Baton,
         roots: gc::FrozenLegacyRoots,

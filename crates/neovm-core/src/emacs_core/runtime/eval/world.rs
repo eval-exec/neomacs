@@ -7,6 +7,7 @@
 use super::*;
 use crate::buffer::buffer::{BufferSelection, BufferStorage, OwnedBufferStorageParts};
 use crate::emacs_core::defvar_bool::ByteBooleanVars;
+use crate::emacs_core::reader::ObarrayReadSymbolsExt;
 use crate::emacs_core::symbol::CanonicalAccess;
 use crate::emacs_core::symbol::{
     CanonicalDispatchCells, ConcealOutcome, DebuggerDescriptor, FunctionEpoch, FunctionEpochBump,
@@ -23,7 +24,10 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 mod era;
+pub(crate) use era::ParallelHeapEraWorldExt;
 pub use era::WorldEra;
+#[cfg(test)]
+pub(crate) use era::WorldProofEraExt;
 pub(crate) use era::prepare_keeper_backing;
 #[cfg(test)]
 pub(crate) use era::{WorldProofEra, WorldProofEraFinishFailure};

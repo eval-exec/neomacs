@@ -5,6 +5,9 @@ use super::super::{Baton, FrozenLegacyRoots};
 #[cfg(test)]
 use super::OwnedProofProjection;
 use super::{OwnedParallelError, OwnedParallelProjection, map_registration};
+use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
+#[cfg(test)]
+use crate::emacs_core::eval::world::WorldProofEraExt;
 #[cfg(test)]
 use crate::tagged::gc::ProofEra;
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError, ParallelHeapEra, QuiescentCollector};

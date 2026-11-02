@@ -2,6 +2,7 @@
 use super::super::{EraCore, InitialTablePreparation};
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::world::{ParallelHeapEraWorldExt, WorldProofEraExt};
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
 
 #[derive(Debug)]

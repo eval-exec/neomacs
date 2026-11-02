@@ -9,6 +9,7 @@ pub(crate) use super::super::retry::{
 use super::super::symbol_functions::retry::{self as contention, Deadline, Retry, retry_owned};
 use super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
 use crate::tagged::gc::{Gen1Admission, Gen1AdmissionError};
 pub(crate) use cohort::{
     CohortPhase, CohortSize, PublicationFacts, PublicationInputs, prepared_hof_cohort,

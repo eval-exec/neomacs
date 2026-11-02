@@ -3,6 +3,8 @@
 //! participants. Neither walk re-enumerates another owner's private slab.
 
 use super::*;
+#[cfg(test)]
+use crate::emacs_core::eval::world::WorldProofEraExt;
 use crate::gc_trace::GcTrace;
 use crate::tagged::gc::{AllStopped, HeapIdentity, RendezvousError};
 use crate::tagged::value::TaggedValue;

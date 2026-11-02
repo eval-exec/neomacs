@@ -1,5 +1,6 @@
 //! Real GEN1 execution with canonical mappers, unary callbacks and cons homes.
 use super::*;
+use crate::emacs_core::eval::world::ParallelHeapEraWorldExt;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::function_write_hooks::HofOperation;

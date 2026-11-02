@@ -34,6 +34,8 @@
 //! off that thread.
 
 use super::*;
+#[cfg(test)]
+use crate::emacs_core::eval::world::WorldProofEraExt;
 
 #[path = "parallel_roots.rs"]
 mod parallel_roots;
