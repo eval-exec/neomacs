@@ -7,6 +7,9 @@
 #[path = "headless_probe.rs"]
 mod headless_probe;
 
+#[path = "downlevel_gl.rs"]
+mod downlevel_gl;
+
 #[path = "offscreen_frame.rs"]
 mod offscreen_frame;
 
