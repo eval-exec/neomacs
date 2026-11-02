@@ -39,9 +39,10 @@ fn make_bytecode(required: Vec<&str>, rest: Option<&str>) -> Value {
     Value::make_bytecode(ByteCodeFunction::new(params))
 }
 
-fn func_arity(function: Value) -> EvalResult {
-    let mut ctx = crate::emacs_core::eval::Context::new();
-    builtin_func_arity_ctx(&mut ctx, vec![function])
+// Arity pairs and error data belong to the caller's heap. Keep its Context
+// alive from input construction through the final result assertion.
+fn func_arity(ctx: &mut crate::emacs_core::eval::Context, function: Value) -> EvalResult {
+    builtin_func_arity_ctx(ctx, vec![function])
 }
 
 // -- subr-name --
@@ -2093,8 +2094,9 @@ fn commandp_rejects_overflow_arity() {
 #[test]
 fn func_arity_lambda_required_only() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
     let lam = make_lambda(vec!["a", "b"], vec![], None);
-    let result = func_arity(lam).unwrap();
+    let result = func_arity(&mut ctx, lam).unwrap();
     if result.is_cons() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
@@ -2108,8 +2110,9 @@ fn func_arity_lambda_required_only() {
 #[test]
 fn func_arity_lambda_with_optional() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
     let lam = make_lambda(vec!["a"], vec!["b", "c"], None);
-    let result = func_arity(lam).unwrap();
+    let result = func_arity(&mut ctx, lam).unwrap();
     if result.is_cons() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
@@ -2123,8 +2126,9 @@ fn func_arity_lambda_with_optional() {
 #[test]
 fn func_arity_lambda_with_rest() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
     let lam = make_lambda(vec!["a"], vec![], Some("rest"));
-    let result = func_arity(lam).unwrap();
+    let result = func_arity(&mut ctx, lam).unwrap();
     if result.is_cons() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
@@ -2138,8 +2142,9 @@ fn func_arity_lambda_with_rest() {
 #[test]
 fn func_arity_bytecode() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
     let bc = make_bytecode(vec!["x", "y"], Some("rest"));
-    let result = func_arity(bc).unwrap();
+    let result = func_arity(&mut ctx, bc).unwrap();
     if result.is_cons() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
@@ -2196,8 +2201,9 @@ fn func_arity_subr_uses_registered_metadata() {
 #[test]
 fn func_arity_macro() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
     let m = make_macro(vec!["a", "b"]);
-    let result = func_arity(m).unwrap();
+    let result = func_arity(&mut ctx, m).unwrap();
     if result.is_cons() {
         let pair_car = result.cons_car();
         let pair_cdr = result.cons_cdr();
@@ -2238,13 +2244,15 @@ fn gnu_lisp_macro_forms_are_not_evaluator_special_forms() {
 #[test]
 fn func_arity_error_for_non_callable() {
     crate::test_utils::init_test_tracing();
-    let result = func_arity(Value::fixnum(42));
+    let mut ctx = crate::emacs_core::eval::Context::new();
+    let result = func_arity(&mut ctx, Value::fixnum(42));
     assert!(result.is_err());
 }
 
 #[test]
 fn func_arity_autoload_object_signals_wrong_type_argument_symbolp() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
     let autoload_fn = Value::list(vec![
         Value::symbol("autoload"),
         Value::string("vm-auto-file"),
@@ -2252,7 +2260,8 @@ fn func_arity_autoload_object_signals_wrong_type_argument_symbolp() {
         Value::T,
         Value::NIL,
     ]);
-    let result = func_arity(autoload_fn).expect_err("autoload forms should not satisfy func-arity");
+    let result = func_arity(&mut ctx, autoload_fn)
+        .expect_err("autoload forms should not satisfy func-arity");
     match result.into_kind() {
         FlowKind::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
