@@ -5,6 +5,7 @@
 //! Threading: every plan, context, root and override is invocation-owned.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::function;

@@ -5,6 +5,7 @@
 //! scoped compiler overrides contain only scalar settings and restore on exit.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;

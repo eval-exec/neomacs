@@ -2,6 +2,8 @@
 //! and exact deopt state. Threading: contexts/leaves are owned by each test.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function, mask_code_text};

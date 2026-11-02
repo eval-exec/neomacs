@@ -1,5 +1,7 @@
 //! GNU Fbyte_code's checked function slots and shared compiled constructor.
 
+use crate::emacs_core::bytecode::function_slots::BytecodeSlotErrorExt as _;
+use crate::emacs_core::bytecode::function_slots::StackDepthErrorExt as _;
 use crate::emacs_core::bytecode::function_slots::{
     BytecodeSlotOrigin, BytecodeString, ConstantsVector, StackDepth,
 };

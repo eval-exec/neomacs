@@ -5,7 +5,7 @@
 //! that evaluator is active, and publish no views to another mutator.
 
 use crate::emacs_core::error::{Flow, LispCondition, signal};
-use crate::emacs_core::value::{LambdaParams, Value, ValueKind};
+use crate::emacs_core::value::{LambdaParams, Value};
 
 pub use crate::tagged::bytecode::function_slots::{
     ArgTemplate, BytecodeSlotError, DynamicArglist, FunctionParams, ParamShapeError, RestSlot,
@@ -37,62 +37,31 @@ impl BytecodeSlotOrigin {
     }
 }
 
-impl RestSlot {
-    #[inline]
-    pub const fn is_present(self) -> bool {
-        matches!(self, Self::Present)
-    }
+/// Upper policy on the lowered [`ArgTemplate`].
+///
+/// The descriptor's pure const projections (`raw`, `mandatory`, `nonrest`,
+/// `rest`) live on the storage type; the arity/shape policy stays upper and
+/// crate-visible. Static dispatch only; callers import the trait.
+pub(crate) trait ArgTemplateExt: Sized {
+    fn accepts(self, nargs: usize) -> bool;
+    fn call_shape(self, nargs: usize) -> Result<StackParamShape, CallShapeError>;
+    fn stack_shape(self) -> Result<StackParamShape, ParamShapeError>;
 }
 
-impl From<i64> for ArgTemplate {
+impl ArgTemplateExt for ArgTemplate {
     #[inline]
-    fn from(raw: i64) -> Self {
-        Self(raw)
-    }
-}
-
-impl ArgTemplate {
-    #[inline]
-    pub const fn raw(self) -> i64 {
-        self.0
-    }
-
-    #[inline]
-    pub const fn mandatory(self) -> usize {
-        (self.0 & 127) as usize
-    }
-
-    #[inline]
-    pub const fn nonrest(self) -> i64 {
-        self.0 >> 8
-    }
-
-    #[inline]
-    pub const fn rest(self) -> RestSlot {
-        if self.0 & 128 == 0 {
-            RestSlot::Absent
-        } else {
-            RestSlot::Present
-        }
-    }
-
-    #[inline]
-    pub fn accepts(self, nargs: usize) -> bool {
+    fn accepts(self, nargs: usize) -> bool {
         self.mandatory() <= nargs
             && (self.rest().is_present()
                 || i64::try_from(nargs).is_ok_and(|nargs| nargs <= self.nonrest()))
     }
 
-    /// GNU's byte compiler emits 15-bit descriptors (7-bit counts plus the
-    /// `&rest` bit, bytecode.c:535-537); their shapes need no host checks.
-    const COMPACT_LIMIT: i64 = 1 << 15;
-
     /// The stack shape a call with NARGS arguments enters, checked in GNU's
     /// order: the signed arity test first, then host representability.
     #[inline]
-    pub fn call_shape(self, nargs: usize) -> Result<StackParamShape, CallShapeError> {
-        if !(0..Self::COMPACT_LIMIT).contains(&self.0) {
-            return self.wide_call_shape(nargs);
+    fn call_shape(self, nargs: usize) -> Result<StackParamShape, CallShapeError> {
+        if !(0..COMPACT_LIMIT).contains(&self.0) {
+            return wide_call_shape(self, nargs);
         }
         let shape = StackParamShape {
             required: self.mandatory(),
@@ -106,17 +75,8 @@ impl ArgTemplate {
         }
     }
 
-    #[cold]
-    #[inline(never)]
-    fn wide_call_shape(self, nargs: usize) -> Result<StackParamShape, CallShapeError> {
-        if !self.accepts(nargs) {
-            return Err(CallShapeError::Arity);
-        }
-        self.stack_shape().map_err(CallShapeError::Shape)
-    }
-
     #[inline]
-    pub fn stack_shape(self) -> Result<StackParamShape, ParamShapeError> {
+    fn stack_shape(self) -> Result<StackParamShape, ParamShapeError> {
         let nonrest = usize::try_from(self.nonrest())
             .map_err(|_| ParamShapeError::NonRest(self.nonrest()))?;
         let shape = StackParamShape {
@@ -129,31 +89,35 @@ impl ArgTemplate {
     }
 }
 
-impl StackParamShape {
-    #[inline]
-    pub const fn required(self) -> usize {
-        self.required
-    }
+/// GNU's byte compiler emits 15-bit descriptors (7-bit counts plus the
+/// `&rest` bit, bytecode.c:535-537); their shapes need no host checks.
+const COMPACT_LIMIT: i64 = 1 << 15;
 
-    #[inline]
-    pub const fn nonrest(self) -> usize {
-        self.nonrest
+#[cold]
+#[inline(never)]
+fn wide_call_shape(template: ArgTemplate, nargs: usize) -> Result<StackParamShape, CallShapeError> {
+    if !template.accepts(nargs) {
+        return Err(CallShapeError::Arity);
     }
+    template.stack_shape().map_err(CallShapeError::Shape)
+}
 
-    #[inline]
-    pub const fn rest(self) -> RestSlot {
-        self.rest
-    }
+/// Upper policy on the lowered [`StackParamShape`].
+pub(crate) trait StackParamShapeExt: Sized {
+    fn optional(self) -> Option<usize>;
+    fn entry_depth(self) -> Result<usize, ParamShapeError>;
+}
 
+impl StackParamShapeExt for StackParamShape {
     /// Optimization-only optional count. An inconsistent descriptor cannot
     /// become a synthetic optional list, but remains a stored GNU object.
     #[inline]
-    pub fn optional(self) -> Option<usize> {
+    fn optional(self) -> Option<usize> {
         self.nonrest.checked_sub(self.required)
     }
 
     #[inline]
-    pub fn entry_depth(self) -> Result<usize, ParamShapeError> {
+    fn entry_depth(self) -> Result<usize, ParamShapeError> {
         self.nonrest
             .checked_add(usize::from(self.rest.is_present()))
             .ok_or(ParamShapeError::EntryDepth)
@@ -173,9 +137,16 @@ pub enum CallShapeError {
 
 static_assertions::assert_impl_all!(FormalMarkers: Send, Sync, Copy, std::fmt::Debug);
 
-impl FormalMarkers {
+/// Upper policy on the lowered [`FormalMarkers`] (it interns GNU's marker
+/// names in the process-global obarray).
+pub(crate) trait FormalMarkersExt: Sized {
+    fn canonical() -> Self;
+    fn classify(self, symbol: crate::emacs_core::intern::SymId) -> FormalRole;
+}
+
+impl FormalMarkersExt for FormalMarkers {
     #[inline]
-    pub(crate) fn canonical() -> Self {
+    fn canonical() -> Self {
         static MARKERS: std::sync::OnceLock<FormalMarkers> = std::sync::OnceLock::new();
         *MARKERS.get_or_init(|| Self {
             optional: crate::emacs_core::intern::intern("&optional"),
@@ -184,7 +155,7 @@ impl FormalMarkers {
     }
 
     #[inline]
-    pub(crate) fn classify(self, symbol: crate::emacs_core::intern::SymId) -> FormalRole {
+    fn classify(self, symbol: crate::emacs_core::intern::SymId) -> FormalRole {
         if symbol == self.optional {
             FormalRole::OptionalMarker
         } else if symbol == self.rest {
@@ -195,13 +166,14 @@ impl FormalMarkers {
     }
 }
 
-impl DynamicArglist {
-    #[inline]
-    pub const fn value(self) -> Value {
-        self.0
-    }
+/// Upper policy on the lowered [`DynamicArglist`] (invocation owns the
+/// GNU formal walk and its rooted cursor).
+pub(crate) trait DynamicArglistExt: Sized {
+    fn invocation(self) -> FormalCursor;
+}
 
-    pub(crate) fn invocation(self) -> FormalCursor {
+impl DynamicArglistExt for DynamicArglist {
+    fn invocation(self) -> FormalCursor {
         FormalCursor {
             tail: self.0,
             state: FormalState::Required,
@@ -323,35 +295,15 @@ impl FormalCursor {
     }
 }
 
-impl From<LambdaParams> for FunctionParams {
-    fn from(params: LambdaParams) -> Self {
-        Self::Named(params)
-    }
+/// Upper policy on the lowered [`FunctionParams`].
+pub(crate) trait FunctionParamsExt {
+    fn stack_shape(&self) -> Option<StackParamShape>;
+    fn fixed_arity(&self) -> Option<usize>;
 }
 
-impl TryFrom<Value> for FunctionParams {
-    type Error = BytecodeSlotError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value.kind() {
-            ValueKind::Fixnum(raw) => Ok(Self::Stack(raw.into())),
-            ValueKind::Cons | ValueKind::Nil => Ok(Self::Dynamic(DynamicArglist(value))),
-            _ => Err(BytecodeSlotError::Arglist(value)),
-        }
-    }
-}
-
-impl FunctionParams {
+impl FunctionParamsExt for FunctionParams {
     #[inline]
-    pub fn named(&self) -> Option<&LambdaParams> {
-        match self {
-            Self::Named(params) => Some(params),
-            Self::Stack(_) | Self::Dynamic(_) => None,
-        }
-    }
-
-    #[inline]
-    pub fn stack_shape(&self) -> Option<StackParamShape> {
+    fn stack_shape(&self) -> Option<StackParamShape> {
         match self {
             Self::Stack(template) => template.stack_shape().ok(),
             Self::Dynamic(args) if args.value().is_nil() => Some(StackParamShape {
@@ -376,93 +328,24 @@ impl FunctionParams {
         }
     }
 
-    /// Each embedded Value is a strong GC child independently of the
-    /// separately stored, observable original arglist slot.
     #[inline]
-    #[deny(clippy::wildcard_enum_match_arm)]
-    pub(crate) fn heap_child(&self) -> Option<Value> {
-        match self {
-            Self::Dynamic(params) => Some(params.value()),
-            Self::Stack(_) | Self::Named(_) => None,
-        }
-    }
-
-    #[inline]
-    pub fn fixed_arity(&self) -> Option<usize> {
+    fn fixed_arity(&self) -> Option<usize> {
         let shape = self.stack_shape()?;
         (shape.rest == RestSlot::Absent && shape.required == shape.nonrest)
             .then_some(shape.required)
     }
 }
 
-impl StackDepth {
-    pub const ZERO: Self = Self(0);
-
-    /// The deepest frame the in-place iterative Bcall installs. GNU-compiled
-    /// functions stay far below it; deeper frames take the recursive entry,
-    /// whose reservation reports failure as a Lisp error.
-    pub const ITERATIVE_FRAME_LIMIT: Self = Self(u16::MAX as usize);
-
-    #[inline]
-    pub const fn get(self) -> usize {
-        self.0
-    }
-
-    #[inline]
-    pub fn value(self) -> Value {
-        // Constructor invariants bound the value by the positive fixnum limit.
-        Value::fixnum(self.0 as i64)
-    }
-
-    #[cfg(test)]
-    pub const fn for_test(depth: usize) -> Self {
-        assert!(depth <= Value::MOST_POSITIVE_FIXNUM as usize);
-        Self(depth)
-    }
+/// Upper policy on the lowered [`StackDepthError`] (signals through the
+/// upper slot-origin policy).
+pub(crate) trait StackDepthErrorExt: Sized {
+    fn into_flow(self, origin: BytecodeSlotOrigin) -> Flow;
 }
 
-impl std::fmt::Display for StackDepth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl TryFrom<usize> for StackDepth {
-    type Error = StackDepthError;
-
-    fn try_from(depth: usize) -> Result<Self, Self::Error> {
-        if depth > Value::MOST_POSITIVE_FIXNUM as usize {
-            return Err(StackDepthError::Range(depth as u64));
-        }
-        Ok(Self(depth))
-    }
-}
-
-impl TryFrom<u64> for StackDepth {
-    type Error = StackDepthError;
-
-    fn try_from(depth: u64) -> Result<Self, Self::Error> {
-        let depth = usize::try_from(depth).map_err(|_| StackDepthError::Range(depth))?;
-        Self::try_from(depth)
-    }
-}
-
-impl TryFrom<Value> for StackDepth {
-    type Error = StackDepthError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let depth = value
-            .as_fixnum()
-            .filter(|depth| *depth >= 0)
-            .ok_or(StackDepthError::Value(value))?;
-        Self::try_from(depth as u64)
-    }
-}
-
-impl StackDepthError {
+impl StackDepthErrorExt for StackDepthError {
     #[cold]
     #[inline(never)]
-    pub fn into_flow(self, origin: BytecodeSlotOrigin) -> Flow {
+    fn into_flow(self, origin: BytecodeSlotOrigin) -> Flow {
         origin.invalid_flow()
     }
 }
@@ -572,10 +455,16 @@ impl ConstantsVector {
     }
 }
 
-impl BytecodeSlotError {
+/// Upper policy on the lowered [`BytecodeSlotError`] (signals through the
+/// upper slot-origin policy).
+pub(crate) trait BytecodeSlotErrorExt: Sized {
+    fn into_flow(self, origin: BytecodeSlotOrigin) -> Flow;
+}
+
+impl BytecodeSlotErrorExt for BytecodeSlotError {
     #[cold]
     #[inline(never)]
-    pub fn into_flow(self, origin: BytecodeSlotOrigin) -> Flow {
+    fn into_flow(self, origin: BytecodeSlotOrigin) -> Flow {
         origin.invalid_flow()
     }
 }

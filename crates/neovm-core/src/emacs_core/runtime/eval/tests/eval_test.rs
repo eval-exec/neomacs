@@ -24,6 +24,8 @@ fn progn_reads_the_body_tail_before_evaluating_a_form() {
     );
 }
 
+#[cfg(feature = "perf-probes")]
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;
 

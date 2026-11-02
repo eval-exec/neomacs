@@ -3,6 +3,7 @@
 //! these tests introduce no runtime caches or compiler-worker Lisp ownership.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::{
     Context, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,

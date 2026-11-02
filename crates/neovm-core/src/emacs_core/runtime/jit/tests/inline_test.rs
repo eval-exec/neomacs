@@ -3,6 +3,7 @@
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
@@ -574,19 +575,6 @@ fn classic_fuser_capture_ignores_unused_vector_constant() {
 #[derive(Clone, Copy, Debug)]
 struct FixtureGnuByteOffset(usize);
 
-#[derive(Clone, Copy, Debug)]
-struct FixtureInstructionIndex(usize);
-
-impl From<(FixtureGnuByteOffset, FixtureInstructionIndex)>
-    for crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry
-{
-    fn from(
-        (byte_offset, instruction_index): (FixtureGnuByteOffset, FixtureInstructionIndex),
-    ) -> Self {
-        Self::new(byte_offset.0, instruction_index.0)
-    }
-}
-
 impl TryFrom<FixtureGnuByteOffset> for Value {
     type Error = std::num::TryFromIntError;
 
@@ -653,7 +641,7 @@ fn classic_fuser_no_call_switch_still_hydrates_parked_table() {
             .expect("rooted hash-table fixture");
         let constants = vec![key, table, Value::make_int(71), Value::make_int(72)];
         let offsets: Vec<GnuByteOffsetMapEntry> = (0..ops.len())
-            .map(|pc| (FixtureGnuByteOffset(pc * 2), FixtureInstructionIndex(pc)).into())
+            .map(|pc| GnuByteOffsetMapEntry::new(pc * 2, pc))
             .collect();
         let feedback = vec![NumericFeedback::FixnumOnly; ops.len()];
         assert!(fuse_calls(&ops, &constants, Some(&offsets), 0, &feedback).is_none());
@@ -682,6 +670,7 @@ fn classic_fuser_no_call_switch_still_hydrates_parked_table() {
 /// its data: that accessor materializes genuine mapped pdump stubs.
 #[test]
 fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
+    use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
     use crate::emacs_core::pdump::{dump_to_file, load_from_dump};
 
     let mut ev = Context::new();
@@ -691,8 +680,8 @@ fn classic_fuser_header_scan_keeps_unused_pdump_bytecode_lazy() {
         vec![Value::make_int(42)],
     );
     callee.gnu_byte_offset_map = Some(vec![
-        (FixtureGnuByteOffset(0), FixtureInstructionIndex(0)).into(),
-        (FixtureGnuByteOffset(1), FixtureInstructionIndex(1)).into(),
+        GnuByteOffsetMapEntry::new(0, 0),
+        GnuByteOffsetMapEntry::new(1, 1),
     ]);
     callee.gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(vec![0xC0, 0x87]));
     ev.obarray

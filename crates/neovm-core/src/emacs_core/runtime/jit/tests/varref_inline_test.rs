@@ -6,6 +6,7 @@
 use super::shims::VARREF_SHIM_CALLS;
 use super::*;
 use crate::emacs_core::bytecode::Vm;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::LambdaParams;

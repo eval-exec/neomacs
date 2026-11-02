@@ -6,6 +6,7 @@
 use super::knobs::{SwitchLoopPolicy, jit_switch_loop_policy};
 use super::{Cfg, Op};
 use crate::emacs_core::bytecode::opcode::BranchTargets;
+use crate::emacs_core::bytecode::opcode::OpBranchTargetsExt as _;
 
 /// Production policy is chosen before compilation. The default examines only
 /// direct edges, preserving original emission; the optional conservative policy

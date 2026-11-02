@@ -1,5 +1,8 @@
 //! ByteCode chunk — compiled function representation.
 
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
+use crate::emacs_core::bytecode::opcode::OpDisasmExt as _;
 use std::sync::OnceLock;
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};

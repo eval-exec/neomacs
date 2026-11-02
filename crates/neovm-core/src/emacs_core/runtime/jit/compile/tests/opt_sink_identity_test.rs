@@ -4,6 +4,7 @@
 //! belong to this invocation's mutator; no new runtime state is introduced.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::function;

@@ -25,9 +25,14 @@ pub(crate) enum BranchTargets {
     SwitchTable,
 }
 
-impl Op {
+/// Upper compile-time target view on the lowered [`Op`].
+pub(crate) trait OpBranchTargetsExt {
+    fn branch_targets(&self) -> BranchTargets;
+}
+
+impl OpBranchTargetsExt for Op {
     #[deny(clippy::wildcard_enum_match_arm)]
-    pub(crate) fn branch_targets(&self) -> BranchTargets {
+    fn branch_targets(&self) -> BranchTargets {
         match self {
             Self::Goto(target)
             | Self::GotoIfNil(target)

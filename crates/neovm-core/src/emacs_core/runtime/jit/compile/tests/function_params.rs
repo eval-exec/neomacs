@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::{FunctionParams, StackDepth};
 use crate::emacs_core::value::Value;
 

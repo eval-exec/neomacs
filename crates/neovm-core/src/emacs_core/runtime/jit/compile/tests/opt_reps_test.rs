@@ -4,6 +4,7 @@
 //! overrides belong to one test invocation and are restored on exit.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function};

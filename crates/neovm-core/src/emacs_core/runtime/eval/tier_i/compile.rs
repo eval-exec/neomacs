@@ -150,9 +150,14 @@ pub(super) enum Op {
 
 crate::emacs_core::subr::world_registry!(Op);
 
-impl Op {
+/// Upper special-form classification on the lowered [`Op`].
+pub(super) trait OpHandlerExt {
+    fn handler(&self) -> Option<SpecialFormHandler>;
+}
+
+impl OpHandlerExt for Op {
     /// The special form this op mirrors, `None` for a call.
-    pub(super) fn handler(&self) -> Option<SpecialFormHandler> {
+    fn handler(&self) -> Option<SpecialFormHandler> {
         Some(match self {
             Op::Call(_) => return None,
             Op::Special(handler) => *handler,

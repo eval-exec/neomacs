@@ -1,6 +1,7 @@
 //! Bytecode parameter storage vocabulary (T1 storage cut).
 
 use super::{LambdaParams, SymId, Value};
+use crate::tagged::value::ValueKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestSlot {
@@ -107,4 +108,179 @@ pub enum BytecodeSlotError {
     Constants(Value),
     #[error(transparent)]
     Depth(#[from] StackDepthError),
+}
+
+// ---------------------------------------------------------------------------
+// Storage-owned impls (T1 coherence): every method whose body needs only the
+// lowered vocabulary lives here with the data; the upper crate keeps policy
+// behind extension traits.
+// ---------------------------------------------------------------------------
+
+impl RestSlot {
+    #[inline]
+    pub const fn is_present(self) -> bool {
+        matches!(self, Self::Present)
+    }
+}
+
+impl From<i64> for ArgTemplate {
+    #[inline]
+    fn from(raw: i64) -> Self {
+        Self(raw)
+    }
+}
+
+impl ArgTemplate {
+    #[inline]
+    pub const fn raw(self) -> i64 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn mandatory(self) -> usize {
+        (self.0 & 127) as usize
+    }
+
+    #[inline]
+    pub const fn nonrest(self) -> i64 {
+        self.0 >> 8
+    }
+
+    #[inline]
+    pub const fn rest(self) -> RestSlot {
+        if self.0 & 128 == 0 {
+            RestSlot::Absent
+        } else {
+            RestSlot::Present
+        }
+    }
+}
+
+impl StackParamShape {
+    #[inline]
+    pub const fn required(self) -> usize {
+        self.required
+    }
+
+    #[inline]
+    pub const fn nonrest(self) -> usize {
+        self.nonrest
+    }
+
+    #[inline]
+    pub const fn rest(self) -> RestSlot {
+        self.rest
+    }
+}
+
+impl DynamicArglist {
+    #[inline]
+    pub const fn value(self) -> Value {
+        self.0
+    }
+}
+
+impl From<LambdaParams> for FunctionParams {
+    fn from(params: LambdaParams) -> Self {
+        Self::Named(params)
+    }
+}
+
+impl TryFrom<Value> for FunctionParams {
+    type Error = BytecodeSlotError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value.kind() {
+            ValueKind::Fixnum(raw) => Ok(Self::Stack(raw.into())),
+            ValueKind::Cons | ValueKind::Nil => Ok(Self::Dynamic(DynamicArglist(value))),
+            _ => Err(BytecodeSlotError::Arglist(value)),
+        }
+    }
+}
+
+impl StackDepth {
+    pub const ZERO: Self = Self(0);
+
+    /// The deepest frame the in-place iterative Bcall installs. GNU-compiled
+    /// functions stay far below it; deeper frames take the recursive entry,
+    /// whose reservation reports failure as a Lisp error.
+    pub const ITERATIVE_FRAME_LIMIT: Self = Self(u16::MAX as usize);
+
+    #[inline]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub const fn for_test(depth: usize) -> Self {
+        assert!(depth <= Value::MOST_POSITIVE_FIXNUM as usize);
+        Self(depth)
+    }
+}
+
+impl std::fmt::Display for StackDepth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl TryFrom<usize> for StackDepth {
+    type Error = StackDepthError;
+
+    fn try_from(depth: usize) -> Result<Self, Self::Error> {
+        if depth > Value::MOST_POSITIVE_FIXNUM as usize {
+            return Err(StackDepthError::Range(depth as u64));
+        }
+        Ok(Self(depth))
+    }
+}
+
+impl TryFrom<u64> for StackDepth {
+    type Error = StackDepthError;
+
+    fn try_from(depth: u64) -> Result<Self, Self::Error> {
+        let depth = usize::try_from(depth).map_err(|_| StackDepthError::Range(depth))?;
+        Self::try_from(depth)
+    }
+}
+
+impl TryFrom<Value> for StackDepth {
+    type Error = StackDepthError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let depth = value
+            .as_fixnum()
+            .filter(|depth| *depth >= 0)
+            .ok_or(StackDepthError::Value(value))?;
+        Self::try_from(depth as u64)
+    }
+}
+
+impl FunctionParams {
+    #[inline]
+    pub fn named(&self) -> Option<&LambdaParams> {
+        match self {
+            Self::Named(params) => Some(params),
+            Self::Stack(_) | Self::Dynamic(_) => None,
+        }
+    }
+
+    /// Each embedded Value is a strong GC child independently of the
+    /// separately stored, observable original arglist slot.
+    #[inline]
+    #[deny(clippy::wildcard_enum_match_arm)]
+    pub(crate) fn heap_child(&self) -> Option<Value> {
+        match self {
+            Self::Dynamic(params) => Some(params.value()),
+            Self::Stack(_) | Self::Named(_) => None,
+        }
+    }
+}
+
+impl StackDepth {
+    #[inline]
+    pub fn value(self) -> Value {
+        // Constructor invariants bound the value by the positive fixnum limit.
+        Value::fixnum(self.0 as i64)
+    }
 }

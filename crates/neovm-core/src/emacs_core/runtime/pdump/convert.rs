@@ -2,6 +2,7 @@
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use std::cell::RefCell;
 use std::collections::HashMap;
 

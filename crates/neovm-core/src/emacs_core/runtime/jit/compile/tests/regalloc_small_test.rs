@@ -1,6 +1,7 @@
 //! The bytecode-size cap precedes shape policy but never a forced allocator.
 
 use super::lowering::{RegallocChoice, RegallocPolicy, choose_regalloc};
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 
 #[test]
 fn regalloc_small_policy_table() {

@@ -1,6 +1,7 @@
 use super::*;
 use crate::buffer::{CharLen, CharRange, LispCharPos1};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::BytecodeSlotErrorExt as _;
 use crate::emacs_core::error::{
     FlowKind, FlowResultExt, expect_args, expect_args_range, expect_fixnum, expect_max_args,
     expect_min_args,

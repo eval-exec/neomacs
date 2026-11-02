@@ -2,6 +2,10 @@
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::bytecode::function_slots::ArgTemplateExt as _;
+use crate::emacs_core::bytecode::function_slots::DynamicArglistExt as _;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
 use std::sync::OnceLock;
 
 use smallvec::SmallVec;

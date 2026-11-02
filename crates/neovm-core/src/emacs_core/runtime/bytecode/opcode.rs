@@ -12,11 +12,16 @@ pub use crate::tagged::bytecode::opcode::Op;
 #[cfg(any(test, feature = "jit"))]
 mod branch_targets;
 #[cfg(any(test, feature = "jit"))]
-pub(crate) use branch_targets::BranchTargets;
+pub(crate) use branch_targets::{BranchTargets, OpBranchTargetsExt};
 
-impl Op {
+/// Upper disassembly on the lowered [`Op`] (human-readable diagnostics only).
+pub(crate) trait OpDisasmExt {
+    fn disasm(&self, constants: &[super::super::value::Value]) -> String;
+}
+
+impl OpDisasmExt for Op {
     /// Human-readable disassembly of this instruction.
-    pub fn disasm(&self, constants: &[super::super::value::Value]) -> String {
+    fn disasm(&self, constants: &[super::super::value::Value]) -> String {
         match self {
             Op::Constant(idx) => {
                 let val = constants

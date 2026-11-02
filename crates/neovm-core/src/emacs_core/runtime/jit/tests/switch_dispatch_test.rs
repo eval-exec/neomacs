@@ -5,6 +5,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::Context;
 
 /// Byte-compile `lambda_src` lexically in a bootstrapped context and return

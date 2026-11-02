@@ -7,6 +7,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::value::LambdaParams;

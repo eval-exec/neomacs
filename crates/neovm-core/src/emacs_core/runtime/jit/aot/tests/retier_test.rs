@@ -2,6 +2,7 @@
 #![cfg(target_os = "linux")]
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use std::sync::atomic::Ordering;
 
 use super::*;

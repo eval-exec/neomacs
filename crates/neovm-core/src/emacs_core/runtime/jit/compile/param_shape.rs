@@ -4,6 +4,8 @@
 //! Lisp object, publishes no mutator state, and can be used by either compiler.
 
 use super::CompileError;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::function_slots::StackParamShapeExt as _;
 use crate::emacs_core::bytecode::{ByteCodeFunction, RestSlot, StackParamShape};
 
 /// A stack shape that fits its declared frame and the optimizer's u16 slot IDs.

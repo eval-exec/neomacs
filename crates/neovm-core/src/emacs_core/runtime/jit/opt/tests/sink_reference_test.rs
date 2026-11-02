@@ -4,6 +4,7 @@
 //! Threading: all sources, contexts and roots are local to this test invocation.
 use super::{Inputs, Outcome, evaluate};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, Vm};
 use crate::emacs_core::eval::{
     Context, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
