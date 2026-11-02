@@ -2353,6 +2353,12 @@ impl Context {
                 restore: super::restore_scratch_gc_roots,
             },
         );
+        // The string position cache lives above heap_types, but heap payload
+        // mutations must invalidate it. Publish the cache's stamp at the same
+        // one-time seam; the cache refuses to fill until it is installed.
+        crate::heap_types::install_string_bytes_changed_hook(
+            crate::emacs_core::string_pos_cache::note_string_bytes_changed,
+        );
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.

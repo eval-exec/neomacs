@@ -44,7 +44,6 @@ fuzz_support regex_emacs 1
 fuzz_support syntax 1
 gc_trace value 1
 heap_types emacs_char 4
-heap_types string_pos_cache 2
 heap_types value 4
 image_identity value 1
 keyboard (root) 1

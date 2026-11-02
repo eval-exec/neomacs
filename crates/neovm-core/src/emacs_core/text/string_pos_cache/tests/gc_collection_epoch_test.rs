@@ -170,6 +170,10 @@ fn activate_cache_for_heap(heap: &TaggedHeap) {
 }
 
 fn partly_swept_cached_string() -> (Box<TaggedHeap>, Value, usize) {
+    // The evaluator publishes the byte-mutation hook at its one-time seams;
+    // this fixture drives a raw heap without a Context, so install the
+    // production hook so the cache can fill (assertions unchanged).
+    install_notification_hook_for_test();
     let mut heap = Box::new(TaggedHeap::new());
     set_tagged_heap(&mut heap);
     activate_cache_for_heap(&heap);

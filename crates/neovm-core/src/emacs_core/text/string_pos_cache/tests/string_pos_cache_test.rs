@@ -31,6 +31,10 @@ fn mixed_bytes(seed: u64, chars: usize) -> Vec<u8> {
 #[test]
 fn cached_conversions_agree_with_a_scan_from_the_start() {
     crate::test_utils::init_test_tracing();
+    // The evaluator publishes the mutation hook at its one-time seams; this
+    // test process has none, so install the production hook to exercise the
+    // cached path (assertions unchanged).
+    install_notification_hook_for_test();
     for seed in 0..8u64 {
         reset_string_pos_cache();
         let bytes = mixed_bytes(seed, 700);
@@ -73,6 +77,9 @@ fn cached_conversions_agree_with_a_scan_from_the_start() {
 #[test]
 fn a_changed_string_never_answers_from_the_cache() {
     crate::test_utils::init_test_tracing();
+    // Install the evaluator's production hook so the cache really fills and
+    // the mutation must invalidate it (assertions unchanged).
+    install_notification_hook_for_test();
     reset_string_pos_cache();
     // "aжb": cache a pair past the 2-byte character, then make the first
     // character 2 bytes and the second 1 byte -- the same SBYTES, shifted
@@ -111,6 +118,9 @@ fn a_changed_string_never_answers_from_the_cache() {
 #[test]
 fn clear_string_invalidates_cached_pair_after_shape_change() {
     crate::test_utils::init_test_tracing();
+    // Install the evaluator's production hook so the cache really fills and
+    // the mutation must invalidate it (assertions unchanged).
+    install_notification_hook_for_test();
     reset_string_pos_cache();
     let value = Value::heap_string(LispString::from_emacs_bytes("aжжb".as_bytes().to_vec()));
     assert_eq!(
@@ -141,4 +151,43 @@ fn clear_string_invalidates_cached_pair_after_shape_change() {
         string_char_to_byte(other, other.as_lisp_string().unwrap(), 2),
         3
     );
+}
+
+#[test]
+fn never_stores_while_the_notification_hook_is_uninstalled() {
+    crate::test_utils::init_test_tracing();
+    // No Context is constructed in this process, and the hook is published
+    // only by the evaluator's one-time seams, so the cache must refuse to
+    // fill. A mutation that therefore skipped notification cannot leave a
+    // stale entry behind.
+    assert!(
+        !crate::heap_types::string_bytes_changed_hook_installed(),
+        "this test needs a process with no evaluator-constructed hook"
+    );
+    reset_string_pos_cache();
+    let value = Value::heap_string(LispString::from_emacs_bytes("aжжb".as_bytes().to_vec()));
+    let original_ptr = value.as_lisp_string().expect("string").as_bytes().as_ptr();
+    let original_sbytes = value.as_lisp_string().expect("string").sbytes();
+    // This conversion would normally fill the cache; it must compute uncached.
+    assert_eq!(
+        string_char_to_byte(value, value.as_lisp_string().unwrap(), 2),
+        3
+    );
+    assert!(
+        cached_pair(value, value.as_lisp_string().unwrap()).is_none(),
+        "the cache must not store while the byte-mutation hook is uninstalled"
+    );
+    // The same object, SBYTES and data pointer, different character
+    // boundaries: a stored pair would now be stale.
+    value.with_lisp_string_mut(|string| {
+        string.mutate_bytes(|bytes| {
+            bytes.clear();
+            bytes.extend_from_slice("жaжb".as_bytes());
+        })
+    });
+    let changed = value.as_lisp_string().expect("string");
+    assert_eq!(changed.as_bytes().as_ptr(), original_ptr);
+    assert_eq!(changed.sbytes(), original_sbytes);
+    assert_eq!(string_char_to_byte(value, changed, 1), 2);
+    assert!(cached_pair(value, changed).is_none());
 }

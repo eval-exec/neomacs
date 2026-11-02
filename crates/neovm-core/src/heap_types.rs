@@ -17,6 +17,40 @@ use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+/// The position cache's byte-mutation stamp, installed by the evaluator above
+/// this layer. The cache owns the epoch cell and the conversions that fill it;
+/// heap payload mutations only notify it. The upper cache's fill path refuses
+/// to store while this table is empty, so a mutation that skipped notification
+/// can never leave a stale entry behind. The hook reads the calling thread's
+/// own TLS epoch, so it stays correct on every mutator and carrier thread.
+static NOTE_STRING_BYTES_CHANGED: OnceLock<fn()> = OnceLock::new();
+
+/// Hand the upper position cache its byte-mutation stamp. One-time process
+/// hook, installed next to the scratch-root hooks by evaluator construction
+/// and by image restore; a later install is the same function pointer and is
+/// ignored.
+pub(crate) fn install_string_bytes_changed_hook(hook: fn()) {
+    let _ = NOTE_STRING_BYTES_CHANGED.set(hook);
+}
+
+/// Whether an evaluator has published the byte-mutation stamp. The position
+/// cache's fill path consults this (an acquire load) before storing: without
+/// the hook a later mutation could not invalidate the entry. Once set, the
+/// hook never goes away.
+#[inline]
+pub(crate) fn string_bytes_changed_hook_installed() -> bool {
+    NOTE_STRING_BYTES_CHANGED.get().is_some()
+}
+
+/// Some string's bytes changed: notify the upper position cache, if an
+/// evaluator has installed it.
+#[inline]
+fn note_string_bytes_changed() {
+    if let Some(hook) = NOTE_STRING_BYTES_CHANGED.get() {
+        hook();
+    }
+}
+
 /// A Lisp string.
 ///
 /// Backing bytes use Emacs internal encoding (a UTF-8 superset). For standard
@@ -1050,7 +1084,7 @@ impl LispString {
             self.size = len;
             self.size_byte = SIZE_BYTE_UNIBYTE_NORMAL;
         }
-        crate::emacs_core::string_pos_cache::note_string_bytes_changed();
+        note_string_bytes_changed();
     }
 
     /// Mutable text-property interval tree attached to this string.
@@ -1188,7 +1222,7 @@ impl LispString {
     /// `clear_contents_to_unibyte` restores its known shape and invalidates
     /// the cache directly, without scanning the zeroed bytes.
     fn recompute_size(&mut self, byte_len: usize) {
-        crate::emacs_core::string_pos_cache::note_string_bytes_changed();
+        note_string_bytes_changed();
         if self.size_byte >= 0 {
             // multibyte
             let data = if byte_len == 0 {

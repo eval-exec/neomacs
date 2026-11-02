@@ -9,6 +9,10 @@ fn init_cache_test() {
     // before tracing or the Lisp runtime can initialize or start workers.
     unsafe { std::env::set_var("NEOVM_COMPARE_STRINGS_POS_CACHE", "on") };
     crate::test_utils::init_test_tracing();
+    // The evaluator publishes the byte-mutation hook at its one-time seams;
+    // these tests drive the cache without a Context, so install the
+    // production hook first (assertions unchanged).
+    string_pos_cache::install_notification_hook_for_test();
     string_pos_cache::reset_string_pos_cache();
 }
 

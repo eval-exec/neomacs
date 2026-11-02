@@ -114,6 +114,10 @@ fn syntax_heap_source_validates_object_payload_and_rejects_scalars() {
         binding.string(),
         source.as_lisp_string().expect("test payload")
     ));
+    // The evaluator publishes the byte-mutation hook at its one-time seams;
+    // this test drives the cache without a Context, so install the
+    // production hook first (assertions unchanged).
+    crate::emacs_core::string_pos_cache::install_notification_hook_for_test();
     crate::emacs_core::string_pos_cache::reset_string_pos_cache();
     assert_eq!(binding.byte_to_gnu_char_pos(4).get(), -1);
     assert_eq!(

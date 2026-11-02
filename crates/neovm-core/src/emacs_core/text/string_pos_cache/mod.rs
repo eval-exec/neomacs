@@ -21,7 +21,7 @@ use std::cell::Cell;
 
 use crate::emacs_core::emacs_char;
 use crate::emacs_core::value::Value;
-use crate::heap_types::{GnuStringCharPos, LispString};
+use crate::heap_types::{GnuStringCharPos, LispString, string_bytes_changed_hook_installed};
 
 #[derive(Clone, Copy, Debug)]
 struct Entry {
@@ -57,6 +57,16 @@ pub(crate) fn reset_string_pos_cache() {
     CACHE_HEAP
         .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
     CACHE_COLLECTION_EPOCH.with(|epoch| epoch.set(None));
+}
+
+/// Test-only: publish the cache's byte-mutation stamp exactly as the
+/// evaluator's one-time seams (`Context` construction and image restore) do.
+/// Tests that need the cache to fill must install the production hook; the
+/// structural pre-install refusal is covered by
+/// `never_stores_while_the_notification_hook_is_uninstalled`.
+#[cfg(test)]
+pub(crate) fn install_notification_hook_for_test() {
+    crate::heap_types::install_string_bytes_changed_hook(note_string_bytes_changed);
 }
 
 /// Validate ownership at activation, never during character/byte conversion.
@@ -143,7 +153,17 @@ fn remember(string: Value, s: &LispString, char_pos: GnuStringCharPos, byte_pos:
         char_pos,
         byte_pos,
     };
-    CACHE.with(|cache| cache.set(Some(entry)));
+    CACHE.with(|cache| {
+        // Fill only while the evaluator has published the byte-mutation
+        // stamp; otherwise a later mutation could not invalidate this entry.
+        // The acquire load runs on the empty-cache (miss) path only: an
+        // existing entry proves the hook was installed when it was stored,
+        // and installation is one-way.
+        if cache.get().is_none() && !string_bytes_changed_hook_installed() {
+            return;
+        }
+        cache.set(Some(entry));
+    });
 }
 
 /// The byte offset of nonnegative character `char_index`, clamped to SCHARS.
