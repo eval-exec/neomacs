@@ -649,10 +649,20 @@ fn compile_osr_leaf(
     let diagnostic = stats::front_diag::begin(id, stats::CompileOrigin::Osr, None);
     let clock = stats::CompileClock::start(stats::CompileOrigin::Osr);
     let diagnostic_start = diagnostic.as_ref().map(|_| clock.started());
+    let cpu_started = super::tier2::cpu_time_us();
     let entry = compile_osr_leaf_timed(obarray, func, osr_pc, id, name_hint);
     let elapsed = clock.finish(entry.is_some());
+    let cpu_finished = super::tier2::cpu_time_us();
     if let Some(entry) = &entry {
         entry.leaf.obs.note_compile_time(elapsed);
+        if cpu_started != 0 && cpu_finished != 0 {
+            entry
+                .leaf
+                .obs
+                .note_compile_cpu_time(std::time::Duration::from_micros(
+                    cpu_finished.saturating_sub(cpu_started),
+                ));
+        }
     }
     if let (Some(diagnostic), Some(start)) = (diagnostic, diagnostic_start) {
         diagnostic.finish(start, elapsed, entry.is_some());
@@ -1453,21 +1463,22 @@ fn compile_cache_entry(
     let defer = super::bg::DeferScope::enter(class);
     let clock = stats::CompileClock::start(request.origin);
     let diagnostic_start = diagnostic.as_ref().map(|_| clock.started());
-    let cpu_started = spine_upgrade.then(super::tier2::cpu_time_us);
+    let cpu_started = super::tier2::cpu_time_us();
     let result = compile_bytecode_function_requested(func, obarray, request);
     drop(defer);
     let mut deferred = super::bg::take_deferred();
     let elapsed = clock.finish(result.is_ok());
-    if let Some(started) = cpu_started {
-        let finished = super::tier2::cpu_time_us();
+    let cpu_finished = super::tier2::cpu_time_us();
+    // Measure CPU for every compile: the T2 compile budget is CPU-accounted,
+    // so a leaf's next upgrade estimate must not inherit a wall stall inflated
+    // by descheduling. A missing CPU clock (0 at either end) leaves `None`: the
+    // charge falls back to wall time and the estimate to the leaf's wall time.
+    let cpu_elapsed = (cpu_started != 0 && cpu_finished != 0)
+        .then(|| std::time::Duration::from_micros(cpu_finished.saturating_sub(cpu_started)));
+    if spine_upgrade {
         // A missing CPU clock must not make every upgrade free. Wall
         // elapsed conservatively charges the fixed startup budget floor.
-        let charged = if started == 0 || finished == 0 {
-            elapsed
-        } else {
-            std::time::Duration::from_micros(finished.saturating_sub(started))
-        };
-        super::tier2::charge_compile(charged);
+        super::tier2::charge_compile(cpu_elapsed.unwrap_or(elapsed));
     }
     stats::record_compile(elapsed, func.executable_ops().len(), &result);
     if let (Some(diagnostic), Some(start)) = (diagnostic, diagnostic_start) {
@@ -1483,6 +1494,9 @@ fn compile_cache_entry(
             leaf.obs.id = id;
             leaf.compiled_level = rt.reopt_level();
             leaf.obs.note_compile_time(elapsed);
+            if let Some(cpu) = cpu_elapsed {
+                leaf.obs.note_compile_cpu_time(cpu);
+            }
             // Registered when the front finishes, so a redefinition of an
             // inlined callee removes a pending leaf as it would a compiled one.
             if spine_upgrade {

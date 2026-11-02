@@ -177,12 +177,61 @@ fn tier2_opt_compact_helper_respects_the_compile_cpu_budget() {
         floor_ms: 0,
         ..policy()
     }));
+    // A directly built leaf has no CPU sample, so the wall-time fallback is
+    // the conservative estimate here.
     leaf.obs.compile_us.set(u32::MAX);
     assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
     assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
     assert_eq!(leaf.obs.t2.reserved_us.get(), 0);
     assert_eq!(leaf.obs.t2.budget.get(), i64::from(policy().stable));
     assert_eq!(leaf.obs.t2.policy.borrow().attempts, 1);
+    assert_eq!(leaf.obs.t2.state.get(), T2State::BudgetWait);
+}
+
+#[test]
+fn tier2_opt_budget_estimates_from_measured_cpu_not_wall_stall() {
+    let _settings = Settings::enter(OptMode::Opt);
+    let _ctx = Context::new();
+    let (f, leaf) = policy_fixture(47);
+    force_opt_for_test(Some(OptMode::Opt), None);
+    // The 1 ms floor keeps this assertion independent of the thread CPU clock;
+    // the wall field alone would still be unaffordable.
+    force_tier2_policy_for_test(Some(Tier2PolicyKnob {
+        budget_pct: 1,
+        floor_ms: 1,
+        ..policy()
+    }));
+    // A long wall stall that consumed almost no CPU must not reserve CPU it
+    // never spent: the ledger it is compared with is thread-CPU accounted.
+    leaf.obs.compile_us.set(u32::MAX);
+    leaf.obs.compile_cpu_us.set(1);
+    assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
+    assert_eq!(
+        request_decision(&leaf, f.jit_runtime()),
+        Some(T2Decision::Upgrade(T2Upgrade::Feedback))
+    );
+    assert_eq!(leaf.obs.t2.reserved_us.get(), 0);
+    release(&leaf);
+}
+
+#[test]
+fn tier2_opt_budget_denies_the_measured_cpu_ceiling() {
+    let _settings = Settings::enter(OptMode::Opt);
+    let _ctx = Context::new();
+    let (f, leaf) = policy_fixture(47);
+    force_opt_for_test(Some(OptMode::Opt), None);
+    force_tier2_policy_for_test(Some(Tier2PolicyKnob {
+        budget_pct: 1,
+        floor_ms: 0,
+        ..policy()
+    }));
+    // A small wall time cannot hide a compile that consumed the whole CPU
+    // ceiling; the measured CPU estimate still refuses the reservation.
+    leaf.obs.compile_us.set(1);
+    leaf.obs.compile_cpu_us.set(u32::MAX);
+    assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
+    assert_eq!(request_decision(&leaf, f.jit_runtime()), None);
+    assert_eq!(leaf.obs.t2.reserved_us.get(), 0);
     assert_eq!(leaf.obs.t2.state.get(), T2State::BudgetWait);
 }
 
@@ -299,6 +348,7 @@ fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
     let original = unsafe { &*original_ptr };
     assert_eq!(original.selected_tier(), SelectedTier::Baseline);
     original.obs.compile_us.set(u32::MAX);
+    original.obs.compile_cpu_us.set(u32::MAX);
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
         budget_pct: 1,
         floor_ms: 0,
@@ -353,6 +403,7 @@ fn tier2_opt_budget_denial_retries_native_helper_after_stable_windows() {
     // Make the resource policy affordable deterministically; the earlier
     // denial did not consume a reservation and cannot permanently keep T1.
     original.obs.compile_us.set(1);
+    original.obs.compile_cpu_us.set(1);
     force_tier2_policy_for_test(Some(policy()));
     for _ in 0..SERVED_CALLS {
         call(&mut ctx);
@@ -449,6 +500,7 @@ fn tier2_opt_budget_wait_freezes_use_feedback_and_reopens_a_fresh_window() {
     // fallback throughout the rooted caller's normal native invocations.
     let original = unsafe { &*original_ptr };
     original.obs.compile_us.set(u32::MAX);
+    original.obs.compile_cpu_us.set(u32::MAX);
     force_tier2_policy_for_test(Some(Tier2PolicyKnob {
         budget_pct: 1,
         floor_ms: 0,
@@ -499,6 +551,7 @@ fn tier2_opt_budget_wait_freezes_use_feedback_and_reopens_a_fresh_window() {
     // was invisible during BudgetWait and must be observed in a full fresh
     // stable window before the original helper can be upgraded.
     original.obs.compile_us.set(1);
+    original.obs.compile_cpu_us.set(1);
     force_tier2_policy_for_test(Some(policy()));
     for _ in 0..policy().stable {
         if original.obs.t2.state.get() == T2State::Idle {

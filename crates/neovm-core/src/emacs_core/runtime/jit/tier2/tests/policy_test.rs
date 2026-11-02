@@ -177,6 +177,7 @@ fn tier2_policy_budget_denial_rearms_current_native_leaf() {
     run(&mut ctx, &f, &[]);
     let old = current(&f);
     old.obs.compile_us.set(u32::MAX);
+    old.obs.compile_cpu_us.set(u32::MAX);
     run(&mut ctx, &f, &[]);
     assert_eq!(old.obs.t2.state.get(), T2State::Idle);
     assert_eq!(old.obs.t2.budget.get(), 1);
@@ -185,6 +186,7 @@ fn tier2_policy_budget_denial_rearms_current_native_leaf() {
     assert!(std::ptr::eq(old, current(&f)));
     // A temporarily full ledger must not permanently disable this source.
     old.obs.compile_us.set(1);
+    old.obs.compile_cpu_us.set(1);
     run(&mut ctx, &f, &[]);
     assert!(old.obs.t2.due().is_some());
     run(&mut ctx, &f, &[]);

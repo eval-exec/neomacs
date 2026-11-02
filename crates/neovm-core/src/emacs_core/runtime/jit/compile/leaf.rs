@@ -368,6 +368,12 @@ pub(crate) struct LeafObs {
     /// ran under `NEOVM_JIT_TIER2`. Its `budget` cell's address is baked
     /// into a profiling leaf's code, like `entries`.
     pub(crate) t2: crate::emacs_core::jit::tier2::T2Cells,
+    /// CPU time the compile consumed on its mutator thread, in µs (0 = built
+    /// outside the cache seams, or the thread CPU clock was unavailable).
+    /// `compile_us` is wall time and includes descheduling, so the T2
+    /// compile-budget estimate reads this first and falls back to `compile_us`
+    /// only when it is 0.
+    pub(crate) compile_cpu_us: Cell<u32>,
 }
 
 impl LeafObs {
@@ -392,6 +398,7 @@ impl LeafObs {
             compile_us: Cell::new(0),
             mir_verdict: None,
             t2: crate::emacs_core::jit::tier2::T2Cells::unprofiled(),
+            compile_cpu_us: Cell::new(0),
         })
     }
 
@@ -410,6 +417,12 @@ impl LeafObs {
     pub(crate) fn note_compile_time(&self, elapsed: std::time::Duration) {
         self.compile_us
             .set(u32::try_from(elapsed.as_micros()).unwrap_or(u32::MAX));
+    }
+
+    /// Record the CPU time that produced this leaf (see `compile_cpu_us`).
+    pub(crate) fn note_compile_cpu_time(&self, cpu: std::time::Duration) {
+        self.compile_cpu_us
+            .set(u32::try_from(cpu.as_micros()).unwrap_or(u32::MAX));
     }
 
     /// The cell the generated prologue increments, when this leaf was

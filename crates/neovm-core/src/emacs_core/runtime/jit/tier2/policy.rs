@@ -130,10 +130,15 @@ fn affordable(
             <= cpu_us.saturating_mul(u64::from(pct)) / 100 + u64::from(floor_ms) * 1_000
 }
 fn estimate_us(leaf: &CompiledLeaf) -> u64 {
-    u64::from(leaf.obs.compile_us.get())
-        .saturating_mul(3)
-        .div_ceil(2)
-        .max(1)
+    // The ledger is thread-CPU accounted, so estimate in the same unit: a wall
+    // stall inflated by descheduling must not reserve CPU the compile never
+    // consumed. Leaves without a CPU sample (built outside a cache seam, or no
+    // thread CPU clock) keep the conservative wall-time estimate.
+    let measured = match leaf.obs.compile_cpu_us.get() {
+        0 => leaf.obs.compile_us.get(),
+        cpu => cpu,
+    };
+    u64::from(measured).saturating_mul(3).div_ceil(2).max(1)
 }
 fn budget_allows(leaf: &CompiledLeaf) -> bool {
     let k = jit_tier2_policy();

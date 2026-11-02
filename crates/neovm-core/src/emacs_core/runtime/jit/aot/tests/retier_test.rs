@@ -615,6 +615,7 @@ fn aot_retier_cached_legacy_symbol_calls_reach_request_without_advancing_heat() 
 
 fn force_compile_budget_denial(old: &CompiledLeaf) {
     old.obs.compile_us.set(u32::MAX);
+    old.obs.compile_cpu_us.set(u32::MAX);
     compile::force_tier2_policy_for_test(Some(Tier2PolicyKnob {
         stable: 1,
         attempts: 4,
