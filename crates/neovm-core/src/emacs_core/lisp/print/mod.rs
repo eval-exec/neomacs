@@ -11,8 +11,9 @@ pub(crate) use error_format::{
     PrintShorthandSymbol, builtin_error_message_string, format_flow_with_eval,
     format_opaque_handle_in_state, format_signal_data_with_eval,
     format_value_bytes_in_state_with_options, format_window_handle_in_state,
-    print_options_from_state, print_value_bytes_in_state, print_value_bytes_in_state_with_options,
-    print_value_in_state, print_value_in_state_with_options, reset_error_format_for_carrier,
+    install_eval_error_format_hook, print_options_from_state, print_value_bytes_in_state,
+    print_value_bytes_in_state_with_options, print_value_in_state,
+    print_value_in_state_with_options, reset_error_format_for_carrier,
 };
 pub use error_format::{
     format_eval_result, format_eval_result_bytes_with_eval, format_eval_result_with_eval, map_flow,

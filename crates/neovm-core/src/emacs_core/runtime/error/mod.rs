@@ -15,6 +15,7 @@ use crate::tagged::SymbolMode;
 use strum::IntoStaticStr;
 
 mod bytecode_backtrace;
+pub(crate) mod format_hook;
 use bytecode_backtrace::BytecodeErrorBacktrace;
 pub(crate) use bytecode_backtrace::InlineErrorOp;
 
@@ -1132,6 +1133,9 @@ pub(crate) fn memory_signal_from_binding_value(value: Value, symbol_mode: Symbol
 #[cfg(test)]
 #[path = "tests/flow_kind_test.rs"]
 mod flow_kind_tests;
+#[cfg(test)]
+#[path = "tests/format_hook_test.rs"]
+mod format_hook_tests;
 #[cfg(test)]
 #[path = "tests/error_test.rs"]
 mod tests;

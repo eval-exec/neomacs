@@ -21,7 +21,7 @@ use crate::emacs_core::intern::intern;
 use crate::emacs_core::string_escape::{format_lisp_string_bytes_emacs, format_lisp_string_emacs};
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 use crate::window::WindowId;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Formatter};
 
 thread_local! {
     static FORMAT_OBJECT_STACK: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -1190,29 +1190,40 @@ pub fn format_eval_result_bytes_with_eval(
     out
 }
 
-impl Display for EvalError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Signal {
-                symbol,
-                data,
-                raw_data,
-                ..
-            } => write!(
-                f,
-                "signal {} {}",
-                format_symbol_name_for_diagnostic(*symbol),
-                format_signal_payload(raw_data.as_ref(), data),
-            ),
-            Self::UncaughtThrow { tag, value, .. } => write!(
-                f,
-                "uncaught throw tag={} value={}",
-                super::print_value(tag),
-                super::print_value(value),
-            ),
-            Self::Shutdown(request) => write!(f, "kill-emacs {}", request.exit_code),
-        }
+/// Render an `EvalError` for `Display`.
+///
+/// Moved verbatim from the inherent Display impl that now lives in the value
+/// layer; the printer installs this one algorithm through the one-time hook.
+pub(crate) fn format_eval_error(error: &EvalError, f: &mut Formatter<'_>) -> fmt::Result {
+    match error {
+        EvalError::Signal {
+            symbol,
+            data,
+            raw_data,
+            ..
+        } => write!(
+            f,
+            "signal {} {}",
+            format_symbol_name_for_diagnostic(*symbol),
+            format_signal_payload(raw_data.as_ref(), data),
+        ),
+        EvalError::UncaughtThrow { tag, value, .. } => write!(
+            f,
+            "uncaught throw tag={} value={}",
+            super::print_value(tag),
+            super::print_value(value),
+        ),
+        EvalError::Shutdown(request) => write!(f, "kill-emacs {}", request.exit_code),
     }
+}
+
+/// Install the evaluator's EvalError formatter beside the other one-time hooks.
+pub(crate) fn install_eval_error_format_hook() {
+    crate::emacs_core::error::format_hook::install_eval_error_formatter(
+        crate::emacs_core::error::format_hook::EvalErrorFormatter {
+            fmt: format_eval_error,
+        },
+    );
 }
 
 /// Convert internal flow to public EvalError.

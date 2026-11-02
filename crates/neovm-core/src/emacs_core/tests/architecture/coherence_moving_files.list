@@ -4,11 +4,13 @@ emacs_core/runtime/alloc/tests/boundary_numbers.rs
 emacs_core/runtime/alloc/tests/validated_lengths.rs
 emacs_core/runtime/error/bytecode_backtrace.rs
 emacs_core/runtime/error/flow_word.rs
+emacs_core/runtime/error/format_hook.rs
 emacs_core/runtime/error/mod.rs
 emacs_core/runtime/error/tests/error_test.rs
 emacs_core/runtime/error/tests/flow_kind_test.rs
 emacs_core/runtime/error/tests/flow_word_gc_test.rs
 emacs_core/runtime/error/tests/flow_word_test.rs
+emacs_core/runtime/error/tests/format_hook_test.rs
 emacs_core/runtime/error/tests/gc_tls_ownership_test.rs
 emacs_core/runtime/error/tests/issue554_throw_roundtrip.rs
 emacs_core/runtime/error/tests/memory_signal_policy_test.rs

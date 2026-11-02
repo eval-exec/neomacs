@@ -2363,6 +2363,9 @@ impl Context {
         crate::heap_types::install_string_bytes_changed_hook(
             crate::emacs_core::string_pos_cache::note_string_bytes_changed,
         );
+        // The value layer owns EvalError's Display table; the printer installs
+        // its one formatting algorithm here, at the same one-time hooks.
+        crate::emacs_core::print::install_eval_error_format_hook();
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.

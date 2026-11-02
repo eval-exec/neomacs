@@ -31,17 +31,15 @@ use syn::spanned::Spanned;
 use syn::{Item, Type};
 
 /// Illegal upper impls still to convert. Decremented by every seam commit.
-const REMAINING_ALLOWED: usize = 2;
+const REMAINING_ALLOWED: usize = 1;
 
 /// Moved types whose name also has a non-moving definition in this crate, so
 /// the general name rule cannot classify them. Each entry is
 /// `(file, self type, trait or None for inherent)`; every entry must match a
 /// real impl or the guard reports a stale row, and each match counts once.
-const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[(
-    "emacs_core/lisp/print/error_format.rs",
-    "EvalError",
-    Some("Display"),
-)];
+/// Empty since B1 moved `Display for EvalError` into the moving error module;
+/// the mechanism stays for a future ambiguous identity.
+const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[];
 
 /// Moved type names that have no plain definition inside the moving files
 /// because they are aliases of a moved type (`OpenedFontMetrics` is an upper
