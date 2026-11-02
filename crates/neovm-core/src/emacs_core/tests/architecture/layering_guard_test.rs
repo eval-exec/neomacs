@@ -302,6 +302,15 @@ fn is_workspace_sibling(name: &str) -> bool {
     (name.starts_with("neomacs_") || name.starts_with("neovm_")) && name != "neovm_core"
 }
 
+/// The first lower crate of the extraction. Its modules are already inside the
+/// moving set, so a moving file that reaches one of them through a core-root
+/// re-export stays internal and is not counted as an upward edge.
+const MOVING_CRATE: &str = "neovm_value";
+
+fn is_moving_crate(name: &str) -> bool {
+    name == MOVING_CRATE
+}
+
 /// A moving-set file is either a bottom-peer top-level module or a G0
 /// emacs_core member. The move manifest (`tmp/rehearsal/move.py` at the
 /// extraction tip) is generated from exactly these roots; `G0_MEMBERS` and
@@ -352,6 +361,13 @@ struct ModuleIndex {
     /// `MenuBarPopupAnchor`, ...), which a `crate::emacs_core::Name` path can
     /// reach without naming a submodule.
     ec_root_items: BTreeSet<String>,
+    /// Items defined directly in `lib.rs`, reachable as `crate::name` without
+    /// naming a module. These are not layering edges.
+    crate_root_items: BTreeSet<String>,
+    /// Crate-root re-exports of modules that live in the moving crate (for
+    /// example `pub(crate) use neovm_value::tls_scope;`). A moving file that
+    /// names one through `crate::` still targets the moving set.
+    moving_crate_exports: BTreeMap<String, String>,
     crate_exports: BTreeMap<String, EcSub>,
     ec_exports: BTreeMap<String, EcSub>,
 }
@@ -471,6 +487,9 @@ impl ProductionWalker {
             // only when the source moves (the value crate must not depend on
             // a sibling workspace crate).
             if moving && is_workspace_sibling(first) {
+                if is_moving_crate(first) {
+                    return Classification::NotUpward;
+                }
                 return Classification::Upward(Pair {
                     lower: source_root,
                     upper: Upper::Extern(first.clone()),
@@ -543,12 +562,26 @@ impl ProductionWalker {
                     upper: Upper::Top(root),
                 });
             }
+            if self.index.moving_crate_exports.contains_key(name) || is_moving_crate(name) {
+                return Classification::NotUpward;
+            }
             if is_workspace_sibling(name) {
                 return Classification::Upward(Pair {
                     lower: source_root,
                     upper: Upper::Extern(name.clone()),
                 });
             }
+            if self.index.crate_root_items.contains(name) {
+                return Classification::NotUpward;
+            }
+            // A moving file's crate-root path that names no module, facade,
+            // moving-crate re-export or root item is an edge kind this guard
+            // cannot classify. Fail closed instead of silently skipping it.
+            panic!(
+                "{}:{}: unknown top-level production module {name}; teach the layering guard this edge",
+                self.source.display(),
+                span.start().line
+            );
         }
         Classification::NotUpward
     }
@@ -602,6 +635,9 @@ impl ProductionWalker {
             if let Some(first) = segments.first()
                 && is_workspace_sibling(first)
             {
+                if is_moving_crate(first) {
+                    return Classification::NotUpward;
+                }
                 return Classification::Upward(Pair {
                     lower: LowerRoot::G0,
                     upper: Upper::Extern(first.clone()),
@@ -648,6 +684,12 @@ impl ProductionWalker {
                 lower: LowerRoot::G0,
                 upper: Upper::Ec(origin.clone()),
             });
+        }
+        if self.index.moving_crate_exports.contains_key(first) || is_moving_crate(first) {
+            return Classification::NotUpward;
+        }
+        if self.index.crate_root_items.contains(first) {
+            return Classification::NotUpward;
         }
         if is_workspace_sibling(first) {
             return Classification::Upward(Pair {
@@ -798,11 +840,15 @@ fn item_name(item: &Item) -> Option<String> {
 
 impl<'ast> Visit<'ast> for ProductionWalker {
     fn visit_item(&mut self, item: &'ast Item) {
-        if matches!(self.phase, ScanPhase::Discover)
-            && self.logical_path.as_slice() == ["emacs_core"]
-        {
-            if let Some(name) = item_name(item) {
-                self.index.ec_root_items.insert(name);
+        if matches!(self.phase, ScanPhase::Discover) {
+            if self.logical_path.as_slice() == ["emacs_core"] {
+                if let Some(name) = item_name(item) {
+                    self.index.ec_root_items.insert(name);
+                }
+            } else if self.logical_path.is_empty() {
+                if let Some(name) = item_name(item) {
+                    self.index.crate_root_items.insert(name);
+                }
             }
         }
         if !test_only(item_attributes(item)) {
@@ -869,11 +915,23 @@ impl<'ast> Visit<'ast> for ProductionWalker {
     fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
         match self.phase {
             ScanPhase::Discover => {
+                let mut leaves = Vec::new();
+                use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
+                if self.logical_path.is_empty() {
+                    // Any root binding of a moving-crate module is the
+                    // crate:: facade a moving file can use, whatever its
+                    // visibility: descendants can see the root's private
+                    // imports.
+                    for (path, name) in &leaves {
+                        if path.first().is_some_and(|part| part == MOVING_CRATE) {
+                            let module = path.get(1).cloned().unwrap_or_else(|| name.clone());
+                            self.index.moving_crate_exports.insert(name.clone(), module);
+                        }
+                    }
+                }
                 if matches!(item.vis, syn::Visibility::Public(_))
                     && (self.logical_path.is_empty() || self.logical_path == ["emacs_core"])
                 {
-                    let mut leaves = Vec::new();
-                    use_leaves(&item.tree, &mut Vec::new(), &mut leaves);
                     for (path, name) in leaves {
                         self.exports.push((self.logical_path.clone(), path, name));
                     }
@@ -1007,6 +1065,13 @@ fn parse_ceilings(text: &str, index: &ModuleIndex) -> Ceilings {
             3,
             "expected <lower_root> <upper> <count>: {line}"
         );
+        assert!(
+            !columns[1].contains(':')
+                || columns[1].starts_with("top:")
+                || columns[1].starts_with("extern:"),
+            "unknown layering edge kind `{}`: {line}",
+            columns[1]
+        );
         let upper = if let Some(top) = columns[1].strip_prefix("top:") {
             let root = LowerRoot::parse(top);
             assert!(
@@ -1074,7 +1139,32 @@ fn assert_production_ceilings(root: &Path, sites: &Sites, ceilings: &Ceilings) {
                 .join("\n");
             failures.push(format!("{} {}: {current} production upward references exceed the ceiling {ceiling}. Remove upward dependencies; this ceiling may only decrease.\n{locations}", pair.lower.name(), pair.upper.text()));
         } else if current < ceiling {
-            failures.push(format!("{} {}: current {current} below ceiling {ceiling}; this ceiling may only decrease. Paste the FULL current table into layering_ceilings.list.", pair.lower.name(), pair.upper.text()));
+            let locations = sites.get(pair).map_or_else(String::new, |sites| {
+                let mut locations = sites
+                    .iter()
+                    .take(5)
+                    .map(|site| {
+                        format!(
+                            "{}:{}",
+                            site.source
+                                .strip_prefix(root)
+                                .unwrap_or(&site.source)
+                                .display(),
+                            site.line
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !locations.is_empty() {
+                    locations.insert(0, '\n');
+                }
+                locations
+            });
+            failures.push(format!(
+                "{} {}: current {current} below ceiling {ceiling}; this ceiling may only decrease. Attribute each removed reference to the moved item in the commit message and paste the FULL current table into layering_ceilings.list.{locations}",
+                pair.lower.name(),
+                pair.upper.text()
+            ));
         }
     }
     assert!(
@@ -1461,6 +1551,42 @@ fn layering_guard_moving_set_internal_references_are_not_counted() {
     );
     let (index, sites) = production_sites(directory.path());
     assert!(sites.is_empty(), "{:?}", current_table(&sites));
+    assert_production_ceilings(directory.path(), &sites, &parse_ceilings("", &index));
+}
+
+#[test]
+#[should_panic(expected = "unknown top-level production module missing")]
+fn layering_guard_rejects_unknown_moving_set_target() {
+    let directory = fixture("mod tagged { use crate::missing::Glyph; }");
+    production_sites(directory.path());
+}
+
+#[test]
+#[should_panic(expected = "unknown layering edge kind")]
+fn layering_guard_rejects_unknown_ceiling_edge_kind() {
+    let directory = fixture("mod tagged {}");
+    let (index, _) = production_sites(directory.path());
+    parse_ceilings("tagged mystery:x 1", &index);
+}
+
+#[test]
+fn layering_guard_treats_moving_crate_and_root_items_as_internal() {
+    let directory = fixture(
+        r#"
+        pub(crate) use neovm_value::tls_scope;
+        pub fn root_helper() {}
+        mod tagged {
+            use crate::root_helper;
+            use crate::tls_scope::TlsScope;
+            use neovm_value::heap_types::Payload;
+        }
+        mod emacs_core {
+            pub mod value { use crate::tls_scope::TlsScope; }
+        }
+    "#,
+    );
+    let (index, sites) = production_sites(directory.path());
+    assert!(sites.is_empty(), "{}", current_table(&sites));
     assert_production_ceilings(directory.path(), &sites, &parse_ceilings("", &index));
 }
 
