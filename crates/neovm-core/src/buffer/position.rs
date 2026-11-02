@@ -425,34 +425,19 @@ impl AccessibleCharRange {
     }
 }
 
-impl LispCharPos1 {
-    pub const ONE: Self = Self(1);
-
-    pub const fn new(pos: i64) -> Self {
-        Self(pos)
-    }
-
-    pub fn from_one_based_usize(pos: usize) -> Self {
-        Self(i64::try_from(pos.max(1)).expect("Lisp character position fits i64"))
-    }
-
-    pub fn to_one_based_usize(self) -> usize {
-        usize::try_from(self.as_i64().max(1)).expect("Lisp character position fits usize")
-    }
-
-    /// Convert to 0-based internal char position.
-    pub fn to_char_pos(self) -> CharPos0 {
-        CharPos0::from_lisp(self)
-    }
-
+/// Buffer-dependent Lisp character-position conversions.
+///
+/// The value layer owns the position vocabulary; converting to an internal
+/// byte position needs the buffer's text, so that one method stays here as an
+/// extension trait (the value type cannot name `BufferText`).
+pub trait LispCharPos1BufferExt {
     /// Convert to 0-based internal byte position.
-    pub fn to_byte_pos(self, text: &super::BufferText) -> EmacsBytePos {
-        EmacsBytePos::from_lisp(self, text)
-    }
+    fn to_byte_pos(self, text: &super::BufferText) -> EmacsBytePos;
+}
 
-    /// The raw i64 value.
-    pub fn as_i64(self) -> i64 {
-        self.0
+impl LispCharPos1BufferExt for LispCharPos1 {
+    fn to_byte_pos(self, text: &super::BufferText) -> EmacsBytePos {
+        EmacsBytePos::from_lisp(self, text)
     }
 }
 

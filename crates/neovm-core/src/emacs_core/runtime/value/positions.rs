@@ -155,3 +155,29 @@ pub(crate) use crate::heap_types::byte_positions::{EmacsByteDelta, apply_signed_
 pub use crate::heap_types::byte_positions::{
     EmacsByteLen, EmacsBytePos, EmacsBytePositionView, EmacsByteRange, LispBytePos1,
 };
+
+impl LispCharPos1 {
+    pub const ONE: Self = Self(1);
+
+    pub const fn new(pos: i64) -> Self {
+        Self(pos)
+    }
+
+    pub fn from_one_based_usize(pos: usize) -> Self {
+        Self(i64::try_from(pos.max(1)).expect("Lisp character position fits i64"))
+    }
+
+    pub fn to_one_based_usize(self) -> usize {
+        usize::try_from(self.as_i64().max(1)).expect("Lisp character position fits usize")
+    }
+
+    /// Convert to 0-based internal char position.
+    pub fn to_char_pos(self) -> CharPos0 {
+        CharPos0::from_lisp(self)
+    }
+
+    /// The raw i64 value.
+    pub fn as_i64(self) -> i64 {
+        self.0
+    }
+}
