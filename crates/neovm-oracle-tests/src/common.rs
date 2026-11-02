@@ -12,7 +12,7 @@ use neomacs_test_oracle::CapturedEvaluation;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::OnceLock;
 
 #[path = "oracle_sandbox.rs"]
@@ -1128,15 +1128,18 @@ impl WindowSystemIdentity {
 /// GNU mints the symbol in C (the `Fprovide` sites on [`GnuWindowSystem`]);
 /// the feature set is the only runtime witness of which backend the attested
 /// binary was built with.  The probe is a fixed form run through the attested
-/// oracle (never a user form) and is cached for the process.
-fn gnu_window_system(oracle_bin: &Path) -> Option<GnuWindowSystem> {
+/// oracle (never a user form) and is cached for the process.  Like every
+/// oracle spawn it carries the canonical pins, so the detected identity does
+/// not depend on the host's HOME, locale or display variables.
+fn gnu_window_system(sandbox: &OracleSandbox, oracle_bin: &Path) -> Option<GnuWindowSystem> {
     static DETECTED: OnceLock<Option<GnuWindowSystem>> = OnceLock::new();
     *DETECTED.get_or_init(|| {
         const DETECT: &str = "(princ (cond ((featurep 'ns) \"ns\") \
              ((featurep 'pgtk) \"pgtk\") ((featurep 'x) \"x\") \
              ((featurep 'w32) \"w32\") ((featurep 'haiku) \"haiku\") \
              ((featurep 'android) \"android\") (t \"\")))";
-        let output = Command::new(oracle_bin)
+        let output = sandbox
+            .pinned_command(oracle_bin)
             .args(["--batch", "-Q", "--eval", DETECT])
             .stdin(Stdio::null())
             .output()
@@ -1219,7 +1222,7 @@ fn run_oracle_eval_with_sandbox(
     sandbox.configure(&mut cmd);
     cmd.env(OracleEngine::ENV, OracleEngine::Gnu.as_env_value());
     cmd.env("EMACSNATIVELOADPATH", "/dev/null");
-    let identity = WindowSystemIdentity::Gnu(gnu_window_system(&oracle_bin));
+    let identity = WindowSystemIdentity::Gnu(gnu_window_system(sandbox, &oracle_bin));
     eval_program.configure_command(&mut cmd, identity);
 
     apply_virtual_memory_limit(&mut cmd, mem_limit);
