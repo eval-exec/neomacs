@@ -3287,7 +3287,7 @@ impl TaggedValue {
         unsafe {
             match (*header).type_tag {
                 VecLikeType::Thread => {
-                    Some((*(header as *const ThreadObj)).payload.id.native_key())
+                    Some((*(header as *const ThreadObj)).payload.id().native_key())
                 }
                 VecLikeType::Mutex => Some((*(header as *const MutexObj)).payload.id.native_key()),
                 VecLikeType::CondVar => {

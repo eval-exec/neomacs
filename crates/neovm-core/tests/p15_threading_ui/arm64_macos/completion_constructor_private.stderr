@@ -1,0 +1,5 @@
+error[E0451]: fields `thread`, `exit`, `consumption` and `_confined` of struct `CompletingThread` are private
+ --> tests/p15_threading_ui/arm64_macos/../completion_constructor_private.rs
+  |
+  |     let forged = CompletingThread { ..completion };
+  |                                       ^^^^^^^^^^ fields `thread`, `exit`, `consumption` and `_confined` are private

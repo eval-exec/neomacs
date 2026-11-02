@@ -113,33 +113,17 @@ impl ThreadName {
     }
 }
 
-/// One GNU `THREAD_EVENT` waiting for its target thread's reader.
-///
-/// GNU's `thread-signal` targeted at the main thread does not store an error
-/// there: it queues an input event whose Lisp form is
-/// `(thread-event SENDER ERROR-SYMBOL DATA)` (`src/thread.c:1007-1013`), and
-/// the main thread's reader delivers it through `special-event-map`
-/// (`src/keyboard.c`, THREAD_EVENT; `lisp/thread.el:thread-handle-event`).
-/// The native transport mailbox belongs to the target's live registration
-/// (thread 0 is main). It is separate from the heap object's ordinary traced
-/// children, so durable transport roots cannot create an object self-cycle.
-/// The main Context drains this mailbox into its keyboard queue in
-/// `keyboard.rs` (`stage_pending_thread_events`).
-///
-/// The fields are [`SharedRoot`]s, not raw values: a Green worker queues the
-/// event on its own mutator thread and the main mutator consumes it later, so
-/// the three Lisp objects must stay alive and cross the mutator boundary in
-/// the heap's designed transport (`tagged::transport`).  The keyboard queue
-/// holds the same handles (`InputEvent::ThreadEvent`), which keeps that
-/// queue `Send` like every other input event.
+/// Temporary transport roots awaiting admission into a target's ordinary
+/// traced children. A successful admission permits these leases to expire;
+/// a refusal leaves the caller's event intact.
 #[derive(Clone, Debug)]
-pub struct PendingThreadEvent {
+pub struct InFlightThreadEvent {
     pub sender: SharedRoot,
     pub error_symbol: SharedRoot,
     pub data: SharedRoot,
 }
 
-impl PendingThreadEvent {
+impl InFlightThreadEvent {
     /// Root `(SENDER ERROR-SYMBOL DATA)` for transport to the main mutator.
     ///
     /// This is on `thread-signal`'s Lisp-reachable path, so a heap-identity
@@ -178,7 +162,7 @@ impl PendingThreadEvent {
     }
 }
 
-/// The runtime failure mode of [`PendingThreadEvent::share`], as a Lisp error.
+/// The runtime failure mode of [`InFlightThreadEvent::share`], as a Lisp error.
 ///
 /// GNU's `Fthread_signal` has no counterpart (its kbd buffer is process-wide
 /// and untyped), so this names the transport invariant instead of inventing a
@@ -193,13 +177,18 @@ fn thread_event_transport_error(error: crate::tagged::transport::SharedRootError
     )
 }
 
+mod completion;
 mod layout;
+mod mailbox;
 mod manager;
+
+use completion::SimCompletion;
+pub(crate) use completion::{CompletingThread, CompletionExit, RetiredCompletion};
 
 pub(crate) use crate::heap_types::threading::{
     CondVarId, CondVarPayload, JoinObservation, MutexId, MutexOwnership, MutexPayload,
-    MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadId, ThreadIds,
-    ThreadOutcome, ThreadPayload, ThreadPhase,
+    MutexReference, RecursionDepth, RunState, StoredThreadEvent, ThreadChildren, ThreadId,
+    ThreadIds, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase,
 };
 
 /// A validated object identity. This word is not a GC root by itself: Lisp
@@ -273,7 +262,7 @@ impl CurrentThreadOrdinal {
 pub struct ThreadManager {
     last_error: Option<Value>,
     threads: HashMap<ThreadId, Value>,
-    transport_mailboxes: HashMap<ThreadId, Vec<PendingThreadEvent>>,
+    mailbox_reservation: layout::MailboxReservation,
     before_issuer: layout::BeforeIssuerReservation,
     ids: ThreadIds,
     current_thread: CurrentThreadOrdinal,
@@ -306,7 +295,7 @@ impl GcTrace for ThreadManager {
         let Self {
             last_error,
             threads,
-            transport_mailboxes: _,
+            mailbox_reservation: _,
             before_issuer: _,
             ids: _,
             current_thread: _,
@@ -316,8 +305,7 @@ impl GcTrace for ThreadManager {
         if let Some(error) = last_error {
             roots.push(*error);
         }
-        // In-flight events remain external transport roots until S2 transfers
-        // them to stored object edges. No SharedRoot is inside a heap payload.
+        // Stored events are reached through the canonical ThreadObj child schema.
     }
 }
 
@@ -419,6 +407,14 @@ pub(crate) fn builtin_make_thread(eval: &mut super::eval::Context, args: Vec<Val
     eval.threads
         .set_thread_current_buffer(thread_id, eval.buffers.current_buffer_id());
     eval.with_sim_creation_local_bindings(|eval| {
+        // Keep the existing two-word callback ABI: the registered object is
+        // still a strong root when this callback begins, so its typed identity
+        // can be acquired here before runtime entry rather than captured.
+        let completion_id = eval
+            .threads
+            .get_thread(thread_id)
+            .ok_or_else(missing_live_thread_registration)?
+            .id();
         let runtime_state = match enter_thread_runtime(eval, thread_id) {
             Ok(state) => state,
             Err(flow) => {
@@ -429,6 +425,7 @@ pub(crate) fn builtin_make_thread(eval: &mut super::eval::Context, args: Vec<Val
         let result = eval.apply(function, vec![]);
         let exit_result = exit_thread_runtime(eval, thread_id, runtime_state);
         let thread_result = finish_make_thread_result(&mut eval.threads, thread_id, result);
+        finish_sim_thread_registration(&mut eval.threads, completion_id)?;
         exit_result?;
         thread_result
     })
@@ -554,6 +551,28 @@ pub(crate) fn finish_make_thread_result(
     Ok(thread)
 }
 
+/// Sim has no carrier to retire. Once the previous runtime is restored and
+/// the result is published, no native worker access follows this boundary.
+fn finish_sim_thread_registration(
+    threads: &mut ThreadManager,
+    thread_id: ThreadId,
+) -> Result<(), Flow> {
+    let completion = threads
+        .prepare_sim_completion(thread_id)
+        .map_err(|error| match error {
+            completion::CompletionError::MissingRegistration
+            | completion::CompletionError::MainThread
+            | completion::CompletionError::AlreadyPrepared => missing_live_thread_registration(),
+        })?;
+    match completion {
+        SimCompletion::Blocked => {}
+        SimCompletion::Completed(completion) => {
+            let _retired = threads.retire_thread_completion(completion);
+        }
+    }
+    Ok(())
+}
+
 /// `(thread-join THREAD)` -- wait for thread completion.
 ///
 /// Returns the thread's result, resuming a simulated blocked thread when needed,
@@ -599,6 +618,11 @@ fn resume_blocked_thread(ctx: &mut crate::emacs_core::eval::Context, thread_id: 
     let Some(remaining_forms) = ctx.threads.blocked_remaining_forms_if_ready(thread_id) else {
         return Ok(Value::NIL);
     };
+    let completion_id = ctx
+        .threads
+        .get_thread(thread_id)
+        .ok_or_else(missing_live_thread_registration)?
+        .id();
     let runtime_state = enter_thread_runtime(ctx, thread_id)?;
     let taken_forms = ctx
         .threads
@@ -619,6 +643,7 @@ fn resume_blocked_thread(ctx: &mut crate::emacs_core::eval::Context, thread_id: 
     };
     let exit_result = exit_thread_runtime(ctx, thread_id, runtime_state);
     let thread_result = finish_make_thread_result(&mut ctx.threads, thread_id, result);
+    finish_sim_thread_registration(&mut ctx.threads, completion_id)?;
     exit_result?;
     thread_result?;
     Ok(Value::NIL)
@@ -716,8 +741,11 @@ pub(crate) fn builtin_thread_signal(
         // signalling mutator's stack); the signalling thread is the installed
         // mutator of this evaluator's heap and keeps all three reachable
         // until admission ends.
-        let event = unsafe { PendingThreadEvent::share(ctx, sender, error_symbol, data) }?;
-        ctx.threads.queue_thread_event(id, event);
+        let event = unsafe { InFlightThreadEvent::share(ctx, sender, error_symbol, data) }?;
+        let target = ctx.threads.ids.main_thread();
+        ctx.threads
+            .queue_thread_event(target, &event)
+            .map_err(mailbox::event_error)?;
         if ctx.green_threads_running() {
             ctx.green_wake_main_for_thread_event();
         }
@@ -1024,7 +1052,7 @@ pub(crate) fn builtin_condition_wait(
         ));
     }
     if ctx.green_threads_running() {
-        return ctx.green_condition_wait(id, mutex_id);
+        return ctx.green_condition_wait(id);
     }
     Ok(Value::NIL)
 }

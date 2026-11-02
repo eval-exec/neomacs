@@ -143,3 +143,98 @@ fn e8s_thread_signal_to_main_is_a_thread_event() {
         ]],
     );
 }
+
+/// GNU thread.c:466 clears the blocker before mutex reacquisition; :475
+/// delivers the signal afterwards. The handler is INSIDE with-mutex, before
+/// its unwind unlock. Two successful unlocks pin the saved recursive depth.
+/// The ready-condition handshake forces a real wait without polling, sleeps,
+/// retries or assuming that one GNU thread-yield schedules a particular owner.
+#[test]
+fn p15_condition_wait_signal_reacquires_before_inner_handler() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    common::assert_oracle_parity_under_envs_expect(
+        r##"
+(let* ((m (make-mutex))
+       (ready (make-condition-variable m))
+       (condition (make-condition-variable m))
+       (seen nil)
+       (waiting nil)
+       (joined nil)
+       (worker nil))
+  (mutex-lock m)
+  (setq worker
+    (make-thread
+      (lambda ()
+        (with-mutex m
+          (mutex-lock m)
+          (condition-notify ready)
+          (condition-case problem
+              (condition-wait condition)
+            (error
+             (setq seen
+               (list (car problem)
+                     (thread--blocker (current-thread))
+                     (mutex-unlock m)
+                     (mutex-unlock m)
+                     (condition-case nil (mutex-unlock m)
+                       (error 'released))))
+             (mutex-lock m)))))))
+  (condition-wait ready)
+  (setq waiting (eq (thread--blocker worker) condition))
+  (thread-signal worker 'error '(p15-condition-signal))
+  (mutex-unlock m)
+  ;; GNU thread.c:1135-1143 snapshots the pending injected error at join entry;
+  ;; it may re-raise that error after waiting even though the worker handled it.
+  ;; Keep the complete condition/data: a different join error must fail parity.
+  (setq joined
+    (condition-case join-error
+        (list 'returned (thread-join worker))
+      (error (list 'raised join-error))))
+  (list waiting seen joined))
+"##,
+        &[&[("NEOVM_THREADS", "green")]],
+        expect_test::expect![[
+            r#""OK (t (error nil nil nil released) (raised (error p15-condition-signal)))""#
+        ]],
+    );
+}
+
+/// GNU thread.c:304-326 creates an ordinary GC mutex object; :410-413 and
+/// :592-595 finalize collectible synchronization objects. A held mutex is not
+/// rooted by ownership. The condition's validated association is a real edge.
+/// Each allocating helper returns before the fixed full/full checkpoints.
+#[test]
+fn p15_unreferenced_held_mutex_has_no_implicit_root() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    assert_default_threads_oracle(
+        r##"
+(let ((held (make-hash-table :test 'eq :weakness 'key))
+      (paired (make-hash-table :test 'eq :weakness 'key))
+      (kept nil))
+  (funcall
+    (lambda ()
+      (let ((mutex (make-mutex)))
+        (mutex-lock mutex)
+        (puthash mutex t held))))
+  (garbage-collect)
+  (garbage-collect)
+  (let ((held-count (hash-table-count held)))
+    (funcall
+      (lambda ()
+        (let* ((mutex (make-mutex))
+               (condition (make-condition-variable mutex)))
+          (puthash mutex t paired)
+          (puthash condition t paired)
+          (setq kept condition)
+          nil)))
+    (garbage-collect)
+    (garbage-collect)
+    (let ((retained-count (hash-table-count paired)))
+      (setq kept nil)
+      (garbage-collect)
+      (garbage-collect)
+      (list held-count retained-count (hash-table-count paired)))))
+"##,
+        expect_test::expect![[r#""OK (0 2 0)""#]],
+    );
+}

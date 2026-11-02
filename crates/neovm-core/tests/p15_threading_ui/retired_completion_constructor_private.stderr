@@ -1,0 +1,9 @@
+error[E0451]: fields `thread` and `_confined` of struct `RetiredCompletion` are private
+  --> tests/p15_threading_ui/retired_completion_constructor_private.rs:12:9
+   |
+11 |     let forged = RetiredCompletion {
+   |                  ----------------- in this type
+12 |         thread,
+   |         ^^^^^^ private field
+13 |         _confined: Default::default(),
+   |         ^^^^^^^^^ private field

@@ -99,7 +99,9 @@ fn p15_threading_compile_contracts() {
     // The lower-source fixtures compile the production payload/id definitions;
     // private facade fixtures additionally name the actual allocator/handles.
     // The pass control ensures a missing shim dependency is never accepted as
-    // the intended identity, constructor or ownership rejection.
+    // the intended identity, constructor or ownership rejection. Completion
+    // cases include the real token/consuming manager methods and the unchanged
+    // Control::finish source; scheduler/World neighbours are compile-only glue.
     cases.pass("tests/p15_threading_pass/*.rs");
     for fixture in fixture_target::FixtureTarget::current().fixtures(
         "tests/p15_threading_ui",

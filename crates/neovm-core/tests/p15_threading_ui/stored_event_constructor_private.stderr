@@ -1,0 +1,11 @@
+error[E0451]: fields `sender`, `error_symbol` and `data` of struct `StoredThreadEvent` are private
+  --> tests/p15_threading_ui/stored_event_constructor_private.rs:8:9
+   |
+ 7 |     let event = threading::StoredThreadEvent {
+   |                 ---------------------------- in this type
+ 8 |         sender: TaggedValue::NIL,
+   |         ^^^^^^ private field
+ 9 |         error_symbol: TaggedValue::NIL,
+   |         ^^^^^^^^^^^^ private field
+10 |         data: TaggedValue::NIL,
+   |         ^^^^ private field

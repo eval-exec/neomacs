@@ -1,0 +1,28 @@
+error[E0382]: use of moved value: `completion`
+  --> tests/p15_threading_ui/completion_double_consume.rs:12:52
+   |
+10 | fn consume_twice(mut manager: ThreadManager, completion: CompletingThread) {
+   |                                              ---------- move occurs because `completion` has type `CompletingThread`, which does not implement the `Copy` trait
+11 |     let _first = manager.retire_thread_completion(completion);
+   |                                                   ---------- value moved here
+12 |     let _second = manager.retire_thread_completion(completion);
+   |                                                    ^^^^^^^^^^ value used here after move
+   |
+note: consider changing this parameter type in method `retire_thread_completion` to borrow instead if owning the value isn't necessary
+  --> tests/p15_threading_ui/../p15_threading_support/../../src/emacs_core/runtime/threads/completion.rs
+   |
+   |     pub(crate) fn retire_thread_completion(
+   |                   ------------------------ in this method
+   |         &mut self,
+   |         mut completion: CompletingThread,
+   |                         ^^^^^^^^^^^^^^^^ this parameter takes ownership of the value
+note: if `CompletingThread` implemented `Clone`, you could clone the value
+  --> tests/p15_threading_ui/../p15_threading_support/../../src/emacs_core/runtime/threads/completion.rs
+   |
+   | pub(crate) struct CompletingThread {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+   |
+  ::: tests/p15_threading_ui/completion_double_consume.rs:11:51
+   |
+11 |     let _first = manager.retire_thread_completion(completion);
+   |                                                   ---------- you could clone this value

@@ -173,6 +173,25 @@ impl Baton {
         )
     }
 
+    /// Retire an exiting worker's final native root after its Context and
+    /// carrier TLS have gone. This is intentionally not a payload accessor.
+    pub(crate) fn retire_thread_completion(
+        &mut self,
+        completion: crate::emacs_core::threads::CompletingThread,
+    ) -> crate::emacs_core::threads::RetiredCompletion {
+        if !self.held_here() || completion.heap_identity() != self.parallel_heap_identity() {
+            // No installed heap remains here, so a mismatched authority is a
+            // fail-stop rather than a Lisp error or an attempted TLS restore.
+            std::process::abort();
+        }
+        // SAFETY: this unique held Baton excludes every other World access.
+        // The Context was retired, no manager borrow survives, and removal
+        // touches only native registry storage: no heap word is decoded,
+        // collected, mutated or accessed through TLS. Baton retains the World
+        // allocation until after Control::finish transfers ownership.
+        unsafe { (&mut (*self.world.global.get()).threads).retire_thread_completion(completion) }
+    }
+
     /// The World's Green runtime.
     pub(crate) fn green_runtime(
         &self,

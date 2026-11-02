@@ -1,0 +1,16 @@
+error[E0308]: mismatched types
+ --> tests/p15_threading_ui/arm64_macos/../exit_without_retired_completion.rs
+  |
+  |     control.finish(thread, baton);
+  |             ------ ^^^^^^ expected `RetiredCompletion`, found `ThreadId`
+  |             |
+  |             arguments to this method are incorrect
+  |
+note: method defined here
+ --> tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/emacs_core/runtime/eval/green/scheduler/completion_exit.rs
+  |
+  |     pub(crate) fn finish(
+  |                   ^^^^^^
+  |         &self,
+  |         completion: crate::emacs_core::threads::RetiredCompletion,
+  |         ---------------------------------------------------------

@@ -43,8 +43,9 @@ pub(crate) mod buffer {
 }
 
 pub(crate) mod tagged {
+    pub mod transport { pub use neovm_core::tagged::transport::{SharedRoot, SharedRootError}; }
     pub mod gc {
-        pub use neovm_core::tagged::gc::HeapIdentity;
+        pub use neovm_core::tagged::gc::{HeapIdentity, TaggedHeap};
     }
     pub mod value {
         pub use neovm_core::tagged::value::TaggedValue;

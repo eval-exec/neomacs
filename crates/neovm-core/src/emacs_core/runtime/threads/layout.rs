@@ -99,3 +99,33 @@ const _: () = {
     assert!(OLD_SIZE == 336);
     assert!(OLD_ALIGN == 8);
 };
+
+/// Readiness of main's stored mailbox. Only successful admission and complete
+/// delivery change it; it holds no Lisp word or independent liveness edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub(super) enum MainMailboxState {
+    Empty,
+    Pending,
+}
+
+/// The former native-map slot. One native readiness word preserves the empty
+/// reader fast path; the remainder owns neither roots nor native allocations.
+#[repr(C)]
+pub(super) struct MailboxReservation {
+    pub(super) main: MainMailboxState,
+    _words: [MaybeUninit<usize>; size_of::<HashMap<u64, Value>>() / size_of::<usize>() - 1],
+}
+impl MailboxReservation {
+    pub(super) const fn new() -> Self {
+        Self {
+            main: MainMailboxState::Empty,
+            _words: [MaybeUninit::uninit();
+                size_of::<HashMap<u64, Value>>() / size_of::<usize>() - 1],
+        }
+    }
+}
+static_assertions::const_assert_eq!(
+    size_of::<MailboxReservation>(),
+    size_of::<HashMap<u64, Value>>()
+);

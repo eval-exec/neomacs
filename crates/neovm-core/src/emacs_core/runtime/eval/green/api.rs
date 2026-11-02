@@ -10,9 +10,8 @@ use crate::emacs_core::threads::{
     CondVarHandle, MutexAcquisition, MutexHandle, MutexRelease, NotificationScope,
 };
 use crate::emacs_core::value::Value;
-use crate::heap_types::threading::RecursionDepth;
 
-fn mutex_depth_exhausted() -> crate::emacs_core::error::Flow {
+pub(super) fn mutex_depth_exhausted() -> crate::emacs_core::error::Flow {
     signal(
         "error",
         vec![Value::string("Mutex recursion depth exhausted")],
@@ -165,38 +164,8 @@ impl Context {
     /// whatever its count, wait for a notification unless already
     /// signalled, take the mutex back with its count (even when signalled),
     /// then raise a pending signal.
-    pub(crate) fn green_condition_wait(
-        &mut self,
-        condition: CondVarHandle,
-        mutex: MutexHandle,
-    ) -> EvalResult {
-        let key = self.green_key().expect("a Green thread");
-        let control = self.green_control();
-        let count: RecursionDepth = self.threads.mutex_unlock_for_wait(mutex).ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string(
-                    "Condition variable's mutex is not held by current thread",
-                )],
-            )
-        })?;
-        control.wake_waiting_for(Wait::Mutex(MutexId::new(mutex.native_key())));
-        if self.threads.pending_thread_signal(key.id()).is_none() {
-            self.green_blocked_on(condition.value(), |ctx| {
-                ctx.green_park(Wait::Condition(ConditionId::new(condition.native_key())))
-            })?;
-        }
-        loop {
-            match self.threads.mutex_relock_after_wait(mutex, count) {
-                MutexAcquisition::Acquired => break,
-                MutexAcquisition::Blocked => {
-                    self.green_park(Wait::Mutex(MutexId::new(mutex.native_key())))?
-                }
-                MutexAcquisition::DepthExhausted => return Err(mutex_depth_exhausted()),
-            }
-        }
-        self.green_raise_pending_signal(key)?;
-        Ok(Value::NIL)
+    pub(crate) fn green_condition_wait(&mut self, condition: CondVarHandle) -> EvalResult {
+        super::condition_wait::wait(self, condition)
     }
 
     /// `(condition-notify COND ALL)` once this thread is checked to hold

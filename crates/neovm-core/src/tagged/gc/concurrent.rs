@@ -1176,7 +1176,7 @@ impl TaggedHeap {
     }
 
     /// Mutate an owned thread under the caller's serial authority. The closure
-    /// must not collect, yield, run Lisp, or retain a reference to the payload.
+    /// must not collect, yield, run Lisp, or retain a reference to the child view.
     /// Pre-store SATB and persistent remembered-owner logging use exactly the
     /// same child schema as marking; later capacity growth is charged once.
     ///
@@ -1188,15 +1188,18 @@ impl TaggedHeap {
     pub(crate) unsafe fn with_thread_payload_mut<R>(
         &mut self,
         value: TaggedValue,
-        update: impl FnOnce(&mut crate::heap_types::threading::ThreadPayload) -> R,
+        update: impl FnOnce(&mut crate::heap_types::threading::ThreadChildren) -> R,
     ) -> Option<R> {
         if value.veclike_type()? != VecLikeType::Thread {
             return None;
         }
         let ptr = value.gc_veclike_ptr()? as *mut ThreadObj;
         // SAFETY: the rooted live value has the Thread tag; serial authority
-        // excludes writers, and workers defer all reads of this mutable payload.
-        if unsafe { (*ptr).payload.id.heap_identity() } != self.heap_identity() {
+        // excludes writers. Workers defer EVERY ThreadObj payload read: even
+        // an immutable &ThreadPayload would alias a concurrent &mut native.
+        // A future concurrent reader must project only &ThreadChildren through
+        // the raw pointer, never borrow the enclosing ThreadPayload.
+        if unsafe { (*ptr).payload.id().heap_identity() } != self.heap_identity() {
             return None;
         }
         self.record_threading_payload_write(value);
@@ -1206,9 +1209,42 @@ impl TaggedHeap {
         let before = object.owned_bytes();
         #[cfg(debug_assertions)]
         let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
-        let result = update(&mut object.payload);
+        let result = update(&mut object.payload.children);
         self.note_allocation_bytes(object.owned_bytes().saturating_sub(before));
         Some(result)
+    }
+
+    /// Mutate only non-Lisp state under the same rooted serial authority as
+    /// `with_thread_payload_mut`. This view contains no GC edges or owned
+    /// backing storage, so it performs no heap-write record or charge.
+    ///
+    /// # Safety
+    /// `value` must remain rooted and live throughout this call. The caller
+    /// holds this World's serial authority; no alias reads or mutates the
+    /// payload until the closure returns. The closure must not reach a safe
+    /// point, run Lisp, yield, or retain any payload reference.
+    pub(crate) unsafe fn with_thread_native_mut<R>(
+        &mut self,
+        value: TaggedValue,
+        update: impl FnOnce(&mut crate::heap_types::threading::ThreadNativeState) -> R,
+    ) -> Option<R> {
+        if value.veclike_type()? != VecLikeType::Thread {
+            return None;
+        }
+        let ptr = value.gc_veclike_ptr()? as *mut ThreadObj;
+        // SAFETY: the rooted live value has the Thread tag; serial authority
+        // excludes writers. Workers defer EVERY ThreadObj payload read: an
+        // immutable &ThreadPayload cannot coexist with this &mut native.
+        // A future concurrent reader must project only &ThreadChildren through
+        // the raw pointer, never borrow the enclosing ThreadPayload.
+        if unsafe { (*ptr).payload.id().heap_identity() } != self.heap_identity() {
+            return None;
+        }
+        #[cfg(debug_assertions)]
+        let _guard = crate::tagged::mutate::HeapMutClosureGuard::enter();
+        // SAFETY: the validated live object is exclusively borrowed only for
+        // the non-yielding closure; this view cannot introduce Lisp children.
+        Some(update(unsafe { &mut (*ptr).payload.native }))
     }
 
     /// Mutex counterpart of `with_thread_payload_mut`, with identical authority

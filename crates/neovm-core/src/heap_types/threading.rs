@@ -6,8 +6,9 @@
 
 use super::LispString;
 use crate::buffer::BufferId;
-use crate::tagged::gc::HeapIdentity;
+use crate::tagged::gc::{HeapIdentity, TaggedHeap};
 use crate::tagged::header::MutexObj;
+use crate::tagged::transport::{SharedRoot, SharedRootError};
 use crate::tagged::value::TaggedValue;
 use std::num::{NonZeroU32, NonZeroU64};
 
@@ -232,37 +233,73 @@ pub(crate) enum JoinObservation {
 /// edges, not independently registered roots, so mailbox cycles can die.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct StoredThreadEvent {
-    pub(crate) sender: TaggedValue,
-    pub(crate) error_symbol: TaggedValue,
-    pub(crate) data: TaggedValue,
+    sender: TaggedValue,
+    error_symbol: TaggedValue,
+    data: TaggedValue,
 }
 
 impl StoredThreadEvent {
-    fn visit_children(&self, visit: &mut impl FnMut(TaggedValue)) {
+    /// Admit all three transport roots to the target's heap before producing
+    /// ordinary child words. A foreign sender, symbol or data leaves the
+    /// target untouched; the caller still owns every transport lease.
+    pub(crate) fn try_from_roots(
+        heap: &TaggedHeap,
+        roots: &[SharedRoot; 3],
+    ) -> Result<Self, SharedRootError> {
+        let sender = roots[0].materialize(heap)?;
+        let error_symbol = roots[1].materialize(heap)?;
+        let data = roots[2].materialize(heap)?;
+        Ok(Self {
+            sender: sender.value(),
+            error_symbol: error_symbol.value(),
+            data: data.value(),
+        })
+    }
+
+    pub(crate) fn values(self) -> [TaggedValue; 3] {
         let Self {
             sender,
             error_symbol,
             data,
         } = self;
-        visit(*sender);
-        visit(*error_symbol);
-        visit(*data);
+        [sender, error_symbol, data]
+    }
+
+    fn visit_children(&self, visit: &mut impl FnMut(TaggedValue)) {
+        for value in self.values() {
+            visit(value);
+        }
     }
 }
 
-/// Thread-owned state. Access and mutation require the runtime's rooted,
-/// same-heap authority; no reference to this payload may cross GC or yield.
+/// Scalar runtime state that carries no Lisp children or owned storage. Its
+/// mutable view cannot change heap identity or introduce an unbarriered edge.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ThreadNativeState {
+    pub(crate) phase: ThreadPhase,
+    pub(crate) join_observation: JoinObservation,
+    pub(crate) current_buffer: Option<BufferId>,
+}
+
+impl ThreadNativeState {
+    pub(crate) const fn new(phase: ThreadPhase, current_buffer: Option<BufferId>) -> Self {
+        Self {
+            phase,
+            join_observation: JoinObservation::Unobserved,
+            current_buffer,
+        }
+    }
+}
+
+/// All Lisp child words and their directly owned storage. Only this view is
+/// exposed by the pre-store SATB/remembered-owner mutation wrapper.
 #[derive(Debug)]
-pub(crate) struct ThreadPayload {
-    pub(crate) id: ThreadId,
+pub(crate) struct ThreadChildren {
     pub(crate) name: ThreadName,
     pub(crate) function: TaggedValue,
-    pub(crate) phase: ThreadPhase,
     pub(crate) result: TaggedValue,
     pub(crate) last_error: Option<TaggedValue>,
-    pub(crate) join_observation: JoinObservation,
     pub(crate) buffer_disposition: TaggedValue,
-    pub(crate) current_buffer: Option<BufferId>,
     pub(crate) event_object: TaggedValue,
     pub(crate) error_symbol: TaggedValue,
     pub(crate) error_data: TaggedValue,
@@ -270,19 +307,68 @@ pub(crate) struct ThreadPayload {
     pub(crate) stored_events: Vec<StoredThreadEvent>,
 }
 
+/// Thread-owned state. Access and mutation require the runtime's rooted,
+/// same-heap authority; no reference to either view may cross GC or yield.
+#[derive(Debug)]
+pub(crate) struct ThreadPayload {
+    id: ThreadId,
+    pub(crate) native: ThreadNativeState,
+    pub(crate) children: ThreadChildren,
+}
+
 impl ThreadPayload {
+    pub(crate) const fn new(
+        id: ThreadId,
+        native: ThreadNativeState,
+        children: ThreadChildren,
+    ) -> Self {
+        Self {
+            id,
+            native,
+            children,
+        }
+    }
+
+    pub(crate) const fn id(&self) -> ThreadId {
+        self.id
+    }
+
     /// One exhaustive child schema for mark, preimage, minors and verification.
     pub(crate) fn visit_children(&self, visit: &mut impl FnMut(TaggedValue)) {
         let Self {
             id: _,
+            native,
+            children,
+        } = self;
+        // Every native field is deliberately non-traced. Adding a new field
+        // requires classifying it here as well as in the native-view type.
+        let ThreadNativeState {
+            phase: _,
+            join_observation: _,
+            current_buffer: _,
+        } = native;
+        children.visit_children(visit);
+    }
+
+    /// Directly owned backing capacity, excluding this inline payload and the
+    /// separately allocated Lisp objects reached by its child words.
+    pub(crate) fn backing_bytes(&self) -> usize {
+        self.children.backing_layout().1
+    }
+
+    pub(crate) fn logical_backing_bytes(&self) -> usize {
+        self.children.backing_layout().0
+    }
+}
+
+impl ThreadChildren {
+    fn visit_children(&self, visit: &mut impl FnMut(TaggedValue)) {
+        let Self {
             name,
             function,
-            phase: _,
             result,
             last_error,
-            join_observation: _,
             buffer_disposition,
-            current_buffer: _,
             event_object,
             error_symbol,
             error_data,
@@ -305,27 +391,13 @@ impl ThreadPayload {
         }
     }
 
-    /// Directly owned backing capacity, excluding this inline payload and the
-    /// separately allocated Lisp objects reached by its child words.
-    pub(crate) fn backing_bytes(&self) -> usize {
-        self.backing_layout().1
-    }
-
-    pub(crate) fn logical_backing_bytes(&self) -> usize {
-        self.backing_layout().0
-    }
-
     fn backing_layout(&self) -> (usize, usize) {
         let Self {
-            id: _,
             name: _,
             function: _,
-            phase: _,
             result: _,
             last_error: _,
-            join_observation: _,
             buffer_disposition: _,
-            current_buffer: _,
             event_object: _,
             error_symbol: _,
             error_data: _,
@@ -520,6 +592,9 @@ fn name_backing_layout(name: &Option<LispString>) -> (usize, usize) {
 static_assertions::assert_impl_all!(ThreadId: Send, Sync, Copy);
 static_assertions::assert_impl_all!(MutexId: Send, Sync, Copy);
 static_assertions::assert_impl_all!(CondVarId: Send, Sync, Copy);
+// Copy excludes owned backing; Send + Sync excludes TaggedValue child words.
+static_assertions::assert_impl_all!(ThreadNativeState: Send, Sync, Copy);
+static_assertions::assert_not_impl_any!(ThreadChildren: Send, Sync);
 static_assertions::assert_not_impl_any!(ThreadPayload: Send, Sync);
 static_assertions::assert_not_impl_any!(MutexPayload: Send, Sync);
 static_assertions::assert_not_impl_any!(CondVarPayload: Send, Sync);

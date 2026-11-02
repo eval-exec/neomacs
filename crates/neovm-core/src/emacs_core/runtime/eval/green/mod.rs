@@ -17,6 +17,7 @@ mod bootstrap;
 mod carried;
 mod carrier;
 pub(crate) mod carrier_tls;
+mod condition_wait;
 #[allow(
     dead_code,
     reason = "S2 control service stays dormant until owned host adapters activate"
@@ -286,6 +287,14 @@ mod tests;
 #[cfg(test)]
 #[path = "../tests/green_switch_test.rs"]
 mod switch_tests;
+
+#[cfg(test)]
+#[path = "../tests/green_p15_condition_wait_test.rs"]
+mod p15_condition_wait_tests;
+
+#[cfg(test)]
+#[path = "../tests/green_p15_completion_test.rs"]
+mod p15_completion_tests;
 
 #[cfg(test)]
 #[path = "../tests/carrier_pool_test.rs"]

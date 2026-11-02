@@ -1,0 +1,11 @@
+error[E0451]: fields `condition`, `mutex` and `depth` of struct `ValidatedWait` are private
+ --> tests/p15_threading_ui/arm64_macos/../condition_wait_unvalidated_association.rs
+  |
+  |     condition_wait::ConditionWait::Waiting(condition_wait::ValidatedWait {
+  |                                            ----------------------------- in this type
+  |         condition,
+  |         ^^^^^^^^^ private field
+  |         mutex,
+  |         ^^^^^ private field
+  |         depth,
+  |         ^^^^^ private field

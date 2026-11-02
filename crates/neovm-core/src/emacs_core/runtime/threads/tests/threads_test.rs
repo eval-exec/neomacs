@@ -94,6 +94,54 @@ fn thread_current_buffer_survives_gc_through_registry_seed() {
     assert!(ctx.tagged_heap.owns_heap_value_for_test(seeded));
 }
 
+/// Native thread bookkeeping changes no Lisp edge. Exercise the real World
+/// manager with SATB armed but no marker thread, so a misplaced bulk barrier
+/// leaves a deterministic preimage in both GEN1 and GEN0. The independent
+/// remembered log and allocation debt must also remain unchanged.
+#[test]
+fn p15_native_thread_updates_do_not_record_lisp_writes() {
+    let mut ctx = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    ctx.gc_collect_exact();
+    let buffer = ctx.buffers.create_buffer("p15-native-state");
+    let child = Value::vector(vec![Value::fixnum(25)]);
+    let native = ctx.threads.create_thread(child, ThreadName::UNNAMED);
+    ctx.gc_collect_exact();
+    let thread = ctx.threads.thread_handle(native).unwrap();
+    assert!(ctx.tagged_heap.owns_heap_value_for_test(thread));
+    assert!(ctx.tagged_heap.owns_heap_value_for_test(child));
+
+    ctx.tagged_heap.set_concurrent_active_for_test(true);
+    let before_satb = ctx.tagged_heap.take_satb_shared_for_test();
+    let before_remset = ctx.tagged_heap.remembered_log_len_for_test();
+    let before_debt = ctx.tagged_heap.bytes_since_gc_exact();
+    ctx.threads.start_thread(native);
+    let changed = ctx.threads.set_thread_current_buffer(native, Some(buffer));
+    let unchanged = ctx.threads.set_thread_current_buffer(native, Some(buffer));
+    ctx.threads.mark_thread_exited(native);
+    let native_satb = ctx.tagged_heap.take_satb_shared_for_test();
+    let after_remset = ctx.tagged_heap.remembered_log_len_for_test();
+    let after_debt = ctx.tagged_heap.bytes_since_gc_exact();
+    // Disarm before any assertion can panic or a later test collection runs.
+    ctx.tagged_heap.set_concurrent_active_for_test(false);
+
+    assert!(before_satb.is_empty());
+    assert!(changed && unchanged);
+    assert!(
+        native_satb.is_empty(),
+        "native writes recorded Lisp preimages"
+    );
+    assert_eq!(after_remset, before_remset);
+    assert_eq!(after_debt, before_debt);
+    assert_eq!(ctx.threads.thread_current_buffer(native), Some(buffer));
+    assert_eq!(
+        ctx.threads.get_thread(native).unwrap().children.function,
+        child
+    );
+    ctx.gc_collect_exact();
+    assert!(ctx.tagged_heap.owns_heap_value_for_test(child));
+    ctx.threads.discard_unstarted_thread(native);
+}
+
 // -- ThreadManager unit tests -------------------------------------------
 
 #[test]
@@ -134,19 +182,19 @@ fn thread_lifecycle_created_running_finished() {
     crate::test_utils::init_test_tracing();
     let mut mgr = ThreadManager::new();
     let id = mgr.create_thread(Value::NIL, ThreadName::UNNAMED);
-    assert_eq!(mgr.get_thread(id).unwrap().phase, ThreadPhase::New);
+    assert_eq!(mgr.get_thread(id).unwrap().native.phase, ThreadPhase::New);
     assert!(mgr.thread_alive_p(id));
 
     mgr.start_thread(id);
     assert_eq!(
-        mgr.get_thread(id).unwrap().phase,
+        mgr.get_thread(id).unwrap().native.phase,
         ThreadPhase::Active(RunState::Running)
     );
     assert!(mgr.thread_alive_p(id));
 
     mgr.finish_thread(id, Value::fixnum(42));
     assert_eq!(
-        mgr.get_thread(id).unwrap().phase,
+        mgr.get_thread(id).unwrap().native.phase,
         ThreadPhase::Completing(ThreadOutcome::Returned)
     );
     assert!(mgr.thread_alive_p(id));
@@ -164,7 +212,7 @@ fn thread_signal_records_error() {
     mgr.start_thread(id);
     mgr.signal_thread(id, Value::symbol("test-error"));
     assert_eq!(
-        mgr.get_thread(id).unwrap().phase,
+        mgr.get_thread(id).unwrap().native.phase,
         ThreadPhase::Completing(ThreadOutcome::Signaled)
     );
     assert!(!mgr.thread_alive_p(id));
@@ -411,8 +459,11 @@ fn test_builtin_make_thread_accepts_buffer_disposition_arg() {
     let thread = result.unwrap();
     let thread_id = tagged_object_id(&thread, ThreadingKind::Thread).unwrap();
     assert_eq!(thread_id, 1);
+    // GNU thread.c:1052-1059 reads the retained thread object, including
+    // after run_thread unlinks its live registration (:853-859).
+    assert!(eval.tagged_heap.owns_heap_value_for_test(thread));
     assert_eq!(
-        eval.threads.thread_buffer_disposition(thread_id),
+        eval.threads.thread_buffer_disposition_for_value(thread),
         Some(Value::symbol("silently"))
     );
 }
@@ -682,8 +733,8 @@ fn failed_blocked_thread_entry_preserves_continuation() {
         .threads
         .get_thread(thread_id)
         .expect("blocked thread remains registered");
-    assert_eq!(thread.phase, ThreadPhase::Active(RunState::Blocked));
-    assert_eq!(thread.blocked_remaining_forms, continuation);
+    assert_eq!(thread.native.phase, ThreadPhase::Active(RunState::Blocked));
+    assert_eq!(thread.children.blocked_remaining_forms, continuation);
 
     super::super::eval::set_default_toplevel_value(
         &mut eval,
@@ -751,7 +802,7 @@ fn threads_feature_and_main_thread_binding_match_gnu() {
 }
 
 #[test]
-fn test_builtin_all_threads_includes_finished_unjoined_worker() {
+fn test_builtin_all_threads_excludes_finished_unjoined_worker() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let worker = builtin_make_thread(
@@ -768,7 +819,18 @@ fn test_builtin_all_threads_includes_finished_unjoined_worker() {
     .unwrap();
     let result = builtin_all_threads(&mut eval, vec![]).unwrap();
     let list = super::super::value::list_to_vec(&result).unwrap();
-    assert!(list.iter().any(|value| eq_value(value, &worker)));
+    // Sim has already executed this empty function to completion. GNU's
+    // thread_live_p (thread.c:74-76,1036-1045) and all-threads (:1153-1160)
+    // exclude an exited worker independently of join; run_thread unlinks it
+    // at :853-859. The old positive expectation encoded join-owned rooting.
+    // GNU31.1's unjoined exit-receipt probe returns (t nil nil): receipt,
+    // live-p, membership. This is an opposite exact assertion, not a skip.
+    assert!(!list.iter().any(|value| eq_value(value, &worker)));
+    assert_eq!(
+        builtin_thread_live_p(&mut eval, vec![worker]).unwrap(),
+        Value::NIL
+    );
+    assert!(eval.tagged_heap.owns_heap_value_for_test(worker));
 
     builtin_thread_join(&mut eval, vec![worker]).unwrap();
     let after_join = builtin_all_threads(&mut eval, vec![]).unwrap();
@@ -857,6 +919,7 @@ fn test_builtin_thread_signal_non_current_is_noop() {
 fn thread_signal_to_main_queues_a_thread_event() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
+    let target = eval.threads.ids.main_thread();
     let main = builtin_current_thread(&mut eval, vec![]).unwrap();
     let worker = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
     eval.threads.enter_thread(worker);
@@ -867,14 +930,14 @@ fn thread_signal_to_main_queues_a_thread_event() {
         let result = builtin_thread_signal(&mut eval, vec![main, Value::symbol("error"), data]);
         eval.threads.restore_thread(0);
         assert_eq!(result.unwrap(), Value::NIL);
-        let mut events = eval.threads.take_thread_events(0);
+        let mut events = eval.threads.take_thread_events(target).unwrap();
         assert_eq!(
             events.len(),
             1,
             "one THREAD_EVENT queued for the main thread"
         );
         assert!(
-            eval.threads.take_thread_events(0).is_empty(),
+            eval.threads.take_thread_events(target).unwrap().is_empty(),
             "drained once"
         );
         events.pop().unwrap()
@@ -923,7 +986,7 @@ fn thread_event_sharing_reports_a_foreign_heap_as_a_lisp_error() {
     let _second = Context::new();
     // SAFETY: `first` and `sender` outlive the call, and the identity check
     // fails before either value is touched.
-    let result = unsafe { PendingThreadEvent::share(&first, sender, Value::NIL, Value::NIL) };
+    let result = unsafe { InFlightThreadEvent::share(&first, sender, Value::NIL, Value::NIL) };
     match result.kinded() {
         Err(FlowKind::Signal(sig)) => {
             assert_eq!(sig.symbol_name(), "error");
@@ -2222,3 +2285,172 @@ fn p15_gc_old_thread_payload_remembers_young_children() {
 #[cfg(not(feature = "gc-memory-telemetry"))]
 #[path = "threading_payload_tests.rs"]
 mod threading_payload_tests;
+
+/// GNU run_thread's late unlink is independent of join (thread.c:853-859).
+/// Exact heap telemetry and native roots must both return to main-only; this
+/// test never joins an otherwise unreachable worker.
+fn p15_external_root_words(context: &Context) -> Vec<Value> {
+    let mut roots = Vec::new();
+    crate::tagged::transport::collect_shared_root_gc_roots(&context.tagged_heap, &mut roots);
+    roots.sort_unstable_by_key(|value| value.bits());
+    roots
+}
+
+#[test]
+fn p15_gc_unjoined_sim_completions_return_exactly_to_baseline() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    eval.gc_collect_exact();
+    let before = threading_object_count(&mut eval, ThreadingKind::Thread);
+    assert_eq!(before, ThreadingObjectCount(1));
+    assert_eq!(eval.threads.threads.len(), 1);
+    let before_roots = p15_external_root_words(&eval);
+    for _ in 0..200 {
+        eval.eval_str("(progn (make-thread (lambda () nil)) nil)")
+            .expect("unjoined worker executes");
+        assert_eq!(
+            eval.threads.threads.len(),
+            1,
+            "completion must retire without join"
+        );
+    }
+    eval.gc_collect_exact();
+    let after = threading_object_count(&mut eval, ThreadingKind::Thread);
+    eprintln!(
+        "P15_S2_UNJOINED_SIM objects {}->{} registrations=1 cycles=200",
+        before.0, after.0
+    );
+    assert_eq!(after, before);
+    assert_eq!(p15_external_root_words(&eval), before_roots);
+}
+
+/// Eight simultaneous carriers fit the unit target's deliberately large
+/// RUST_MIN_STACK. P11's native 100-worker acceptance row remains separate
+/// and unchanged. A single FIFO yield after each complete creation burst is
+/// the product handoff under test, not a retry/poll or serialized creation.
+#[test]
+fn p15_gc_unjoined_green_bursts_return_exactly_to_baseline() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Green);
+    eval.start_green_threads()
+        .expect("initialize Green infrastructure before baseline");
+    eval.eval_str("(setq p15-unjoined-completed 0)").unwrap();
+    eval.gc_collect_exact();
+    let before = threading_object_count(&mut eval, ThreadingKind::Thread);
+    assert_eq!(before, ThreadingObjectCount(1));
+    let before_roots = p15_external_root_words(&eval);
+    for burst in 1..=3 {
+        eval.eval_str(
+            "(progn
+            (let ((i 0))
+              (while (< i 8)
+                (make-thread (lambda () (setq p15-unjoined-completed (1+ p15-unjoined-completed))))
+                (setq i (1+ i))))
+            (thread-yield)
+            nil)",
+        )
+        .expect("fixed unjoined creation burst and one handoff");
+        assert_eq!(
+            eval.eval_str("p15-unjoined-completed").unwrap(),
+            Value::fixnum(burst * 8)
+        );
+        assert_eq!(
+            eval.threads.threads.len(),
+            1,
+            "all completed carriers retire their roots"
+        );
+        eval.gc_collect_exact();
+        assert_eq!(
+            threading_object_count(&mut eval, ThreadingKind::Thread),
+            before
+        );
+        assert_eq!(p15_external_root_words(&eval), before_roots);
+    }
+    eprintln!(
+        "P15_S2_UNJOINED_GREEN objects 1->1 registrations=1 bursts=3 workers_per_burst=8 joins=0"
+    );
+    eval.green_teardown();
+}
+
+/// GNU thread.c:1004-1031 queues only main-thread transport. Worker signals
+/// remain in the target's error fields for thread-join (:985-991,1135-1143).
+#[test]
+fn p15_worker_signals_never_queue_native_transport() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let native = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
+    let worker = eval.threads.thread_handle(native).unwrap();
+    let id = eval.threads.get_thread(native).unwrap().id();
+    let data = Value::list(vec![Value::fixnum(530)]);
+    builtin_thread_signal(&mut eval, vec![worker, Value::symbol("error"), data]).unwrap();
+    assert!(
+        eval.threads
+            .get_thread(native)
+            .unwrap()
+            .children
+            .stored_events
+            .is_empty()
+    );
+    let pending = eval
+        .threads
+        .pending_thread_signal_for_value(worker)
+        .unwrap();
+    match pending.into_kind() {
+        FlowKind::Signal(signal) => {
+            assert_eq!(signal.symbol_name(), "error");
+            assert_eq!(signal.data, vec![Value::fixnum(530)]);
+        }
+        other => panic!("worker signal must remain pending, got {other:?}"),
+    }
+    let completion = eval
+        .threads
+        .prepare_thread_completion(id, completion::CompletionExit::Executed)
+        .unwrap();
+    let _retired = eval.threads.retire_thread_completion(completion);
+    assert_eq!(eval.threads.threads.len(), 1);
+    assert!(
+        eval.threads
+            .pending_thread_signal_for_value(worker)
+            .is_some()
+    );
+}
+
+/// GNU thread.c:985-991,1135-1143 retains a finished object's pending
+/// signal until observation. Completion may retire the native registration,
+/// but must not clear ordinary stored children of a still-referenced handle.
+#[test]
+fn p15_stored_worker_event_survives_completion_without_external_leases() {
+    let mut eval = Context::new_with_threading(super::super::eval::ThreadingMode::Sim);
+    let native = eval.threads.create_thread(Value::NIL, ThreadName::UNNAMED);
+    let worker = eval.threads.thread_handle(native).unwrap();
+    let id = eval.threads.get_thread(native).unwrap().id();
+    let sender = eval.threads.thread_handle(0).unwrap();
+    // SAFETY: sender is a live registry root and the arguments remain live
+    // in this installed evaluator until admission finishes.
+    let event =
+        unsafe { InFlightThreadEvent::share(&eval, sender, Value::NIL, Value::NIL) }.unwrap();
+    eval.threads.queue_thread_event(id, &event).unwrap();
+    drop(event);
+    let completion = eval
+        .threads
+        .prepare_thread_completion(id, completion::CompletionExit::Executed)
+        .unwrap();
+    let _retired = eval.threads.retire_thread_completion(completion);
+    assert_eq!(eval.threads.threads.len(), 1);
+    assert!(eval.tagged_heap.owns_heap_value_for_test(worker));
+    // SAFETY: allocation membership was checked above; no collection or yield
+    // occurs while this retained Thread-tagged allocation is inspected.
+    let payload = unsafe {
+        &(*worker
+            .as_veclike_ptr()
+            .unwrap()
+            .cast::<crate::tagged::header::ThreadObj>())
+        .payload
+    };
+    let stored = &payload.children.stored_events;
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].values(), [sender, Value::NIL, Value::NIL]);
+}
+
+#[path = "p15_mailbox_test.rs"]
+mod p15_mailbox_tests;
+
+#[path = "p15_reclamation_test.rs"]
+mod p15_reclamation_tests;

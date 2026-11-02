@@ -1,0 +1,14 @@
+error[E0599]: no method named `clone` found for struct `CompletingThread` in the current scope
+ --> tests/p15_threading_ui/arm64_macos/../completion_clone.rs
+  |
+  |     let duplicate = completion.clone();
+  |                                ^^^^^ method not found in `CompletingThread`
+  |
+ ::: tests/p15_threading_ui/arm64_macos/../../p15_threading_support/../../src/emacs_core/runtime/threads/completion.rs
+  |
+  | pub(crate) struct CompletingThread {
+  | ---------------------------------- method `clone` not found for this struct
+  |
+  = help: items from traits can only be used if the trait is implemented and in scope
+  = note: the following trait defines an item `clone`, perhaps you need to implement it:
+          candidate #1: `Clone`

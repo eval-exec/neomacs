@@ -203,6 +203,9 @@ pub(crate) struct GreenSeat {
     /// condition-wait retakes its mutex. The owner slab traces a forwarded
     /// error's offending Lisp value, including while this owner is running.
     binding_resume_error: Option<BindingResumeError>,
+    /// Native continuation only: the existing subr argument/image retains the
+    /// condition and its canonical child schema retains the associated mutex.
+    pub(super) condition_wait: super::condition_wait::ConditionWait,
     /// Empty census scratch retained on this owner. Publication copies its
     /// words into the typed root batch before this buffer is cleared.
     pub(super) parked_roots_buffer: Vec<Value>,
@@ -299,6 +302,7 @@ impl Context {
                 receiver: Some(OwnerReceive::new(key, receiver)),
                 baton: Some(baton),
                 binding_resume_error: None,
+                condition_wait: super::condition_wait::ConditionWait::Completed,
                 parked_roots_buffer: Vec::new(),
                 parked_root_batch: None,
                 #[cfg(feature = "jit")]
@@ -1416,7 +1420,7 @@ pub(super) fn run_carrier_job(
         crate::tagged::gc::carrier_heap_is_acceptable_for_job_start(),
         "carrier job starts with a stale TAGGED_HEAP TLS pointer"
     );
-    let baton = receive_owner_turn(key, wake, &control, &mut receiver).into_ordinary_baton();
+    let mut baton = receive_owner_turn(key, wake, &control, &mut receiver).into_ordinary_baton();
     baton.enter();
     set_job_thread_name(key);
     #[cfg(feature = "jit")]
@@ -1424,9 +1428,19 @@ pub(super) fn run_carrier_job(
     unstow_carried_state(&baton);
     let mut owner = Context::new_green_owner(&baton);
     unstow_owner_state(&mut owner, &baton);
+    let completion_id = match owner.threads.get_thread(key.id()) {
+        Some(thread) => thread.id(),
+        None => std::process::abort(),
+    };
     if control.lifecycle() == Lifecycle::Closing {
         // Main ended before this thread ever ran.
-        owner.threads.mark_thread_exited(key.id());
+        let completion = match owner.threads.prepare_thread_completion(
+            completion_id,
+            crate::emacs_core::threads::CompletionExit::ClosingBeforeStart,
+        ) {
+            Ok(completion) => completion,
+            Err(error) => error.fail_stop(),
+        };
         if let Some(runtime) = baton.green_runtime().as_ref() {
             runtime.pending_starts.borrow_mut().remove(&key);
         }
@@ -1440,7 +1454,8 @@ pub(super) fn run_carrier_job(
         // visible to any dispatcher that runs after `exited` is observed.
         super::carrier_tls::park_carrier_tls();
         let parked = pool.park(carrier);
-        control.finish(key, baton);
+        let retired = baton.retire_thread_completion(completion);
+        control.finish(retired, baton);
         return parked;
     }
     let outgoing_error = baton
@@ -1499,9 +1514,15 @@ pub(super) fn run_carrier_job(
         key.id(),
         outcome,
     );
-    owner.threads.mark_thread_exited(key.id());
+    let completion = match owner.threads.prepare_thread_completion(
+        completion_id,
+        crate::emacs_core::threads::CompletionExit::Executed,
+    ) {
+        Ok(completion) => completion,
+        Err(error) => error.fail_stop(),
+    };
     let seat = owner.green_seat().expect("seated above");
-    let baton = seat
+    let mut baton = seat
         .baton
         .take()
         .expect("a finishing thread holds the Baton");
@@ -1528,7 +1549,8 @@ pub(super) fn run_carrier_job(
     // after `exited` is observed always finds the slot parked.
     super::carrier_tls::park_carrier_tls();
     let parked = pool.park(carrier);
-    control.finish(key, baton);
+    let retired = baton.retire_thread_completion(completion);
+    control.finish(retired, baton);
     parked
 }
 

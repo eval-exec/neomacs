@@ -1167,7 +1167,7 @@ impl super::eval::Context {
         // the wait's command-input check below.  Stage it before that check so
         // a main thread parked in `read-event` wakes on the event instead of
         // sleeping to its deadline.
-        self.stage_pending_thread_events();
+        self.stage_pending_thread_events()?;
         let mut outcome = WaitServiceOutcome::default();
         let special_input = if request.services_special_input() {
             self.service_wait_request_special_input_events_with_idle_policy(request.idle_policy)?
