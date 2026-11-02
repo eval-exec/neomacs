@@ -65,9 +65,9 @@ fn with_error_handler((device, queue): (wgpu::Device, wgpu::Queue)) -> (wgpu::De
 /// Texture dimensions follow the adapter because window surfaces can exceed
 /// wgpu's default 8192 cap (e.g. a 5K HiDPI display). Every other limit starts
 /// from the WebGPU defaults and is clamped to what the adapter supports.
-/// Without the clamp, a downlevel adapter — a pre-4.3 OpenGL context reports
-/// zero compute limits — rejects the entire device request even though the
-/// renderer never creates a compute pipeline.
+/// Without the clamp, an adapter reporting zero compute limits rejects the
+/// entire device request even though the renderer never creates a compute
+/// pipeline.
 fn requested_limits(adapter_limits: &wgpu::Limits) -> wgpu::Limits {
     wgpu::Limits::default()
         .using_resolution(adapter_limits.clone())
