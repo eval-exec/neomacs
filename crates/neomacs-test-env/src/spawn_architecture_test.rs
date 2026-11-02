@@ -64,6 +64,7 @@ const NON_EDITOR_PROGRAMS: &[&str] = &[
     "tic",
     "tput",
     "toe",
+    "ps",
 ];
 
 /// A reviewed spawn whose program is a variable but is not an editor.
@@ -92,6 +93,11 @@ const EXCEPTIONS: &[Exception] = &[
     Exception {
         path_suffix: "emacs_core/lisp/load/tests/load_test.rs",
         argument: "&exe",
+        reason: "re-executes the current test binary as a child",
+    },
+    Exception {
+        path_suffix: "emacs_core/runtime/eval/tests/green_spawn_failure_test.rs",
+        argument: "exe",
         reason: "re-executes the current test binary as a child",
     },
     Exception {
