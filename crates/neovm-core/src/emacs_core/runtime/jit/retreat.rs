@@ -12,27 +12,11 @@
 //! grows, and a compile that misses a concurrent mark sees it on the next
 //! one (the same contract as the numeric feedback beside it).
 
+pub(crate) use crate::emacs_core::value::jit_runtime::retreat::{
+    RetreatBit, SiteRetreat, SiteRetreatTable,
+};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU16, Ordering};
-
-/// One retreat a deopt can force at a pc. The value is the bit in
-/// [`SiteRetreat`]'s low byte.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u16)]
-pub(crate) enum RetreatBit {
-    /// Do not splice, MIR-inline or intrinsify the call at this pc (P0.4).
-    NoInline = 1 << 0,
-    /// Do not hoist this site's guards above it (P2.1 entry guards, P2.2
-    /// LICM).
-    NoHoist = 1 << 1,
-    /// Do not speculate float-only at this arithmetic site (P2.2).
-    NoFloatOnly = 1 << 2,
-    /// Compile the block at this leader even if the profile never reached
-    /// it (P2.1's uncommon-trap pruning).
-    KeepBlock = 1 << 3,
-    /// A deopt here invalidated a leaf: never speculate here again (P2.1).
-    Invalidated = 1 << 4,
-}
+use std::sync::atomic::Ordering;
 
 impl RetreatBit {
     /// Every bit, in bit order.
@@ -55,11 +39,6 @@ impl RetreatBit {
         }
     }
 }
-
-/// The retreat word of one pc: [`RetreatBit`]s in the low byte, a
-/// saturating deopt count in the high byte.
-#[derive(Default)]
-pub(crate) struct SiteRetreat(AtomicU16);
 
 impl SiteRetreat {
     const BITS_MASK: u16 = 0x00ff;
@@ -117,10 +96,6 @@ impl std::fmt::Debug for SiteRetreat {
             .finish()
     }
 }
-
-/// One source's retreat words, one per pc, allocated on the first mark.
-#[derive(Default, Debug)]
-pub(crate) struct SiteRetreatTable(OnceLock<Box<[SiteRetreat]>>);
 
 impl SiteRetreatTable {
     /// An empty table (nothing allocated).

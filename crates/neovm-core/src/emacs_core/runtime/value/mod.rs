@@ -59,6 +59,7 @@ pub(crate) enum FunctionSourceIdentity {
 
 pub mod buffer_vocab;
 pub mod flow_vocab;
+pub(crate) mod jit_runtime;
 pub mod positions;
 pub(crate) mod scratch_bridge;
 pub mod text_props;
