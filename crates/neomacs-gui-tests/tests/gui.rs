@@ -43,6 +43,9 @@ mod desktop_font_startup;
 #[path = "desktop_font_updates.rs"]
 mod desktop_font_updates;
 
+// Only the Linux desktop-font suites (which pin a Linux font package) use
+// this helper; compiling it on other hosts is dead code.
+#[cfg(target_os = "linux")]
 #[path = "desktop_font_pins.rs"]
 mod desktop_font_pins;
 
