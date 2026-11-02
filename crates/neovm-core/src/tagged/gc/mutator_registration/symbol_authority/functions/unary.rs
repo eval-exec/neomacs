@@ -43,8 +43,15 @@ pub(super) fn check_argument(
     }
 }
 
-impl<K: EraKeeper> EraCore<'_, K> {
-    pub(crate) fn prepare_unary_function_symbol(
+pub(crate) trait EraCoreUnaryExt {
+    fn prepare_unary_function_symbol(
+        &self,
+        key: &SymbolHandle,
+    ) -> Result<PreparedUnaryFunction, FunctionError>;
+}
+
+impl<K: EraKeeper> EraCoreUnaryExt for EraCore<'_, K> {
+    fn prepare_unary_function_symbol(
         &self,
         key: &SymbolHandle,
     ) -> Result<PreparedUnaryFunction, FunctionError> {
@@ -76,10 +83,29 @@ impl<K: EraKeeper> EraCore<'_, K> {
     }
 }
 
-impl<'era> RunAccess<'_, 'era> {
+pub(crate) trait RunAccessUnaryExt<'era> {
     /// Fresh definition, identity and private activation root agree under the
     /// same reader. A source mismatch never starts a callback.
-    pub(crate) fn sym_unary_call_begin(
+    fn sym_unary_call_begin(
+        &mut self,
+        callback: &PreparedUnaryFunction,
+        expected: &OwnerRootSlot<'era>,
+        argument: &OwnerRootSlot<'era>,
+        activation: &mut FunctionActivation<'era>,
+    ) -> Result<FunctionSelection, FunctionError>;
+
+    /// Only this capability can publish a replacement with the same prepared
+    /// ordinary formal. The default fset remains strictly nullary.
+    fn sym_unary_fset_into(
+        &mut self,
+        callback: &PreparedUnaryFunction,
+        src: &OwnerRootSlot<'era>,
+        dst: &mut OwnerRootSlot<'era>,
+    ) -> Result<(), FunctionError>;
+}
+
+impl<'era> RunAccessUnaryExt<'era> for RunAccess<'_, 'era> {
+    fn sym_unary_call_begin(
         &mut self,
         callback: &PreparedUnaryFunction,
         expected: &OwnerRootSlot<'era>,
@@ -92,9 +118,7 @@ impl<'era> RunAccess<'_, 'era> {
         self.named_call_begin_with_shape(callback.key(), expected, activation, callback.shape())
     }
 
-    /// Only this capability can publish a replacement with the same prepared
-    /// ordinary formal. The default fset remains strictly nullary.
-    pub(crate) fn sym_unary_fset_into(
+    fn sym_unary_fset_into(
         &mut self,
         callback: &PreparedUnaryFunction,
         src: &OwnerRootSlot<'era>,

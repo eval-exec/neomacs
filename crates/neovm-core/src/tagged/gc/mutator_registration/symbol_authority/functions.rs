@@ -4,11 +4,13 @@ mod constant;
 mod hof;
 mod name;
 pub(crate) use hof::PreparedHofBuiltin;
+pub(crate) use hof::{EraCoreHofExt, RunAccessHofExt};
 mod unary;
 pub(super) use constant::{CallShape, ReturnSubset};
 #[cfg(test)]
 pub(in crate::tagged::gc::mutator_registration) use name::PreparedNameFunction;
 pub(crate) use unary::PreparedUnaryFunction;
+pub(crate) use unary::{EraCoreUnaryExt, RunAccessUnaryExt};
 pub(super) mod write;
 use super::intern::OwnerRootIndex;
 use super::*;

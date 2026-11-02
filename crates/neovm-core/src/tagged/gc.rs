@@ -2807,6 +2807,8 @@ pub use mutator_registration::{
     RunSlice, SealedTableAccess, SliceRoot, Snapshot, StoppedSummaries, SymbolHandle, SymbolMut,
     SymbolRef, TableMut, TableRef, YoungWorkerLoan,
 };
+#[cfg(test)]
+pub(crate) use mutator_registration::{EraCoreHofExt, RunAccessHofExt, RunAccessUnaryExt};
 
 #[cfg(test)]
 pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;

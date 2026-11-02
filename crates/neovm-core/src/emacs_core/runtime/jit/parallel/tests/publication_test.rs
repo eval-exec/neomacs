@@ -5,6 +5,7 @@ use crate::emacs_core::intern::{
     SymId,
     parallel::{identity_census_for_test, name_publication_for_test},
 };
+use crate::tagged::gc::RunAccessUnaryExt;
 use crate::tagged::gc::function_write_hooks::HofOperation;
 use crate::tagged::gc::{
     CohortPhase, CohortSize, ExecutionFixtureReceipt, ExecutionTestDeadline, ExecutionTestHomes,

@@ -7,6 +7,9 @@ use super::construction::{Gen1Construction, ProductionAdmission};
 #[cfg(test)]
 use super::construction::{ProofAdmission, ProofConstruction};
 use super::*;
+use crate::tagged::gc::mutator_registration::{
+    EraCoreExecutionExt, EraCoreHofExt, EraCoreUnaryExt,
+};
 
 /// Production multi-mutator authority, minted only from checked GEN1 inputs.
 #[must_use = "finish explicitly; abandonment retains the World and poisons the era"]

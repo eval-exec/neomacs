@@ -1,5 +1,6 @@
 //! Real compiled manifest; Rust ABI controls remain separate Miri evidence.
 use super::*;
+use crate::tagged::gc::RunAccessUnaryExt;
 use crate::tagged::gc::{
     ExecutionFixtureReceipt, ExecutionTestHomes, HofTestInputs, PlainSymbolBacking,
     with_test_prepared_hof_execution,

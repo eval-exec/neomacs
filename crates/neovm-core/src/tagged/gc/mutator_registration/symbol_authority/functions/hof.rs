@@ -25,8 +25,16 @@ impl PreparedHofBuiltin {
     }
 }
 
-impl<K: EraKeeper> EraCore<'_, K> {
-    pub(crate) fn prepare_hof_builtin(
+pub(crate) trait EraCoreHofExt {
+    fn prepare_hof_builtin(
+        &self,
+        operation: HofOperation,
+        key: &SymbolHandle,
+    ) -> Result<PreparedHofBuiltin, FunctionError>;
+}
+
+impl<K: EraKeeper> EraCoreHofExt for EraCore<'_, K> {
+    fn prepare_hof_builtin(
         &self,
         operation: HofOperation,
         key: &SymbolHandle,
@@ -71,11 +79,22 @@ impl<K: EraKeeper> EraCore<'_, K> {
     }
 }
 
-impl<'era> RunAccess<'_, 'era> {
+pub(crate) trait RunAccessHofExt<'era> {
     /// This is a guarded callback selection, not generic HOF execution. Both
     /// handles and homes validate before the single reader is acquired. A
     /// later callback redefinition cannot redirect a rooted old selection.
-    pub(crate) fn sym_hof_call_begin(
+    fn sym_hof_call_begin(
+        &mut self,
+        mapper: &PreparedHofBuiltin,
+        callback: &PreparedUnaryFunction,
+        expected: &OwnerRootSlot<'era>,
+        argument: &OwnerRootSlot<'era>,
+        activation: &mut FunctionActivation<'era>,
+    ) -> Result<FunctionSelection, FunctionError>;
+}
+
+impl<'era> RunAccessHofExt<'era> for RunAccess<'_, 'era> {
+    fn sym_hof_call_begin(
         &mut self,
         mapper: &PreparedHofBuiltin,
         callback: &PreparedUnaryFunction,
@@ -96,7 +115,17 @@ impl<'era> RunAccess<'_, 'era> {
     }
 }
 
-impl SymbolRef<'_, '_, '_> {
+trait SymbolRefHofExt {
+    fn select_hof(
+        &mut self,
+        mapper: &PreparedHofBuiltin,
+        expected: OwnerRootIndex,
+        activation: &mut FunctionActivation<'_>,
+        shape: CallShape,
+    ) -> Result<FunctionSelection, FunctionError>;
+}
+
+impl SymbolRefHofExt for SymbolRef<'_, '_, '_> {
     fn select_hof(
         &mut self,
         mapper: &PreparedHofBuiltin,

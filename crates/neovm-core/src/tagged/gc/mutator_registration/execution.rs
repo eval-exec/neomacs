@@ -65,8 +65,13 @@ pub(crate) struct ExecutionActivation<'activation, 'owner, 'era> {
     result: OwnerRootSlot<'era>,
 }
 
-impl<K: EraKeeper> EraCore<'_, K> {
-    pub(super) fn execution_admission(
+pub(crate) trait EraCoreExecutionExt {
+    fn execution_admission(&self, _production: &Gen1Construction)
+    -> ParallelExecutionAdmission<'_>;
+}
+
+impl<K: EraKeeper> EraCoreExecutionExt for EraCore<'_, K> {
+    fn execution_admission(
         &self,
         _production: &Gen1Construction,
     ) -> ParallelExecutionAdmission<'_> {

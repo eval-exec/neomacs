@@ -19,6 +19,10 @@ mod cons_allocation;
 mod cons_catalog;
 mod construction;
 mod execution;
+pub(crate) use execution::EraCoreExecutionExt;
+pub(crate) use symbol_authority::{
+    EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunAccessUnaryExt,
+};
 pub(super) mod facade;
 pub use execution::ParallelExecutionAdmission;
 pub(crate) use execution::{

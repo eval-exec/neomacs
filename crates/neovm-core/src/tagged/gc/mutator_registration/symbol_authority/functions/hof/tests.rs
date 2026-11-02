@@ -5,6 +5,7 @@ use crate::emacs_core::intern::intern;
 use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
     self as contention, Deadline, Retry, retry_owned,
 };
+use crate::tagged::gc::mutator_registration::{RunAccessHofExt, RunAccessUnaryExt};
 use crate::tagged::header::SubrDispatchKind;
 use crate::test_utils::SubrValueExt;
 use std::num::NonZeroU32;

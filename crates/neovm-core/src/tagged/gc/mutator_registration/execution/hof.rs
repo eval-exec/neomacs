@@ -5,6 +5,7 @@ use super::super::symbol_authority::{
 };
 use super::*;
 use crate::tagged::gc::function_write_hooks::HofOperation;
+use crate::tagged::gc::mutator_registration::RunAccessHofExt;
 use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
