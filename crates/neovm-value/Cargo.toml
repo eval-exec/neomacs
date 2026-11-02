@@ -1,0 +1,11 @@
+[package]
+name = "neovm-value"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lower NeoVM runtime utilities shared with the core crate"
+
+[dependencies]
+static_assertions.workspace = true

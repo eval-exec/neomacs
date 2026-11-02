@@ -25,6 +25,7 @@ members = [
     "crates/neovm-core",
     "crates/neovm-host-abi",
     "crates/neovm-oracle-tests",
+    "crates/neovm-value",
     "crates/neovm-worker",
     "crates/xtask",
 ]
@@ -94,6 +95,7 @@ neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-host-abi = { path = "crates/neovm-host-abi" }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
+neovm-value = { path = "crates/neovm-value" }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
 neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }
 neomacs-font-materializer = { path = "crates/neomacs-font-materializer" }

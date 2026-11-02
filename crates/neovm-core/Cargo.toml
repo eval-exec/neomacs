@@ -12,6 +12,7 @@ autotests = false
 
 [dependencies]
 neovm-host-abi.workspace = true
+neovm-value.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
 enumflags2.workspace = true

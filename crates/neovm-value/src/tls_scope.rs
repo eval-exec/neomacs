@@ -17,7 +17,11 @@ mod sealed {
 }
 
 /// The two supported TLS storage kinds; callers cannot supply restoration code.
-pub(crate) trait TlsSlot<T>: sealed::Sealed {
+///
+/// The supertrait lives in the private `sealed` module, so `TlsSlot` stays
+/// sealed across the crate boundary without hiding the type or its methods.
+#[allow(private_bounds)]
+pub trait TlsSlot<T>: sealed::Sealed {
     fn replace(&self, value: T) -> T;
     fn try_replace(&self, value: T) -> Result<T, T>;
 }
@@ -51,7 +55,7 @@ impl<T> TlsSlot<T> for RefCell<T> {
 
 /// Owns restoration on the thread that installed a temporary value.
 #[must_use = "thread-local state is restored when the scope drops"]
-pub(crate) struct TlsScope<T: 'static, Slot: TlsSlot<T> + 'static> {
+pub struct TlsScope<T: 'static, Slot: TlsSlot<T> + 'static> {
     key: &'static LocalKey<Slot>,
     previous: Option<T>,
     _thread: PhantomData<Rc<()>>,
@@ -70,13 +74,13 @@ impl<T: 'static, Slot: TlsSlot<T> + 'static> std::fmt::Debug for TlsScope<T, Slo
 
 impl<T: 'static, Slot: TlsSlot<T> + 'static> TlsScope<T, Slot> {
     #[inline]
-    pub(crate) fn new(key: &'static LocalKey<Slot>, value: T) -> Self {
+    pub fn new(key: &'static LocalKey<Slot>, value: T) -> Self {
         Self::restore(key, key.with(|slot| slot.replace(value)))
     }
 
     /// Restore state saved by a specialized entry operation.
     #[inline]
-    pub(crate) fn restore(key: &'static LocalKey<Slot>, previous: T) -> Self {
+    pub fn restore(key: &'static LocalKey<Slot>, previous: T) -> Self {
         Self {
             key,
             previous: Some(previous),
@@ -87,12 +91,12 @@ impl<T: 'static, Slot: TlsSlot<T> + 'static> TlsScope<T, Slot> {
     /// Return an owned value without constructing a temporary scope.
     /// An unavailable key or borrowed slot drops the returned value instead.
     #[inline]
-    pub(crate) fn restore_now(key: &'static LocalKey<Slot>, previous: T) {
+    pub fn restore_now(key: &'static LocalKey<Slot>, previous: T) {
         let _ = key.try_with(|slot| slot.try_replace(previous));
     }
 
     /// Restore the enclosing value and return the temporary value once.
-    pub(crate) fn finish(mut self) -> Option<T> {
+    pub fn finish(mut self) -> Option<T> {
         self.previous
             .take()
             .map(|previous| self.key.with(|slot| slot.replace(previous)))
@@ -114,7 +118,7 @@ struct StackDepth(usize);
 
 /// Restores a thread-local stack to its entry depth without popping/asserting.
 #[must_use = "the stack entry lasts until its scope drops"]
-pub(crate) struct TlsStackScope<T: 'static> {
+pub struct TlsStackScope<T: 'static> {
     key: &'static LocalKey<RefCell<Vec<T>>>,
     depth: StackDepth,
     _thread: PhantomData<Rc<()>>,
@@ -131,7 +135,7 @@ impl<T: 'static> std::fmt::Debug for TlsStackScope<T> {
 }
 
 impl<T: 'static> TlsStackScope<T> {
-    pub(crate) fn push(key: &'static LocalKey<RefCell<Vec<T>>>, value: T) -> Self {
+    pub fn push(key: &'static LocalKey<RefCell<Vec<T>>>, value: T) -> Self {
         let depth = key.with(|stack| {
             let mut stack = stack.borrow_mut();
             let depth = StackDepth(stack.len());

@@ -4313,6 +4313,7 @@ dependencies = [
  "neomacs-test-oracle",
  "neomacs-video-model",
  "neovm-host-abi",
+ "neovm-value",
  "network-interface",
  "num_enum",
  "object 0.39.1",
@@ -4385,6 +4386,13 @@ dependencies = [
  "rustls-pki-types",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "neovm-value"
+version = "0.0.20"
+dependencies = [
+ "static_assertions",
 ]
 
 [[package]]
