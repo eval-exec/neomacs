@@ -193,18 +193,34 @@ fn release_deopt_after_sleep_for_park() {
 
 /// Contended `mutex-lock` parks (GNU `lisp_mutex_lock` releases on
 /// contention): the peer holds the mutex across the redefinition.
+///
+/// Sequencing is event-driven, never wall-clock: the helper yields until
+/// the peer provably holds the mutex, then takes the lock. The peer is
+/// parked (via its own `thread-yield`) still holding the mutex and cannot
+/// run again until the helper parks, so the helper's lock is guaranteed
+/// contended, and the peer's unlock — after the redefinition — is what
+/// wakes it. The redefinition therefore lands inside the mutex park, not
+/// inside a handshake yield. GNU's `make-thread` never yields to the new
+/// thread (thread.c:885) and `lisp_mutex_lock_for_thread` returns at once
+/// for an unowned mutex (thread.c:200-245), so the old 3 ms head start
+/// let a slow thread spawn leave the lock uncontended. No sleep sizes the
+/// window, so no load level can reorder it, and a mutex that ever
+/// admitted a second holder would still fail the release-point assertion.
 #[test]
 fn release_deopt_after_contended_mutex_lock_park() {
     exercise_green_park(
-        "(setq green-release-mutex (make-mutex))
+        "(setq green-release-mutex (make-mutex)
+               green-release-peer-holds nil)
          (fset 'green-release-peer (lambda ()
               (mutex-lock green-release-mutex)
-              (sleep-for 0 20)
+              (setq green-release-peer-holds t)
+              (thread-yield)
               (green-release-redefine)
               (mutex-unlock green-release-mutex)))
          (fset 'green-release-helper (lambda ()
               (make-thread 'green-release-peer)
-              (sleep-for 0 3)
+              (while (null green-release-peer-holds)
+                (thread-yield))
               (mutex-lock green-release-mutex)
               (mutex-unlock green-release-mutex)))",
     );
