@@ -520,6 +520,10 @@ mod architecture_leaf_slot_writer_guard_test;
 mod architecture_tagged_compile_seam_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/coherence_upper_impl_ratchet_test.rs"]
+mod architecture_coherence_upper_impl_ratchet_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
 
