@@ -22,6 +22,8 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 mod atomic_value;
 pub use atomic_value::AtomicTaggedValue;
+#[cfg(feature = "sqlite")]
+pub(crate) mod sqlite_finalizer;
 mod value_vec;
 pub use value_vec::OwnedValueVec;
 
@@ -2595,6 +2597,9 @@ pub struct ModuleFunctionObj {
     pub interactive_form: TaggedValue,
 }
 
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "header/tests/sqlite_finalizer_test.rs"]
+mod sqlite_finalizer_tests;
 #[cfg(test)]
 #[path = "header/tests/header_test.rs"]
 mod tests;

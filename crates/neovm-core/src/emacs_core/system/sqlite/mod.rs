@@ -44,6 +44,11 @@ mod enabled {
         include!("tests/shutdown.rs");
     }
 
+    #[cfg(test)]
+    mod finalizer_hook_tests {
+        include!("tests/finalizer_hook.rs");
+    }
+
     thread_local! {
         /// Open database connections: handle_id -> shared Connection.  Result sets
         /// retain the connection so finalizing their raw statement can never race
@@ -94,25 +99,38 @@ mod enabled {
         }
     }
 
-    impl Drop for crate::tagged::header::SqliteObj {
-        fn drop(&mut self) {
-            // This Drop can run during thread-local DESTRUCTION (the heap is dropped
-            // when its thread exits, which drops the SqliteObj it owns). At that
-            // point the `RESULT_SETS`/`DB_HANDLES` thread-locals may already be
-            // destroyed, so `with` would panic with `AccessError` ("cannot access a
-            // Thread Local Storage value during or after destruction") and abort the
-            // process. `try_with` tolerates that — if the registry is already gone
-            // there is nothing left to remove.
-            if self.is_statement {
-                let _ = RESULT_SETS.try_with(|h| {
-                    h.borrow_mut().remove(&self.id);
-                });
-            } else {
-                let _ = DB_HANDLES.try_with(|h| {
-                    h.borrow_mut().remove(&self.id);
-                });
-            }
+    /// The sqlite object finalizer installed into the value layer's table.
+    ///
+    /// Moved verbatim from the `Drop` impl that now lives beside `SqliteObj`;
+    /// the registry cleanup and its TLS-destruction tolerance stay in the
+    /// sqlite module while the object moves to neovm-value.
+    pub(crate) fn finalize_sqlite_obj(obj: &crate::tagged::header::SqliteObj) {
+        // This finalizer can run during thread-local DESTRUCTION (the heap is dropped
+        // when its thread exits, which drops the SqliteObj it owns). At that
+        // point the `RESULT_SETS`/`DB_HANDLES` thread-locals may already be
+        // destroyed, so `with` would panic with `AccessError` ("cannot access a
+        // Thread Local Storage value during or after destruction") and abort the
+        // process. `try_with` tolerates that — if the registry is already gone
+        // there is nothing left to remove.
+        if obj.is_statement {
+            let _ = RESULT_SETS.try_with(|h| {
+                h.borrow_mut().remove(&obj.id);
+            });
+        } else {
+            let _ = DB_HANDLES.try_with(|h| {
+                h.borrow_mut().remove(&obj.id);
+            });
         }
+    }
+
+    /// Install the finalizer table beside the other one-time hooks. Idempotent:
+    /// the handle-construction path calls it before the first SqliteObj exists.
+    pub(crate) fn install_sqlite_finalizer_hook() {
+        crate::tagged::header::sqlite_finalizer::install_sqlite_obj_finalizer(
+            crate::tagged::header::sqlite_finalizer::SqliteObjFinalizer {
+                finalize: finalize_sqlite_obj,
+            },
+        );
     }
 
     /// Reset all thread-local state (called between test runs).
@@ -190,10 +208,12 @@ mod enabled {
     }
 
     fn make_db_handle(id: i64) -> Value {
+        install_sqlite_finalizer_hook();
         Value::make_sqlite(false, id)
     }
 
     fn make_stmt_handle(id: i64) -> Value {
+        install_sqlite_finalizer_hook();
         Value::make_sqlite(true, id)
     }
 
@@ -1003,8 +1023,9 @@ mod enabled {
 
 #[cfg(feature = "sqlite")]
 pub(crate) use enabled::{
-    available_p, close, columns, commit, execute, execute_batch, finalize, is_sqlite_object,
-    load_extension, more_p, next, open, pragma, rollback, select, transaction, version,
+    available_p, close, columns, commit, execute, execute_batch, finalize,
+    install_sqlite_finalizer_hook, is_sqlite_object, load_extension, more_p, next, open, pragma,
+    rollback, select, transaction, version,
 };
 #[cfg(feature = "sqlite")]
 pub(crate) use enabled::{swap_world_state, world_state_placeholder};

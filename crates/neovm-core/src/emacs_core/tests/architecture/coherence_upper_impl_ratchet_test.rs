@@ -31,7 +31,7 @@ use syn::spanned::Spanned;
 use syn::{Item, Type};
 
 /// Illegal upper impls still to convert. Decremented by every seam commit.
-const REMAINING_ALLOWED: usize = 1;
+const REMAINING_ALLOWED: usize = 0;
 
 /// Moved types whose name also has a non-moving definition in this crate, so
 /// the general name rule cannot classify them. Each entry is

@@ -386,7 +386,9 @@ tagged/gc/tests/weak_key_gc_test.rs
 tagged/gc/young_registry.rs
 tagged/header.rs
 tagged/header/atomic_value.rs
+tagged/header/sqlite_finalizer.rs
 tagged/header/tests/header_test.rs
+tagged/header/tests/sqlite_finalizer_test.rs
 tagged/header/value_vec.rs
 tagged/mod.rs
 tagged/mutate.rs

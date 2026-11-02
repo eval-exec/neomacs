@@ -18,6 +18,11 @@ fn context_new_installs_the_eval_error_formatter() {
         eval_error_formatter_installed(),
         "Context::new_inner must install the EvalError formatter"
     );
+    #[cfg(feature = "sqlite")]
+    assert!(
+        crate::tagged::header::sqlite_finalizer::sqlite_obj_finalizer_installed(),
+        "Context::new_inner must install the SqliteObj finalizer"
+    );
 }
 
 #[test]
@@ -26,6 +31,11 @@ fn pdump_reconstruction_installs_the_eval_error_formatter() {
     assert!(
         eval_error_formatter_installed(),
         "pdump reconstruction must install the EvalError formatter"
+    );
+    #[cfg(feature = "sqlite")]
+    assert!(
+        crate::tagged::header::sqlite_finalizer::sqlite_obj_finalizer_installed(),
+        "pdump reconstruction must install the SqliteObj finalizer"
     );
 }
 
