@@ -1,6 +1,6 @@
 //! Assoc's two-argument callback seam, preserving GNU's live function cells.
 use super::*;
-use crate::tagged::header::SubrFn2;
+use crate::emacs_core::eval::subr_abi::SubrFn2;
 
 /// A pure builtin identified by its implementation, rather than its name.
 /// This immutable enum contains no Lisp state and is safe to share between

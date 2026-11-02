@@ -1,8 +1,8 @@
 use super::{FixedMin2, NativeFn, NoEvalPolicy, SubrArity, SubrSpec, no_eval_policy};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::Value;
-use crate::tagged::header::SubrFn;
 
 #[path = "subrs.rs"]
 mod subrs;

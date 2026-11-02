@@ -6,6 +6,7 @@
 use super::*;
 #[cfg(feature = "jit")]
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 
 /// The GC root that keeps an interpreted callable alive for one
 /// [`Context::apply_lambda`] call.
@@ -3552,7 +3553,10 @@ impl Context {
     #[inline]
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn check_funcall_subr_arity(&self, sym_id: SymId, nargs: usize) -> Option<Flow> {
-        self.check_funcall_subr_arity_value(Value::subr_from_sym_id(sym_id), nargs)
+        self.check_funcall_subr_arity_value(
+            <Value as SubrValueExt>::subr_from_sym_id(sym_id),
+            nargs,
+        )
     }
 
     pub(super) fn dispatch_subr_value_internal(
@@ -3628,7 +3632,7 @@ impl Context {
     #[inline(never)]
     pub(crate) fn dispatch_subr_fn_from_bc_stack(
         &mut self,
-        function: crate::tagged::header::SubrFn,
+        function: crate::emacs_core::eval::subr_abi::SubrFn,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
@@ -3654,7 +3658,7 @@ impl Context {
     /// the VM's Bcall path keeps its own inlining.
     fn call_many_slice_from_bc_stack(
         &mut self,
-        func: crate::tagged::header::SubrFnManySlice,
+        func: crate::emacs_core::eval::subr_abi::SubrFnManySlice,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
@@ -3700,7 +3704,7 @@ impl Context {
     #[inline]
     fn dispatch_fixed_subr_fn_from_bc_stack(
         &mut self,
-        function: crate::tagged::header::SubrFn,
+        function: crate::emacs_core::eval::subr_abi::SubrFn,
         args_start: usize,
         nargs: usize,
     ) -> Option<EvalResult> {
@@ -3782,36 +3786,36 @@ impl Context {
     #[inline]
     pub(super) fn dispatch_subr_func_unchecked(
         &mut self,
-        func: crate::tagged::header::SubrFn,
+        func: crate::emacs_core::eval::subr_abi::SubrFn,
         args: &[Value],
     ) -> EvalResult {
         match func {
-            crate::tagged::header::SubrFn::Many(func) => func(self, args.to_vec()),
-            crate::tagged::header::SubrFn::ManyNoContext(func) => func(args.to_vec()),
-            crate::tagged::header::SubrFn::ManySlice(func) => func(self, args),
-            crate::tagged::header::SubrFn::A0(func) => func(self),
-            crate::tagged::header::SubrFn::A1(func) => {
+            crate::emacs_core::eval::subr_abi::SubrFn::Many(func) => func(self, args.to_vec()),
+            crate::emacs_core::eval::subr_abi::SubrFn::ManyNoContext(func) => func(args.to_vec()),
+            crate::emacs_core::eval::subr_abi::SubrFn::ManySlice(func) => func(self, args),
+            crate::emacs_core::eval::subr_abi::SubrFn::A0(func) => func(self),
+            crate::emacs_core::eval::subr_abi::SubrFn::A1(func) => {
                 func(self, args.first().copied().unwrap_or(Value::NIL))
             }
-            crate::tagged::header::SubrFn::A2(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A2(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
             ),
-            crate::tagged::header::SubrFn::A3(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A3(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
                 args.get(2).copied().unwrap_or(Value::NIL),
             ),
-            crate::tagged::header::SubrFn::A4(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A4(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
                 args.get(2).copied().unwrap_or(Value::NIL),
                 args.get(3).copied().unwrap_or(Value::NIL),
             ),
-            crate::tagged::header::SubrFn::A5(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A5(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
@@ -3819,7 +3823,7 @@ impl Context {
                 args.get(3).copied().unwrap_or(Value::NIL),
                 args.get(4).copied().unwrap_or(Value::NIL),
             ),
-            crate::tagged::header::SubrFn::A6(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A6(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
@@ -3828,7 +3832,7 @@ impl Context {
                 args.get(4).copied().unwrap_or(Value::NIL),
                 args.get(5).copied().unwrap_or(Value::NIL),
             ),
-            crate::tagged::header::SubrFn::A7(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A7(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
@@ -3838,7 +3842,7 @@ impl Context {
                 args.get(5).copied().unwrap_or(Value::NIL),
                 args.get(6).copied().unwrap_or(Value::NIL),
             ),
-            crate::tagged::header::SubrFn::A8(func) => func(
+            crate::emacs_core::eval::subr_abi::SubrFn::A8(func) => func(
                 self,
                 args.first().copied().unwrap_or(Value::NIL),
                 args.get(1).copied().unwrap_or(Value::NIL),
@@ -3932,7 +3936,7 @@ impl Context {
                 // the function cell. Treat this as the canonical callable
                 // object, not an obarray indirection cycle.
                 ValueKind::Subr(sid) if sid == sym_id => {
-                    NamedCallTarget::Subr(Value::subr_from_sym_id(sid))
+                    NamedCallTarget::Subr(<Value as SubrValueExt>::subr_from_sym_id(sid))
                 }
                 ValueKind::Veclike(VecLikeType::Subr) if func.as_subr_id() == Some(sym_id) => {
                     NamedCallTarget::Subr(func)
@@ -3942,7 +3946,7 @@ impl Context {
         } else if self.obarray.is_function_unbound_id(sym_id) {
             NamedCallTarget::Void
         } else if lookup_global_subr_entry(sym_id).is_some() {
-            NamedCallTarget::Subr(Value::subr_from_sym_id(sym_id))
+            NamedCallTarget::Subr(<Value as SubrValueExt>::subr_from_sym_id(sym_id))
         } else {
             NamedCallTarget::Void
         };
@@ -4150,14 +4154,16 @@ impl Context {
         // Startup wrappers often expose autoload-shaped function cells for names
         // backed by builtins. Keep the autoload shape while preserving callability.
         if lookup_global_subr_entry(sym_id).is_some() {
-            let subr = Value::subr_from_sym_id(sym_id);
+            let subr = <Value as SubrValueExt>::subr_from_sym_id(sym_id);
             // GNU-faithful pre-check via check_funcall_subr_arity.
             if let Some(flow) = self.check_funcall_subr_arity_value(subr, args.len()) {
                 return Err(flow);
             }
-            if let Some(result) =
-                self.dispatch_subr_value_internal(subr, &args, Value::subr_from_sym_id(sym_id))
-            {
+            if let Some(result) = self.dispatch_subr_value_internal(
+                subr,
+                &args,
+                <Value as SubrValueExt>::subr_from_sym_id(sym_id),
+            ) {
                 return result;
             }
         }
@@ -4227,7 +4233,7 @@ impl Context {
                     return Err(signal(
                         LispCondition::WrongNumberOfArguments,
                         vec![
-                            Value::subr_from_sym_id(sym_id),
+                            <Value as SubrValueExt>::subr_from_sym_id(sym_id),
                             Value::fixnum(args.len() as i64),
                         ],
                     ));

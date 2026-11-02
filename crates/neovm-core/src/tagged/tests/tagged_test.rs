@@ -4,6 +4,7 @@ use super::gc::{HeapWriteKind, HeapWriteRecord};
 use super::header::*;
 use super::value::*;
 use crate::emacs_core::intern::{SymId, intern, intern_uninterned};
+use crate::test_utils::SubrValueExt;
 
 #[test]
 fn nil_is_zero() {

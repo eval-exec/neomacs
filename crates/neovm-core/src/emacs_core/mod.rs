@@ -526,3 +526,7 @@ mod architecture_plist_head_seam_guard_test;
 #[cfg(test)]
 #[path = "tests/architecture/parallel_exec_substrate_test.rs"]
 mod architecture_parallel_exec_substrate_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/subr_storage_boundary_test.rs"]
+mod architecture_subr_storage_boundary_test;

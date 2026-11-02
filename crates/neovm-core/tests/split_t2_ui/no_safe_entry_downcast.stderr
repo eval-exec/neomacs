@@ -1,0 +1,11 @@
+error[E0599]: no method named `as_subr_entry` found for struct `TaggedValue` in the current scope
+ --> tests/split_t2_ui/no_safe_entry_downcast.rs:1:84
+  |
+1 | fn main() { let value = neovm_core::tagged::value::TaggedValue::NIL; let _ = value.as_subr_entry::<fn()>(); }
+  |                                                                                    ^^^^^^^^^^^^^
+  |
+help: there is a method `as_subr_id` with a similar name
+  |
+1 - fn main() { let value = neovm_core::tagged::value::TaggedValue::NIL; let _ = value.as_subr_entry::<fn()>(); }
+1 + fn main() { let value = neovm_core::tagged::value::TaggedValue::NIL; let _ = value.as_subr_id::<fn()>(); }
+  |

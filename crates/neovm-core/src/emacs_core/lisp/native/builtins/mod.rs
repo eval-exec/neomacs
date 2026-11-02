@@ -6,6 +6,7 @@
 pub(crate) use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::rounding_modes::RoundingMode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -610,7 +611,7 @@ pub(crate) fn dispatch_builtin_by_id(
     sym_id: SymId,
     args: Vec<Value>,
 ) -> Option<EvalResult> {
-    eval.dispatch_subr_value(Value::subr_from_sym_id(sym_id), args)
+    eval.dispatch_subr_value(<Value as SubrValueExt>::subr_from_sym_id(sym_id), args)
 }
 
 use super::subr::{

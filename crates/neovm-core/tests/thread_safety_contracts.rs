@@ -110,3 +110,11 @@ fn p15_threading_compile_contracts() {
         cases.compile_fail(fixture);
     }
 }
+
+#[cfg(feature = "contract-fixtures")]
+#[test]
+fn split_t2_storage_compile_contracts() {
+    let cases = trybuild::TestCases::new();
+    cases.pass("tests/split_t2_pass/metadata_only.rs");
+    cases.compile_fail("tests/split_t2_ui/*.rs");
+}

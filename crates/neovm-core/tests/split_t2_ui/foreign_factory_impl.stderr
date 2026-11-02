@@ -1,0 +1,11 @@
+error[E0117]: only traits defined in the current crate can be implemented for types defined outside of the crate
+ --> tests/split_t2_ui/foreign_factory_impl.rs:4:1
+  |
+4 | unsafe impl CanonicalSubrFactory for SubrObj<fn()> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-------------
+  |                                      |
+  |                                      `SubrObj` is not defined in the current crate
+  |
+  = note: impl doesn't have any local type before any uncovered type parameters
+  = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules
+  = note: define and implement a trait or new type instead

@@ -505,7 +505,7 @@ fn object_struct_bytes(header: *const GcHeader) -> usize {
                 VecLikeType::SurfaceHandle => size_of::<SurfaceObj>(),
                 VecLikeType::VideoHandle => size_of::<VideoObj>(),
                 VecLikeType::BoolVector => size_of::<BoolVectorObj>(),
-                VecLikeType::Subr => size_of::<SubrObj>(),
+                VecLikeType::Subr => size_of::<SubrStorageLayout>(),
                 VecLikeType::Bignum => size_of::<BignumObj>(),
                 VecLikeType::SymbolWithPos => size_of::<SymbolWithPosObj>(),
                 VecLikeType::Finalizer => size_of::<FinalizerObj>(),

@@ -6,11 +6,13 @@
 
 use super::*;
 use crate::emacs_core::error::EvalResult;
+use crate::emacs_core::eval::subr_abi::SubrFn;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
 use crate::tagged::collection_reads::{
     CompiledJournalMode, capture, force_compiled_journal_for_test, is_observed,
 };
-use crate::tagged::header::{ConsCell, SubrDispatchKind, SubrFn};
+use crate::tagged::header::{ConsCell, SubrDispatchKind};
 use crate::tagged::mutate::LispCollectionRevision;
 use crate::tagged::value::TAG_MASK;
 
@@ -190,7 +192,7 @@ fn check_binding(local: bool) {
     );
     context.set_function(
         "fx1-cold-blv-inspect-bound",
-        Value::subr_from_sym_id(observer),
+        <Value as SubrValueExt>::subr_from_sym_id(observer),
     );
     super::super::inline_vars::reset_inline_var_sites();
     let leaf = compile_blv(

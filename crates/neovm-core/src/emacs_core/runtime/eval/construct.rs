@@ -4,6 +4,7 @@
 //! the same view of `Context` and the parent's private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::symbol::CanonicalAccess;
 
 /// Select raw constructor storage BEFORE the World is sealed or callable.
@@ -1499,7 +1500,10 @@ impl Context {
         // loaded GNU bytecode can capture `nil` for forward/runtime calls into
         // Builtin function cells are set by SubrSpec registration during init_builtins().
         for name in ["mark-marker", "region-beginning", "region-end"] {
-            obarray.set_symbol_function(name, Value::subr_from_sym_id(intern(name)));
+            obarray.set_symbol_function(
+                name,
+                <Value as SubrValueExt>::subr_from_sym_id(intern(name)),
+            );
         }
 
         // `word-at-point` is defined in GNU Emacs Lisp by `thingatpt.el`,

@@ -12,11 +12,13 @@ use super::super::owner_bindings::Channel;
 use super::super::{NativeUnwindAction, SpecBinding};
 use super::ThreadingMode;
 use crate::emacs_core::error::EvalResult;
+use crate::emacs_core::eval::subr_abi::SubrFn;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::{Context, SubrEntry, register_global_subr_entry};
 use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::Value;
-use crate::tagged::header::{SubrDispatchKind, SubrFn};
+use crate::tagged::header::SubrDispatchKind;
 
 fn eval(ev: &mut Context, src: &str) -> String {
     match ev.eval_str(src) {
@@ -292,7 +294,7 @@ fn with_admit_subr(mode: ThreadingMode) -> Context {
             interactive_spec: None,
         },
     );
-    ev.set_function("tad-admit", Value::subr_from_sym_id(id));
+    ev.set_function("tad-admit", <Value as SubrValueExt>::subr_from_sym_id(id));
     ev
 }
 

@@ -3,6 +3,7 @@
 
 use super::CheckedNativeCallback;
 use crate::emacs_core::error::{EvalResult, Flow, LispCondition, signal};
+use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::eval::{
     Context, SpecBinding, SubrEntry, global_subr_lookup_count, lookup_global_subr_entry,
     register_global_subr_entry, reset_global_subr_lookup_count,
@@ -11,7 +12,6 @@ use crate::emacs_core::intern::intern;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::subr::{FixedMin1, FixedMin2, FixedMin3, SubrSpec};
 use crate::emacs_core::value::Value;
-use crate::tagged::header::SubrFn;
 
 fn original(_: &mut Context, _: Value) -> EvalResult {
     Ok(Value::symbol("native-callback-original"))

@@ -151,21 +151,31 @@ mod subr_entry_sync;
 pub(crate) use subr_entry_sync::with_static_subr_entry_read;
 #[cfg(all(test, feature = "jit"))]
 pub(crate) use subr_entry_sync::with_static_subr_entry_write;
-
 /// How a static subr entry registration writes its metadata.
 ///
 /// The upper registration owner decides from its immutable compiler policy
 /// whether a writer must take the entry sync lock; this layer owns only the
 /// lock. `Direct` is the non-JIT writer and the unselected production path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StaticSubrEntrySync {
+pub enum StaticSubrEntrySync {
     Direct,
     Locked,
 }
 
-pub(crate) fn update_static_subr_object_entry(
+/// Refresh the real canonical entry specialization in place.
+///
+/// # Safety
+/// Every object in the canonical cache uses exactly this Entry specialization,
+/// initialized by the sole guarded factory with the asserted storage Layout.
+/// `sync` is the upper registration owner's immutable compiler decision:
+/// Locked for selected JIT readers, Direct otherwise. Locked retains the
+/// existing RwLock write/try_read Acquire/Release protocol; test writers always
+/// select Locked. The upper registration generation is published Release only
+/// after refresh, and cached readers validate it with Acquire. No entry view
+/// or metadata reference may outlive that selected reader guard.
+pub unsafe fn update_static_subr_object_entry<Entry: Copy + 'static>(
     sym_id: SymId,
-    function: Option<super::header::SubrFn>,
+    function: Option<Entry>,
     min_args: u16,
     max_args: Option<u16>,
     dispatch_kind: super::header::SubrDispatchKind,
@@ -184,13 +194,15 @@ pub(crate) fn update_static_subr_object_entry(
             return;
         }
 
-        let ptr = value.as_veclike_ptr().unwrap() as *mut SubrObj;
+        let ptr = value.as_veclike_ptr().unwrap() as *mut SubrObj<Entry>;
+        // SAFETY: caller binds Entry and canonical layout to the sole factory;
+        // the immutable selector below preserves the original exclusion policy.
         let write = || unsafe {
             (*ptr).function = function;
-            (*ptr).min_args = min_args;
-            (*ptr).max_args = max_args;
-            (*ptr).dispatch_kind = dispatch_kind;
-            (*ptr).interactivity = interactivity;
+            (*ptr).metadata.min_args = min_args;
+            (*ptr).metadata.max_args = max_args;
+            (*ptr).metadata.dispatch_kind = dispatch_kind;
+            (*ptr).metadata.interactivity = interactivity;
         };
         #[cfg(feature = "jit")]
         if matches!(sync, StaticSubrEntrySync::Locked) {
@@ -276,14 +288,25 @@ impl Hash for TaggedValue {
     }
 }
 
-fn canonical_subr_object(sym_id: SymId) -> TaggedValue {
+/// Cold static allocation policy. A factory is never stored or passed at runtime.
+///
+/// # Safety
+/// Exactly one production implementation supplies the upper native entry ABI.
+/// Every result is the correctly named, fully initialized, permanently live
+/// canonical Subr allocation with the asserted lower storage Layout. It is never
+/// a managed/mapped allocation or another entry specialization.
+pub unsafe trait CanonicalSubrFactory {
+    fn allocate(sym_id: SymId) -> TaggedValue;
+}
+
+fn canonical_subr_object<F: CanonicalSubrFactory>(sym_id: SymId) -> TaggedValue {
     STATIC_SUBR_OBJECTS.with(|objects| {
         let idx = sym_id.0 as usize;
         if let Some(value) = objects.borrow().get(idx).and_then(|value| *value) {
             return value;
         }
 
-        let value = allocate_static_subr_object(sym_id);
+        let value = F::allocate(sym_id);
         let mut objects = objects.borrow_mut();
         if objects.len() <= idx {
             objects.resize_with(idx + 1, || None);
@@ -302,9 +325,9 @@ fn canonical_subr_object(sym_id: SymId) -> TaggedValue {
 /// minting lazily on two threads would give one primitive two objects).
 /// Through `subr_from_sym_id`, so `canonical_subr_object` keeps its one
 /// caller and stays inlined there.
-pub(crate) fn mint_static_subr_objects(ids: impl IntoIterator<Item = SymId>) {
+pub fn mint_static_subr_objects<F: CanonicalSubrFactory>(ids: impl IntoIterator<Item = SymId>) {
     for id in ids {
-        let _ = TaggedValue::subr_from_sym_id(id);
+        let _ = TaggedValue::subr_from_sym_id::<F>(id);
     }
 }
 
@@ -316,41 +339,6 @@ pub(crate) fn snapshot_static_subr_objects() -> Vec<Option<TaggedValue>> {
 /// Install OBJECTS as this thread's canonical subr objects.
 pub(crate) fn install_static_subr_objects(objects: Vec<Option<TaggedValue>>) {
     STATIC_SUBR_OBJECTS.with(|table| *table.borrow_mut() = objects);
-}
-
-fn allocate_static_subr_object(sym_id: SymId) -> TaggedValue {
-    let name_id = symbol_name_id(sym_id);
-    let entry = crate::emacs_core::eval::lookup_global_subr_entry(sym_id);
-    let (function, min_args, max_args, dispatch_kind, interactivity) = if let Some(entry) = entry {
-        (
-            entry.function,
-            entry.min_args,
-            entry.max_args,
-            entry.dispatch_kind,
-            super::header::SubrInteractivity::from(entry.interactive_spec.is_some()),
-        )
-    } else {
-        (
-            None,
-            0,
-            None,
-            super::header::SubrDispatchKind::Builtin,
-            super::header::SubrInteractivity::NonInteractive,
-        )
-    };
-
-    let obj = Box::new(SubrObj {
-        header: super::header::VecLikeHeader::new(VecLikeType::Subr),
-        sym_id,
-        name: name_id,
-        min_args,
-        max_args,
-        dispatch_kind,
-        interactivity,
-        function,
-    });
-    let ptr = Box::leak(obj) as *mut SubrObj;
-    unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +506,9 @@ impl TaggedValue {
     /// never moved, so the VALUE can never go stale; only the name -> canonical
     /// mapping can, and that bumps `symbol_registry_epoch`, which is exactly
     /// what the memo validates against.
-    pub fn subr_from_sym_id(sym_id: crate::emacs_core::intern::SymId) -> Self {
+    pub fn subr_from_sym_id<F: CanonicalSubrFactory>(
+        sym_id: crate::emacs_core::intern::SymId,
+    ) -> Self {
         let idx = sym_id.0 as usize;
         let epoch = symbol_registry_epoch_value();
         let hit = SUBR_BY_SYM.with(|cache| {
@@ -536,7 +526,7 @@ impl TaggedValue {
             return value;
         }
         let canonical = canonical_symbol_for_name(symbol_name_id(sym_id)).unwrap_or(sym_id);
-        let value = canonical_subr_object(canonical);
+        let value = canonical_subr_object::<F>(canonical);
         SUBR_BY_SYM.with(|cache| {
             let mut cache = cache.borrow_mut();
             if cache.1.len() <= idx {
@@ -545,11 +535,6 @@ impl TaggedValue {
             cache.1[idx] = Some(value);
         });
         value
-    }
-
-    /// Create a subr (builtin function) value.
-    pub fn subr(id: SymId) -> Self {
-        Self::subr_from_sym_id(id)
     }
 
     // ---------------------------------------------------------------------------
@@ -846,7 +831,7 @@ impl TaggedValue {
     pub fn as_subr_id(self) -> Option<SymId> {
         let header = self.as_veclike_ptr()?;
         if unsafe { (*header).type_tag } == VecLikeType::Subr {
-            let ptr = header as *const super::header::SubrObj;
+            let ptr = header as *const super::header::SubrMetadata;
             Some(unsafe { (*ptr).sym_id })
         } else {
             None
@@ -860,7 +845,7 @@ impl TaggedValue {
         if unsafe { (*header).type_tag } != VecLikeType::Subr {
             return None;
         }
-        let ptr = header as *const super::header::SubrObj;
+        let ptr = header as *const super::header::SubrMetadata;
         Some(unsafe { (*ptr).interactivity })
     }
 

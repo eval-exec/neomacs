@@ -7,7 +7,7 @@ use super::*;
 use crate::emacs_core::error::{FlowKind, InlineErrorOp};
 use crate::emacs_core::eval::AttentionMask;
 #[cfg(feature = "jit")]
-use crate::tagged::header::{SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5};
+use crate::emacs_core::eval::subr_abi::{SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5};
 
 pub(crate) type JitBuiltin1 = fn(&mut Context, Value) -> Result<Value, Flow>;
 pub(crate) type JitBuiltin2 = fn(&mut Context, Value, Value) -> Result<Value, Flow>;
@@ -2133,7 +2133,7 @@ pub(crate) fn subr_spec_armed_reference(
 }
 
 /// A fixed-arity builtin the armed subr spec shim calls directly: the
-/// [`SubrFn`](crate::tagged::header::SubrFn) entry's code address and its
+/// [`SubrFn`](crate::emacs_core::eval::subr_abi::SubrFn) entry's code address and its
 /// slot class (A0..A5 => 0..=5).
 #[cfg(feature = "jit")]
 #[derive(Clone, Copy)]
@@ -2143,7 +2143,7 @@ struct FixedBuiltinEntry {
 }
 
 /// The cached screened entry's code address, viewed as the
-/// [`SubrFn`](crate::tagged::header::SubrFn) variant its slot class names:
+/// [`SubrFn`](crate::emacs_core::eval::subr_abi::SubrFn) variant its slot class names:
 /// written through `addr`, read through the class's fn-pointer field. A
 /// union rather than a `transmute` — the architecture transmute guard counts
 /// production sites and may only decrease. The validity requirement is the
@@ -2177,7 +2177,8 @@ union ScreenedFn {
 #[cfg(feature = "jit")]
 #[inline]
 fn screen_fixed_builtin(target: Value, nargs: usize) -> Option<FixedBuiltinEntry> {
-    use crate::tagged::header::{SubrFn, SubrObj, VecLikeType};
+    use crate::emacs_core::eval::subr_abi::{SubrFn, SubrObj};
+    use crate::tagged::header::VecLikeType;
     let ptr = target.as_veclike_ptr()?;
     // SAFETY: a veclike pointer from a live Value; the type tag is checked
     // before the SubrObj view is used.
@@ -2187,9 +2188,12 @@ fn screen_fixed_builtin(target: Value, nargs: usize) -> Option<FixedBuiltinEntry
         }
         &*(ptr as *const SubrObj)
     };
-    if subr.dispatch_kind != SubrDispatchKind::Builtin
-        || nargs < usize::from(subr.min_args)
-        || subr.max_args.is_some_and(|max| nargs > usize::from(max))
+    if subr.metadata().dispatch_kind() != SubrDispatchKind::Builtin
+        || nargs < usize::from(subr.metadata().min_args())
+        || subr
+            .metadata()
+            .max_args()
+            .is_some_and(|max| nargs > usize::from(max))
     {
         return None;
     }
@@ -2200,7 +2204,7 @@ fn screen_fixed_builtin(target: Value, nargs: usize) -> Option<FixedBuiltinEntry
     // below both discriminate on it, and re-reading it through `subr` made the
     // compiler load and branch on the same field twice on every builtin call
     // out of JIT-compiled code.
-    let entry = match subr.function? {
+    let entry = match subr.function()? {
         SubrFn::A0(f) => FixedBuiltinEntry {
             fn_ptr: f as usize,
             slots: 0,

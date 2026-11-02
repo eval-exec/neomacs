@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::builtins::builtin_documentation_stringp;
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::{Context, EvalError};
 use crate::test_utils::{
     load_minimal_gnu_help_runtime, runtime_startup_context, runtime_startup_eval_all,

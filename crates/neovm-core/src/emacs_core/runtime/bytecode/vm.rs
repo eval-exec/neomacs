@@ -1,6 +1,7 @@
 //! Bytecode virtual machine — stack-based interpreter.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use std::sync::OnceLock;
 
 use smallvec::SmallVec;
@@ -21,8 +22,9 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::intern::{SymId, intern, lookup_interned, resolve_sym};
 // storage_char_len and storage_substring no longer needed here — using emacs_char + LispString
+use crate::emacs_core::eval::subr_abi::{SubrFn, SubrObj};
 use crate::emacs_core::value::*;
-use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrObj};
+use crate::tagged::header::SubrDispatchKind;
 use crate::tagged::value::{FIXNUM_CHECK_MASK, FIXNUM_CHECK_VALUE, FIXNUM_SHIFT};
 use crate::window::FrameId;
 
@@ -1896,7 +1898,7 @@ impl ResolvedBuiltinCallee {
         }
         let ptr = value.as_veclike_ptr()? as *const SubrObj;
         let subr = unsafe { &*ptr };
-        (subr.dispatch_kind == SubrDispatchKind::Builtin && subr.function.is_some())
+        (subr.metadata().dispatch_kind() == SubrDispatchKind::Builtin && subr.function().is_some())
             .then_some(Self(value))
     }
     /// What a call needs: symbol, function pointer, arity -- read off the
@@ -1918,14 +1920,19 @@ impl ResolvedBuiltinCallee {
             // SAFETY: `from_subr_value` checked the tag; the function cell (or
             // the caller's operand stack) keeps the object alive across the call.
             let subr = unsafe { &*ptr };
-            debug_assert_eq!(subr.dispatch_kind, SubrDispatchKind::Builtin);
-            (subr.sym_id, subr.function, subr.min_args, subr.max_args)
+            debug_assert_eq!(subr.metadata().dispatch_kind(), SubrDispatchKind::Builtin);
+            (
+                subr.metadata().symbol_id(),
+                subr.function(),
+                subr.metadata().min_args(),
+                subr.metadata().max_args(),
+            )
         }
     }
     #[inline]
     fn wrong_arity_value(self) -> Value {
         if let Some(sym_id) = self.0.as_bare_symbol_id() {
-            Value::subr_from_sym_id(sym_id)
+            <Value as SubrValueExt>::subr_from_sym_id(sym_id)
         } else {
             self.0
         }
@@ -8530,7 +8537,7 @@ impl<'a> Vm<'a> {
             // These are static subrs, so this is unreachable in practice; take
             // the traced path rather than invent a dispatch for it.
             None => self.call_function_from_stack_args(
-                Value::subr_from_sym_id(kind.builtin_id()),
+                <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id()),
                 args_start,
                 nargs,
                 true,
@@ -8596,7 +8603,7 @@ impl<'a> Vm<'a> {
         args_start: usize,
         nargs: usize,
     ) -> Option<EvalResult> {
-        let func_val = Value::subr_from_sym_id(kind.builtin_id());
+        let func_val = <Value as SubrValueExt>::subr_from_sym_id(kind.builtin_id());
         let callee = ResolvedBuiltinCallee::from_subr_value(func_val)?;
         let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
         if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
@@ -8868,7 +8875,7 @@ impl<'a> Vm<'a> {
 
     fn call_many_slice_subr_from_stack_args(
         ctx: &mut crate::emacs_core::eval::Context,
-        func: crate::tagged::header::SubrFnManySlice,
+        func: crate::emacs_core::eval::subr_abi::SubrFnManySlice,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
@@ -9390,7 +9397,7 @@ impl<'a> Vm<'a> {
             return self.dispatch_vm_builtin(resolve_sym(id), args);
         }
         self.ctx
-            .funcall_general(Value::subr_from_sym_id(id), args.into())
+            .funcall_general(<Value as SubrValueExt>::subr_from_sym_id(id), args.into())
     }
 
     fn dispatch_vm_builtin(&mut self, name: &str, args: impl Into<LispArgVec>) -> EvalResult {
@@ -9677,8 +9684,10 @@ impl<'a> Vm<'a> {
         // All real builtins go through funcall_general → dispatch_subr.
         // This matches GNU Emacs where the bytecode VM delegates to
         // funcall_general for everything except bytecoded closures.
-        self.ctx
-            .funcall_general(Value::subr_from_sym_id(Self::builtin_name_id(name)), args)
+        self.ctx.funcall_general(
+            <Value as SubrValueExt>::subr_from_sym_id(Self::builtin_name_id(name)),
+            args,
+        )
     }
 
     fn builtin_call_interactively_shared(&mut self, args: &[Value]) -> EvalResult {

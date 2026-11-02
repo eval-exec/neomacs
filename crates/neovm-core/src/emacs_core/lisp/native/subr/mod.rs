@@ -8,10 +8,11 @@
 
 use super::interactive::BuiltinInteractiveSpec;
 use super::intern::{SymId, intern};
-use crate::tagged::header::{
-    SubrDispatchKind, SubrFn, SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5, SubrFn6,
-    SubrFnMany, SubrFnManyNoContext, SubrFnManySlice,
+use crate::emacs_core::eval::subr_abi::{
+    SubrFn, SubrFn0, SubrFn1, SubrFn2, SubrFn3, SubrFn4, SubrFn5, SubrFn6, SubrFnMany,
+    SubrFnManyNoContext, SubrFnManySlice,
 };
+use crate::tagged::header::SubrDispatchKind;
 use std::sync::{Mutex, OnceLock};
 
 pub(crate) mod effect_catalog;

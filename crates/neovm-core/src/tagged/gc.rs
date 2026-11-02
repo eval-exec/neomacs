@@ -2104,7 +2104,7 @@ impl TaggedHeap {
                             let obj = &*(ptr as *const BoolVectorObj);
                             size_of::<BoolVectorObj>().saturating_add(size_of_val(obj.words()))
                         }
-                        VecLikeType::Subr => size_of::<SubrObj>(),
+                        VecLikeType::Subr => size_of::<SubrStorageLayout>(),
                         VecLikeType::Bignum => size_of::<BignumObj>(),
                         VecLikeType::SymbolWithPos => size_of::<SymbolWithPosObj>(),
                         VecLikeType::Finalizer => size_of::<FinalizerObj>(),

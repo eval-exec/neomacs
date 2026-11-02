@@ -1,5 +1,6 @@
 //! Native Lisp declarations and dispatch metadata owned by GNU `src/eval.c`'s mirror.
 
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use std::sync::OnceLock;
 
 use super::*;
@@ -275,7 +276,7 @@ impl Context {
                 });
         if should_install_public_subr {
             self.obarray
-                .set_symbol_function(name, Value::subr_from_sym_id(sym_id));
+                .set_symbol_function(name, <Value as SubrValueExt>::subr_from_sym_id(sym_id));
         }
         // The static subr entry above was rewritten IN PLACE even when the
         // cell write was skipped — keep function_epoch a complete change

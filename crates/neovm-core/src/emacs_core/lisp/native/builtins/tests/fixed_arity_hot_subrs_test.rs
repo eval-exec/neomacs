@@ -4,8 +4,8 @@
 //! `Bpoint`..`Bwiden` inline — with no owned argument `Vec` per call.
 use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::intern::intern;
-use crate::tagged::header::SubrFn;
 
 const HOT_FIXED_ARITY_SUBRS: [(&str, usize); 71] = [
     ("get-char-property", 3),

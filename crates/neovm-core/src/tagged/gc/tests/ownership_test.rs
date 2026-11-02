@@ -944,20 +944,8 @@ fn concurrent_mark_defers_mapped_strings_and_marks_their_interval_children() {
 /// Build a leaked-static `SubrObj` exactly like the production
 /// constructor (`allocate_static_subr_object` `Box::leak`s and never
 /// registers with any heap list), returning the veclike value + raw ptr.
-fn leaked_test_subr() -> (TaggedValue, *mut crate::tagged::header::SubrObj) {
-    let obj = Box::new(crate::tagged::header::SubrObj {
-        header: VecLikeHeader::new(VecLikeType::Subr),
-        sym_id: crate::emacs_core::intern::SymId(1),
-        name: crate::emacs_core::intern::NameId(1),
-        min_args: 1,
-        max_args: Some(2),
-        dispatch_kind: crate::tagged::header::SubrDispatchKind::Builtin,
-        interactivity: crate::tagged::header::SubrInteractivity::NonInteractive,
-        function: None,
-    });
-    let ptr = Box::into_raw(obj);
-    let val = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
-    (val, ptr)
+fn leaked_test_subr() -> (TaggedValue, *mut crate::tagged::header::SubrMetadata) {
+    crate::test_utils::leaked_subr_metadata_for_test()
 }
 
 /// Task 01 SUBR RECOGNIZE-AND-DROP: a leaked-static subr (the only
@@ -1042,7 +1030,7 @@ fn concurrent_mapped_subr_still_deferred_and_side_table_marked() {
     unsafe {
         heap.register_mapped_veclike_object(
             mapped as *mut VecLikeHeader,
-            std::mem::size_of::<crate::tagged::header::SubrObj>(),
+            std::mem::size_of::<crate::tagged::header::SubrStorageLayout>(),
         )
     };
     let root = heap.alloc_cons(subr_val, TaggedValue::fixnum(0));
@@ -3561,4 +3549,23 @@ fn concurrent_builtin_clear_string_retains_interval_child_for_snapshot() {
     // No property home remains. The next exact collection must reclaim child.
     heap.collect_exact(std::iter::once(root));
     assert!(!heap.owns_non_cons_object(child_ptr));
+}
+
+/// Exercise the residual owned-Box sweep with the real upper ABI; the
+/// production canonical factory itself never registers/leaks into a heap.
+#[test]
+fn owned_subr_storage_is_deallocated_by_its_exact_layout() {
+    let mut heap = TaggedHeap::new();
+    let (value, ptr) = crate::test_utils::leaked_subr_metadata_for_test();
+    // The cfg(test) adapter returns an unregistered allocation whose only
+    // owner is this fixture; unlike the static tests, transfer it to the heap.
+    heap.link_veclike(ptr.cast::<VecLikeHeader>());
+    assert!(heap.non_cons_object_addrs.contains(&(ptr as usize)));
+    assert_eq!(
+        value.as_subr_id(),
+        Some(crate::emacs_core::intern::SymId(1))
+    );
+    // Drop's existing exclusive owned sweep must use the fixed exact Layout.
+    // Miri with leak checking verifies both deallocation and allocator size.
+    drop(heap);
 }

@@ -4,7 +4,7 @@ use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
 use crate::emacs_core::intern::intern;
 use crate::tagged::gc::function_write_hooks::HofOperation;
 use crate::tagged::gc::{HofScratch, HofSingleton, PreparedHofBuiltin, PreparedUnaryFunction};
-use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrFn2};
+use crate::test_utils::SubrValueExt;
 
 pub(crate) struct HofTestInputs<'era> {
     pub(crate) mapper: PreparedHofBuiltin,
@@ -25,17 +25,7 @@ pub(super) fn spelling(operation: HofOperation) -> &'static str {
 }
 
 pub(super) fn builtin(operation: HofOperation) -> SubrEntry {
-    let body: SubrFn2 = match operation {
-        HofOperation::Mapc => crate::emacs_core::builtins::builtin_mapc_2,
-        HofOperation::Mapcar => crate::emacs_core::builtins::builtin_mapcar_2,
-    };
-    SubrEntry {
-        function: Some(SubrFn::A2(body)),
-        min_args: 2,
-        max_args: Some(2),
-        dispatch_kind: SubrDispatchKind::Builtin,
-        interactive_spec: None,
-    }
+    crate::test_utils::builtin_hof_entry_for_test(operation)
 }
 
 #[derive(Debug)]
@@ -85,7 +75,7 @@ pub(crate) fn prepared_hof_fixture<P>(
         register_global_subr_entry(intern(spelling(kind)), builtin(kind));
     }
     let mapper_id = intern(spelling(operation));
-    let canonical = TaggedValue::subr_from_sym_id(mapper_id);
+    let canonical = <TaggedValue as SubrValueExt>::subr_from_sym_id(mapper_id);
     let parameter = intern("nmjit-native-hof-ordinary-parameter");
     let replacement = intern("nmjit-native-hof-replacement");
     let mapper_replacement = intern("nmjit-native-hof-mapper-replacement");

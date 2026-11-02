@@ -99,6 +99,7 @@ use crate::emacs_core::bytecode::vm::condition_frame_resume;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::dynamic_module::panic_message;
 use crate::emacs_core::error::{Flow, make_signal_binding_value, signal};
+use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::eval::{
     ConditionFrame, Context, LispArgVec, ModuleBoundarySnapshot, ResumeTarget,
     lookup_global_subr_entry, push_scratch_gc_root, restore_scratch_gc_roots,
@@ -107,7 +108,7 @@ use crate::emacs_core::eval::{
 use crate::emacs_core::intern::{SymId, intern, resolve_sym};
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::{Value, ValueKind};
-use crate::tagged::header::{ConsCell, SubrDispatchKind, SubrFn};
+use crate::tagged::header::{ConsCell, SubrDispatchKind};
 use crate::tagged::value::{
     FIXNUM_CHECK_MASK, FIXNUM_CHECK_VALUE, FIXNUM_SHIFT, TAG_BITS, TAG_CONS, TAG_MASK, TAG_STRING,
     TAG_SYMBOL,

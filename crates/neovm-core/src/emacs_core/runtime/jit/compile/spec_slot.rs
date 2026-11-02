@@ -338,7 +338,7 @@ impl SpecSlot {
     }
 
     /// Low three bits of a subr slot's `direct_entry` hold the cached
-    /// screened entry's [`SubrFn`](crate::tagged::header::SubrFn) class
+    /// screened entry's [`SubrFn`](crate::emacs_core::eval::subr_abi::SubrFn) class
     /// (`slots + 1`, `slots` being the fixed entry's A0..A5 slot count
     /// 0..=5); the rest is the entry's code address shifted left by three
     /// (see [`Self::pack_screened_subr_entry`]). A subr slot never arms a
@@ -356,7 +356,7 @@ impl SpecSlot {
 
     /// Cache the screened fixed-arity builtin entry of a `SubrGeneral` site:
     /// its code address shifted left three, with the
-    /// [`SubrFn`](crate::tagged::header::SubrFn) slot class in the low three
+    /// [`SubrFn`](crate::emacs_core::eval::subr_abi::SubrFn) slot class in the low three
     /// bits ([`Self::pack_screened_subr_entry`]).
     ///
     /// Validity: exactly while `epoch` still equals the obarray's

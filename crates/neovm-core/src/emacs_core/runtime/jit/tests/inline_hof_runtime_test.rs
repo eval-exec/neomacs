@@ -5,6 +5,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::{ChainBacktrace, ChainLink};
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::compile::{self, Inline2Mode, NativeRun};
 use crate::emacs_core::jit::vframe::{
@@ -188,8 +189,9 @@ fn abort_signal_observer(ctx: &mut Context, symbol: Value, _data: Value) -> Resu
 
 #[test]
 fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
+    use crate::emacs_core::eval::subr_abi::SubrFn;
     use crate::emacs_core::eval::{SubrEntry, register_global_subr_entry};
-    use crate::tagged::header::{SubrDispatchKind, SubrFn};
+    use crate::tagged::header::SubrDispatchKind;
 
     let mut ctx = Context::new();
     let observer = intern("hof-abort-signal-observer");
@@ -205,7 +207,7 @@ fn inline_hof_runtime_abort_dispatches_signal_with_live_map_depth_and_frame() {
     );
     ctx.set_function(
         "hof-abort-signal-observer",
-        Value::subr_from_sym_id(observer),
+        <Value as SubrValueExt>::subr_from_sym_id(observer),
     );
     ctx.set_variable("signal-hook-function", Value::from_sym_id(observer));
     ctx.set_variable("hof-abort-hook-count", Value::make_int(0));

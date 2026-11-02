@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::value::ValueKind;
 use crate::test_utils::runtime_startup_eval_all;
 

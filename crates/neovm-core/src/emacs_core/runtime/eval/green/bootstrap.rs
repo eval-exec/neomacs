@@ -50,7 +50,7 @@ pub(crate) fn debug_assert_native_tables_open(name: &str) {
 impl NativeTables {
     fn capture() -> Self {
         let subrs = super::super::GLOBAL_SUBR_TABLE.with(|table| table.borrow().clone());
-        crate::tagged::value::mint_static_subr_objects(
+        crate::emacs_core::eval::subr_abi::mint_static_subr_objects(
             subrs
                 .iter()
                 .enumerate()

@@ -1,0 +1,23 @@
+error[E0277]: the trait bound `std::string::String: std::marker::Copy` is not satisfied
+ --> tests/split_t2_ui/entry_cannot_have_drop.rs:2:20
+  |
+2 | fn main() { let _: Option<SubrObj<String>> = None; }
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ the trait `std::marker::Copy` is not implemented for `std::string::String`
+  |
+note: required by a bound in `SubrObj`
+ --> src/tagged/header.rs
+  |
+  | pub struct SubrObj<Entry: Copy + 'static> {
+  |                           ^^^^ required by this bound in `SubrObj`
+
+error[E0277]: the trait bound `std::string::String: std::marker::Copy` is not satisfied
+ --> tests/split_t2_ui/entry_cannot_have_drop.rs:2:46
+  |
+2 | fn main() { let _: Option<SubrObj<String>> = None; }
+  |                                              ^^^^ the trait `std::marker::Copy` is not implemented for `std::string::String`
+  |
+note: required by a bound in `SubrObj`
+ --> src/tagged/header.rs
+  |
+  | pub struct SubrObj<Entry: Copy + 'static> {
+  |                           ^^^^ required by this bound in `SubrObj`

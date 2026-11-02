@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::jit::test_support::{prepare_entry, prepare_osr, settle};
 use crate::emacs_core::value::LambdaParams;
 use cranelift_frontend::FunctionBuilderContext;
@@ -10102,10 +10103,11 @@ fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
 /// signals `wrong-number-of-arguments`.
 #[test]
 fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
+    use crate::emacs_core::eval::subr_abi::SubrFn;
     use crate::emacs_core::eval::{Context, SubrEntry, register_global_subr_entry};
     use crate::emacs_core::intern::intern;
     use crate::emacs_core::symbol::FunctionEpochBump;
-    use crate::tagged::header::{SubrDispatchKind, SubrFn};
+    use crate::tagged::header::SubrDispatchKind;
 
     // A call-dominated body is exactly what the profitability gate declines
     // in production; this test needs the compiled site.
@@ -10132,7 +10134,7 @@ fn subr_spec_screened_entry_cache_engages_and_a_rewrite_invalidates_it() {
     // fill its entry: `register_global_subr_entry` rewrites the object IN
     // PLACE and is a no-op before the object exists.
     ev.obarray
-        .set_symbol_function(name, Value::subr_from_sym_id(sym));
+        .set_symbol_function(name, <Value as SubrValueExt>::subr_from_sym_id(sym));
     register_global_subr_entry(sym, mk_entry(SubrFn::A1(plus_one), 1, Some(1)));
 
     // `(lambda (p0) (test-sym p0))`: one SubrGeneral spec site.

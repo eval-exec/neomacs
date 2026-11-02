@@ -3,6 +3,7 @@
 //! direct entry armed after its leaf and cleared before it.
 
 use super::*;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 
 fn word_at(slot: &SpecSlot, offset: usize) -> u64 {
     // SAFETY: `offset` is one of the const-asserted word offsets.
@@ -66,9 +67,10 @@ fn every_site_kind_names_its_slot_kind() {
 
 #[test]
 fn a_subr_general_or_fboundp_slot_carries_its_binding_and_the_others_are_empty() {
-    let expected =
-        crate::emacs_core::value::Value::subr_from_sym_id(crate::emacs_core::intern::intern("car"))
-            .bits() as u64;
+    let expected = <crate::emacs_core::value::Value as SubrValueExt>::subr_from_sym_id(
+        crate::emacs_core::intern::intern("car"),
+    )
+    .bits() as u64;
     let bound = SpecSlot::for_site(SpecCalleeKind::SubrGeneral, 7, 42, expected);
     assert!(bound.holds_subr_binding());
     assert_eq!(bound.subr_binding(), (SymId(42), expected));

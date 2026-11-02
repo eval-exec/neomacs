@@ -37,7 +37,7 @@ allocation_kinds! {
     Obarray => ("Obarray", super::ObarrayObj),
     Terminal => ("Terminal", super::TerminalObj),
     WindowConfig => ("WindowConfig", super::RecordObj),
-    Subr => ("Subr", super::SubrObj),
+    Subr => ("Subr", super::SubrStorageLayout),
     Xwidget => ("Xwidget", super::XwidgetObj),
     XwidgetView => ("XwidgetView", super::XwidgetViewObj),
     ModuleFunction => ("ModuleFunction", super::ModuleFunctionObj),

@@ -91,7 +91,7 @@ pub(crate) enum CallTarget {
 /// serial cost, E4 rev 2 §7).
 #[derive(Clone, Copy)]
 pub(crate) struct PrimitiveCall {
-    pub(crate) function: crate::tagged::header::SubrFn,
+    pub(crate) function: crate::emacs_core::eval::subr_abi::SubrFn,
     pub(crate) min_args: u16,
     pub(crate) max_args: Option<u16>,
 }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::buffer::{CharRange, EmacsByteRange, LispCharPos1};
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
 }

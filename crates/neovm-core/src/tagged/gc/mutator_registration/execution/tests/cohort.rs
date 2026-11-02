@@ -1,4 +1,5 @@
 //! Owned compiled entries return before every published stop; no JIT grace receipt.
+use crate::test_utils::SubrValueExt;
 #[path = "cohort/inputs.rs"]
 mod inputs;
 use super::hof::{FixtureParameters, builtin, definition, spelling};
@@ -295,7 +296,7 @@ fn prepared_cohort<P: Send>(
         register_global_subr_entry(intern(spelling(kind)), builtin(kind));
     }
     let mapper_id = intern(spelling(operation));
-    let canonical = TaggedValue::subr_from_sym_id(mapper_id);
+    let canonical = <TaggedValue as SubrValueExt>::subr_from_sym_id(mapper_id);
     let parameter = intern("nmjit-native-cohort-ordinary-parameter");
     let replacement_id = intern("nmjit-native-cohort-replacement");
     let mapper_replacement_id = intern("nmjit-native-cohort-mapper-replacement");

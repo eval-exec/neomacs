@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::error::FlowKind;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::value::{LambdaData, LambdaParams};
 

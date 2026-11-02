@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::error::{FlowKind, FlowRef};
 use crate::emacs_core::eval::VariableView;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::symbol::CanonicalAccess;
 fn test_ob() -> crate::emacs_core::symbol::Obarray {
     crate::emacs_core::symbol::Obarray::new()
@@ -701,7 +702,7 @@ fn commandp_borrows_subr_arguments_like_gnu() {
     assert!(
         matches!(
             entry.function,
-            Some(crate::tagged::header::SubrFn::ManySlice(_))
+            Some(crate::emacs_core::eval::subr_abi::SubrFn::ManySlice(_))
         ),
         "GNU Fcommandp receives Lisp_Object arguments directly; Neomacs must not allocate an owned Vec for each command candidate"
     );
@@ -793,7 +794,7 @@ fn subr_registration_refreshes_an_existing_objects_interactivity() {
     crate::test_utils::init_test_tracing();
     let _ev = Context::new();
     let symbol = intern("neo-commandp-late-interactive-subr");
-    let function = Value::subr_from_sym_id(symbol);
+    let function = <Value as SubrValueExt>::subr_from_sym_id(symbol);
     assert_eq!(
         function.subr_interactivity(),
         Some(crate::tagged::header::SubrInteractivity::NonInteractive)

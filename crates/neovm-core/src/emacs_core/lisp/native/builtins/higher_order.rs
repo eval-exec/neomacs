@@ -805,8 +805,9 @@ pub(super) fn capture_sort_predicate(
     eval: &mut super::eval::Context,
     predicate: Value,
 ) -> Option<SortPredicate> {
+    use crate::emacs_core::eval::subr_abi::{SubrFn, SubrFn2};
     use crate::emacs_core::eval::subr_entry_from_value;
-    use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrFn2};
+    use crate::tagged::header::SubrDispatchKind;
 
     if predicate.is_nil() {
         return Some(SortPredicate::ValueLt);
@@ -828,7 +829,8 @@ pub(super) fn capture_sort_predicate(
         if let Some(SubrFn::ManySlice(body)) = entry.function
             && std::ptr::fn_addr_eq(
                 body,
-                super::arithmetic::builtin_num_lt_slice as crate::tagged::header::SubrFnManySlice,
+                super::arithmetic::builtin_num_lt_slice
+                    as crate::emacs_core::eval::subr_abi::SubrFnManySlice,
             )
         {
             return Some(SortPredicate::NumericLessp {

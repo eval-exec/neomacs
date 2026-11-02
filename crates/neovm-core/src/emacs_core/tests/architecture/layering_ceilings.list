@@ -69,7 +69,6 @@ keyboard wait 1
 keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
-tagged eval 12
 tagged top:buffer 6
 tagged extern:neomacs_display_protocol 7
 window category 2

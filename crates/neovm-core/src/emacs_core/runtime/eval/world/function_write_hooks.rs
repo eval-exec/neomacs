@@ -1,6 +1,8 @@
 //! Compiler-side implementation of the value layer's cold function hooks.
 use super::Baton;
 use crate::emacs_core::bytecode::Op;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::eval::subr_abi::{SubrFn, SubrFn2, SubrObj};
 use crate::emacs_core::intern::{SymId, lookup_interned};
 use crate::emacs_core::symbol::FunctionEpochBump;
 use crate::tagged::gc::function_write_hooks::{
@@ -8,7 +10,7 @@ use crate::tagged::gc::function_write_hooks::{
     HofRegistrationEpoch, InitialDefinition,
 };
 use crate::tagged::gc::{KeeperSymbols, SymbolWriteToken};
-use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrFn2, SubrObj, VecLikeType};
+use crate::tagged::header::{SubrDispatchKind, VecLikeType};
 use crate::tagged::value::TaggedValue;
 
 impl FunctionWriteHooks for Baton {
@@ -31,7 +33,7 @@ impl FunctionWriteHooks for Baton {
             verify_hof_entry(operation, &registered)?;
             // This cold canonical lookup is independent of the mutable function
             // cell. Its existing keeper TLS cache is never consulted by selection.
-            let canonical = TaggedValue::subr_from_sym_id(symbol);
+            let canonical = <TaggedValue as SubrValueExt>::subr_from_sym_id(symbol);
             // Preparation excludes registration updates by contract. Also use the
             // existing static-entry reader guard in JIT builds: test registration
             // writers and selected production writers honor this same lock.
@@ -137,12 +139,12 @@ unsafe fn copy_static_hof_entry(
     // static lifetime, and the caller excludes all metadata writers here.
     let subr = unsafe { &*pointer.cast::<SubrObj>() };
     Some((
-        subr.sym_id,
+        subr.metadata().symbol_id(),
         super::super::SubrEntry {
-            function: subr.function,
-            min_args: subr.min_args,
-            max_args: subr.max_args,
-            dispatch_kind: subr.dispatch_kind,
+            function: subr.function(),
+            min_args: subr.metadata().min_args(),
+            max_args: subr.metadata().max_args(),
+            dispatch_kind: subr.metadata().dispatch_kind(),
             interactive_spec: None,
         },
     ))

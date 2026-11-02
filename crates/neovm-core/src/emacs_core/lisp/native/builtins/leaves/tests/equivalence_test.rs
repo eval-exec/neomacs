@@ -17,10 +17,10 @@ use super::*;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::error::Flow;
+use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::subr::leaf::LEAVES;
 use crate::emacs_core::value::LambdaParams;
-use crate::tagged::header::SubrFn;
 
 /// The general pool: every shape a list, sequence, symbol or string builtin
 /// distinguishes, including improper and circular lists, symbols with

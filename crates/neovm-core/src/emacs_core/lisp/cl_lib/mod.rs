@@ -12,6 +12,7 @@ use crate::emacs_core::error::LispCondition;
 #[cfg(test)]
 use crate::emacs_core::error::expect_max_args;
 use crate::emacs_core::error::{expect_args, expect_min_args};
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
@@ -674,7 +675,10 @@ pub(crate) fn builtin_seq_min(args: Vec<Value>) -> EvalResult {
     if elems.is_empty() {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
-            vec![Value::subr_from_sym_id(intern("min")), Value::fixnum(0)],
+            vec![
+                <Value as SubrValueExt>::subr_from_sym_id(intern("min")),
+                Value::fixnum(0),
+            ],
         ));
     }
     let mut min_val = &elems[0];
@@ -697,7 +701,10 @@ pub(crate) fn builtin_seq_max(args: Vec<Value>) -> EvalResult {
     if elems.is_empty() {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
-            vec![Value::subr_from_sym_id(intern("max")), Value::fixnum(0)],
+            vec![
+                <Value as SubrValueExt>::subr_from_sym_id(intern("max")),
+                Value::fixnum(0),
+            ],
         ));
     }
     let mut max_val = &elems[0];

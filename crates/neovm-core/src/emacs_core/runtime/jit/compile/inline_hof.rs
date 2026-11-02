@@ -15,6 +15,7 @@ use super::inline_frames::{Frames, HofChainState};
 use super::lowering::{self, RegionDeopt};
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::jit::inline::{HofKind, HofSite};
 use cranelift_codegen::ir::StackSlotKind;
 
@@ -110,9 +111,10 @@ pub(crate) fn emit(
         (((sym.0 as usize & (OBARRAY_CHUNK_SLOTS - 1)) * LISP_SYMBOL_SIZE)
             + LISP_SYMBOL_FUNCTION_OFFSET) as i32,
     );
-    let expected = fb
-        .ins()
-        .iconst(types::I64, Value::subr_from_sym_id(sym).bits() as i64);
+    let expected = fb.ins().iconst(
+        types::I64,
+        <Value as SubrValueExt>::subr_from_sym_id(sym).bits() as i64,
+    );
     let same = fb.ins().icmp(IntCC::Equal, actual, expected);
     emit_guard(fb, identity, same);
     if site.closure {

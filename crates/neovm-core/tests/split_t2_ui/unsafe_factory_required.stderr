@@ -1,0 +1,11 @@
+error[E0200]: the trait `CanonicalSubrFactory` requires an `unsafe impl` declaration
+ --> tests/split_t2_ui/unsafe_factory_required.rs:4:1
+  |
+4 | impl CanonicalSubrFactory for Fake { fn allocate(_: SymId) -> TaggedValue { TaggedValue::NIL } }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: the trait `CanonicalSubrFactory` enforces invariants that the compiler can't check. Review the trait documentation and make sure this implementation upholds those invariants before adding the `unsafe` keyword
+help: add `unsafe` to this trait implementation
+  |
+4 | unsafe impl CanonicalSubrFactory for Fake { fn allocate(_: SymId) -> TaggedValue { TaggedValue::NIL } }
+  | ++++++

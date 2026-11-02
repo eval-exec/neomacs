@@ -1,6 +1,7 @@
 //! Conversions between runtime types and pdump snapshot types.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -38,6 +39,7 @@ use crate::emacs_core::chartable::{
 use crate::emacs_core::coding::{CodingSystemInfo, CodingSystemManager, EolType};
 use crate::emacs_core::custom::CustomManager;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::fontset::{
     FontDefinitionMetadata, FontRepertory, FontSpecEntry, FontsetDataSnapshot,
     FontsetRangeEntrySnapshot, FontsetRegistrySnapshot, StoredFontSpec, restore_fontset_registry,
@@ -71,7 +73,7 @@ use crate::tagged::gc::with_tagged_heap;
 use crate::tagged::header::{
     ByteCodeObj, ByteCodeSlotObject, ByteCodeSlotObjects, CLOSURE_MIN_SLOTS, CharTableObj,
     ConsCell, FloatObj, HeapObjectKind, LambdaObj, LispValueVec, MacroObj, MarkerObj, OverlayObj,
-    RecordObj, StringObj, SubCharTableObj, SubrObj, VecLikeHeader, VectorObj,
+    RecordObj, StringObj, SubCharTableObj, VecLikeHeader, VectorObj,
 };
 use crate::tagged::value::TaggedValue;
 
@@ -1925,10 +1927,10 @@ impl<'a> LoadDecoder<'a> {
             DumpHeapObject::Subr { name, .. } => {
                 let name_id = load_name_id(name);
                 if let Some(sym_id) = intern::canonical_symbol_for_name(name_id) {
-                    Value::subr_from_sym_id(sym_id)
+                    <Value as SubrValueExt>::subr_from_sym_id(sym_id)
                 } else {
                     let n = intern::resolve_name(name_id);
-                    Value::subr_from_sym_id(intern::intern(n))
+                    <Value as SubrValueExt>::subr_from_sym_id(intern::intern(n))
                 }
             }
             DumpHeapObject::Free => Value::NIL,
@@ -2549,11 +2551,11 @@ impl<'a> LoadDecoder<'a> {
                 // Convert NameId -> canonical SymId for the PVEC_SUBR-like
                 // object constructor.
                 if let Some(sym_id) = intern::canonical_symbol_for_name(name_id) {
-                    Value::subr_from_sym_id(sym_id)
+                    <Value as SubrValueExt>::subr_from_sym_id(sym_id)
                 } else {
                     // Fallback: intern the name to get a canonical SymId.
                     let name = intern::resolve_name(name_id);
-                    Value::subr_from_sym_id(intern::intern(name))
+                    <Value as SubrValueExt>::subr_from_sym_id(intern::intern(name))
                 }
             }
             DumpValue::ByteCode(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
@@ -2589,10 +2591,10 @@ impl<'a> LoadDecoder<'a> {
             DumpValue::Subr(s) => {
                 let name_id = load_name_id(&s);
                 if let Some(sym_id) = intern::canonical_symbol_for_name(name_id) {
-                    Value::subr_from_sym_id(sym_id)
+                    <Value as SubrValueExt>::subr_from_sym_id(sym_id)
                 } else {
                     let name = intern::resolve_name(name_id);
-                    Value::subr_from_sym_id(intern::intern(name))
+                    <Value as SubrValueExt>::subr_from_sym_id(intern::intern(name))
                 }
             }
             DumpValue::ByteCode(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
@@ -3362,9 +3364,9 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
             let ptr = value.as_veclike_ptr().expect("subr") as *const SubrObj;
             let subr = unsafe { &*ptr };
             DumpHeapObject::Subr {
-                name: dump_name_id(subr.name),
-                min_args: subr.min_args,
-                max_args: subr.max_args,
+                name: dump_name_id(subr.metadata().name_id()),
+                min_args: subr.metadata().min_args(),
+                max_args: subr.metadata().max_args(),
             }
         }
         _ => DumpHeapObject::Free,

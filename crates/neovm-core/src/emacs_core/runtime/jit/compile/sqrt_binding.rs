@@ -2,8 +2,9 @@
 //! A GC-free selected native guard, never a dispatch or cached entry point.
 
 use super::*;
+use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::symbol::FunctionCellSnapshot;
-use crate::tagged::header::{SubrObj, VecLikeHeader, VecLikeType};
+use crate::tagged::header::{VecLikeHeader, VecLikeType};
 
 /// Check a live actual Subr entry on its owning FRONT or running MUTATOR.
 /// Workers never call this helper: the compiler witness carries opaque scalar
@@ -41,18 +42,18 @@ fn is_actual_sqrt_locked(binding: Value) -> bool {
         }
         &*(ptr as *const SubrObj)
     };
-    if subr.dispatch_kind != SubrDispatchKind::Builtin
-        || subr.min_args != 1
-        || subr.max_args != Some(1)
+    if subr.metadata().dispatch_kind() != SubrDispatchKind::Builtin
+        || subr.metadata().min_args() != 1
+        || subr.metadata().max_args() != Some(1)
     {
         return false;
     }
-    let Some(SubrFn::A1(function)) = subr.function else {
+    let Some(SubrFn::A1(function)) = *subr.function_ref() else {
         return false;
     };
     std::ptr::fn_addr_eq(
         function,
-        crate::emacs_core::builtins::builtin_sqrt_1 as crate::tagged::header::SubrFn1,
+        crate::emacs_core::builtins::builtin_sqrt_1 as crate::emacs_core::eval::subr_abi::SubrFn1,
     )
 }
 

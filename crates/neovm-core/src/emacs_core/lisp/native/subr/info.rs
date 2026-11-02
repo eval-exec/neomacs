@@ -11,9 +11,10 @@ use super::intern::{SymId, intern, resolve_sym};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use crate::emacs_core::eval::subr_abi::SubrObj;
 use crate::emacs_core::intern::WellKnown;
 use crate::tagged::SymbolMode;
-use crate::tagged::header::{SubrDispatchKind, SubrObj};
+use crate::tagged::header::SubrDispatchKind;
 
 // ---------------------------------------------------------------------------
 // Argument helpers
@@ -253,7 +254,7 @@ pub(crate) fn subr_dispatch_kind_from_value(value: &Value) -> Option<SubrDispatc
         return None;
     }
     let ptr = value.as_veclike_ptr()? as *const SubrObj;
-    Some(unsafe { (*ptr).dispatch_kind })
+    Some(unsafe { (*ptr).metadata().dispatch_kind() })
 }
 
 pub(crate) fn subr_is_callable_function_value(value: &Value) -> bool {

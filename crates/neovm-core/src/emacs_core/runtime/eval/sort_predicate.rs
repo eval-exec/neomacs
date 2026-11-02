@@ -2,8 +2,8 @@
 #![deny(clippy::wildcard_enum_match_arm)]
 use super::*;
 use crate::emacs_core::builtins::higher_order::{NativeSortCall, SortPredicate};
+use crate::emacs_core::eval::subr_abi::{SubrFn2, SubrFnManySlice};
 use crate::tagged::gc::MarkPhase;
-use crate::tagged::header::{SubrFn2, SubrFnManySlice};
 
 #[cfg(test)]
 #[path = "tests/sort_stack_boundary_test.rs"]

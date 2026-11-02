@@ -5,7 +5,8 @@ use crate::emacs_core::intern::intern;
 use crate::tagged::gc::mutator_registration::symbol_functions::retry::{
     self as contention, Deadline, Retry, retry_owned,
 };
-use crate::tagged::header::{SubrDispatchKind, SubrFn, SubrFn2};
+use crate::tagged::header::SubrDispatchKind;
+use crate::test_utils::SubrValueExt;
 use std::num::NonZeroU32;
 use std::ops::ControlFlow;
 
@@ -37,19 +38,7 @@ fn spelling(operation: HofOperation) -> &'static str {
     }
 }
 fn builtin(operation: HofOperation) -> SubrEntry {
-    let body: SubrFn2 = match operation {
-        HofOperation::Mapc => crate::emacs_core::builtins::builtin_mapc_2,
-        HofOperation::Mapcar => crate::emacs_core::builtins::builtin_mapcar_2,
-    };
-    // The same real bodies and fixed arity registered by builtin startup, not
-    // a fake seed/current-cell-derived expectation. No Context bootstrap/GC.
-    SubrEntry {
-        function: Some(SubrFn::A2(body)),
-        min_args: 2,
-        max_args: Some(2),
-        dispatch_kind: SubrDispatchKind::Builtin,
-        interactive_spec: None,
-    }
+    crate::test_utils::builtin_hof_entry_for_test(operation)
 }
 fn definition(parameters: Value, answer: i64) -> Value {
     let body = Value::cons(Value::fixnum(answer), Value::NIL);
@@ -84,7 +73,7 @@ fn fixture(
         register_global_subr_entry(intern(spelling(kind)), builtin(kind));
     }
     let mapper_id = intern(spelling(operation));
-    let canonical = Value::subr_from_sym_id(mapper_id);
+    let canonical = <Value as SubrValueExt>::subr_from_sym_id(mapper_id);
     let parameter = intern("nmjit-hof-ordinary-parameter");
     let replacement = intern("nmjit-hof-replacement");
     let twin = intern("nmjit-hof-twin");
@@ -459,7 +448,7 @@ fn nmjit_n4_hof_preparation_refuses_re_registered_implementation() {
         let id = intern("mapc");
         intern("lambda");
         register_global_subr_entry(id, builtin(HofOperation::Mapc));
-        let canonical = Value::subr_from_sym_id(id);
+        let canonical = <Value as SubrValueExt>::subr_from_sym_id(id);
         struct Restore(SymId, SubrEntry);
         impl Drop for Restore {
             fn drop(&mut self) {

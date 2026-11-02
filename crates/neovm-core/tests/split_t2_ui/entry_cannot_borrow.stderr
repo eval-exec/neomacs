@@ -1,0 +1,7 @@
+error: lifetime may not live long enough
+ --> tests/split_t2_ui/entry_cannot_borrow.rs:3:12
+  |
+2 | fn borrowed<'a>(_: &'a u8) {
+  |             -- lifetime `'a` defined here
+3 |     let _: Option<SubrObj<&'a u8>> = None;
+  |            ^^^^^^^^^^^^^^^^^^^^^^^ requires that `'a` must outlive `'static`

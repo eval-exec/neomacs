@@ -12,6 +12,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::LambdaParams;
 
@@ -217,7 +218,7 @@ fn spec_subr_stack_results_arity_and_signal_frame() {
     let mut eval = Context::new();
     install_frame_probe(&mut eval, "car");
     let car = intern("car");
-    let subr = Value::subr_from_sym_id(car);
+    let subr = <Value as SubrValueExt>::subr_from_sym_id(car);
     let call = |eval: &mut Context, args: &[Value]| -> EvalResult {
         let before = eval.specpdl.len();
         let args_start = eval.bc_buf.len();

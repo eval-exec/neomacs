@@ -887,3 +887,7 @@ mod tests {
 #[cfg(test)]
 #[path = "test_utils/mock_redisplay.rs"]
 pub mod mock_redisplay;
+
+pub(crate) use crate::emacs_core::eval::subr_abi::{
+    SubrValueExt, builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
+};
