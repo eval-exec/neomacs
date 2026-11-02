@@ -67,7 +67,10 @@ let
         test -f ${checkedPackage}/bin/neomacs.pdump
         test ! -e ${checkedPackage}/bin/libneomacs_video_gstreamer.so
 
-        readelf --dynamic ${checkedPackage}/bin/neomacs \
+        # bin/neomacs is the wrapProgram shell script (nix/package.nix); the
+        # linked executable it execs is bin/.neomacs-wrapped.
+        test -x ${checkedPackage}/bin/.neomacs-wrapped
+        readelf --dynamic ${checkedPackage}/bin/.neomacs-wrapped \
           | grep -Eq 'Shared library: \[libgstreamer-1[.]0[.]so'
 
         fingerprint="$(${checkedPackage}/bin/neomacs --fingerprint | tr -d '[:space:]')"
