@@ -7047,9 +7047,16 @@ impl crate::emacs_core::eval::Context {
         None
     }
 
+    /// Element `index` of a proper Lisp list; `None` for a shorter or
+    /// improper list (the `list_to_vec` contract).
+    fn list_slot(list: &Value, index: usize) -> Option<Value> {
+        crate::emacs_core::value::list_to_vec(list)?
+            .get(index)
+            .copied()
+    }
+
     fn event_position_area(position: &Value, mode: SymbolMode) -> Option<Value> {
-        let slots = crate::emacs_core::value::list_to_vec(position)?;
-        let area_or_pos = *slots.get(1)?;
+        let area_or_pos = Self::list_slot(position, 1)?;
         match mode.unwrap(area_or_pos).kind() {
             ValueKind::Symbol(_) => Some(area_or_pos),
             ValueKind::Cons => {
@@ -7093,13 +7100,8 @@ impl crate::emacs_core::eval::Context {
         // whenever they come directly from the keyboard buffer
         // (`src/keyboard.c:11445-11482`, and the `read_char` split at
         // `:3171-3184`).
-        let slots = crate::emacs_core::value::list_to_vec(first)?;
-        let position = *slots.get(1)?;
-        let position_slots = crate::emacs_core::value::list_to_vec(&position)?;
-        if position_slots.len() < 2 {
-            return None;
-        }
-        let area = *position_slots.get(1)?;
+        let position = Self::list_slot(first, 1)?;
+        let area = Self::list_slot(&position, 1)?;
         let area_name = area.as_symbol_name(mode)?;
         if area_name == "menu-bar" || area_name == "tool-bar" || area_name == "tab-bar" {
             return Some(Self::prepend_mouse_area(area, events));
