@@ -1200,8 +1200,19 @@ struct OpenedFontNames {
     full: Value,
 }
 
-impl OpenedFontMetrics {
+/// Font-info schema shared by stored font objects and newly opened entities.
+/// `OpenedFontMetrics` is this upper alias of the value layer's
+/// `FontObjectMetrics`; the schema needs this module's `Value` construction,
+/// so it stays upper as an extension trait on the moved type.
+trait OpenedFontMetricsExt {
     /// One public font-info schema for stored objects and newly opened entities.
+    fn info_vector(self, names: OpenedFontNames, file: Value, capability: Value) -> Value;
+    fn from_probe(probe: super::eval::FontPxProbeResult) -> Self;
+    #[cfg(test)]
+    fn fallback(pixel_size: i64) -> Self;
+}
+
+impl OpenedFontMetricsExt for OpenedFontMetrics {
     fn info_vector(self, names: OpenedFontNames, file: Value, capability: Value) -> Value {
         let fields: [Value; 14] = [
             names.opened,
