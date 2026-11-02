@@ -4,7 +4,6 @@
 mod keeper;
 pub(crate) use keeper::KeeperWorldDesignator;
 mod functions;
-mod parameters;
 mod roots;
 mod table;
 pub(crate) use functions::FunctionUpdate;
@@ -15,7 +14,9 @@ pub(crate) use intern::{InitialInternFacts, InitialInternFault};
 
 use super::{Obarray, SymbolTrappedWrite, ValueCell};
 use crate::emacs_core::forward::{CanonicalArm, ThreadProjectionTable};
-use crate::emacs_core::intern::SymId;
+use crate::emacs_core::intern::{SymId, resolve_name_lisp_string};
+use crate::tagged::gc::SymbolWriteToken;
+use crate::tagged::gc::function_write_hooks::CallbackParameterKind;
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
@@ -205,3 +206,39 @@ impl SymbolBacking {
 #[cfg(test)]
 #[path = "tests/parallel_test.rs"]
 mod tests;
+
+impl SymbolBacking {
+    /// # Safety
+    /// The matching exclusive admission writer retains this World before any
+    /// owner registers; no ordinary view or concurrent marker can overlap.
+    pub(crate) unsafe fn callback_parameter_kind_at_admission(
+        &self,
+        id: SymId,
+        _authority: &SymbolWriteToken<'_>,
+    ) -> CallbackParameterKind {
+        // SAFETY: this is the original retained root covered by the caller's
+        // matching exclusive admission writer, never a Context-derived view.
+        let obarray = unsafe { self.obarray.as_ref() };
+        if obarray.generation() != self.generation || !obarray.is_global_member(id) {
+            return CallbackParameterKind::Unsupported;
+        }
+        let Some(symbol) = obarray.get_by_id(id) else {
+            return CallbackParameterKind::Unsupported;
+        };
+        if symbol.trapped_write() != SymbolTrappedWrite::Untrapped
+            || symbol.flags().runtime_projected()
+            || symbol.flags().declared_special()
+            || !matches!(symbol.value_cell(), ValueCell::Plain(_))
+        {
+            return CallbackParameterKind::Unsupported;
+        }
+        // Resolve the slot's existing NameId directly. This cold check neither
+        // interns a name nor enters a thread-local symbol-name cache.
+        let name = resolve_name_lisp_string(symbol.name()).as_bytes();
+        if name == b"nil" || name == b"t" || name.starts_with(b":") || name.starts_with(b"&") {
+            CallbackParameterKind::Unsupported
+        } else {
+            CallbackParameterKind::Ordinary
+        }
+    }
+}
