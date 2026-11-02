@@ -686,6 +686,74 @@ fn ready_lazy_invalidation_preserves_fifo() {
     assert_eq!(ready, vec![b, a], "the re-woken key joins at the back");
 }
 
+/// Wait-object and deadline index removal is a side effect, never a debug
+/// assertion: release builds compile `debug_assert!` out. If a removal lives
+/// inside the assertion, a woken thread stays in its object index and
+/// `wake_one` can pick the stale, already-runnable key instead of the real
+/// waiter (the released SCHEDIDX lost wakeup, CI run 41381682310).
+#[test]
+fn waking_a_waiter_releases_every_wait_object_index() {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let condition_waiter = ThreadKey::Main;
+    let mutex_waiter = ThreadKey::Worker(NonZeroU64::new(1).expect("nonzero"));
+    let select_waiter = ThreadKey::Worker(NonZeroU64::new(2).expect("nonzero"));
+    let mut state = ControlState::default();
+    state
+        .waits
+        .insert(condition_waiter, Wait::Condition(ConditionId::new(7)));
+    state
+        .waits
+        .insert(mutex_waiter, Wait::Mutex(MutexId::new(9)));
+    state
+        .waits
+        .insert(select_waiter, Wait::Select { wait_end: deadline });
+    assert_eq!(
+        state
+            .waits
+            .condition_waiters
+            .get(&ConditionId::new(7))
+            .map(|set| set.len()),
+        Some(1),
+        "precondition: the condition waiter is indexed"
+    );
+    assert_eq!(
+        state
+            .waits
+            .mutex_waiters
+            .get(&MutexId::new(9))
+            .map(|set| set.len()),
+        Some(1),
+        "precondition: the mutex waiter is indexed"
+    );
+    assert!(
+        state.waits.select_index.contains_key(&DeadlineKey {
+            wait_end: deadline,
+            key: select_waiter,
+        }),
+        "precondition: the deadline is indexed"
+    );
+    for key in [condition_waiter, mutex_waiter, select_waiter] {
+        Control::wake_locked(&mut state, key);
+    }
+    assert!(
+        state.waits.condition_waiters.is_empty(),
+        "a woken condition waiter must leave the condition index"
+    );
+    assert!(
+        state.waits.mutex_waiters.is_empty(),
+        "a woken mutex waiter must leave the mutex index"
+    );
+    assert!(
+        state.waits.select_index.is_empty(),
+        "a woken select must leave the deadline index"
+    );
+    assert!(
+        state.waits.select_keys.is_empty(),
+        "a woken select must leave the select-key index"
+    );
+    assert_eq!(state.ready.valid_count(), 3, "all three turns are queued");
+}
+
 /// The deadline index is keyed by `(wait_end, ThreadKey)`: expiry admits the
 /// earliest deadline first and keeps key order for ties.
 #[test]
