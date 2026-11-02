@@ -2439,8 +2439,9 @@ pub(crate) fn lower_mir_inst_via_baseline(
     if produces == 1 {
         cval[r] = stack.pop();
         cval_raw[r] = false;
+        let result_rep = reps.pop();
         debug_assert!(
-            matches!(reps.pop(), None | Some(SlotRep::Tagged)),
+            matches!(result_rep, None | Some(SlotRep::Tagged)),
             "results are tagged"
         );
     }
