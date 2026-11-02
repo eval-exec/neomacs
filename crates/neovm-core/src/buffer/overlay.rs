@@ -89,42 +89,15 @@ impl NonNilPropertyValue {
 }
 
 #[cfg(test)]
-static OVERLAYS_AT_NODE_VISITS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) use crate::heap_types::overlay_storage::instrumentation::{
+    overlays_at_node_visit_count, record_overlays_at_node_visit, reset_overlays_at_node_visit_count,
+};
 
 #[cfg(test)]
-pub(crate) fn reset_overlays_at_node_visit_count() {
-    OVERLAYS_AT_NODE_VISITS.store(0, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-pub(crate) fn overlays_at_node_visit_count() -> usize {
-    OVERLAYS_AT_NODE_VISITS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(super) fn record_overlays_at_node_visit() {
-    OVERLAYS_AT_NODE_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-static OVERLAY_ITERATOR_FRAME_PUSHES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-pub(crate) fn reset_overlay_iterator_frame_push_count() {
-    OVERLAY_ITERATOR_FRAME_PUSHES.store(0, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-pub(crate) fn overlay_iterator_frame_push_count() -> usize {
-    OVERLAY_ITERATOR_FRAME_PUSHES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(super) fn record_overlay_iterator_frame_push() {
-    OVERLAY_ITERATOR_FRAME_PUSHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
+pub(crate) use crate::heap_types::overlay_storage::instrumentation::{
+    overlay_iterator_frame_push_count, record_overlay_iterator_frame_push,
+    reset_overlay_iterator_frame_push_count,
+};
 
 #[cfg(test)]
 static OVERLAY_PROPERTY_EXTENT_INSPECTIONS: std::sync::atomic::AtomicUsize =
@@ -174,61 +147,22 @@ pub(super) fn record_overlay_edit_candidate_inspection() {
 }
 
 #[cfg(test)]
-static OVERLAY_SHIFT_NODE_VISITS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+pub(crate) use crate::heap_types::overlay_storage::instrumentation::{
+    overlay_shift_node_visit_count, record_overlay_shift_node_visit,
+    reset_overlay_shift_node_visit_count,
+};
 
 #[cfg(test)]
-pub(crate) fn reset_overlay_shift_node_visit_count() {
-    OVERLAY_SHIFT_NODE_VISITS.store(0, std::sync::atomic::Ordering::Relaxed);
-}
+pub(crate) use crate::heap_types::overlay_storage::instrumentation::{
+    endpoint_search_node_visit_count, record_endpoint_search_node_visit,
+    reset_endpoint_search_node_visit_count,
+};
 
 #[cfg(test)]
-pub(crate) fn overlay_shift_node_visit_count() -> usize {
-    OVERLAY_SHIFT_NODE_VISITS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(super) fn record_overlay_shift_node_visit() {
-    OVERLAY_SHIFT_NODE_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-static ENDPOINT_SEARCH_NODE_VISITS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-pub(crate) fn reset_endpoint_search_node_visit_count() {
-    ENDPOINT_SEARCH_NODE_VISITS.store(0, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-pub(crate) fn endpoint_search_node_visit_count() -> usize {
-    ENDPOINT_SEARCH_NODE_VISITS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(super) fn record_endpoint_search_node_visit() {
-    ENDPOINT_SEARCH_NODE_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-static ENDPOINT_SEARCH_SUMMARY_SHIFTS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-pub(crate) fn reset_endpoint_search_summary_shift_count() {
-    ENDPOINT_SEARCH_SUMMARY_SHIFTS.store(0, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-pub(crate) fn endpoint_search_summary_shift_count() -> usize {
-    ENDPOINT_SEARCH_SUMMARY_SHIFTS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(super) fn record_endpoint_search_summary_shift() {
-    ENDPOINT_SEARCH_SUMMARY_SHIFTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
+pub(crate) use crate::heap_types::overlay_storage::instrumentation::{
+    endpoint_search_summary_shift_count, record_endpoint_search_summary_shift,
+    reset_endpoint_search_summary_shift_count,
+};
 
 #[cfg(test)]
 static ENDPOINT_PUBLICATION_INTERVAL_READS: std::sync::atomic::AtomicUsize =
@@ -250,23 +184,10 @@ pub(super) fn record_endpoint_publication_interval_read() {
 }
 
 #[cfg(test)]
-static OVERLAY_FULL_ENUMERATION_VISITS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(test)]
-pub(crate) fn reset_overlay_full_enumeration_visit_count() {
-    OVERLAY_FULL_ENUMERATION_VISITS.store(0, std::sync::atomic::Ordering::Relaxed);
-}
-
-#[cfg(test)]
-pub(crate) fn overlay_full_enumeration_visit_count() -> usize {
-    OVERLAY_FULL_ENUMERATION_VISITS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-#[cfg(test)]
-pub(super) fn record_overlay_full_enumeration_visit() {
-    OVERLAY_FULL_ENUMERATION_VISITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-}
+pub(crate) use crate::heap_types::overlay_storage::instrumentation::{
+    overlay_full_enumeration_visit_count, record_overlay_full_enumeration_visit,
+    reset_overlay_full_enumeration_visit_count,
+};
 
 pub struct OverlayList {
     index: OverlayIndex,

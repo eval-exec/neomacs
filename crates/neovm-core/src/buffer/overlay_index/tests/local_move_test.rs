@@ -179,7 +179,7 @@ fn cl2_local_moves_update_ordered_record_without_membership_mutations() {
     }
     let moving = entries[2_500].0;
     let original = index.range(moving).unwrap();
-    let initial_attachment = index.intervals.read().next_attachment_order;
+    let initial_attachment = index.intervals.read().next_attachment_order_for_test();
     index
         .intervals
         .read()
@@ -209,7 +209,10 @@ fn cl2_local_moves_update_ordered_record_without_membership_mutations() {
         previous = next;
     }
     let intervals = index.intervals.read();
-    assert_eq!(intervals.next_attachment_order, initial_attachment + moves);
+    assert_eq!(
+        intervals.next_attachment_order_for_test(),
+        initial_attachment + moves
+    );
     assert_eq!(
         intervals.records.membership_mutation_count(),
         0,
@@ -252,7 +255,7 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
             .records
             .record(OverlayIdentity::of(moving))
             .unwrap();
-        let next_attachment = index.intervals.read().next_attachment_order;
+        let next_attachment = index.intervals.read().next_attachment_order_for_test();
         let mut reference = index.gnu_order.clone();
         assert_eq!(index.move_to(moving, next), Some(previous));
         let record = index
@@ -264,7 +267,7 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
         if previous.start() != next.start() {
             assert_eq!(record.key.attachment_order, next_attachment);
             assert_eq!(
-                index.intervals.read().next_attachment_order,
+                index.intervals.read().next_attachment_order_for_test(),
                 next_attachment + 1,
                 "a rejected local attempt must not consume a second attachment"
             );
@@ -287,7 +290,7 @@ fn cl2_local_move_attempts_consume_one_attachment_order_and_keep_equal_start_ord
         } else {
             assert_eq!(record.key, previous_record.key);
             assert_eq!(
-                index.intervals.read().next_attachment_order,
+                index.intervals.read().next_attachment_order_for_test(),
                 next_attachment
             );
         }

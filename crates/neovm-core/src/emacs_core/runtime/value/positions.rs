@@ -150,3 +150,8 @@ impl From<CharLen> for usize {
         len.0
     }
 }
+
+pub(crate) use crate::heap_types::byte_positions::{EmacsByteDelta, apply_signed_delta};
+pub use crate::heap_types::byte_positions::{
+    EmacsByteLen, EmacsBytePos, EmacsBytePositionView, EmacsByteRange, LispBytePos1,
+};
