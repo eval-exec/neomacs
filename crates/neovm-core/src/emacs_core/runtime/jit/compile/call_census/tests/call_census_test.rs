@@ -2,6 +2,7 @@
 //! site meets lands in its own cell, and the knob off counts nothing.
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
 /// Callees of every shape, called from a compiled caller: a named exact,
 /// `&optional` (short), `&rest` and framed callee, a `cl-flet` local (a

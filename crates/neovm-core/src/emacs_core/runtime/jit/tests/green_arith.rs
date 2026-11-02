@@ -10,6 +10,7 @@
 //! the baked op.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
 use crate::emacs_core::error::{EvalResult, signal};
 use crate::emacs_core::eval::{Context, ThreadingMode};

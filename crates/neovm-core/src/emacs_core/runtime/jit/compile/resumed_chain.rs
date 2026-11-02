@@ -3,6 +3,7 @@
 //! is no safepoint between spill readback and installing all frame stacks.
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::vm::{ChainFrame, InlinedChainFrame};
 use crate::emacs_core::jit::reopt::{DeoptEvent, LeafOrigin};
 

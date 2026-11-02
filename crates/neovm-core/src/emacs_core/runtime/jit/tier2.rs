@@ -28,6 +28,7 @@
 //! remain in force if another mutator widens feedback. Per-mutator budget TLS
 //! contains resource counters only, and workers return CPU costs to their owner.
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 

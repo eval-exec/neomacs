@@ -7,6 +7,7 @@ use super::heap::*;
 use super::*;
 use crate::buffer::BufferId;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::{SavedBindingValue, SavedBufferId};
 use crate::emacs_core::value::LambdaParams;

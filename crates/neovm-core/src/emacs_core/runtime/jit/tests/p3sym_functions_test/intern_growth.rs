@@ -2,7 +2,7 @@
 use super::compile::VARREF_SHIM_CALLS;
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 fn run_installed(ctx: &mut Context, source: Value) -> usize {
     let f = source.get_bytecode_data().expect("retained native source");
     // Direct observation: no pending-result preparation or compilation helper.

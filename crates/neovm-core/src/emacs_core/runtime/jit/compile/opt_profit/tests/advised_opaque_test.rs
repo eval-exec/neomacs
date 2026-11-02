@@ -6,6 +6,7 @@ use super::frontend_tests::Settings;
 use super::lists_frontend_tests::list_loop;
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::compile::{
     ByteCodeFunction, Context, OptEarlyMode, OptProfitMode, Value, force_opt_early_for_test,

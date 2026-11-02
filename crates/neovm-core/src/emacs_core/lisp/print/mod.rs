@@ -19,6 +19,8 @@ pub use error_format::{
     print_value_bytes_escaped_with_eval, print_value_bytes_with_eval, print_value_with_eval,
 };
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;

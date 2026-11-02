@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use crate::emacs_core::error::{expect_args, expect_args_range};
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, WellKnown};
 use crate::emacs_core::value::{ValueKind, VecLikeType};

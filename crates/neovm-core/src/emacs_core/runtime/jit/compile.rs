@@ -72,6 +72,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 pub(crate) mod body_analysis;
 pub(crate) mod param_shape;
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use body_analysis::{CompileBody, EntryPoint};
 
 use crate::emacs_core::error::LispCondition;

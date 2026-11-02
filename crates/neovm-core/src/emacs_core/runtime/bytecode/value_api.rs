@@ -10,13 +10,51 @@
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::value::{BytecodeInteractiveProbe, Value};
+use crate::emacs_core::value::{BytecodeInteractiveProbe, FunctionSourceIdentity, Value};
+use crate::heap_types::LispString;
 use crate::tagged::gc::with_tagged_heap;
-use crate::tagged::header::{ByteCodeObj, VecLikeType};
+use crate::tagged::header::{ByteCodeObj, ByteCodeSlotObject, VecLikeType};
+use crate::tagged::mutate;
 use crate::tagged::value::{TAG_MASK, TaggedValue};
 
-impl TaggedValue {
+/// Byte-code object surface on the value layer's `TaggedValue`.
+///
+/// The byte-code representation, its function type and the pdump
+/// materializer live above the value layer, so these accessors and
+/// constructors stay upper as an extension trait on the moved type.
+pub trait TaggedValueBytecodeExt {
+    fn make_bytecode(bc: super::ByteCodeFunction) -> Self;
+
+    fn make_bytecode_instance(
+        proto: &super::ByteCodeFunction,
+        constants: crate::tagged::header::LispValueVec,
+        code: Value,
+    ) -> Self;
+
+    fn get_bytecode_data(self) -> Option<&'static super::ByteCodeFunction>;
+
+    #[cfg(feature = "jit")]
+    fn get_bytecode_data_unobserved(self) -> Option<&'static super::ByteCodeFunction>;
+
+    fn is_bytecode_object_of(self, f: &super::ByteCodeFunction) -> bool;
+
+    fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction;
+
+    #[cfg(feature = "jit")]
+    unsafe fn bytecode_data_materialized_by_caller(self) -> &'static super::ByteCodeFunction;
+
+    fn bytecode_data_if_materialized(self) -> Option<&'static super::ByteCodeFunction>;
+
+    fn bytecode_params_required_only_probe(self) -> Option<bool>;
+
+    fn bytecode_required_only_arity_probe(self) -> Option<usize>;
+
+    fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe>;
+}
+
+impl TaggedValueBytecodeExt for TaggedValue {
     /// Allocate a bytecode function.
-    pub fn make_bytecode(bc: super::ByteCodeFunction) -> Self {
+    fn make_bytecode(bc: super::ByteCodeFunction) -> Self {
         // Test builds hand-assemble instruction vectors all over the suite;
         // route them through the real sealing normalizer so they may enter
         // the unchecked-fetch driver. Production sealing happens exclusively
@@ -34,7 +72,7 @@ impl TaggedValue {
     /// Allocate a `make-closure` instance of `proto` with the constant pool
     /// `constants` and the prototype's code-string object `code`, built in
     /// place in its arena slot (see `TaggedHeap::alloc_bytecode_instance`).
-    pub(crate) fn make_bytecode_instance(
+    fn make_bytecode_instance(
         proto: &super::ByteCodeFunction,
         constants: crate::tagged::header::LispValueVec,
         code: Value,
@@ -48,7 +86,7 @@ impl TaggedValue {
     /// extras here, once, on the mutator thread, before any caller sees the
     /// data. Everything that reads bytecode data routes through this (the
     /// architecture test pins it), so a stub can never leak empty vectors.
-    pub fn get_bytecode_data(self) -> Option<&'static super::ByteCodeFunction> {
+    fn get_bytecode_data(self) -> Option<&'static super::ByteCodeFunction> {
         #[cfg(test)]
         crate::emacs_core::value::note_bytecode_data_access();
         // Observe before the header and data projections, which share this
@@ -77,7 +115,7 @@ impl TaggedValue {
     /// their own reads and do not require this mutator to observe dependencies.
     #[cfg(feature = "jit")]
     #[inline(always)]
-    pub(crate) fn get_bytecode_data_unobserved(self) -> Option<&'static super::ByteCodeFunction> {
+    fn get_bytecode_data_unobserved(self) -> Option<&'static super::ByteCodeFunction> {
         debug_assert!(!crate::tagged::collection_reads::is_active());
         #[cfg(test)]
         crate::emacs_core::value::note_bytecode_data_access();
@@ -100,7 +138,7 @@ impl TaggedValue {
     /// comparison that, unlike [`Self::get_bytecode_data`], never materializes
     /// a lazy pdump stub (a compile asking "is this function cell me?" must
     /// not build every stub it merely looks at).
-    pub(crate) fn is_bytecode_object_of(self, f: &super::ByteCodeFunction) -> bool {
+    fn is_bytecode_object_of(self, f: &super::ByteCodeFunction) -> bool {
         if self.veclike_type() != Some(VecLikeType::ByteCode) {
             return false;
         }
@@ -120,7 +158,7 @@ impl TaggedValue {
     ///
     /// SAFETY contract (checked in debug): `self` must be a ByteCode value.
     #[inline(always)]
-    pub(crate) fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction {
+    fn bytecode_data_typechecked_by_caller(self) -> &'static super::ByteCodeFunction {
         debug_assert_eq!(self.veclike_type(), Some(VecLikeType::ByteCode));
         #[cfg(test)]
         crate::emacs_core::value::note_bytecode_data_access();
@@ -148,9 +186,7 @@ impl TaggedValue {
     /// earlier `get_bytecode_data` on the same object (debug-asserted).
     #[cfg(feature = "jit")]
     #[inline(always)]
-    pub(crate) unsafe fn bytecode_data_materialized_by_caller(
-        self,
-    ) -> &'static super::ByteCodeFunction {
+    unsafe fn bytecode_data_materialized_by_caller(self) -> &'static super::ByteCodeFunction {
         debug_assert_eq!(self.veclike_type(), Some(VecLikeType::ByteCode));
         #[cfg(test)]
         crate::emacs_core::value::note_bytecode_data_access();
@@ -170,7 +206,7 @@ impl TaggedValue {
     /// pdump stub (once stubs exist): the peek for scanners that only care
     /// about already-live functions — AOT post-insert marking, PGO drains.
     /// Today (pre-stub) it is the same borrow.
-    pub(crate) fn bytecode_data_if_materialized(self) -> Option<&'static super::ByteCodeFunction> {
+    fn bytecode_data_if_materialized(self) -> Option<&'static super::ByteCodeFunction> {
         if self.veclike_type()? != VecLikeType::ByteCode {
             return None;
         }
@@ -188,7 +224,7 @@ impl TaggedValue {
     /// Raw-header required-only check for a still-stub function; `None` when
     /// the value is not bytecode, `Some(materialized-or-raw answer)` else —
     /// without materializing a stub.
-    pub(crate) fn bytecode_params_required_only_probe(self) -> Option<bool> {
+    fn bytecode_params_required_only_probe(self) -> Option<bool> {
         if self.veclike_type()? != VecLikeType::ByteCode {
             return None;
         }
@@ -205,7 +241,7 @@ impl TaggedValue {
     /// The required-parameter count of a byte-code function that takes only
     /// required parameters, `None` for any other function or value — read
     /// from a lazy pdump stub's raw header without materializing it.
-    pub(crate) fn bytecode_required_only_arity_probe(self) -> Option<usize> {
+    fn bytecode_required_only_arity_probe(self) -> Option<usize> {
         if self.veclike_type()? != VecLikeType::ByteCode {
             return None;
         }
@@ -219,7 +255,7 @@ impl TaggedValue {
         data.params.fixed_arity()
     }
 
-    pub(crate) fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe> {
+    fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe> {
         if self.veclike_type()? != VecLikeType::ByteCode {
             return None;
         }
@@ -238,5 +274,124 @@ impl TaggedValue {
             interactive: data.interactive,
             doc_form: data.doc_form,
         })
+    }
+}
+
+/// Lisp-facing byte-code identity and slot surface on the value layer's
+/// `TaggedValue`.
+///
+/// These operations were inherent methods in the moving value module. They
+/// stay `pub(crate)`: the public byte-code surface remains
+/// [`TaggedValueBytecodeExt`], while the printer, profiler and `aref` slot
+/// machinery reach these crate-local projections through this trait.
+pub(crate) trait TaggedValueBytecodePolicyExt {
+    fn function_source_identity(self) -> Option<FunctionSourceIdentity>;
+
+    fn function_equal(self, other: Value) -> bool;
+
+    fn bytecode_slot_object(self, slot: ByteCodeSlotObject) -> Option<Value>;
+
+    fn bytecode_slot_object_if_created(self, slot: ByteCodeSlotObject) -> Option<Value>;
+}
+
+impl TaggedValueBytecodePolicyExt for TaggedValue {
+    fn function_source_identity(self) -> Option<FunctionSourceIdentity> {
+        // GNU `function-equal` (Ffunction_equal, profiler.c) only treats two
+        // distinct objects as equal when both are COMPILEDP and share their
+        // bytecode object. Interpreted-function closures (the Emacs 30+ `#[args
+        // body env]` records) fall through to the EQ-only case there, so they
+        // must NOT advertise a shared source identity here -- two instances of
+        // the same lambda expression with different captured environments are
+        // not `function-equal`.
+        self.get_bytecode_data()
+            .map(|function| FunctionSourceIdentity::ByteCode(function.source_id))
+    }
+
+    /// GNU `function-equal`: two compiled closures are equal when they share
+    /// their bytecode object; every other function compares by identity (EQ).
+    fn function_equal(self, other: Value) -> bool {
+        if self.bits() == other.bits() {
+            return true;
+        }
+        matches!(
+            (self.function_source_identity(), other.function_source_identity()),
+            (Some(left), Some(right)) if left == right
+        )
+    }
+
+    /// The Lisp object `aref` returns for byte-code closure slot `slot`: one
+    /// object for the function's life, as GNU's pseudovector slot is
+    /// (`(eq (aref f 2) (aref f 2))` is t). Created on the first read and
+    /// kept in the object (`ByteCodeObj::slot_objects`); never read by code,
+    /// so mutating it does not change what the function computes (P3.2 L4b).
+    ///
+    /// `Code` is `nil` for a function with no GNU byte string. `Constants`
+    /// is the captured environment alist for a NeoVM-compiled closure, which
+    /// is already a Lisp object. `None` when `self` is not byte code.
+    #[inline]
+    fn bytecode_slot_object(
+        self,
+        slot: crate::tagged::header::ByteCodeSlotObject,
+    ) -> Option<Value> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: a live byte-code object (the type test above).
+        let cached = unsafe { (*ptr).slot_objects.get(slot) };
+        if !cached.is_nil() {
+            return Some(cached);
+        }
+        Some(self.create_bytecode_slot_object(slot))
+    }
+
+    /// [`Self::bytecode_slot_object`] without creating anything: the object
+    /// Lisp may already hold, or `None` when none was created yet (so no
+    /// Lisp reference to it can exist) or `self` is not byte code. For the
+    /// printer, which must show `print-circle` the shared object when there
+    /// is one, but need not keep a fresh one alive.
+    fn bytecode_slot_object_if_created(
+        self,
+        slot: crate::tagged::header::ByteCodeSlotObject,
+    ) -> Option<Value> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: a live byte-code object (the type test above).
+        let cached = unsafe { (*ptr).slot_objects.get(slot) };
+        (!cached.is_nil()).then_some(cached)
+    }
+}
+
+/// Private slot-object construction, kept out of the crate-visible policy
+/// trait to preserve the original private visibility.
+trait TaggedValueBytecodeSlotCreationExt {
+    fn create_bytecode_slot_object(self, slot: ByteCodeSlotObject) -> Value;
+}
+
+impl TaggedValueBytecodeSlotCreationExt for TaggedValue {
+    #[cold]
+    #[inline(never)]
+    fn create_bytecode_slot_object(self, slot: crate::tagged::header::ByteCodeSlotObject) -> Value {
+        use crate::tagged::header::ByteCodeSlotObject;
+        let bc = self
+            .get_bytecode_data()
+            .expect("caller proved a byte-code value");
+        let object = match slot {
+            ByteCodeSlotObject::Code => match &bc.gnu_bytecode_bytes {
+                // GNU byte-code strings are unibyte: each byte one character.
+                Some(bytes) => {
+                    Value::heap_string(LispString::from_unibyte(bytes.as_slice().to_vec()))
+                }
+                None => return Value::NIL,
+            },
+            ByteCodeSlotObject::Constants => match bc.env {
+                Some(env) => return env,
+                None => Value::vector(bc.constants.as_slice().to_vec()),
+            },
+        };
+        mutate::install_bytecode_slot_object(self, slot, object);
+        object
     }
 }

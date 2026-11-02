@@ -1,6 +1,7 @@
 //! P4.1 Stage 0 pins: the `cconv-make-interpreted-closure` hook's knob,
 //! statistics and effect snapshot.
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::{CconvMemoEvent, CconvMemoMode, Context, parse_cconv_memo_knob};
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::Value;

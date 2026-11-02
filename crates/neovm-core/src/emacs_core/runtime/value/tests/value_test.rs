@@ -1,5 +1,6 @@
 use super::*;
 use crate::buffer::BufferId;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned, resolve_sym};
 use crate::heap_types::LispMarker;

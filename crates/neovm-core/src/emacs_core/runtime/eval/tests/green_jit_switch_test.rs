@@ -6,6 +6,7 @@
 //! an assertion panic. No process-global knob is changed.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::error::{LispCondition, signal};

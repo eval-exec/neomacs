@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::{Flow, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::{Context, push_scratch_gc_root};
 use crate::emacs_core::jit::compile::{self, CompiledLeaf, Inline2Mode, NativeRun};

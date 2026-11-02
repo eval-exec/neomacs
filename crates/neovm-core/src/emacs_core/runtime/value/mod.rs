@@ -3667,30 +3667,6 @@ impl TaggedValue {
         self.closure_slot(CLOSURE_CODE)
     }
 
-    pub(crate) fn function_source_identity(self) -> Option<FunctionSourceIdentity> {
-        // GNU `function-equal` (Ffunction_equal, profiler.c) only treats two
-        // distinct objects as equal when both are COMPILEDP and share their
-        // bytecode object. Interpreted-function closures (the Emacs 30+ `#[args
-        // body env]` records) fall through to the EQ-only case there, so they
-        // must NOT advertise a shared source identity here -- two instances of
-        // the same lambda expression with different captured environments are
-        // not `function-equal`.
-        self.get_bytecode_data()
-            .map(|function| FunctionSourceIdentity::ByteCode(function.source_id))
-    }
-
-    /// GNU `function-equal`: two compiled closures are equal when they share
-    /// their bytecode object; every other function compares by identity (EQ).
-    pub(crate) fn function_equal(self, other: Value) -> bool {
-        if self.bits() == other.bits() {
-            return true;
-        }
-        matches!(
-            (self.function_source_identity(), other.function_source_identity()),
-            (Some(left), Some(right)) if left == right
-        )
-    }
-
     pub fn closure_env(self) -> Option<Option<Value>> {
         self.closure_slot(CLOSURE_CONSTANTS)
             .map(|env| (!env.is_nil()).then_some(env))
@@ -3757,74 +3733,6 @@ impl TaggedValue {
                 .cast::<usize>()
                 .read()
         })
-    }
-
-    /// The Lisp object `aref` returns for byte-code closure slot `slot`: one
-    /// object for the function's life, as GNU's pseudovector slot is
-    /// (`(eq (aref f 2) (aref f 2))` is t). Created on the first read and
-    /// kept in the object (`ByteCodeObj::slot_objects`); never read by code,
-    /// so mutating it does not change what the function computes (P3.2 L4b).
-    ///
-    /// `Code` is `nil` for a function with no GNU byte string. `Constants`
-    /// is the captured environment alist for a NeoVM-compiled closure, which
-    /// is already a Lisp object. `None` when `self` is not byte code.
-    #[inline]
-    pub(crate) fn bytecode_slot_object(
-        self,
-        slot: crate::tagged::header::ByteCodeSlotObject,
-    ) -> Option<Value> {
-        if self.veclike_type()? != VecLikeType::ByteCode {
-            return None;
-        }
-        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
-        // SAFETY: a live byte-code object (the type test above).
-        let cached = unsafe { (*ptr).slot_objects.get(slot) };
-        if !cached.is_nil() {
-            return Some(cached);
-        }
-        Some(self.create_bytecode_slot_object(slot))
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn create_bytecode_slot_object(self, slot: crate::tagged::header::ByteCodeSlotObject) -> Value {
-        use crate::tagged::header::ByteCodeSlotObject;
-        let bc = self
-            .get_bytecode_data()
-            .expect("caller proved a byte-code value");
-        let object = match slot {
-            ByteCodeSlotObject::Code => match &bc.gnu_bytecode_bytes {
-                // GNU byte-code strings are unibyte: each byte one character.
-                Some(bytes) => {
-                    Value::heap_string(LispString::from_unibyte(bytes.as_slice().to_vec()))
-                }
-                None => return Value::NIL,
-            },
-            ByteCodeSlotObject::Constants => match bc.env {
-                Some(env) => return env,
-                None => Value::vector(bc.constants.as_slice().to_vec()),
-            },
-        };
-        mutate::install_bytecode_slot_object(self, slot, object);
-        object
-    }
-
-    /// [`Self::bytecode_slot_object`] without creating anything: the object
-    /// Lisp may already hold, or `None` when none was created yet (so no
-    /// Lisp reference to it can exist) or `self` is not byte code. For the
-    /// printer, which must show `print-circle` the shared object when there
-    /// is one, but need not keep a fresh one alive.
-    pub(crate) fn bytecode_slot_object_if_created(
-        self,
-        slot: crate::tagged::header::ByteCodeSlotObject,
-    ) -> Option<Value> {
-        if self.veclike_type()? != VecLikeType::ByteCode {
-            return None;
-        }
-        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
-        // SAFETY: a live byte-code object (the type test above).
-        let cached = unsafe { (*ptr).slot_objects.get(slot) };
-        (!cached.is_nil()).then_some(cached)
     }
 
     /// Get the pointer address as a unique identity for a string value.

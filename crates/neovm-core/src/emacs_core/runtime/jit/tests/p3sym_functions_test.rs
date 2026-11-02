@@ -8,6 +8,7 @@ mod receiver;
 mod reclamation;
 
 use super::{cache, compile, test_support};
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
 use crate::emacs_core::error::FlowRef;
 use crate::emacs_core::eval::Context;

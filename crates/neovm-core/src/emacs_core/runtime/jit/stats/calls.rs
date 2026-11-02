@@ -6,6 +6,7 @@
 //! their target after that point.
 
 use super::ReportTag;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::RuntimeState;
 use crate::emacs_core::jit::feedback::{CallTarget, STABLE_WINDOW};
 

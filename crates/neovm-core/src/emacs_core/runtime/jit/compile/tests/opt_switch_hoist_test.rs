@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::knobs::{
     force_inline_switch_for_test, force_switch_hoist_for_test,
 };

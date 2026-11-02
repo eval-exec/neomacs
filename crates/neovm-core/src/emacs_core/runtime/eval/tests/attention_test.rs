@@ -14,6 +14,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::value::LambdaParams;
 
 /// The stored word equals the derived one, and the poll's fast test agrees

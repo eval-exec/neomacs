@@ -31,6 +31,7 @@ use super::jit_layout::{BYTECODE_RUNTIME_WORD_OFFSET, VECLIKE_TYPE_TAG_OFFSET};
 use super::lowering::{RtCtx, band_imm_p, icmp_imm_p};
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::AttentionMask;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::jit::feedback::{CallTarget, SiteShape};

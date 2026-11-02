@@ -1,5 +1,6 @@
 //! Reuse real VM/named function caches after a relocated initial-obarray spine.
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
 #[test]
 fn p3sym_c5_vm_readers_and_function_caches_survive_intern_relocation() {

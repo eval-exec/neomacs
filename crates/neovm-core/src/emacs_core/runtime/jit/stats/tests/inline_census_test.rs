@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::jit::inline::CensusShape;
 use crate::emacs_core::value::LambdaParams;

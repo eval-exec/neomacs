@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::emacs_core::builtins::{MapCallee, MapSink, mapcar1_eval_from};
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::vframe::{HofKind, HofResume, InlinedFrameResume};
 
 /// Bound this pure preflight at one less than GNU's largest list-length

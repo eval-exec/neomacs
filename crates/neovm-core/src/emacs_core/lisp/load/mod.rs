@@ -7,6 +7,7 @@ use super::keymap::is_list_keymap;
 use super::print::map_flow;
 use super::value::{Value, ValueKind, VecLikeType, list_to_vec};
 use super::value_reader::ReadSymbolShorthands;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::{LispCondition, signal_error_with_arg};
 use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::CanonicalAccess;

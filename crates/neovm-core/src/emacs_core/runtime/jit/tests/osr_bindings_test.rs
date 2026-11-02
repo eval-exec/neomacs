@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::vm::Vm;
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
 use crate::emacs_core::eval::{ConditionFrame, Context, ResumeTarget};

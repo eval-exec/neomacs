@@ -18,6 +18,7 @@
 use super::compile::lowering::{RegallocChoice, RegallocPolicy, RegallocScope, forced_regalloc};
 use super::compile::{CompileError, CompileRequest, compile_bytecode_function_requested};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;

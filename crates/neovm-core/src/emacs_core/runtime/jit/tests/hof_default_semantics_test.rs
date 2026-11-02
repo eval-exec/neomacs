@@ -8,6 +8,7 @@
 //! UPDATE_EXPECT=1.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::bg::{BgMode, TestModeScope};

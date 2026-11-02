@@ -36,7 +36,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 /// How an inlined frame was entered: the call shape whose frame push, depth
 /// accounting and pop a chain resume reproduces. Threading: immutable call
 /// protocol metadata, independent of any mutator's Lisp state.

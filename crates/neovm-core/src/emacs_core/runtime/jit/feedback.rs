@@ -37,6 +37,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 #[path = "feedback/arrays.rs"]
 pub(crate) mod arrays;
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 

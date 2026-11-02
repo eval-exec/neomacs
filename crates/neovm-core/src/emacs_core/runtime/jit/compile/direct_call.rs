@@ -55,6 +55,7 @@ use super::spec_slot::{
 };
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use std::sync::atomic::AtomicU64;
 

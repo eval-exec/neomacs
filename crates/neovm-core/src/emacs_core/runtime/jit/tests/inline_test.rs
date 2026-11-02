@@ -5,6 +5,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::Vm;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;

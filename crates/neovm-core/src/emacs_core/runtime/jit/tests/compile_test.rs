@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::{FlowKind, FlowRef, FlowResultExt as _};
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::jit::test_support::{prepare_entry, prepare_osr, settle};

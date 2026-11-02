@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::value::LambdaParams;
 use crate::tagged::collection_reads::capture;

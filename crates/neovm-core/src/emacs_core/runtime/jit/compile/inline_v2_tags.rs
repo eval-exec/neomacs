@@ -5,6 +5,7 @@
 //! mutator's rooted constant pool. No runtime cache or shared mutable state.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::collections::{BTreeMap, HashMap};
 
 use super::{FusedBody, HofKind, HofSite, RegionKind};

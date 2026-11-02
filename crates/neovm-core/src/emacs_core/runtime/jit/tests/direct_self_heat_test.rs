@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use direct_call::DirectSelfHeat;
 
 #[test]

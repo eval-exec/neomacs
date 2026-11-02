@@ -5,6 +5,7 @@
 //! includes an eligible call and proves it entered the direct framed helper.
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::path::PathBuf;
 
 fn gnu_expect(name: &str, program: &str, observe: &str, fixture: &str) -> String {

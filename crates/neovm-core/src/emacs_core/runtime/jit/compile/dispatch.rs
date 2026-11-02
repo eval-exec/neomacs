@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::{FlowKind, InlineErrorOp};
 use crate::emacs_core::eval::AttentionMask;
 #[cfg(feature = "jit")]

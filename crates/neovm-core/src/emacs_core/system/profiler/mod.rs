@@ -1,3 +1,4 @@
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use std::time::Instant;
 
 use rustc_hash::FxHashMap;

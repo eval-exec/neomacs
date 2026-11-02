@@ -10,6 +10,7 @@ use super::error::{EvalResult, signal};
 use super::intern::{SymId, intern, resolve_sym};
 use super::value::*;
 use crate::emacs_core::bytecode::function_slots::FormalMarkersExt as _;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::subr_abi::SubrObj;

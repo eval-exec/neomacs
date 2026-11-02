@@ -5,6 +5,7 @@
 //! are multiwriter atomics. Settings restore compiler-test scalar overrides.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 use super::compile_pipeline_tests::{captured_clif, function, mask_runtime_addresses};

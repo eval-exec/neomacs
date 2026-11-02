@@ -3,6 +3,7 @@
 //! without the parent module's line ceiling.
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
 impl Context {
     // STACK PROBES.  `eval_sub` probes the native stack for every cons form

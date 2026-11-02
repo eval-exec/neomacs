@@ -1,6 +1,7 @@
 //! Stopped GC over real installed/retired native leaves and their root census.
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::tagged::gc::CollectionReport;
 
 struct Settings {

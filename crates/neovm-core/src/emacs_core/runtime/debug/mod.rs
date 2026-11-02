@@ -8,6 +8,7 @@
 //! - Apropos searching
 //! - Doc string storage and retrieval
 
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::collections::{HashMap, HashSet};
 
 use crate::heap_types::LispString;

@@ -4,6 +4,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::jit::compile::{self, Inline2Mode};
 use crate::emacs_core::jit::inline::force_inline_for_test;

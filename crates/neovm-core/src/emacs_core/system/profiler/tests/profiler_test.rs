@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 
 #[test]
 fn cpu_folded_renders_recorded_stacks_with_names_and_sorts_by_count() {

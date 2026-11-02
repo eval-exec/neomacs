@@ -4,6 +4,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::stats::{self, CompileOrigin, CompilePhase};
 use crate::emacs_core::value::LambdaParams;

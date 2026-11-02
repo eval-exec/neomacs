@@ -1,5 +1,6 @@
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::StackDepth;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::pdump::DumpError;
 use crate::emacs_core::pdump::mapped_heap::unnamed_params;
 use crate::emacs_core::pdump::types::DumpFunctionParamsKind;

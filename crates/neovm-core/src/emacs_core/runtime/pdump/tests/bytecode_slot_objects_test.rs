@@ -7,7 +7,7 @@
 //! owner or the next collection frees it.
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 fn eval(ctx: &mut Context, src: &str) -> Value {
     let v = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
     crate::emacs_core::eval::push_scratch_gc_root(v);

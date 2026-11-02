@@ -14,6 +14,7 @@
 //! cached here or shared between mutators.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 

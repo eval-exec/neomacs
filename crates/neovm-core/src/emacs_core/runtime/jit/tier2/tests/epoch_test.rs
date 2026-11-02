@@ -3,6 +3,7 @@
 use super::*;
 use crate::emacs_core::builtins::builtin_fset_2;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::bg::{BgMode, force_mode_for_test};
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;

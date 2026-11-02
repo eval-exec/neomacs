@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 /// One straight-line capture increment, with no incoming edge after its
 /// constant load. The dup preserves this exact cell under the car/add1 result.
 #[derive(Clone, Copy)]

@@ -6,6 +6,7 @@
 //! mutable Lisp state. Knob parsing remains in `knobs`.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::rc::Rc;
 
 use super::{CompileRequest, Inline2Mode, active_numeric_feedback, jit_inline2_mode};

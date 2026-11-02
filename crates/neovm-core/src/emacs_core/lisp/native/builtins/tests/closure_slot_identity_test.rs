@@ -8,6 +8,8 @@
 //! reachability of the objects, and that they are never read by code (the
 //! L4b divergence, identical on both tiers).
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 use crate::tagged::header::ByteCodeSlotObject;

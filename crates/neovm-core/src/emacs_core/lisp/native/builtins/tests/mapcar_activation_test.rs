@@ -2,6 +2,7 @@
 
 use super::{MapCallee, builtin_mapc_2, builtin_mapcan, builtin_mapcar_2, builtin_mapconcat};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::error::{EvalResult, FlowKind, FlowResultExt};
 use crate::emacs_core::eval::{Context, SpecBinding};

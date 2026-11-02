@@ -25,6 +25,7 @@
 //! loudly.
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
 /// The Lisp functions a clean run can enter (macroexp.el, cconv.el and the
 /// small helpers they call).

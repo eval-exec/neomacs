@@ -1,5 +1,7 @@
 use super::collections::{ArraySymbolPolicy, ArraySymbolSource};
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodePolicyExt;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::value::{ValueKind, VecLikeType, eq_value};
 use malachite::integer::Integer;

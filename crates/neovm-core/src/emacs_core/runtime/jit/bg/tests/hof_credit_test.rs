@@ -9,6 +9,7 @@
 //! warm callback loop.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::time::Duration;
 
 use super::*;

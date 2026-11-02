@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::{FlowRef, FlowResultExt};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;

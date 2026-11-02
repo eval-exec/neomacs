@@ -9,6 +9,7 @@
 //! ordinary `equal`/sxhash paths free of the dispatch.
 
 use super::{ByteCodeFunction, ByteCodeStructuralPart, Op};
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::hashtab::{
     SXHASH_FALLBACK_NONNEG_MASK, SXHASH_MAX_LEN, emacs_hash_char_array,

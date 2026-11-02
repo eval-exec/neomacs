@@ -18,6 +18,7 @@
 use super::error::{EvalResult, Flow, signal};
 use super::intern::intern;
 use super::value::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use std::fs::File;

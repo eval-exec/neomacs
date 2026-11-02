@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::cell::{Cell, RefCell};
 
 /// Why a bytecode body could not be compiled by this baseline tier.

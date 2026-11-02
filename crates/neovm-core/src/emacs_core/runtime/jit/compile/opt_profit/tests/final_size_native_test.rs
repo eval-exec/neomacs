@@ -3,6 +3,7 @@
 use super::frontend_tests::Settings;
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{
     captured_clif, function, mask_code_text,
 };

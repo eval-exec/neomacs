@@ -42,6 +42,7 @@ use super::compile::{
 };
 use super::*;
 use crate::emacs_core::eval::tier_i::compile::OpHandlerExt as _;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 
 /// What [`Context::ti_lexical_cell`] knows about a symbol's lexical cell.
 enum LexicalCell {

@@ -9,6 +9,7 @@
 //! every template. No mutable Lisp state is cached or shared across mutators.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use std::collections::BTreeMap;
 
 use super::FusedBody;

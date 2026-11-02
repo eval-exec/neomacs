@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::Op;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{

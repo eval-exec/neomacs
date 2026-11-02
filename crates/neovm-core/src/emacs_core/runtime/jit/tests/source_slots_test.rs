@@ -6,6 +6,7 @@
 use super::source_slots::{SOURCE_SLOT_ARMINGS, SOURCE_SLOT_DECLINED, SOURCE_SLOT_FAST_CALLS};
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::feedback::{CallTarget, FeedbackMode, force_feedback_mode_for_test};
 use crate::emacs_core::jit::{ReoptLevel, cache};

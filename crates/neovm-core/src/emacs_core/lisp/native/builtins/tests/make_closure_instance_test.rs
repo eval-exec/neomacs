@@ -5,6 +5,7 @@
 //! vector and without a whole-function temporary; these tests pin the
 //! observable result.
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;

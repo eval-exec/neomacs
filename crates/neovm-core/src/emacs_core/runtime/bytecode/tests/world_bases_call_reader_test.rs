@@ -1,6 +1,7 @@
 //! Call classification completes its short cell loan before callee entry.
 
 use super::*;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 
 fn bytecode(value: i64) -> Value {

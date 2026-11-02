@@ -1,6 +1,7 @@
 //! Parking must preserve the collection census after excluding World groups.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::Flow;
 #[cfg(feature = "jit")]
 use crate::emacs_core::eval::SpecBinding;

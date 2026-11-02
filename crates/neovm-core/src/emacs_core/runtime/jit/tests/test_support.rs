@@ -3,6 +3,7 @@
 //! never executes a Lisp body or changes the selected compilation mode.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::{bytecode::ByteCodeFunction, eval::Context};
 use std::time::Duration;
 

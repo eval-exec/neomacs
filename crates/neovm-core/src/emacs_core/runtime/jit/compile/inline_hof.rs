@@ -16,6 +16,7 @@ use super::lowering::{self, RegionDeopt};
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::inline::{HofKind, HofSite};
 use cranelift_codegen::ir::StackSlotKind;
 
