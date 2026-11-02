@@ -267,6 +267,8 @@ Clearly separate verified facts from assumptions. Do not represent incomplete wo
 
 **AI-assisted development is welcome. Unverified code is not.**
 
+Do not add `Co-authored-by` trailers to commit messages, including squash commit messages.
+
 AI-generated contributions must meet the same standards as human-written contributions, and must follow the workflow in §1–§10: read the relevant repository instructions and source code before editing, reproduce reported failures, establish root causes, add regression tests, preserve existing tests and functionality, run appropriate verification, and report failures and limitations honestly.
 
 Do not:
