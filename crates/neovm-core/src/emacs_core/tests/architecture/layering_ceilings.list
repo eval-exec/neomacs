@@ -73,7 +73,6 @@ keyboard_input emacs_char 2
 tagged error 12
 tagged eval 12
 tagged intern 22
-tagged process 5
 tagged symbol 9
 tagged value 22
 window category 2

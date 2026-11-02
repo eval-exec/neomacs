@@ -440,7 +440,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a process reference.
-    pub fn alloc_process(&mut self, id: crate::emacs_core::process::ProcessId) -> TaggedValue {
+    pub fn alloc_process(&mut self, id: crate::heap_types::ProcessId) -> TaggedValue {
         let obj = Box::new(ProcessObj {
             header: VecLikeHeader::new(VecLikeType::Process),
             id,

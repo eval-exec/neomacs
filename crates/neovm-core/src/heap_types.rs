@@ -1988,3 +1988,9 @@ mod signed_string_positions_tests;
 #[cfg(test)]
 #[path = "heap_types/tests/character_count_kind.rs"]
 mod character_count_kind_tests;
+
+/// Unique identifier for a process.
+///
+/// This is identity data only. The process layer owns ID issuance, process
+/// table access and OS operations; an ID grants none of that authority.
+pub type ProcessId = u64;

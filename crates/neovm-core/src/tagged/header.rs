@@ -2050,7 +2050,7 @@ pub struct WindowObj {
 #[repr(C)]
 pub struct ProcessObj {
     pub header: VecLikeHeader,
-    pub id: crate::emacs_core::process::ProcessId,
+    pub id: crate::heap_types::ProcessId,
 }
 
 /// Heap-allocated frame reference (wraps a u64 id).

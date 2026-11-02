@@ -568,7 +568,7 @@ pub struct TaggedHeap {
     window_registry: FxHashMap<u64, TaggedValue>,
     frame_registry: FxHashMap<u64, TaggedValue>,
     timer_registry: FxHashMap<u64, TaggedValue>,
-    process_registry: FxHashMap<crate::emacs_core::process::ProcessId, TaggedValue>,
+    process_registry: FxHashMap<crate::heap_types::ProcessId, TaggedValue>,
     dirty_owner_bits: FxHashSet<usize>,
     /// Persistent remembered set: bits of dumped objects that have been
     /// mutated and may now hold heap children. Seeded as roots every cycle so
@@ -1539,15 +1539,11 @@ impl TaggedHeap {
         self.timer_registry.insert(id, value);
     }
 
-    pub fn process_value(&self, id: crate::emacs_core::process::ProcessId) -> Option<TaggedValue> {
+    pub fn process_value(&self, id: crate::heap_types::ProcessId) -> Option<TaggedValue> {
         self.process_registry.get(&id).copied()
     }
 
-    pub fn register_process_value(
-        &mut self,
-        id: crate::emacs_core::process::ProcessId,
-        value: TaggedValue,
-    ) {
+    pub fn register_process_value(&mut self, id: crate::heap_types::ProcessId, value: TaggedValue) {
         self.process_registry.insert(id, value);
     }
 

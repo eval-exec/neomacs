@@ -10,7 +10,7 @@ use crate::host_effect::wake::{
 use crate::tagged::value::SymbolMode;
 
 /// Unique identifier for a process.
-pub type ProcessId = u64;
+pub use crate::heap_types::ProcessId;
 
 pub(super) const DEFAULT_READ_PROCESS_OUTPUT_MAX: usize = 65_536;
 pub(super) const READ_PROCESS_OUTPUT_MAX_CEILING: usize = i32::MAX as usize;
