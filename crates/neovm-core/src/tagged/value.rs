@@ -152,6 +152,17 @@ pub(crate) use subr_entry_sync::with_static_subr_entry_read;
 #[cfg(all(test, feature = "jit"))]
 pub(crate) use subr_entry_sync::with_static_subr_entry_write;
 
+/// How a static subr entry registration writes its metadata.
+///
+/// The upper registration owner decides from its immutable compiler policy
+/// whether a writer must take the entry sync lock; this layer owns only the
+/// lock. `Direct` is the non-JIT writer and the unselected production path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StaticSubrEntrySync {
+    Direct,
+    Locked,
+}
+
 pub(crate) fn update_static_subr_object_entry(
     sym_id: SymId,
     function: Option<super::header::SubrFn>,
@@ -159,6 +170,7 @@ pub(crate) fn update_static_subr_object_entry(
     max_args: Option<u16>,
     dispatch_kind: super::header::SubrDispatchKind,
     interactivity: super::header::SubrInteractivity,
+    sync: StaticSubrEntrySync,
 ) {
     STATIC_SUBR_OBJECTS.with(|objects| {
         let Some(value) = objects
@@ -173,39 +185,24 @@ pub(crate) fn update_static_subr_object_entry(
         }
 
         let ptr = value.as_veclike_ptr().unwrap() as *mut SubrObj;
-        #[cfg(all(test, feature = "jit"))]
-        {
-            subr_entry_sync::with_static_subr_entry_write(|| unsafe {
-                (*ptr).function = function;
-                (*ptr).min_args = min_args;
-                (*ptr).max_args = max_args;
-                (*ptr).dispatch_kind = dispatch_kind;
-                (*ptr).interactivity = interactivity;
-            });
-            return;
-        }
-        #[cfg(all(not(test), feature = "jit"))]
-        if subr_entry_sync::writer_sync_selected() {
-            subr_entry_sync::with_static_subr_entry_write(|| unsafe {
-                (*ptr).function = function;
-                (*ptr).min_args = min_args;
-                (*ptr).max_args = max_args;
-                (*ptr).dispatch_kind = dispatch_kind;
-                (*ptr).interactivity = interactivity;
-            });
-            return;
-        }
-        #[cfg(not(all(test, feature = "jit")))]
-        // Static subr objects are leaked and never moved. Native subr
-        // registration is the single writer for their entry metadata, matching GNU's static
-        // `struct Lisp_Subr` initialization model.
-        unsafe {
+        let write = || unsafe {
             (*ptr).function = function;
             (*ptr).min_args = min_args;
             (*ptr).max_args = max_args;
             (*ptr).dispatch_kind = dispatch_kind;
             (*ptr).interactivity = interactivity;
+        };
+        #[cfg(feature = "jit")]
+        if matches!(sync, StaticSubrEntrySync::Locked) {
+            subr_entry_sync::with_static_subr_entry_write(write);
+            return;
         }
+        #[cfg(not(feature = "jit"))]
+        let _ = sync;
+        // Static subr objects are leaked and never moved. Native subr
+        // registration is the single writer for their entry metadata, matching GNU's static
+        // `struct Lisp_Subr` initialization model.
+        write();
     });
 }
 

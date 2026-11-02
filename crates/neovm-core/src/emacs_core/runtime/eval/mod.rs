@@ -678,6 +678,36 @@ fn set_builtin_sym_bit(sym_id: SymId, on: bool) {
     }
 }
 
+/// Upper policy for static subr entry writes. The lower registration writer
+/// owns the entry lock; the compiler's process-immutable selectors decide
+/// whether that writer must take it. Test builds synchronize every writer
+/// because per-thread compiler overrides may select Sink on another thread.
+/// The production condition is decided once, before the first write during
+/// Context setup, exactly as the compiler selectors are.
+#[cfg(feature = "jit")]
+fn static_subr_entry_write_sync() -> crate::tagged::value::StaticSubrEntrySync {
+    use crate::tagged::value::StaticSubrEntrySync;
+    #[cfg(test)]
+    {
+        StaticSubrEntrySync::Locked
+    }
+    #[cfg(not(test))]
+    {
+        use crate::emacs_core::jit::compile::{OptMode, jit_opt_mode, jit_opt_passes};
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ON.get_or_init(|| jit_opt_mode() == OptMode::Opt && jit_opt_passes().sink) {
+            StaticSubrEntrySync::Locked
+        } else {
+            StaticSubrEntrySync::Direct
+        }
+    }
+}
+
+#[cfg(not(feature = "jit"))]
+fn static_subr_entry_write_sync() -> crate::tagged::value::StaticSubrEntrySync {
+    crate::tagged::value::StaticSubrEntrySync::Direct
+}
+
 /// Register a subr entry in the global static table.
 pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
     set_builtin_sym_bit(sym_id, entry.dispatch_kind == SubrDispatchKind::Builtin);
@@ -705,6 +735,7 @@ pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
         entry.max_args,
         entry.dispatch_kind,
         SubrInteractivity::from(entry.interactive_spec.is_some()),
+        static_subr_entry_write_sync(),
     );
     callback::publish_native_registration();
 }

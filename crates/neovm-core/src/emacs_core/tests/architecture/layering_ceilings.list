@@ -75,7 +75,6 @@ tagged bytecode 7
 tagged error 12
 tagged eval 12
 tagged intern 21
-tagged jit 1
 tagged pdump 2
 tagged process 5
 tagged symbol 9
