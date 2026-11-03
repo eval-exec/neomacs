@@ -539,3 +539,7 @@ mod architecture_parallel_exec_substrate_test;
 #[cfg(test)]
 #[path = "tests/architecture/subr_storage_boundary_test.rs"]
 mod architecture_subr_storage_boundary_test;
+
+#[cfg(test)]
+#[path = "tests/architecture/promotion_ledger_guard_test.rs"]
+mod architecture_promotion_ledger_guard_test;

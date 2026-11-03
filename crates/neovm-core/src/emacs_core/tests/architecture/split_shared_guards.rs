@@ -1715,6 +1715,50 @@ fn architecture_pc1_explicit_test_target_and_macro_references_are_fenced() {
     assert!(parse_pc1_table("type\tmethod\tprotected_caller\nValue\tf\t\n").is_err());
 }
 
+#[test]
+fn architecture_pc1_data_approvals_match_the_real_promotion_ledger() {
+    fn rows(text: &str, header: &str, columns: usize) -> Vec<Vec<String>> {
+        let mut lines = text
+            .lines()
+            .filter(|line| !line.is_empty() && !line.starts_with('#'));
+        assert_eq!(lines.next(), Some(header), "PC1_DATA_TABLE_SCHEMA");
+        lines
+            .map(|line| {
+                let fields: Vec<_> = line.split('\t').map(str::to_string).collect();
+                assert_eq!(fields.len(), columns, "PC1_DATA_TABLE_SCHEMA: {line}");
+                fields
+            })
+            .collect()
+    }
+    let ledger = rows(
+        include_str!("PROMOTION-LEDGER.tsv"),
+        "item\tkind\told_vis\tfile:line\tmodule\treason",
+        6,
+    );
+    let expected: BTreeSet<_> = ledger
+        .into_iter()
+        .filter(|row| row[5].to_ascii_lowercase().contains("pc1-d"))
+        .map(|row| {
+            let (file, _) = row[3].rsplit_once(':').expect("PC1_DATA_FILE_IDENTITY");
+            vec![
+                row[0].clone(),
+                row[1].clone(),
+                file.to_string(),
+                row[5].clone(),
+                "PC1-D".to_string(),
+            ]
+        })
+        .collect();
+    let actual = rows(
+        include_str!("pc1_data_promotions.tsv"),
+        "item\tkind\tfile\tprotected_caller\tapproval",
+        5,
+    );
+    let unique: BTreeSet<_> = actual.iter().cloned().collect();
+    assert_eq!(actual.len(), unique.len(), "PC1_DATA_DUPLICATE_ROW");
+    assert_eq!(unique, expected, "PC1_DATA_APPROVAL_LEDGER_MISMATCH");
+}
+
 // ---------------------------------------------------------------------------
 // PC2: exact hook adapter chains, typed test-only rows and completeness.
 // Requires the shared N13Modules source/module catalog, not a second index.
