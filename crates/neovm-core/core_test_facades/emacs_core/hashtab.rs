@@ -17,3 +17,8 @@ mod bignum_sxhash_tests;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/hashtab/tests/hashtab_test.rs"]
 mod tests;
+
+use neovm_value::value::Value;
+#[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/hashtab/tests/symbol_mode_sxhash_test.rs"]
+mod symbol_mode_sxhash_tests;
