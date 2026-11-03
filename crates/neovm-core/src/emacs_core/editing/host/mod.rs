@@ -19,6 +19,7 @@
 //! correct only where no host is in scope (C7 substrate sites, C4b from
 //! host-free code) — never here.
 
+use crate::buffer::Buffer;
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
@@ -58,6 +59,40 @@ pub trait EditHost {
         hook_args: &[Value],
         inherit_global: bool,
     ) -> EvalResult;
+
+    /// The variable's visible value (GNU `find_symbol_value`), `None`
+    /// when unbound. C2.
+    fn variable_value(&self, id: SymId) -> Option<Value>;
+
+    /// [`Self::variable_value`] starting from the variable's name. C2.
+    fn variable_value_by_name(&self, name: &str) -> Option<Value>;
+
+    /// The variable's visible value in `buf`: the buffer's local
+    /// binding when it has one, else the default. C2.
+    fn variable_value_in_buffer(&self, buf: Option<&Buffer>, id: SymId) -> Option<Value>;
+
+    /// GNU `default_value` without a buffer. C2.
+    fn default_value(&self, id: SymId) -> Option<Value>;
+
+    /// GNU `boundp` without a buffer. C2.
+    fn boundp(&self, id: SymId) -> bool;
+
+    /// GNU `Fset` on the evaluator: alias-resolving, watcher-running
+    /// store — the `set` subr body (`builtin_set_2`). C2.
+    fn set_variable(&mut self, symbol: Value, value: Value) -> EvalResult;
+
+    /// GNU `reset_var_on_error` (`insdel.c`): store `value` into the
+    /// variable's runtime binding cell directly — no alias resolution
+    /// (the caller resolved the symbol already) and no variable
+    /// watchers, exactly as the C `*location = Qnil` store. This is the
+    /// error-recovery reset and nothing else; every other store is
+    /// `set_variable`. C2.
+    fn reset_variable_on_error(&mut self, sym: SymId, value: Value);
+
+    /// Whether `inhibit-modification-hooks` is non-nil. GNU `insdel.c`
+    /// reads the `DEFVAR_BOOL` flag in one load; the fast paths over
+    /// the forwarding live on the host, where the symbol table is. C2.
+    fn inhibit_modification_hooks(&self) -> bool;
 
     // -------------------------------------------------------------------------
     // display/system queries (stage-3 display-seam lane: C4b, C5, C15)

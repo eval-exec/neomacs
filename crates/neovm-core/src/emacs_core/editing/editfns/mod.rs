@@ -46,8 +46,8 @@ pub(crate) fn lisp_pos_to_byte(
 /// by NAME on every insert/change signal was a measured cost (~140M Ir on the
 /// buffer benchmark). OnceLock is the established cached-SymId pattern.
 macro_rules! editfns_cached_symbol {
-    ($fn_name:ident, $name:literal) => {
-        fn $fn_name() -> crate::emacs_core::intern::SymId {
+    ($vis:vis $fn_name:ident, $name:literal) => {
+        $vis fn $fn_name() -> crate::emacs_core::intern::SymId {
             static S: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
                 std::sync::OnceLock::new();
             *S.get_or_init(|| crate::emacs_core::intern::intern($name))
@@ -56,6 +56,7 @@ macro_rules! editfns_cached_symbol {
 }
 editfns_cached_symbol!(inhibit_read_only_symbol, "inhibit-read-only");
 editfns_cached_symbol!(
+    pub(crate)
     inhibit_modification_hooks_symbol,
     "inhibit-modification-hooks"
 );
@@ -234,87 +235,36 @@ fn hook_symbol_value_truthy<H: crate::emacs_core::edit_host::EditHost>(
     host.hook_value_by_id(sym).is_some_and(|v| v.is_truthy())
 }
 
-/// Check whether `inhibit-modification-hooks` is non-nil.
-pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context) -> bool {
-    use crate::emacs_core::symbol::SymbolRedirect;
-    let sym = inhibit_modification_hooks_symbol();
-    // `inhibit-modification-hooks` is GNU `DEFVAR_BOOL` (`insdel.c:2575`):
-    // the symbol forwards to a Boolean cell, `let` stores through it in place
-    // (`store_symval_forwarding`), and reading it is the one flag load of
-    // `do_symval_forwarding`'s `Lisp_Fwd_Bool` arm. Read that cell directly.
-    // The Plainval arm covers a runtime that registered it as a plain
-    // global. Anything else -- an alias, a buffer-local -- takes the
-    // alias-resolving hook reader below, which walks the symbol table
-    // several times and ran twice per text-property write when the
-    // forwarded case fell through to it.
-    if let Some(s) = ctx.obarray.get_by_id(sym) {
-        match s.redirect() {
-            SymbolRedirect::Forwarded => {
-                // Whichever forwarder this runtime installed for it -- the
-                // `DEFVAR_BOOL` flag, or an object cell when the symbol was
-                // adopted as a global object variable -- `load` is the
-                // one-load read of `do_symval_forwarding`; only a buffer
-                // object forwarder (never this symbol) answers `None`.
-                if let Some(value) = s.forwarded_descriptor().and_then(|fwd| fwd.load()) {
-                    return value.is_truthy();
-                }
-            }
-            SymbolRedirect::Plainval => {
-                return ctx
-                    .variable_value(sym)
-                    .is_some_and(|v| !v.is_unbound() && v.is_truthy());
-            }
-            // The arm a booted session takes: the code-conversion work buffer
-            // makes the variable buffer-local in itself, exactly as GNU's
-            // `make_conversion_work_buffer` does (`Fmake_local_variable`,
-            // coding.c), so after the first conversion the symbol is a BLV
-            // for good. GNU still reads it as one C load because the BLV
-            // swaps the current buffer's value into the forwarded cell on
-            // every buffer switch; here it is the current buffer's binding
-            // if it has one, else the BLV's default -- `find_symbol_value`'s
-            // order, at the cost of one gated buffer-local probe.
-            SymbolRedirect::Localized => {
-                // The BLV's where-buffer cache is GNU's swapped-in cell: on a
-                // hit this is an epoch compare and a cons cdr, where the
-                // per-buffer binding map cost ~120 instructions a read.
-                if let Some(buf) = ctx.edit.buffers.current_buffer()
-                    && let Some(value) = ctx.obarray.read_localized_symbol_for_buffer(
-                        sym,
-                        s,
-                        buf.id,
-                        buf.local_var_alist_value(),
-                    )
-                {
-                    return !value.is_unbound() && value.is_truthy();
-                }
-                return ctx
-                    .variable_value(sym)
-                    .is_some_and(|v| !v.is_unbound() && v.is_truthy());
-            }
-            SymbolRedirect::Varalias => {}
-        }
-    }
-    let sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(ctx, sym);
-    crate::emacs_core::hook_runtime::hook_value_by_id(ctx, sym).is_some_and(|v| v.is_truthy())
+/// Check whether `inhibit-modification-hooks` is non-nil. GNU `insdel.c`
+/// reads the `DEFVAR_BOOL` flag in one load; the read's fast paths over
+/// the forwarding are an eval service on the host (C2 EditHost
+/// conversion — this body names no evaluator type).
+pub(crate) fn inhibit_modification_hooks<H: crate::emacs_core::edit_host::EditHost>(
+    host: &H,
+) -> bool {
+    host.inhibit_modification_hooks()
 }
 
-fn run_named_hook_reset_on_error(
-    ctx: &mut crate::emacs_core::eval::Context,
+/// Run a named hook, resetting it to nil if running it signals — GNU
+/// `signal_before_change`/`signal_after_change` arming
+/// `reset_var_on_error` (`insdel.c`) around the `run_hook_with_args`
+/// call. The reset deliberately bypasses watchers and alias resolution
+/// (the hook symbol is resolved above), so it is the raw host store,
+/// never `set_variable`. C2 EditHost conversion.
+fn run_named_hook_reset_on_error<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     hook_name: crate::emacs_core::intern::SymId,
     hook_args: &[Value],
 ) -> Result<(), Flow> {
-    let hook_sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(ctx, hook_name);
-    let hook_value =
-        crate::emacs_core::hook_runtime::hook_value_by_id(ctx, hook_sym).unwrap_or(Value::NIL);
+    let hook_sym = host.hook_symbol_by_id(hook_name);
+    let hook_value = host.hook_value_by_id(hook_sym).unwrap_or(Value::NIL);
     if hook_value.is_nil() {
         return Ok(());
     }
-    match crate::emacs_core::hook_runtime::run_hook_value(
-        ctx, hook_sym, hook_value, hook_args, true,
-    ) {
+    match host.run_hook_value(hook_sym, hook_value, hook_args, true) {
         Ok(_) => Ok(()),
         Err(flow) => {
-            let _ = ctx.try_set_runtime_binding_by_id(hook_sym, Value::NIL);
+            host.reset_variable_on_error(hook_sym, Value::NIL);
             Err(flow)
         }
     }
@@ -1181,22 +1131,17 @@ impl BeforeChangeSpecialFunction {
 /// Mirrors GNU's deferral predicate for `signal_after_change`
 /// (`insdel.c:2393`). True when `combine-after-change-calls` is non-nil and
 /// `before-change-functions` is either nil or the well-known
-/// `(t syntax-ppss-flush-cache)` special case.
-fn combine_after_change_calls_active(ctx: &crate::emacs_core::eval::Context) -> bool {
-    let combine_sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(
-        ctx,
-        combine_after_change_calls_symbol(),
-    );
-    let combine_val =
-        crate::emacs_core::hook_runtime::hook_value_by_id(ctx, combine_sym).unwrap_or(Value::NIL);
+/// `(t syntax-ppss-flush-cache)` special case. C2 EditHost conversion:
+/// hook reads plus one `default_value`, no evaluator type named.
+fn combine_after_change_calls_active<H: crate::emacs_core::edit_host::EditHost>(host: &H) -> bool {
+    let combine_sym = host.hook_symbol_by_id(combine_after_change_calls_symbol());
+    let combine_val = host.hook_value_by_id(combine_sym).unwrap_or(Value::NIL);
     if combine_val.is_nil() {
         return false;
     }
 
-    let before_sym =
-        crate::emacs_core::hook_runtime::hook_symbol_by_id(ctx, before_change_functions_symbol());
-    let before_val =
-        crate::emacs_core::hook_runtime::hook_value_by_id(ctx, before_sym).unwrap_or(Value::NIL);
+    let before_sym = host.hook_symbol_by_id(before_change_functions_symbol());
+    let before_val = host.hook_value_by_id(before_sym).unwrap_or(Value::NIL);
     if before_val.is_nil() {
         return true;
     }
@@ -1213,10 +1158,7 @@ fn combine_after_change_calls_active(ctx: &crate::emacs_core::eval::Context) -> 
                 && second.is_bare_symbol()
                 && BeforeChangeSpecialFunction::SyntaxPpssFlushCache.is_lisp_value(second)
             {
-                let default_val = ctx
-                    .variables()
-                    .default_value(before_sym)
-                    .unwrap_or(Value::NIL);
+                let default_val = host.default_value(before_sym).unwrap_or(Value::NIL);
                 return default_val.is_nil();
             }
         }
