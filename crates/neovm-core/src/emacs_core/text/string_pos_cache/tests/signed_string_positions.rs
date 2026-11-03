@@ -1,4 +1,4 @@
-use super::*;
+use crate::emacs_core::string_pos_cache::*;
 use crate::heap_types::GnuDeclaredCharacterCount;
 
 fn ascii_value(chars: i128) -> Value {

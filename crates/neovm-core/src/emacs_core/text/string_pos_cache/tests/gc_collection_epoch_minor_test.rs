@@ -1,9 +1,9 @@
 //! String-position root coverage through real generational minor collections.
 
-use super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::string_pos_cache::*;
 
-use super::gc_collection_epoch_tests::{
+use super::string_pos_cache_gc_epoch_test::{
     UncoveredStringPosCache, assert_warm_entry, populate_cache,
 };
 

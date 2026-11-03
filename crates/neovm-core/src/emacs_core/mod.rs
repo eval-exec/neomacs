@@ -360,8 +360,10 @@ pub mod regex_emacs;
 pub mod search;
 #[path = "text/string_escape/mod.rs"]
 pub(crate) mod string_escape;
-#[path = "text/string_pos_cache/mod.rs"]
-pub(crate) mod string_pos_cache;
+// The character<->byte position cache (GNU fns.c string_char_to_byte)
+// moved into neovm-value with the stage-3 split (C12); the historical
+// `emacs_core::string_pos_cache` paths keep resolving through this facade.
+pub(crate) use neovm_value::string_pos_cache;
 #[path = "text/syntax/mod.rs"]
 pub mod syntax;
 #[path = "editing/textprop/mod.rs"]
@@ -546,6 +548,29 @@ mod architecture_plist_head_seam_guard_test;
 #[cfg(test)]
 #[path = "tests/plist_collection_capture_test.rs"]
 mod plist_collection_capture_test;
+
+// The string-position cache's regression children stayed in core with the
+// stage-3 C12 move: they drive the evaluator's heap and activation machinery
+// (Context, TaggedHeap, tls_scope), which the value layer cannot name.
+#[cfg(test)]
+#[path = "text/string_pos_cache/tests/string_pos_cache_test.rs"]
+mod string_pos_cache_test;
+
+#[cfg(test)]
+#[path = "text/string_pos_cache/tests/gc_tls_ownership_test.rs"]
+mod string_pos_cache_gc_ownership_test;
+
+#[cfg(test)]
+#[path = "text/string_pos_cache/tests/gc_collection_epoch_test.rs"]
+mod string_pos_cache_gc_epoch_test;
+
+#[cfg(test)]
+#[path = "text/string_pos_cache/tests/gc_collection_epoch_minor_test.rs"]
+mod string_pos_cache_gc_epoch_minor_test;
+
+#[cfg(test)]
+#[path = "text/string_pos_cache/tests/signed_string_positions.rs"]
+mod string_pos_cache_signed_positions_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/parallel_exec_substrate_test.rs"]

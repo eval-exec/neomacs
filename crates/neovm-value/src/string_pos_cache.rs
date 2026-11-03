@@ -19,12 +19,13 @@
 
 use std::cell::Cell;
 
-use crate::emacs_core::emacs_char;
-use crate::emacs_core::value::Value;
+use crate::emacs_char;
 use crate::heap_types::{GnuStringCharPos, LispString, string_bytes_changed_hook_installed};
+use crate::value::Value;
 
 #[derive(Clone, Copy, Debug)]
-struct Entry {
+#[doc(hidden)]
+pub struct Entry {
     string: Value,
     data: *const u8,
     sbytes: usize,
@@ -52,10 +53,11 @@ pub(crate) fn note_string_bytes_changed() {
 }
 
 /// The cache's one canonical byte-mutation stamp, installed at the N9 seams.
-pub(crate) static STRING_BYTES_STAMP: fn() = note_string_bytes_changed;
+pub static STRING_BYTES_STAMP: fn() = note_string_bytes_changed;
 
 /// Forget the entry (heap reset, pdump load).
-pub(crate) fn reset_string_pos_cache() {
+#[doc(hidden)]
+pub fn reset_string_pos_cache() {
     CACHE.with(|cache| cache.set(None));
     CACHE_HEAP
         .with(|owner| owner.set(crate::tagged::gc::current_tagged_heap_identity().unwrap_or(0)));
@@ -67,8 +69,9 @@ pub(crate) fn reset_string_pos_cache() {
 /// Tests that need the cache to fill must install the production hook; the
 /// structural pre-install refusal is covered by
 /// `never_stores_while_the_notification_hook_is_uninstalled`.
-#[cfg(test)]
-pub(crate) fn install_notification_hook_for_test() {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn install_notification_hook_for_test() {
     // SAFETY: the production hook and pointer (peer seal N9); the pinned
     // seams install the same function, so this test-only offer is the
     // idempotent re-offer, never a different hook.
@@ -83,7 +86,8 @@ pub(crate) fn install_notification_hook_for_test() {
 /// Validate ownership at activation, never during character/byte conversion.
 /// A collection on another thread cannot see this entry. Reject an uncovered
 /// running collection before it sweeps, and retain covered same-thread cycles.
-pub(crate) fn activate_string_pos_cache(
+#[doc(hidden)]
+pub fn activate_string_pos_cache(
     heap_identity: usize,
     collection_epoch: usize,
     collection_in_progress: bool,
@@ -103,7 +107,8 @@ pub(crate) fn activate_string_pos_cache(
 }
 
 /// The cached string is a GC root, like GNU's staticpro'd cache variable.
-pub(crate) fn collect_string_pos_cache_gc_roots(
+#[doc(hidden)]
+pub fn collect_string_pos_cache_gc_roots(
     roots: &mut Vec<Value>,
     heap_identity: usize,
     collection_epoch: usize,
@@ -146,7 +151,8 @@ pub(crate) fn collect_string_pos_cache_gc_roots(
     });
 }
 
-fn cached_pair(string: Value, s: &LispString) -> Option<(GnuStringCharPos, usize)> {
+#[doc(hidden)]
+pub fn cached_pair(string: Value, s: &LispString) -> Option<(GnuStringCharPos, usize)> {
     let entry = CACHE.with(Cell::get)?;
     (entry.string.bits() == string.bits()
         && entry.data == s.as_bytes().as_ptr()
@@ -181,7 +187,8 @@ fn remember(string: Value, s: &LispString, char_pos: GnuStringCharPos, byte_pos:
 /// GNU fns.c:1194-1241 keeps even a negative cached anchor signed.
 /// Valid GNU metadata fits ptrdiff_t (owned bytes and supplied counts are
 /// bounded by isize::MAX); absolute signed distances fit usize on that domain.
-pub(crate) fn string_char_to_byte(string: Value, s: &LispString, char_index: usize) -> usize {
+#[doc(hidden)]
+pub fn string_char_to_byte(string: Value, s: &LispString, char_index: usize) -> usize {
     let schars = s.schars();
     let sbytes = s.sbytes();
     let char_index = char_index.min(schars);
@@ -216,7 +223,8 @@ pub(crate) fn string_char_to_byte(string: Value, s: &LispString, char_index: usi
 /// Initialized physical bytes bound every scan; GNU-representable metadata
 /// bounds its signed result. Invalid Rust-only dump headers are not admitted
 /// by the supplied-count constructor and must be rejected by their caller.
-pub(crate) fn string_byte_to_gnu_char(
+#[doc(hidden)]
+pub fn string_byte_to_gnu_char(
     string: Value,
     s: &LispString,
     byte_index: usize,
@@ -254,34 +262,16 @@ pub(crate) fn string_byte_to_gnu_char(
     char_pos
 }
 
-#[cfg(test)]
-#[path = "tests/string_pos_cache_test.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
-
-#[cfg(test)]
-#[path = "tests/gc_collection_epoch_test.rs"]
-mod gc_collection_epoch_tests;
-
-#[cfg(test)]
-#[path = "tests/gc_collection_epoch_minor_test.rs"]
-mod gc_collection_epoch_minor_tests;
-
-#[cfg(test)]
-#[path = "tests/signed_string_positions.rs"]
-mod signed_string_positions_tests;
-
 /// Carrier park: reset the owner-installed cache and the per-thread epoch.
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     reset_string_pos_cache();
     EPOCH.with(|slot| slot.set(0));
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, EPOCH.with(|slot| slot.get() as u64));
 }

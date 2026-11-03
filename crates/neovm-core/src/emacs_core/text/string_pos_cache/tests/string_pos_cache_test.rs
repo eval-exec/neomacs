@@ -1,5 +1,5 @@
-use super::*;
 use crate::emacs_core::emacs_char;
+use crate::emacs_core::string_pos_cache::*;
 use crate::emacs_core::value::Value;
 use crate::heap_types::LispString;
 

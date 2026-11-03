@@ -1087,3 +1087,13 @@ listp_error	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:488	list_scan	stag
 builtin_assq_values	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:565	list_scan	stage-3 C12: hot assq entry; edit-layer casing reaches it below the lisp builtins
 assq_exact	fn	private	crates/neovm-value/src/list_scan.rs:616	list_scan	stage-3 C12: exact fallback kept reachable for the fixed-arity regression wrapper
 assq_swp_exact	fn	private	crates/neovm-value/src/list_scan.rs:669	list_scan	stage-3 C12: swp exact fallback kept reachable for the fixed-arity regression wrapper
+Entry	struct	private	crates/neovm-value/src/string_pos_cache.rs:28	string_pos_cache	stage-3 C12: cache representation named by the re-homed TLS-ownership regression children (they pin the entry across heap swaps)
+cached_pair	fn	private	crates/neovm-value/src/string_pos_cache.rs:155	string_pos_cache	stage-3 C12: cache probe asserted by the re-homed regression children
+reset_string_pos_cache	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:60	string_pos_cache	stage-3 C12: pdump/eval/reset callers keep the historical emacs_core::string_pos_cache path
+install_notification_hook_for_test	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:74	string_pos_cache	stage-3 C12: cfg gate widened to any(test, test-support) so core test builds keep installing the production stamp
+activate_string_pos_cache	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:90	string_pos_cache	stage-3 C12: gc_pacing activation keeps its caller path
+collect_string_pos_cache_gc_roots	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:111	string_pos_cache	stage-3 C12: thread_local_roots enumeration keeps its caller path
+string_char_to_byte	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:191	string_pos_cache	stage-3 C12: the substring/concat cores and the aref/search readers convert below the text layer
+string_byte_to_gnu_char	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:227	string_pos_cache	stage-3 C12: regex/syntax callers keep the historical path
+reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:267	string_pos_cache	stage-3 C12: green carrier reset step keeps its path
+carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:275	string_pos_cache	stage-3 C12: green carrier fingerprint keeps its path

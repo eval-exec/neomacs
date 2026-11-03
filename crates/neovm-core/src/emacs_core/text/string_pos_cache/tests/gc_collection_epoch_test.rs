@@ -1,5 +1,5 @@
-use super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::string_pos_cache::*;
 use crate::tagged::gc::{CONS_BLOCK_CELLS, TaggedHeap, set_tagged_heap};
 
 /// An uncovered TLS cache fixture remains local while the owner collects.

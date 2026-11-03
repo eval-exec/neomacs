@@ -186,3 +186,4 @@ tagged/value.rs	tagged/value.rs
 tagged/value/subr_entry_sync.rs	tagged/value/subr_entry_sync.rs
 tls_fingerprint.rs	tls_fingerprint.rs
 emacs_core/runtime/plist/mod.rs	plist/mod.rs
+emacs_core/text/string_pos_cache/mod.rs	string_pos_cache.rs

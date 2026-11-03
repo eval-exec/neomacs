@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 // symbols-with-pos-enabled from a Context remain in this layer.
 pub(crate) use crate::list_scan::{
     GnuTailCycle, LIST_SCAN_BUDGET, builtin_assq_values, builtin_memq_values,
-    builtin_memq_values_from, circular_list_error, collect_proper_list_items, eq_bare_symbol_swp,
+    builtin_memq_values_from, collect_proper_list_items, eq_bare_symbol_swp,
     eq_bare_symbol_swp_scan, for_each_proper_list_tail, for_each_proper_list_tail_rooting_tortoise,
     for_each_proper_list_tail_scan, for_each_tail_cycle_tail, listp_error, positioned_symbol_scan,
     proper_list_length_or_signal, scan_car, scan_cdr, unobserved_list_scan,

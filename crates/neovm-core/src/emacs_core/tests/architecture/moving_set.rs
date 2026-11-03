@@ -28,12 +28,17 @@ pub(crate) const G0_MEMBERS: [&str; 10] = [
 /// itself. `plist` joined with the stage-3 split (C10): the Lisp-command
 /// plist layer sits below the evaluator next to its `symbol::plist_core`
 /// primitives, and core re-exports it as `emacs_core::plist`.
-pub(crate) const BOTTOM_PEER_MODULES: [&str; 5] = [
+/// `string_pos_cache` joined with the stage-3 split (C12): the
+/// character<->byte position cache is value-shaped and moved down beside
+/// the substring/concat cores; core re-exports it as
+/// `emacs_core::string_pos_cache`.
+pub(crate) const BOTTOM_PEER_MODULES: [&str; 6] = [
     "tagged",
     "heap_types",
     "gc_trace",
     "tls_fingerprint",
     "plist",
+    "string_pos_cache",
 ];
 
 /// The first lower crate of the extraction. Its modules are already inside

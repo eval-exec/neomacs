@@ -494,10 +494,7 @@ const MUST_RESET_MODULE_COVERAGE: &[(&str, &str)] = &[
         "regex_emacs",
     ),
     ("neovm-core/src/emacs_core/text/regex/mod.rs", "regex"),
-    (
-        "neovm-core/src/emacs_core/text/string_pos_cache/mod.rs",
-        "string_pos_cache",
-    ),
+    ("neovm-value/src/string_pos_cache.rs", "string_pos_cache"),
     ("neovm-core/src/emacs_core/text/syntax/mod.rs", "syntax"),
     (
         "neovm-core/src/emacs_core/text/syntax/parse_cache.rs",

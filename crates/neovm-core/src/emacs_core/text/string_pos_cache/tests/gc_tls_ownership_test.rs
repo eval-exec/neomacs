@@ -1,5 +1,5 @@
-use super::*;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::string_pos_cache::*;
 
 fn populate(_ctx: &mut Context) -> Value {
     let string = Value::string("aжb");
