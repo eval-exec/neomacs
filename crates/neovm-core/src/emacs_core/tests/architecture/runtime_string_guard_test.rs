@@ -44,7 +44,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "system/process/mod.rs",
         "lisp/reader/mod.rs",
         "text/syntax/mod.rs",
-        "text/textprop/mod.rs",
+        "editing/textprop/mod.rs",
         "system/timefns/mod.rs",
         "system/timer/mod.rs",
         "editing/undo/mod.rs",

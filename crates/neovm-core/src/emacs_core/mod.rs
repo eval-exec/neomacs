@@ -353,7 +353,7 @@ pub(crate) mod string_escape;
 pub(crate) mod string_pos_cache;
 #[path = "text/syntax/mod.rs"]
 pub mod syntax;
-#[path = "text/textprop/mod.rs"]
+#[path = "editing/textprop/mod.rs"]
 pub mod textprop;
 #[path = "text/treesit/mod.rs"]
 pub mod treesit;
