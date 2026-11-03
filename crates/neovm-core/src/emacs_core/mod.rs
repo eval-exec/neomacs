@@ -15,6 +15,8 @@
 // Command input and invocation.
 #[path = "commands/abbrev/mod.rs"]
 pub mod abbrev;
+#[path = "commands/buffer_ops/mod.rs"]
+pub mod buffer_ops;
 #[path = "commands/command_observation/mod.rs"]
 pub(crate) mod command_observation;
 #[path = "commands/interactive/mod.rs"]

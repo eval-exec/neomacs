@@ -360,7 +360,7 @@ impl Diff<'_> {
 /// Return the GNU change runs, or `None` when the deadline expires or the
 /// O(N+M) comparison workspace cannot be reserved. The caller treats both as
 /// "comparison unavailable" and falls back to a whole-region replacement.
-pub(super) fn change_runs(
+pub(crate) fn change_runs(
     a: &[u32],
     b: &[u32],
     deadline: Option<Instant>,

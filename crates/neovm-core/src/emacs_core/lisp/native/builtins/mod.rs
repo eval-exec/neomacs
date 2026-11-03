@@ -490,6 +490,10 @@ pub(crate) mod symbols;
 mod treesit;
 
 pub(crate) use super::buffer::*;
+pub(crate) use crate::emacs_core::buffer_ops::{
+    builtin_buffer_list, builtin_other_buffer, builtin_replace_region_contents,
+    builtin_set_buffer_multibyte,
+};
 pub(crate) use crate::emacs_core::kill_buffer::builtin_kill_buffer;
 pub(crate) use file_notify::*;
 pub(crate) use higher_order::*;

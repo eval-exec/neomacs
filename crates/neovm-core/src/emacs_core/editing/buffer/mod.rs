@@ -11,7 +11,6 @@ use crate::emacs_core::eval::VariableView;
 use crate::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispBytePos1, LispCharPos1, TextChange, TextEditRange, TextExtent,
-    TextPositionAnchor,
 };
 use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::filelock;
@@ -21,7 +20,6 @@ use crate::emacs_core::value::{
     set_string_text_properties_table_for_value,
 };
 use crate::tagged::value::SymbolMode;
-use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
 pub(crate) struct MakeIndirectBufferPlan {
@@ -1126,7 +1124,7 @@ fn replace_region_contents_type_predicate() -> Value {
     ])
 }
 
-fn replace_region_source_value_in_state(
+pub(crate) fn replace_region_source_value_in_state(
     buffers: &BufferManager,
     source: &Value,
     current_id: BufferId,
@@ -1411,7 +1409,7 @@ pub(crate) struct ReplaceRegionChangeRun {
 /// byte_offset)` pairs.  `byte_offset` is the offset (within `bytes`) of each
 /// character; a final sentinel entry `(0, bytes.len())` is appended so callers
 /// can map a character index to its byte offset for `0..=len`.
-fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
+pub(crate) fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
     let mut out = Vec::new();
     let mut pos = 0usize;
     while pos < bytes.len() {
@@ -1423,7 +1421,7 @@ fn decode_chars_with_byte_offsets(bytes: &[u8]) -> Vec<(u32, usize)> {
     out
 }
 
-mod replace_diff;
+pub(crate) mod replace_diff;
 
 /// GNU diffseq change runs, with linear workspace and MAX-COSTS heuristics.
 /// None means timeout or an unavailable comparison workspace; no edit has
@@ -1438,7 +1436,7 @@ pub(crate) fn replace_region_minimal_change_runs(
     replace_diff::change_runs(a, b, deadline, replace_diff::DEFAULT_MAX_COSTS)
 }
 
-fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, Flow> {
+pub(crate) fn replace_region_max_costs(value: Option<&Value>) -> Result<usize, Flow> {
     match value.copied().unwrap_or(Value::NIL) {
         value if value.is_nil() => Ok(replace_diff::DEFAULT_MAX_COSTS),
         value if value.is_fixnum() => Ok(value.as_fixnum().unwrap().max(0) as usize),
@@ -1505,603 +1503,10 @@ pub(crate) fn builtin_replace_buffer_contents(
     builtin_replace_region_contents(eval, region_args)
 }
 
-pub(crate) fn builtin_replace_region_contents(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args_range("replace-region-contents", &args, 3, 6)?;
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
-
-    // GNU editfns.c `Freplace_region_contents`: if SOURCE is a function, call
-    // it with no arguments and the current buffer narrowed to BEG..END, and use
-    // its return value (a buffer or string) as the actual source.  This is
-    // wrapped in `save-excursion` + `save-restriction` so the narrowing and
-    // point are restored afterwards.  (This SOURCE form is deprecated in GNU.)
-    let mut source = args[2];
-    if super::builtins::types::builtin_functionp_1(eval, source)?.is_truthy() {
-        let count = eval.specpdl.len();
-        eval.record_save_excursion();
-        if let Some(state) = eval.edit.buffers.save_current_restriction_state() {
-            eval.specpdl
-                .push(super::eval::SpecBinding::save_restriction(state));
-        }
-        let narrow_result =
-            builtin_narrow_to_region(eval, vec![Value::fixnum(start), Value::fixnum(end)])
-                .and_then(|_| eval.funcall_general(source, Vec::<Value>::new()));
-        let narrow_result = eval.unbind_to_with_result(count, narrow_result);
-        source = narrow_result?;
-    }
-
-    let source_value =
-        replace_region_source_value_in_state(&eval.edit.buffers, &source, current_id)?;
-    // When SOURCE is a buffer, source_value is a FRESH substring held only
-    // in this Rust local while modification hooks run arbitrary Lisp during
-    // the replacement below; root it for the rest of the function. Normal
-    // exits restore explicitly; error unwinds pop the GcRoot with the frame.
-    let source_root_scope = eval.save_specpdl_roots();
-    eval.push_specpdl_root(source_value);
-
-    let read_only_buffer_name = eval.edit.buffers.current_buffer().and_then(|buf| {
-        if super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf) {
-            Some(buf.name_value())
-        } else {
-            None
-        }
-    });
-    if let Some(name) = read_only_buffer_name {
-        return Err(signal(LispCondition::BufferReadOnly, vec![name]));
-    }
-
-    let byte_range = {
-        let buf = eval
-            .edit
-            .buffers
-            .get(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let start_byte = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(start));
-        let end_byte = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(end));
-
-        if start_byte <= end_byte {
-            EmacsByteRange::new(start_byte, end_byte)
-        } else {
-            EmacsByteRange::new(end_byte, start_byte)
-        }
-    };
-    let old_range = super::editfns::buffer_edit_range_for_byte_range_in_manager(
-        &eval.edit.buffers,
-        current_id,
-        byte_range,
-    )?;
-    let target_multibyte = current_buffer_multibyte(&eval.edit.buffers)?;
-    // GNU 31's Freplace_region_contents currently passes its Lisp INHERIT
-    // argument to replace_range's adjust-match-data parameter and hard-codes
-    // the distinct property-inheritance parameter to false (editfns.c).
-    // Neomacs does not yet expose that internal match-data switch, but it must
-    // keep the two semantic axes separate: replacement SOURCE properties are
-    // copied, while adjoining destination properties are not inherited.
-    let _adjust_match_data = args.get(5).is_some_and(|value| value.is_truthy());
-
-    // GNU `Freplace_region_contents` falls back to a plain `delete-region` +
-    // `insert` when MAX-SECS or MAX-COSTS is exactly 0 (the comparison step is
-    // disabled).  Detect that here so callers retain the escape hatch.
-    let comparison_disabled = matches!(args.get(3), Some(v) if eq_fixnum_zero(v))
-        || matches!(args.get(4), Some(v) if eq_fixnum_zero(v));
-
-    // Decode the destination region (A) and the source (B) into codepoint
-    // sequences so we can compute a minimal edit.  The source is first
-    // converted into the destination buffer's representation so both sides use
-    // the same encoding.
-    let region_bytes = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .map(|buf| buf.buffer_substring_bytes_range(byte_range))
-        .unwrap_or_default();
-    let source_string = source_value
-        .as_lisp_string()
-        .map(|ls| buffer_insert_lisp_string_from_lisp_string(ls, target_multibyte))
-        .unwrap_or_else(|| lisp_string_from_buffer_bytes(Vec::new(), target_multibyte));
-
-    let a_decoded = decode_chars_with_byte_offsets(&region_bytes);
-    let b_decoded = decode_chars_with_byte_offsets(source_string.as_bytes());
-    // Strip the trailing sentinel for the codepoint comparison.
-    let a_codes: Vec<u32> = a_decoded[..a_decoded.len() - 1]
-        .iter()
-        .map(|&(c, _)| c)
-        .collect();
-    let b_codes: Vec<u32> = b_decoded[..b_decoded.len() - 1]
-        .iter()
-        .map(|&(c, _)| c)
-        .collect();
-
-    let trivial = comparison_disabled || a_codes.is_empty() || b_codes.is_empty();
-    let runs = if trivial {
-        None
-    } else {
-        let max_costs = replace_region_max_costs(args.get(4))?;
-        // GNU accepts all Lisp time representations, not just float seconds.
-        // An integer zero takes the trivial path above; an expired nonzero
-        // or float-zero budget takes the timeout path and returns nil.
-        let deadline = if let Some(max_secs) = args.get(3).filter(|value| !value.is_nil()) {
-            let (secs, nanos) = super::timefns::time_value_seconds_and_nanos(max_secs)?;
-            let now = Instant::now();
-            if secs < 0 {
-                Some(now)
-            } else {
-                now.checked_add(Duration::new(secs as u64, nanos as u32))
-            }
-        } else {
-            None
-        };
-        replace_diff::change_runs(&a_codes, &b_codes, deadline, max_costs)
-    };
-
-    // Timeout must use the same whole-region replacement as GNU, rather
-    // than applying a partial diff.  Preserve source properties and run the
-    // normal modification hooks in both this and the trivial empty-side path.
-    if runs.is_none() {
-        let replacement = buffer_insert_piece_from_string(source_value, target_multibyte)?
-            .into_replacement_text();
-        // GNU `replace_range (min_a, min_a + size_a, source, true, ...)`
-        // (editfns.c:2044): the range is re-measured after the callbacks.
-        let pending = super::editfns::PendingTextEdit::new(
-            old_range,
-            super::editfns::RemeasureRule::ReplaceRange,
-        );
-        if let Some(prepared) = pending.prepare(eval)? {
-            let new_extent = prepared
-                .lease(&mut eval.edit.buffers)
-                .and_then(|lease| lease.replace(&replacement))
-                .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-            super::editfns::signal_after_text_change(
-                eval,
-                TextChange::new(prepared.range(), new_extent),
-            )?;
-        }
-        eval.restore_specpdl_roots(source_root_scope);
-        return Ok(if trivial { Value::T } else { Value::NIL });
-    }
-
-    let runs = runs.expect("completed comparison");
-
-    // GNU `Freplace_region_contents` (editfns.c) calls `Fundo_boundary` once
-    // compareseq has succeeded, before walking the change runs — including
-    // when there is nothing to change.  Besides the boundary itself this sets
-    // `point_before_last_command_or_undo`, which the per-run `record_point`
-    // then conses ahead of the first change record.  The trivial
-    // empty-side/comparison-disabled paths above return before reaching it,
-    // matching GNU.
-    // GNU's `Freplace_buffer_contents' calls `Fundo_boundary' (src/editfns.c:2139),
-    // so it sets `undo-auto--last-boundary-cause' by exactly the same route.
-    if eval
-        .edit
-        .buffers
-        .add_undo_boundary(current_id)
-        .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?
-        == crate::buffer::buffer::UndoBoundaryOutcome::Recorded
-    {
-        crate::emacs_core::undo::set_last_boundary_cause_explicit(eval)?;
-    }
-
-    if runs.is_empty() {
-        // Buffers already identical within the region: nothing to do, and no
-        // markers/point are disturbed.  GNU returns t in this case.
-        eval.restore_specpdl_roots(source_root_scope);
-        return Ok(Value::T);
-    }
-
-    // Announce a single modification spanning the whole region, exactly like
-    // GNU which calls `prepare_to_modify_buffer` once and binds
-    // `inhibit-modification-hooks` while issuing the per-run replacements.
-    let new_extent = super::editfns::lisp_string_text_extent(&source_string);
-    let change = TextChange::new(old_range, new_extent);
-    super::editfns::signal_before_text_change(eval, change)?;
-
-    // GNU computes every run as `min_a + i` in characters before the
-    // callbacks ran, and `replace_range` clamps each one to BEGV..ZV of the
-    // live buffer (editfns.c:2165-2183, insdel.c:1509-1513). Measuring the
-    // runs in the live text keeps a callback's edit from leaving them past
-    // the text or inside a multibyte sequence.
-    let region_start = old_range.char_start();
-    // Apply the change runs back-to-front so that earlier positions stay
-    // valid as we edit (mirrors GNU walking the change lists backwards).
-    for run in runs.iter().rev() {
-        let Some((target, del_range)) = eval.edit.buffers.current_buffer().map(|buf| {
-            let begv = buf.point_min_char_pos();
-            let zv = buf.point_max_char_pos();
-            let total = buf.total_char_end_pos();
-            let from = region_start
-                .add_len(CharLen::new(run.a_start))
-                .max(begv)
-                .min(total);
-            let to = region_start
-                .add_len(CharLen::new(run.a_end))
-                .min(zv)
-                .clamp(from, total.max(from));
-            (
-                buf.id,
-                buf.edit_range_for_char_range(CharRange::new(from, to)),
-            )
-        }) else {
-            break;
-        };
-
-        // Replacement text for this run: characters [b_start, b_end) of the
-        // source, sliced from the original SOURCE value so text properties are
-        // preserved.
-        let replacement = if run.b_start == run.b_end {
-            Value::string("")
-        } else {
-            super::builtins::strings::builtin_substring(vec![
-                source_value,
-                Value::fixnum(run.b_start as i64),
-                Value::fixnum(run.b_end as i64),
-            ])?
-        };
-        let replacement =
-            buffer_insert_piece_from_string(replacement, target_multibyte)?.into_replacement_text();
-        eval.edit
-            .buffers
-            .replace_buffer_measured_region_lisp_string(target, del_range, &replacement)
-            .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
-    }
-
-    // GNU `signal_after_change (min_a, size_a, size_b)` (editfns.c:2189).
-    super::editfns::signal_after_change_chars(
-        eval,
-        region_start,
-        old_range.char_len(),
-        new_extent.chars(),
-    )?;
-
-    eval.restore_specpdl_roots(source_root_scope);
-    Ok(Value::T)
-}
-
 /// True when `value` is the fixnum 0 (used for GNU's MAX-SECS/MAX-COSTS == 0
 /// "disable comparison" fallback).
-fn eq_fixnum_zero(value: &Value) -> bool {
+pub(crate) fn eq_fixnum_zero(value: &Value) -> bool {
     value.as_fixnum() == Some(0)
-}
-
-pub(crate) fn builtin_set_buffer_multibyte(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    expect_args("set-buffer-multibyte", &args, 1)?;
-    let flag = args[0];
-    let target_multibyte = !flag.is_nil();
-    let current_id = eval
-        .edit
-        .buffers
-        .current_buffer_id()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-
-    let (already_multibyte, narrowed, base_buffer, shared_ids) = {
-        let current = eval
-            .edit
-            .buffers
-            .get(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        (
-            current.get_multibyte(),
-            current.is_narrowed(),
-            current.base_buffer,
-            eval.edit.buffers.shared_text_buffer_ids(current_id),
-        )
-    };
-    let old_undo_list = eval
-        .edit
-        .buffers
-        .get(current_id)
-        .map(|buffer| buffer.get_undo_list())
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-
-    if base_buffer.is_some() {
-        return Err(signal(
-            "error",
-            vec![Value::string(
-                "Cannot do `set-buffer-multibyte' on an indirect buffer",
-            )],
-        ));
-    }
-
-    if already_multibyte == target_multibyte {
-        return Ok(flag);
-    }
-
-    if narrowed {
-        return Err(signal(
-            "error",
-            vec![Value::string("Changing multibyteness in a narrowed buffer")],
-        ));
-    }
-
-    #[derive(Clone, Copy)]
-    struct OverlaySnapshot {
-        overlay: Value,
-        start_old_emacs_byte: EmacsBytePos,
-        end_old_emacs_byte: EmacsBytePos,
-        old_begin: CharPos0,
-    }
-
-    struct BufferSnapshot {
-        id: BufferId,
-        pt_old_emacs_byte: EmacsBytePos,
-        begv_old_emacs_byte: EmacsBytePos,
-        zv_old_emacs_byte: EmacsBytePos,
-        mark_old_emacs_byte: Option<EmacsBytePos>,
-        last_window_start_old_emacs_byte: EmacsBytePos,
-        overlays: Vec<OverlaySnapshot>,
-    }
-
-    let snapshots = {
-        let mut snapshots = Vec::with_capacity(shared_ids.len());
-        for id in &shared_ids {
-            let buffer = eval
-                .edit
-                .buffers
-                .get(*id)
-                .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-            let overlays = buffer
-                .overlays
-                .dump_overlays()
-                .into_iter()
-                .filter_map(|overlay| {
-                    let data = overlay.as_overlay_data()?;
-                    let (start, end) = data.current_range();
-                    let total_end = buffer.total_emacs_byte_end_pos();
-                    Some(OverlaySnapshot {
-                        overlay,
-                        start_old_emacs_byte: EmacsBytePos::new(start).min(total_end),
-                        end_old_emacs_byte: EmacsBytePos::new(end).min(total_end),
-                        old_begin: buffer.emacs_byte_pos_to_char_pos_clamped(
-                            EmacsBytePos::new(start).min(total_end),
-                        ),
-                    })
-                })
-                .collect();
-            let last_window_start = buffer.last_window_start;
-            let total_end = buffer.total_emacs_byte_end_pos();
-            snapshots.push(BufferSnapshot {
-                id: *id,
-                pt_old_emacs_byte: buffer.point_emacs_byte_pos().min(total_end),
-                begv_old_emacs_byte: buffer.point_min_emacs_byte_pos().min(total_end),
-                zv_old_emacs_byte: buffer.point_max_emacs_byte_pos().min(total_end),
-                mark_old_emacs_byte: buffer.mark_emacs_byte_pos().map(|mark| mark.min(total_end)),
-                last_window_start_old_emacs_byte: buffer
-                    .lisp_pos_to_full_buffer_emacs_byte_pos(last_window_start),
-                overlays,
-            });
-        }
-        snapshots
-    };
-
-    let source_value = {
-        let buffer = eval
-            .edit
-            .buffers
-            .get(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        buffer_slice_value_range(buffer, buffer.full_emacs_byte_range())
-    };
-    let old_bytes: Vec<u8> = source_value
-        .as_lisp_string()
-        .map(|s| s.as_bytes().to_vec())
-        .unwrap_or_default();
-    let old_byte_len = old_bytes.len();
-    let (converted_value, mode) = convert_buffer_string_for_multibyte(source_value, flag)?;
-    let piece = buffer_insert_piece_from_string(converted_value, target_multibyte)?;
-    let new_storage = piece.text;
-    let new_total_bytes = new_storage.sbytes();
-    let conversion_byte_map = build_multibyte_conversion_byte_map(&old_bytes, mode);
-
-    let new_props = {
-        let buffer = eval
-            .edit
-            .buffers
-            .get(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        let old_props = buffer.text_props_snapshot();
-        match mode {
-            BufferMultibyteConversionMode::ToMultibyte => old_props,
-            BufferMultibyteConversionMode::AsUnibyte
-            | BufferMultibyteConversionMode::AsMultibyte => {
-                remap_text_property_table(&old_props, |char_pos| {
-                    let logical_byte = buffer
-                        .char_pos_to_emacs_byte_pos_clamped(CharPos0::new(char_pos))
-                        .get();
-                    let boundary = remap_old_byte_to_new_boundary(
-                        &conversion_byte_map,
-                        old_byte_len,
-                        &new_storage,
-                        new_total_bytes,
-                        logical_byte,
-                    );
-                    lisp_string_byte_to_char(&new_storage, boundary)
-                })
-            }
-        }
-    };
-
-    // Walk the intrusive marker chain and remap each logical byte position
-    // through the same boundary arithmetic used for point, narrowing and
-    // overlays.
-    {
-        let buffer = eval
-            .edit
-            .buffers
-            .get_mut(current_id)
-            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-        buffer.remap_text_marker_anchors(|old_position| {
-            let old_byte = old_position.emacs_byte_pos().get();
-            let boundary = remap_old_byte_to_new_boundary(
-                &conversion_byte_map,
-                old_byte_len,
-                &new_storage,
-                new_total_bytes,
-                old_byte,
-            );
-            let new_char = lisp_string_byte_to_char(&new_storage, boundary);
-            TextPositionAnchor::new(CharPos0::new(new_char), EmacsBytePos::new(boundary))
-        });
-        buffer.replace_lisp_string_with_text_props(&new_storage, new_props);
-    }
-
-    // Set the multibyte flag BEFORE remapping positions. GNU does
-    // `bset_enable_multibyte_characters` first ("so that chars_in_text asks the
-    // right question"): the buffer's byte<->char conversion used by point /
-    // narrowing / marker remapping must see the new multibyteness, otherwise it
-    // counts every byte as a character.
-    for id in &shared_ids {
-        eval.edit
-            .buffers
-            .set_buffer_multibyte_flag(*id, target_multibyte)
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-    }
-
-    for snapshot in snapshots {
-        let map_boundary = |logical_byte: usize| {
-            remap_old_byte_to_new_boundary(
-                &conversion_byte_map,
-                old_byte_len,
-                &new_storage,
-                new_total_bytes,
-                logical_byte,
-            )
-        };
-
-        let pt_byte = map_boundary(snapshot.pt_old_emacs_byte.get());
-        let begv_byte = map_boundary(snapshot.begv_old_emacs_byte.get());
-        let zv_byte = map_boundary(snapshot.zv_old_emacs_byte.get());
-        let mark_byte = snapshot
-            .mark_old_emacs_byte
-            .map(|old_byte| map_boundary(old_byte.get()));
-        let last_window_start_byte = map_boundary(snapshot.last_window_start_old_emacs_byte.get());
-
-        eval.edit
-            .buffers
-            .restore_buffer_emacs_byte_restriction(
-                snapshot.id,
-                EmacsByteRange::new(EmacsBytePos::new(begv_byte), EmacsBytePos::new(zv_byte)),
-            )
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        eval.edit
-            .buffers
-            .goto_buffer_emacs_byte_pos(snapshot.id, EmacsBytePos::new(pt_byte))
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-
-        if let Some(mark_byte) = mark_byte {
-            eval.edit
-                .buffers
-                .set_buffer_mark_emacs_byte_pos(snapshot.id, EmacsBytePos::new(mark_byte))
-                .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        } else {
-            eval.edit
-                .buffers
-                .clear_buffer_mark(snapshot.id)
-                .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        }
-
-        eval.edit
-            .buffers
-            .set_buffer_last_window_start(
-                snapshot.id,
-                LispCharPos1::from_one_based_usize(
-                    lisp_string_byte_to_char(&new_storage, last_window_start_byte) + 1,
-                ),
-            )
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-
-        // GNU buffer.c:1044 visits an ascending snapshot, then itree.c:750
-        // compares numeric begins while nodes change coordinate spaces. Build
-        // the complete remap before publication, rather than moving by bytes.
-        let remap_buffer = eval
-            .edit
-            .buffers
-            .get(snapshot.id)
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        let remaps: Vec<_> = snapshot
-            .overlays
-            .into_iter()
-            .map(|overlay| {
-                let start_byte = map_boundary(overlay.start_old_emacs_byte.get());
-                let end_byte = map_boundary(overlay.end_old_emacs_byte.get());
-                crate::buffer::overlay::OverlayPositionRemap {
-                    overlay: overlay.overlay,
-                    old_range: EmacsByteRange::new(
-                        overlay.start_old_emacs_byte,
-                        overlay.end_old_emacs_byte,
-                    ),
-                    range: EmacsByteRange::new(
-                        EmacsBytePos::new(start_byte),
-                        EmacsBytePos::new(end_byte),
-                    ),
-                    old_begin: overlay.old_begin,
-                    // Replaced buffer text owns indexed byte/character lookup;
-                    // rescanning a Lisp string prefix per overlay is quadratic.
-                    new_begin: remap_buffer
-                        .emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(start_byte)),
-                }
-            })
-            .collect();
-        eval.edit
-            .buffers
-            .get_mut(snapshot.id)
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?
-            .overlays
-            .remap_overlay_positions(&remaps);
-        for _ in &remaps {
-            eval.edit
-                .buffers
-                .note_overlay_modification(snapshot.id)
-                .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        }
-
-        eval.edit
-            .buffers
-            .set_buffer_multibyte_flag(snapshot.id, target_multibyte)
-            .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        // The remap above moved every marker in the chain, the windows'
-        // start/point markers included, without a change signal: refresh
-        // the windows' cached positions from them here, as an edit would.
-        // GNU reads `w->start` through the marker (`Fwindow_start`), so
-        // `(window-start)` right after this call already answers with the
-        // remapped position.
-        eval.sync_window_positions(snapshot.id);
-    }
-
-    // GNU buffer.c:2985-2989: a real displayed-buffer conversion raises
-    // windows_or_buffers_changed ALL after remapping text and overlays.
-    if super::redisplay_policy::gnu_redisplay_hooks_enabled()
-        && eval
-            .frames
-            .buffer_window_count(&eval.edit.buffers, current_id)
-            > 0
-    {
-        eval.gnu_mark_windows_all();
-        eval.request_menu_bar_rebuild(super::eval::MenuBarRebuildReason::WindowsOrBuffersChanged);
-    }
-
-    if !old_undo_list.is_t() {
-        let restore_flag = if flag.is_nil() { Value::T } else { Value::NIL };
-        let undo_entry = Value::list(vec![
-            Value::symbol("apply"),
-            Value::symbol("set-buffer-multibyte"),
-            restore_flag,
-        ]);
-        let _ = eval
-            .edit
-            .buffers
-            .configure_buffer_undo_list(current_id, Value::cons(undo_entry, old_undo_list));
-    }
-    Ok(flag)
 }
 
 /// `(split-window-internal OLD PIXEL-SIZE SIDE NORMAL-SIZE &optional REFER)`
@@ -2963,8 +2368,8 @@ pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -
     Ok(arg)
 }
 
-struct InsertPiece {
-    text: crate::heap_types::LispString,
+pub(crate) struct InsertPiece {
+    pub(crate) text: crate::heap_types::LispString,
     text_props: Option<crate::buffer::text_props::TextPropertyTable>,
 }
 
@@ -2972,7 +2377,7 @@ impl InsertPiece {
     /// Reassemble converted text and properties for the typed replacement
     /// pipeline. Lisp string properties normally live beside a tagged Value;
     /// `ReplaceTextPlan` deliberately owns both in one `LispString`.
-    fn into_replacement_text(mut self) -> crate::heap_types::LispString {
+    pub(crate) fn into_replacement_text(mut self) -> crate::heap_types::LispString {
         if let Some(properties) = self.text_props {
             *self.text.intervals_mut() = properties;
         }
@@ -2998,7 +2403,7 @@ fn current_empty_text_change_at_emacs_byte_pos(
     )
 }
 
-fn current_buffer_multibyte(buffers: &BufferManager) -> Result<bool, Flow> {
+pub(crate) fn current_buffer_multibyte(buffers: &BufferManager) -> Result<bool, Flow> {
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3008,7 +2413,10 @@ fn current_buffer_multibyte(buffers: &BufferManager) -> Result<bool, Flow> {
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
 
-fn lisp_string_byte_to_char(string: &crate::heap_types::LispString, byte_pos: usize) -> usize {
+pub(crate) fn lisp_string_byte_to_char(
+    string: &crate::heap_types::LispString,
+    byte_pos: usize,
+) -> usize {
     let clamped = byte_pos.min(string.sbytes());
     if string.is_multibyte() {
         crate::emacs_core::emacs_char::byte_to_char_pos(string.as_bytes(), clamped)
@@ -3046,7 +2454,7 @@ fn lisp_string_advance_byte_to_boundary(
     pos
 }
 
-fn remap_text_property_table(
+pub(crate) fn remap_text_property_table(
     table: &crate::buffer::text_props::TextPropertyTable,
     char_map: impl Fn(usize) -> usize,
 ) -> crate::buffer::text_props::TextPropertyTable {
@@ -3103,7 +2511,7 @@ fn encode_char_code_for_buffer_bytes(code: u32, multibyte: bool) -> Option<Vec<u
     }
 }
 
-fn buffer_insert_lisp_string_from_lisp_string(
+pub(crate) fn buffer_insert_lisp_string_from_lisp_string(
     string: &crate::heap_types::LispString,
     target_multibyte: bool,
 ) -> crate::heap_types::LispString {
@@ -3155,7 +2563,7 @@ fn buffer_insert_lisp_string_from_lisp_string(
     }
 }
 
-fn buffer_insert_piece_from_string(
+pub(crate) fn buffer_insert_piece_from_string(
     value: Value,
     target_multibyte: bool,
 ) -> Result<InsertPiece, Flow> {
@@ -3215,7 +2623,7 @@ pub(crate) fn buffer_slice_value_range(
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum BufferMultibyteConversionMode {
+pub(crate) enum BufferMultibyteConversionMode {
     AsUnibyte,
     AsMultibyte,
     ToMultibyte,
@@ -3249,7 +2657,7 @@ fn remap_string_text_props_for_conversion(
     }
 }
 
-fn convert_buffer_string_for_multibyte(
+pub(crate) fn convert_buffer_string_for_multibyte(
     source: Value,
     flag: Value,
 ) -> Result<(Value, BufferMultibyteConversionMode), Flow> {
@@ -3289,7 +2697,7 @@ fn convert_buffer_string_for_multibyte(
 /// bytes (two eight-bit chars), so old byte 2 maps to new byte 4 — without this,
 /// the old end position maps short and the buffer is wrongly narrowed. `map[k]`
 /// is the new offset of old byte `k`; `map[old_len]` is the total new length.
-fn build_multibyte_conversion_byte_map(
+pub(crate) fn build_multibyte_conversion_byte_map(
     old_bytes: &[u8],
     mode: BufferMultibyteConversionMode,
 ) -> Vec<usize> {
@@ -3357,7 +2765,7 @@ fn build_multibyte_conversion_byte_map(
 /// Remap an old buffer byte offset to a character boundary in the converted
 /// storage, via the conversion byte map (then round to a char boundary for any
 /// position that fell inside a multibyte sequence).
-fn remap_old_byte_to_new_boundary(
+pub(crate) fn remap_old_byte_to_new_boundary(
     byte_map: &[usize],
     old_byte_len: usize,
     new_storage: &crate::heap_types::LispString,
@@ -4575,46 +3983,6 @@ pub(crate) fn builtin_set_buffer_auto_saved(
     Ok(Value::NIL)
 }
 
-pub(crate) fn builtin_buffer_list(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    expect_max_args("buffer-list", &args, 1)?;
-    let ids = args
-        .first()
-        .and_then(|value| match value.kind() {
-            ValueKind::Veclike(VecLikeType::Frame) => {
-                let fid = crate::window::FrameId(value.as_frame_id().unwrap());
-                let frame = eval.frames.get(fid)?;
-
-                // Global buffer list (Vbuffer_alist equivalent).
-                let mut general = eval.edit.buffers.buffer_list();
-
-                // Frame-specific lists (GNU buffer.c:438-460).
-                // f->buffer_list: most-recently-shown first.
-                let framelist: Vec<BufferId> = frame.buffer_list.clone();
-                // f->buried_buffer_list: most-recently-buried first;
-                // GNU reverses it so most-recently-buried comes last.
-                let mut prevlist: Vec<BufferId> = frame.buried_buffer_list.clone();
-                prevlist.reverse();
-
-                // Remove duplicates from general.
-                general.retain(|bid| !framelist.contains(bid) && !prevlist.contains(bid));
-
-                // GNU buffer.c:457: CALLN(Fnconc, framelist, general, prevlist).
-                // Framelist first, then remaining (deduped) general, then
-                // reversed buried list last so buried buffers are at the
-                // absolute end.
-                let mut ids = Vec::with_capacity(framelist.len() + prevlist.len() + general.len());
-                ids.extend(framelist);
-                ids.extend(general);
-                ids.extend(prevlist);
-                Some(ids)
-            }
-            _ => None,
-        })
-        .unwrap_or_else(|| eval.edit.buffers.buffer_list());
-    let vals: Vec<Value> = ids.into_iter().map(Value::make_buffer).collect();
-    Ok(Value::list(vals))
-}
-
 fn other_buffer_designator(
     buffers: &crate::buffer::BufferManager,
     value: Option<&Value>,
@@ -4645,13 +4013,6 @@ fn is_hidden_buffer(buffers: &crate::buffer::BufferManager, id: crate::buffer::B
         .get(id)
         .map(|buf| buf.name_starts_with_space())
         .unwrap_or(true)
-}
-
-pub(crate) fn builtin_other_buffer(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    other_buffer_impl_in_state(&mut eval.frames, &mut eval.edit.buffers, args)
 }
 
 pub(crate) fn other_buffer_impl(
