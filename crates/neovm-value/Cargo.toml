@@ -10,6 +10,7 @@ description = "Lower NeoVM runtime utilities shared with the core crate"
 [dependencies]
 bitflags.workspace = true
 bytemuck.workspace = true
+getrandom.workspace = true
 hashbrown.workspace = true
 libc.workspace = true
 malachite.workspace = true

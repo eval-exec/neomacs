@@ -1055,3 +1055,9 @@ OverlayData::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_
 DumpedSymbolFlags::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/symbol/cell.rs:581	symbol::cell	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
 ThreadChildren::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs:328	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
 MutexPayload::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs:488	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
+emacs_get_random	fn	pub(crate)	crates/neovm-value/src/random.rs:55	random	stage-3 C12: buffer substrate (generate_new_buffer_name) calls the PRNG below the lisp layer; body unchanged, moved from builtins/arithmetic.rs
+emacs_get_random_fixnum	fn	private	crates/neovm-value/src/random.rs:61	random	stage-3 C12: moved with the lock owner (arithmetic's random subr keeps its caller)
+emacs_seed_random	fn	private	crates/neovm-value/src/random.rs:77	random	stage-3 C12: moved with the lock owner
+emacs_init_random	fn	private	crates/neovm-value/src/random.rs:87	random	stage-3 C12: moved with the lock owner
+emacs_random_limb_unlocked	fn	private	crates/neovm-value/src/random.rs:99	random	stage-3 C12: bignum sampler limb word; caller must hold the lock
+with_random_locked	fn	(new fn)	crates/neovm-value/src/random.rs:46	random	stage-3 C12: keeps the single process PRNG lock inside the substrate; the bignum sampler spans limbs under it (GNU bignum.c loop)

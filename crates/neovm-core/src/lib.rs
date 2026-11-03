@@ -25,6 +25,9 @@ pub(crate) use neovm_value::tls_fingerprint;
 // The thread-local restoration guard lives in the lower value crate. The
 // re-export keeps the historical `crate::tls_scope` path for every core user.
 pub(crate) use neovm_value::tls_scope;
+// The process PRNG substrate (GNU sysdep.c) moved with the stage-3 split
+// (C12): the buffer substrate generates unique names below the lisp layer.
+pub(crate) use neovm_value::random;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The

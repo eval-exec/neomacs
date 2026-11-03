@@ -4403,6 +4403,7 @@ version = "0.0.20"
 dependencies = [
  "bitflags 2.13.1",
  "bytemuck",
+ "getrandom 0.4.3",
  "hashbrown 0.17.0",
  "libc",
  "malachite",

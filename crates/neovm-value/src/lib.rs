@@ -15,6 +15,7 @@ pub mod hashtab;
 pub mod heap_types;
 pub mod intern;
 pub mod plist;
+pub mod random;
 pub mod symbol;
 pub mod tagged;
 pub mod tls_fingerprint;

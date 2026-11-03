@@ -8147,7 +8147,7 @@ impl BufferManager {
     /// unchanged; otherwise follows GNU `generate-new-buffer-name`.
     pub fn generate_new_buffer_name(&self, base: &str) -> String {
         self.generate_new_buffer_name_ignoring_with_random(base, None, || {
-            crate::emacs_core::builtins::emacs_get_random()
+            crate::random::emacs_get_random()
         })
     }
 
@@ -8155,7 +8155,7 @@ impl BufferManager {
     /// a live buffer already owns that name.
     pub fn generate_new_buffer_name_ignoring(&self, base: &str, ignore: Option<&str>) -> String {
         self.generate_new_buffer_name_ignoring_with_random(base, ignore, || {
-            crate::emacs_core::builtins::emacs_get_random()
+            crate::random::emacs_get_random()
         })
     }
 

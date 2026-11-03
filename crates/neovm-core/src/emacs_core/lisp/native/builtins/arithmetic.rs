@@ -3,6 +3,10 @@ use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::forward::LispIntFwd;
 use crate::emacs_core::intern::{SymId, intern};
 use crate::emacs_core::symbol::Obarray;
+use crate::random::{
+    emacs_get_random, emacs_get_random_fixnum, emacs_init_random, emacs_random_limb_unlocked,
+    emacs_seed_random, with_random_locked,
+};
 use malachite::base::num::arithmetic::traits::{Abs, DivRound};
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::num::logic::traits::SignificantBits;
@@ -11,7 +15,7 @@ use malachite::integer::Integer;
 use malachite::natural::Natural;
 use std::cell::RefCell;
 use std::mem::MaybeUninit;
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Weak};
 
 mod bounded_power;
 
@@ -2612,7 +2616,8 @@ pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {
 /// A positive bignum magnitude, validated before random generation. This
 /// borrow points into the creating mutator's Lisp heap and must remain on
 /// that mutator, even though Natural itself is Send/Sync. The process PRNG
-/// remains serialized by `SeededGenerator`; its lock does not protect GC.
+/// remains serialized by the value layer's PRNG lock (`with_random_locked`);
+/// its lock does not protect GC.
 /// No mutator-local cache is introduced.
 #[derive(Clone, Copy, Debug)]
 struct PositiveRandomLimit<'a>(&'a Natural, std::marker::PhantomData<*const ()>);
@@ -2644,237 +2649,49 @@ enum RandomPrefix {
 
 static_assertions::assert_impl_all!(RandomPrefix: Send, Sync);
 
-fn emacs_random_limb(generator: &mut SeededGenerator) -> u64 {
-    // GNU src/sysdep.c:2270-2276, get_random_ulong.
-    let mut word = 0u64;
-    for _ in 0..64u32.div_ceil(31) {
-        word = generator.word() ^ (word << 31) ^ (word >> 33);
-    }
-    word
-}
-
 fn emacs_get_random_bignum(limit: PositiveRandomLimit<'_>) -> EvalResult {
     // GNU src/bignum.c:558-617 samples the high limb in a bounded interval,
     // then rejects full candidates at or above LIMIT. Each allowed integer
     // therefore has equal probability, including fixnum results.
     let limbs = limit.0.as_limbs_asc();
     let high_limit = limbs[limbs.len() - 1].wrapping_add(u64::from(limbs.len() > 1));
-    let mut generator = SeededGenerator::lock();
-    let mut candidate = vec![0; limbs.len()];
-    'sample: loop {
-        let high = loop {
-            let word = emacs_random_limb(&mut generator);
-            if high_limit == 0 {
-                break word;
+    with_random_locked(|| {
+        let mut candidate = vec![0; limbs.len()];
+        'sample: loop {
+            let high = loop {
+                let word = emacs_random_limb_unlocked();
+                if high_limit == 0 {
+                    break word;
+                }
+                let remainder = word % high_limit;
+                if word - remainder <= high_limit.wrapping_neg() {
+                    break remainder;
+                }
+            };
+            candidate[limbs.len() - 1] = high;
+            let mut prefix = if high == limbs[limbs.len() - 1] {
+                RandomPrefix::AtLimit
+            } else {
+                RandomPrefix::BelowLimit
+            };
+            for i in (0..limbs.len() - 1).rev() {
+                let word = emacs_random_limb_unlocked();
+                match prefix {
+                    RandomPrefix::AtLimit => match word.cmp(&limbs[i]) {
+                        std::cmp::Ordering::Greater => continue 'sample,
+                        std::cmp::Ordering::Equal => {}
+                        std::cmp::Ordering::Less => prefix = RandomPrefix::BelowLimit,
+                    },
+                    RandomPrefix::BelowLimit => {}
+                }
+                candidate[i] = word;
             }
-            let remainder = word % high_limit;
-            if word - remainder <= high_limit.wrapping_neg() {
-                break remainder;
+            if prefix == RandomPrefix::BelowLimit {
+                return integer_value(false, Natural::from_owned_limbs_asc(candidate))
+                    .ok_or_else(overflow_error);
             }
-        };
-        candidate[limbs.len() - 1] = high;
-        let mut prefix = if high == limbs[limbs.len() - 1] {
-            RandomPrefix::AtLimit
-        } else {
-            RandomPrefix::BelowLimit
-        };
-        for i in (0..limbs.len() - 1).rev() {
-            let word = emacs_random_limb(&mut generator);
-            match prefix {
-                RandomPrefix::AtLimit => match word.cmp(&limbs[i]) {
-                    std::cmp::Ordering::Greater => continue 'sample,
-                    std::cmp::Ordering::Equal => {}
-                    std::cmp::Ordering::Less => prefix = RandomPrefix::BelowLimit,
-                },
-                RandomPrefix::BelowLimit => {}
-            }
-            candidate[i] = word;
         }
-        if prefix == RandomPrefix::BelowLimit {
-            return integer_value(false, Natural::from_owned_limbs_asc(candidate))
-                .ok_or_else(overflow_error);
-        }
-    }
-}
-
-/// Whether the process `random' generator has been given a seed.
-///
-/// GNU's generator is libc's `random ()` state, and `main` seeds it on every
-/// startup, dumped image or not, before any Lisp runs (`init_random ()` at
-/// src/emacs.c:2020, below `load_pdump` and outside the `!initialized`
-/// block).  A generator nobody seeded is not random: POSIX has it answer the
-/// `srandom (1)` sequence, so every process drew the same numbers and
-/// `server-generate-key' (lisp/server.el:606-617) computed the same TCP
-/// server key in every session.  Neither libc's state nor this one is part
-/// of a dumped image, so every process starts `Unseeded`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GeneratorSeed {
-    Unseeded,
-    Seeded,
-}
-
-/// The process generator, locked and seeded.
-///
-/// Every draw takes one, and [`SeededGenerator::lock`] seeds an `Unseeded`
-/// generator exactly as GNU's `init_random` does before handing it out.  So
-/// no draw reaches an unseeded generator, whichever path started the
-/// process: a final or bootstrap image, the source fallback, `temacs`
-/// loadup, or an embedder that never runs the post-image sequence.
-struct SeededGenerator {
-    /// Held, not read: holding it is what serializes the draws.
-    _held: MutexGuard<'static, GeneratorSeed>,
-}
-
-impl SeededGenerator {
-    fn lock() -> Self {
-        let mut seed = lock_generator();
-        if *seed == GeneratorSeed::Unseeded {
-            seed_from_entropy(&mut seed);
-        }
-        Self { _held: seed }
-    }
-
-    /// One `random ()` result, RAND_BITS = 31 (src/sysdep.c:2171-2178).
-    fn word(&mut self) -> u64 {
-        platform_random_word()
-    }
-}
-
-fn lock_generator() -> MutexGuard<'static, GeneratorSeed> {
-    static GENERATOR: Mutex<GeneratorSeed> = Mutex::new(GeneratorSeed::Unseeded);
-    // `Seeded` is written only after the seed it records is set, so a
-    // panicking holder cannot leave the state wrong.
-    GENERATOR
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-}
-
-/// GNU `init_random` (src/sysdep.c:2225-2249): seed from the operating
-/// system's entropy source (`getrandom`, or `w32_init_random` on Windows),
-/// and from the PID and the current time only when that source fails.
-fn seed_from_entropy(seed: &mut MutexGuard<'static, GeneratorSeed>) {
-    let value = getrandom::u32().unwrap_or_else(|_| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        std::process::id() ^ (now.as_secs() as u32) ^ now.subsec_nanos()
-    });
-    platform_seed_random(value);
-    **seed = GeneratorSeed::Seeded;
-}
-
-fn emacs_intmask() -> u64 {
-    (1_u64 << emacs_random_fixnum_bits()) - 1
-}
-
-fn emacs_random_fixnum_bits() -> u32 {
-    62
-}
-
-fn emacs_get_random_from(generator: &mut SeededGenerator) -> i64 {
-    const RAND_BITS: u32 = 31;
-    const EMACS_INT_WIDTH: u32 = 64;
-    let fixnum_bits = emacs_random_fixnum_bits();
-    let mut val: u64 = 0;
-    for _ in 0..fixnum_bits.div_ceil(RAND_BITS) {
-        let r = generator.word();
-        val = r ^ (val << RAND_BITS) ^ (val >> (EMACS_INT_WIDTH - RAND_BITS));
-    }
-    val ^= val >> (EMACS_INT_WIDTH - fixnum_bits);
-    (val & emacs_intmask()) as i64
-}
-
-pub(crate) fn emacs_get_random() -> i64 {
-    emacs_get_random_from(&mut SeededGenerator::lock())
-}
-
-fn emacs_get_random_fixnum(limit: i64) -> i64 {
-    let lim = limit as u64;
-    let intmask = emacs_intmask();
-    let difflim = intmask - lim + 1;
-    let mut generator = SeededGenerator::lock();
-    loop {
-        let r = emacs_get_random_from(&mut generator) as u64;
-        let remainder = r % lim;
-        let diff = r - remainder;
-        if difflim >= diff {
-            return remainder as i64;
-        }
-    }
-}
-
-/// `(random STRING)`: GNU `seed_random` (src/sysdep.c:2213-2222).  The seed
-/// is deterministic, and it is the process's seed from now on, so no later
-/// draw replaces it with one from the OS.
-fn emacs_seed_random(seed: &[u8]) {
-    let mut arg = 0u32;
-    for (index, byte) in seed.iter().enumerate() {
-        arg ^= u32::from(*byte) << ((index % 4) * 8);
-    }
-    let mut state = lock_generator();
-    platform_seed_random(arg);
-    *state = GeneratorSeed::Seeded;
-}
-
-/// `(random t)`: GNU `Frandom` runs `init_random` again (src/fns.c:88-89).
-fn emacs_init_random() {
-    seed_from_entropy(&mut lock_generator());
-}
-
-#[cfg(unix)]
-fn platform_seed_random(seed: u32) {
-    // GNU sysdep.c uses srandom/random when HAVE_RANDOM is available, with
-    // `unsigned int random_seed`.  Unix platforms we support provide that API.
-    unsafe { c_random::srandom(seed as libc::c_uint) };
-}
-
-#[cfg(unix)]
-fn platform_random_word() -> u64 {
-    unsafe { c_random::random() as u64 }
-}
-
-#[cfg(unix)]
-mod c_random {
-    unsafe extern "C" {
-        pub(super) fn srandom(seed: libc::c_uint);
-        pub(super) fn random() -> libc::c_long;
-    }
-}
-
-#[cfg(not(unix))]
-mod fallback_random {
-    use std::sync::atomic::{AtomicU32, Ordering};
-
-    /// One state for the whole process, not one per thread: the seed set by
-    /// startup or by `(random STRING)` has to govern every Lisp thread's
-    /// draws.  GNU replaces the MS-Windows `rand` for the same reason, "MS-
-    /// Windows 'rand' produces separate identical series for each thread"
-    /// (src/w32.c:2419-2457).  Only read and written under the generator
-    /// lock (`lock_generator`).
-    static RANDOM_STATE: AtomicU32 = AtomicU32::new(0x1234_5678);
-
-    pub(super) fn seed(seed: u32) {
-        RANDOM_STATE.store(seed, Ordering::Relaxed);
-    }
-
-    pub(super) fn next() -> u64 {
-        let next = RANDOM_STATE
-            .load(Ordering::Relaxed)
-            .wrapping_mul(1103515245)
-            .wrapping_add(12345);
-        RANDOM_STATE.store(next, Ordering::Relaxed);
-        u64::from((next >> 16) & 0x7fff)
-    }
-}
-
-#[cfg(not(unix))]
-fn platform_seed_random(seed: u32) {
-    fallback_random::seed(seed);
-}
-
-#[cfg(not(unix))]
-fn platform_random_word() -> u64 {
-    fallback_random::next()
+    })
 }
 
 pub(crate) fn builtin_isnan(args: Vec<Value>) -> EvalResult {
