@@ -5,6 +5,7 @@ use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::lowering::FlonumKind;
 use crate::emacs_core::jit::inline::fuse_calls_v2;
 use crate::emacs_core::value::{LambdaParams, Value};

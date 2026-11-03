@@ -7,6 +7,8 @@ use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::ReoptLevel;
+use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::bg::{self, BgMode, JobClass, TestModeScope};
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::compile::{

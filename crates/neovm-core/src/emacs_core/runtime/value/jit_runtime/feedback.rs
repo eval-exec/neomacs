@@ -4,12 +4,11 @@
 //! every implementation stay in the upper module. The data holds integers,
 //! `SymId`s, `Weak<RuntimeState>` (as `Weak::into_raw`), and no Lisp `Value`.
 
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64};
-
 use super::{FeedbackVec, RuntimeState};
-
 /// One source's feedback (see the module docs).
+use std::sync::OnceLock;
+use std::sync::Weak;
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 #[derive(Debug, Default)]
 pub(crate) struct SourceFeedback {
     /// Per-op word: `NumericFeedback` at arithmetic pcs (the encoding the
@@ -75,4 +74,17 @@ pub(crate) struct CallSites {
     /// Per op: 0 = no recorded site at this pc, else the site's index + 1.
     pub(crate) index: Box<[u16]>,
     pub(crate) sites: Box<[CallSiteFeedback]>,
+}
+
+impl Drop for CallSiteFeedback {
+    fn drop(&mut self) {
+        for slot in &self.sources {
+            let ptr = slot.load(Ordering::Relaxed);
+            if !ptr.is_null() {
+                // SAFETY: every non-null slot holds a `Weak::into_raw`
+                // this site owns.
+                drop(unsafe { Weak::from_raw(ptr) });
+            }
+        }
+    }
 }

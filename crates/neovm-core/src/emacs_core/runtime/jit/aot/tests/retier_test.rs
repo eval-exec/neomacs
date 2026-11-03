@@ -10,6 +10,7 @@ use super::*;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{SymId, intern};
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::lowering::{RegallocChoice, forced_regalloc};
 use crate::emacs_core::jit::compile::{CompiledLeaf, Tier2Knob, Tier2PolicyKnob};
 use crate::emacs_core::jit::tier2::{T2Origin, T2State, T2Upgrade};

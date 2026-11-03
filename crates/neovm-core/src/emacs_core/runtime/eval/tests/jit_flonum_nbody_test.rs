@@ -20,6 +20,7 @@ use crate::emacs_core::bytecode::decode::{decode_gnu_bytecode, parse_arglist_des
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::{FlonumMode, force_flonum_mode_for_test, lowering};
 use crate::emacs_core::value::{Value, ValueKind};
 use crate::tagged::gc::MemoryUseCountSlot;

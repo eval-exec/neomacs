@@ -1,5 +1,6 @@
 //! Ownership and stale-key checks for opt-only, scalar report metadata.
 use super::*;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::opt::passes::fold::FoldStats;
 
 fn counted(n: usize) -> OptCensus {

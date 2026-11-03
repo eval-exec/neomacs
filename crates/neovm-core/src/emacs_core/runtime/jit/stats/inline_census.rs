@@ -27,6 +27,7 @@ use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::Value;
 
 use super::ReportTag;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 
 /// Scalar process configuration. Relaxed loads/stores publish no payload,
 /// so independent compiler/mutator readers need no acquire/release ordering.

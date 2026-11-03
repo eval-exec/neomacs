@@ -6,6 +6,7 @@
 
 use super::{CompileRequest, Op, OptMode, jit_opt_mode, jit_opt_profit};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::tier2::CompileTier;
 
 /// The frontier to try for this compilation. Threading: compiler-local scalar

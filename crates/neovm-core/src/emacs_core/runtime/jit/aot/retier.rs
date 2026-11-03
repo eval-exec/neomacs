@@ -9,6 +9,8 @@ use std::sync::atomic::Ordering;
 use super::super::compile::{CompiledLeaf, LeafObs, LeafTier, jit_aot_retier_on};
 use super::super::tier2::{DISARMED, T2State, T2Upgrade};
 use super::super::{Runtime, RuntimeState};
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 
 /// The old heat crossing, also available when T2 owns JIT-leaf requests.
 pub(crate) fn heat() -> Option<u32> {

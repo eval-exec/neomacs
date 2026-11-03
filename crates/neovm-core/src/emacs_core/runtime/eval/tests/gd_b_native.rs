@@ -1,6 +1,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 /// Owns JIT test overrides on the test thread that installed them.
 /// The thread-local extent ends on this same thread when the guard drops.
 #[cfg(feature = "jit")]

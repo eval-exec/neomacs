@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock, RwLock, Weak};
 use super::super::compile::{LeafObs, call_feedback};
 use crate::emacs_core::jit::RuntimeState;
 use crate::emacs_core::jit::feedback::arrays::ArrayKindMask;
+use crate::emacs_core::jit::feedback::arrays::RuntimeStateArraysExt;
 
 struct Entry {
     owner: Weak<RuntimeState>,

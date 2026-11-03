@@ -11,6 +11,7 @@ use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::eval::subr_abi::SubrFn;
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::value::{LambdaParams, Value};
 
 fn eval(ctx: &mut Context, src: &str) -> Value {

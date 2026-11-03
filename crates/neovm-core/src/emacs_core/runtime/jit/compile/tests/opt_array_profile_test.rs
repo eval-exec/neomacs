@@ -12,6 +12,8 @@ use super::compile_pipeline_tests::{captured_clif, function, mask_runtime_addres
 use super::*;
 use crate::emacs_core::jit::bg::{BgMode, force_mode_for_test};
 use crate::emacs_core::jit::cache;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
+use crate::emacs_core::jit::feedback::arrays::RuntimeStateArraysExt;
 use crate::emacs_core::jit::feedback::arrays::{
     ArraySiteFeedback, ObservedArrayKind, PlainArrayKind,
 };

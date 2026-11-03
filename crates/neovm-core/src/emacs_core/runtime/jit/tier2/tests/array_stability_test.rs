@@ -9,6 +9,7 @@ use crate::emacs_core::jit::compile::{
     OptMode, OptPasses, force_opt_for_test, force_opt_passes_for_test,
 };
 use crate::emacs_core::jit::feedback::arrays::ObservedArrayKind;
+use crate::emacs_core::jit::feedback::arrays::RuntimeArraysExt;
 use crate::emacs_core::jit::tier2::{T2Cells, T2Origin};
 
 struct Settings;

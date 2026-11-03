@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::emacs_core::jit::Runtime;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[test]

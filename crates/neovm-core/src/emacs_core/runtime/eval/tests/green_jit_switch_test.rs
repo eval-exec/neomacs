@@ -11,6 +11,8 @@ use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::error::{LispCondition, signal};
 use crate::emacs_core::eval::{Context, ThreadingMode};
+use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::{
     cache,
     compile::{NativeRun, ProfitGateTestPolicy, replace_profit_gate_for_test},

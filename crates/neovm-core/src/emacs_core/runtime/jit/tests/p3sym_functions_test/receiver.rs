@@ -1,6 +1,7 @@
 //! A compiled named call checks the executing World's actual function cell.
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::{CompiledLeaf, NativeRun};
 use crate::emacs_core::jit::reopt::DeoptCause;
 use crate::emacs_core::symbol::FunctionEpochBump;

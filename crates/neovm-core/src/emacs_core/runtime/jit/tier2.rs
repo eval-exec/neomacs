@@ -34,6 +34,7 @@ use std::sync::Arc;
 
 use super::RuntimeState;
 use super::compile::{CompiledLeaf, LeafObs, Tier2Knob, jit_tier2};
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 
 /// What a second compile of a source produces.
 #[derive(

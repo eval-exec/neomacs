@@ -5,6 +5,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::chunk::{ByteCodeFunction, GnuByteOffsetMapEntry};
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::analyze_cfg;
 use crate::emacs_core::value::{HashTableTest, LambdaParams, Value as LispValue};
 

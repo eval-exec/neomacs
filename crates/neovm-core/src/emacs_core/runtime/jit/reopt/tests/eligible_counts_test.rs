@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::{cache, compile, stats};
 use crate::emacs_core::value::LambdaParams;
 

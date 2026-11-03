@@ -2,7 +2,6 @@
 
 use super::{LambdaParams, SymId, Value};
 use crate::tagged::value::ValueKind;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RestSlot {
     Absent,
@@ -212,9 +211,11 @@ impl StackDepth {
     }
 
     #[cfg(test)]
-    pub const fn for_test(depth: usize) -> Self {
-        assert!(depth <= Value::MOST_POSITIVE_FIXNUM as usize);
-        Self(depth)
+    pub fn for_test(depth: usize) -> Self {
+        // Test-only constructor (peer R5): delegate to the canonical checked
+        // constructor; never rebuild the storage field across the crate
+        // boundary.
+        Self::try_from(depth).expect("StackDepth::for_test depth is a valid GNU stack depth")
     }
 }
 

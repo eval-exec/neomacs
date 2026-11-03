@@ -6,7 +6,12 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
+use crate::emacs_core::jit::feedback::CallSitesExt;
 use crate::emacs_core::jit::feedback::CallTarget;
+use crate::emacs_core::jit::feedback::RuntimeStateCallSitesExt;
+use crate::emacs_core::jit::feedback::SourceFeedbackExt;
 
 #[derive(Clone, Debug)]
 // A weak hold preserves pointer identity against allocator reuse without

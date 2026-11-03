@@ -7,6 +7,8 @@ use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::error::{EvalResult, FlowKind, FlowResultExt};
 use crate::emacs_core::eval::{Context, SpecBinding};
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::subr::{FixedMin1, SubrSpec};

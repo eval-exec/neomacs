@@ -15,6 +15,7 @@ use crate::emacs_core::fontset;
 pub(crate) use crate::emacs_core::frame::{builtin_next_frame, builtin_previous_frame};
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::minibuffer;
 use crate::emacs_core::symbol::CanonicalAccess;
 use crate::emacs_core::symbol::{FunctionCellSnapshot, Obarray, SymbolPlistSnapshot};

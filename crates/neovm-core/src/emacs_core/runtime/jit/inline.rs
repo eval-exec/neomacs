@@ -46,6 +46,7 @@ use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::opcode::OpBranchTargetsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::param_shape::JitParamShape;
 use crate::emacs_core::value::Value;
 

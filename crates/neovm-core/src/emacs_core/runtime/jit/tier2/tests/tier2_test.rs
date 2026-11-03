@@ -10,6 +10,7 @@ use crate::emacs_core::eval::{
     Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
 };
 use crate::emacs_core::intern::{SymId, intern};
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::lowering::{RegallocChoice, forced_regalloc};
 use crate::emacs_core::jit::compile::{

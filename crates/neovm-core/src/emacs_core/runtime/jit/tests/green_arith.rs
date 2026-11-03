@@ -14,6 +14,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
 use crate::emacs_core::error::{EvalResult, signal};
 use crate::emacs_core::eval::{Context, ThreadingMode};
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::{self, bg, cache, compile};
 use crate::emacs_core::subr::SubrSpec;
 use crate::emacs_core::value::{LambdaParams, Value};

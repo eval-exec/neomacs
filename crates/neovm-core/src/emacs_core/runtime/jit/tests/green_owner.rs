@@ -7,6 +7,8 @@ use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::bg::{self, BgMode};
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::{

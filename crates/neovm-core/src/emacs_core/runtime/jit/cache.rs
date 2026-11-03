@@ -36,6 +36,7 @@ use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::Value;
 

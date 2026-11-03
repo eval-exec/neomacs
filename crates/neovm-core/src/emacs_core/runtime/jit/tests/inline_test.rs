@@ -9,6 +9,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::error::FlowResultExt as _;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::inline::fuse_calls;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::{LambdaParams, Value};

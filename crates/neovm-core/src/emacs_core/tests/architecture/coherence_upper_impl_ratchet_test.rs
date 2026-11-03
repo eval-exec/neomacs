@@ -45,27 +45,22 @@
 //! an upper impl on it counts, while impls inside that crate are lower-crate
 //! impls and stay legal.
 
+use super::architecture_moving_set as moving_set;
+/// Illegal upper impls still to convert. Decremented by every seam commit.
+///
+/// The 24 at the 85055db807 base were the deferred half of the T1-pre data cut
+/// `8105f97a11` (the per-source JIT runtime and feedback data moved into
+/// `runtime/value/jit_runtime`, every implementation left in
+/// `emacs_core::jit`). N17 moves those impls with their types (lower-crate
+/// inherent impls and storage data) and keeps only upper-local extension
+/// traits, so the row is now zero. Any new illegal impl fails immediately and
+/// every removed one must lower this number in the same commit.
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-
 use syn::spanned::Spanned;
 use syn::{Item, Type};
-
-use super::architecture_moving_set as moving_set;
-
-/// Illegal upper impls still to convert. Decremented by every seam commit.
-///
-/// The 24 at the 85055db807 base are all the deferred half of the T1-pre data
-/// cut `8105f97a11` (the per-source JIT runtime and feedback data moved into
-/// `runtime/value/jit_runtime`, every implementation deliberately left in
-/// `emacs_core::jit`): 18 unambiguous feedback/retreat impls plus the six
-/// `Runtime` impls pinned below. Converting them belongs to the JIT cut; this
-/// branch converts the parts of the T1 inventory that T1 left on the storage
-/// vocabulary (`Op`, the function_slots impls). Any new illegal impl fails
-/// immediately and every removed one must lower this number in the same
-/// commit.
-const REMAINING_ALLOWED: usize = 24;
+const REMAINING_ALLOWED: usize = 0;
 
 /// Moved types whose name also has a non-moving definition in this crate, so
 /// the general name rule cannot classify them. Each entry is
@@ -80,12 +75,9 @@ const REMAINING_ALLOWED: usize = 24;
 /// until the JIT cut moves the impls with the type; converting them is not
 /// part of this coherence series.
 const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[
-    ("emacs_core/runtime/jit/feedback.rs", "Runtime", None),
-    ("emacs_core/runtime/jit/feedback/arrays.rs", "Runtime", None),
-    ("emacs_core/runtime/jit/mod.rs", "Runtime", None),
-    ("emacs_core/runtime/jit/mod.rs", "Runtime", Some("Deref")),
-    ("emacs_core/runtime/jit/mod.rs", "Runtime", Some("Default")),
-    ("emacs_core/runtime/jit/mod.rs", "Runtime", Some("Clone")),
+    // N17 converted the six pinned `Runtime` impls (feedback recording, the
+    // array registry, `new`, `Deref`, `Default`, `Clone`) into lower-crate
+    // impls or upper-local extension traits; no ambiguous row remains.
 ];
 
 /// Moved type names that have no plain definition inside the moving files

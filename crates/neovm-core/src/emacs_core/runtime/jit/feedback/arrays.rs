@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock, RwLock, Weak};
 
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 use crate::emacs_core::jit::{Runtime, RuntimeState};
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
 
@@ -160,10 +162,17 @@ struct ArrayRegistryEntry {
 type ArrayRegistry = HashMap<u64, ArrayRegistryEntry>;
 static ARRAY_REGISTRY: OnceLock<RwLock<ArrayRegistry>> = OnceLock::new();
 
-impl Runtime {
+/// Upper extension trait for the moved runtime arrays.
+pub(crate) trait RuntimeArraysExt {
     /// Create only from the selected compile frontend, before emitting a site
     /// pointer. A clone of this Runtime shares the same source and table.
-    pub(crate) fn array_sites_for(&self, ops: &[Op]) -> Arc<ArraySites> {
+    fn array_sites_for(&self, ops: &[Op]) -> Arc<ArraySites>;
+}
+
+impl RuntimeArraysExt for Runtime {
+    /// Create only from the selected compile frontend, before emitting a site
+    /// pointer. A clone of this Runtime shares the same source and table.
+    fn array_sites_for(&self, ops: &[Op]) -> Arc<ArraySites> {
         let id = self.compiled_id_or_assign();
         let source = self.share_state();
         let registry = ARRAY_REGISTRY.get_or_init(|| RwLock::new(HashMap::new()));
@@ -183,10 +192,18 @@ impl Runtime {
     }
 }
 
-impl RuntimeState {
+/// Upper extension trait for the moved runtime state arrays.
+pub(crate) trait RuntimeStateArraysExt {
     /// A copied ownership hold, without initializing a registry or assigning
     /// an id for a source the selected frontend has never observed.
-    pub(crate) fn array_sites(&self) -> Option<Arc<ArraySites>> {
+    fn array_sites(&self) -> Option<Arc<ArraySites>>;
+    fn array_kind_snapshot(&self, ops_len: usize) -> Vec<ArrayKindMask>;
+}
+
+impl RuntimeStateArraysExt for RuntimeState {
+    /// A copied ownership hold, without initializing a registry or assigning
+    /// an id for a source the selected frontend has never observed.
+    fn array_sites(&self) -> Option<Arc<ArraySites>> {
         let id = self.compiled_id()?;
         let registry = ARRAY_REGISTRY.get()?;
         let entries = registry
@@ -195,7 +212,7 @@ impl RuntimeState {
         entries.get(&id).map(|entry| Arc::clone(&entry.sites))
     }
 
-    pub(crate) fn array_kind_snapshot(&self, ops_len: usize) -> Vec<ArrayKindMask> {
+    fn array_kind_snapshot(&self, ops_len: usize) -> Vec<ArrayKindMask> {
         self.array_sites()
             .map_or_else(Vec::new, |sites| sites.snapshot(ops_len))
     }

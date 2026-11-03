@@ -6,6 +6,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
+use crate::emacs_core::jit::RuntimeStateArmedLeafExt;
 use crate::emacs_core::jit::bg::{BgMode, force_mode_for_test};
 use crate::emacs_core::jit::cache::{self, OsrProbe};
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
@@ -15,6 +16,8 @@ use crate::emacs_core::jit::compile::{
     force_deopt_for_test, force_profit_gate_for_test, force_spec_sources_for_test,
     force_tier2_for_test, force_tier2_policy_for_test,
 };
+use crate::emacs_core::jit::feedback::CallSitesExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 use crate::emacs_core::jit::feedback::{
     CallTarget, FeedbackMode, STABLE_WINDOW, force_feedback_mode_for_test,
 };

@@ -11,6 +11,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, opcode::Op};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::{bg, compile};
 use crate::emacs_core::value::Value;

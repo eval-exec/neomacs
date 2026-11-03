@@ -53,6 +53,8 @@ use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::NumericFeedbackExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::value::Value;
 
 /// Which kind of leaf deopted.

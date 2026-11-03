@@ -7,6 +7,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 
 /// The AOT leaf table (design §2.9 phase 2) would be indexed by these: a
 /// renumbering must be a deliberate edit of this list.

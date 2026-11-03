@@ -163,10 +163,11 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::jit::feedback::SourceFeedbackExt;
 
 /// Cranelift codegen backend (Phase 3+). Only compiled with the `jit` feature,
 /// since it links Cranelift. Today it exposes a self-contained smoke path that
-/// proves the codegen toolchain works inside neovm-core's own build before any
+/// proves the codegen toolchain works inside neomacs-core's own build before any
 /// bytecode is lowered onto it — the same "prove the tool, then build on it"
 /// discipline used to validate TSan before trusting the concurrent GC.
 #[cfg(feature = "jit")]
@@ -293,11 +294,19 @@ pub enum Plan {
 // Phase 1 — feedback. The runtime-observed information later tiers speculate on.
 // ---------------------------------------------------------------------------
 
-impl CallFeedback {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait CallFeedbackExt {
+    /// Pack into one `u64` for lock-free atomic storage. Low 2 bits tag the
+    /// variant; a `SymId`'s `u32` rides in the upper bits.
+    fn pack(self) -> u64;
+    fn unpack(bits: u64) -> Self;
+}
+
+impl CallFeedbackExt for CallFeedback {
     /// Pack into one `u64` for lock-free atomic storage. Low 2 bits tag the
     /// variant; a `SymId`'s `u32` rides in the upper bits.
     #[inline]
-    const fn pack(self) -> u64 {
+    fn pack(self) -> u64 {
         match self {
             CallFeedback::Uninit => 0b00,
             // Pattern read of the packed word: bind the symbol and read
@@ -321,7 +330,31 @@ impl CallFeedback {
     }
 }
 
-impl NumericFeedback {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait NumericFeedbackExt {
+    /// Classify the operands an arithmetic site took, for the lowering's
+    /// benefit. The interpreter's slow arithmetic arm and the deopt
+    /// classifier (`jit::reopt`) share this one classification.
+    ///
+    /// `Float` means every operand is a float or a fixnum and at least one is
+    /// a float: exactly what an `f64` lowering can take, promoting the
+    /// fixnums. A bignum, marker or non-number is `Other`. All fixnums — an
+    /// overflow, a zero divisor, `1+` at the boundary — is `FixnumOnly`, the
+    /// operand types the fixnum lowering assumes, and the interpreter records
+    /// nothing: one overflow during warm-up must not turn a fixnum-hot site
+    /// into a generic-fallback site for good (`Other` is sticky, and it takes
+    /// the body out of the MIR tier).
+    fn of_operands(args: &[crate::emacs_core::value::Value]) -> Self;
+    /// Packed into the tag `CallFeedback` leaves reserved. A bytecode
+    /// instruction is either a call or an arithmetic op, never both, so the
+    /// two lattices never share a slot — and the encodings are chosen so that
+    /// reading one as the other still yields the SAFE answer either way
+    /// (`Megamorphic` / `Other`), rather than relying on that disjointness.
+    fn pack(self) -> u64;
+    fn unpack(bits: u64) -> Self;
+}
+
+impl NumericFeedbackExt for NumericFeedback {
     /// Classify the operands an arithmetic site took, for the lowering's
     /// benefit. The interpreter's slow arithmetic arm and the deopt
     /// classifier (`jit::reopt`) share this one classification.
@@ -335,7 +368,7 @@ impl NumericFeedback {
     /// into a generic-fallback site for good (`Other` is sticky, and it takes
     /// the body out of the MIR tier).
     #[inline]
-    pub fn of_operands(args: &[crate::emacs_core::value::Value]) -> Self {
+    fn of_operands(args: &[crate::emacs_core::value::Value]) -> Self {
         let mut saw_float = false;
         for arg in args {
             if arg.is_float() {
@@ -357,7 +390,7 @@ impl NumericFeedback {
     /// reading one as the other still yields the SAFE answer either way
     /// (`Megamorphic` / `Other`), rather than relying on that disjointness.
     #[inline]
-    const fn pack(self) -> u64 {
+    fn pack(self) -> u64 {
         match self {
             NumericFeedback::FixnumOnly => 0b00,
             NumericFeedback::Float => 0b0111,
@@ -428,14 +461,27 @@ impl ReoptLevel {
     }
 }
 
-impl FeedbackVec {
-    #[inline]
-    pub const fn new() -> Self {
-        Self {
-            slots: OnceLock::new(),
-        }
-    }
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait FeedbackVecExt {
+    /// Allocate (once) `len` zeroed slots. Idempotent; a benign race just keeps
+    /// whichever allocation wins.
+    fn slots(&self, len: usize) -> &[AtomicU64];
+    /// Record an observed callee `sym` at call-site `pc` (instruction index);
+    /// `ops_len` is the function's instruction count, for lazy sizing. Drives
+    /// the `Uninit -> Monomorphic -> Megamorphic` lattice.
+    fn record_call(&self, pc: usize, ops_len: usize, sym: SymId);
+    /// Record the operand types observed at arithmetic site `pc`. Called only
+    /// from the opcodes' non-fixnum arm, so the fixnum fast path pays nothing.
+    /// Drives `FixnumOnly -> Float -> Other`, with `Other` sticky. Returns
+    /// whether the slot moved (the deopt reoptimizer's "learned something").
+    fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool;
+    /// Operand-type feedback at arithmetic site `pc`.
+    fn numeric_at(&self, pc: usize) -> NumericFeedback;
+    /// Feedback at call-site `pc` (or `Uninit` if unallocated / out of range).
+    fn call_at(&self, pc: usize) -> CallFeedback;
+}
 
+impl FeedbackVecExt for FeedbackVec {
     /// Allocate (once) `len` zeroed slots. Idempotent; a benign race just keeps
     /// whichever allocation wins.
     #[inline]
@@ -448,7 +494,7 @@ impl FeedbackVec {
     /// `ops_len` is the function's instruction count, for lazy sizing. Drives
     /// the `Uninit -> Monomorphic -> Megamorphic` lattice.
     #[inline]
-    pub fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
+    fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
         let slots = self.slots(ops_len);
         let Some(slot) = slots.get(pc) else { return };
         let next = match CallFeedback::unpack(slot.load(Ordering::Relaxed)) {
@@ -466,7 +512,7 @@ impl FeedbackVec {
     /// Drives `FixnumOnly -> Float -> Other`, with `Other` sticky. Returns
     /// whether the slot moved (the deopt reoptimizer's "learned something").
     #[inline]
-    pub fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
+    fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
         let slots = self.slots(ops_len);
         let Some(slot) = slots.get(pc) else {
             return false;
@@ -483,7 +529,7 @@ impl FeedbackVec {
 
     /// Operand-type feedback at arithmetic site `pc`.
     #[inline]
-    pub fn numeric_at(&self, pc: usize) -> NumericFeedback {
+    fn numeric_at(&self, pc: usize) -> NumericFeedback {
         match self.slots.get() {
             None => NumericFeedback::FixnumOnly,
             Some(slots) => slots.get(pc).map_or(NumericFeedback::FixnumOnly, |s| {
@@ -494,20 +540,13 @@ impl FeedbackVec {
 
     /// Feedback at call-site `pc` (or `Uninit` if unallocated / out of range).
     #[inline]
-    pub fn call_at(&self, pc: usize) -> CallFeedback {
+    fn call_at(&self, pc: usize) -> CallFeedback {
         match self.slots.get() {
             None => CallFeedback::Uninit,
             Some(slots) => slots.get(pc).map_or(CallFeedback::Uninit, |s| {
                 CallFeedback::unpack(s.load(Ordering::Relaxed))
             }),
         }
-    }
-}
-
-impl Clone for FeedbackVec {
-    /// A clone starts with no feedback (per-instance, like the heat counter).
-    fn clone(&self) -> Self {
-        Self::new()
     }
 }
 
@@ -838,25 +877,285 @@ pub fn force_osr_for_test(on: bool) {
     OSR_TEST_OVERRIDE.with(|c| c.set(Some(on)));
 }
 
-impl RuntimeState {
-    /// Invocations before a function is "hot" enough to tier up.
+/// Upper extension trait for the moved runtime state.
+pub(crate) trait RuntimeStateTieringExt {
+    /// Number of leading constant slots that are per-instance (`make-closure`
+    /// patched) for this source; 0 for a plain function.
+    fn patched_prefix(&self) -> usize;
+    /// Record a `make-closure` patch of width `n`. Returns `Some(compiled_id)`
+    /// when the recorded prefix GREW while a compiled id was already assigned:
+    /// any leaf compiled for that id assumed the narrower prefix (it may have
+    /// baked a slot that is now per-instance) and must be evicted by the
+    /// caller before the next dispatch.
     ///
-    /// Tuned via `jit_bench_threshold_economics` (eval_test.rs), an
-    /// interleaved debug-build A/B of 1_000 vs the previous placeholder
-    /// 10_000 across 1.2k/3k/20k-call workloads: 1_000 halves end-to-end
-    /// wall time for the 3k-20k call population (the functions a 10_000
-    /// threshold strands in the interpreter forever) and only regresses
-    /// ~1.2k-call functions by the one-time compile cost — which a debug
-    /// build heavily inflates, so the release regression is smaller still.
-    /// Compilation is the only cost lowering adds; going far lower (100)
-    /// starts compiling barely-warm functions for no amortized win.
-    /// `NEOVM_JIT_THRESHOLD` still overrides per process.
-    pub const HOT_THRESHOLD: u32 = 1_000;
+    /// Every instance of a prototype patches the same width, so the common
+    /// case is a plain load that finds the prefix already recorded; only a
+    /// widening pays the read-modify-write.
+    fn note_patched_prefix(&self, n: usize) -> Option<u64>;
+    /// Defer this body's tier-up to `heat` (see `profit_deferred_heat`).
+    fn defer_tier_up(&self, heat: u32);
+    /// The deferral heat of a parked body: one no heat reaches.
+    const PARKED_HEAT: u32;
+    /// The deferral heat a released park leaves: already reached, so the
+    /// next call tiers up at once.
+    const RELEASED_HEAT: u32;
+    /// Hold this body in the interpreter until a background backend's
+    /// publication releases it ([`Self::release_parked_tier_up`], `jit::bg`).
+    /// The dispatcher reads the hold as any other deferral, so neither an
+    /// interpreted nor a compiled call pays for the wait. `SeqCst`, as is
+    /// the release: a parker that rechecks its job after parking and a
+    /// publisher that releases after publishing cannot both miss.
+    fn park_tier_up(&self);
+    /// End a park: the next call tiers up, finding the backend's result.
+    /// Only a park is ended; a hold set since by another owner stays.
+    fn release_parked_tier_up(&self);
+    /// Whether this body is parked (see [`Self::park_tier_up`]).
+    fn tier_up_parked(&self) -> bool;
+    /// The heat this body's tier-up is deferred to (0 = not deferred).
+    fn deferred_heat(&self) -> u32;
+    /// Whether a profitability deferral is still holding at heat `now`.
+    fn tier_up_deferred(&self, now: u32) -> bool;
+    /// Whether this body's deferral has run out: it was deferred and its heat
+    /// has reached the deferral point, so the next compile bypasses the gate.
+    fn profit_deferral_expired(&self) -> bool;
+    /// Record that the JIT rejected this body (`CacheEntry::NotCompilable`)
+    /// under NotCompilable generation `epoch` — see `native_rejected_epoch`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn mark_native_rejected(&self, epoch: u64);
+    /// Whether a remembered `NotCompilable` verdict is still current, i.e. a
+    /// cache probe would only re-find it.
+    fn native_rejected(&self) -> bool;
+    /// Record one invocation and decide how to run it. The caller MUST handle
+    /// the returned [`Plan`] exhaustively.
+    ///
+    /// Counts the invocation and returns [`Plan::Compiled`] once the function
+    /// crosses [`hot_threshold`] (default [`Runtime::HOT_THRESHOLD`]), else
+    /// [`Plan::Interpret`]. The compiled plan only means "the JIT may run this"
+    /// — the cache still falls back to the interpreter on deopt, and a body
+    /// the cache has rejected as `NotCompilable` is remembered here
+    /// (`native_rejected_epoch`) so it answers `Interpret` without the trip.
+    /// Default [`size_unit`]: bodies up to this many ops tier at the flat
+    /// `hot_threshold()`; larger ones need proportionally more calls. Tuned on
+    /// the fontify gate (font-lock closures now tier since `make-closure`
+    /// instances share heat): a 352-op keyword matcher cost ~80 ms / ~135M Ir
+    /// to compile and ran break-even natively, so a flat threshold paid the
+    /// whole compile inside one fontification for nothing. V8's interrupt
+    /// budget is the precedent for scaling tier-up by bytecode length.
+    ///
+    /// 512 since 2026-09-15 (was 64), with [`Self::MAX_TIER_OPS`] raised to
+    /// 4096: the byte compiler's workhorses are big and called tens of times
+    /// per file — `byte-optimize-lapcode` is 2,528 ops and ~64 calls, which at
+    /// 64 ops a unit needed 39,000 calls, and `byte-compile-out-toplevel` (288
+    /// ops) was over the old cap — so they never left the interpreter. elb
+    /// bytecomp -11.5% instructions (50 compiles: 19.83G -> 17.54G, GNU
+    /// 16.0G), org-editing -3.7%, org-editing-heavy -0.7%; the other ELB rows
+    /// within noise; a 3-file compile pays +4.7% in compile time.
+    const SIZE_UNIT: u32;
+    /// Default [`retier_heat`] factor: a leaf compiled with the fast register
+    /// allocator (`lowering::RegallocChoice::Fast`) is rebuilt with the full
+    /// one once its heat reaches this many [`hot_threshold`]s. 16 = 16,000
+    /// calls at the default threshold: the call-heavy benchmark (3M calls)
+    /// spends 0.5% of them on the fast code; an editing session's leaves
+    /// (hundreds to a few thousand calls) never pay the second compile.
+    const RETIER_FACTOR: u32;
+    /// Default [`profit_defer_factor`]: `0` keeps the profitability gate a
+    /// veto (a refused body never compiles); `K` defers the compile to
+    /// `K × hot_threshold()` calls instead.
+    ///
+    /// Chosen by same-binary sweeps (2026-09-05, instructions, medians of 3,
+    /// every run checked for exit status and output; `tmp/rr/wf2/ab-k.sh`),
+    /// each arm vs the veto, with call-heavy bodies on the fast allocator:
+    ///
+    /// | fixture                      | K=2    | K=4    | K=8    |
+    /// |------------------------------|--------|--------|--------|
+    /// | org editing, 5 passes        | −0.05% | −0.13% | −0.23% |
+    /// | org editing, 25 passes       | −1.71% | −1.58% | −1.58% |
+    /// | org editing, 50 passes       | −3.36% | −3.18% | −2.50% |
+    /// | byte-compile cc-engine.el    | −0.86% | −1.13% | −0.72% |
+    /// | 3M-call benchmark            | +0.00% | +0.00% | −0.00% |
+    /// | 200-function compile fixture | +0.61% | +0.48% | +0.31% |
+    ///
+    /// A call-heavy body runs faster native (~830 instructions per entry on
+    /// org) but its compile is dear, so admitting it at the flat threshold
+    /// (gate off) wins in long sessions and loses in short ones: org 5 passes
+    /// +3.1%, 50 passes −7.0%, the compile fixture +10.6%. 4 takes most of
+    /// the long-session win and the best byte-compile point while every
+    /// short session stays within half a percent of the veto.
+    const PROFIT_DEFER_FACTOR: u32;
+    /// Default [`max_tier_ops`].
+    ///
+    /// Originally (2026-08-28) the same 352-op font-lock matcher cost ~80 ms
+    /// to compile for break-even native code, so the cap was a compile-stall
+    /// guard. Re-measured 2026-08-31: compile cost is now effectively linear
+    /// (~3.5 µs/op on loop-shaped bodies, 20 µs/op on branch/deopt-heavy
+    /// matchers; that matcher compiles in 7.15 ms, whole type-sim compile
+    /// total 12.6 ms).
+    ///
+    /// CORRECTED 2026-09-01: the old "break-even with the interpreter"
+    /// finding was an artifact — the "interpreted" halves of those A/Bs ran
+    /// ~99.99% NATIVE, because OSR ignores the cap (this gate covers only
+    /// entry dispatch) and, in benches, ignored `force_interpret` (fixed:
+    /// `is_hot` now honors it). With an honest Tier-0 baseline the >256-op
+    /// fixture (`jit_bench_big_body_matcher_shape`) runs 12.6x FASTER
+    /// native. The cap's practical effect is therefore only to delay the
+    /// ENTRY tier for big bodies whose loops OSR anyway; lifting it is
+    /// pending a real-workload A/B (byte-compile watch per the GATE_RELAX
+    /// precedent) — see the mid-end campaign notes.
+    ///
+    /// That A/B (2026-09-15, see [`Self::SIZE_UNIT`]) raised it to 4096: a
+    /// stall guard, not a profit gate, sized to admit the byte compiler's
+    /// 2,528-op `byte-optimize-lapcode`.
+    const MAX_TIER_OPS: u32;
+    /// [`dispatch`](Self::dispatch) with the tier-up budget scaled by the body
+    /// size (`ops_len`): bodies above [`max_tier_ops`] never tier, and the hot
+    /// threshold is multiplied by `max(1, ops_len / size_unit())`. The seam
+    /// call sites use this; the unsized `dispatch` is the flat rule (tests,
+    /// tiny bodies).
+    fn dispatch_sized(&self, ops_len: usize) -> Plan;
+    fn dispatch(&self) -> Plan;
+    /// This function's compiled-cache id, assigning a fresh process-unique one
+    /// on first call (idempotent under races). Used only by [`cache`].
+    ///
+    /// This is the single production caller of the lower writer
+    /// [`set_compiled_id_word`] (T1 privacy ledger A2, a MINT). See the
+    /// `SAFETY` note below for the mint and attach invariants.
+    fn compiled_id_or_assign(&self) -> u64;
+    /// This function's compiled-cache id if one was ALREADY assigned (it has been
+    /// compiled/hot), else `None` — WITHOUT assigning a fresh one. The AOT-PGO drain
+    /// uses this to intersect the obarray walk with the hot set without minting ids
+    /// for the many never-compiled bound functions it walks past.
+    fn compiled_id(&self) -> Option<u64>;
+    /// True once this function has crossed the tier-up threshold.
+    fn is_hot(&self) -> bool;
+    /// Current invocation count.
+    /// Advance the call heat by one (what `dispatch_sized` does before its
+    /// tier decision) and return the new value — the direct stack entry keeps
+    /// the re-tier trigger honest without the rest of the dispatcher.
+    #[cfg(feature = "jit")]
+    fn bump_heat(&self) -> u32;
+    /// The heat WITHOUT advancing it — for a probe that may decline and let
+    /// another probe of the same call do the advancing.
+    #[cfg(feature = "jit")]
+    fn peek_heat(&self) -> u32;
+    #[cfg(all(feature = "jit", test))]
+    fn force_interpret_for_test(&self) -> bool;
+    fn heat(&self) -> u32;
+    /// Backward branches per loop-heat wrap — the interpreter's `branch_to!`
+    /// quit counter is a `u8`, so it wraps (and calls [`note_loop_work`]) once
+    /// per 256 backward branches. Documented here so the loop-heat weighting
+    /// (256 iterations ≈ one call) is discoverable from the `Runtime` API.
+    ///
+    /// [`note_loop_work`]: Self::note_loop_work
+    const LOOP_BACKEDGES_PER_WRAP: u32;
+    /// Credit loop work toward tier-up: called from the interpreter's
+    /// backward-branch quit-counter wrap (`bytecode/vm.rs`), i.e. once per
+    /// [`LOOP_BACKEDGES_PER_WRAP`](Self::LOOP_BACKEDGES_PER_WRAP) iterations, so
+    /// the per-iteration cost is amortized to ~nothing. A function whose body is
+    /// a long INNER LOOP but which is CALLED only a few times never crosses
+    /// [`hot_threshold`] on `dispatch`'s per-call bump alone; this accumulates
+    /// heat from the loop itself so the NEXT entry tiers it up. The CURRENT
+    /// interpreted call still runs to completion in Tier 0 — there is no
+    /// on-stack replacement, so a body called exactly once sees no benefit
+    /// (that is the OSR follow-up). Saturating: a long-lived loop must never
+    /// wrap heat back to cold. Respects the [`jit_runtime_enabled`] kill switch
+    /// and the `NEOVM_JIT_LOOP_HEAT=0` off knob.
+    fn note_loop_work(&self);
+    /// Credit callback work a `mapc`/`mapcar` call ran for this caller: its
+    /// heat rises as if it had been entered `credit` more times, so a caller
+    /// driving many callbacks tiers up with its loop inlined at its next
+    /// entry. Relaxed and observational, like [`note_loop_work`](Self::note_loop_work);
+    /// a racing credit may be lost.
+    #[cfg(feature = "jit")]
+    fn note_callback_work(&self, credit: u32);
+    /// Whether this caller may take callback credit, deciding once with
+    /// `selectable` (the default front's HOF-only predicate) and caching the
+    /// answer. Concurrent first calls may both compute it; they agree.
+    #[cfg(feature = "jit")]
+    fn hof_caller(&self, selectable: impl FnOnce() -> bool) -> bool;
+    /// Test-only: force this function "hot" so the next [`dispatch`](Self::dispatch)
+    /// tiers it up, without driving `HOT_THRESHOLD` real invocations.
+    /// Mark this function as served by a prepopulated AOT leaf (see the
+    /// field doc): `dispatch` returns `Plan::Compiled` from call 1.
+    fn mark_aot_prewarmed(&self);
+    /// Whether this function is marked to run a preload leaf from call 1.
+    fn is_aot_prewarmed(&self) -> bool;
+    #[cfg(test)]
+    fn set_hot_for_test(&self);
+    /// Test-only: set the heat outright (re-tier tests).
+    #[cfg(test)]
+    fn set_heat_for_test(&self, heat: u32);
+    /// Test-only: pin this function to the Tier-0 interpreter forever (the
+    /// forced-cold half of the benchmark A/B; see `force_interpret`).
+    #[cfg(test)]
+    fn set_cold_for_test(&self);
+    /// Record an observed callee `sym` at the call site at instruction `pc`
+    /// (`ops_len` = the function's instruction count, for lazy sizing).
+    fn record_call(&self, pc: usize, ops_len: usize, sym: SymId);
+    /// Call-site feedback observed at instruction `pc`.
+    fn call_feedback(&self, pc: usize) -> CallFeedback;
+    /// Record the operand types seen at the arithmetic site at instruction
+    /// `pc` — see [`NumericFeedback`]. Returns whether the site's slot moved.
+    fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool;
+    /// Operand-type feedback observed at arithmetic site `pc`.
+    fn numeric_feedback(&self, pc: usize) -> NumericFeedback;
+    /// Whether this body's arithmetic sites still want their operand types
+    /// recorded — see `numeric_feedback_consumed`.
+    fn wants_numeric_feedback(&self) -> bool;
+    /// Mark this body's numeric feedback as read by a compile.
+    fn note_numeric_feedback_consumed(&self);
+    // --- Deopt-driven reoptimization state (`jit::reopt`). Relaxed atomics:
+    // the mutator is the only writer, as for every other field. ---
 
+    /// The ceiling every later compile of this source respects.
+    fn reopt_level(&self) -> ReoptLevel;
+    /// Deopt-driven invalidations of this source so far (saturating).
+    fn reopt_count(&self) -> u8;
+    /// Record one invalidation whose cause asks for at least `floor`, and
+    /// return the level later compiles must respect. Past `max_reopts`
+    /// invalidations each further one climbs one level, so a source can be
+    /// invalidated at most `max_reopts + 4` times before it is interpreted
+    /// for good.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn note_reopt(&self, floor: ReoptLevel, max_reopts: u8) -> ReoptLevel;
+    /// Make the interpreter record numeric feedback again, until the next
+    /// compile consumes it.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn reopen_numeric_feedback(&self);
+    /// Join `seen` into arithmetic site `pc`'s feedback (what a deopt proved
+    /// the site meets). Returns whether the site's slot moved.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn widen_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool;
+    /// Forbid splicing, MIR-inlining or intrinsifying the call site at `pc`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn mark_call_site_no_inline(&self, pc: usize, ops_len: usize);
+    /// Test-only: set the reoptimization ceiling outright.
+    #[cfg(test)]
+    fn set_reopt_level_for_test(&self, level: ReoptLevel);
+    /// Whether a deopt forbade inlining the call site at `pc`.
+    fn call_site_no_inline(&self, pc: usize) -> bool;
+    /// Count one precise deopt at `pc` in this source's persistent deopt
+    /// history (P2.1 C2); returns the new count (saturating at 255, 0 for a
+    /// pc outside the body the table was sized for).
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8;
+    /// Precise deopts ever counted at `pc` of this source, across all of its
+    /// leaves (0 before the first; a read never allocates).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
+    )]
+    fn deopt_history(&self, pc: usize) -> u8;
+    /// Stop serving this source as AOT-prewarmed: `dispatch_sized` would
+    /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn clear_aot_prewarmed(&self);
+}
+
+impl RuntimeStateTieringExt for RuntimeState {
     /// Number of leading constant slots that are per-instance (`make-closure`
     /// patched) for this source; 0 for a plain function.
     #[inline]
-    pub fn patched_prefix(&self) -> usize {
+    fn patched_prefix(&self) -> usize {
         self.patched_prefix.load(Ordering::Relaxed) as usize
     }
 
@@ -870,7 +1169,7 @@ impl RuntimeState {
     /// case is a plain load that finds the prefix already recorded; only a
     /// widening pays the read-modify-write.
     #[inline]
-    pub fn note_patched_prefix(&self, n: usize) -> Option<u64> {
+    fn note_patched_prefix(&self, n: usize) -> Option<u64> {
         let n = u32::try_from(n).unwrap_or(u32::MAX);
         if n <= self.patched_prefix.load(Ordering::Relaxed) {
             return None;
@@ -887,7 +1186,7 @@ impl RuntimeState {
     }
 
     /// Defer this body's tier-up to `heat` (see `profit_deferred_heat`).
-    pub(crate) fn defer_tier_up(&self, heat: u32) {
+    fn defer_tier_up(&self, heat: u32) {
         self.profit_deferred_heat.store(heat, Ordering::Relaxed);
     }
 
@@ -904,14 +1203,14 @@ impl RuntimeState {
     /// interpreted nor a compiled call pays for the wait. `SeqCst`, as is
     /// the release: a parker that rechecks its job after parking and a
     /// publisher that releases after publishing cannot both miss.
-    pub(crate) fn park_tier_up(&self) {
+    fn park_tier_up(&self) {
         self.profit_deferred_heat
             .store(Self::PARKED_HEAT, Ordering::SeqCst);
     }
 
     /// End a park: the next call tiers up, finding the backend's result.
     /// Only a park is ended; a hold set since by another owner stays.
-    pub(crate) fn release_parked_tier_up(&self) {
+    fn release_parked_tier_up(&self) {
         let _ = self.profit_deferred_heat.compare_exchange(
             Self::PARKED_HEAT,
             Self::RELEASED_HEAT,
@@ -921,12 +1220,12 @@ impl RuntimeState {
     }
 
     /// Whether this body is parked (see [`Self::park_tier_up`]).
-    pub(crate) fn tier_up_parked(&self) -> bool {
+    fn tier_up_parked(&self) -> bool {
         self.profit_deferred_heat.load(Ordering::Relaxed) == Self::PARKED_HEAT
     }
 
     /// The heat this body's tier-up is deferred to (0 = not deferred).
-    pub(crate) fn deferred_heat(&self) -> u32 {
+    fn deferred_heat(&self) -> u32 {
         self.profit_deferred_heat.load(Ordering::Relaxed)
     }
 
@@ -939,7 +1238,7 @@ impl RuntimeState {
 
     /// Whether this body's deferral has run out: it was deferred and its heat
     /// has reached the deferral point, so the next compile bypasses the gate.
-    pub(crate) fn profit_deferral_expired(&self) -> bool {
+    fn profit_deferral_expired(&self) -> bool {
         let at = self.profit_deferred_heat.load(Ordering::Relaxed);
         at != 0 && self.heat() >= at
     }
@@ -947,7 +1246,7 @@ impl RuntimeState {
     /// Record that the JIT rejected this body (`CacheEntry::NotCompilable`)
     /// under NotCompilable generation `epoch` — see `native_rejected_epoch`.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn mark_native_rejected(&self, epoch: u64) {
+    fn mark_native_rejected(&self, epoch: u64) {
         self.native_rejected_epoch.store(epoch, Ordering::Relaxed);
     }
 
@@ -991,7 +1290,7 @@ impl RuntimeState {
     /// bytecomp -11.5% instructions (50 compiles: 19.83G -> 17.54G, GNU
     /// 16.0G), org-editing -3.7%, org-editing-heavy -0.7%; the other ELB rows
     /// within noise; a 3-file compile pays +4.7% in compile time.
-    pub const SIZE_UNIT: u32 = 512;
+    const SIZE_UNIT: u32 = 512;
 
     /// Default [`retier_heat`] factor: a leaf compiled with the fast register
     /// allocator (`lowering::RegallocChoice::Fast`) is rebuilt with the full
@@ -999,7 +1298,7 @@ impl RuntimeState {
     /// calls at the default threshold: the call-heavy benchmark (3M calls)
     /// spends 0.5% of them on the fast code; an editing session's leaves
     /// (hundreds to a few thousand calls) never pay the second compile.
-    pub const RETIER_FACTOR: u32 = 16;
+    const RETIER_FACTOR: u32 = 16;
 
     /// Default [`profit_defer_factor`]: `0` keeps the profitability gate a
     /// veto (a refused body never compiles); `K` defers the compile to
@@ -1024,7 +1323,7 @@ impl RuntimeState {
     /// +3.1%, 50 passes −7.0%, the compile fixture +10.6%. 4 takes most of
     /// the long-session win and the best byte-compile point while every
     /// short session stays within half a percent of the veto.
-    pub const PROFIT_DEFER_FACTOR: u32 = 4;
+    const PROFIT_DEFER_FACTOR: u32 = 4;
 
     /// Default [`max_tier_ops`].
     ///
@@ -1049,7 +1348,7 @@ impl RuntimeState {
     /// That A/B (2026-09-15, see [`Self::SIZE_UNIT`]) raised it to 4096: a
     /// stall guard, not a profit gate, sized to admit the byte compiler's
     /// 2,528-op `byte-optimize-lapcode`.
-    pub const MAX_TIER_OPS: u32 = 4096;
+    const MAX_TIER_OPS: u32 = 4096;
 
     /// [`dispatch`](Self::dispatch) with the tier-up budget scaled by the body
     /// size (`ops_len`): bodies above [`max_tier_ops`] never tier, and the hot
@@ -1057,7 +1356,7 @@ impl RuntimeState {
     /// call sites use this; the unsized `dispatch` is the flat rule (tests,
     /// tiny bodies).
     #[inline]
-    pub fn dispatch_sized(&self, ops_len: usize) -> Plan {
+    fn dispatch_sized(&self, ops_len: usize) -> Plan {
         if !jit_runtime_enabled() {
             return Plan::Interpret;
         }
@@ -1112,7 +1411,7 @@ impl RuntimeState {
     }
 
     #[inline]
-    pub fn dispatch(&self) -> Plan {
+    fn dispatch(&self) -> Plan {
         // Runtime kill switch (NEOVM_JIT=0): never tier up — pure interpreter,
         // no recompile. The early return also skips the heat bump, so a disabled
         // JIT is strictly cheaper than an enabled-but-cold one.
@@ -1146,7 +1445,7 @@ impl RuntimeState {
     /// [`set_compiled_id_word`] (T1 privacy ledger A2, a MINT). See the
     /// `SAFETY` note below for the mint and attach invariants.
     #[inline]
-    pub fn compiled_id_or_assign(&self) -> u64 {
+    fn compiled_id_or_assign(&self) -> u64 {
         let cur = self.compiled_id_word();
         if cur != 0 {
             return cur;
@@ -1169,14 +1468,14 @@ impl RuntimeState {
     /// uses this to intersect the obarray walk with the hot set without minting ids
     /// for the many never-compiled bound functions it walks past.
     #[inline]
-    pub fn compiled_id(&self) -> Option<u64> {
+    fn compiled_id(&self) -> Option<u64> {
         let cur = self.compiled_id_word();
         (cur != 0).then_some(cur)
     }
 
     /// True once this function has crossed the tier-up threshold.
     #[inline(always)]
-    pub fn is_hot(&self) -> bool {
+    fn is_hot(&self) -> bool {
         // A forced-cold function must never read as hot — the OSR gate
         // consults is_hot() directly, and OSR ignoring force_interpret is
         // how a benchmark's "interpreter" half silently ran ~99.99% native
@@ -1194,7 +1493,7 @@ impl RuntimeState {
     /// the re-tier trigger honest without the rest of the dispatcher.
     #[cfg(feature = "jit")]
     #[inline(always)]
-    pub(crate) fn bump_heat(&self) -> u32 {
+    fn bump_heat(&self) -> u32 {
         let now = self.heat.load(Ordering::Relaxed).saturating_add(1);
         self.heat.store(now, Ordering::Relaxed);
         now
@@ -1204,17 +1503,17 @@ impl RuntimeState {
     /// another probe of the same call do the advancing.
     #[cfg(feature = "jit")]
     #[inline]
-    pub(crate) fn peek_heat(&self) -> u32 {
+    fn peek_heat(&self) -> u32 {
         self.heat.load(Ordering::Relaxed)
     }
 
     #[cfg(all(feature = "jit", test))]
-    pub(crate) fn force_interpret_for_test(&self) -> bool {
+    fn force_interpret_for_test(&self) -> bool {
         self.force_interpret.load(Ordering::Relaxed)
     }
 
     #[inline]
-    pub fn heat(&self) -> u32 {
+    fn heat(&self) -> u32 {
         self.heat.load(Ordering::Relaxed)
     }
 
@@ -1224,7 +1523,7 @@ impl RuntimeState {
     /// (256 iterations ≈ one call) is discoverable from the `Runtime` API.
     ///
     /// [`note_loop_work`]: Self::note_loop_work
-    pub const LOOP_BACKEDGES_PER_WRAP: u32 = 256;
+    const LOOP_BACKEDGES_PER_WRAP: u32 = 256;
 
     /// Credit loop work toward tier-up: called from the interpreter's
     /// backward-branch quit-counter wrap (`bytecode/vm.rs`), i.e. once per
@@ -1239,7 +1538,7 @@ impl RuntimeState {
     /// wrap heat back to cold. Respects the [`jit_runtime_enabled`] kill switch
     /// and the `NEOVM_JIT_LOOP_HEAT=0` off knob.
     #[inline]
-    pub fn note_loop_work(&self) {
+    fn note_loop_work(&self) {
         let credit = loop_heat_per_wrap();
         if credit == 0 || !jit_runtime_enabled() {
             return;
@@ -1255,7 +1554,7 @@ impl RuntimeState {
     /// entry. Relaxed and observational, like [`note_loop_work`](Self::note_loop_work);
     /// a racing credit may be lost.
     #[cfg(feature = "jit")]
-    pub(crate) fn note_callback_work(&self, credit: u32) {
+    fn note_callback_work(&self, credit: u32) {
         let prev = self.heat.load(Ordering::Relaxed);
         self.heat
             .store(prev.saturating_add(credit), Ordering::Relaxed);
@@ -1265,7 +1564,7 @@ impl RuntimeState {
     /// `selectable` (the default front's HOF-only predicate) and caching the
     /// answer. Concurrent first calls may both compute it; they agree.
     #[cfg(feature = "jit")]
-    pub(crate) fn hof_caller(&self, selectable: impl FnOnce() -> bool) -> bool {
+    fn hof_caller(&self, selectable: impl FnOnce() -> bool) -> bool {
         match self.hof_caller.load(Ordering::Relaxed) {
             bit if bit == HofCallerBit::Yes as u8 => true,
             bit if bit == HofCallerBit::No as u8 => false,
@@ -1286,32 +1585,32 @@ impl RuntimeState {
     /// tiers it up, without driving `HOT_THRESHOLD` real invocations.
     /// Mark this function as served by a prepopulated AOT leaf (see the
     /// field doc): `dispatch` returns `Plan::Compiled` from call 1.
-    pub(crate) fn mark_aot_prewarmed(&self) {
+    fn mark_aot_prewarmed(&self) {
         self.aot_prewarmed
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether this function is marked to run a preload leaf from call 1.
-    pub(crate) fn is_aot_prewarmed(&self) -> bool {
+    fn is_aot_prewarmed(&self) -> bool {
         self.aot_prewarmed
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
-    pub(crate) fn set_hot_for_test(&self) {
+    fn set_hot_for_test(&self) {
         self.heat.store(Self::HOT_THRESHOLD, Ordering::Relaxed);
     }
 
     /// Test-only: set the heat outright (re-tier tests).
     #[cfg(test)]
-    pub(crate) fn set_heat_for_test(&self, heat: u32) {
+    fn set_heat_for_test(&self, heat: u32) {
         self.heat.store(heat, Ordering::Relaxed);
     }
 
     /// Test-only: pin this function to the Tier-0 interpreter forever (the
     /// forced-cold half of the benchmark A/B; see `force_interpret`).
     #[cfg(test)]
-    pub(crate) fn set_cold_for_test(&self) {
+    fn set_cold_for_test(&self) {
         self.force_interpret
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -1319,33 +1618,33 @@ impl RuntimeState {
     /// Record an observed callee `sym` at the call site at instruction `pc`
     /// (`ops_len` = the function's instruction count, for lazy sizing).
     #[inline]
-    pub fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
+    fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
         self.feedback.record_call(pc, ops_len, sym);
     }
 
     /// Call-site feedback observed at instruction `pc`.
     #[inline]
-    pub fn call_feedback(&self, pc: usize) -> CallFeedback {
+    fn call_feedback(&self, pc: usize) -> CallFeedback {
         self.feedback.call_at(pc)
     }
 
     /// Record the operand types seen at the arithmetic site at instruction
     /// `pc` — see [`NumericFeedback`]. Returns whether the site's slot moved.
     #[inline]
-    pub fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
+    fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
         self.feedback.record_numeric(pc, ops_len, seen)
     }
 
     /// Operand-type feedback observed at arithmetic site `pc`.
     #[inline]
-    pub fn numeric_feedback(&self, pc: usize) -> NumericFeedback {
+    fn numeric_feedback(&self, pc: usize) -> NumericFeedback {
         self.feedback.numeric_at(pc)
     }
 
     /// Whether this body's arithmetic sites still want their operand types
     /// recorded — see `numeric_feedback_consumed`.
     #[inline]
-    pub fn wants_numeric_feedback(&self) -> bool {
+    fn wants_numeric_feedback(&self) -> bool {
         !self
             .numeric_feedback_consumed
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1353,7 +1652,7 @@ impl RuntimeState {
 
     /// Mark this body's numeric feedback as read by a compile.
     #[inline]
-    pub fn note_numeric_feedback_consumed(&self) {
+    fn note_numeric_feedback_consumed(&self) {
         self.numeric_feedback_consumed
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -1363,13 +1662,13 @@ impl RuntimeState {
 
     /// The ceiling every later compile of this source respects.
     #[inline]
-    pub fn reopt_level(&self) -> ReoptLevel {
+    fn reopt_level(&self) -> ReoptLevel {
         ReoptLevel::from_u8(self.reopt_level.load(Ordering::Relaxed))
     }
 
     /// Deopt-driven invalidations of this source so far (saturating).
     #[inline]
-    pub fn reopt_count(&self) -> u8 {
+    fn reopt_count(&self) -> u8 {
         self.reopt_count.load(Ordering::Relaxed)
     }
 
@@ -1379,7 +1678,7 @@ impl RuntimeState {
     /// invalidated at most `max_reopts + 4` times before it is interpreted
     /// for good.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn note_reopt(&self, floor: ReoptLevel, max_reopts: u8) -> ReoptLevel {
+    fn note_reopt(&self, floor: ReoptLevel, max_reopts: u8) -> ReoptLevel {
         let count = self.reopt_count().saturating_add(1);
         self.reopt_count.store(count, Ordering::Relaxed);
         let cur = self.reopt_level();
@@ -1394,7 +1693,7 @@ impl RuntimeState {
     /// Make the interpreter record numeric feedback again, until the next
     /// compile consumes it.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn reopen_numeric_feedback(&self) {
+    fn reopen_numeric_feedback(&self) {
         self.numeric_feedback_consumed
             .store(false, std::sync::atomic::Ordering::Relaxed);
     }
@@ -1402,13 +1701,13 @@ impl RuntimeState {
     /// Join `seen` into arithmetic site `pc`'s feedback (what a deopt proved
     /// the site meets). Returns whether the site's slot moved.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn widen_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
+    fn widen_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
         self.feedback.record_numeric(pc, ops_len, seen)
     }
 
     /// Forbid splicing, MIR-inlining or intrinsifying the call site at `pc`.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn mark_call_site_no_inline(&self, pc: usize, ops_len: usize) {
+    fn mark_call_site_no_inline(&self, pc: usize, ops_len: usize) {
         if let Some(site) = self.site_retreat.site(pc, ops_len) {
             site.set(retreat::RetreatBit::NoInline);
         }
@@ -1416,13 +1715,13 @@ impl RuntimeState {
 
     /// Test-only: set the reoptimization ceiling outright.
     #[cfg(test)]
-    pub(crate) fn set_reopt_level_for_test(&self, level: ReoptLevel) {
+    fn set_reopt_level_for_test(&self, level: ReoptLevel) {
         self.reopt_level.store(level as u8, Ordering::Relaxed);
     }
 
     /// Whether a deopt forbade inlining the call site at `pc`.
     #[inline]
-    pub(crate) fn call_site_no_inline(&self, pc: usize) -> bool {
+    fn call_site_no_inline(&self, pc: usize) -> bool {
         self.site_retreat.has(pc, retreat::RetreatBit::NoInline)
     }
 
@@ -1430,7 +1729,7 @@ impl RuntimeState {
     /// history (P2.1 C2); returns the new count (saturating at 255, 0 for a
     /// pc outside the body the table was sized for).
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8 {
+    fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8 {
         self.site_retreat
             .site(pc, ops_len)
             .map_or(0, retreat::SiteRetreat::note_deopt)
@@ -1443,7 +1742,7 @@ impl RuntimeState {
         expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
     )]
     #[inline]
-    pub(crate) fn deopt_history(&self, pc: usize) -> u8 {
+    fn deopt_history(&self, pc: usize) -> u8 {
         self.site_retreat
             .get(pc)
             .map_or(0, retreat::SiteRetreat::count)
@@ -1452,52 +1751,8 @@ impl RuntimeState {
     /// Stop serving this source as AOT-prewarmed: `dispatch_sized` would
     /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn clear_aot_prewarmed(&self) {
+    fn clear_aot_prewarmed(&self) {
         self.aot_prewarmed.store(false, Ordering::Relaxed);
-    }
-}
-
-impl Default for RuntimeState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Runtime {
-    pub const HOT_THRESHOLD: u32 = RuntimeState::HOT_THRESHOLD;
-
-    /// A fresh, cold, unshared state — for a NEW source (reader, decoder,
-    /// `make-byte-code`, pdump restore). Clones share instead.
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            shared: std::sync::Arc::new(RuntimeState::new()),
-        }
-    }
-}
-
-impl std::ops::Deref for Runtime {
-    type Target = RuntimeState;
-    #[inline]
-    fn deref(&self) -> &RuntimeState {
-        &self.shared
-    }
-}
-
-impl Default for Runtime {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for Runtime {
-    /// A clone SHARES the source's state (see the type docs) — a
-    /// `make-closure` instance inherits the prototype's heat, feedback and
-    /// compiled leaf, and contributes its own calls to them.
-    fn clone(&self) -> Self {
-        Self {
-            shared: std::sync::Arc::clone(&self.shared),
-        }
     }
 }
 
@@ -1558,12 +1813,18 @@ pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
     let _ = h;
 }
 
+#[cfg(all(feature = "jit", test))]
+/// Upper extension trait for the moved runtime state (test helpers).
 /// Test helpers for the armed-leaf slot. Production arming goes through the
 /// lower `unsafe set_leaf_slot_word` from the single `cache::arm_leaf_slot`
 /// call site; tests keep the old typed read/write spellings.
+pub(crate) trait RuntimeStateArmedLeafExt {
+    fn armed_leaf_slot(&self, epoch: u64) -> Option<*const compile::CompiledLeaf>;
+}
+
 #[cfg(all(feature = "jit", test))]
-impl RuntimeState {
-    pub(crate) fn armed_leaf_slot(&self, epoch: u64) -> Option<*const compile::CompiledLeaf> {
+impl RuntimeStateArmedLeafExt for RuntimeState {
+    fn armed_leaf_slot(&self, epoch: u64) -> Option<*const compile::CompiledLeaf> {
         self.armed_leaf_word(epoch)
             .map(|word| word.get() as *const compile::CompiledLeaf)
     }

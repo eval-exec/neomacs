@@ -34,6 +34,7 @@
 //! remembers it (no ABA).
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::FeedbackVecExt;
 #[path = "feedback/arrays.rs"]
 pub(crate) mod arrays;
 
@@ -192,10 +193,26 @@ fn feedback_mode_from_env() -> FeedbackMode {
 // Per-source feedback.
 // ---------------------------------------------------------------------------
 
-impl SourceFeedback {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait SourceFeedbackExt {
+    /// No feedback yet (nothing allocated).
+    fn new() -> Self;
+    /// Record callee `sym` at call site `pc` (the legacy lattice).
+    fn record_call(&self, pc: usize, ops_len: usize, sym: SymId);
+    /// The legacy call lattice at `pc`.
+    fn call_at(&self, pc: usize) -> CallFeedback;
+    /// Join `seen` into arithmetic site `pc`; whether the slot moved.
+    fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool;
+    /// The numeric lattice at arithmetic site `pc`.
+    fn numeric_at(&self, pc: usize) -> NumericFeedback;
+    /// The call-site table, if one was built.
+    fn call_sites(&self) -> Option<&CallSites>;
+}
+
+impl SourceFeedbackExt for SourceFeedback {
     /// No feedback yet (nothing allocated).
     #[inline]
-    pub(crate) const fn new() -> Self {
+    fn new() -> Self {
         Self {
             ops: FeedbackVec::new(),
             calls: OnceLock::new(),
@@ -204,44 +221,87 @@ impl SourceFeedback {
 
     /// Record callee `sym` at call site `pc` (the legacy lattice).
     #[inline]
-    pub(crate) fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
+    fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
         self.ops.record_call(pc, ops_len, sym);
     }
 
     /// The legacy call lattice at `pc`.
     #[inline]
-    pub(crate) fn call_at(&self, pc: usize) -> CallFeedback {
+    fn call_at(&self, pc: usize) -> CallFeedback {
         self.ops.call_at(pc)
     }
 
     /// Join `seen` into arithmetic site `pc`; whether the slot moved.
     #[inline]
-    pub(crate) fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
+    fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
         self.ops.record_numeric(pc, ops_len, seen)
     }
 
     /// The numeric lattice at arithmetic site `pc`.
     #[inline]
-    pub(crate) fn numeric_at(&self, pc: usize) -> NumericFeedback {
+    fn numeric_at(&self, pc: usize) -> NumericFeedback {
         self.ops.numeric_at(pc)
     }
 
     /// The call-site table, if one was built.
     #[inline(always)]
-    pub(crate) fn call_sites(&self) -> Option<&CallSites> {
+    fn call_sites(&self) -> Option<&CallSites> {
         self.calls.get()
     }
 }
 
-impl RuntimeState {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait RuntimeStateCallSitesExt {
+    /// The source's call-site table, if one was built.
+    fn call_sites(&self) -> Option<&CallSites>;
+}
+
+impl RuntimeStateCallSitesExt for RuntimeState {
     /// The source's call-site table, if one was built.
     #[inline(always)]
-    pub(crate) fn call_sites(&self) -> Option<&CallSites> {
+    fn call_sites(&self) -> Option<&CallSites> {
         self.feedback.call_sites()
     }
 }
 
-impl Runtime {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait RuntimeFeedbackExt {
+    /// Record the target of the call at `pc` of `func` (this runtime's
+    /// function) that the interpreter is about to make: `callee` is the
+    /// called value, `arg0` its first argument (nil when it has none). A
+    /// no-op at a site whose callee is a constant (the compile knows it);
+    /// at `apply` and mapping-builtin sites the target is `arg0`.
+    ///
+    /// The fast path is the table lookup and one compare; only a lattice
+    /// transition leaves it.
+    fn record_call_target(
+        &self,
+        pc: usize,
+        func: &crate::emacs_core::bytecode::ByteCodeFunction,
+        callee: Value,
+        arg0: Value,
+    );
+    /// [`Self::record_call_target`] on a source without a table: build it,
+    /// register the source with the census, then record.
+    fn record_call_target_first(
+        &self,
+        pc: usize,
+        func: &crate::emacs_core::bytecode::ByteCodeFunction,
+        callee: Value,
+        arg0: Value,
+    );
+    /// This source's call-site table, built from `ops` (its executable
+    /// instructions) on first use and registered with the exit census.
+    fn call_sites_for(&self, ops: &[Op], constants: &[Value]) -> &CallSites;
+    /// The source's `RuntimeState` address (its identity among live
+    /// sources, as `Arc::as_ptr`).
+    fn state_ptr(&self) -> *const RuntimeState;
+    /// The source's `RuntimeState`, shared (a compiled leaf that bakes an
+    /// address inside it keeps it alive).
+    fn share_state(&self) -> Arc<RuntimeState>;
+}
+
+impl RuntimeFeedbackExt for Runtime {
     /// Record the target of the call at `pc` of `func` (this runtime's
     /// function) that the interpreter is about to make: `callee` is the
     /// called value, `arg0` its first argument (nil when it has none). A
@@ -251,7 +311,7 @@ impl Runtime {
     /// The fast path is the table lookup and one compare; only a lattice
     /// transition leaves it.
     #[inline(always)]
-    pub(crate) fn record_call_target(
+    fn record_call_target(
         &self,
         pc: usize,
         func: &crate::emacs_core::bytecode::ByteCodeFunction,
@@ -285,7 +345,7 @@ impl Runtime {
 
     /// This source's call-site table, built from `ops` (its executable
     /// instructions) on first use and registered with the exit census.
-    pub(crate) fn call_sites_for(&self, ops: &[Op], constants: &[Value]) -> &CallSites {
+    fn call_sites_for(&self, ops: &[Op], constants: &[Value]) -> &CallSites {
         let mut built = false;
         let sites = self.feedback.calls.get_or_init(|| {
             built = true;
@@ -300,13 +360,13 @@ impl Runtime {
     /// The source's `RuntimeState` address (its identity among live
     /// sources, as `Arc::as_ptr`).
     #[inline(always)]
-    pub(crate) fn state_ptr(&self) -> *const RuntimeState {
+    fn state_ptr(&self) -> *const RuntimeState {
         Arc::as_ptr(&self.shared)
     }
 
     /// The source's `RuntimeState`, shared (a compiled leaf that bakes an
     /// address inside it keeps it alive).
-    pub(crate) fn share_state(&self) -> Arc<RuntimeState> {
+    fn share_state(&self) -> Arc<RuntimeState> {
         Arc::clone(&self.shared)
     }
 }
@@ -325,9 +385,15 @@ pub(crate) fn identity_word_of(state: &Arc<RuntimeState>) -> usize {
 // Call sites.
 // ---------------------------------------------------------------------------
 
-impl SiteShape {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait SiteShapeExt {
     /// The census name.
-    pub(crate) fn name(self) -> &'static str {
+    fn name(self) -> &'static str;
+}
+
+impl SiteShapeExt for SiteShape {
+    /// The census name.
+    fn name(self) -> &'static str {
         match self {
             SiteShape::Callee => "callee",
             SiteShape::ApplyArg => "apply",
@@ -379,7 +445,53 @@ fn target_key(target: Value) -> u64 {
     }
 }
 
-impl CallSiteFeedback {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait CallSiteFeedbackExt {
+    fn new(pc: u32, shape: SiteShape) -> Self;
+    /// The value this site records for a call of `callee` with first
+    /// argument `arg0`.
+    fn target_of(&self, callee: Value, arg0: Value) -> Value;
+    /// What the site records.
+    fn shape(&self) -> SiteShape;
+    /// The site's pc.
+    fn pc(&self) -> u32;
+    /// Counted executions.
+    fn count(&self) -> u32;
+    /// Late transitions.
+    fn late(&self) -> u32;
+    /// Join `target` into the lattice. One load and a compare unless the
+    /// word moves.
+    fn observe(&self, target: Value);
+    /// Whether the site is still inside its profiling window (fewer than
+    /// [`STABLE_WINDOW`] counted executions).
+    fn window_open(&self) -> bool;
+    /// Test-only: set the counted executions outright.
+    #[cfg(test)]
+    fn set_count_for_test(&self, count: u32);
+    /// Count one execution, then [`Self::observe`] (the recording call
+    /// shims').
+    fn observe_counted(&self, target: Value);
+    /// The word moves (or a polymorphic site meets one of its sources).
+    fn transition(&self, state: u64, key: u64, target: Value);
+    /// Without the JIT a byte-code object has no source identity
+    /// (`ByteCodeFunction::runtime` is JIT-only), so no key names one.
+    #[cfg(not(feature = "jit"))]
+    fn remember_source(&self, _i: usize, _target: Value) -> bool;
+    /// Keep a `Weak` of `target`'s source in slot `i`; false when `target`
+    /// has no source (never: the key said it has one).
+    #[cfg(feature = "jit")]
+    fn remember_source(&self, i: usize, target: Value) -> bool;
+    /// Without the JIT no site holds a source.
+    #[cfg(not(feature = "jit"))]
+    fn holds_source(&self, _n: usize, _target: Value) -> bool;
+    /// Whether `target`'s source is among the first `n` the site holds.
+    #[cfg(feature = "jit")]
+    fn holds_source(&self, n: usize, target: Value) -> bool;
+    /// The site's target as a compile reads it (see [`CallTarget`]).
+    fn target(&self) -> CallTarget;
+}
+
+impl CallSiteFeedbackExt for CallSiteFeedback {
     fn new(pc: u32, shape: SiteShape) -> Self {
         Self {
             state: AtomicU64::new(STATE_UNINIT),
@@ -394,7 +506,7 @@ impl CallSiteFeedback {
     /// The value this site records for a call of `callee` with first
     /// argument `arg0`.
     #[inline(always)]
-    pub(crate) fn target_of(&self, callee: Value, arg0: Value) -> Value {
+    fn target_of(&self, callee: Value, arg0: Value) -> Value {
         match self.shape {
             SiteShape::Callee => callee,
             SiteShape::ApplyArg | SiteShape::CallbackArg => arg0,
@@ -402,29 +514,29 @@ impl CallSiteFeedback {
     }
 
     /// What the site records.
-    pub(crate) fn shape(&self) -> SiteShape {
+    fn shape(&self) -> SiteShape {
         self.shape
     }
 
     /// The site's pc.
-    pub(crate) fn pc(&self) -> u32 {
+    fn pc(&self) -> u32 {
         self.pc
     }
 
     /// Counted executions.
-    pub(crate) fn count(&self) -> u32 {
+    fn count(&self) -> u32 {
         self.count.load(Ordering::Relaxed)
     }
 
     /// Late transitions.
-    pub(crate) fn late(&self) -> u32 {
+    fn late(&self) -> u32 {
         self.late.load(Ordering::Relaxed)
     }
 
     /// Join `target` into the lattice. One load and a compare unless the
     /// word moves.
     #[inline(always)]
-    pub(crate) fn observe(&self, target: Value) {
+    fn observe(&self, target: Value) {
         let key = target_key(target);
         let state = self.state.load(Ordering::Relaxed);
         if state == key || state == STATE_MEGA {
@@ -436,20 +548,20 @@ impl CallSiteFeedback {
     /// Whether the site is still inside its profiling window (fewer than
     /// [`STABLE_WINDOW`] counted executions).
     #[inline(always)]
-    pub(crate) fn window_open(&self) -> bool {
+    fn window_open(&self) -> bool {
         self.count.load(Ordering::Relaxed) < STABLE_WINDOW
     }
 
     /// Test-only: set the counted executions outright.
     #[cfg(test)]
-    pub(crate) fn set_count_for_test(&self, count: u32) {
+    fn set_count_for_test(&self, count: u32) {
         self.count.store(count, Ordering::Relaxed);
     }
 
     /// Count one execution, then [`Self::observe`] (the recording call
     /// shims').
     #[inline(always)]
-    pub(crate) fn observe_counted(&self, target: Value) {
+    fn observe_counted(&self, target: Value) {
         let count = self.count.load(Ordering::Relaxed);
         self.count.store(count.saturating_add(1), Ordering::Relaxed);
         self.observe(target);
@@ -544,7 +656,7 @@ impl CallSiteFeedback {
     }
 
     /// The site's target as a compile reads it (see [`CallTarget`]).
-    pub(crate) fn target(&self) -> CallTarget {
+    fn target(&self) -> CallTarget {
         let state = self.state.load(Ordering::Relaxed);
         let n = match state & TAG_BITS {
             _ if state == STATE_UNINIT => return CallTarget::Uninit,
@@ -575,24 +687,23 @@ impl CallSiteFeedback {
     }
 }
 
-impl Drop for CallSiteFeedback {
-    fn drop(&mut self) {
-        for slot in &self.sources {
-            let ptr = slot.load(Ordering::Relaxed);
-            if !ptr.is_null() {
-                // SAFETY: every non-null slot holds a `Weak::into_raw`
-                // this site owns.
-                drop(unsafe { Weak::from_raw(ptr) });
-            }
-        }
-    }
-}
-
-impl CallSites {
+/// Upper extension trait for the moved feedback types.
+pub(crate) trait CallSitesExt {
     /// The table of `ops` (a body's executable instructions): classify each
     /// `Op::Call`/`Op::Apply` by the constant its callee slot provably holds
     /// (the block-local tag scan `find_spec_sites` uses).
-    pub(crate) fn build(ops: &[Op], constants: &[Value]) -> Self {
+    fn build(ops: &[Op], constants: &[Value]) -> Self;
+    /// The site at `pc`, if the call there records.
+    fn site_at(&self, pc: usize) -> Option<&CallSiteFeedback>;
+    /// Every site, in pc order.
+    fn sites(&self) -> &[CallSiteFeedback];
+}
+
+impl CallSitesExt for CallSites {
+    /// The table of `ops` (a body's executable instructions): classify each
+    /// `Op::Call`/`Op::Apply` by the constant its callee slot provably holds
+    /// (the block-local tag scan `find_spec_sites` uses).
+    fn build(ops: &[Op], constants: &[Value]) -> Self {
         let shapes = classify_call_sites(ops, constants);
         let mut index = vec![0u16; ops.len()].into_boxed_slice();
         let mut sites = Vec::new();
@@ -612,7 +723,7 @@ impl CallSites {
 
     /// The site at `pc`, if the call there records.
     #[inline(always)]
-    pub(crate) fn site_at(&self, pc: usize) -> Option<&CallSiteFeedback> {
+    fn site_at(&self, pc: usize) -> Option<&CallSiteFeedback> {
         let at = *self.index.get(pc)?;
         if at == 0 {
             return None;
@@ -621,7 +732,7 @@ impl CallSites {
     }
 
     /// Every site, in pc order.
-    pub(crate) fn sites(&self) -> &[CallSiteFeedback] {
+    fn sites(&self) -> &[CallSiteFeedback] {
         &self.sites
     }
 }

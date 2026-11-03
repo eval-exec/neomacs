@@ -18,8 +18,10 @@
 use super::{CacheEntry, DeferReason, EntryLeaves, OSR_PENDING, install_osr_pending};
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 use crate::emacs_core::jit::compile::{self, CompileRequest};
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 use crate::emacs_core::jit::tier2::CompileTier;
 use crate::emacs_core::symbol::Obarray;
 

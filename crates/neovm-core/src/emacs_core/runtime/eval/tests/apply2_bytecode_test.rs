@@ -11,6 +11,7 @@ use crate::emacs_core::eval::{
     Context, LispArgVec, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::{LambdaParams, Value};

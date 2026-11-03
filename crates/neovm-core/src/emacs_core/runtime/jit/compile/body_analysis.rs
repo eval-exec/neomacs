@@ -14,6 +14,7 @@ use super::{Cfg, CompileError, JitParamShape, analyze_cfg, mask_dynamic_prefix};
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::inline::FusedBody;
 use crate::emacs_core::value::Value;
 

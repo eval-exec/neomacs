@@ -8,6 +8,11 @@
 use super::ReportTag;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::jit::RuntimeState;
+use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
+use crate::emacs_core::jit::feedback::CallSitesExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
+use crate::emacs_core::jit::feedback::RuntimeStateCallSitesExt;
+use crate::emacs_core::jit::feedback::SiteShapeExt;
 use crate::emacs_core::jit::feedback::{CallTarget, STABLE_WINDOW};
 
 /// How many sites the ranked section prints.

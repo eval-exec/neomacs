@@ -14,6 +14,9 @@ use crate::emacs_core::jit::compile::{
     SpecSlotKind, Tier2Knob, force_deopt_for_test, force_spec_sources_for_test,
     force_tier2_for_test,
 };
+use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
+use crate::emacs_core::jit::feedback::CallSitesExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 use crate::emacs_core::jit::feedback::{FeedbackMode, force_feedback_mode_for_test};
 use crate::emacs_core::jit::stats::{ObserveOverride, force_observe_for_test};
 use crate::emacs_core::jit::tier2::{DISARMED, T2Origin};

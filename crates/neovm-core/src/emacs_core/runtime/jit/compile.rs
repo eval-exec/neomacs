@@ -69,6 +69,7 @@
 //! interpreter stores it.
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 pub(crate) mod body_analysis;
 pub(crate) mod param_shape;
 

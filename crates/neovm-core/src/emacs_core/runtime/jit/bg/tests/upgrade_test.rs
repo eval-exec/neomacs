@@ -5,6 +5,7 @@ use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{corpus, function};
 use crate::emacs_core::jit::compile::lowering::RegallocChoice;

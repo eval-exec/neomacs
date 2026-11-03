@@ -13,6 +13,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache::{cache_entry_kind_for_test, compiled_leaf_ptr_for_test};
 use crate::emacs_core::jit::compile::{force_deopt_for_test, force_profit_gate_for_test};
 use crate::emacs_core::jit::stats;

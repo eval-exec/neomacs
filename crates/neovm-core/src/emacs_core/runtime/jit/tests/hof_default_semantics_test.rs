@@ -11,6 +11,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::bg::{BgMode, TestModeScope};
 use crate::emacs_core::jit::compile::{self, Inline2Mode, OptMode};
 use crate::emacs_core::print::print_value;

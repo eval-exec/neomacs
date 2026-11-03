@@ -6,6 +6,7 @@ use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::{force_deopt_for_test, lower_nullary_leaf};
 use crate::emacs_core::jit::stats;
 use crate::emacs_core::value::LambdaParams;

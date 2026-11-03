@@ -31,6 +31,7 @@ use super::backend::BackendError;
 use super::compile::{CompileError, DeoptCells};
 use super::mir;
 use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::value::Value;
 
 /// Wrap a stringly backend error as a `CompileError` (module-init flavor — the

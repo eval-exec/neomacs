@@ -9,7 +9,11 @@
 use super::super::*;
 use super::{FeedbackSnapshot, NumericFeedbackScope};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 use crate::emacs_core::jit::feedback::arrays::ArrayKindMask;
+use crate::emacs_core::jit::feedback::arrays::RuntimeArraysExt;
+use crate::emacs_core::jit::feedback::arrays::RuntimeStateArraysExt;
 
 /// Additional owned compiler masks, keeping the complete main snapshot intact.
 #[derive(Debug, Default)]

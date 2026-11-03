@@ -26,6 +26,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use super::compile::{CompileError, CompiledLeaf, LeafTotals};
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 pub(crate) use phases::{CompileClock, CompileOrigin, CompilePhase, enter_phase};
 
 /// Upper bounds (exclusive, µs) of the first seven histogram buckets; the

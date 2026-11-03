@@ -7,6 +7,7 @@ use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::{self, Inline2Mode};
 use crate::emacs_core::value::{LambdaParams, Value};
 

@@ -15,6 +15,7 @@ use crate::emacs_core::bytecode::decode::{decode_gnu_bytecode, parse_arglist_des
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::mir::{self, LispType, MirOp};
 use crate::emacs_core::value::{Value, ValueKind};
 

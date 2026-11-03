@@ -12,6 +12,8 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::jit::NumericFeedback;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 
 thread_local! {
     /// Per-pc operand-type feedback for the body being compiled.

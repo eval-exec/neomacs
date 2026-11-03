@@ -15,6 +15,7 @@ use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::{
     push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
+use crate::emacs_core::jit::feedback::arrays::RuntimeStateArraysExt;
 use crate::emacs_core::jit::opt::passes::{array_reads, range};
 use crate::emacs_core::jit::opt::{
     build, eval, ir,

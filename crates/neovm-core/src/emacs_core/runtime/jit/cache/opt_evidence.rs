@@ -6,6 +6,7 @@
 
 use super::{COMPILED_HEAP, COMPILED_OBARRAY, OSR_CACHE};
 use crate::emacs_core::jit::RuntimeState;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::opt_census::SelectedTier;
 
 /// Installed Opt code at one of this source's original qualifying headers.

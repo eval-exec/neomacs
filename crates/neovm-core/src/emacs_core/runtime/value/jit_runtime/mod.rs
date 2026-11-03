@@ -344,3 +344,71 @@ pub unsafe fn set_compiled_id_word(rt: &RuntimeState, fresh: u64) -> u64 {
         Err(actual) => actual,
     }
 }
+
+impl FeedbackVec {
+    #[inline]
+    pub const fn new() -> Self {
+        Self {
+            slots: OnceLock::new(),
+        }
+    }
+}
+
+impl Clone for FeedbackVec {
+    /// A clone starts with no feedback (per-instance, like the heat counter).
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl Default for RuntimeState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Runtime {
+    pub const HOT_THRESHOLD: u32 = RuntimeState::HOT_THRESHOLD;
+
+    /// A fresh, cold, unshared state — for a NEW source (reader, decoder,
+    /// `make-byte-code`, pdump restore). Clones share instead.
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            shared: std::sync::Arc::new(RuntimeState::new()),
+        }
+    }
+}
+
+impl std::ops::Deref for Runtime {
+    type Target = RuntimeState;
+    #[inline]
+    fn deref(&self) -> &RuntimeState {
+        &self.shared
+    }
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for Runtime {
+    /// A clone SHARES the source's state (see the type docs) — a
+    /// `make-closure` instance inherits the prototype's heat, feedback and
+    /// compiled leaf, and contributes its own calls to them.
+    fn clone(&self) -> Self {
+        Self {
+            shared: std::sync::Arc::clone(&self.shared),
+        }
+    }
+}
+
+impl RuntimeState {
+    /// Invocations before a function is "hot" enough to tier up.
+    ///
+    /// Lower-layer copy: the upper tiering extension and `Runtime`'s
+    /// `HOT_THRESHOLD` both read this single value.
+    pub const HOT_THRESHOLD: u32 = 1_000;
+}

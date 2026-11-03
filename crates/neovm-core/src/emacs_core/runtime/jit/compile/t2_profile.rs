@@ -16,6 +16,7 @@
 use super::lowering::RtCtx;
 use super::*;
 use crate::emacs_core::jit::feedback::CallSiteFeedback;
+use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
 use crate::emacs_core::jit::tier2::{T2Emit, neovm_jit_t2_hof_credit};
 use cranelift_codegen::isa::CallConv;
 

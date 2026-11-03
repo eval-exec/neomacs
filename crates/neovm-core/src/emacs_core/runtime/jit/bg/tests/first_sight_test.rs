@@ -10,6 +10,7 @@ use super::*;
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::function;
 use crate::emacs_core::jit::compile::force_deopt_for_test;

@@ -22,7 +22,11 @@
 use super::lowering::RtCtx;
 use super::*;
 use crate::emacs_core::jit::RuntimeState;
+use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
+use crate::emacs_core::jit::feedback::CallSitesExt;
+use crate::emacs_core::jit::feedback::RuntimeStateCallSitesExt;
 use crate::emacs_core::jit::feedback::arrays::ArraySiteFeedback;
+use crate::emacs_core::jit::feedback::arrays::RuntimeStateArraysExt;
 use crate::emacs_core::jit::feedback::{CallSiteFeedback, CallTarget, SiteShape};
 use cranelift_codegen::isa::CallConv;
 use std::sync::Arc;

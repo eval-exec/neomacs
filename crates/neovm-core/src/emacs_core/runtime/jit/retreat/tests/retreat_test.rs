@@ -3,6 +3,7 @@
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 /// The bits are distinct, fit the low byte, and leave the count byte alone.
 #[test]
 fn retreat_bits_are_distinct_and_fit_the_low_byte() {

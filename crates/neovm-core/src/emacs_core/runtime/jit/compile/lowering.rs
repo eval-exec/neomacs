@@ -5,6 +5,7 @@
 
 use super::boolean::{BoolResultMode, tagged_bool_view};
 use super::*;
+use crate::emacs_core::jit::feedback::CallSiteFeedbackExt;
 
 #[path = "opt_sink_deopt.rs"]
 mod opt_sink_deopt;

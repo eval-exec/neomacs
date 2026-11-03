@@ -73,6 +73,8 @@ use super::stats::CompileOrigin;
 use super::stats::asm_dump::{self, PendingAsm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
+use crate::emacs_core::jit::feedback::RuntimeFeedbackExt;
 
 mod affinity;
 mod queue;

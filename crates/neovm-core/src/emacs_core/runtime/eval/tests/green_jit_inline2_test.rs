@@ -11,6 +11,7 @@ use crate::emacs_core::bytecode::{ByteCodeFunction, Op, StackDepth};
 use crate::emacs_core::error::{EvalResult, FlowRef};
 use crate::emacs_core::eval::{Context, SpecBinding, ThreadingMode};
 use crate::emacs_core::intern::intern;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::{
     cache,
     compile::{self, Inline2Mode, NativeRun, ProfitGateTestPolicy},

@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::jit::RuntimeStateTieringExt;
 use crate::emacs_core::jit::compile::compile_pipeline_tests::{
     captured_clif, function, mask_code_text,
 };
