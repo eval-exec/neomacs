@@ -17,10 +17,22 @@ pub struct SqliteObjFinalizer {
 }
 
 static SQLITE_OBJ_FINALIZER: OnceLock<SqliteObjFinalizer> = OnceLock::new();
+static SQLITE_OBJ_FINALIZER_IDENTITY: OnceLock<&'static SqliteObjFinalizer> = OnceLock::new();
 
-/// Install the sqlite finalizer. Idempotent like the other one-time hooks.
-pub(crate) fn install_sqlite_obj_finalizer(finalizer: SqliteObjFinalizer) {
-    let _ = SQLITE_OBJ_FINALIZER.set(finalizer);
+/// Install the sqlite finalizer. Idempotent like the other one-time hooks;
+/// a different finalizer table is a typed refusal, never a silent skip.
+#[must_use = "handle a conflicting sqlite-finalizer publication"]
+pub fn install_sqlite_obj_finalizer(
+    finalizer: &'static SqliteObjFinalizer,
+) -> Result<
+    crate::value::hook_publication::HookInstallStatus,
+    crate::value::hook_publication::HookInstallError,
+> {
+    crate::value::hook_publication::publish(
+        &SQLITE_OBJ_FINALIZER,
+        &SQLITE_OBJ_FINALIZER_IDENTITY,
+        finalizer,
+    )
 }
 
 /// Whether the finalizer hook has been installed (test-only observation).

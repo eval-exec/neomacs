@@ -4,7 +4,8 @@
 #[cfg(test)]
 #[path = "tests/instrumentation.rs"]
 pub(crate) mod instrumentation;
-pub(crate) mod ordered;
+#[doc(hidden)]
+pub mod ordered;
 
 use super::byte_positions::{EmacsByteDelta, EmacsBytePos, EmacsByteRange};
 use crate::tagged::value::TaggedValue as Value;

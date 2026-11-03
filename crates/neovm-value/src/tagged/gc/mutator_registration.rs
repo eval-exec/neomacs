@@ -50,7 +50,8 @@ pub(crate) use wrappers::{
     ProofEra as GenericProofEra, ProofEraFinishFailure as GenericProofEraFinishFailure,
 };
 mod keeper;
-pub(crate) use keeper::EraKeeper;
+#[doc(hidden)]
+pub use keeper::EraKeeper;
 #[doc(hidden)]
 pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
 mod gate;
@@ -350,10 +351,11 @@ struct EraCore<'heap, K: EraKeeper> {
     _thread: PhantomData<Rc<()>>,
 }
 
-pub(crate) struct EraAdmissionFailure<'heap, K: EraKeeper> {
-    pub(crate) reason: RegistrationError,
-    pub(crate) collector: QuiescentCollector<'heap>,
-    pub(crate) keeper: K,
+#[doc(hidden)]
+pub struct EraAdmissionFailure<'heap, K: EraKeeper> {
+    pub(super) reason: RegistrationError,
+    pub(super) collector: QuiescentCollector<'heap>,
+    pub(super) keeper: K,
 }
 
 impl<K: EraKeeper> std::fmt::Debug for EraAdmissionFailure<'_, K> {
@@ -361,6 +363,19 @@ impl<K: EraKeeper> std::fmt::Debug for EraAdmissionFailure<'_, K> {
         f.debug_tuple("EraAdmissionFailure")
             .field(&self.reason)
             .finish()
+    }
+}
+
+impl<'heap, K: EraKeeper> EraAdmissionFailure<'heap, K> {
+    /// The reason the refused admission was rejected.
+    #[inline]
+    pub fn reason(&self) -> &RegistrationError {
+        &self.reason
+    }
+
+    /// Recover the collector and keeper from the refused admission.
+    pub fn into_parts(self) -> (RegistrationError, QuiescentCollector<'heap>, K) {
+        (self.reason, self.collector, self.keeper)
     }
 }
 impl<K: EraKeeper> std::fmt::Debug for EraCore<'_, K> {

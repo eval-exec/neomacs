@@ -4,12 +4,12 @@
 pub use super::symbol_authority::{PreparedHofBuiltin, PreparedUnaryFunction};
 #[doc(hidden)]
 pub use super::{
-    CellRead, CellReadError, ExecutionActivation, FrozenFunctionRoots, FrozenLegacyRoots, HofError,
-    HofScratch, HofSingleton, ImmediateResult, ImmediateResultError, SymbolWriteToken,
+    CellRead, CellReadError, EraAdmissionFailure, EraKeeper, ExecutionActivation,
+    FrozenFunctionRoots, FrozenLegacyRoots, HofError, HofScratch, HofSingleton, ImmediateResult,
+    ImmediateResultError, SymbolWriteToken,
 };
 pub(crate) use super::{
-    EraAdmissionFailure, EraFinishFailure, EraKeeper, OwnerRootAdmission, StoppedRootAdmission,
-    SymbolReadToken,
+    EraFinishFailure, OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken,
 };
 
 #[cfg(test)]

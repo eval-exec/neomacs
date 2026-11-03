@@ -2382,7 +2382,7 @@ impl Context {
         // construction, one of the two pinned seams.
         let installed = unsafe {
             crate::heap_types::install_string_bytes_changed_hook(
-                crate::emacs_core::string_pos_cache::note_string_bytes_changed,
+                &crate::emacs_core::string_pos_cache::STRING_BYTES_STAMP,
             )
         };
         debug_assert!(

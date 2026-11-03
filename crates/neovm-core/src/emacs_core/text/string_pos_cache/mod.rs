@@ -51,6 +51,9 @@ pub(crate) fn note_string_bytes_changed() {
     EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
 }
 
+/// The cache's one canonical byte-mutation stamp, installed at the N9 seams.
+pub(crate) static STRING_BYTES_STAMP: fn() = note_string_bytes_changed;
+
 /// Forget the entry (heap reset, pdump load).
 pub(crate) fn reset_string_pos_cache() {
     CACHE.with(|cache| cache.set(None));
@@ -70,7 +73,7 @@ pub(crate) fn install_notification_hook_for_test() {
     // seams install the same function, so this test-only offer is the
     // idempotent re-offer, never a different hook.
     let installed =
-        unsafe { crate::heap_types::install_string_bytes_changed_hook(note_string_bytes_changed) };
+        unsafe { crate::heap_types::install_string_bytes_changed_hook(&STRING_BYTES_STAMP) };
     debug_assert!(
         installed.is_ok(),
         "a different byte-mutation stamp is already installed"

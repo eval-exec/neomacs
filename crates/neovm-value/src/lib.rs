@@ -32,10 +32,12 @@ pub mod test_utils;
 
 // PC2 sealed hook installers (exact-chain; see architecture PC2 table)
 pub use error::format_hook::{EvalErrorFormatter, install_eval_error_formatter};
+pub use heap_types::install_string_bytes_changed_hook;
 pub use symbol::function_cell_observer::{
     FunctionCellObserver, FunctionEpochMoveSink, install_function_cell_observer,
     install_function_epoch_move_sink,
 };
+pub use tagged::header::sqlite_finalizer::{SqliteObjFinalizer, install_sqlite_obj_finalizer};
 pub use value::bytecode_semantics::{BytecodeSemantics, install_bytecode_semantics};
 pub use value::hook_publication::{HookInstallError, HookInstallStatus};
 pub use value::scratch_bridge::{ScratchRootHooks, install_scratch_root_hooks};

@@ -123,13 +123,19 @@ mod enabled {
         }
     }
 
+    /// The one canonical finalizer table (peer-ruled PC2 shape).
+    static CANONICAL_SQLITE_FINALIZER: neovm_value::SqliteObjFinalizer =
+        neovm_value::SqliteObjFinalizer {
+            finalize: finalize_sqlite_obj,
+        };
+
     /// Install the finalizer table beside the other one-time hooks. Idempotent:
     /// the handle-construction path calls it before the first SqliteObj exists.
     pub(crate) fn install_sqlite_finalizer_hook() {
-        crate::tagged::header::sqlite_finalizer::install_sqlite_obj_finalizer(
-            crate::tagged::header::sqlite_finalizer::SqliteObjFinalizer {
-                finalize: finalize_sqlite_obj,
-            },
+        let installed = neovm_value::install_sqlite_obj_finalizer(&CANONICAL_SQLITE_FINALIZER);
+        debug_assert!(
+            installed.is_ok(),
+            "a different sqlite finalizer table is already installed"
         );
     }
 

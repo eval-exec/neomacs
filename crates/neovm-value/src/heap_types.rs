@@ -31,12 +31,7 @@ use std::sync::{Mutex, OnceLock};
 /// can never leave a stale entry behind. The hook reads the calling thread's
 /// own TLS epoch, so it stays correct on every mutator and carrier thread.
 static NOTE_STRING_BYTES_CHANGED: OnceLock<fn()> = OnceLock::new();
-
-/// A different byte-mutation stamp is already installed. Installs are
-/// one-way and idempotent: re-offering the installed hook is accepted, and
-/// offering a different hook is a typed refusal rather than a silent skip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct StringBytesHookAlreadyInstalled;
+static NOTE_STRING_BYTES_CHANGED_IDENTITY: OnceLock<&'static fn()> = OnceLock::new();
 
 /// Hand the upper position cache its byte-mutation stamp. One-time process
 /// hook, installed next to the scratch-root hooks by evaluator construction
@@ -51,14 +46,20 @@ pub(crate) struct StringBytesHookAlreadyInstalled;
 /// and image restore (`eval/pdump_reconstruct.rs`). The exact call-site
 /// guard in `emacs_core/tests/architecture/mint_seal_guard_test.rs` pins
 /// the seams.
-pub(crate) unsafe fn install_string_bytes_changed_hook(
-    hook: fn(),
-) -> Result<(), StringBytesHookAlreadyInstalled> {
-    match NOTE_STRING_BYTES_CHANGED.set(hook) {
-        Ok(()) => Ok(()),
-        Err(existing) if existing == hook => Ok(()),
-        Err(_) => Err(StringBytesHookAlreadyInstalled),
-    }
+#[must_use = "handle a conflicting byte-stamp publication"]
+#[cold]
+#[inline(never)]
+pub unsafe fn install_string_bytes_changed_hook(
+    stamp: &'static fn(),
+) -> Result<
+    crate::value::hook_publication::HookInstallStatus,
+    crate::value::hook_publication::HookInstallError,
+> {
+    crate::value::hook_publication::publish(
+        &NOTE_STRING_BYTES_CHANGED,
+        &NOTE_STRING_BYTES_CHANGED_IDENTITY,
+        stamp,
+    )
 }
 
 /// Whether an evaluator has published the byte-mutation stamp. The position

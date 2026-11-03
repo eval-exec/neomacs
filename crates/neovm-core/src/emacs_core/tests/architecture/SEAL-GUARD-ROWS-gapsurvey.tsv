@@ -10,3 +10,7 @@ RootGroup	runtime/eval/thread_local_roots.rs:17,22; runtime/eval/command_loop.rs
 DescriptorOffset	runtime/jit/parallel/native.rs:364,367-370	TOKEN symbol_table::abi; field private; no ctor promoted
 DescriptorOffset::get	runtime/jit/parallel/native.rs:365	seal producer; safe const read, body unchanged
 SingleMutatorWorld::from_heap	runtime/eval/command_loop.rs:2908	seal mint; pub unsafe fn, original # Safety text unchanged; type stays TOKEN with private fields
+EraAdmissionFailure	runtime/eval/world/era.rs:40,46,54,65	seal ownership-return carrier; fields pub(super) only; accessors reason() #[inline] + into_parts(); no constructor promoted; carried by facade pub brace + gc.rs facade::* glob
+install_string_bytes_changed_hook	runtime/eval/construct.rs:2384; runtime/eval/pdump_reconstruct.rs:63; text/string_pos_cache/mod.rs (test_only seam)	pc2 mint (pub unsafe fn); # Safety text unchanged verbatim; NOTE_STRING_BYTES_CHANGED + identity table stay private in heap_types.rs; StringBytesHookAlreadyInstalled deleted
+install_sqlite_obj_finalizer	system/sqlite/mod.rs (install_sqlite_finalizer_hook, CANONICAL_SQLITE_FINALIZER)	pc2 publish; SQLITE_OBJ_FINALIZER + identity table stay private; module sqlite_finalizer stays pub(crate); SqliteObjFinalizer decl already pub
+OrderedFilterMask	buffer/overlay_index.rs:19 (imports); mask method sites in overlay_index.rs/overlay_bplus.rs	pc1-d; tuple field private; only EMPTY/ALL/with_bit/intersects/contains widened

@@ -57,6 +57,8 @@ EmacsByteDelta	struct	pub(crate)	crates/neovm-value/src/heap_types/byte_position
 EndpointKind	enum	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:44	heap_types::overlay_storage	bulk
 EqualKind	enum	pub(crate)	crates/neovm-value/src/value/mod.rs:4554	emacs_core::value	bulk
 EqualSeenPair	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:4560	emacs_core::value	bulk
+EraAdmissionFailure	type	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:355	tagged::gc::mutator_registration	seal per ruling: doc(hidden); fields pub(super) (child construction.rs literal); no ctor; added #[inline] reason() + into_parts(); exact callers eval/world/era.rs:40,46,54,65
+EraKeeper	reexport	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration.rs:54	tagged::gc::mutator_registration	ruling: decl already pub unsafe trait (keeper.rs:70, unchanged); chain completion via facade pub brace + gc.rs facade::* glob; caller eval/world/parallel_roots.rs:364
 EvalErrorFormatter	struct	pub(crate)	crates/neovm-value/src/error/format_hook.rs:18	emacs_core::error::format_hook	pc2 inert descriptor; private callback field; root-only export from private format_hook module
 EvalResult	type	pub(crate)	crates/neovm-value/src/error/mod.rs:839	emacs_core::error	bulk
 ExecutionActivation	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:67	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; callers jit/parallel/*.rs
@@ -158,6 +160,21 @@ OBARRAY_JIT_LEN_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:113
 OBARRAY_JIT_SPINE_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1115	emacs_core::symbol	bulk
 ObarrayBits	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:86	emacs_core::alloc	bulk
 ObarraySymbolCellSkipGuard	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:5018	emacs_core::symbol	bulk
+OrderedFilterMask	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:56	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z; tuple field private; callers buffer/overlay_index.rs:19
+OrderedFilterMask::ALL	const	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:62	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::EMPTY	const	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:60	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::contains	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:80	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::intersects	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:71	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilterMask::with_bit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:65	heap_types::overlay_storage::ordered	pc1-d per peer ruling 15:49Z member: exactly the consts/methods core uses
+OrderedFilteredRecord	trait	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:120	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
+OrderedRecordRelocation	enum	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:127	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
+OrderedShiftRecord	trait	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:97	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
+OrderedShiftTree	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:233	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
+OrderedShiftTree::for_each_match	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:810	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
+OrderedShiftTree::from_records	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:285	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
+OrderedShiftTree::matches_owned	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:796	heap_types::overlay_storage::ordered	tree member core calls (matches_owned x3, from_records, for_each_match); cargo check confirms no further member needed
+OrderedTreeMatches	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:1881	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
+OrderedTreeQuery	trait	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:1819	heap_types::overlay_storage::ordered	companion name imported at buffer/overlay_index.rs:19 / overlay_bplus.rs:2 glob; vis-only, members default
 OverlayBatchOrder	enum	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:24	heap_types::overlay_storage	bulk
 OverlayIdentity	struct	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:35	heap_types::overlay_storage	bulk
 OverlayPositionHandle	struct	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:55	heap_types::overlay_storage	bulk
@@ -313,7 +330,10 @@ heap_types::threading	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:10	hea
 hoist_reads	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:74	tagged::collection_reads	bulk
 inhibited_user_test_since_gc	fn	pub(crate)	crates/neovm-value/src/hashtab/user_test_guard.rs:11	emacs_core::hashtab	pc3 signed unsafe raw consumer; sole production caller crates/neovm-core/src/emacs_core/lisp/native/builtins/stubs.rs::builtin_garbage_collect_maybe; active pinned exclusive Context accounting entry valid through synchronous callback; body unchanged
 install_eval_error_formatter	fn	pub(crate)	crates/neovm-value/src/error/format_hook.rs:45	emacs_core::error	pc2 unsafe root-only export; private descriptor fields and OnceLocks; canonical shared refusal; sole printer adapter at construction/restore seams
+install_sqlite_obj_finalizer	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:25	tagged::header::sqlite_finalizer	pc2 per ruling: publish identity-cell (&'static SqliteObjFinalizer); module stays pub(crate); adapter system/sqlite/mod.rs installs &CANONICAL_SQLITE_FINALIZER
 install_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:357	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; caller eval/green/bootstrap.rs
+install_string_bytes_changed_hook	unsafe fn	pub(crate)	crates/neovm-value/src/heap_types.rs:52	heap_types	pc2 per ruling: REUSE value::hook_publication::publish identity-cell; N9 # Safety verbatim; StringBytesHookAlreadyInstalled deleted; seams construct.rs + pdump_reconstruct.rs pass &string_pos_cache::STRING_BYTES_STAMP (pub(crate) static, new)
+install_string_bytes_changed_hook::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:35	crate root	pc2 root pub use line in the ONE lib.rs PC2 section
 intern_call_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2186	emacs_core::intern	bulk
 intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2181	emacs_core::intern	bulk
 is_active	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:92	tagged::collection_reads	bulk
@@ -341,6 +361,7 @@ neovm_jit_unobserved_collection_owner	fn	pub(crate)	crates/neovm-value/src/tagge
 note_blv_alist_structural_mutation	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:461	emacs_core::symbol	bulk
 note_bytecode_data_access	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:358	emacs_core::value	bulk
 note_root_overwrite	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:2391	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
+ordered	mod	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:8	heap_types::overlay_storage	module-gate: ruling condition 'module-gate ordered if the path needs it'; overlay_bplus.rs:2 glob + overlay_index.rs:19 named imports
 overlay_full_enumeration_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:108	heap_types::overlay_storage::instrumentation	bulk
 overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:32	heap_types::overlay_storage::instrumentation	bulk
 overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:51	heap_types::overlay_storage::instrumentation	bulk
@@ -390,6 +411,7 @@ signal_error_with_arg	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1047	ema
 signal_suppressed	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1009	emacs_core::error	bulk
 signal_with_data	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1037	emacs_core::error	bulk
 snapshot_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:335	tagged::value	bulk
+sqlite_finalizer::root_reexport	reexport	(new)	crates/neovm-value/src/lib.rs:40	crate root	pc2 root pub use line; SqliteObjFinalizer decl already pub+doc(hidden) (no promotion)
 sqlite_obj_finalizer_installed	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:27	tagged::header::sqlite_finalizer	bulk
 string_bytes_changed_hook_installed	fn	pub(crate)	crates/neovm-value/src/heap_types.rs:66	heap_types	bulk
 swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:43	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only

@@ -52,18 +52,23 @@ const _: () = assert!(minimum_nodes_for_depth(MAX_TREE_DEPTH + 1) > u32::MAX as 
 /// Fixed-size conservative signature used to prune ordered subtrees without
 /// coupling the tree to any caller's property vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OrderedFilterMask([u64; 4]);
+#[doc(hidden)]
+pub struct OrderedFilterMask([u64; 4]);
 
 impl OrderedFilterMask {
-    pub(crate) const EMPTY: Self = Self([0; 4]);
-    pub(crate) const ALL: Self = Self([u64::MAX; 4]);
+    #[doc(hidden)]
+    pub const EMPTY: Self = Self([0; 4]);
+    #[doc(hidden)]
+    pub const ALL: Self = Self([u64::MAX; 4]);
 
-    pub(crate) fn with_bit(mut self, bit: usize) -> Self {
+    #[doc(hidden)]
+    pub fn with_bit(mut self, bit: usize) -> Self {
         self.0[bit / u64::BITS as usize] |= 1_u64 << (bit % u64::BITS as usize);
         self
     }
 
-    pub(crate) fn intersects(self, other: Self) -> bool {
+    #[doc(hidden)]
+    pub fn intersects(self, other: Self) -> bool {
         self.0
             .iter()
             .zip(other.0)
@@ -71,7 +76,8 @@ impl OrderedFilterMask {
     }
 
     /// Whether every class in `other` is also in `self`.
-    pub(crate) fn contains(self, other: Self) -> bool {
+    #[doc(hidden)]
+    pub fn contains(self, other: Self) -> bool {
         self.0
             .iter()
             .zip(other.0)
@@ -87,7 +93,8 @@ impl BitOr for OrderedFilterMask {
     }
 }
 
-pub(crate) trait OrderedShiftRecord: Copy + Debug {
+#[doc(hidden)]
+pub trait OrderedShiftRecord: Copy + Debug {
     type Identity: Copy + Debug + Eq + Hash;
     type Key: Copy + Debug + Ord;
 
@@ -109,13 +116,15 @@ pub(crate) trait OrderedShiftRecord: Copy + Debug {
 /// The class is independent of the record's key and positions, so changing
 /// it never moves the record, never needs pending lazy shifts resolved, and
 /// leaves every position summary valid.
-pub(crate) trait OrderedFilteredRecord: OrderedShiftRecord {
+#[doc(hidden)]
+pub trait OrderedFilteredRecord: OrderedShiftRecord {
     /// This record with `mask` as its filter class; key and positions unchanged.
     fn with_filter_mask(self, mask: OrderedFilterMask) -> Self;
 }
 
 /// Whether a changed record can retain its occupied position in key order.
-pub(crate) enum OrderedRecordRelocation<R> {
+#[doc(hidden)]
+pub enum OrderedRecordRelocation<R> {
     Replaced { previous: R },
     OutsideNeighbors,
     Missing,
@@ -220,7 +229,8 @@ impl<R: OrderedShiftRecord> OrderedNode<R> {
 /// Nodes are addressed by integer IDs; page zero may move as it grows.
 /// Mutation requires exclusive access, supplied by the owning index's lock.
 #[derive(Clone, Debug)]
-pub(crate) struct OrderedShiftTree<R: OrderedShiftRecord> {
+#[doc(hidden)]
+pub struct OrderedShiftTree<R: OrderedShiftRecord> {
     root: Option<OrderedNodeId>,
     rightmost_leaf: Option<OrderedNodeId>,
     pages: Vec<Box<[Option<OrderedNode<R>>]>>,
@@ -271,7 +281,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     }
 
     /// Construct occupied leaves and branch levels directly in linear time.
-    pub(crate) fn from_records(mut records: Vec<R>) -> Self {
+    #[doc(hidden)]
+    pub fn from_records(mut records: Vec<R>) -> Self {
         if !records.is_sorted_by_key(|record| record.key()) {
             records.sort_unstable_by_key(|record| record.key());
         }
@@ -781,7 +792,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     }
 
     #[inline(always)]
-    pub(crate) fn matches_owned<T, Q>(tree: T, query: Q) -> OrderedTreeMatches<T, R, Q>
+    #[doc(hidden)]
+    pub fn matches_owned<T, Q>(tree: T, query: Q) -> OrderedTreeMatches<T, R, Q>
     where
         T: Deref<Target = Self>,
         Q: OrderedTreeQuery<R>,
@@ -794,7 +806,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     /// call, so a bounded recursive walk avoids copying the fixed frame stack
     /// while streaming layout consumers retain `matches_owned`.
     #[inline(always)]
-    pub(crate) fn for_each_match<Q, F>(&self, query: Q, mut visit: F)
+    #[doc(hidden)]
+    pub fn for_each_match<Q, F>(&self, query: Q, mut visit: F)
     where
         Q: OrderedTreeQuery<R>,
         F: FnMut(R),
@@ -1802,7 +1815,8 @@ impl FilterMaskChange {
     }
 }
 
-pub(crate) trait OrderedTreeQuery<R: OrderedShiftRecord>: Copy {
+#[doc(hidden)]
+pub trait OrderedTreeQuery<R: OrderedShiftRecord>: Copy {
     fn subtree_may_match(
         self,
         minimum: EmacsBytePos,
@@ -1863,7 +1877,8 @@ enum OrderedTraversalDirection {
     Reverse,
 }
 
-pub(crate) struct OrderedTreeMatches<T, R, Q>
+#[doc(hidden)]
+pub struct OrderedTreeMatches<T, R, Q>
 where
     T: Deref<Target = OrderedShiftTree<R>>,
     R: OrderedShiftRecord,
