@@ -26,3 +26,7 @@ mod tests;
 #[cfg(test)]
 #[path = "../core_tests/heap_types/tests/text_property_view_test.rs"]
 mod text_property_view_tests;
+
+#[cfg(test)]
+#[path = "../core_tests/heap_types/tests/clear_string_in_place_test.rs"]
+mod clear_string_in_place_tests;

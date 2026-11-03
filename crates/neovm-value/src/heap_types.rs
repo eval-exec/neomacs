@@ -2071,3 +2071,49 @@ impl OverlayData {
         }
     }
 }
+
+#[cfg(feature = "test-support")]
+pub(crate) mod __test_support {
+    use super::*;
+
+    // A3 v2 / R8 payload rows: copied scalars, copied pointer, owned alias snapshot.
+    pub(crate) fn lisp_string_data_ptr(s: &LispString) -> *const u8 {
+        s.data
+    }
+
+    pub(crate) fn lisp_string_size(s: &LispString) -> usize {
+        s.size
+    }
+
+    pub(crate) fn lisp_string_owned_capacity(s: &LispString) -> usize {
+        s.owned_capacity()
+    }
+
+    pub(crate) fn lisp_string_has_owned_storage(s: &LispString) -> bool {
+        s.has_owned_storage()
+    }
+
+    pub(crate) fn lisp_string_has_trailing_nul(s: &LispString) -> bool {
+        s.has_trailing_nul()
+    }
+
+    pub(crate) fn lisp_string_character_count_kind(s: &LispString) -> StringCharacterCountKind {
+        s.character_count_kind()
+    }
+
+    pub(crate) fn lisp_string_borrowed_alias(s: &LispString) -> Option<LispString> {
+        s.borrowed_alias()
+    }
+
+    /// # Safety
+    /// Same contract as [`LispString::from_borrowed_bytes`].
+    pub(crate) unsafe fn lisp_string_from_borrowed_bytes(
+        ptr: *const u8,
+        len: usize,
+        size: usize,
+        size_byte: i64,
+        static_rodata: bool,
+    ) -> LispString {
+        unsafe { LispString::from_borrowed_bytes(ptr, len, size, size_byte, static_rodata) }
+    }
+}

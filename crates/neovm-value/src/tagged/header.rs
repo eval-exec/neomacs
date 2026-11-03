@@ -2649,3 +2649,13 @@ impl ThreadObj {
         &self.payload
     }
 }
+
+/// Test-only accessors for core-owned tests (A3 v2).
+#[cfg(feature = "test-support")]
+pub(crate) mod __test_support {
+    use super::*;
+
+    pub(crate) fn gc_header_collection_observed(header: &GcHeader) -> bool {
+        header.collection_observed()
+    }
+}
