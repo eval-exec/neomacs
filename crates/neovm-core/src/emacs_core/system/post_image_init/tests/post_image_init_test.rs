@@ -184,14 +184,16 @@ fn post_image_init_screened_sites_carry_their_evidence() {
         not_in_build, GNU_PLATFORM_ONLY,
         "every platform-only call site is classified NotInThisBuild"
     );
-    // init_standard_fds, init_random, init_module_assertions, init_atimer,
-    // init_dbusbind, init_xterm, init_xdisp, init_fringe.  `init_signals`
-    // used to be the ninth; ledger 184 reclassified it, because the
-    // dispositions it installs are the difference between GNU's `rc=0` and
-    // this port's `rc=140` on a `kill -USR2`.
+    // init_standard_fds, init_module_assertions, init_atimer, init_dbusbind,
+    // init_xterm, init_xdisp, init_fringe.  `init_signals` used to be one;
+    // ledger 184 reclassified it, because the dispositions it installs are
+    // the difference between GNU's `rc=0` and this port's `rc=140` on a
+    // `kill -USR2`.  `init_random` used to be one too, and that is how this
+    // port came to never seed its generator: every session drew the same
+    // `(random)' sequence and the same `server-generate-key'.
     assert_eq!(
-        screened_empty, 8,
-        "eight reachable call sites were read and establish no Lisp-visible \
+        screened_empty, 7,
+        "seven reachable call sites were read and establish no Lisp-visible \
          state; that is a result, not a gap"
     );
     assert_eq!(
@@ -241,8 +243,8 @@ fn post_image_init_derivations_are_classified_and_cited() {
         "four derivations are performed by this sequence itself"
     );
     assert_eq!(
-        elsewhere, 21,
-        "twenty-one are performed elsewhere on this port's startup path"
+        elsewhere, 22,
+        "twenty-two are performed elsewhere on this port's startup path"
     );
     // shared-game-score-directory.
     assert_eq!(not_applicable, 1, "one has nothing here to derive");
@@ -399,6 +401,66 @@ fn apply_post_image_init_assigns_every_constant_row() {
 
 fn finalized_runtime() -> crate::emacs_core::eval::Context {
     crate::emacs_core::load::create_bootstrap_evaluator_cached().expect("cached bootstrap")
+}
+
+const RANDOM_PROBE_ENV: &str = "NEOVM_POST_IMAGE_RANDOM_PROBE";
+const RANDOM_PROBE_MARKER: &str = "POST-IMAGE-RANDOM-PROBE ";
+
+/// GNU `init_random` (src/emacs.c:2020, body src/sysdep.c:2225-2249) seeds
+/// the generator from the OS after the image is loaded, on every startup, so
+/// a dumped image cannot hand two sessions the same `random' sequence.
+/// `server-generate-key' (lisp/server.el:606-617) is the consumer that makes
+/// it a security fact: it is the `server-use-tcp' authentication key, and
+/// every session of this port used to compute the same one.
+#[test]
+fn runtime_server_key_differs_between_sessions_like_gnu_init_random() {
+    crate::test_utils::init_test_tracing();
+    const NAME: &str = "runtime_server_key_differs_between_sessions_like_gnu_init_random";
+    if std::env::var_os(RANDOM_PROBE_ENV).is_some() {
+        let mut eval = finalized_runtime();
+        let key = eval.eval_str("(progn (require 'server) (server-generate-key))");
+        println!(
+            "{RANDOM_PROBE_MARKER}{}",
+            crate::emacs_core::format_eval_result(&key)
+        );
+        return;
+    }
+    let session_key = || -> String {
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .arg("--exact")
+            .arg(format!("{module}::{NAME}"))
+            .arg("--nocapture")
+            .env(RANDOM_PROBE_ENV, "1")
+            .output()
+            .expect("spawn session probe");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "session probe failed: {:?}\nstdout: {stdout}\nstderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(RANDOM_PROBE_MARKER))
+            .unwrap_or_else(|| panic!("session probe printed no key:\n{stdout}"))
+            .to_string()
+    };
+    let first = session_key();
+    let second = session_key();
+    for key in [&first, &second] {
+        assert!(
+            key.starts_with("OK \"") && key.len() > 64,
+            "server-generate-key: {key}"
+        );
+    }
+    assert_ne!(
+        first, second,
+        "two sessions started from the same image computed the same \
+         `server-generate-key'"
+    );
 }
 
 /// GNU `init_alloc` (src/alloc.c:7391-7392) zeroes `gc-elapsed` and `gcs-done`
