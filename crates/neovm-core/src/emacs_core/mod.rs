@@ -488,6 +488,10 @@ mod architecture_transmute_guard_test;
 mod architecture_layering_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/moving_set.rs"]
+mod architecture_moving_set;
+
+#[cfg(test)]
 #[path = "tests/architecture/value_ref_guard_test.rs"]
 mod architecture_value_ref_guard_test;
 

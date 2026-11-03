@@ -9,6 +9,10 @@ use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 
+use super::architecture_moving_set::{
+    is_bottom_peer_name, is_g0_member, is_moving_crate,
+};
+
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -213,36 +217,11 @@ impl LowerRoot {
     }
 }
 
-/// The emacs_core direct submodules that join `tagged`, `heap_types` and
-/// `gc_trace` in the bottom `neovm-value` crate (DESIGN.md §4). A reference
-/// from one of them to anything outside this set and the bottom peers is
-/// upward.
-const G0_MEMBERS: [&str; 10] = [
-    "value",
-    "symbol",
-    "intern",
-    "error",
-    "errors",
-    "forward",
-    "emacs_char",
-    "boolvec",
-    "alloc",
-    "hashtab",
-];
-
-fn is_g0_member(name: &str) -> bool {
-    G0_MEMBERS.contains(&name)
-}
-
-/// Top-level modules that move into `neovm-value` with G0, so a G0 reference
-/// to one of them stays inside the bottom crate. `tls_fingerprint` is a
-/// std-only, debug-only hashing helper that the per-module carrier TLS probes
-/// in G0 members (error, intern, symbol) call; it names nothing above itself.
+/// Bottom-peer membership is shared with the coherence ratchet through
+/// `architecture_moving_set`, so the two guards and the move manifest use one
+/// rule for which root is inside the bottom crate.
 fn is_bottom_peer(root: LowerRoot) -> bool {
-    matches!(
-        root,
-        LowerRoot::Tagged | LowerRoot::HeapTypes | LowerRoot::GcTrace | LowerRoot::TlsFingerprint
-    )
+    is_bottom_peer_name(root.name())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -302,20 +281,12 @@ fn is_workspace_sibling(name: &str) -> bool {
     (name.starts_with("neomacs_") || name.starts_with("neovm_")) && name != "neovm_core"
 }
 
-/// The lower crates of the extraction whose modules are already inside the
-/// moving set, so a moving file that reaches one of them through a core-root
-/// re-export stays internal and is not counted as an upward edge.
-const MOVING_CRATES: [&str; 2] = ["neovm_value", "neovm_display_identity"];
-
-fn is_moving_crate(name: &str) -> bool {
-    MOVING_CRATES.contains(&name)
-}
-
 /// A moving-set file is either a bottom-peer top-level module or a G0
 /// emacs_core member. The move manifest (`tmp/rehearsal/move.py` at the
-/// extraction tip) is generated from exactly these roots; `G0_MEMBERS` and
-/// `is_bottom_peer` are the single source of truth shared with the old
-/// ratchet, so the two cannot drift.
+/// extraction tip) is generated from exactly these roots; the membership
+/// constants live in `architecture_moving_set`, the single source of truth
+/// shared with the coherence ratchet and the move manifest, so they cannot
+/// drift.
 fn moving_source(logical_path: &[String]) -> bool {
     match logical_path {
         [root] if root != "emacs_core" => is_bottom_peer(LowerRoot::parse(root)),

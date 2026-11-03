@@ -9,7 +9,6 @@
 
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
-use crate::emacs_core::value::{BytecodeInteractiveProbe, Value};
 use crate::emacs_core::value::{BytecodeInteractiveProbe, FunctionSourceIdentity, Value};
 use crate::heap_types::LispString;
 use crate::tagged::gc::with_tagged_heap;

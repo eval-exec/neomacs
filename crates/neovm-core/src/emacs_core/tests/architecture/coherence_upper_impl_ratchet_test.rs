@@ -15,39 +15,78 @@
 //! fails immediately; a stale allowlist row fails as a mismatch too.
 //!
 //! The moving set is **derived mechanically from the tree under test**: a file
-//! is moving when its path lies under one of [`MOVING_FILE_PATHS`] or is one
-//! of [`MOVING_ROOT_FILES`]. It is deliberately not a type list taken from
-//! main: a split cut can move a type into a moving path (T1-storage moves
-//! `ByteCodeFunction` into `tagged/bytecode/chunk.rs`), and any upper impl on
-//! it must start counting on that candidate tree without editing the guard.
+//! is moving when its declared module is a bottom-peer top-level module or a
+//! G0 `emacs_core` member (`architecture_moving_set`, the same single source
+//! of truth as the layering ratchet and the move manifest), or when it belongs
+//! to the extracted `neovm-value` crate. It is deliberately not a type list
+//! taken from main: a split cut can move a type into a moving module
+//! (T1-storage moves `ByteCodeFunction` into `tagged/bytecode/chunk.rs`; T1
+//! lowers `Op` and the function_slots storage types under `tagged/bytecode`;
+//! T1-pre moves the `jit_runtime` files under `runtime/value`), and any upper
+//! impl on it must start counting on that candidate tree without editing the
+//! guard.
 //! The layering ratchet cannot see calls that resolve to an upper inherent
 //! method from lower code; this guard catches that class by flagging the impl
 //! itself.
 //!
-//! Type resolution works on the crate's own source tree: a name defined only
+//! Type resolution works on the crate's own source tree. A self type written
+//! with a qualified moving-module path (`crate::tagged::...`,
+//! `crate::emacs_core::value::...`) is the moved type even when an unrelated
+//! upper definition shares its final segment. An unqualified name defined only
 //! inside moving files is a moved type; a name defined in a non-moving file is
-//! an upper type (same-name collisions make the name ambiguous and are not
-//! counted, except the pinned identities below). Traits defined in non-moving
-//! files are upper-local (legal); a foreign trait whose type arguments name an
-//! upper type is the legal orphan-rule case. The scan parses every source file
-//! and walks nested modules, so test modules in the same crate are included.
+//! an upper type; same-name collisions make an unqualified name ambiguous and
+//! it is not counted, except the pinned identities below. Traits defined in
+//! non-moving files are upper-local (legal); a foreign trait whose type
+//! arguments name an upper type is the legal orphan-rule case. The scan parses
+//! every source file and walks nested modules, so test modules in the same
+//! crate are included.
+//! The first extracted sibling crate (`neovm-value`, N5) is scanned the same
+//! way under a `neovm-value/` path prefix: a type defined there is moving, and
+//! an upper impl on it counts, while impls inside that crate are lower-crate
+//! impls and stay legal.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use syn::spanned::Spanned;
 use syn::{Item, Type};
 
+use super::architecture_moving_set as moving_set;
+
 /// Illegal upper impls still to convert. Decremented by every seam commit.
-const REMAINING_ALLOWED: usize = 0;
+///
+/// The 24 at the 85055db807 base are all the deferred half of the T1-pre data
+/// cut `8105f97a11` (the per-source JIT runtime and feedback data moved into
+/// `runtime/value/jit_runtime`, every implementation deliberately left in
+/// `emacs_core::jit`): 18 unambiguous feedback/retreat impls plus the six
+/// `Runtime` impls pinned below. Converting them belongs to the JIT cut; this
+/// branch converts the parts of the T1 inventory that T1 left on the storage
+/// vocabulary (`Op`, the function_slots impls). Any new illegal impl fails
+/// immediately and every removed one must lower this number in the same
+/// commit.
+const REMAINING_ALLOWED: usize = 24;
 
 /// Moved types whose name also has a non-moving definition in this crate, so
 /// the general name rule cannot classify them. Each entry is
 /// `(file, self type, trait or None for inherent)`; every entry must match a
 /// real impl or the guard reports a stale row, and each match counts once.
-/// Empty since B1 moved `Display for EvalError` into the moving error module;
-/// the mechanism stays for a future ambiguous identity.
-const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[];
+///
+/// The six `Runtime` impls below are the deferred half of the T1-pre data cut
+/// `8105f97a11`: it moved `Runtime`/`RuntimeState` into
+/// `runtime/value/jit_runtime` but deliberately left every implementation in
+/// `emacs_core::jit`. `sort_buffered.rs` defines an unrelated local `Runtime`,
+/// so the unqualified name is ambiguous here. They stay counted (and pinned)
+/// until the JIT cut moves the impls with the type; converting them is not
+/// part of this coherence series.
+const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[
+    ("emacs_core/runtime/jit/feedback.rs", "Runtime", None),
+    ("emacs_core/runtime/jit/feedback/arrays.rs", "Runtime", None),
+    ("emacs_core/runtime/jit/mod.rs", "Runtime", None),
+    ("emacs_core/runtime/jit/mod.rs", "Runtime", Some("Deref")),
+    ("emacs_core/runtime/jit/mod.rs", "Runtime", Some("Default")),
+    ("emacs_core/runtime/jit/mod.rs", "Runtime", Some("Clone")),
+];
 
 /// Moved type names that have no plain definition inside the moving files
 /// because they are aliases of a moved type (`OpenedFontMetrics` is an upper
@@ -57,33 +96,126 @@ const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[];
 /// the alias resolves, so they count exactly like unambiguous definitions.
 const PINNED_MOVED_NAMES: &[&str] = &["OpenedFontMetrics", "GenericProofEra", "WorldProofEra"];
 
-/// Directories whose complete contents move into neovm-value, relative to
-/// `crates/neovm-core/src`. Derived from the split design's module list, never
-/// from a branch's type inventory.
-const MOVING_FILE_PATHS: &[&str] = &[
-    "emacs_core/runtime/value/",
-    "emacs_core/runtime/symbol/",
-    "emacs_core/runtime/intern/",
-    "emacs_core/runtime/error/",
-    "emacs_core/runtime/errors/",
-    "emacs_core/runtime/forward/",
-    "emacs_core/runtime/alloc/",
-    "emacs_core/runtime/hashtab/",
-    "emacs_core/text/emacs_char/",
-    "emacs_core/text/boolvec/",
-    "tagged/",
-];
+/// Physical source prefixes of the derived moving set. The membership rule is
+/// the shared move-manifest rule in [`moving_set`] (bottom-peer top-level
+/// modules + G0 `emacs_core` members); each member's physical path comes from
+/// the crate's own `mod` declarations (`#[path = "..."]` or the default
+/// `name.rs` / `name/` form). A T1 cut that lowers a type into
+/// `tagged/bytecode/...` or `runtime/value/jit_runtime/...` is therefore
+/// covered without editing this guard. The extracted `neovm-value` crate is
+/// scanned under a `neovm-value/` prefix.
+fn moving_prefixes() -> &'static [String] {
+    static PREFIXES: OnceLock<Vec<String>> = OnceLock::new();
+    PREFIXES.get_or_init(|| {
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut prefixes = Vec::new();
+        let library = read_declaration_file(&source_root.join("lib.rs"));
+        collect_member_prefixes(
+            &library.items,
+            "",
+            &source_root,
+            moving_set::is_bottom_peer_name,
+            &mut prefixes,
+        );
+        let emacs_core = read_declaration_file(&source_root.join("emacs_core/mod.rs"));
+        collect_member_prefixes(
+            &emacs_core.items,
+            "emacs_core",
+            &source_root,
+            moving_set::is_g0_member,
+            &mut prefixes,
+        );
+        prefixes.push(moving_crate_prefix().to_owned());
+        prefixes
+    })
+}
 
-/// Single-file moving modules at the crate root.
-const MOVING_ROOT_FILES: &[&str] = &["heap_types.rs", "gc_trace.rs", "tls_fingerprint.rs"];
+fn moving_crate_prefix() -> &'static str {
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    PREFIX.get_or_init(|| format!("{}/", moving_set::MOVING_CRATE.replace('_', "-")))
+}
+
+fn read_declaration_file(path: &Path) -> syn::File {
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    syn::parse_file(&source).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+}
+
+/// Record the physical prefix of every declaration whose module name the move
+/// manifest rule includes. `#[path = "..."]` is resolved relative to the
+/// declaring file's directory (both files parsed here live at or below the
+/// crate root); a bare `mod name;` picks `name.rs` when that file exists and
+/// `name/` otherwise. A `mod.rs` declaration names the directory that
+/// contains it.
+fn collect_member_prefixes(
+    items: &[Item],
+    directory: &str,
+    source_root: &Path,
+    wanted: fn(&str) -> bool,
+    prefixes: &mut Vec<String>,
+) {
+    for item in items {
+        let Item::Mod(module) = item else {
+            continue;
+        };
+        let name = module.ident.to_string();
+        if !wanted(&name) {
+            continue;
+        }
+        let declared_path = module.attrs.iter().find_map(|attribute| {
+            if !attribute.path().is_ident("path") {
+                return None;
+            }
+            let syn::Meta::NameValue(value) = &attribute.meta else {
+                return None;
+            };
+            let syn::Expr::Lit(value) = &value.value else {
+                return None;
+            };
+            let syn::Lit::Str(path) = &value.lit else {
+                return None;
+            };
+            Some(path.value())
+        });
+        let relative = match declared_path {
+            Some(path) => join_declared(directory, &path),
+            None => {
+                let file = join_declared(directory, &format!("{name}.rs"));
+                if source_root.join(&file).is_file() {
+                    file
+                } else {
+                    format!("{}/", join_declared(directory, &name))
+                }
+            }
+        };
+        if let Some(module_directory) = relative.strip_suffix("mod.rs") {
+            let module_directory = module_directory.trim_end_matches('/');
+            if !module_directory.is_empty() {
+                prefixes.push(format!("{module_directory}/"));
+            }
+        } else if relative.ends_with(".rs") {
+            prefixes.push(relative);
+        } else {
+            prefixes.push(format!("{}/", relative.trim_end_matches('/')));
+        }
+    }
+}
+
+fn join_declared(directory: &str, path: &str) -> String {
+    if directory.is_empty() {
+        path.to_string()
+    } else {
+        format!("{directory}/{path}")
+    }
+}
 
 /// Mechanical moving-set membership for a source path relative to
-/// `crates/neovm-core/src` (forward slashes).
+/// `crates/neovm-core/src` (forward slashes), or a sibling-crate path under
+/// the `neovm-value/` prefix.
 fn is_moving_path(relative: &str) -> bool {
-    MOVING_ROOT_FILES.contains(&relative)
-        || MOVING_FILE_PATHS
-            .iter()
-            .any(|prefix| relative.starts_with(prefix))
+    moving_prefixes()
+        .iter()
+        .any(|prefix| relative.starts_with(prefix))
 }
 
 fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
@@ -111,6 +243,50 @@ fn base_ident(ty: &Type) -> Option<String> {
         Type::Slice(slice) => base_ident(&slice.elem),
         Type::Array(array) => base_ident(&array.elem),
         _ => None,
+    }
+}
+
+/// A self type written with a qualified path rooted at a moving module names
+/// the moved type even when an unrelated upper definition shares its final
+/// segment: `impl crate::tagged::value::Fixnum` is visible even when
+/// `from_value.rs` defines an unrelated local `Fixnum`.
+fn qualified_moving_self_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(path) => {
+            let segments: Vec<String> = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            let rooted = |module: &[&str]| {
+                segments.len() > module.len() + 1
+                    && segments[0] == "crate"
+                    && module
+                        .iter()
+                        .enumerate()
+                        .all(|(index, name)| segments[index + 1] == *name)
+            };
+            rooted(&["tagged"])
+                || rooted(&["heap_types"])
+                || rooted(&["gc_trace"])
+                || rooted(&["tls_fingerprint"])
+                || rooted(&["emacs_core", "value"])
+                || rooted(&["emacs_core", "symbol"])
+                || rooted(&["emacs_core", "intern"])
+                || rooted(&["emacs_core", "error"])
+                || rooted(&["emacs_core", "errors"])
+                || rooted(&["emacs_core", "forward"])
+                || rooted(&["emacs_core", "alloc"])
+                || rooted(&["emacs_core", "hashtab"])
+                || rooted(&["emacs_core", "text", "emacs_char"])
+                || rooted(&["emacs_core", "text", "boolvec"])
+        }
+        Type::Reference(reference) => qualified_moving_self_type(&reference.elem),
+        Type::Paren(paren) => qualified_moving_self_type(&paren.elem),
+        Type::Group(group) => qualified_moving_self_type(&group.elem),
+        Type::Ptr(pointer) => qualified_moving_self_type(&pointer.elem),
+        _ => false,
     }
 }
 
@@ -279,8 +455,8 @@ fn collect_impls(
                                 && *self_name == self_type
                                 && *trait_item == trait_name.as_deref()
                         });
-                let moved = (moving_defs.contains_key(&self_type)
-                    && !upper_defs.contains(&self_type))
+                let moved = qualified_moving_self_type(&implementation.self_ty)
+                    || (moving_defs.contains_key(&self_type) && !upper_defs.contains(&self_type))
                     || PINNED_MOVED_NAMES.contains(&self_type.as_str());
                 if !moved {
                     let Some(index) = pinned_index else {
@@ -415,6 +591,35 @@ fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
         parsed.push((relative, syntax));
     }
 
+    // The destination crate is part of the derived moving set from N5 on.
+    // Scan it when present so an upper impl on a type defined there counts;
+    // impls inside the crate are skipped as lower-crate impls.
+    let sibling_root = crate_root
+        .parent()
+        .expect("crate directory")
+        .join("neovm-value")
+        .join("src");
+    if sibling_root.is_dir() {
+        let mut sibling_files = Vec::new();
+        source_files(&sibling_root, &mut sibling_files);
+        sibling_files.sort();
+        for file in &sibling_files {
+            let relative = format!(
+                "{}{}",
+                moving_crate_prefix(),
+                file.strip_prefix(&sibling_root)
+                    .expect("sibling source file is inside src")
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            );
+            let source = std::fs::read_to_string(file)
+                .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {relative}: {error}"));
+            parsed.push((relative, syntax));
+        }
+    }
+
     let moving = parsed
         .iter()
         .filter(|(relative, _)| is_moving_path(relative))
@@ -441,6 +646,11 @@ fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
         REMAINING_ALLOWED,
         "coherence ratchet: found {} illegal upper impls, allowed {}:\n{}",
         violations.len(),
+        REMAINING_ALLOWED,
+        render_violations(&violations),
+    );
+    eprintln!(
+        "coherence ratchet residual (allowed {}):\n{}",
         REMAINING_ALLOWED,
         render_violations(&violations),
     );
@@ -482,6 +692,43 @@ fn coherence_ratchet_reddens_on_a_synthetic_moved_type() {
         rendered.contains(
             "emacs_core/runtime/eval/upper_consumer.rs:2: impl Clone for ByteCodeFunction"
         ),
+        "{rendered}"
+    );
+}
+
+/// A qualified moving path is the moved type regardless of an unrelated
+/// upper name collision: an inherent impl on `crate::tagged::value::Fixnum`
+/// stays visible although `from_value.rs` defines its own `Fixnum`. (A foreign
+/// trait with an upper type argument remains legal via RFC 2451 and is covered
+/// by the local-forms fixture.)
+#[test]
+fn coherence_ratchet_counts_a_qualified_moving_self_type() {
+    let parsed = vec![
+        (
+            "tagged/value.rs".to_string(),
+            syn::parse_file("pub(crate) struct Fixnum(i64);").expect("moved source"),
+        ),
+        (
+            "buffer/position.rs".to_string(),
+            syn::parse_file(
+                "pub(crate) struct BufferLispPos(i64);\n\
+                 pub(crate) struct Fixnum;\n\
+                 impl crate::tagged::value::Fixnum {\n\
+                     pub(crate) fn from_pos(_: BufferLispPos) -> Self { Fixnum(0) }\n\
+                 }",
+            )
+            .expect("upper source"),
+        ),
+    ];
+    let (violations, _) = scan_sources(&parsed);
+    let rendered = render_violations(&violations);
+    assert_eq!(
+        violations.len(),
+        1,
+        "the qualified moving path must count despite the upper Fixnum collision:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("buffer/position.rs:3: impl (inherent) for Fixnum"),
         "{rendered}"
     );
 }
@@ -559,8 +806,16 @@ fn coherence_ratchet_ignores_legal_moving_and_local_forms() {
 #[test]
 fn coherence_moving_set_is_derived_from_module_paths() {
     assert!(is_moving_path("tagged/bytecode/chunk.rs"));
+    assert!(is_moving_path("tagged/bytecode/function_slots.rs"));
+    assert!(is_moving_path("tagged/bytecode/opcode.rs"));
     assert!(is_moving_path("tagged/header/sqlite_finalizer.rs"));
     assert!(is_moving_path("emacs_core/runtime/value/new_module.rs"));
+    assert!(is_moving_path(
+        "emacs_core/runtime/value/jit_runtime/mod.rs"
+    ));
+    assert!(is_moving_path(
+        "emacs_core/runtime/value/jit_runtime/feedback.rs"
+    ));
     assert!(is_moving_path(
         "emacs_core/runtime/symbol/tests/new_test.rs"
     ));
@@ -568,6 +823,7 @@ fn coherence_moving_set_is_derived_from_module_paths() {
     assert!(is_moving_path("heap_types.rs"));
     assert!(is_moving_path("gc_trace.rs"));
     assert!(is_moving_path("tls_fingerprint.rs"));
+    assert!(is_moving_path("neovm-value/tls_scope.rs"));
     assert!(!is_moving_path("emacs_core/runtime/bytecode/chunk.rs"));
     assert!(!is_moving_path("emacs_core/runtime/eval/mod.rs"));
     assert!(!is_moving_path("emacs_core/display/font/mod.rs"));

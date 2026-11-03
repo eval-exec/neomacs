@@ -41,8 +41,8 @@ use super::compile::{
     is_lazy_leaf_subr,
 };
 use super::*;
-use crate::emacs_core::eval::tier_i::compile::OpHandlerExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::tier_i::compile::OpHandlerExt as _;
 
 /// What [`Context::ti_lexical_cell`] knows about a symbol's lexical cell.
 enum LexicalCell {
