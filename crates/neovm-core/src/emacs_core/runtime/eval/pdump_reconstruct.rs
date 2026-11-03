@@ -84,6 +84,13 @@ impl Context {
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
         super::cconv_memo::install_function_epoch_move_sink();
+        // The buffer substrate asks the text layer for composition and
+        // syntax queries through host-free fn-pointer tables; a restored
+        // image builds buffers before any Context constructor runs, so
+        // publish them at this one-time seam too.  Both installs are
+        // idempotent.
+        crate::emacs_core::composite::install_substrate_seams();
+        crate::emacs_core::syntax::install_substrate_seams();
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, false);

@@ -11,7 +11,6 @@ use crate::emacs_core::symbol::CanonicalAccess;
 use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 
-use num_enum::{IntoPrimitive, TryFromPrimitive};
 use strum::{EnumString, IntoStaticStr};
 
 use super::error::{EvalResult, Flow, signal};
@@ -380,117 +379,23 @@ pub fn init_syntax_vars(
 // Syntax classes
 // ===========================================================================
 
-/// Emacs syntax classes, matching GNU's `enum syntaxcode` from `syntax.h`.
-///
-/// Discriminant values match the GNU numbering (0–15) so the enum can be
-/// cast to `u8` and used directly in bytecode (e.g. the regex engine's
-/// `SyntaxSpec` / `NotSyntaxSpec` opcodes).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, IntoPrimitive, TryFromPrimitive)]
-#[repr(u8)]
-pub enum SyntaxClass {
-    /// ' ' — Whitespace (Swhitespace = 0)
-    Whitespace = 0,
-    /// '.' — Punctuation (Spunct = 1)
-    Punctuation = 1,
-    /// 'w' — Word constituent (Sword = 2)
-    Word = 2,
-    /// '_' — Symbol constituent (Ssymbol = 3)
-    Symbol = 3,
-    /// '(' — Open parenthesis/bracket (Sopen = 4)
-    Open = 4,
-    /// ')' — Close parenthesis/bracket (Sclose = 5)
-    Close = 5,
-    /// '\'' — Expression prefix (Squote = 6)
-    Quote = 6,
-    /// '"' — String delimiter (Sstring = 7)
-    StringDelim = 7,
-    /// '$' — Math delimiter, paired (Smath = 8)
-    Math = 8,
-    /// '\\' — Escape character (Sescape = 9)
-    Escape = 9,
-    /// '/' — Character quote, only quotes the next character (Scharquote = 10)
-    CharQuote = 10,
-    /// '<' — Comment starter (Scomment = 11)
-    Comment = 11,
-    /// '>' — Comment ender (Sendcomment = 12)
-    EndComment = 12,
-    /// '@' — Inherit from standard syntax table (Sinherit = 13)
-    InheritStd = 13,
-    /// '!' — Generic comment delimiter / comment fence (Scomment_fence = 14)
-    CommentFence = 14,
-    /// '|' — Generic string fence (Sstring_fence = 15)
-    StringFence = 15,
-}
+pub(crate) use crate::buffer::syntax_class::SYNTAX_CLASS_COUNT;
+pub use crate::buffer::syntax_class::SyntaxClass;
 
-const SYNTAX_CLASS_COUNT: usize = 16;
-const SYNTAX_CLASS_DESIGNATORS: [char; SYNTAX_CLASS_COUNT] = [
-    ' ', '.', 'w', '_', '(', ')', '\'', '"', '$', '\\', '/', '<', '>', '@', '!', '|',
-];
-
-impl SyntaxClass {
-    /// Parse a GNU syntax descriptor byte, matching
-    /// `src/syntax.c:syntax_spec_code`.
-    pub fn from_syntax_spec_byte(byte: u8) -> Option<SyntaxClass> {
-        match byte {
-            b' ' | b'-' => Some(SyntaxClass::Whitespace),
-            b'w' => Some(SyntaxClass::Word),
-            b'_' => Some(SyntaxClass::Symbol),
-            b'.' => Some(SyntaxClass::Punctuation),
-            b'(' => Some(SyntaxClass::Open),
-            b')' => Some(SyntaxClass::Close),
-            b'\'' => Some(SyntaxClass::Quote),
-            b'"' => Some(SyntaxClass::StringDelim),
-            b'$' => Some(SyntaxClass::Math),
-            b'\\' => Some(SyntaxClass::Escape),
-            b'/' => Some(SyntaxClass::CharQuote),
-            b'<' => Some(SyntaxClass::Comment),
-            b'>' => Some(SyntaxClass::EndComment),
-            b'@' => Some(SyntaxClass::InheritStd),
-            b'!' => Some(SyntaxClass::CommentFence),
-            b'|' => Some(SyntaxClass::StringFence),
-            _ => None,
-        }
+/// Install the buffer substrate's syntax queries (stage-3 C7).  Idempotent;
+/// called at evaluator construction and image restore.  The table carries
+/// only value/edit types and the implementations stay here, where the live
+/// syntax char-table lives; there is no dynamic dispatch and no new TLS.
+pub(crate) fn install_substrate_seams() {
+    static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
+        return;
     }
-
-    /// Parse a syntax class from its single-character designator.
-    pub fn from_char(ch: char) -> Option<SyntaxClass> {
-        let byte = u8::try_from(u32::from(ch)).ok()?;
-        SyntaxClass::from_syntax_spec_byte(byte)
-    }
-
-    /// Return the canonical single-character designator for this class.
-    #[inline]
-    pub fn to_char(self) -> char {
-        SYNTAX_CLASS_DESIGNATORS[usize::from(u8::from(self))]
-    }
-
-    /// Return the integer code Emacs uses for this syntax class
-    /// (used in the cons cell returned by `string-to-syntax`).
-    #[inline]
-    pub fn code(self) -> i64 {
-        i64::from(u8::from(self))
-    }
-
-    #[inline]
-    fn from_gnu_discriminant(code: u8) -> Option<SyntaxClass> {
-        SyntaxClass::try_from(code).ok()
-    }
-
-    /// Parse a syntax class from a syntax table entry code.
-    ///
-    /// GNU syntax table entries store flags above the low 8 bits; the class is
-    /// extracted with `code & 0377`.
-    pub fn from_code(n: i64) -> Option<SyntaxClass> {
-        SyntaxClass::from_gnu_discriminant((n & 0xFF) as u8)
-    }
-
-    /// Parse a public syntax class integer, as accepted by
-    /// `syntax-class-to-char`.  Unlike syntax table entries, GNU rejects raw
-    /// integers outside 0..Smax here instead of masking flag bits.
-    fn from_plain_code(n: i64) -> Option<SyntaxClass> {
-        let code = u8::try_from(n).ok()?;
-        SyntaxClass::from_gnu_discriminant(code)
-    }
+    crate::buffer::syntax_class::install(crate::buffer::syntax_class::SyntaxSeams {
+        table_for_buffer: |buf| buf.syntax_chartable(),
+        char_syntax_code: |table, code| syntax_class_at_char_code(&table, code),
+    });
+    INSTALLED.store(true, std::sync::atomic::Ordering::Release);
 }
 
 /// Return the GNU standard syntax-table class for an Emacs character

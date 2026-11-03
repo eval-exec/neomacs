@@ -5,9 +5,9 @@
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::intern;
-use super::syntax::{SyntaxClass, SyntaxTable};
 use super::textprop::{buffer_overlay_property_at_byte_pos, lookup_buffer_text_property};
 use super::value::{Value, ValueKind, VecLikeType};
+use crate::buffer::syntax_class::{SyntaxClass, SyntaxTableView};
 use crate::buffer::{
     AccessibleEmacsByteRange, BufferLispPos, BufferManager, CharPos0, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispCharPos1,
@@ -1184,7 +1184,7 @@ fn skip_char_in_explicit_ranges(set: &SkipCharsSet, code: u32) -> bool {
         .any(|(start, end)| code >= *start && code <= *end)
 }
 
-fn skip_char_class_matches(class: SkipCharClass, code: u32, syntax_table: &SyntaxTable) -> bool {
+fn skip_char_class_matches(class: SkipCharClass, code: u32, syntax_table: SyntaxTableView) -> bool {
     match class {
         SkipCharClass::Alnum => {
             is_ascii_alpha_code(code) || is_ascii_digit_code(code) || non_ascii_alnum(code)
@@ -1235,7 +1235,7 @@ fn skip_char_class_matches(class: SkipCharClass, code: u32, syntax_table: &Synta
     }
 }
 
-fn skip_char_matches(set: &SkipCharsSet, code: u32, syntax_table: &SyntaxTable) -> bool {
+fn skip_char_matches(set: &SkipCharsSet, code: u32, syntax_table: SyntaxTableView) -> bool {
     let in_set = set
         .classes
         .iter()
@@ -1318,7 +1318,7 @@ pub(crate) fn builtin_skip_chars_forward_2(
     let current_id = ctx.edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (start_pos, pos, limit, moved_chars) = {
         let buf = ctx.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
-        let syntax_table = SyntaxTable::for_buffer(buf);
+        let syntax_table = SyntaxTableView::for_buffer(buf);
         let accessible = buf.accessible_emacs_byte_region();
         let lim_byte =
             skip_chars_limit_byte(&ctx.edit.buffers, buf, args.get(1), accessible.end())?;
@@ -1339,7 +1339,7 @@ pub(crate) fn builtin_skip_chars_forward_2(
                 let Some(code) = buf.char_code_after_emacs_byte_pos(pos) else {
                     break;
                 };
-                if !skip_char_matches(&char_set, code, &syntax_table) {
+                if !skip_char_matches(&char_set, code, syntax_table) {
                     break;
                 }
                 pos = pos.add_len(
@@ -1362,7 +1362,7 @@ pub(crate) fn builtin_skip_chars_forward_2(
                     let (c, n) = crate::emacs_core::emacs_char::string_char(&window[off..]);
                     (c.code(), n)
                 };
-                if !skip_char_matches(&char_set, code, &syntax_table) {
+                if !skip_char_matches(&char_set, code, syntax_table) {
                     stopped = true;
                     break;
                 }
@@ -1398,7 +1398,7 @@ pub(crate) fn builtin_skip_chars_backward_2(
     let current_id = ctx.edit.buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (pos, moved_chars) = {
         let buf = ctx.edit.buffers.get(current_id).ok_or_else(no_buffer)?;
-        let syntax_table = SyntaxTable::for_buffer(buf);
+        let syntax_table = SyntaxTableView::for_buffer(buf);
         let accessible = buf.accessible_emacs_byte_region();
         let limit = skip_chars_limit_byte(&ctx.edit.buffers, buf, args.get(1), accessible.start())?;
         let start_pos = buf.point_emacs_byte_pos();
@@ -1413,7 +1413,7 @@ pub(crate) fn builtin_skip_chars_backward_2(
                 let Some(code) = buf.char_code_before_emacs_byte_pos(pos) else {
                     break;
                 };
-                if !skip_char_matches(&char_set, code, &syntax_table) {
+                if !skip_char_matches(&char_set, code, syntax_table) {
                     break;
                 }
                 pos = pos.saturating_sub_len(
@@ -1443,7 +1443,7 @@ pub(crate) fn builtin_skip_chars_backward_2(
                         .0
                         .code()
                 };
-                if !skip_char_matches(&char_set, code, &syntax_table) {
+                if !skip_char_matches(&char_set, code, syntax_table) {
                     stopped = true;
                     break;
                 }

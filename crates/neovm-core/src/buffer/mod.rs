@@ -7,6 +7,7 @@ mod edit_runtime;
 mod edit_transaction;
 pub(crate) mod storage_string;
 pub(crate) mod syntax_cache;
+pub(crate) mod syntax_class;
 pub(crate) use edit_transaction::{CasifyExpansion, CasifyStorageShape};
 pub(crate) mod gap_buffer;
 mod marker_data;

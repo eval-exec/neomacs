@@ -2410,6 +2410,9 @@ impl Context {
         // entry points install lazily as well, so a Buffer used outside a
         // Context needs no Context.
         crate::emacs_core::composite::install_substrate_seams();
+        // The buffer substrate also asks the text layer for syntax-class
+        // queries through a host-free fn-pointer table (stage-3 C7).
+        crate::emacs_core::syntax::install_substrate_seams();
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization. The owner carries the allocation's
         // provenance root; installation and every later access derive from it.
