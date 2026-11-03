@@ -8,6 +8,36 @@ repository.workspace = true
 description = "Lower NeoVM runtime utilities shared with the core crate"
 
 [dependencies]
+bitflags.workspace = true
+bytemuck.workspace = true
+hashbrown.workspace = true
+libc.workspace = true
+malachite.workspace = true
+memchr.workspace = true
+neovm-display-identity.workspace = true
+num_enum.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, optional = true }
+smallvec.workspace = true
 static_assertions.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
+typed-index-collections.workspace = true
+unicode-general-category.workspace = true
+
+# The lower layer carries the same cfg vocabulary as `neovm-core`: the moved
+# modules gate code on these names, so the features must exist here even when
+# their only effect is to select already-moved code.  No Cranelift, SQLite or
+# evaluator dependency leaks into the lower layer through them.
+[features]
+default = ["jit", "sqlite"]
+# Diagnostic inventory walks and JSONL records; absent from ordinary builds.
+gc-memory-telemetry = ["dep:serde_json"]
+jit = []
+perf-probes = []
+sqlite = []

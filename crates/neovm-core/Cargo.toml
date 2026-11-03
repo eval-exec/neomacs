@@ -122,8 +122,8 @@ dbus = { version = "0.9", default-features = false }
 [features]
 default = ["jit", "sqlite"]
 # Diagnostic inventory walks and JSONL records; absent from ordinary builds.
-gc-memory-telemetry = ["dep:serde_json"]
-sqlite = ["dep:rusqlite"]
+gc-memory-telemetry = ["dep:serde_json", "neovm-value/gc-memory-telemetry"]
+sqlite = ["dep:rusqlite", "neovm-value/sqlite"]
 # Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
 # Production/Nix builds leave this off and use the system library.
 dbus-vendored = ["dbus/vendored"]
@@ -159,6 +159,7 @@ jit = [
     "dep:cranelift-object",
     "dep:object",
     "dep:cranelift-native",
+    "neovm-value/jit",
 ]
 # Dynamic, execution-weighted interpreter opcode histogram — a profiling aid for
 # sizing JIT work (which ops dominate real execution). Compiled in ONLY under
@@ -174,7 +175,7 @@ fuzzing = []
 # not correctness tests, so the default suite compiles them out; run them
 # explicitly with `--features perf-probes` (release for timings).  Keep them
 # from rotting with `cargo check -p neovm-core --features perf-probes --tests`.
-perf-probes = []
+perf-probes = ["neovm-value/perf-probes"]
 # Opt-in compiler-contract suites (trybuild): their fixtures compile with the
 # source-free gate toolchain, so they stay out of the ordinary suite.
 # The postgate compiles them with

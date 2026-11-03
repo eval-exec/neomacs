@@ -97,7 +97,7 @@ neovm-core = { path = "crates/neovm-core", default-features = false }
 neovm-display-identity = { path = "crates/neovm-display-identity" }
 neovm-host-abi = { path = "crates/neovm-host-abi" }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
-neovm-value = { path = "crates/neovm-value" }
+neovm-value = { path = "crates/neovm-value", default-features = false }
 neomacs-display-runtime = { path = "crates/neomacs-display-runtime", default-features = false }
 neomacs-display-protocol = { path = "crates/neomacs-display-protocol", default-features = false }
 neomacs-font-materializer = { path = "crates/neomacs-font-materializer" }
@@ -444,6 +444,12 @@ incremental = false
 
 # Optimize interpreter-heavy tests without changing ordinary editor debug builds.
 [profile.test.package.neovm-core]
+opt-level = 2
+
+# The lower value layer carries the modules core's test profile compiles at
+# opt-level 2 (tagged heap, symbols, values).  Keep its test-profile units at
+# the same setting so moving a module does not silently change its codegen.
+[profile.test.package.neovm-value]
 opt-level = 2
 
 # Optimized build driven by a PGO profile. Same codegen settings as release,

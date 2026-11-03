@@ -4350,6 +4350,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tl",
  "tracing",
+ "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
  "tracing-test",
@@ -4400,9 +4401,27 @@ dependencies = [
 name = "neovm-value"
 version = "0.0.20"
 dependencies = [
+ "bitflags 2.13.1",
+ "bytemuck",
+ "hashbrown 0.17.0",
+ "libc",
+ "malachite",
+ "memchr",
+ "neovm-display-identity",
+ "num_enum",
+ "parking_lot",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+ "smallvec",
  "static_assertions",
+ "strum",
+ "thiserror 2.0.20",
+ "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "typed-index-collections",
+ "unicode-general-category",
 ]
 
 [[package]]
