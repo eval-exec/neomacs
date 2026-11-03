@@ -1,4 +1,5 @@
 use super::CoreTextBackend;
+use super::core_text_calls::{fallback_family_matches, font_family_name, font_postscript_name};
 use crate::font::resolver::{FontEntityQuery, FontResolver};
 use crate::font_backend::FontFamilyName;
 use crate::font_backend::ProcessFontRegistration;
@@ -202,4 +203,26 @@ fn native_identity_prefilter_uses_the_stable_key_even_with_an_opaque_url() {
     assert!(!CoreTextBackend::candidate_may_match_identity(
         &candidate, &identity
     ));
+}
+
+#[test]
+fn fallback_family_accepts_only_available_or_exactly_resolved_names() {
+    assert!(fallback_family_matches("Helvetica", true, None));
+    assert!(fallback_family_matches(
+        "Helvetica",
+        false,
+        Some("helvetica")
+    ));
+    assert!(!fallback_family_matches("Helvetica", false, Some("Arial")));
+    // A NULL CTFontCopyFamilyName result must decline the best-match face
+    // rather than panic or treat it as an exact resolution (#673).
+    assert!(!fallback_family_matches("Helvetica", false, None));
+}
+
+#[test]
+fn coretext_font_names_are_reported_as_options() {
+    let name = objc2_core_foundation::CFString::from_str("Helvetica");
+    let font = unsafe { objc2_core_text::CTFont::with_name(&name, 12.0, std::ptr::null()) };
+    assert!(font_family_name(&font).is_some());
+    assert!(font_postscript_name(&font).is_some());
 }

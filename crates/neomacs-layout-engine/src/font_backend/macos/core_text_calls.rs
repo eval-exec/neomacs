@@ -56,7 +56,42 @@ pub(super) fn resolve_generic_family(family: &str) -> Option<String> {
     // SAFETY: `None` is explicitly accepted for the optional language and the
     // generated wrapper owns the Create result with `CFRetained`.
     let font = unsafe { CTFont::new_ui_font_for_language(kind, 0.0, None) }?;
-    Some(unsafe { font.family_name() }.to_string())
+    font_family_name(&font)
+}
+
+// `CTFontCopyFamilyName` and `CTFontCopyPostScriptName` are documented to
+// return a retained string, but CoreText can return NULL: the #673 backtrace
+// on macOS 26.7.2 panicked inside the generated binding for the family name.
+// The generated objc2 wrappers mark these results non-null, so the two Copy
+// calls are declared here and absence stays an Option, matching GNU's
+// `if (family_name)` / `if (name1)` checks in `src/macfont.m:2783` and `:3759`.
+unsafe extern "C-unwind" {
+    fn CTFontCopyFamilyName(font: &CTFont) -> Option<NonNull<CFString>>;
+    fn CTFontCopyPostScriptName(font: &CTFont) -> Option<NonNull<CFString>>;
+}
+
+pub(super) fn font_family_name(font: &CTFont) -> Option<String> {
+    // SAFETY: `font` is a live retained CoreText object, and the Copy result
+    // is an owned reference that `CFRetained` takes over.
+    let name = unsafe { CTFontCopyFamilyName(font) }?;
+    Some(unsafe { CFRetained::from_raw(name) }.to_string())
+}
+
+pub(super) fn font_postscript_name(font: &CTFont) -> Option<String> {
+    // SAFETY: as in `font_family_name`; the returned reference is owned.
+    let name = unsafe { CTFontCopyPostScriptName(font) }?;
+    Some(unsafe { CFRetained::from_raw(name) }.to_string())
+}
+
+/// GNU accepts a best-matched face when its requested family is catalogued
+/// or when CoreText resolves the request to the same family. A face whose
+/// family name is unavailable cannot prove either, so it is not accepted.
+pub(super) fn fallback_family_matches(
+    requested: &str,
+    is_available: bool,
+    resolved: Option<&str>,
+) -> bool {
+    is_available || resolved.is_some_and(|name| name.eq_ignore_ascii_case(requested))
 }
 
 pub(super) fn family_prefers_monospace(family: &str) -> bool {
@@ -162,11 +197,15 @@ fn family_fonts(family: &str) -> Vec<CFRetained<CTFont>> {
         // returns a best match even for a missing name, so accept it only when
         // the resulting family proves that the request was exact.
         let font = unsafe { CTFont::with_name(&family, 0.0, ptr::null()) };
-        let resolved_family = unsafe { font.family_name() }.to_string();
+        let resolved_family = font_family_name(&font);
         let is_available_family = available_family_names()
             .iter()
             .any(|available| available.eq_ignore_ascii_case(requested_family));
-        if is_available_family || resolved_family.eq_ignore_ascii_case(requested_family) {
+        if fallback_family_matches(
+            requested_family,
+            is_available_family,
+            resolved_family.as_deref(),
+        ) {
             fonts.push(font);
         }
     }
@@ -316,8 +355,11 @@ fn add_scalar_range(set: &CFMutableCharacterSet, first: u32, second: u32) -> Opt
 fn candidate_from_font(font: CFRetained<CTFont>) -> Option<Candidate> {
     let descriptor = unsafe { font.font_descriptor() };
     let path = descriptor_path(&descriptor);
-    let postscript_name = unsafe { font.post_script_name() }.to_string();
-    let family = unsafe { font.family_name() }.to_string();
+    // A face without either name cannot be matched by the resolver; GNU
+    // treats a NULL CoreText name as absent (`src/macfont.m:2783`, `:3759`),
+    // so skip the candidate instead of panicking or inventing an identity.
+    let postscript_name = font_postscript_name(&font)?;
+    let family = font_family_name(&font)?;
     let symbolic = unsafe { font.symbolic_traits() };
     let traits = typed_number_dictionary(unsafe { font.traits() });
     let weight = traits
