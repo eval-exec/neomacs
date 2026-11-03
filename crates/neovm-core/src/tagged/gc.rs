@@ -2909,7 +2909,7 @@ mod generational_major_tests;
 mod generational_pacing_tests;
 
 #[cfg(test)]
-#[path = "gc/tests/bytecode_parameter_roots.rs"]
+#[path = "../../core_tests/tagged/gc/tests/bytecode_parameter_roots.rs"]
 mod bytecode_parameter_roots_tests;
 #[cfg(test)]
 #[path = "gc/tests/major_symbol_preimage_test.rs"]

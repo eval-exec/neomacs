@@ -50,6 +50,7 @@ mod gate;
 mod image;
 mod native_extent;
 #[cfg(test)]
+#[path = "../../../core_tests/tagged/gc/mutator_registration/nmjit_n1.rs"]
 mod nmjit_n1;
 mod root_slot;
 mod run_slice;

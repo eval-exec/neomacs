@@ -5753,7 +5753,7 @@ use hash_index::{HashIndex, fx_hash_key, stored_hash};
 mod tests;
 
 #[cfg(test)]
-#[path = "tests/bytecode_capture_test.rs"]
+#[path = "../../../../core_tests/emacs_core/runtime/value/tests/bytecode_capture_test.rs"]
 mod bytecode_capture_tests;
 
 #[cfg(test)]
