@@ -475,7 +475,7 @@ impl TaggedHeap {
         width: i32,
         height: i32,
         xwidget_id: u32,
-        webview_id: neomacs_display_protocol::WebViewId,
+        webview_id: neovm_display_identity::WebViewId,
     ) -> TaggedValue {
         let obj = Box::new(XwidgetObj {
             header: VecLikeHeader::new(VecLikeType::Xwidget),
@@ -581,10 +581,7 @@ impl TaggedHeap {
     }
 
     /// Allocate a GC-managed video-session handle.
-    pub fn alloc_video_handle(
-        &mut self,
-        video_id: neomacs_display_protocol::VideoId,
-    ) -> TaggedValue {
+    pub fn alloc_video_handle(&mut self, video_id: neovm_display_identity::VideoId) -> TaggedValue {
         let obj = Box::new(VideoObj {
             header: VecLikeHeader::new(VecLikeType::VideoHandle),
             video_id,
@@ -604,7 +601,7 @@ impl TaggedHeap {
     }
 
     /// Take video ids whose last Lisp handle was reclaimed by the sweep.
-    pub fn take_pending_video_destroys(&mut self) -> Vec<neomacs_display_protocol::VideoId> {
+    pub fn take_pending_video_destroys(&mut self) -> Vec<neovm_display_identity::VideoId> {
         std::mem::take(&mut self.pending_video_destroys)
     }
 

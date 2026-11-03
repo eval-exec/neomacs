@@ -15,7 +15,7 @@ use super::value::TaggedValue;
 use crate::emacs_core::intern::NameId;
 use crate::emacs_core::intern::SymId;
 use malachite::integer::Integer;
-use neomacs_display_protocol::{VideoId, WebViewId};
+use neovm_display_identity::{VideoId, WebViewId};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
@@ -2007,7 +2007,7 @@ pub struct FontObjectData {
     /// Exact backend identity retained from realization.  This is deliberately
     /// not reduced to file/index: native selectors and variation coordinates
     /// are required to reopen the same font instance.
-    pub identity: neomacs_display_protocol::font::ResolvedFontIdentity,
+    pub identity: neovm_display_identity::font::ResolvedFontIdentity,
 }
 
 /// Heap-allocated opened-font pseudovector (`PVEC_FONT`).

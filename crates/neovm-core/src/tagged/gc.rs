@@ -441,7 +441,7 @@ pub struct TaggedHeap {
     pending_surface_destroys: Vec<u32>,
     /// Stable video ids of `VideoObj` handles reclaimed by the sweep. The
     /// evaluator drains these after collection through `DisplayHost`.
-    pending_video_destroys: Vec<neomacs_display_protocol::VideoId>,
+    pending_video_destroys: Vec<neovm_display_identity::VideoId>,
     /// SIZE-CLASS OBJECT ARENAS (non-cons allocator modernization stage 3 +
     /// task 03/3a): every heap float/string/vector/bytecode lives in a
     /// 64KB-aligned `ObjectPage`
@@ -2038,9 +2038,7 @@ impl TaggedHeap {
                 identity
                     .variation_coords
                     .capacity()
-                    .saturating_mul(
-                        size_of::<neomacs_display_protocol::font::FontVariationCoord>(),
-                    ),
+                    .saturating_mul(size_of::<neovm_display_identity::font::FontVariationCoord>()),
             )
     }
 

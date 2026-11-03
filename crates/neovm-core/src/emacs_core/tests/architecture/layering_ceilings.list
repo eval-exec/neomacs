@@ -1,4 +1,3 @@
-g0 extern:neomacs_display_protocol 3
 buffer builtins 6
 buffer chartable 1
 buffer composite 13
@@ -70,7 +69,6 @@ keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
 tagged top:buffer 6
-tagged extern:neomacs_display_protocol 7
 window category 2
 window chartable 1
 window display_spec 3

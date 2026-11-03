@@ -302,13 +302,13 @@ fn is_workspace_sibling(name: &str) -> bool {
     (name.starts_with("neomacs_") || name.starts_with("neovm_")) && name != "neovm_core"
 }
 
-/// The first lower crate of the extraction. Its modules are already inside the
+/// The lower crates of the extraction whose modules are already inside the
 /// moving set, so a moving file that reaches one of them through a core-root
 /// re-export stays internal and is not counted as an upward edge.
-const MOVING_CRATE: &str = "neovm_value";
+const MOVING_CRATES: [&str; 2] = ["neovm_value", "neovm_display_identity"];
 
 fn is_moving_crate(name: &str) -> bool {
-    name == MOVING_CRATE
+    MOVING_CRATES.contains(&name)
 }
 
 /// A moving-set file is either a bottom-peer top-level module or a G0
@@ -923,7 +923,7 @@ impl<'ast> Visit<'ast> for ProductionWalker {
                     // visibility: descendants can see the root's private
                     // imports.
                     for (path, name) in &leaves {
-                        if path.first().is_some_and(|part| part == MOVING_CRATE) {
+                        if path.first().is_some_and(|part| is_moving_crate(part)) {
                             let module = path.get(1).cloned().unwrap_or_else(|| name.clone());
                             self.index.moving_crate_exports.insert(name.clone(), module);
                         }

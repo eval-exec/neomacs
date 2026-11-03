@@ -4313,6 +4313,7 @@ dependencies = [
  "neomacs-test-env",
  "neomacs-test-oracle",
  "neomacs-video-model",
+ "neovm-display-identity",
  "neovm-host-abi",
  "neovm-value",
  "network-interface",
