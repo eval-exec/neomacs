@@ -1,5 +1,5 @@
-//! GNU has no C DEFVAR for `read-file-name-completion-ignore-case': its
-//! defcustom (`lisp/minibuffer.el:3117') selects the platform default, which
+//! GNU has no C DEFVAR for `read-file-name-completion-ignore-case`: its
+//! defcustom (`lisp/minibuffer.el:3117`) selects the platform default, which
 //! is t on darwin/windows-nt/ms-dos/cygwin. Pre-seeding the name in the Rust
 //! bootstrap shadowed that initializer (#667).
 

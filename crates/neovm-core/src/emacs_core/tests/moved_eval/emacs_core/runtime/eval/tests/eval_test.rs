@@ -29496,6 +29496,10 @@ fn jit_guarded_bcall_leaf_site_calls_through_the_function_cell() {
 /// which is t on darwin/windows-nt/ms-dos/cygwin. Pre-seeding the name in
 /// the Rust bootstrap shadowed that initializer, so macOS completed file
 /// names case-sensitively (#667).
+///
+/// The `defvar` below mirrors the binding that `defcustom` expands to; the
+/// test deliberately does not depend on custom.el being loaded in a bare
+/// bootstrap context.
 #[test]
 fn read_file_name_completion_ignore_case_is_left_to_the_lisp_defcustom() {
     let mut ctx = Context::new();
@@ -29513,6 +29517,6 @@ fn read_file_name_completion_ignore_case_is_left_to_the_lisp_defcustom() {
                    (if (memq system-type '(ms-dos windows-nt darwin cygwin)) t nil))
                  read-file-name-completion-ignore-case)"#,
         )
-        .expect("the defcustom initializer should evaluate");
-    assert!(value.is_t(), "darwin must get the defcustom default t");
+        .expect("the defvar form mirroring the defcustom expansion should evaluate");
+    assert!(value.is_t(), "darwin must get the platform default t");
 }
