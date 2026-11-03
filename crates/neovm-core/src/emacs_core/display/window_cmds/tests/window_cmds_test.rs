@@ -345,6 +345,14 @@ struct RecordingDisplayHost {
         Rc<RefCell<Vec<(crate::window::FrameId, crate::window::GuiFrameGeometryHints)>>>,
     primary_size: Option<GuiFrameHostSize>,
     resolved_frame_font: Option<ResolvedFrameFont>,
+    font_requests: Rc<
+        RefCell<
+            Vec<(
+                crate::window::FrameId,
+                crate::emacs_core::display_host::FrameFontRequest,
+            )>,
+        >,
+    >,
     initial_gui_defaults: Option<crate::emacs_core::display_host::InitialGuiFrameDefaults>,
     finished: Rc<RefCell<Vec<GuiFrameHostRequest>>>,
 }
@@ -513,9 +521,10 @@ impl DisplayHost for RecordingDisplayHost {
 
     fn resolve_frame_font(
         &mut self,
-        _frame_id: crate::window::FrameId,
-        _request: crate::emacs_core::display_host::FrameFontRequest,
+        frame_id: crate::window::FrameId,
+        request: crate::emacs_core::display_host::FrameFontRequest,
     ) -> Result<Option<ResolvedFrameFont>, String> {
+        self.font_requests.borrow_mut().push((frame_id, request));
         Ok(self.resolved_frame_font.clone())
     }
 }
@@ -9027,6 +9036,7 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
         },
     ));
     let resized = host.resized.clone();
+    let font_requests = host.font_requests.clone();
     ev.set_display_host(Box::new(host));
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
@@ -9067,6 +9077,45 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
         resized.borrow().len(),
         1,
         "a live frame font change must request the implied resize"
+    );
+
+    // The request itself must carry the requested family and size; deriving
+    // everything from the mock's fixed reply could hide a misparsed request.
+    let requests = font_requests.borrow();
+    assert_eq!(requests.len(), 1, "one frame font resolution expected");
+    assert_eq!(requests[0].0, fid);
+    assert_eq!(
+        requests[0].1.face().family,
+        Some(Value::string("Noto Sans Mono")),
+        "the requested family must be parsed from the parameter"
+    );
+    let size = requests[0].1.size();
+    assert!(
+        matches!(
+            size,
+            crate::emacs_core::display_host::FrameFontSize::Points(_)
+        ),
+        "unexpected size request: {size:?}"
+    );
+    assert_eq!(
+        size,
+        crate::emacs_core::display_host::FrameFontSize::points(16.0).expect("16pt is a valid size")
+    );
+
+    // GNU `gui_set_font' recomputes the basic faces; redisplay must not keep
+    // drawing the frame-local default face with the previous font.
+    let table =
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(&ev, fid, false);
+    let default_face = table.merge_faces(&["default"]);
+    assert_eq!(
+        default_face.family,
+        Some(Value::string("Noto Sans Mono")),
+        "redisplay's default face must follow the opened font"
+    );
+    assert_eq!(
+        default_face.height,
+        Some(crate::face::FaceHeight::Absolute(160)),
+        "the default face must carry the opened font's height"
     );
 }
 

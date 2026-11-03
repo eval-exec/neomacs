@@ -1860,6 +1860,13 @@ pub(crate) fn builtin_modify_frame_parameters(
                                     ));
                                 }
                                 super::font::sync_live_frame_font_state(eval, fid, &resolution)?;
+                                // GNU `gui_set_font' ends in
+                                // `recompute_basic_faces'; without this the
+                                // frame-local default face keeps the previous
+                                // font and redisplay can draw with it.
+                                super::font::seed_live_frame_default_face_from_font_parameter(
+                                    eval, fid,
+                                );
                             }
                         }
                         FrameParamKey::Known(FrameParam::Name) => {
