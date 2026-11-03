@@ -1392,7 +1392,8 @@ mod data;
 pub use data::case_fold_match_len;
 #[doc(hidden)]
 pub use data::decode_declared_multibyte_char;
-pub(crate) use data::decode_file_multibyte_char;
+#[doc(hidden)]
+pub use data::decode_file_multibyte_char;
 #[doc(hidden)]
 pub use data::unibyte_case_fold_match_len;
 

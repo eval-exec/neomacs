@@ -255,38 +255,58 @@ fn binop_driver(a: Value, b: Value, dest: Value, op: BinOp) -> EvalResult {
 mod data;
 #[doc(hidden)]
 pub use data::BoolVectorView;
-pub(crate) use data::bool_vector_elements;
-pub(crate) use data::bool_vector_equal_key_u128;
-pub(crate) use data::bool_vector_fill;
+#[doc(hidden)]
+pub use data::bool_vector_elements;
+#[doc(hidden)]
+pub use data::bool_vector_equal_key_u128;
+#[doc(hidden)]
+pub use data::bool_vector_fill;
 #[doc(hidden)]
 pub use data::bool_vector_from_bits;
 #[doc(hidden)]
 pub use data::bool_vector_from_bytes;
-pub(crate) use data::bool_vector_from_u128;
+#[doc(hidden)]
+pub use data::bool_vector_from_u128;
 #[doc(hidden)]
 pub use data::bool_vector_length;
 #[doc(hidden)]
 pub use data::bool_vector_ref_value;
-pub(crate) use data::bool_vector_set;
-pub(crate) use data::bool_vector_u128;
-pub(crate) use data::builtin_bool_vector;
-pub(crate) use data::builtin_bool_vector_count_consecutive;
-pub(crate) use data::builtin_bool_vector_count_population;
-pub(crate) use data::builtin_bool_vector_exclusive_or;
-pub(crate) use data::builtin_bool_vector_intersection;
-pub(crate) use data::builtin_bool_vector_not;
-pub(crate) use data::builtin_bool_vector_p;
-pub(crate) use data::builtin_bool_vector_set_difference;
-pub(crate) use data::builtin_bool_vector_subsetp;
-pub(crate) use data::builtin_bool_vector_union;
-pub(crate) use data::builtin_make_bool_vector;
-pub(crate) use data::copy_bool_vector;
+#[doc(hidden)]
+pub use data::bool_vector_set;
+#[doc(hidden)]
+pub use data::bool_vector_u128;
+#[doc(hidden)]
+pub use data::builtin_bool_vector;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_count_consecutive;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_count_population;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_exclusive_or;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_intersection;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_not;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_p;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_set_difference;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_subsetp;
+#[doc(hidden)]
+pub use data::builtin_bool_vector_union;
+#[doc(hidden)]
+pub use data::builtin_make_bool_vector;
+#[doc(hidden)]
+pub use data::copy_bool_vector;
 #[doc(hidden)]
 pub use data::is_bool_vector;
 #[doc(hidden)]
 pub use data::make_bool_vector;
-pub(crate) use data::nreverse_bool_vector;
-pub(crate) use data::reverse_bool_vector;
+#[doc(hidden)]
+pub use data::nreverse_bool_vector;
+#[doc(hidden)]
+pub use data::reverse_bool_vector;
 
 #[cfg(test)]
 #[path = "tests/boolvec_test.rs"]
