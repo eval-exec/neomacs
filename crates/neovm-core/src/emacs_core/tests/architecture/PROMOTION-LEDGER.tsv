@@ -1147,3 +1147,4 @@ char_table_external_slots	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1578	c
 char_table_has_subtype_named_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1590	chartab	stage-3 C7a: subtype check; core subtype subr imports it back
 assq_cell_eq	fn	private	crates/neovm-value/src/chartab.rs:1600	chartab	stage-3 C7a: assq cell search; core unicode-property subrs import it back
 decode_uniprop_run_length	fn	private	crates/neovm-value/src/chartab.rs:1619	chartab	stage-3 C7a: run-length decoder; core unicode-property subrs import it back
+copy_sequence_with_symbols	fn	private	crates/neovm-value/src/sequence_copy.rs:26	sequence_copy	stage-3 C12: copy-sequence dispatch core (list/string/vector/char-table/record/bool-vector); subr wrappers resolve symbol policy above the split

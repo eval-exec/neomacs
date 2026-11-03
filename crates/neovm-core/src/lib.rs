@@ -36,6 +36,10 @@ pub(crate) use neovm_value::list_scan;
 // stage-3 split (C12): the subr wrappers keep the perf_trace probes in the
 // lisp layer, while the buffer substrate reaches the cores directly.
 pub(crate) use neovm_value::strings_core;
+// The sequence-copy core (GNU fns.c copy-sequence) moved with the stage-3
+// split (C12) once the char-table copy landed in chartab (C7a): the subr
+// wrappers and Context-routed entries resolve the symbol policy first.
+pub(crate) use neovm_value::sequence_copy;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The
