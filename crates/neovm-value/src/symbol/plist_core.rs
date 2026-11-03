@@ -33,13 +33,13 @@ fn note_symbol_with_pos_plist_comparison() {
 
 #[cfg(test)]
 #[doc(hidden)]
-pub fn reset_symbol_with_pos_plist_comparisons() {
+pub(crate) fn reset_symbol_with_pos_plist_comparisons() {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 #[doc(hidden)]
-pub fn symbol_with_pos_plist_comparisons() -> usize {
+pub(crate) fn symbol_with_pos_plist_comparisons() -> usize {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(std::cell::Cell::get)
 }
 
@@ -50,13 +50,13 @@ fn note_plist_get_walk() {
 
 #[cfg(test)]
 #[doc(hidden)]
-pub fn reset_plist_get_walks() {
+pub(crate) fn reset_plist_get_walks() {
     PLIST_GET_WALKS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 #[doc(hidden)]
-pub fn plist_get_walks() -> usize {
+pub(crate) fn plist_get_walks() -> usize {
     PLIST_GET_WALKS.with(std::cell::Cell::get)
 }
 
@@ -142,7 +142,8 @@ pub struct TailCycleCheck {
 
 impl TailCycleCheck {
     #[inline]
-    pub(crate) fn new(list: Value) -> Self {
+    #[doc(hidden)]
+    pub fn new(list: Value) -> Self {
         Self {
             tortoise: list,
             max: 2,
@@ -154,14 +155,16 @@ impl TailCycleCheck {
     /// The current tortoise, for walks that call Lisp between steps and must
     /// keep it rooted (it is compared by identity).
     #[inline]
-    pub(crate) fn tortoise(&self) -> Value {
+    #[doc(hidden)]
+    pub fn tortoise(&self) -> Value {
         self.tortoise
     }
 
     /// The macro's step after the walk advanced to `tail`: returns `tail`
     /// when it closes a cycle (the object GNU signals with).
     #[inline]
-    pub(crate) fn step(&mut self, tail: Value) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn step(&mut self, tail: Value) -> Option<Value> {
         if !tail.is_cons() {
             return None;
         }
@@ -188,7 +191,8 @@ pub struct SafeTailGuard {
 }
 
 impl SafeTailGuard {
-    pub(crate) fn new(tail: Value) -> Self {
+    #[doc(hidden)]
+    pub fn new(tail: Value) -> Self {
         Self {
             tortoise: tail,
             power: 1,
@@ -198,7 +202,8 @@ impl SafeTailGuard {
 
     /// Mirrors GNU's `FOR_EACH_TAIL_SAFE` cycle arm: after the caller
     /// advances to the next tail, return true if a cycle was found.
-    pub(crate) fn found_cycle_after_advance(&mut self, tail: Value) -> bool {
+    #[doc(hidden)]
+    pub fn found_cycle_after_advance(&mut self, tail: Value) -> bool {
         if !tail.is_cons() {
             return false;
         }

@@ -34,7 +34,8 @@ pub(crate) mod function_cell_observer;
 pub mod leaf_activity;
 #[doc(hidden)]
 pub mod parallel;
-pub(crate) mod plist_core;
+#[doc(hidden)]
+pub mod plist_core;
 mod projection;
 mod property_revision;
 mod roots;

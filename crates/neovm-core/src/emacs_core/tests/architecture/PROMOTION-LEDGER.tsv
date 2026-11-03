@@ -169,7 +169,7 @@ SXHASH_FALLBACK_NONNEG_MASK	const	pub(crate)	crates/neovm-value/src/hashtab/mod.
 SXHASH_MAX_LEN	const	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:58	emacs_core::hashtab	bulk
 SYMBOL_FLAGS_REDIRECT_MASK	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1144	emacs_core::symbol	bulk
 SYMCELL_INLINE_WRITE_MASK	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1155	emacs_core::symbol	bulk
-SafeTailGuard	struct	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:178	emacs_core::symbol::plist_core	bulk
+SafeTailGuard	struct	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:178	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; private traversal fields, existing constructor/method bodies unchanged; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15
 ScratchRootHooks	struct	pub(crate)	crates/neovm-value/src/value/scratch_bridge.rs:15	emacs_core::value::scratch_bridge	bulk
 SetInternalAlist	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:584	emacs_core::symbol	bulk
 ShiftedTextPropertySource	struct	pub(crate)	crates/neovm-value/src/value/text_props.rs:2430	emacs_core::value::text_props	bulk
@@ -193,7 +193,7 @@ TAG_MASK	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:118	tagged::val
 TAG_STRING	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:124	tagged::value	bulk
 TAG_SYMBOL	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:122	tagged::value	bulk
 TAG_VECLIKE	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:125	tagged::value	bulk
-TailCycleCheck	struct	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:131	emacs_core::symbol::plist_core	bulk
+TailCycleCheck	struct	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:131	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; private traversal fields, existing constructor/method bodies unchanged; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15
 ThreadChildren	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:297	heap_types::threading	bulk
 ThreadId	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:36 (native_id! macro)	heap_types::threading	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs
 ThreadIds	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:61	heap_types::threading	pc1-d: DATA seal privacy ledger 17f6ac250b; caller runtime/threads/layout.rs
@@ -307,7 +307,6 @@ overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/o
 overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:13	heap_types::overlay_storage::instrumentation	bulk
 park_carrier_tls	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1252	emacs_core::error	bulk
 plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:173	emacs_core::symbol	bulk
-plist_get_walks	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:55	emacs_core::symbol::plist_core	bulk
 prepare_thread_symbol_caches	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2237	emacs_core::intern	bulk
 reads_need_observation	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:83	tagged::collection_reads	bulk
 record_endpoint_search_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:75	heap_types::overlay_storage::instrumentation	bulk
@@ -333,8 +332,6 @@ reset_overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/hea
 reset_overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:46	heap_types::overlay_storage::instrumentation	bulk
 reset_overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:8	heap_types::overlay_storage::instrumentation	bulk
 reset_plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:168	emacs_core::symbol	bulk
-reset_plist_get_walks	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:50	emacs_core::symbol::plist_core	bulk
-reset_symbol_with_pos_plist_comparisons	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:35	emacs_core::symbol::plist_core	bulk
 restore_runtime_interner	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1523	emacs_core::intern	bulk
 set_compiled_cons_cdr	fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:238	tagged::mutate	bulk
 set_tagged_heap_root	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:1646	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
@@ -349,7 +346,6 @@ swap_world_state	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs
 sxhash_combine	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:108	emacs_core::hashtab	bulk
 symbol::parallel	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:35	symbol	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 symbol_registry_epoch_value	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1509	emacs_core::intern	bulk
-symbol_with_pos_plist_comparisons	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:40	emacs_core::symbol::plist_core	bulk
 symcell_inline_write_value	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1167	emacs_core::symbol	bulk
 tagged::bytecode	mod	pub(crate)	crates/neovm-value/src/tagged/mod.rs:10	tagged	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 tagged::bytecode::chunk	mod	pub(crate)	crates/neovm-value/src/tagged/bytecode/mod.rs:18	tagged::bytecode	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
@@ -486,3 +482,9 @@ CallSiteFeedback::upgrade_source	method	pub(crate)/new signed extraction	crates/
 RuntimeState::feedback	method	pub(crate)/new signed extraction	crates/neovm-value/src/value/jit_runtime/mod.rs	emacs_core::value::jit_runtime	pc1-d T1 A4: approved private DATA accessor; upper runtime/jit/feedback.rs; runtime/jit/mod.rs; runtime/jit/compile/source_slots.rs:76
 Runtime::shared	method	pub(crate)/new signed extraction	crates/neovm-value/src/value/jit_runtime/mod.rs	emacs_core::value::jit_runtime	pc1-d T1 A4: approved private DATA accessor; upper runtime/jit/feedback.rs; runtime/jit/mod.rs; runtime/jit/compile/source_slots.rs:76
 runtime_shared_identity_word	fn	pub(crate)/new signed extraction	crates/neovm-value/src/value/jit_runtime/mod.rs	emacs_core::value::jit_runtime	pc1-d T1 A4: approved private DATA accessor; upper runtime/jit/feedback.rs; runtime/jit/mod.rs; runtime/jit/compile/source_slots.rs:76
+plist_core	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:38	emacs_core::symbol	module-gate: signed plist addendum; private probes narrowed, no hook installer/table; existing public API item inventory in module receipt; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15,16
+TailCycleCheck::new	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:146	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
+TailCycleCheck::tortoise	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:159	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
+TailCycleCheck::step	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:167	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
+SafeTailGuard::new	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:195	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
+SafeTailGuard::found_cycle_after_advance	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:206	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
