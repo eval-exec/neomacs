@@ -25,6 +25,7 @@ use super::scratch_bridge::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use super::{Value, eq_value, equal_value};
+use crate::emacs_core::error::{Flow, LispCondition, signal};
 use crate::gc_trace::GcTrace;
 
 #[cfg(test)]
@@ -5398,6 +5399,210 @@ impl Default for TextPropertyTable {
 impl GcTrace for TextPropertyTable {
     fn trace_roots(&self, roots: &mut Vec<Value>) {
         self.for_each_root(|value| roots.push(value));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Casing insertion: the lower storage transaction and its policy seam
+// ---------------------------------------------------------------------------
+
+/// Scratch roots belong to this Lisp mutator and must be restored on its
+/// thread, after the prepared table is published or abandoned.
+#[derive(Debug)]
+#[must_use = "retain casing roots until the prepared table is published or abandoned"]
+pub struct CasingPropertyRoots {
+    saved: usize,
+    mutator: std::marker::PhantomData<*const ()>,
+}
+
+impl CasingPropertyRoots {
+    pub fn new() -> Self {
+        Self {
+            saved: save_scratch_gc_roots(),
+            mutator: std::marker::PhantomData,
+        }
+    }
+
+    pub fn root(&self, value: Value) {
+        push_scratch_gc_root(value);
+    }
+}
+
+impl Drop for CasingPropertyRoots {
+    fn drop(&mut self) {
+        restore_scratch_gc_roots(self.saved);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertionSite {
+    Interior,
+    Boundary,
+}
+
+#[derive(Debug)]
+pub enum InsertionInheritance {
+    InteriorStretch,
+    Boundary(Vec<(Value, Value)>),
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BoundaryInheritanceTarget {
+    Predecessor,
+    Successor,
+    Inserted,
+}
+
+/// Upper-owned inheritance policy for casing growth.
+///
+/// The buffer layer resolves sticky/category properties against the
+/// evaluator and implements this trait; the storage transaction stays in the
+/// value layer so it can mutate the interval tree's private fields after the
+/// type moves to neovm-value.
+pub trait CasingInsertionPolicy {
+    fn same_properties(&self, left: &[(Value, Value)], right: &[(Value, Value)]) -> bool;
+
+    fn inherited(
+        &self,
+        left: &[(Value, Value)],
+        right: &[(Value, Value)],
+        site: InsertionSite,
+        roots: &CasingPropertyRoots,
+    ) -> Result<InsertionInheritance, Flow>;
+}
+
+#[cold]
+#[inline(never)]
+fn invalid_interval_plan() -> Flow {
+    signal(
+        LispCondition::Error,
+        vec![Value::string("Invalid casing interval plan")],
+    )
+}
+
+impl TextPropertyTable {
+    /// No syntax reader runs between the detached casing interval offsets
+    /// (GNU intervals.c:1358-1365) and publication. Invalidate these positional
+    /// caches once instead of shifting every cached range for every expansion.
+    pub fn invalidate_casify_syntax_caches(&mut self) {
+        let ranges = self
+            .syntax_prop_ranges
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *ranges = (0, Vec::new());
+        self.syntax_prop_any
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Casing calls offset_intervals at the expanded source character, with
+    /// positive net growth (insdel.c:1800; intervals.c:1358-1365). Coordinates
+    /// refer to physical text, independent of the buffer's narrowed bounds.
+    pub fn adjust_for_casify_insertion<P: CasingInsertionPolicy>(
+        &mut self,
+        pos: CharPos0,
+        len: CharLen,
+        old_object_len: CharLen,
+        context: &P,
+        roots: &CasingPropertyRoots,
+    ) -> Result<(), Flow> {
+        if len.is_empty() || self.is_empty() {
+            return Ok(());
+        }
+        if pos > CharPos0::ZERO.add_len(old_object_len) {
+            return Err(invalid_interval_plan());
+        }
+        self.intervals
+            .ensure_cover(CharPos0::ZERO.add_len(old_object_len));
+        let located = self.intervals.find_id(pos);
+        let site = located.map_or(InsertionSite::Boundary, |(start, _interval)| {
+            if pos > start {
+                InsertionSite::Interior
+            } else {
+                InsertionSite::Boundary
+            }
+        });
+        let left = if pos == CharPos0::ZERO {
+            Vec::new()
+        } else {
+            self.plist_at(pos.saturating_sub_len(CharLen::new(1)))
+                .unwrap_or_default()
+        };
+        let right = self.plist_at(pos).unwrap_or_default();
+        let inherited = match context.inherited(&left, &right, site, roots)? {
+            InsertionInheritance::InteriorStretch => {
+                let interval = located
+                    .map(|(_, interval)| interval)
+                    .ok_or_else(invalid_interval_plan)?;
+                // GNU intervals.c:971-978 stretches the original interval;
+                // neither its plist identity nor its partition changes.
+                self.mutation_tick += 1;
+                if let Ok(mut guard) = self.syntax_prop_ranges.lock()
+                    && guard.0 == self.syntax_prop_tick + 1
+                {
+                    for (start, end) in guard.1.iter_mut() {
+                        if *start >= pos {
+                            *start = start.add_len(len);
+                            *end = end.add_len(len);
+                        } else if *end > pos {
+                            *end = end.add_len(len);
+                        }
+                    }
+                }
+                self.intervals.add_length_to_ancestors(
+                    Some(interval),
+                    isize::try_from(len.get()).map_err(|_| invalid_interval_plan())?,
+                );
+                return Ok(());
+            }
+            InsertionInheritance::Boundary(properties) => properties,
+        };
+        let target = if pos > CharPos0::ZERO && context.same_properties(&left, &inherited) {
+            BoundaryInheritanceTarget::Predecessor
+        } else if located.is_some() && context.same_properties(&right, &inherited) {
+            BoundaryInheritanceTarget::Successor
+        } else {
+            BoundaryInheritanceTarget::Inserted
+        };
+        // A forced boundary must split even a property-free interval. The
+        // ordinary insert helper may otherwise stretch such an interval.
+        if let Some(interval) = self.intervals.split_at(pos) {
+            roots.root(self.intervals.nodes[interval.0].plist);
+        }
+        self.adjust_for_insert_raw(pos, len);
+        if !inherited.is_empty() {
+            self.set_properties_for_object_char_len(
+                CharRange::from_start_len(pos, len),
+                old_object_len.add_len(len),
+                inherited,
+            );
+        }
+        let (_, inserted) = self
+            .intervals
+            .find_id(pos)
+            .ok_or_else(invalid_interval_plan)?;
+        roots.root(self.intervals.nodes[inserted.0].plist);
+        match target {
+            BoundaryInheritanceTarget::Predecessor => {
+                // GNU extends the predecessor when its properties match. Do
+                // not remove an already-existing equal boundary on the right.
+                self.intervals
+                    .merge_interval_left(inserted)
+                    .ok_or_else(invalid_interval_plan)?;
+            }
+            BoundaryInheritanceTarget::Successor => {
+                // GNU intervals.c:949-958,1380-1417 absorbs into the successor,
+                // retaining its plist, including its cons identity.
+                let (_, successor) = self
+                    .intervals
+                    .find_id(pos.add_len(len))
+                    .ok_or_else(invalid_interval_plan)?;
+                let plist = self.intervals.nodes[successor.0].plist;
+                self.intervals.set_node_plist(inserted, plist);
+                self.intervals.merge_into_predecessor(inserted, successor);
+            }
+            BoundaryInheritanceTarget::Inserted => {}
+        }
+        Ok(())
     }
 }
 

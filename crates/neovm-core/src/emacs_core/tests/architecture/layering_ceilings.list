@@ -3,7 +3,7 @@ buffer chartable 1
 buffer composite 13
 buffer emacs_char 34
 buffer error 12
-buffer eval 7
+buffer eval 4
 buffer intern 10
 buffer plist 4
 buffer string_escape 5

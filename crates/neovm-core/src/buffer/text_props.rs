@@ -11,11 +11,8 @@ pub(crate) use crate::emacs_core::value::text_props::{
     PropertyPlistApplication, ShiftedTextPropertySource,
 };
 
-use crate::buffer::position::{CharLen, CharPos0, CharRange};
 use crate::emacs_core::value::Value;
 
 #[path = "text_props/casing_insertion.rs"]
 mod casing_insertion;
-pub(crate) use casing_insertion::{
-    CasingPropertyControls, CasingPropertyMode, CasingPropertyRoots,
-};
+pub(crate) use casing_insertion::{CasingPropertyControls, CasingPropertyMode};
