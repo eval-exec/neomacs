@@ -1971,7 +1971,8 @@ impl HashTableMakeKeyword {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
-pub(crate) enum HashTableLiteralKey {
+#[doc(hidden)]
+pub enum HashTableLiteralKey {
     Test,
     Size,
     Purecopy,
@@ -2595,7 +2596,8 @@ impl LispHashTable {
     }
 }
 
-pub(crate) fn build_hash_table_literal_value(
+#[doc(hidden)]
+pub fn build_hash_table_literal_value(
     test: HashTableTest,
     test_name: Option<SymId>,
     size: i64,
@@ -5863,7 +5865,8 @@ macro_rules! assert_val_eq {
 }
 
 mod hash_index;
-pub(crate) mod switch_plan;
+#[doc(hidden)]
+pub mod switch_plan;
 
 pub(crate) use hash_index::equal_value_hash;
 use hash_index::{HashIndex, fx_hash_key, stored_hash};

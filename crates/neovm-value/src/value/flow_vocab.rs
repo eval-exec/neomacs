@@ -13,7 +13,8 @@
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum ResumeTarget {
+#[doc(hidden)]
+pub enum ResumeTarget {
     CommandLoopExit,
     CommandLoopTopLevel,
     InterpreterCatch,

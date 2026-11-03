@@ -54,7 +54,8 @@ pub fn hash_test_parity_enabled() -> bool {
 }
 
 mod user_test_guard;
-pub(crate) use user_test_guard::gc_threshold_integer_fallback;
+#[doc(hidden)]
+pub use user_test_guard::gc_threshold_integer_fallback;
 pub use user_test_guard::inhibited_user_test_since_gc;
 
 const SXHASH_MAX_DEPTH: usize = 3;
@@ -543,7 +544,8 @@ fn sxhash_emacs_uint_for(value: &Value, test: HashTableTest, symbol_mode: Symbol
 /// policy owns no Lisp state and is threaded through recursive hashing; it is
 /// never recovered from global/TLS state. GNU fns.c sxhash_obj unwraps a
 /// positioned symbol only while symbols_with_pos_enabled (line 5555).
-pub(crate) fn sxhash_for(value: &Value, test: HashTableTest, symbol_mode: SymbolMode) -> i64 {
+#[doc(hidden)]
+pub fn sxhash_for(value: &Value, test: HashTableTest, symbol_mode: SymbolMode) -> i64 {
     reduce_emacs_uint_to_fixnum(sxhash_emacs_uint_for(value, test, symbol_mode))
 }
 
@@ -725,7 +727,8 @@ pub fn builtin_hash_table_weakness(args: Vec<Value>) -> EvalResult {
 }
 
 /// (copy-hash-table TABLE) -> new hash table with same entries
-pub(crate) fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_copy_hash_table(args: Vec<Value>) -> EvalResult {
     expect_args("copy-hash-table", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {

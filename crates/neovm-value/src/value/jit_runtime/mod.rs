@@ -19,8 +19,10 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use crate::intern::SymId;
 
-pub(crate) mod feedback;
-pub(crate) mod retreat;
+#[doc(hidden)]
+pub mod feedback;
+#[doc(hidden)]
+pub mod retreat;
 
 /// Type/target feedback observed at one CALL site (the JIT's most important
 /// speculation input — it enables direct-call inlining).

@@ -51,7 +51,8 @@ pub unsafe fn inhibited_user_test_since_gc(
 /// conversion outside the ordinary fixnum runtime-settings cache path.
 #[cold]
 #[inline(never)]
-pub(crate) fn gc_threshold_integer_fallback(value: Value) -> Option<i64> {
+#[doc(hidden)]
+pub fn gc_threshold_integer_fallback(value: Value) -> Option<i64> {
     if super::hash_test_parity_enabled() {
         value
             .as_bignum()
