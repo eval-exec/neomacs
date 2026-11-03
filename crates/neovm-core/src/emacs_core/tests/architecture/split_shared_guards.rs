@@ -1719,133 +1719,907 @@ fn architecture_pc1_explicit_test_target_and_macro_references_are_fenced() {
 }
 
 // ---------------------------------------------------------------------------
-// PC2: hook installer two-seam table.
+// PC2: exact hook adapter chains, typed test-only rows and completeness.
+// Requires the shared N13Modules source/module catalog, not a second index.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
+struct Pc2Site {
+    file: String,
+    function: String,
+}
+
+#[derive(Clone, Debug)]
+enum Pc2Kind {
+    Production {
+        adapter: Option<Pc2Site>,
+        seams: [Pc2Site; 2],
+    },
+    TestOnly {
+        adapter: Pc2Site,
+    },
+}
+
+#[derive(Clone, Debug)]
 struct Pc2Row {
-    installer: String,
-    seams: BTreeSet<(String, String)>,
+    installer: Vec<String>,
+    kind: Pc2Kind,
+}
+
+fn pc2_site(text: &str) -> Result<Pc2Site, String> {
+    let (file, function) = text
+        .split_once(':')
+        .ok_or_else(|| format!("PC2_TABLE: expected exact file:function, got {text:?}"))?;
+    let path = Path::new(file);
+    if file.is_empty()
+        || function.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        || !file.ends_with(".rs")
+        || function
+            .split("::")
+            .any(|p| syn::parse_str::<syn::Ident>(p).is_err())
+    {
+        return Err(format!("PC2_TABLE: malformed exact site {text:?}"));
+    }
+    Ok(Pc2Site {
+        file: file.to_string(),
+        function: function.to_string(),
+    })
 }
 
 fn parse_pc2_table(text: &str) -> Result<Vec<Pc2Row>, String> {
     let mut rows = Vec::new();
+    let mut header = false;
+    let mut unique = BTreeSet::new();
     for (index, line) in text.lines().enumerate() {
-        if line.starts_with('#') || line.starts_with("installer\t") || line.is_empty() {
+        if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() != 3 {
-            return Err(format!("pc2 table line {}: expected 3 columns", index + 1));
-        }
-        let installer = fields[0].to_string();
-        let mut seams = BTreeSet::new();
-        for pair in &fields[1..] {
-            let Some((file, function)) = pair.split_once(':') else {
+        if !header {
+            if line != "kind\tinstaller\tadapter\tseam1\tseam2" {
                 return Err(format!(
-                    "pc2 table line {}: seam is not file:function",
+                    "PC2_TABLE:{}: missing exact five-column header",
                     index + 1
                 ));
-            };
-            seams.insert((file.to_string(), function.to_string()));
+            }
+            header = true;
+            continue;
         }
-        if seams.len() != 2 {
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.len() != 5 {
+            return Err(format!("PC2_TABLE:{}: expected five columns", index + 1));
+        }
+        let installer = syn::parse_str::<syn::Path>(fields[1])
+            .map_err(|e| format!("PC2_TABLE:{}: installer: {e}", index + 1))?;
+        let installer = path_names(&installer);
+        if installer.len() < 2 || !installer.last().is_some_and(|s| s.starts_with("install")) {
             return Err(format!(
-                "pc2 table line {}: expected exactly two seams",
+                "PC2_TABLE:{}: installer must be fully qualified",
                 index + 1
             ));
         }
-        rows.push(Pc2Row { installer, seams });
+        let kind = match fields[0] {
+            "production" => {
+                let adapter = if fields[2].is_empty() {
+                    None
+                } else {
+                    Some(pc2_site(fields[2])?)
+                };
+                let first = pc2_site(fields[3])?;
+                let second = pc2_site(fields[4])?;
+                if first.file == second.file && first.function == second.function {
+                    return Err("PC2_TABLE: production seams must be distinct".into());
+                }
+                Pc2Kind::Production {
+                    adapter,
+                    seams: [first, second],
+                }
+            }
+            "test_only" => {
+                if fields[2].is_empty() || !matches!(fields[3], "" | "-") || !matches!(fields[4], "" | "-") {
+                    return Err("PC2_TABLE: test_only needs a named adapter and empty seams".into());
+                }
+                Pc2Kind::TestOnly {
+                    adapter: pc2_site(fields[2])?,
+                }
+            }
+            other => return Err(format!("PC2_TABLE: unknown row kind {other:?}")),
+        };
+        let key = (fields[0].to_string(), installer.clone());
+        if !unique.insert(key) {
+            return Err("PC2_TABLE: duplicate installer/kind row".into());
+        }
+        rows.push(Pc2Row { installer, kind });
+    }
+    if !header {
+        return Err("PC2_TABLE: missing header".into());
+    }
+    if rows.is_empty() {
+        return Err("PC2_TABLE: existing hook chains require nonempty rows".into());
     }
     Ok(rows)
 }
 
-struct InstallerCallCollector<'a> {
-    installer: &'a str,
-    current_fn: Option<String>,
-    sites: BTreeSet<String>,
+fn pc2_cfg_test(meta: &syn::Meta) -> bool {
+    match meta {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::NameValue(value) => {
+            value.path.is_ident("feature")
+                && matches!(&value.value, Expr::Lit(v) if matches!(&v.lit, syn::Lit::Str(s) if s.value() == "test-support"))
+        }
+        syn::Meta::List(list) => {
+            use syn::parse::Parser;
+            let Ok(items) =
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+                    .parse2(list.tokens.clone())
+            else {
+                return false;
+            };
+            if list.path.is_ident("all") {
+                items.iter().any(pc2_cfg_test)
+            } else if list.path.is_ident("any") {
+                !items.is_empty() && items.iter().all(pc2_cfg_test)
+            } else {
+                false
+            }
+        }
+    }
 }
 
-impl<'a, 'ast> Visit<'ast> for InstallerCallCollector<'a> {
-    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        let previous = self.current_fn.replace(item.sig.ident.to_string());
-        visit::visit_item_fn(self, item);
-        self.current_fn = previous;
+fn pc2_test_attrs(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if attr.path().is_ident("test") {
+            return true;
+        }
+        if !attr.path().is_ident("cfg") {
+            return false;
+        }
+        attr.parse_args::<syn::Meta>()
+            .is_ok_and(|meta| pc2_cfg_test(&meta))
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Pc2Function {
+    owner: Vec<String>,
+    name: String,
+}
+
+// Resolve the function's original declaration spelling through the ONE
+// shared module/import catalog, including cross-name facade re-exports.
+fn pc2_resolve_function(
+    catalog: &N13Modules,
+    module: &[String],
+    path: &[String],
+) -> Result<Pc2Function, String> {
+    let Some(name) = path.last() else {
+        return Err("PC2_UNRESOLVED_REFERENCE: empty function path".into());
+    };
+    let prefix = if path.len() == 1 {
+        vec!["self".to_string()]
+    } else {
+        path[..path.len() - 1].to_vec()
+    };
+    catalog
+        .resolve_function_identity(module, &prefix, name)
+        .map(|identity| Pc2Function {
+            owner: identity.module,
+            name: identity.name,
+        })
+        .map_err(|error| {
+            if error.contains("AMBIGUOUS") {
+                format!("PC2_AMBIGUOUS_RECEIVER: {error}")
+            } else {
+                format!("PC2_UNRESOLVED_REFERENCE: {error}")
+            }
+        })
+}
+
+#[derive(Clone)]
+struct Pc2Definition {
+    symbol: Pc2Function,
+    site: Pc2Site,
+    test_only: bool,
+}
+
+#[derive(Clone)]
+struct Pc2Reference {
+    source: PathBuf,
+    line: usize,
+    symbol: Pc2Function,
+    caller: Option<Pc2Site>,
+    test_only: bool,
+}
+
+#[derive(Default)]
+struct Pc2Facts {
+    definitions: Vec<Pc2Definition>,
+    references: Vec<Pc2Reference>,
+    once_statics: BTreeSet<(Vec<String>, String)>,
+    all_statics: BTreeSet<(Vec<String>, String)>,
+    installs: BTreeSet<Pc2Function>,
+    errors: Vec<String>,
+}
+
+struct Pc2Visitor<'a> {
+    workspace: &'a Path,
+    source: &'a Path,
+    catalog: &'a N13Modules,
+    names: &'a BTreeSet<String>,
+    module: Vec<String>,
+    current_fn: Option<String>,
+    current_impl: Option<String>,
+    test_only: bool,
+    aliases: BTreeMap<String, BTreeSet<Vec<String>>>,
+    facts: &'a mut Pc2Facts,
+    // First visit inventories static/function definitions, second records refs.
+    definitions_only: bool,
+    completeness_scope: bool,
+}
+
+impl Pc2Visitor<'_> {
+    fn site(&self, function: &str) -> Option<Pc2Site> {
+        let file = match self.source.strip_prefix(self.workspace) {
+            Ok(path) => path.to_string_lossy().replace('\\', "/"),
+            Err(_) => return None,
+        };
+        Some(Pc2Site {
+            file,
+            function: function.to_string(),
+        })
+    }
+    fn error(&mut self, span: Span, detail: String) {
+        self.facts.errors.push(format!(
+            "{}:{}: {detail}",
+            self.source.display(),
+            line_of(span)
+        ));
+    }
+    fn caller(&self) -> Option<Pc2Site> {
+        self.current_fn.as_deref().and_then(|name| self.site(name))
     }
 
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let Expr::Path(path) = &*call.func {
-            if path
-                .path
-                .segments
-                .last()
-                .is_some_and(|segment| segment.ident == self.installer)
-            {
-                if let Some(enclosing) = self.current_fn.clone() {
-                    self.sites.insert(enclosing);
+    fn resolve(&self, path: &[String]) -> Result<Pc2Function, String> {
+        fn expand(
+            visitor: &Pc2Visitor<'_>,
+            path: &[String],
+            seen: &mut BTreeSet<String>,
+        ) -> Result<Pc2Function, String> {
+            if let Some(first) = path.first() {
+                if let Some(aliases) = visitor.aliases.get(first) {
+                    if !seen.insert(first.clone()) {
+                        return Err(format!(
+                            "PC2_AMBIGUOUS_RECEIVER: cyclic local alias {first}"
+                        ));
+                    }
+                    let mut resolved = BTreeSet::new();
+                    for alias in aliases {
+                        let mut full = alias.clone();
+                        full.extend_from_slice(&path[1..]);
+                        let symbol = if full.first() == Some(first) {
+                            pc2_resolve_function(visitor.catalog, &visitor.module, &full)?
+                        } else {
+                            expand(visitor, &full, &mut seen.clone())?
+                        };
+                        resolved.insert(symbol);
+                    }
+                    return match resolved.len() {
+                        1 => resolved
+                            .into_iter()
+                            .next()
+                            .ok_or_else(|| "PC2_UNRESOLVED_REFERENCE: alias".into()),
+                        _ => Err(format!(
+                            "PC2_AMBIGUOUS_RECEIVER: alias {first}: {resolved:?}"
+                        )),
+                    };
+                }
+            }
+            pc2_resolve_function(visitor.catalog, &visitor.module, path)
+        }
+        expand(self, path, &mut BTreeSet::new())
+    }
+
+    fn alias_relevant(&self, alias: &str, seen: &mut BTreeSet<String>) -> bool {
+        if !seen.insert(alias.to_string()) {
+            return false;
+        }
+        self.aliases.get(alias).is_some_and(|paths| {
+            paths.iter().any(|path| {
+                path.last().is_some_and(|name| self.names.contains(name))
+                    || path
+                        .first()
+                        .is_some_and(|name| self.alias_relevant(name, &mut seen.clone()))
+            })
+        })
+    }
+
+    fn import_aliases(&mut self, items: &[Item]) {
+        for item in items {
+            if let Item::Use(item) = item {
+                let mut leaves = Vec::new();
+                n13_use_leaves(&item.tree, &[], &mut leaves);
+                for leaf in leaves {
+                    if let Some(alias) = leaf.alias {
+                        self.aliases.entry(alias).or_default().insert(leaf.path);
+                    }
                 }
             }
         }
-        visit::visit_expr_call(self, call);
+    }
+
+    fn reference(&mut self, names: &[String], span: Span) {
+        if self.definitions_only {
+            return;
+        }
+        let relevant = names.last().is_some_and(|name| self.names.contains(name))
+            || names
+                .first()
+                .is_some_and(|name| self.alias_relevant(name, &mut BTreeSet::new()));
+        if !relevant {
+            return;
+        }
+        match self.resolve(names) {
+            Ok(symbol) => self.facts.references.push(Pc2Reference {
+                source: self.source.to_path_buf(),
+                line: line_of(span),
+                symbol,
+                caller: self.caller(),
+                test_only: self.test_only,
+            }),
+            Err(error) => self.error(span, error),
+        }
+    }
+
+    fn macro_tokens(&mut self, stream: proc_macro2::TokenStream) {
+        if let Ok(file) = syn::parse2::<syn::File>(stream.clone()) {
+            if !file.items.is_empty() {
+                self.visit_file(&file);
+                return;
+            }
+        }
+        if let Ok(block) = syn::parse2::<syn::Block>(stream.clone()) {
+            self.visit_block(&block);
+            return;
+        }
+        let wrapped: proc_macro2::TokenStream = std::iter::once(proc_macro2::TokenTree::Group(
+            proc_macro2::Group::new(proc_macro2::Delimiter::Brace, stream.clone()),
+        ))
+        .collect();
+        if let Ok(block) = syn::parse2::<syn::Block>(wrapped) {
+            self.visit_block(&block);
+            return;
+        }
+        if let Ok(expr) = syn::parse2::<Expr>(stream.clone()) {
+            self.visit_expr(&expr);
+            return;
+        }
+        let tokens: Vec<_> = stream.into_iter().collect();
+        let mut index = 0;
+        while index < tokens.len() {
+            match &tokens[index] {
+                proc_macro2::TokenTree::Group(group) => self.macro_tokens(group.stream()),
+                proc_macro2::TokenTree::Ident(ident) => {
+                    let mut names = vec![ident.to_string()];
+                    let mut next = index + 1;
+                    while next + 2 < tokens.len()
+                        && matches!(&tokens[next], proc_macro2::TokenTree::Punct(p) if p.as_char() == ':')
+                        && matches!(&tokens[next + 1], proc_macro2::TokenTree::Punct(p) if p.as_char() == ':')
+                    {
+                        let proc_macro2::TokenTree::Ident(ident) = &tokens[next + 2] else {
+                            break;
+                        };
+                        names.push(ident.to_string());
+                        next += 3;
+                    }
+                    if self.names.contains(&ident.to_string())
+                        && index > 0
+                        && matches!(&tokens[index - 1], proc_macro2::TokenTree::Punct(p) if p.as_char() == '.')
+                    {
+                        self.error(
+                            ident.span(),
+                            "PC2_AMBIGUOUS_RECEIVER: macro method receiver requires review".into(),
+                        );
+                    } else {
+                        self.reference(&names, ident.span());
+                    }
+                    index = next;
+                    continue;
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Pc2Visitor<'_> {
+    fn visit_file(&mut self, file: &'ast syn::File) {
+        self.import_aliases(&file.items);
+        visit::visit_file(self, file);
+    }
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        let previous = self.aliases.clone();
+        for stmt in &block.stmts {
+            if let syn::Stmt::Item(item) = stmt {
+                self.import_aliases(std::slice::from_ref(item));
+            }
+        }
+        visit::visit_block(self, block);
+        self.aliases = previous;
+    }
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if let Some((_, items)) = &module.content {
+            let previous = self.test_only;
+            self.test_only |= pc2_test_attrs(&module.attrs);
+            self.module.push(module.ident.to_string());
+            let old_aliases = std::mem::take(&mut self.aliases);
+            self.import_aliases(items);
+            for item in items {
+                self.visit_item(item);
+            }
+            self.aliases = old_aliases;
+            self.module.pop();
+            self.test_only = previous;
+        }
+    }
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        let previous = self.current_impl.take();
+        self.current_impl = match &*item.self_ty {
+            syn::Type::Path(path) if path.qself.is_none() => {
+                path.path.segments.last().map(|s| s.ident.to_string())
+            }
+            _ => None,
+        };
+        let old_test = self.test_only;
+        self.test_only |= pc2_test_attrs(&item.attrs);
+        visit::visit_item_impl(self, item);
+        self.test_only = old_test;
+        self.current_impl = previous;
+    }
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        let previous = self.current_fn.replace(item.sig.ident.to_string());
+        let old_test = self.test_only;
+        self.test_only |= pc2_test_attrs(&item.attrs);
+        if self.definitions_only {
+            if let Some(site) = self.site(&item.sig.ident.to_string()) {
+                self.facts.definitions.push(Pc2Definition {
+                    symbol: Pc2Function {
+                        owner: self.module.clone(),
+                        name: item.sig.ident.to_string(),
+                    },
+                    site,
+                    test_only: self.test_only,
+                });
+            }
+        }
+        let old_aliases = self.aliases.clone();
+        visit::visit_item_fn(self, item);
+        self.aliases = old_aliases;
+        self.test_only = old_test;
+        self.current_fn = previous;
+    }
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        let name = self
+            .current_impl
+            .as_ref()
+            .map(|ty| format!("{ty}::{}", item.sig.ident));
+        let previous = std::mem::replace(&mut self.current_fn, name);
+        let old_test = self.test_only;
+        self.test_only |= pc2_test_attrs(&item.attrs);
+        visit::visit_impl_item_fn(self, item);
+        self.test_only = old_test;
+        self.current_fn = previous;
+    }
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        if self.definitions_only {
+            self.facts
+                .all_statics
+                .insert((self.module.clone(), item.ident.to_string()));
+            if matches!(&*item.ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|s| s.ident == "OnceLock"))
+            {
+                self.facts
+                    .once_statics
+                    .insert((self.module.clone(), item.ident.to_string()));
+            }
+        }
+        visit::visit_item_static(self, item);
+    }
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let mut leaves = Vec::new();
+        n13_use_leaves(&item.tree, &[], &mut leaves);
+        for leaf in leaves {
+            if let Some(alias) = leaf.alias {
+                if leaf
+                    .path
+                    .last()
+                    .is_some_and(|name| self.names.contains(name))
+                {
+                    // Imports grant no call permission. Retain the exact path
+                    // so later uses of a renamed function receive the same check.
+                    if !self.definitions_only {
+                        if let Err(error) =
+                            pc2_resolve_function(self.catalog, &self.module, &leaf.path)
+                        {
+                            self.error(item.use_token.span, error);
+                        }
+                    }
+                }
+                self.aliases.entry(alias).or_default().insert(leaf.path);
+            }
+        }
+    }
+    fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
+        let names = path_names(&path.path);
+        if path.qself.is_some() && names.last().is_some_and(|name| self.names.contains(name)) {
+            self.error(
+                path.path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.span())
+                    .unwrap_or_else(Span::call_site),
+                "PC2_AMBIGUOUS_RECEIVER: qualified-self installer reference requires review".into(),
+            );
+        } else {
+            self.reference(
+                &names,
+                path.path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.span())
+                    .unwrap_or_else(Span::call_site),
+            );
+        }
+        visit::visit_expr_path(self, path);
+    }
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if !self.definitions_only && self.names.contains(&call.method.to_string()) {
+            self.error(
+                call.method.span(),
+                format!(
+                    "PC2_AMBIGUOUS_RECEIVER: method {} needs a resolved receiver",
+                    call.method
+                ),
+            );
+        }
+        if !self.definitions_only
+            && self.completeness_scope
+            && call.method == "set"
+            && self.current_fn.as_deref().is_some_and(|name| {
+                name.split("::")
+                    .last()
+                    .is_some_and(|name| name.starts_with("install"))
+            })
+        {
+            if let Expr::Path(receiver) = &*call.receiver {
+                let names = path_names(&receiver.path);
+                if let Some(name) = names.last() {
+                    let owner = if names.len() == 1 {
+                        Ok(self.module.clone())
+                    } else {
+                        self.catalog
+                            .resolve(&self.module, &names[..names.len() - 1])
+                    };
+                    match owner {
+                        Ok(owner)
+                            if self
+                                .facts
+                                .once_statics
+                                .contains(&(owner.clone(), name.clone())) =>
+                        {
+                            self.facts.installs.insert(Pc2Function {
+                                owner: self.module.clone(),
+                                name: self.current_fn.clone().unwrap_or_default(),
+                            });
+                        }
+                        Ok(owner) => {
+                            let known_static =
+                                self.facts.all_statics.contains(&(owner, name.clone()));
+                            self.error(call.method.span(), format!("PC2_UNRESOLVED_REFERENCE: install* .set receiver {name} cannot prove non-OnceLock (known static: {known_static}); resolve aliases or review"));
+                        }
+                        Err(error) => self.error(
+                            call.method.span(),
+                            format!("PC2_UNRESOLVED_REFERENCE: OnceLock receiver: {error}"),
+                        ),
+                    }
+                }
+            } else {
+                self.error(
+                    call.method.span(),
+                    "PC2_UNRESOLVED_REFERENCE: install* .set has a non-path receiver".into(),
+                );
+            }
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.macro_tokens(mac.tokens.clone());
+    }
+}
+
+fn pc2_same_site(a: &Pc2Site, b: &Pc2Site) -> bool {
+    a.file == b.file && a.function == b.function
+}
+
+fn pc2_unique_definition<'a>(
+    facts: &'a Pc2Facts,
+    site: &Pc2Site,
+) -> Result<&'a Pc2Definition, String> {
+    let candidates: Vec<_> = facts
+        .definitions
+        .iter()
+        .filter(|d| pc2_same_site(&d.site, site))
+        .collect();
+    if candidates.len() == 1 {
+        Ok(candidates[0])
+    } else {
+        Err(format!(
+            "PC2_UNRESOLVED_REFERENCE: adapter {}:{} has {} definitions",
+            site.file,
+            site.function,
+            candidates.len()
+        ))
     }
 }
 
 pub(crate) fn scan_pc2_table(workspace: &Path, text: &str) -> Result<Vec<String>, String> {
     let rows = parse_pc2_table(text)?;
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-    let crates_dir = workspace.join("crates");
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(&crates_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let src = entry.path().join("src");
-        if src.is_dir() {
-            rs_files(&src, &mut files);
-        }
-        let tests = entry.path().join("tests");
-        if tests.is_dir() {
-            rs_files(&tests, &mut files);
-        }
-    }
-    let mut violations = Vec::new();
+    let sources = discover_sources(workspace)?;
+    let catalog = n13_module_catalog(&sources)?;
+    let mut names: BTreeSet<_> = rows
+        .iter()
+        .filter_map(|r| r.installer.last().cloned())
+        .collect();
     for row in &rows {
-        for file in &files {
-            let Ok(text) = std::fs::read_to_string(file) else {
+        match &row.kind {
+            Pc2Kind::Production {
+                adapter: Some(adapter),
+                ..
+            }
+            | Pc2Kind::TestOnly { adapter } => {
+                if let Some(name) = adapter.function.split("::").last() {
+                    names.insert(name.to_string());
+                }
+            }
+            Pc2Kind::Production { adapter: None, .. } => {}
+        }
+    }
+    let mut facts = Pc2Facts::default();
+    // External test-only module declarations need inherited cfg proof. Derive
+    // these gates from source declarations, never merely a filename `tests`.
+    let mut test_modules = BTreeSet::new();
+    fn gated(
+        items: &[Item],
+        module: &mut Vec<String>,
+        inherited: bool,
+        out: &mut BTreeSet<Vec<String>>,
+    ) {
+        for item in items {
+            if let Item::Mod(m) = item {
+                module.push(m.ident.to_string());
+                let gate = inherited || pc2_test_attrs(&m.attrs);
+                if gate {
+                    out.insert(module.clone());
+                }
+                if let Some((_, items)) = &m.content {
+                    gated(items, module, gate, out);
+                }
+                module.pop();
+            }
+        }
+    }
+    for source in &sources {
+        let path = source
+            .path
+            .canonicalize()
+            .map_err(|e| format!("PC2_SOURCE {}: {e}", source.path.display()))?;
+        let (_, parsed) = parse_file(&path)?;
+        if let Some(modules) = catalog.files.get(&path) {
+            for module in modules {
+                gated(&parsed.items, &mut module.clone(), false, &mut test_modules);
+            }
+        }
+    }
+    for definitions_only in [true, false] {
+        for source in &sources {
+            let path = source
+                .path
+                .canonicalize()
+                .map_err(|e| format!("PC2_SOURCE {}: {e}", source.path.display()))?;
+            let (text, parsed) = parse_file(&path)?;
+            let modules = catalog.files.get(&path);
+            let Some(module) = modules
+                .filter(|m| m.len() == 1)
+                .and_then(|m| m.iter().next())
+            else {
+                if names.iter().any(|name| {
+                    count_occurrences(&cleaned_code(&text), &BTreeSet::from([name.clone()])).len()
+                        > 0
+                }) || text.contains("OnceLock") && text.contains("fn install")
+                {
+                    facts.errors.push(format!(
+                        "PC2_UNRESOLVED_REFERENCE: {} has unknown or ambiguous module {modules:?}",
+                        path.display()
+                    ));
+                }
                 continue;
             };
-            let Ok(parsed) = syn::parse_file(&text) else {
-                violations.push(format!("{}: unparseable", file.display()));
-                continue;
-            };
-            let mut collector = InstallerCallCollector {
-                installer: &row.installer,
+            let test_only = module
+                .first()
+                .is_some_and(|key| key.contains("@test:") || key.contains("@target:tests/"))
+                || test_modules.iter().any(|prefix| module.starts_with(prefix));
+            let mut visitor = Pc2Visitor {
+                workspace,
+                source: &path,
+                catalog: &catalog,
+                names: &names,
+                module: module.clone(),
                 current_fn: None,
-                sites: BTreeSet::new(),
+                current_impl: None,
+                test_only,
+                aliases: BTreeMap::new(),
+                facts: &mut facts,
+                definitions_only,
+                completeness_scope: matches!(source.package.as_str(), "neovm-core" | "neovm-value")
+                    && path.starts_with(
+                        source
+                            .member_root
+                            .join("src")
+                            .canonicalize()
+                            .map_err(|e| format!("PC2_SOURCE src root: {e}"))?,
+                    ),
             };
-            collector.visit_file(&parsed);
-            let relative = file
-                .strip_prefix(workspace)
-                .unwrap_or(file)
-                .to_string_lossy()
-                .into_owned();
-            for function in &collector.sites {
-                let signed = row.seams.iter().any(|(seam_file, seam_fn)| {
-                    seam_fn == function
-                        && (relative.ends_with(seam_file) || seam_file.ends_with(&relative))
-                });
-                if !signed {
+            visitor.visit_file(&parsed);
+        }
+    }
+    let mut violations = facts.errors.clone();
+    let mut covered = BTreeSet::new();
+    let mut allowed_installer_sites: BTreeMap<Pc2Function, Vec<(Pc2Site, bool)>> = BTreeMap::new();
+    for row in &rows {
+        let Some(root) = row.installer.first() else {
+            continue;
+        };
+        if let Ok(installer) = pc2_resolve_function(&catalog, &[root.clone()], &row.installer) {
+            let sites = allowed_installer_sites.entry(installer).or_default();
+            match &row.kind {
+                Pc2Kind::Production {
+                    adapter: Some(adapter),
+                    ..
+                } => sites.push((adapter.clone(), false)),
+                Pc2Kind::Production {
+                    adapter: None,
+                    seams,
+                } => {
+                    for seam in seams {
+                        sites.push((seam.clone(), false));
+                    }
+                }
+                Pc2Kind::TestOnly { adapter } => sites.push((adapter.clone(), true)),
+            }
+        }
+    }
+    for row in &rows {
+        let Some(root) = row.installer.first() else {
+            return Err("PC2_TABLE: empty installer".into());
+        };
+        let installer = match pc2_resolve_function(&catalog, &[root.clone()], &row.installer) {
+            Ok(symbol) => symbol,
+            Err(error) => {
+                violations.push(error);
+                continue;
+            }
+        };
+        covered.insert(installer.clone());
+        let (adapter_site, seams, test_row) = match &row.kind {
+            Pc2Kind::Production { adapter, seams } => (adapter.as_ref(), Some(seams), false),
+            Pc2Kind::TestOnly { adapter } => (Some(adapter), None, true),
+        };
+        let adapter = match adapter_site
+            .map(|site| pc2_unique_definition(&facts, site))
+            .transpose()
+        {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                violations.push(error);
+                continue;
+            }
+        };
+        if test_row && !adapter.is_some_and(|d| d.test_only) {
+            violations.push(format!(
+                "PC2_TEST_ONLY_DEFINITION: {} requires cfg(test) or test-support",
+                adapter_site
+                    .map(|s| s.function.as_str())
+                    .unwrap_or("missing adapter")
+            ));
+        }
+        if let Some(adapter_site) = adapter_site {
+            if !facts.references.iter().any(|r| {
+                r.symbol == installer
+                    && r.caller
+                        .as_ref()
+                        .is_some_and(|caller| pc2_same_site(caller, adapter_site))
+            }) {
+                violations.push(format!(
+                    "PC2_MISSING_CHAIN_REFERENCE: {:?} does not reference installer {}",
+                    adapter_site, installer.name
+                ));
+            }
+        }
+        if let Some(seams) = seams {
+            for seam in seams {
+                let target = adapter.map(|d| &d.symbol).unwrap_or(&installer);
+                if !facts.references.iter().any(|r| {
+                    &r.symbol == target
+                        && r.caller
+                            .as_ref()
+                            .is_some_and(|caller| pc2_same_site(caller, seam))
+                }) {
                     violations.push(format!(
-                        "{}:{}: {} installer call outside the two signed seams ({:?})",
-                        relative, function, row.installer, row.seams
+                        "PC2_MISSING_SEAM_REFERENCE: {}:{}",
+                        seam.file, seam.function
+                    ));
+                }
+            }
+        }
+        for reference in &facts.references {
+            if reference.symbol == installer {
+                // Separate production/test-only rows may cover the same low
+                // installer. Their signed sites combine; neither row creates
+                // a blanket permission for the other's adapter callers.
+                let allowed = reference.caller.as_ref().is_some_and(|caller| {
+                    allowed_installer_sites
+                        .get(&installer)
+                        .is_some_and(|sites| {
+                            sites.iter().any(|(site, needs_test)| {
+                                pc2_same_site(caller, site) && (!needs_test || reference.test_only)
+                            })
+                        })
+                });
+                if !allowed {
+                    violations.push(format!(
+                        "{}:{}: PC2_INSTALLER_OUTSIDE_EXACT_CHAIN: {}::{} from {:?}",
+                        reference.source.display(),
+                        reference.line,
+                        installer.owner.join("::"),
+                        installer.name,
+                        reference.caller
+                    ));
+                }
+            }
+            if adapter.is_some_and(|a| reference.symbol == a.symbol) {
+                let allowed = if test_row {
+                    reference.test_only
+                } else {
+                    reference.caller.as_ref().is_some_and(|caller| {
+                        seams.is_some_and(|seams| {
+                            seams.iter().any(|seam| pc2_same_site(caller, seam))
+                        })
+                    })
+                };
+                if !allowed {
+                    violations.push(format!(
+                        "{}:{}: PC2_ADAPTER_OUTSIDE_EXACT_SEAMS: {:?}",
+                        reference.source.display(),
+                        reference.line,
+                        adapter_site
                     ));
                 }
             }
         }
     }
+    for installer in &facts.installs {
+        if !covered.contains(installer) {
+            violations.push(format!(
+                "PC2_UNLISTED_ONCELOCK_INSTALLER: {}::{}",
+                installer.owner.join("::"),
+                installer.name
+            ));
+        }
+    }
+    violations.sort();
+    violations.dedup();
     Ok(violations)
 }
 
@@ -1856,12 +2630,7 @@ fn architecture_pc2_hook_installers_have_exactly_two_seams() {
         Ok(violations) => panic!(
             "{} PC2 hook-installer violations:\n{}",
             violations.len(),
-            violations
-                .iter()
-                .take(80)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
+            violations.join("\n")
         ),
         Err(error) => panic!("PC2 table: {error}"),
     }
@@ -1869,31 +2638,141 @@ fn architecture_pc2_hook_installers_have_exactly_two_seams() {
 
 #[test]
 fn architecture_pc2_guard_self_test() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let core = dir.path().join("crates/neovm-core/src");
-    std::fs::create_dir_all(&core).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    for package in ["neovm-core", "neovm-value"] {
+        let member = root.join("crates").join(package);
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(
+            member.join("Cargo.toml"),
+            format!("[package]\nname = {package:?}\nversion = \"0.0.0\"\n"),
+        )
+        .unwrap();
+        std::fs::write(member.join("src/lib.rs"), "").unwrap();
+    }
     std::fs::write(
-        core.join("construct.rs"),
-        "pub fn new_inner() { unsafe { install_scratch_hook(1); } }\n",
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/neovm-core\", \"crates/neovm-value\"]\n",
     )
     .unwrap();
+    let core = root.join("crates/neovm-core/src");
     std::fs::write(
-        core.join("pdump_reconstruct.rs"),
-        "pub fn restore() { unsafe { install_scratch_hook(2); } }\n",
+        core.join("lib.rs"),
+        "mod low; mod adapter; mod seam; mod external;\n",
     )
     .unwrap();
-    let table = "installer\tseam1\tseam2\n\
-                 install_scratch_hook\tcrates/neovm-core/src/construct.rs:new_inner\tcrates/neovm-core/src/pdump_reconstruct.rs:restore\n";
-    let green = scan_pc2_table(dir.path(), table).unwrap();
-    assert!(green.is_empty(), "false positive: {green:?}");
+    std::fs::write(core.join("low.rs"), "use std::sync::OnceLock; static HOOK: OnceLock<fn()> = OnceLock::new(); pub fn install_hook(f: fn()) { let _ = HOOK.set(f); }\n").unwrap();
     std::fs::write(
-        core.join("extra.rs"),
-        "pub fn break_it() { unsafe { install_scratch_hook(3); } }\n",
+        core.join("adapter.rs"),
+        "pub fn install() { crate::low::install_hook(|| {}); }\n",
     )
     .unwrap();
-    let red = scan_pc2_table(dir.path(), table).unwrap();
-    assert!(!red.is_empty(), "mutation not detected");
-    assert!(red[0].contains("extra.rs"), "wrong site: {red:?}");
+    let seams = "pub struct Context; impl Context { pub fn new_inner() { crate::adapter::install(); } pub fn from_dump() { crate::adapter::install(); } }\n";
+    std::fs::write(core.join("seam.rs"), seams).unwrap();
+    std::fs::write(core.join("external.rs"), "fn unrelated() {}\n").unwrap();
+    let table = "kind\tinstaller\tadapter\tseam1\tseam2\nproduction\tneovm_core::low::install_hook\tcrates/neovm-core/src/adapter.rs:install\tcrates/neovm-core/src/seam.rs:Context::new_inner\tcrates/neovm-core/src/seam.rs:Context::from_dump\n";
+    let green = scan_pc2_table(root, table).unwrap();
+    assert!(green.is_empty(), "PC2 baseline: {green:?}");
+    for (witness, source) in [
+        (
+            "INSTALLER_ESCAPE",
+            "fn third() { crate::low::install_hook(|| {}); }",
+        ),
+        (
+            "ADAPTER_THIRD_CALL",
+            "fn third() { crate::adapter::install(); }",
+        ),
+        (
+            "RENAMED_ITEM_REF",
+            "use crate::adapter::install as renamed; fn third() { let p = renamed; }",
+        ),
+        (
+            "MACRO_THIRD_CALL",
+            "fn third() { sample!({ crate::adapter::install(); }); }",
+        ),
+        ("AMBIGUOUS_RECEIVER", "fn third(v: V) { v.install_hook(); }"),
+        (
+            "UNRESOLVED_REFERENCE",
+            "fn third() { unknown::install_hook(); }",
+        ),
+        (
+            "UNLISTED_ONCELOCK",
+            "use std::sync::OnceLock; static NEW: OnceLock<fn()> = OnceLock::new(); fn install_unlisted(f: fn()) { let _ = NEW.set(f); }",
+        ),
+    ] {
+        std::fs::write(core.join("external.rs"), source).unwrap();
+        let red = scan_pc2_table(root, table).unwrap();
+        assert!(!red.is_empty(), "PC2_MUTATION_{witness}: {red:?}");
+        std::fs::write(core.join("external.rs"), "fn unrelated() {}\n").unwrap();
+        assert!(
+            scan_pc2_table(root, table).unwrap().is_empty(),
+            "PC2_RESTORED_{witness}"
+        );
+    }
+    for invalid in [
+        "",
+        "kind\tinstaller\tadapter\tseam1\tseam2\nunknown\tx::install\t\t\t\n",
+        "kind\tinstaller\tadapter\tseam1\tseam2\ntest_only\tx::install\t\t\t\n",
+    ] {
+        assert!(
+            parse_pc2_table(invalid).is_err(),
+            "PC2_MUTATION_MALFORMED_ROW"
+        );
+    }
+    let test_table = "kind\tinstaller\tadapter\tseam1\tseam2\ntest_only\tneovm_core::low::install_hook\tcrates/neovm-core/src/adapter.rs:install\t\t\n";
+    std::fs::write(core.join("seam.rs"), "pub struct Context;\n").unwrap();
+    std::fs::write(core.join("adapter.rs"), "#[cfg(any(test, feature = \"test-support\"))] pub fn install() { crate::low::install_hook(|| {}); }\n").unwrap();
+    std::fs::write(
+        core.join("external.rs"),
+        "#[test] fn test_caller() { crate::adapter::install(); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_pc2_table(root, test_table).unwrap().is_empty(),
+        "PC2_TEST_ONLY_GREEN"
+    );
+    std::fs::write(
+        core.join("adapter.rs"),
+        "pub fn install() { crate::low::install_hook(|| {}); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_pc2_table(root, test_table)
+            .unwrap()
+            .iter()
+            .any(|e| e.contains("PC2_TEST_ONLY_DEFINITION")),
+        "PC2_MUTATION_TEST_ONLY_CFG"
+    );
+    std::fs::write(
+        core.join("adapter.rs"),
+        "#[cfg(test)] pub fn install() { crate::low::install_hook(|| {}); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_pc2_table(root, test_table).unwrap().is_empty(),
+        "PC2_RESTORED_TEST_ONLY_CFG"
+    );
+    std::fs::write(
+        core.join("external.rs"),
+        "fn product_caller() { crate::adapter::install(); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_pc2_table(root, test_table)
+            .unwrap()
+            .iter()
+            .any(|e| e.contains("PC2_ADAPTER_OUTSIDE_EXACT_SEAMS")),
+        "PC2_MUTATION_TEST_ONLY_PRODUCT_REF"
+    );
+    std::fs::write(
+        core.join("external.rs"),
+        "#[test] fn test_caller() { crate::adapter::install(); }\n",
+    )
+    .unwrap();
+    assert!(
+        scan_pc2_table(root, test_table).unwrap().is_empty(),
+        "PC2_RESTORED_TEST_ONLY_PRODUCT_REF"
+    );
 }
 
 // ---------------------------------------------------------------------------

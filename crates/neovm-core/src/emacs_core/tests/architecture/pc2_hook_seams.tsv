@@ -1,4 +1,7 @@
-# PC2 sealed hook installers (peer PC2/PC10): exactly two install seams,
-# evaluator construction and image restore.
-# Columns: installer<TAB>seam1 file:function<TAB>seam2 file:function
-installer	seam1	seam2
+# PC2: signed existing chains, exact source sites, and the dev-only adapter.
+# A dash is an inapplicable test_only seam, never a wildcard permission.
+kind	installer	adapter	seam1	seam2
+production	neovm_core::emacs_core::value::install_bytecode_semantics	crates/neovm-core/src/emacs_core/runtime/bytecode/semantics.rs:install	crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
+production	neovm_core::emacs_core::symbol::install_function_cell_observer	crates/neovm-core/src/emacs_core/runtime/jit/mod.rs:install_function_cell_observer	crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
+production	neovm_core::emacs_core::value::scratch_bridge::install_scratch_root_hooks		crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
+test_only	neovm_core::heap_types::install_string_bytes_changed_hook	crates/neovm-core/src/emacs_core/text/string_pos_cache/mod.rs:install_notification_hook_for_test	-	-
