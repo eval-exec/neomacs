@@ -752,7 +752,8 @@ pub struct LispBoolFwd {
 }
 
 /// Byte offset of a [`LispBoolFwd`]'s flag, for compiled code's inline read.
-pub(crate) const LISP_BOOL_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispBoolFwd, value);
+#[doc(hidden)]
+pub const LISP_BOOL_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispBoolFwd, value);
 
 /// What an obarray's `debug-on-next-call` cell pointer names before the
 /// obarray has resolved the `DEFVAR_BOOL` (`Obarray::debug_on_next_call_fwd`):
@@ -992,8 +993,8 @@ struct SelectedKeyboardSlots {
 
 /// Byte offset of a [`LispKboardObjFwd`]'s slot, for JIT code's inline read
 /// and store (P1.4 Stage B).
-pub(crate) const LISP_KBOARD_OBJ_FWD_VALUE_OFFSET: usize =
-    std::mem::offset_of!(LispKboardObjFwd, value);
+#[doc(hidden)]
+pub const LISP_KBOARD_OBJ_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispKboardObjFwd, value);
 
 // Pin the physical layout generated code bakes. Replacing the word by a
 // real atomic and adding zero-size thread markers must not move any slot.
@@ -1280,7 +1281,8 @@ pub fn alloc_boolfwd(initial: bool) -> &'static LispBoolFwd {
 /// names while the binding lasts, as GNU's `globals.f_debug_on_next_call`
 /// holds the running thread's binding. One per owner slab, leaked like every
 /// Boolean forwarder, because compiled code may hold its address.
-pub(crate) fn alloc_owner_debugger_cell(initial: bool) -> &'static LispBoolFwd {
+#[doc(hidden)]
+pub fn alloc_owner_debugger_cell(initial: bool) -> &'static LispBoolFwd {
     Box::leak(Box::new(LispBoolFwd {
         ty: LispFwdType::Bool,
         value: AtomicBool::new(initial),

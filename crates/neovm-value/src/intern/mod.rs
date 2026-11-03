@@ -158,7 +158,8 @@ fn format_lisp_symbol_name_for_diagnostic(name: &LispString) -> String {
     out
 }
 
-pub(crate) fn format_symbol_name_for_diagnostic(symbol: SymId) -> String {
+#[doc(hidden)]
+pub fn format_symbol_name_for_diagnostic(symbol: SymId) -> String {
     // The LIVE Lisp-visible name object where one exists, not the immutable
     // atom: GNU permits `aset` on a symbol's name string and a diagnostic must
     // show the mutation (`symbol_diagnostics_use_the_lisp_visible_name_object`).
@@ -824,7 +825,8 @@ enum SymbolNameOrigin {
 /// substitute the atom once an object exists: GNU `symbol-name` and every
 /// primitive built on it observe later mutation of the object.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum LispVisibleSymbolName {
+#[doc(hidden)]
+pub enum LispVisibleSymbolName {
     LispObject(TaggedValue),
     Atom {
         symbol: SymId,
@@ -842,7 +844,8 @@ impl LispVisibleSymbolName {
     /// `TaggedValue`, so the borrow is reborrowed from `&self` and cannot
     /// outlive the view; only the atom arm is genuinely `'static`, and it says
     /// so in its own field rather than in the return type of both.
-    pub(crate) fn text(&self) -> &LispString {
+    #[doc(hidden)]
+    pub fn text(&self) -> &LispString {
         match self {
             Self::LispObject(value) => value
                 .as_lisp_string()
@@ -1745,7 +1748,8 @@ pub fn is_canonical_id(id: SymId) -> bool {
 }
 
 #[inline]
-pub(crate) fn is_keyword_id(id: SymId) -> bool {
+#[doc(hidden)]
+pub fn is_keyword_id(id: SymId) -> bool {
     if let Some(is_keyword) = thread_local_keyword(id) {
         return is_keyword;
     }
@@ -1791,7 +1795,8 @@ pub fn resolve_sym_metadata(id: SymId) -> (&'static str, bool) {
 }
 
 #[inline]
-pub(crate) fn symbol_name_id(id: SymId) -> NameId {
+#[doc(hidden)]
+pub fn symbol_name_id(id: SymId) -> NameId {
     if let Some(name_id) = thread_local_name_id(id) {
         return name_id;
     }
@@ -1803,20 +1808,23 @@ pub(crate) fn symbol_name_id(id: SymId) -> NameId {
 }
 
 #[inline]
-pub(crate) fn resolve_name(id: NameId) -> &'static str {
+#[doc(hidden)]
+pub fn resolve_name(id: NameId) -> &'static str {
     let registry = global_symbol_registry().read();
     registry.resolve_name(id)
 }
 
 #[inline]
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn resolve_name_lisp_string(id: NameId) -> &'static LispString {
+#[doc(hidden)]
+pub fn resolve_name_lisp_string(id: NameId) -> &'static LispString {
     let registry = global_symbol_registry().read();
     registry.resolve_name_lisp_string(id)
 }
 
 #[inline]
-pub(crate) fn canonical_symbol_for_name(id: NameId) -> Option<SymId> {
+#[doc(hidden)]
+pub fn canonical_symbol_for_name(id: NameId) -> Option<SymId> {
     ensure_thread_local_cache_epoch_current();
     if let Some(sym_id) = thread_local_canonical_symbol_for_name(id) {
         return Some(sym_id);
@@ -1912,7 +1920,8 @@ pub(crate) fn unintern_canonical_id(id: SymId) -> bool {
 /// point of use, exactly as GNU takes `SDATA` only after `s1 = SYMBOL_NAME
 /// (s1)`.
 #[inline]
-pub(crate) fn resolve_lisp_visible_symbol_name(id: SymId) -> LispVisibleSymbolName {
+#[doc(hidden)]
+pub fn resolve_lisp_visible_symbol_name(id: SymId) -> LispVisibleSymbolName {
     let heap_id = crate::tagged::gc::current_tagged_heap_identity().map(SymbolNameHeapId);
     let epoch = SYMBOL_NAME_MATERIALIZATION_EPOCH.load(Ordering::Acquire);
     let cached = VISIBLE_SYMBOL_NAME_CACHE
@@ -1999,7 +2008,8 @@ fn resolve_lisp_visible_symbol_name_uncached(
 /// `(heap, symbol)` identity.  The allocation happens outside the registry
 /// lock; the second lookup makes concurrent first reads converge on one
 /// published object.
-pub(crate) fn materialize_symbol_name_value(id: SymId) -> TaggedValue {
+#[doc(hidden)]
+pub fn materialize_symbol_name_value(id: SymId) -> TaggedValue {
     let heap_id = SymbolNameHeapId(
         crate::tagged::gc::current_tagged_heap_identity()
             .expect("materializing a Lisp symbol name requires an installed tagged heap"),
@@ -2046,7 +2056,8 @@ pub(crate) fn materialize_symbol_name_value(id: SymId) -> TaggedValue {
 /// name collection is required. `LispVisibleSymbolName` carries either a
 /// process-lifetime atom or the exact rooted Lisp value, never a reference into
 /// the registry lock.
-pub(crate) fn map_lisp_visible_symbol_names<T>(
+#[doc(hidden)]
+pub fn map_lisp_visible_symbol_names<T>(
     ids: &[SymId],
     mut map: impl FnMut(SymId, LispVisibleSymbolName) -> T,
 ) -> Vec<T> {

@@ -1136,7 +1136,8 @@ pub const OBARRAY_JIT_SPINE_OFFSET: usize =
 pub const OBARRAY_DISPATCH_CELLS_OFFSET: usize = std::mem::offset_of!(Obarray, dispatch_cells);
 /// Where compiled code reads the obarray's function epoch (a `u64`), which
 /// every function-cell write moves: an armed call site compares it inline.
-pub(crate) const OBARRAY_FUNCTION_EPOCH_OFFSET: usize =
+#[doc(hidden)]
+pub const OBARRAY_FUNCTION_EPOCH_OFFSET: usize =
     OBARRAY_DISPATCH_CELLS_OFFSET + DISPATCH_FUNCTION_EPOCH_OFFSET;
 
 // Atomic scalar layouts retain the existing clock representation. The grouped

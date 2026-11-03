@@ -314,3 +314,18 @@ validate_maphash_args	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:938	em
 with_static_subr_entry_read	fn	pub(crate)	crates/neovm-value/src/tagged/value/subr_entry_sync.rs:13	tagged::value	bulk
 with_static_subr_entry_write	fn	pub(crate)	crates/neovm-value/src/tagged/value/subr_entry_sync.rs:22	tagged::value	bulk
 world_state_placeholder	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1068	tagged::collection_reads	bulk
+LISP_BOOL_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:756	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1529:37
+LISP_KBOARD_OBJ_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:997	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/jit_layout.rs:223:60
+alloc_owner_debugger_cell	fn	pub(crate)	crates/neovm-value/src/forward/mod.rs:1286	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:414:46
+LispVisibleSymbolName	enum	pub(crate)	crates/neovm-value/src/intern/mod.rs:828	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1979:38
+canonical_symbol_for_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1821	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:7080:56
+format_symbol_name_for_diagnostic	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:162	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/lisp/load/mod.rs:5:21
+is_keyword_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1751	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:22
+map_lisp_visible_symbol_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2054	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:2270:32
+materialize_symbol_name_value	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2007	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1929:44
+resolve_lisp_visible_symbol_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1920	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1966:40
+resolve_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1810	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:5104:64
+resolve_name_lisp_string	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1818	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/stats.rs:1045:52
+symbol_name_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1798	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:50
+OBARRAY_FUNCTION_EPOCH_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1140	emacs_core::symbol	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:224:41
+LispVisibleSymbolName::text	method	pub(crate)	crates/neovm-value/src/intern/mod.rs:848	emacs_core::intern	pc1-d DATA: reviewed ledger emacs_core::intern::LispVisibleSymbolName::text; upper crates/neovm-core/src/emacs_core/lisp/native/builtins/from_value.rs:236; unchanged reborrow body
