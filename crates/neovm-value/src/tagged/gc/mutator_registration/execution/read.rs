@@ -33,7 +33,8 @@ impl<'era> ExecutionActivation<'_, '_, 'era> {
 
     /// A matching named definition is installed in the private bounded-call
     /// activation under the reader. No boolean can authorize a separate callee.
-    pub(crate) fn select_named_function(
+    #[doc(hidden)]
+    pub fn select_named_function(
         &mut self,
         symbol: &SymbolHandle,
         expected: &OwnerRootSlot<'era>,

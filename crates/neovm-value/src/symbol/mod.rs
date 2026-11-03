@@ -517,7 +517,8 @@ pub struct BlvCacheHit {
 /// A `Localized` symbol's cells as `set_default_internal` sees them
 /// ([`LispSymbol::blv_default_cells`]); copied out like [`BlvCacheHit`].
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BlvDefaultCells {
+#[doc(hidden)]
+pub struct BlvDefaultCells {
     /// `(SYMBOL . DEFAULT-VALUE)`; also the loaded cell whenever the
     /// default is what is loaded, so one store reaches both.
     pub(crate) defcell: Value,
@@ -1504,14 +1505,16 @@ impl ObarrayScanSnapshot {
     /// `>= n_chunks` (slots `>= n_slots`) and are not covered by this scan; the
     /// termination re-seed covers that new range.
     #[inline]
-    pub(crate) fn n_chunks(&self) -> usize {
+    #[doc(hidden)]
+    pub fn n_chunks(&self) -> usize {
         self.chunks.len()
     }
 
     /// Logical live-slot count captured at start. The scan covers slots
     /// `[0, n_slots)`; the termination re-seed covers `[n_slots, current_len)`.
     #[inline]
-    pub(crate) fn n_slots(&self) -> usize {
+    #[doc(hidden)]
+    pub fn n_slots(&self) -> usize {
         self.n_slots
     }
 
@@ -5277,5 +5280,26 @@ impl Obarray {
     #[doc(hidden)]
     pub fn max_lisp_eval_depth_localized(&self) -> bool {
         self.max_lisp_eval_depth_localized
+    }
+}
+
+impl BlvCacheHit {
+    #[inline]
+    #[doc(hidden)]
+    pub fn local_if_set(&self) -> bool {
+        self.local_if_set
+    }
+}
+
+impl BlvDefaultCells {
+    #[inline]
+    #[doc(hidden)]
+    pub fn defcell(&self) -> Value {
+        self.defcell
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn fwd(&self) -> Option<crate::forward::FwdRef> {
+        self.fwd
     }
 }

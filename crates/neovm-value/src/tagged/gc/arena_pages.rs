@@ -1848,7 +1848,8 @@ pub struct RootSeedBreakdown {
 impl RootSeedBreakdown {
     /// Compact `name=USus/COUNT` rendering of the nonzero groups, for the
     /// `NEOVM_GC_TRACE` handshake lines.
-    pub(crate) fn format_nonzero(&self) -> String {
+    #[doc(hidden)]
+    pub fn format_nonzero(&self) -> String {
         let mut out = String::new();
         for &(name, us, count) in &self.groups {
             if us == 0 && count == 0 {
@@ -1977,7 +1978,8 @@ pub(crate) struct HandshakeStats {
 
 impl HandshakeStats {
     /// Compact probe rendering for the `NEOVM_GC_TRACE` handshake lines.
-    pub(crate) fn format_probes(&self) -> String {
+    #[doc(hidden)]
+    pub fn format_probes(&self) -> String {
         format!(
             "jit={}/{} rem={} bc={} spec={} obslots={} obchunks={} vecs={} consblk={} bufs={}",
             self.probe_jit_compiled_entries,

@@ -87,7 +87,8 @@ impl BytecodeErrorBacktrace {
         })
     }
 
-    pub(crate) fn record(self, push: &mut dyn FnMut(Value, &[Value])) {
+    #[doc(hidden)]
+    pub fn record(self, push: &mut dyn FnMut(Value, &[Value])) {
         push(self.function, &self.args);
     }
 }

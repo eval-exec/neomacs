@@ -115,13 +115,13 @@ pub(crate) fn inline_switch_for_site(
         .as_hash_table()?
         .switch_inline_plan(INLINE_MAX_NODES)?;
     let epoch_addr = (table.bits() & !(TAG_MASK as usize)) + SWITCH_EPOCH_OFFSET;
-    let nodes: usize = plan.keys.iter().map(|key| key.program.len()).sum();
+    let nodes: usize = plan.keys().iter().map(|key| key.program().len()).sum();
     let keys = plan
-        .keys
+        .keys()
         .into_iter()
         .map(|key| {
-            let k = targets.iter().position(|&(raw, _)| raw == key.target)?;
-            Some((key.program, k))
+            let k = targets.iter().position(|&(raw, _)| raw == key.target())?;
+            Some((key.program().clone(), k))
         })
         .collect::<Option<Vec<_>>>()?;
     tracing::debug!(
@@ -129,11 +129,11 @@ pub(crate) fn inline_switch_for_site(
         site,
         keys = keys.len(),
         nodes,
-        epoch = plan.epoch,
+        epoch = plan.epoch(),
         "jump table answered inline"
     );
     Some(InlineSwitch {
-        epoch: plan.epoch,
+        epoch: plan.epoch(),
         epoch_addr,
         keys,
     })

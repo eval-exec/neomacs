@@ -73,7 +73,8 @@ impl LazyGnuCode {
     /// (`decode_lazy_gnu_code`), which is where the constant slice and the
     /// byte-offset map are built.
     #[inline]
-    pub(crate) fn decoded_ready(&self) -> Option<&DecodedGnuCode> {
+    #[doc(hidden)]
+    pub fn decoded_ready(&self) -> Option<&DecodedGnuCode> {
         self.decoded.get()
     }
 }
@@ -262,7 +263,8 @@ impl DecodedGnuCode {
     /// the value itself. Only a table mutated after sealing gets here.
     #[cold]
     #[inline(never)]
-    pub(crate) fn unadmitted_switch_target(&self, raw: i64) -> Option<usize> {
+    #[doc(hidden)]
+    pub fn unadmitted_switch_target(&self, raw: i64) -> Option<usize> {
         let raw_addr = usize::try_from(raw).ok()?;
         let map = &self.byte_offset_map;
         if map.is_empty() {

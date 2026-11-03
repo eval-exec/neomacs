@@ -313,7 +313,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
         match &self.lazy_gnu_code() {
             Some(lazy) => {
                 if let Some(decoded) = lazy.decoded_ready() {
-                    return decoded.stack_verified;
+                    return decoded.stack_verified();
                 }
                 let raw_bytes = self
                     .gnu_bytecode_bytes
@@ -344,7 +344,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>> {
         let lazy = self.lazy_gnu_code().as_ref()?;
         let decoded = lazy.decoded_ready()?;
-        if !decoded.stack_verified {
+        if !decoded.stack_verified() {
             return None;
         }
         Some(lazy.proof.get().and_then(|proof| {

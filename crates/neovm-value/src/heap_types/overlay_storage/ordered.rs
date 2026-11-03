@@ -650,7 +650,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
     /// This pure read needs no coordinate materialization: lazy shifts preserve
     /// record order. Callers hold the buffer owner's existing index read or
     /// write guard; no identity or position is cached across mutators.
-    pub(crate) fn successor_identity(&self, identity: R::Identity) -> Option<R::Identity> {
+    #[doc(hidden)]
+    pub fn successor_identity(&self, identity: R::Identity) -> Option<R::Identity> {
         let leaf = *self.by_identity.get(&identity)?;
         let records = self.leaf_records(leaf);
         let index = records

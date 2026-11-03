@@ -34,7 +34,8 @@ impl RootSeedScratch {
 }
 
 impl RootSeedLoan {
-    pub(crate) fn roots(&mut self) -> &mut Vec<TaggedValue> {
+    #[doc(hidden)]
+    pub fn roots(&mut self) -> &mut Vec<TaggedValue> {
         &mut self.roots
     }
 }

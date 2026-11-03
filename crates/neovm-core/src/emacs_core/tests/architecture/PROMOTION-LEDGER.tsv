@@ -946,3 +946,37 @@ RuntimeState::t2_reopts_ref	field-accessor	private	crates/neovm-value/src/value/
 PropertyInterval::key_order	field-accessor	pub(crate)	crates/neovm-value/src/value/text_props.rs:63	value::text_props	PC11-F getter
 ByteCodeFunction::ops_sealed_ptr	field-accessor	(new fn)	crates/neovm-value/src/tagged/bytecode/chunk.rs:643	tagged::bytecode::chunk	PC11-F raw place accessor (addr_of_mut! site mapped_heap.rs:820); unsafe ptr accessor, field visibility unchanged
 IntervalKey	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:83	heap_types::overlay_storage	B1 private type promotion (A9); trait associated type in the promoted IntervalRecord interface; fields stay private
+BytecodeErrorBacktrace::record	method	pub(restricted)	crates/neovm-value/src/error/bytecode_backtrace.rs:90	error::bytecode_backtrace	BULK (PC11-M)
+LispKboardObjFwd::is_selected_keyboard	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:1096	forward	BULK (PC11-M)
+LispKboardObjFwd::binding_owner	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:1144	forward	BULK (PC11-M)
+LispBufferObjFwd::value_in	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:926	forward	BULK (PC11-M)
+OrderedShiftTree::successor_identity	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:653	heap_types::overlay_storage::ordered	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay_index.rs:678
+CondVarPayload::association	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:580	heap_types::threading	BULK (PC11-M)
+ObarrayScanSnapshot::n_chunks	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1507	symbol	BULK (PC11-M)
+ObarrayScanSnapshot::n_slots	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1514	symbol	BULK (PC11-M)
+LazyGnuCode::decoded_ready	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:76	tagged::bytecode::chunk	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:315; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:346; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:439; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:465
+RootSeedBreakdown::format_nonzero	method	pub(restricted)	crates/neovm-value/src/tagged/gc/arena_pages.rs:1851	tagged::gc::arena_pages	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2953; crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:3105
+HandshakeStats::format_probes	method	pub(restricted)	crates/neovm-value/src/tagged/gc/arena_pages.rs:1980	tagged::gc::arena_pages	BULK (PC11-M)
+TaggedHeap::shutdown_owned_resources	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:911	tagged::gc::concurrent	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/eval/world.rs:1050
+ExecutionActivation::store_immediate	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:152	tagged::gc::mutator_registration::execution	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/native.rs:262
+ExecutionActivation::select_named_function	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution/read.rs:36	tagged::gc::mutator_registration::execution::read	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/identity.rs:34
+RootSeedLoan::roots	method	pub(restricted)	crates/neovm-value/src/tagged/gc/root_seed_scratch.rs:37	tagged::gc::root_seed_scratch	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2797; crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2819
+FinalizedRootBatch::publish	method	pub(restricted)	crates/neovm-value/src/tagged/transport/root_batch.rs:501	tagged::transport::root_batch	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/eval/green/host_service.rs:607; crates/neovm-core/src/emacs_core/runtime/eval/green/host_service.rs:692; crates/neovm-core/src/emacs_core/runtime/eval/green/switch.rs:635
+Fixnum::checked_div	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:75	tagged::value	BULK (PC11-M)
+IntervalRecord::range	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:106	heap_types::overlay_storage	PC11-F getter
+ThreadChildren::name	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:323	heap_types::threading	PC11-F getter
+BlvCacheHit::local_if_set	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:510	symbol	PC11-F getter
+StoredThreadEvent::values	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:282	heap_types::threading	BULK (PC11-M)
+MutexReference::value	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:546	heap_types::threading	BULK (PC11-M)
+DecodedGnuCode::unadmitted_switch_target	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:266	tagged::bytecode::chunk	BULK (PC11-M)
+CondVarPayload::id	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:553	heap_types::threading	Copy CondVarId read (A/B read accessor)
+MutexPayload::id	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:482	heap_types::threading	Copy MutexId read (A/B read accessor)
+InlineSwitchPlan	type	pub(restricted)	crates/neovm-value/src/value/switch_plan.rs:162	value::switch_plan	B1 private type promotion (A9); fields stay private
+InlineSwitchKey	type	pub(restricted)	crates/neovm-value/src/value/switch_plan.rs:171	value::switch_plan	B1 private type promotion (A9); fields stay private
+InlineSwitchPlan::epoch	field-accessor	pub(crate)	crates/neovm-value/src/value/switch_plan.rs:162	value::switch_plan	PC11-F getter
+InlineSwitchPlan::keys	field-accessor	pub(crate)	crates/neovm-value/src/value/switch_plan.rs:164	value::switch_plan	PC11-F getter
+BlvDefaultCells	type	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:520	symbol	B1 private type promotion (A9); fields stay private
+BlvDefaultCells::defcell	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:520	symbol	PC11-F getter
+BlvDefaultCells::fwd	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:523	symbol	PC11-F getter
+InlineSwitchKey::program	field-accessor	pub(crate)	crates/neovm-value/src/value/switch_plan.rs:173	value::switch_plan	PC11-F getter
+InlineSwitchKey::target	field-accessor	pub(crate)	crates/neovm-value/src/value/switch_plan.rs:174	value::switch_plan	PC11-F getter

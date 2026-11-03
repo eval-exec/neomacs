@@ -159,7 +159,8 @@ pub enum InlineKeyNode {
 /// (`jit/compile/switch_dispatch.rs`): what its plan answers, as long as the
 /// table's epoch is still `epoch`.
 #[derive(Debug)]
-pub(crate) struct InlineSwitchPlan {
+#[doc(hidden)]
+pub struct InlineSwitchPlan {
     /// [`super::HashTableStorage::switch_epoch`] of the contents described.
     pub(crate) epoch: u64,
     /// Every key, in no particular order (keys are unique under the test,
@@ -168,7 +169,8 @@ pub(crate) struct InlineSwitchPlan {
 }
 
 #[derive(Debug)]
-pub(crate) struct InlineSwitchKey {
+#[doc(hidden)]
+pub struct InlineSwitchKey {
     pub(crate) program: Vec<InlineKeyNode>,
     /// The key's jump target: a byte offset.
     pub(crate) target: i64,
@@ -852,3 +854,29 @@ fn match_key<const SWP: bool>(prog: &[KeyNode], strings: &[StringKey], mut v: Va
 #[cfg(test)]
 #[path = "switch_plan/tests/switch_plan_test.rs"]
 mod tests;
+
+impl InlineSwitchPlan {
+    #[inline]
+    #[doc(hidden)]
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn keys(&self) -> &Vec<InlineSwitchKey> {
+        &self.keys
+    }
+}
+
+impl InlineSwitchKey {
+    #[inline]
+    #[doc(hidden)]
+    pub fn program(&self) -> &Vec<InlineKeyNode> {
+        &self.program
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn target(&self) -> i64 {
+        self.target
+    }
+}

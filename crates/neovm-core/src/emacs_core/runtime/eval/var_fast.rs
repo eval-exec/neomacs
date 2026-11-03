@@ -364,7 +364,7 @@ impl Context {
     fn read_localized_cached(&self, sym: &LispSymbol) -> Option<Value> {
         let buf = self.buffers.current_buffer()?;
         let hit = sym.blv_cache_hit(buf.id)?;
-        let value = hit.valcell.cons_cdr();
+        let value = hit.valcell().cons_cdr();
         if value.is_unbound() {
             return None;
         }
@@ -495,13 +495,13 @@ impl Context {
         let Some(hit) = sym.blv_cache_hit(buf.id) else {
             return false;
         };
-        let Some(stored) = forward_rule(hit.fwd, value) else {
+        let Some(stored) = forward_rule(hit.fwd(), value) else {
             return false;
         };
-        let (cell, event) = if hit.found {
-            (hit.valcell, VarCacheEvent::SetLocalizedFound)
-        } else if !hit.local_if_set && hit.valcell.bits() == hit.defcell.bits() {
-            (hit.defcell, VarCacheEvent::SetLocalizedDefault)
+        let (cell, event) = if hit.found() {
+            (hit.valcell(), VarCacheEvent::SetLocalizedFound)
+        } else if !hit.local_if_set() && hit.valcell().bits() == hit.defcell().bits() {
+            (hit.defcell(), VarCacheEvent::SetLocalizedDefault)
         } else {
             // `local_if_set` with no binding here: auto-create unless a
             // `let` shadows the buffer -- a specpdl walk and a cons.
@@ -767,9 +767,9 @@ impl Context {
         }
         let popped = match sym.blv_cache_hit(buffer_id) {
             Some(hit)
-                if hit.found && !old.is_unbound() && self.buffers.get(buffer_id).is_some() =>
+                if hit.found() && !old.is_unbound() && self.buffers.get(buffer_id).is_some() =>
             {
-                store_cached_cons_cdr::<COMPILED>(hit.valcell, old);
+                store_cached_cons_cdr::<COMPILED>(hit.valcell(), old);
                 self.retire_top_let_entry();
                 true
             }
@@ -818,12 +818,12 @@ impl Context {
         }
         let popped = match (sym.blv_default_cells(), old.get()) {
             (Some(cells), Some(old)) if !self.runtime_binding_has_projection(id) => {
-                match forward_rule(cells.fwd, old) {
+                match forward_rule(cells.fwd(), old) {
                     Some(stored) => {
                         // `valcell` is the same cons when the default is
                         // loaded, so this one store is both of
                         // `set_symbol_value_id`'s.
-                        store_cached_cons_cdr::<COMPILED>(cells.defcell, stored);
+                        store_cached_cons_cdr::<COMPILED>(cells.defcell(), stored);
                         self.retire_top_let_entry();
                         true
                     }

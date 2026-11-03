@@ -908,7 +908,8 @@ impl TaggedHeap {
     /// The enclosing owner is consumed and may perform no further object or
     /// Lisp Value access, including through legacy TLS aliases. Its only
     /// remaining operation is automatic destruction after this returns.
-    pub(crate) unsafe fn shutdown_owned_resources(&mut self) -> Result<(), MarkFinishError> {
+    #[doc(hidden)]
+    pub unsafe fn shutdown_owned_resources(&mut self) -> Result<(), MarkFinishError> {
         // Check ALL canonical owners before finish can consume residual work
         // or resource teardown can begin. Current-owner retirement alone does
         // not cover a worker holding another registration's young payload.

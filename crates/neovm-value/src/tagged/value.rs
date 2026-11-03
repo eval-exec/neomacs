@@ -72,7 +72,8 @@ impl Fixnum {
     /// Truncating division whose result stays in the immediate domain.
     /// Zero and the sole overflowing pair need Lisp's arithmetic slow path.
     #[inline]
-    pub(crate) fn checked_div(self, rhs: Self) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn checked_div(self, rhs: Self) -> Option<Self> {
         if rhs.0 == 0 || (self.0 == TaggedValue::MOST_NEGATIVE_FIXNUM && rhs.0 == -1) {
             None
         } else {

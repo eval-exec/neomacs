@@ -279,7 +279,8 @@ impl StoredThreadEvent {
         })
     }
 
-    pub(crate) fn values(self) -> [TaggedValue; 3] {
+    #[doc(hidden)]
+    pub fn values(self) -> [TaggedValue; 3] {
         let Self {
             sender,
             error_symbol,
@@ -543,7 +544,8 @@ impl MutexReference {
         self.id
     }
 
-    pub(crate) const fn value(self) -> TaggedValue {
+    #[doc(hidden)]
+    pub const fn value(self) -> TaggedValue {
         self.value
     }
 }
@@ -577,7 +579,8 @@ impl CondVarPayload {
         })
     }
 
-    pub(crate) const fn association(&self) -> MutexReference {
+    #[doc(hidden)]
+    pub const fn association(&self) -> MutexReference {
         self.association
     }
 
@@ -786,5 +789,29 @@ impl ThreadPayload {
     #[doc(hidden)]
     pub fn native(&self) -> ThreadNativeState {
         self.native
+    }
+}
+
+impl ThreadChildren {
+    #[inline]
+    #[doc(hidden)]
+    pub fn name(&self) -> ThreadName {
+        self.name
+    }
+}
+
+impl CondVarPayload {
+    #[inline]
+    #[doc(hidden)]
+    pub fn id(&self) -> CondVarId {
+        self.id
+    }
+}
+
+impl MutexPayload {
+    #[inline]
+    #[doc(hidden)]
+    pub fn id(&self) -> MutexId {
+        self.id
     }
 }

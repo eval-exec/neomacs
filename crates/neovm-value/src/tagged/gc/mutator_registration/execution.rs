@@ -149,10 +149,8 @@ impl ExecutionActivation<'_, '_, '_> {
     /// Commit a validated immediate to the canonical resident result home.
     /// Cell-derived values need their separate sealed root-transfer methods;
     /// a pointer-shaped machine result cannot enter through this interface.
-    pub(crate) fn store_immediate(
-        &mut self,
-        result: ImmediateResult,
-    ) -> Result<(), RegistrationError> {
+    #[doc(hidden)]
+    pub fn store_immediate(&mut self, result: ImmediateResult) -> Result<(), RegistrationError> {
         self.run.owner.check_thread()?;
         let destination = self
             .run

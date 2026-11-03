@@ -923,7 +923,8 @@ impl LispBufferObjFwd {
     /// unconditionally; conditional ones only while the buffer's bit is set.
     /// No current buffer is SLOTS `None` (and no flag set).
     #[inline]
-    pub(crate) fn value_in(
+    #[doc(hidden)]
+    pub fn value_in(
         &self,
         slots: Option<&[Value]>,
         local_flags: u64,
@@ -1093,7 +1094,8 @@ impl LispKboardObjFwd {
         });
     }
 
-    pub(crate) fn is_selected_keyboard(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_selected_keyboard(&self) -> bool {
         self.keyboards.lock().unwrap().is_some()
     }
 
@@ -1141,7 +1143,8 @@ impl LispKboardObjFwd {
         self.set(value);
     }
 
-    pub(crate) fn binding_owner(&self) -> Option<KeyboardBindingOwner> {
+    #[doc(hidden)]
+    pub fn binding_owner(&self) -> Option<KeyboardBindingOwner> {
         self.keyboards.lock().unwrap().as_ref()?.active
     }
 

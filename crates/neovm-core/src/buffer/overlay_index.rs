@@ -1116,8 +1116,8 @@ impl OverlayIndex {
         self.intervals.read().records().for_each_match(
             IntervalDeletionQuery::new(range),
             |record| {
-                starts_contract |= record.range.start() > range.start();
-                exceptions.push(record.overlay);
+                starts_contract |= record.range().start() > range.start();
+                exceptions.push(record.overlay());
             },
         );
         (exceptions, starts_contract)
@@ -1216,7 +1216,7 @@ impl OverlayIndex {
         intervals
             .records()
             .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
-                overlays.push(record.overlay);
+                overlays.push(record.overlay());
             });
         overlays
     }
@@ -1230,7 +1230,7 @@ impl OverlayIndex {
         intervals
             .records()
             .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
-                visit(record.overlay);
+                visit(record.overlay());
             });
     }
 
@@ -1273,7 +1273,7 @@ impl OverlayIndex {
         intervals
             .records()
             .for_each_match(IntervalIntersectionQuery::new(range), |record| {
-                overlays.push(record.overlay);
+                overlays.push(record.overlay());
             });
         overlays
     }
@@ -1290,7 +1290,7 @@ impl OverlayIndex {
                 range,
                 accessible_end,
             },
-            |record| overlays.push(record.overlay),
+            |record| overlays.push(record.overlay()),
         );
         overlays
     }
@@ -1362,7 +1362,7 @@ impl OverlayIndex {
         intervals
             .records()
             .for_each_match(IntervalBPlusQuery::All, |record| {
-                for endpoint in [record.range.start(), record.range.end()] {
+                for endpoint in [record.range().start(), record.range().end()] {
                     if pos < endpoint
                         && endpoint <= limit
                         && next.is_none_or(|current| endpoint < current)

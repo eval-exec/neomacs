@@ -554,3 +554,11 @@ impl IntervalRecord {
         self.overlay
     }
 }
+
+impl IntervalRecord {
+    #[inline]
+    #[doc(hidden)]
+    pub fn range(&self) -> EmacsByteRange {
+        self.range
+    }
+}

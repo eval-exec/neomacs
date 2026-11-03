@@ -498,7 +498,8 @@ impl PreparedRootBatch {
 impl FinalizedRootBatch {
     /// Commit the immutable allocation to its reserved slot, with Release
     /// publication. Errors preserve this stage for original-owner recovery.
-    pub(crate) fn publish(mut self) -> Result<RootBatchLease, RootBatchPublishFailure> {
+    #[doc(hidden)]
+    pub fn publish(mut self) -> Result<RootBatchLease, RootBatchPublishFailure> {
         let commit = (|| {
             let ownership = self
                 .reservation
