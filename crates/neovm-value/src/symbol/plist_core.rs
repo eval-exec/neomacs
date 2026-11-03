@@ -2,9 +2,9 @@
 //!
 //! The `Obarray` property accessors and the cons-list walks they need travel
 //! with the symbol module into neovm-value. The Lisp-command layer in
-//! `runtime/plist` keeps the public `plist-get`/`plist-put`/`plist-member`
-//! surface and re-exports these primitives. Bodies and inline hints are
-//! unchanged.
+//! `plist` (moved next to this module with the stage-3 split, C10) keeps the
+//! public `plist-get`/`plist-put`/`plist-member` surface and re-exports
+//! these primitives. Bodies and inline hints are unchanged.
 //!
 //! Scratch GC roots stay in the evaluator: the value layer's typed
 //! `scratch_bridge` hooks are the only route used here, so this module names

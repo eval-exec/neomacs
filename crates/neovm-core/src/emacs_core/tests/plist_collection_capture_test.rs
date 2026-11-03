@@ -1,4 +1,4 @@
-use super::{plist_get_swp, plist_put_swp};
+use crate::emacs_core::plist::{plist_get_swp, plist_put_swp};
 use crate::emacs_core::{Value, eval::Context};
 use crate::tagged::{collection_reads::capture, mutate::LispCollectionRevision};
 

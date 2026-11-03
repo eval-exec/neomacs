@@ -25,9 +25,16 @@ pub(crate) const G0_MEMBERS: [&str; 10] = [
 /// Top-level modules that move into `neovm-value` with G0. `tls_fingerprint`
 /// is a std-only, debug-only hashing helper that the per-module carrier TLS
 /// probes in G0 members (error, intern, symbol) call; it names nothing above
-/// itself.
-pub(crate) const BOTTOM_PEER_MODULES: [&str; 4] =
-    ["tagged", "heap_types", "gc_trace", "tls_fingerprint"];
+/// itself. `plist` joined with the stage-3 split (C10): the Lisp-command
+/// plist layer sits below the evaluator next to its `symbol::plist_core`
+/// primitives, and core re-exports it as `emacs_core::plist`.
+pub(crate) const BOTTOM_PEER_MODULES: [&str; 5] = [
+    "tagged",
+    "heap_types",
+    "gc_trace",
+    "tls_fingerprint",
+    "plist",
+];
 
 /// The first lower crate of the extraction. Its modules are already inside
 /// the moving set; the coherence ratchet scans it under this path prefix.

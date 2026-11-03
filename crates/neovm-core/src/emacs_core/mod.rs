@@ -247,8 +247,7 @@ pub mod jit;
 pub mod owned_roots;
 #[path = "runtime/pdump/mod.rs"]
 pub mod pdump;
-#[path = "runtime/plist/mod.rs"]
-pub mod plist;
+pub use neovm_value::plist;
 #[path = "runtime/position/mod.rs"]
 pub(crate) mod position;
 #[path = "runtime/runtime_identity/mod.rs"]
@@ -531,6 +530,10 @@ mod architecture_coherence_upper_impl_ratchet_test;
 #[cfg(test)]
 #[path = "tests/architecture/plist_head_seam_guard_test.rs"]
 mod architecture_plist_head_seam_guard_test;
+
+#[cfg(test)]
+#[path = "tests/plist_collection_capture_test.rs"]
+mod plist_collection_capture_test;
 
 #[cfg(test)]
 #[path = "tests/architecture/parallel_exec_substrate_test.rs"]

@@ -185,3 +185,4 @@ tagged/transport/shared_root.rs	tagged/transport/shared_root.rs
 tagged/value.rs	tagged/value.rs
 tagged/value/subr_entry_sync.rs	tagged/value/subr_entry_sync.rs
 tls_fingerprint.rs	tls_fingerprint.rs
+emacs_core/runtime/plist/mod.rs	plist/mod.rs

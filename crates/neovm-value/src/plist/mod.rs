@@ -4,20 +4,19 @@
 //! Mirrors GNU `plist-get` / `plist-put` / `plist-member` semantics
 //! (`fns.c`). Comparison uses `eq` (via `eq_value`) as GNU does.
 //!
-//! The value-layer primitives live in the moving `symbol::plist_core` module
-//! so symbol and error code can use them after the neovm-value move; this
-//! module keeps the Lisp-command layer and re-exports those primitives.
+//! The value-layer primitives live in `symbol::plist_core`; this module
+//! keeps the Lisp-command layer and re-exports those primitives. It moved
+//! into neovm-value with the stage-3 split (C10) so the edit layer reaches
+//! it below the evaluator; core re-exports it as `emacs_core::plist`.
 
-use crate::emacs_core::error::LispCondition;
-use crate::emacs_core::error::{Flow, signal};
-use crate::emacs_core::value::{Value, eq_value};
+use crate::error::LispCondition;
+use crate::error::{Flow, signal};
+use crate::value::{Value, eq_value};
 
-pub(crate) use crate::emacs_core::symbol::plist_core::{SafeTailGuard, TailCycleCheck};
-pub use crate::emacs_core::symbol::plist_core::{
-    plist_get, plist_get_swp, plist_put, plist_put_swp,
-};
+pub use crate::symbol::plist_core::{SafeTailGuard, TailCycleCheck};
+pub use crate::symbol::plist_core::{plist_get, plist_get_swp, plist_put, plist_put_swp};
 #[cfg(test)]
-pub(crate) use crate::emacs_core::symbol::plist_core::{
+pub(crate) use crate::symbol::plist_core::{
     plist_get_walks, reset_plist_get_walks, reset_symbol_with_pos_plist_comparisons,
     symbol_with_pos_plist_comparisons,
 };
@@ -72,7 +71,3 @@ pub fn plist_member(plist: Value, prop: &Value) -> Value {
         tail = rest.cons_cdr();
     }
 }
-
-#[cfg(test)]
-#[path = "tests/collection_capture_test.rs"]
-mod collection_capture;
