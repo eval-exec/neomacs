@@ -265,6 +265,11 @@ impl RenderApp {
     }
 
     pub(super) fn handle_about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // A Cmd-Q that arrived while the input queue was full is retried here
+        // rather than dropped or blocked on the AppKit main thread.
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::deliver_pending_quit(&self.comms.input_tx);
+
         // One observation for the whole pass. Everything this pass ages,
         // schedules or services is dated to the same instant, so two windows
         // cannot disagree about what time it is and a deadline cannot be
