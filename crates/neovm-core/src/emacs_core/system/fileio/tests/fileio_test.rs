@@ -6756,6 +6756,579 @@ fn builtin_do_auto_save_runs_auto_save_hook_before_writing_buffer() {
     );
 }
 
+/// Sets the umask through `set-default-file-modes` and restores the previous
+/// one when dropped.  nextest runs each test in its own process.
+#[cfg(unix)]
+struct DefaultFileModesScope {
+    previous: i64,
+}
+
+#[cfg(unix)]
+impl DefaultFileModesScope {
+    fn set(modes: i64) -> Self {
+        let previous = builtin_default_file_modes(vec![])
+            .expect("default-file-modes")
+            .as_int()
+            .expect("default-file-modes is an integer");
+        builtin_set_default_file_modes(vec![Value::fixnum(modes)]).expect("set-default-file-modes");
+        Self { previous }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DefaultFileModesScope {
+    fn drop(&mut self) {
+        let _ = builtin_set_default_file_modes(vec![Value::fixnum(self.previous)]);
+    }
+}
+
+/// Give BUF unsaved text, VISITED as its file name (when given), and
+/// AUTO_SAVE as its `buffer-auto-save-file-name`.
+#[cfg(unix)]
+fn prepare_buffer_for_auto_save(
+    buf: &mut crate::buffer::Buffer,
+    visited: Option<&str>,
+    auto_save: &std::path::Path,
+) {
+    if let Some(visited) = visited {
+        buf.set_file_name_value(Value::string(visited));
+    }
+    let auto_name = Value::string(auto_save.to_string_lossy());
+    buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+    buf.set_auto_save_file_name_value(auto_name);
+    buf.insert("unsaved secret\n");
+}
+
+#[cfg(unix)]
+fn file_permission_bits(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).expect("stat file").permissions().mode() & 0o7777
+}
+
+/// GNU `auto_save_1` (src/fileio.c:6249-6273) creates the auto-save file with
+/// `(visited file modes | 0600) & 0777`, and open(2) applies the umask on top.
+/// Neomacs created it with the bare umask default instead, so the unsaved
+/// contents of a 0600 file landed in a 0644 `#file#`.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_creates_the_auto_save_file_with_the_visited_file_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    // (default-file-modes, visited file modes, expected auto-save file modes)
+    let cases: [(i64, u32, u32); 7] = [
+        (0o755, 0o600, 0o600),
+        (0o755, 0o640, 0o640),
+        (0o755, 0o750, 0o750),
+        // Owner read/write is always added, so the next pass can overwrite.
+        (0o755, 0o400, 0o600),
+        (0o755, 0o444, 0o644),
+        // The umask still masks the visited file's modes...
+        (0o700, 0o644, 0o600),
+        // ...and the visited file's modes are never widened.
+        (0o777, 0o604, 0o604),
+    ];
+    for (default_modes, visited_modes, expected) in cases {
+        let _modes = DefaultFileModesScope::set(default_modes);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let visited = dir.path().join("secret.txt");
+        let auto_save = dir.path().join("#secret.txt#");
+        fs::write(&visited, "saved secret\n").expect("write visited file");
+        fs::set_permissions(&visited, fs::Permissions::from_mode(visited_modes))
+            .expect("chmod visited file");
+
+        let mut eval = Context::new();
+        prepare_buffer_for_auto_save(
+            eval.buffers.current_buffer_mut().expect("current buffer"),
+            Some(&visited.to_string_lossy()),
+            &auto_save,
+        );
+        builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+        assert_eq!(
+            fs::read_to_string(&auto_save).expect("read auto-save file"),
+            "unsaved secret\n"
+        );
+        assert_eq!(
+            file_permission_bits(&auto_save),
+            expected,
+            "auto-save of a {visited_modes:o} file under default-file-modes {default_modes:o}"
+        );
+    }
+}
+
+/// The same rule through the Lisp layer: `find-file-noselect` on a 0600 file,
+/// `auto-save-mode` naming `#secret.txt#` (lisp/files.el), then `do-auto-save`.
+#[cfg(unix)]
+#[test]
+fn auto_save_mode_keeps_the_auto_save_file_of_a_private_file_private() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let visited = dir.path().join("secret.txt");
+    fs::write(&visited, "saved secret\n").expect("write visited file");
+    fs::set_permissions(&visited, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
+
+    let results = bootstrap_eval(&format!(
+        r##"(with-current-buffer (find-file-noselect {visited:?})
+              (auto-save-mode 1)
+              (goto-char (point-max))
+              (insert "unsaved edit\n")
+              (do-auto-save t t)
+              (prog1 (list (file-name-nondirectory buffer-auto-save-file-name)
+                           (file-modes buffer-auto-save-file-name))
+                (set-buffer-modified-p nil)
+                (kill-buffer)))"##
+    ));
+    assert_eq!(results, vec![r##"OK ("#secret.txt#" 384)"##.to_string()]);
+    assert_eq!(
+        fs::read_to_string(dir.path().join("#secret.txt#")).expect("read auto-save file"),
+        "saved secret\nunsaved edit\n"
+    );
+}
+
+/// With no visited file, or before the visited file exists, GNU keeps
+/// `auto_save_mode_bits = 0666` (src/fileio.c:6254): the umask alone decides.
+/// "Does not exist" is a stat failing with ENOENT or ENOTDIR, the two errno
+/// values `file_metadata_errno` turns into nil (src/fileio.c:325-330).
+#[cfg(unix)]
+#[test]
+fn do_auto_save_uses_0666_without_an_existing_visited_file() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // A buffer that visits no file, such as a mail draft.
+    let draft_auto_save = dir.path().join("#*mail*#");
+    let mut eval = Context::new();
+    prepare_buffer_for_auto_save(
+        eval.buffers.current_buffer_mut().expect("current buffer"),
+        None,
+        &draft_auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+    assert_eq!(file_permission_bits(&draft_auto_save), 0o644);
+
+    // A buffer visiting a file that has never been saved.
+    let new_file = dir.path().join("new.txt");
+    let new_auto_save = dir.path().join("#new.txt#");
+    let mut eval = Context::new();
+    prepare_buffer_for_auto_save(
+        eval.buffers.current_buffer_mut().expect("current buffer"),
+        Some(&new_file.to_string_lossy()),
+        &new_auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+    assert!(
+        !new_file.exists(),
+        "auto-saving must not create the visited file"
+    );
+    assert_eq!(file_permission_bits(&new_auto_save), 0o644);
+
+    // A visited name below a regular file: the stat fails with ENOTDIR.
+    let plain_file = dir.path().join("plain.txt");
+    fs::write(&plain_file, "not a directory\n").expect("write regular file");
+    let under_file = plain_file.join("new.txt");
+    let under_file_auto_save = dir.path().join("#plain.txt!new.txt#");
+    let mut eval = Context::new();
+    prepare_buffer_for_auto_save(
+        eval.buffers.current_buffer_mut().expect("current buffer"),
+        Some(&under_file.to_string_lossy()),
+        &under_file_auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+    assert_eq!(file_permission_bits(&under_file_auto_save), 0o644);
+}
+
+/// GNU's `file-modes` signals when the stat fails with any errno other than
+/// ENOENT and ENOTDIR (`file_metadata_errno`, src/fileio.c:325-330), and
+/// `Fdo_auto_save` catches the error (src/fileio.c:6478): a visited file that
+/// exists but cannot be stat'ed is not auto-saved at all.  It must not be
+/// auto-saved with the 0666 default, which would expose a private file.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_writes_nothing_when_the_visited_file_cannot_be_stat_ed() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // ELOOP: a symbolic link to itself.
+    let looped = dir.path().join("loop.txt");
+    std::os::unix::fs::symlink(&looped, &looped).expect("create a symlink loop");
+    let looped_auto_save = dir.path().join("#loop.txt#");
+
+    // EACCES: a 0600 file in a directory that may not be searched.
+    let locked_dir = dir.path().join("locked");
+    fs::create_dir(&locked_dir).expect("create locked directory");
+    let locked = locked_dir.join("secret.txt");
+    fs::write(&locked, "saved secret\n").expect("write visited file");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
+    let locked_auto_save = dir.path().join("#locked!secret.txt#");
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o000))
+        .expect("chmod locked directory");
+    // The superuser can still stat it; the EACCES case needs an ordinary user.
+    let locked_is_unreadable = fs::metadata(&locked).is_err();
+
+    let mut eval = Context::new();
+    prepare_buffer_for_auto_save(
+        eval.buffers.current_buffer_mut().expect("current buffer"),
+        Some(&looped.to_string_lossy()),
+        &looped_auto_save,
+    );
+    let locked_id = eval.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.buffers.get_mut(locked_id).expect("locked buffer"),
+        Some(&locked.to_string_lossy()),
+        &locked_auto_save,
+    );
+    let result = builtin_do_auto_save(&mut eval, vec![]);
+    fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o700))
+        .expect("restore locked directory");
+
+    result.expect("the stat errors stay inside do-auto-save");
+    assert_eq!(
+        (
+            looped_auto_save.exists(),
+            locked_is_unreadable && locked_auto_save.exists()
+        ),
+        (false, false),
+        "auto-save files written for (ELOOP, EACCES) visited files"
+    );
+}
+
+/// GNU's `write_region` only hands the modes to open(2) (`O_WRONLY | O_CREAT
+/// | O_TRUNC`, src/fileio.c:5634-5652) and never chmods: an auto-save file
+/// that already exists keeps its modes, whatever the visited file's are.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_keeps_the_modes_of_an_existing_auto_save_file() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    for (visited_modes, existing_modes) in [(0o600, 0o644), (0o644, 0o600)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let visited = dir.path().join("secret.txt");
+        let auto_save = dir.path().join("#secret.txt#");
+        fs::write(&visited, "saved secret\n").expect("write visited file");
+        fs::set_permissions(&visited, fs::Permissions::from_mode(visited_modes))
+            .expect("chmod visited file");
+        fs::write(&auto_save, "stale auto-save\n").expect("write old auto-save file");
+        fs::set_permissions(&auto_save, fs::Permissions::from_mode(existing_modes))
+            .expect("chmod old auto-save file");
+
+        let mut eval = Context::new();
+        prepare_buffer_for_auto_save(
+            eval.buffers.current_buffer_mut().expect("current buffer"),
+            Some(&visited.to_string_lossy()),
+            &auto_save,
+        );
+        builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+        assert_eq!(
+            fs::read_to_string(&auto_save).expect("read auto-save file"),
+            "unsaved secret\n"
+        );
+        assert_eq!(file_permission_bits(&auto_save), existing_modes);
+    }
+}
+
+/// "Remote files don't cooperate with fstatat": when the visited file cannot
+/// be stat'ed, GNU asks `file-modes`, whose file name handler supplies the
+/// modes (src/fileio.c:6264-6267).  The auto-save file of a TRAMP buffer is
+/// local (`auto-save-file-name-transforms` puts it in
+/// `temporary-file-directory`), and must not be more readable than the remote
+/// file.  The handler runs with the auto-saved buffer current
+/// (`set_buffer_internal (b)`, src/fileio.c:6453), and the buffer current on
+/// entry is selected again afterwards (src/fileio.c:6482).
+#[cfg(unix)]
+#[test]
+fn do_auto_save_takes_a_remote_visited_file_modes_from_its_handler() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+
+    let mut eval = Context::new();
+    eval.eval_str(
+        "(fset 'm2-remote-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (setq m2-remote-modes-asked (car args)) \
+                   (setq m2-remote-modes-buffer (buffer-name)) #o600) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the stand-in handler");
+    eval.eval_str("(setq m2-remote-modes-asked nil m2-remote-modes-buffer nil)")
+        .expect("seed the witnesses");
+    eval.obarray.set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-remote-modes-handler"),
+        )]),
+    );
+    let entry_buffer = eval.buffers.current_buffer_id();
+    let remote_id = eval.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.buffers.get_mut(remote_id).expect("remote buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+    assert_eq!(
+        eval.eval_str("m2-remote-modes-asked")
+            .expect("read the witness")
+            .as_utf8_str(),
+        Some("/m2-remote:host:/secret.txt")
+    );
+    assert_eq!(
+        eval.eval_str("m2-remote-modes-buffer")
+            .expect("read the witness")
+            .as_utf8_str(),
+        Some("secret.txt"),
+        "the handler runs in the buffer being auto-saved"
+    );
+    assert_eq!(eval.buffers.current_buffer_id(), entry_buffer);
+    assert_eq!(file_permission_bits(&auto_save), 0o600);
+}
+
+/// GNU runs `auto_save_1` under `internal_condition_case (auto_save_1, Qt,
+/// auto_save_error)` (src/fileio.c:6478): when asking for the visited file's
+/// modes signals, that buffer's auto-save file is not written, the error does
+/// not escape `do-auto-save`, and the other buffers are still auto-saved.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_skips_a_buffer_whose_modes_handler_signals() {
+    use std::os::unix::fs::PermissionsExt;
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let remote_auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+    let local = dir.path().join("local.txt");
+    let local_auto_save = dir.path().join("#local.txt#");
+    fs::write(&local, "saved secret\n").expect("write visited file");
+    fs::set_permissions(&local, fs::Permissions::from_mode(0o600)).expect("chmod visited file");
+
+    let mut eval = Context::new();
+    eval.eval_str(
+        "(fset 'm2-failing-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (signal 'file-error '(\"m2 handler failure\"))) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the failing handler");
+    eval.obarray.set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-failing-modes-handler"),
+        )]),
+    );
+    prepare_buffer_for_auto_save(
+        eval.buffers.current_buffer_mut().expect("current buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &remote_auto_save,
+    );
+    let local_id = eval.buffers.create_buffer("local.txt");
+    prepare_buffer_for_auto_save(
+        eval.buffers.get_mut(local_id).expect("local buffer"),
+        Some(&local.to_string_lossy()),
+        &local_auto_save,
+    );
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("the handler error stays inside do-auto-save");
+
+    assert!(
+        !remote_auto_save.exists(),
+        "a buffer whose modes could not be read is not auto-saved"
+    );
+    assert_eq!(file_permission_bits(&local_auto_save), 0o600);
+}
+
+/// GNU's `write_region` reads the buffer only after `auto_save_1` has asked
+/// `file-modes` for the visited file's modes (src/fileio.c:6264-6273).  Text
+/// that the handler inserts is therefore in the auto-save file, and the
+/// buffer counts as auto-saved at its new modification tick.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_writes_the_text_a_modes_handler_inserted() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+
+    let mut eval = Context::new();
+    eval.eval_str(
+        "(fset 'm2-editing-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (goto-char (point-max)) \
+                   (insert \"handler edit\\n\") \
+                   #o600) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the editing handler");
+    eval.obarray.set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-editing-modes-handler"),
+        )]),
+    );
+    prepare_buffer_for_auto_save(
+        eval.buffers.current_buffer_mut().expect("current buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &auto_save,
+    );
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save");
+
+    assert_eq!(
+        fs::read_to_string(&auto_save).expect("read auto-save file"),
+        "unsaved secret\nhandler edit\n"
+    );
+    let buf = eval.buffers.current_buffer().expect("current buffer");
+    assert_eq!(
+        buf.autosave_modified_tick,
+        buf.modified_tick(),
+        "the recorded auto-save covers the handler's edit"
+    );
+}
+
+/// GNU `auto_save_error` (src/fileio.c:6233-6245) reports a failed auto-save
+/// with `(display-warning 'auto-save "Auto-saving BUFFER: MESSAGE" :error)`,
+/// from the buffer being auto-saved, whether reading the visited file's modes
+/// or writing failed.  `Fdo_auto_save` then records the buffer as auto-saved
+/// anyway (src/fileio.c:6480-6481): the next pass neither retries it nor
+/// warns again before the buffer changes.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_warns_about_a_buffer_it_cannot_auto_save() {
+    crate::test_utils::init_test_tracing();
+    let _modes = DefaultFileModesScope::set(0o755);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let remote_auto_save = dir.path().join("#!m2-remote:host:!secret.txt#");
+    // The directory does not exist, so open(2) fails with ENOENT.
+    let unwritable_auto_save = dir.path().join("missing").join("#notes#");
+
+    let mut eval = Context::new();
+    eval.eval_str(
+        "(fset 'display-warning \
+         '(lambda (type message &optional level _buffer-name) \
+            (setq m2-warnings \
+                  (cons (list type message level (buffer-name)) m2-warnings))))",
+    )
+    .expect("define the stand-in display-warning");
+    eval.eval_str("(setq m2-warnings nil)")
+        .expect("seed the witness");
+    eval.eval_str(
+        "(fset 'm2-failing-modes-handler \
+         '(lambda (operation &rest args) \
+            (cond ((eq operation 'file-modes) \
+                   (signal 'file-error '(\"m2 handler failure\"))) \
+                  ((eq operation 'expand-file-name) (car args)) \
+                  (t nil))))",
+    )
+    .expect("define the failing handler");
+    eval.obarray.set_symbol_value(
+        "file-name-handler-alist",
+        Value::list(vec![Value::cons(
+            Value::string("\\`/m2-remote:"),
+            Value::symbol("m2-failing-modes-handler"),
+        )]),
+    );
+    let entry_buffer = eval.buffers.current_buffer_id();
+    let remote_id = eval.buffers.create_buffer("secret.txt");
+    prepare_buffer_for_auto_save(
+        eval.buffers.get_mut(remote_id).expect("remote buffer"),
+        Some("/m2-remote:host:/secret.txt"),
+        &remote_auto_save,
+    );
+    let notes_id = eval.buffers.create_buffer("notes");
+    prepare_buffer_for_auto_save(
+        eval.buffers.get_mut(notes_id).expect("notes buffer"),
+        None,
+        &unwritable_auto_save,
+    );
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("the errors stay inside do-auto-save");
+    let warnings = |eval: &mut Context| {
+        eval.eval_str("(prin1-to-string (reverse m2-warnings))")
+            .expect("read the witness")
+            .as_utf8_str()
+            .expect("a string")
+            .to_owned()
+    };
+    let expected = format!(
+        "((auto-save \"Auto-saving secret.txt: m2 handler failure\" :error \"secret.txt\") \
+         (auto-save \"Auto-saving notes: Opening output file: No such file or directory, {}\" \
+         :error \"notes\"))",
+        unwritable_auto_save.display()
+    );
+    assert_eq!(warnings(&mut eval), expected);
+    assert_eq!(eval.buffers.current_buffer_id(), entry_buffer);
+    assert!(!remote_auto_save.exists());
+
+    builtin_do_auto_save(&mut eval, vec![]).expect("second pass");
+    assert_eq!(
+        warnings(&mut eval),
+        expected,
+        "a failed buffer is not retried before it changes"
+    );
+
+    eval.buffers
+        .get_mut(notes_id)
+        .expect("notes buffer")
+        .insert("more\n");
+    builtin_do_auto_save(&mut eval, vec![]).expect("third pass");
+    assert_eq!(
+        eval.eval_str("(length m2-warnings)")
+            .expect("read the witness")
+            .as_fixnum(),
+        Some(3),
+        "the changed buffer is tried, and reported, again"
+    );
+}
+
+/// The same report through the Lisp layer: `display-warning` is autoloaded
+/// from warnings.el and logs the warning in `*Warnings*`.
+#[cfg(unix)]
+#[test]
+fn do_auto_save_logs_a_failed_auto_save_in_the_warnings_buffer() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let auto_save = dir.path().join("missing").join("#notes#");
+
+    // `after-init-time` and `noninteractive` keep `display-warning` from
+    // deferring the warning to the end of startup or popping up a window.
+    let results = bootstrap_eval(&format!(
+        r##"(let ((after-init-time (current-time))
+                  (noninteractive t))
+              (with-current-buffer (get-buffer-create "notes")
+                (setq buffer-auto-save-file-name {auto_save:?})
+                (insert "unsaved secret\n")
+                (do-auto-save t t)
+                (prog1 (with-current-buffer "*Warnings*" (buffer-string))
+                  (set-buffer-modified-p nil)
+                  (kill-buffer))))"##
+    ));
+    let expected = format!(
+        "Error (auto-save): Auto-saving notes: Opening output file: \
+         No such file or directory, {}",
+        auto_save.display()
+    );
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].starts_with("OK ") && results[0].contains(&expected),
+        "{results:?} should log {expected:?}"
+    );
+}
+
 #[test]
 fn test_find_file_noselect_nonexistent() {
     crate::test_utils::init_test_tracing();
