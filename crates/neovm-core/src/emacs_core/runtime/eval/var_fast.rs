@@ -605,21 +605,21 @@ impl Context {
         hit: BlvCacheHit,
         value: Value,
     ) -> bool {
-        let old = read_cached_binding_old::<COMPILED>(hit.valcell);
+        let old = read_cached_binding_old::<COMPILED>(hit.valcell());
         if old.is_unbound() {
             return false;
         }
-        let Some(stored) = forward_rule(hit.fwd, value) else {
+        let Some(stored) = forward_rule(hit.fwd(), value) else {
             return false;
         };
-        if hit.found {
+        if hit.found() {
             self.push_specpdl_with(|| SpecBinding::LetLocal {
                 sym_id: id,
                 old_value: old,
                 buffer_id,
             });
             note(VarCacheEvent::BindLetLocal);
-        } else if hit.valcell.bits() == hit.defcell.bits() {
+        } else if hit.valcell().bits() == hit.defcell().bits() {
             self.push_specpdl_with(|| SpecBinding::LetDefault {
                 sym_id: id,
                 old_value: SavedBindingValue::from_option(Some(old)),
@@ -629,7 +629,7 @@ impl Context {
         } else {
             return false;
         }
-        store_cached_cons_cdr::<COMPILED>(hit.valcell, stored);
+        store_cached_cons_cdr::<COMPILED>(hit.valcell(), stored);
         true
     }
 

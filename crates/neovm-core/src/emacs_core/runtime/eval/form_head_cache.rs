@@ -55,7 +55,7 @@ impl Default for FormHeadCache {
 impl FormHeadCache {
     #[inline]
     fn slot(sym_id: SymId) -> usize {
-        (sym_id.0 as usize).wrapping_mul(0x9E37_79B1) >> 13 & (FORM_HEAD_CACHE_CAPACITY - 1)
+        (sym_id.to_raw() as usize).wrapping_mul(0x9E37_79B1) >> 13 & (FORM_HEAD_CACHE_CAPACITY - 1)
     }
 
     #[inline]

@@ -298,7 +298,8 @@ impl FwdRef {
 
     /// The header address, for storage in a cell word.
     #[inline(always)]
-    pub(crate) fn address(self) -> usize {
+    #[doc(hidden)]
+    pub fn address(self) -> usize {
         self.0.as_ptr() as usize
     }
 
@@ -653,7 +654,10 @@ impl AtomicValue {
 
     #[inline(always)]
     fn load(&self) -> Value {
-        Value::from_bits(self.0.load(Ordering::Acquire))
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            Value::from_bits(self.0.load(Ordering::Acquire))
+        }
     }
 
     /// Called by the owning mutator: retain the old root before publishing
@@ -1095,7 +1099,8 @@ impl LispKboardObjFwd {
 
     /// GNU data.c:kboard_for_bindings uses the selected frame's keyboard,
     /// independently of the keyboard that most recently supplied input.
-    pub(crate) fn select_keyboard(&self, terminal: u64, initial: Value) {
+    #[doc(hidden)]
+    pub fn select_keyboard(&self, terminal: u64, initial: Value) {
         let mut guard = self.keyboards.lock().unwrap();
         let Some(keyboards) = guard.as_mut() else {
             return;
@@ -1142,11 +1147,8 @@ impl LispKboardObjFwd {
 
     /// Exchange one captured owner's slot without selecting a different frame.
     /// A binding of a deleted keyboard cannot change a newly opened terminal.
-    pub(crate) fn exchange_for_owner(
-        &self,
-        owner: KeyboardBindingOwner,
-        value: Value,
-    ) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn exchange_for_owner(&self, owner: KeyboardBindingOwner, value: Value) -> Option<Value> {
         let mut guard = self.keyboards.lock().unwrap();
         let keyboards = guard.as_mut()?;
         if keyboards.active == Some(owner) {
@@ -1164,7 +1166,8 @@ impl LispKboardObjFwd {
         }
     }
 
-    pub(crate) fn forget_keyboard(&self, terminal: u64) {
+    #[doc(hidden)]
+    pub fn forget_keyboard(&self, terminal: u64) {
         let mut guard = self.keyboards.lock().unwrap();
         let Some(keyboards) = guard.as_mut() else {
             return;

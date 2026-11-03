@@ -307,7 +307,8 @@ impl BlvPtr {
 
     /// The record's address (for the GC root walk and compiled code).
     #[inline(always)]
-    pub(crate) fn as_ptr(self) -> *mut LispBufferLocalValue {
+    #[doc(hidden)]
+    pub fn as_ptr(self) -> *mut LispBufferLocalValue {
         self.0.as_ptr()
     }
 
@@ -411,7 +412,10 @@ impl CellWord {
     /// The word stored under `Plainval` by [`Self::plain`].
     #[inline(always)]
     fn read_plain(&self) -> Value {
-        Value::from_bits(self.load())
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            Value::from_bits(self.load())
+        }
     }
 
     /// The word stored under `Varalias` by [`Self::alias`], which
@@ -675,7 +679,8 @@ impl LispSymbol {
     /// A detached symbol rebuilt from a portable dump: the redirect and its
     /// word come in as one [`DumpedCell`], so the loader cannot pair a tag
     /// with another arm's word.
-    pub(crate) fn from_dump(
+    #[doc(hidden)]
+    pub fn from_dump(
         id: SymId,
         flags: DumpedSymbolFlags,
         cell: DumpedCell,
@@ -769,19 +774,22 @@ impl LispSymbol {
 
     /// GNU `set_symbol_trapped_write`.
     #[inline]
-    pub(crate) fn set_trapped_write(&mut self, t: SymbolTrappedWrite) {
+    #[doc(hidden)]
+    pub fn set_trapped_write(&mut self, t: SymbolTrappedWrite) {
         self.flags.set_trapped_write(t);
     }
 
     /// GNU `s.interned`.
     #[inline]
-    pub(crate) fn set_interned(&mut self, i: SymbolInterned) {
+    #[doc(hidden)]
+    pub fn set_interned(&mut self, i: SymbolInterned) {
         self.flags.set_interned(i);
     }
 
     /// GNU `s.declared_special`.
     #[inline]
-    pub(crate) fn set_declared_special(&mut self, v: bool) {
+    #[doc(hidden)]
+    pub fn set_declared_special(&mut self, v: bool) {
         self.flags.set_declared_special(v);
     }
 
@@ -796,7 +804,8 @@ impl LispSymbol {
     /// [`LISP_SYMBOL_FLAGS_OFFSET`] that an inline or cached symbol-cell
     /// write tests under `SYMCELL_INLINE_WRITE_MASK`.
     #[inline(always)]
-    pub(crate) fn write_window(&self) -> u16 {
+    #[doc(hidden)]
+    pub fn write_window(&self) -> u16 {
         u16::from(self.flags.bits()) | (u16::from(self.interned_global) << 8)
     }
 
@@ -809,7 +818,8 @@ impl LispSymbol {
     /// (sym->u.s.redirect)`). The single mutator's reader; see the module's
     /// threading note.
     #[inline(always)]
-    pub(crate) fn value_cell(&self) -> ValueCell {
+    #[doc(hidden)]
+    pub fn value_cell(&self) -> ValueCell {
         self.val.decode(self.flags.redirect())
     }
 
@@ -834,7 +844,8 @@ impl LispSymbol {
     /// The value of a `Plainval` cell ([`Value::UNBOUND`] when void);
     /// `None` for every other redirect.
     #[inline(always)]
-    pub(crate) fn plain_value(&self) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn plain_value(&self) -> Option<Value> {
         match self.flags.redirect() {
             SymbolRedirect::Plainval => Some(self.val.read_plain()),
             SymbolRedirect::Varalias | SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
@@ -865,7 +876,8 @@ impl LispSymbol {
 
     /// The descriptor of a `Forwarded` cell; `None` for every other redirect.
     #[inline(always)]
-    pub(crate) fn forwarded_descriptor(&self) -> Option<FwdRef> {
+    #[doc(hidden)]
+    pub fn forwarded_descriptor(&self) -> Option<FwdRef> {
         match self.flags.redirect() {
             SymbolRedirect::Forwarded => Some(self.val.read_forwarded()),
             SymbolRedirect::Plainval | SymbolRedirect::Varalias | SymbolRedirect::Localized => None,

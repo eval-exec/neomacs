@@ -1960,7 +1960,8 @@ impl TaggedHeap {
     /// The World's one-time thread admission state, owned alongside allocator
     /// metadata so reservation and thread admission cannot disagree.
     #[inline]
-    pub(crate) fn threads_admitted(&self) -> bool {
+    #[doc(hidden)]
+    pub fn threads_admitted(&self) -> bool {
         self.cons_allocator.threads_admitted()
     }
 
@@ -1970,7 +1971,8 @@ impl TaggedHeap {
     /// The caller owns the stopped sole Context, excludes concurrent-marker
     /// launches and callbacks, and has drained the collector to quiescence.
     /// No second mutator may run until this transition returns.
-    pub(crate) unsafe fn admit_threads_world_stopped(&mut self) {
+    #[doc(hidden)]
+    pub unsafe fn admit_threads_world_stopped(&mut self) {
         debug_assert!(!self.mark_in_progress);
         debug_assert!(!self.generational.major_in_progress);
         self.close_alloc_regions();

@@ -17,7 +17,8 @@ impl TaggedHeap {
     /// re-snapshot the COMPLETE root set, not just the evaluator/context roots —
     /// otherwise an object that became reachable only through one of these roots
     /// during the marking window is left unmarked and swept while live.
-    pub(crate) fn reseed_runtime_and_remembered_roots(&mut self) {
+    #[doc(hidden)]
+    pub fn reseed_runtime_and_remembered_roots(&mut self) {
         // Zero the remembered scratch so the skip branch below does not leave
         // a stale previous value in the termination slots filled after.
         self.last_remembered_seed_us = 0;
@@ -39,7 +40,8 @@ impl TaggedHeap {
     /// termination, after the roots have been re-snapshotted, while the world is
     /// stopped. A single `mark_all` reaches the fixpoint: `mark_value` re-pushes
     /// each marked object's children, so the gray queue drains completely.
-    pub(crate) fn incremental_drain_all(&mut self) {
+    #[doc(hidden)]
+    pub fn incremental_drain_all(&mut self) {
         let t0 = std::time::Instant::now();
         self.mark_all();
         self.incremental_mark_us += t0.elapsed().as_micros() as u64;
@@ -52,11 +54,8 @@ impl TaggedHeap {
     /// The reclaim drains in bounded slices at later safe points
     /// (`incremental_sweep_slice`), so it is no longer part of the STW pause.
     /// Marking is complete here; the barrier is dropped.
-    pub(crate) fn incremental_finish(
-        &mut self,
-        bytes_before: usize,
-        _pause_t0: std::time::Instant,
-    ) {
+    #[doc(hidden)]
+    pub fn incremental_finish(&mut self, bytes_before: usize, _pause_t0: std::time::Instant) {
         assert!(
             !self.concurrent_mark_running,
             "sweep publication requires an explicit successful marker finish"
@@ -232,7 +231,8 @@ impl TaggedHeap {
     /// to contain (re-raises) when it fires; the locks keep plain `.unwrap()`
     /// at their use sites on purpose — clearing poison would assert a
     /// coherence nothing can verify and erase the only evidence.
-    pub(crate) fn gc_locks_poisoned(&self) -> bool {
+    #[doc(hidden)]
+    pub fn gc_locks_poisoned(&self) -> bool {
         self.cons_allocator.is_poisoned()
             || self.satb_handoff.is_poisoned()
             || self.gc_wake.0.is_poisoned()
@@ -259,7 +259,8 @@ impl TaggedHeap {
     /// (and finalizes accounting) once the whole sweep is done. New conses
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
-    pub(crate) fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+    #[doc(hidden)]
+    pub fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
         assert!(
             !self.concurrent_mark_running,
             "sweeping requires an explicit successful marker finish"
@@ -453,7 +454,8 @@ impl TaggedHeap {
 
     /// Drive the deferred sweep to completion in one shot (forced GC, or before
     /// the next mark / a stop-the-world collection can begin).
-    pub(crate) fn finish_incremental_sweep_now(&mut self) {
+    #[doc(hidden)]
+    pub fn finish_incremental_sweep_now(&mut self) {
         while self.sweep_in_progress {
             self.incremental_sweep_slice(usize::MAX);
         }
@@ -2439,7 +2441,8 @@ impl TaggedHeap {
     /// residual box set. Address membership only: a reclaimed box is absent
     /// and is not dereferenced. Admission uses this to decide whether an
     /// unrooted empty weak table survived a serial collection.
-    pub(crate) fn retains_veclike(&self, value: TaggedValue) -> bool {
+    #[doc(hidden)]
+    pub fn retains_veclike(&self, value: TaggedValue) -> bool {
         value.is_veclike()
             && Self::value_heap_addr(value)
                 .is_some_and(|addr| self.owns_veclike_object(addr as *const u8))

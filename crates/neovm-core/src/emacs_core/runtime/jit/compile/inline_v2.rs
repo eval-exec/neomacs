@@ -185,7 +185,11 @@ fn annotate(front: tags::StaticFront) -> Option<FusedBody> {
     let mut exit_regions = BTreeMap::new();
     for (region_id, region) in body.regions.iter().enumerate() {
         entry_at.insert(region.start);
-        let callee = Value::from_bits(region.callee_bits as usize).get_bytecode_data()?;
+        let callee = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(region.callee_bits as usize)
+        }
+        .get_bytecode_data()?;
         let mut cursor = region.start;
         for (callee_pc, op) in callee.executable_ops().iter().enumerate() {
             let pc = u32::try_from(callee_pc).ok()?;

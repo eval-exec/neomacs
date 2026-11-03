@@ -11,7 +11,10 @@
 /// require the same revision and pointer observation as the string setter.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_string_collection_write(bits: i64) {
-    let owner = crate::tagged::value::TaggedValue::from_bits(bits as usize);
+    let owner = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        crate::tagged::value::TaggedValue::from_bits(bits as usize)
+    };
     crate::tagged::mutate::LispCollectionRevision::changed(owner);
     let projected = owner.as_string_ptr();
     debug_assert!(projected.is_some());

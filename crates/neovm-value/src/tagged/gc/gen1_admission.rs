@@ -37,7 +37,8 @@ impl std::fmt::Debug for Gen1Admission<'_> {
 impl<'heap> Gen1Admission<'heap> {
     #[cold]
     #[inline(never)]
-    pub(crate) fn check(
+    #[doc(hidden)]
+    pub fn check(
         mut collector: QuiescentCollector<'heap>,
     ) -> Result<Self, Gen1AdmissionFailure<'heap>> {
         // Read the retained heap's actual mode exactly once at construction.

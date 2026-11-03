@@ -657,7 +657,7 @@ static BUILTIN_SYM_BITS: [std::sync::atomic::AtomicU64; BUILTIN_SYM_BITS_WORDS] 
 ///
 /// Baking a host address makes any emission using this JIT-only.
 pub(crate) fn builtin_sym_bit_probe(sym_id: SymId) -> Option<(usize, u64)> {
-    let idx = sym_id.0 as usize;
+    let idx = sym_id.to_raw() as usize;
     if idx >= BUILTIN_SYM_BITS_WORDS * 64 {
         return None;
     }
@@ -667,7 +667,7 @@ pub(crate) fn builtin_sym_bit_probe(sym_id: SymId) -> Option<(usize, u64)> {
 
 fn set_builtin_sym_bit(sym_id: SymId, on: bool) {
     use std::sync::atomic::Ordering;
-    let idx = sym_id.0 as usize;
+    let idx = sym_id.to_raw() as usize;
     if idx >= BUILTIN_SYM_BITS_WORDS * 64 {
         return;
     }
@@ -713,7 +713,7 @@ fn static_subr_entry_write_sync() -> crate::tagged::value::StaticSubrEntrySync {
 pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
     set_builtin_sym_bit(sym_id, entry.dispatch_kind == SubrDispatchKind::Builtin);
     GLOBAL_SUBR_TABLE.with(|table| {
-        let idx = sym_id.0 as usize;
+        let idx = sym_id.to_raw() as usize;
         let mut table = table.borrow_mut();
         if table.len() <= idx {
             table.resize_with(idx + 1, || None);
@@ -722,7 +722,7 @@ pub(crate) fn register_global_subr_entry(sym_id: SymId, entry: SubrEntry) {
     });
     let inline = InlineSubr::for_entry(resolve_sym(sym_id), &entry);
     INLINE_SUBR_TABLE.with(|table| {
-        let idx = sym_id.0 as usize;
+        let idx = sym_id.to_raw() as usize;
         let mut table = table.borrow_mut();
         if table.len() <= idx {
             table.resize_with(idx + 1, InlineSubr::default);
@@ -821,7 +821,7 @@ pub(crate) fn inline_subr(sym_id: SymId) -> InlineSubr {
     INLINE_SUBR_TABLE.with(|table| {
         table
             .borrow()
-            .get(sym_id.0 as usize)
+            .get(sym_id.to_raw() as usize)
             .copied()
             .unwrap_or_default()
     })
@@ -842,25 +842,34 @@ pub(crate) fn inline_subr_function(sym_id: SymId) -> Option<SubrFn> {
 pub(crate) fn global_subr_is_builtin(sym_id: SymId) -> bool {
     #[cfg(test)]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
-    let idx = sym_id.0 as usize;
+    let idx = sym_id.to_raw() as usize;
     if idx < BUILTIN_SYM_BITS_WORDS * 64 {
         return BUILTIN_SYM_BITS[idx >> 6].load(std::sync::atomic::Ordering::Relaxed)
             & (1u64 << (idx & 63))
             != 0;
     }
     GLOBAL_SUBR_TABLE.with(|table| {
-        table.borrow().get(sym_id.0 as usize).is_some_and(|entry| {
-            entry
-                .as_ref()
-                .is_some_and(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin)
-        })
+        table
+            .borrow()
+            .get(sym_id.to_raw() as usize)
+            .is_some_and(|entry| {
+                entry
+                    .as_ref()
+                    .is_some_and(|entry| entry.dispatch_kind == SubrDispatchKind::Builtin)
+            })
     })
 }
 
 pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
     #[cfg(test)]
     GLOBAL_SUBR_LOOKUP_COUNT.with(|count| count.set(count.get() + 1));
-    GLOBAL_SUBR_TABLE.with(|table| table.borrow().get(sym_id.0 as usize).copied().flatten())
+    GLOBAL_SUBR_TABLE.with(|table| {
+        table
+            .borrow()
+            .get(sym_id.to_raw() as usize)
+            .copied()
+            .flatten()
+    })
 }
 
 #[cfg(test)]
@@ -951,7 +960,7 @@ pub(crate) fn with_global_subr_entry<R>(
     GLOBAL_SUBR_TABLE.with(|table| {
         table
             .borrow()
-            .get(sym_id.0 as usize)
+            .get(sym_id.to_raw() as usize)
             .and_then(|entry| entry.as_ref().map(f))
     })
 }
@@ -1527,7 +1536,10 @@ impl BacktraceArgs {
     #[inline]
     fn view(self) -> BacktraceArgsView {
         if self.0 & Self::TAG_MASK != Self::DESCRIPTOR_TAG {
-            return BacktraceArgsView::Unevalled(Value::from_bits(self.0));
+            return BacktraceArgsView::Unevalled(unsafe {
+                /* SAFETY: real Value word */
+                Value::from_bits(self.0)
+            });
         }
         let kind = (self.0 >> Self::KIND_SHIFT) & Self::KIND_MASK;
         let payload = self.0 >> Self::PAYLOAD_SHIFT;
@@ -1827,7 +1839,8 @@ impl Default for LexenvSpecialCache {
 impl LexenvSpecialCache {
     #[inline]
     fn slot(lexenv_bits: usize, sym_id: SymId) -> usize {
-        let mixed = lexenv_bits.rotate_left(7) ^ (sym_id.0 as usize).wrapping_mul(0x9E37_79B1);
+        let mixed =
+            lexenv_bits.rotate_left(7) ^ (sym_id.to_raw() as usize).wrapping_mul(0x9E37_79B1);
         mixed & (LEXENV_SPECIAL_CACHE_CAPACITY - 1)
     }
 
@@ -3793,7 +3806,7 @@ struct GcSettingSyms {
 impl GcSettingSyms {
     fn resolve() -> Self {
         Self {
-            threshold: std::num::NonZeroU32::new(intern("gc-cons-threshold").0)
+            threshold: std::num::NonZeroU32::new(intern("gc-cons-threshold").to_raw())
                 .expect("gc-cons-threshold is distinct from the nil symbol"),
             percentage: intern("gc-cons-percentage"),
             memory_full: intern("memory-full"),

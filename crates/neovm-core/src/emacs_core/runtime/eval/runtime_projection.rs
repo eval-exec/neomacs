@@ -49,12 +49,12 @@ pub(super) fn runtime_projection_mask_for(core_mirrors: &[SymId]) -> Box<[u64]> 
     );
     let words = ids
         .iter()
-        .map(|id| id.0 as usize / 64 + 1)
+        .map(|id| id.to_raw() as usize / 64 + 1)
         .max()
         .unwrap_or(0);
     let mut mask = vec![0u64; words];
     for id in &ids {
-        mask[id.0 as usize / 64] |= 1 << (id.0 % 64);
+        mask[id.to_raw() as usize / 64] |= 1 << (id.to_raw() % 64);
     }
     mask.into_boxed_slice()
 }
@@ -72,7 +72,7 @@ impl Context {
     /// replaced cost 53 instructions per `setq`.
     #[inline]
     pub(crate) fn runtime_binding_has_projection(&self, resolved: SymId) -> bool {
-        let id = resolved.0 as usize;
+        let id = resolved.to_raw() as usize;
         self.runtime_projection_mask
             .get(id / 64)
             .is_some_and(|word| word & (1 << (id % 64)) != 0)

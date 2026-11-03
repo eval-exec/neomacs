@@ -220,7 +220,7 @@ pub(crate) fn record_no_eval_policy(name: &str, policy: NoEvalPolicy) {
     let mut policies = no_eval_policies()
         .lock()
         .expect("subr no-eval policy registry poisoned");
-    let index = sym_id.0 as usize;
+    let index = sym_id.to_raw() as usize;
     if policies.len() <= index {
         policies.resize(index + 1, None);
     }
@@ -231,7 +231,7 @@ pub(crate) fn no_eval_policy(sym_id: SymId) -> NoEvalPolicy {
     no_eval_policies()
         .lock()
         .expect("subr no-eval policy registry poisoned")
-        .get(sym_id.0 as usize)
+        .get(sym_id.to_raw() as usize)
         .copied()
         .flatten()
         .unwrap_or(NoEvalPolicy::Native)

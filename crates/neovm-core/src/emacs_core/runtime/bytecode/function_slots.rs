@@ -60,15 +60,17 @@ impl ArgTemplateExt for ArgTemplate {
     /// order: the signed arity test first, then host representability.
     #[inline]
     fn call_shape(self, nargs: usize) -> Result<StackParamShape, CallShapeError> {
-        if !(0..COMPACT_LIMIT).contains(&self.0) {
+        if !(0..COMPACT_LIMIT).contains(&self.field_0()) {
             return wide_call_shape(self, nargs);
         }
         let shape = StackParamShape {
             required: self.mandatory(),
-            nonrest: (self.0 >> 8) as usize,
+            nonrest: (self.field_0() >> 8) as usize,
             rest: self.rest(),
         };
-        if shape.required <= nargs && (shape.rest.is_present() || nargs <= shape.nonrest) {
+        if shape.required_ref() <= nargs
+            && (shape.rest_ref().is_present() || nargs <= shape.nonrest_ref())
+        {
             Ok(shape)
         } else {
             Err(CallShapeError::Arity)
@@ -113,13 +115,13 @@ impl StackParamShapeExt for StackParamShape {
     /// become a synthetic optional list, but remains a stored GNU object.
     #[inline]
     fn optional(self) -> Option<usize> {
-        self.nonrest.checked_sub(self.required)
+        self.nonrest_ref().checked_sub(self.required_ref())
     }
 
     #[inline]
     fn entry_depth(self) -> Result<usize, ParamShapeError> {
-        self.nonrest
-            .checked_add(usize::from(self.rest.is_present()))
+        self.nonrest_ref()
+            .checked_add(usize::from(self.rest_ref().is_present()))
             .ok_or(ParamShapeError::EntryDepth)
     }
 }
@@ -156,9 +158,9 @@ impl FormalMarkersExt for FormalMarkers {
 
     #[inline]
     fn classify(self, symbol: crate::emacs_core::intern::SymId) -> FormalRole {
-        if symbol == self.optional {
+        if symbol == self.optional() {
             FormalRole::OptionalMarker
-        } else if symbol == self.rest {
+        } else if symbol == self.rest() {
             FormalRole::RestMarker
         } else {
             FormalRole::Variable
@@ -175,10 +177,10 @@ pub(crate) trait DynamicArglistExt: Sized {
 impl DynamicArglistExt for DynamicArglist {
     fn invocation(self) -> FormalCursor {
         FormalCursor {
-            tail: self.0,
+            tail: self.field_0(),
             state: FormalState::Required,
             markers: FormalMarkers::canonical(),
-            cycle: crate::emacs_core::plist::TailCycleCheck::new(self.0),
+            cycle: crate::emacs_core::plist::TailCycleCheck::new(self.field_0()),
             _mutator: PhantomData,
         }
     }
@@ -331,8 +333,8 @@ impl FunctionParamsExt for FunctionParams {
     #[inline]
     fn fixed_arity(&self) -> Option<usize> {
         let shape = self.stack_shape()?;
-        (shape.rest == RestSlot::Absent && shape.required == shape.nonrest)
-            .then_some(shape.required)
+        (shape.rest_ref() == RestSlot::Absent && shape.required_ref() == shape.nonrest_ref())
+            .then_some(shape.required_ref())
     }
 }
 

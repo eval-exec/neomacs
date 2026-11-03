@@ -269,22 +269,22 @@ impl Obarray {
     /// Whether a cell made now is born projected: this obarray's World has
     /// admitted threads. One load in a dormant process.
     #[inline]
-    pub(crate) fn births_projected(&self) -> bool {
+    #[doc(hidden)]
+    pub fn births_projected(&self) -> bool {
         born_projected(self.generation).is_some()
     }
 
     /// The thread projection ID's cell heads, if it is projected.
     #[inline]
-    pub(crate) fn thread_projection_of(
-        &self,
-        id: SymId,
-    ) -> Option<&'static ThreadProjectionDescriptor> {
+    #[doc(hidden)]
+    pub fn thread_projection_of(&self, id: SymId) -> Option<&'static ThreadProjectionDescriptor> {
         self.slot(id)?.forwarded_descriptor()?.thread_projection()
     }
 
     /// Give ID's projected cell its logical arm, word and host-projection
     /// bit back. `None`, changing nothing, unless ID is projected.
-    pub(crate) fn reveal_projection(&mut self, id: SymId) -> Option<RevealedProjection> {
+    #[doc(hidden)]
+    pub fn reveal_projection(&mut self, id: SymId) -> Option<RevealedProjection> {
         if self.slot(id).is_none() && self.births_projected() {
             // The operation would make the cell; it is born projected, so
             // make it now and let the operation see it unprojected.
@@ -310,7 +310,8 @@ impl Obarray {
 
     /// Conceal a revealed cell again over its projection, recording the
     /// logical arm and word the operation left.
-    pub(crate) fn conceal_projection(&mut self, revealed: RevealedProjection) -> ConcealOutcome {
+    #[doc(hidden)]
+    pub fn conceal_projection(&mut self, revealed: RevealedProjection) -> ConcealOutcome {
         let RevealedProjection { id, projection } = revealed;
         {
             let mut write = self.cell_write_ensure(id);
@@ -345,7 +346,8 @@ impl Obarray {
     /// own if it is on the World's shared VOID descriptor: what a bind or a
     /// canonical write needs, since neither may touch VOID. Cold: a cell
     /// leaves VOID once.
-    pub(crate) fn owned_thread_projection(
+    #[doc(hidden)]
+    pub fn owned_thread_projection(
         &mut self,
         id: SymId,
     ) -> Option<&'static ThreadProjectionDescriptor> {
@@ -368,7 +370,8 @@ impl Obarray {
     }
     /// What admission does with ID's cell: `None` for a cell it leaves alone
     /// (empty, an alias, a constant, already projected).
-    pub(crate) fn admission_plan(&self, id: SymId) -> Option<AdmissionPlanCell> {
+    #[doc(hidden)]
+    pub fn admission_plan(&self, id: SymId) -> Option<AdmissionPlanCell> {
         let sym = self.slot(id)?;
         if sym.trapped_write() == SymbolTrappedWrite::NoWrite {
             return None;
@@ -432,7 +435,8 @@ impl Obarray {
     /// Admission's projection of ID's cell, as PLAN said: onto a descriptor
     /// TABLE issues (complete before the cell is redirected), or onto VOID.
     /// Allocates nothing once TABLE is reserved.
-    pub(crate) fn project_admitted_cell(
+    #[doc(hidden)]
+    pub fn project_admitted_cell(
         &mut self,
         id: SymId,
         plan: AdmissionPlanCell,
@@ -531,7 +535,8 @@ impl Obarray {
     /// `variable-binding-locus` refuses a nil `where_buf`, re-deriving from
     /// the buffer itself and answering with the object it allocates there.
     /// The next read after the object exists swaps the cache in as usual.
-    pub(crate) fn read_projected_localized<B: BufferLocalView>(
+    #[doc(hidden)]
+    pub fn read_projected_localized<B: BufferLocalView>(
         &self,
         id: SymId,
         blv: CanonicalBlv,
@@ -586,11 +591,8 @@ impl Obarray {
     /// storage-level form of `Context::with_revealed_projection`, for writers
     /// below the evaluator. ID must be projected; OP sees the unprojected
     /// variable.
-    pub(crate) fn with_revealed_projection<R>(
-        &mut self,
-        id: SymId,
-        op: impl FnOnce(&mut Self) -> R,
-    ) -> R {
+    #[doc(hidden)]
+    pub fn with_revealed_projection<R>(&mut self, id: SymId, op: impl FnOnce(&mut Self) -> R) -> R {
         let revealed = self.reveal_projection(id);
         let result = op(self);
         if let Some(revealed) = revealed {
@@ -604,7 +606,8 @@ impl Obarray {
     /// (a per-buffer builtin's installation default). `None` when void.
     #[cold]
     #[inline(never)]
-    pub(crate) fn projected_default_value(
+    #[doc(hidden)]
+    pub fn projected_default_value(
         &self,
         projection: &ThreadProjectionDescriptor,
     ) -> Option<crate::value::Value> {

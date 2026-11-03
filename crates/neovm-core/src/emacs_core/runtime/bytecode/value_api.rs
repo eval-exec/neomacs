@@ -303,7 +303,7 @@ impl TaggedValueBytecodePolicyExt for TaggedValue {
         // the same lambda expression with different captured environments are
         // not `function-equal`.
         self.get_bytecode_data()
-            .map(|function| FunctionSourceIdentity::ByteCode(function.source_id))
+            .map(|function| FunctionSourceIdentity::ByteCode(function.source_id()))
     }
 
     /// GNU `function-equal`: two compiled closures are equal when they share

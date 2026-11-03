@@ -277,7 +277,8 @@ static_assertions::assert_not_impl_any!(CollectionReads: Send, Sync);
 
 impl CollectionReads {
     /// Numeric identities only; origin/lifetime admission belongs to the caller.
-    pub(crate) fn all_dependency_bits(&self, mut predicate: impl FnMut(usize) -> bool) -> bool {
+    #[doc(hidden)]
+    pub fn all_dependency_bits(&self, mut predicate: impl FnMut(usize) -> bool) -> bool {
         self.reads.iter().copied().all(&mut predicate)
     }
 

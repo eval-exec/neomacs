@@ -829,7 +829,13 @@ impl TaggedHeap {
         // owner inserted meanwhile would be merged back.
         let owners = std::mem::take(&mut self.mapped_remembered);
         for &bits in &owners {
-            self.push_value_children_to_gray(TaggedValue::from_bits(bits), "remembered-dump-child");
+            self.push_value_children_to_gray(
+                unsafe {
+                    /* SAFETY: value-internal construction from a real Value */
+                    TaggedValue::from_bits(bits)
+                },
+                "remembered-dump-child",
+            );
         }
         let inserted = std::mem::replace(&mut self.mapped_remembered, owners);
         self.mapped_remembered.extend(inserted);
@@ -1592,11 +1598,13 @@ impl TaggedHeap {
         }
     }
 
-    pub(crate) fn seed_root(&mut self, root: TaggedValue) {
+    #[doc(hidden)]
+    pub fn seed_root(&mut self, root: TaggedValue) {
         self.seed_root_with_origin(root, "explicit-root");
     }
 
-    pub(crate) fn seed_root_with_origin(&mut self, root: TaggedValue, origin: &str) {
+    #[doc(hidden)]
+    pub fn seed_root_with_origin(&mut self, root: TaggedValue, origin: &str) {
         if let crate::tagged::value::ValueKind::Symbol(id) = root.gc_kind() {
             self.mark_symbol(id);
             return;
@@ -1673,7 +1681,8 @@ impl TaggedHeap {
         self.last_runtime_seed_us = seed_t0.elapsed().as_micros() as u64;
     }
 
-    pub(crate) fn complete_collection(&mut self) {
+    #[doc(hidden)]
+    pub fn complete_collection(&mut self) {
         assert!(
             !self.concurrent_mark_running,
             "sweeping requires an explicit successful marker finish"
@@ -1780,7 +1789,8 @@ impl TaggedHeap {
     /// the writer: every finalizer the dump walk could reach is live
     /// (registered at allocation, deregistered only when doomed — at which
     /// point it is unreachable and swept within the same completed cycle).
-    pub(crate) fn live_finalizer_count(&self) -> usize {
+    #[doc(hidden)]
+    pub fn live_finalizer_count(&self) -> usize {
         self.finalizer_registry.len()
     }
 
@@ -1788,7 +1798,8 @@ impl TaggedHeap {
     /// Empty whenever `gc_collect_exact` returns (its cycle-completed block
     /// drains and runs the whole batch); `dump-emacs-portable` asserts this
     /// before writing so a dumped image can never silently lose pending runs.
-    pub(crate) fn has_pending_doomed_finalizers(&self) -> bool {
+    #[doc(hidden)]
+    pub fn has_pending_doomed_finalizers(&self) -> bool {
         !self.doomed_finalizer_functions.is_empty()
     }
 

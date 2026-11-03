@@ -988,3 +988,41 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/symbol_mode_sxhash_test.rs"]
 mod symbol_mode_sxhash_tests;
+
+impl HashTestGcInhibitAccounting {
+    #[inline]
+    #[doc(hidden)]
+    pub fn charged_bytes_at_start(&self) -> usize {
+        self.charged_bytes_at_start
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn collector_threshold_at_start(&self) -> usize {
+        self.collector_threshold_at_start
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn entry_percentage_scaled(&self) -> &Option<std::num::NonZeroU64> {
+        &self.entry_percentage_scaled
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn entry_threshold_bytes(&self) -> usize {
+        self.entry_threshold_bytes
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn memory_full(&self) -> bool {
+        self.memory_full
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn startup_ceiling(&self) -> bool {
+        self.startup_ceiling
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn threshold_overridden(&self) -> bool {
+        self.threshold_overridden
+    }
+}

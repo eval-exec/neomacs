@@ -159,7 +159,7 @@ impl Context {
         &mut self,
         sig: Box<SignalData>,
     ) -> Result<Box<SignalData>, Flow> {
-        if sig.search_complete {
+        if sig.search_complete() {
             return Ok(sig);
         }
         self.dispatch_signal(*sig).map(Box::new)
@@ -202,7 +202,7 @@ impl Context {
         // GNU bytecode.c records inline primitive error frames before signalling.
         // Native leaves defer this specpdl mutation until their witness is gone.
         // The selected handler/function unwinder owns the frame from here on.
-        if let Some(frame) = sig.bytecode_error_backtrace.take() {
+        if let Some(frame) = sig.bytecode_error_backtrace_mut().take() {
             frame.record(&mut |function: Value, args: &[Value]| {
                 self.push_backtrace_frame(function, args)
             });
@@ -251,8 +251,8 @@ impl Context {
                         self.symbol_mode(),
                     ) {
                         self.maybe_call_debugger_for_signal(&sig, Some(&conditions))?;
-                        sig.selected_resume = Some(resume);
-                        sig.search_complete = true;
+                        *sig.selected_resume_mut() = Some(resume);
+                        *sig.search_complete_mut() = true;
                         return Ok(sig);
                     }
                 }
@@ -333,8 +333,8 @@ impl Context {
             None
         };
         self.last_uncaught_signal_backtrace = captured_backtrace;
-        sig.search_complete = true;
-        sig.selected_resume = None;
+        *sig.search_complete_mut() = true;
+        *sig.selected_resume_mut() = None;
         Ok(sig)
     }
 

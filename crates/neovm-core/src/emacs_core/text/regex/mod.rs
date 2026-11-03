@@ -758,7 +758,10 @@ pub(crate) fn collect_regex_gc_roots(
     }
     fn syntax_root(roots: &mut Vec<super::value::Value>, key: Option<SyntaxCacheKey>) {
         if let Some(SyntaxCacheKey::Table { id, .. }) = key {
-            roots.push(super::value::Value::from_bits(id));
+            roots.push(unsafe {
+                /* SAFETY: real Value word */
+                super::value::Value::from_bits(id)
+            });
         }
     }
     SEARCH_PATTERN_CACHE.with(|cache| {

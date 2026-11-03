@@ -30,7 +30,8 @@ impl SymbolSlotIndex {
         Self(index)
     }
 
-    pub(crate) const fn get(self) -> usize {
+    #[doc(hidden)]
+    pub const fn get(self) -> usize {
         self.0
     }
 }

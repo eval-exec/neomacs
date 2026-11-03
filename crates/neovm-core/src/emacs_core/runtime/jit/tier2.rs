@@ -391,7 +391,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_t2_hof_credit(obs: *const LeafObs, seq
         .saturating_add(1)
         .saturating_mul(HOF_CREDIT_DIVISOR);
     let len = bounded_length(
-        crate::emacs_core::value::Value::from_bits(seq as usize),
+        unsafe {
+            /* SAFETY: JIT constant-pool word */
+            crate::emacs_core::value::Value::from_bits(seq as usize)
+        },
         cap,
     );
     let credit = (len / HOF_CREDIT_DIVISOR) as i64;

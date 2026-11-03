@@ -508,8 +508,10 @@ impl<'a> TaggedLoadState<'a> {
 
     #[inline]
     fn cached_value(&self, index: usize) -> Option<Value> {
-        (self.has_value[index >> 6] & (1u64 << (index & 63)) != 0)
-            .then(|| Value::from_bits(self.values[index] as usize))
+        (self.has_value[index >> 6] & (1u64 << (index & 63)) != 0).then(|| unsafe {
+            /* SAFETY: dumped word */
+            Value::from_bits(self.values[index] as usize)
+        })
     }
 
     #[inline]
@@ -759,19 +761,25 @@ impl<'a> LoadDecoder<'a> {
                 let word = batch.word_ptr(offset)?;
                 // Format v12 bakes the word as Value::symbol(dump_local_id)
                 // bits; untag, remap, re-tag.
-                let baked = Value::from_bits(unsafe { word.read_unaligned() });
+                let baked = unsafe {
+                    /* SAFETY: dumped word */
+                    Value::from_bits(unsafe { word.read_unaligned() })
+                };
                 let dump_id = baked.as_bare_symbol_id().ok_or_else(|| {
                     DumpError::ImageFormatError(format!(
                         "symbol fixup word at offset {offset} does not hold baked symbol bits"
                     ))
                 })?;
-                let sym = remap.get(dump_id.0 as usize).copied().ok_or_else(|| {
-                    DumpError::ImageFormatError(format!(
-                        "symbol fixup id {} is outside the remap of {} slots",
-                        dump_id.0,
-                        remap.len()
-                    ))
-                })?;
+                let sym = remap
+                    .get(dump_id.to_raw() as usize)
+                    .copied()
+                    .ok_or_else(|| {
+                        DumpError::ImageFormatError(format!(
+                            "symbol fixup id {} is outside the remap of {} slots",
+                            dump_id.to_raw(),
+                            remap.len()
+                        ))
+                    })?;
                 unsafe { word.cast::<Value>().write_unaligned(Value::symbol(sym)) };
             }
             Ok(())
@@ -804,13 +812,16 @@ impl<'a> LoadDecoder<'a> {
                 // reading it as a raw id would silently resolve symbol
                 // 8*dump_id. Untag first, like the section walk.
                 let word = mapped_heap.value_word_ptr(location_offset)?;
-                let baked = Value::from_bits(unsafe { word.read_unaligned() });
+                let baked = unsafe {
+                    /* SAFETY: dumped word */
+                    Value::from_bits(unsafe { word.read_unaligned() })
+                };
                 let dump_id = baked.as_bare_symbol_id().ok_or_else(|| {
                     DumpError::ImageFormatError(format!(
                         "symbol value-fixup word at offset {location_offset} does not hold baked symbol bits"
                     ))
                 })?;
-                let value = Value::symbol(load_sym_id(&DumpSymId(dump_id.0)));
+                let value = Value::symbol(load_sym_id(&DumpSymId(dump_id.to_raw())));
                 unsafe { word.cast::<Value>().write_unaligned(value) };
                 Ok(())
             }
@@ -2152,12 +2163,15 @@ impl<'a> LoadDecoder<'a> {
                     )
                 })?;
                 let remap_one = |raw: u32| -> Result<u32, DumpError> {
-                    remap.get(raw as usize).map(|sym| sym.0).ok_or_else(|| {
-                        DumpError::ImageFormatError(format!(
-                            "bytecode param symbol {raw} is outside the remap of {} slots",
-                            remap.len()
-                        ))
-                    })
+                    remap
+                        .get(raw as usize)
+                        .map(|sym| sym.to_raw())
+                        .ok_or_else(|| {
+                            DumpError::ImageFormatError(format!(
+                                "bytecode param symbol {raw} is outside the remap of {} slots",
+                                remap.len()
+                            ))
+                        })
                 };
                 for i in 0..n_ids {
                     let word_ptr = unsafe { ids_ptr.add(i * 4) };
@@ -2687,11 +2701,11 @@ fn tagged_heap_ref(id: &DumpHeapRef) -> TaggedHeapRef {
 // --- Primitives ---
 
 pub(crate) fn dump_sym_id(id: SymId) -> DumpSymId {
-    DumpSymId(id.0)
+    DumpSymId(id.to_raw())
 }
 
 pub(crate) fn dump_name_id(id: NameId) -> DumpNameId {
-    DumpNameId(id.0)
+    DumpNameId(id.to_raw())
 }
 
 fn dump_lisp_string(string: &LispString) -> DumpLispString {
@@ -2770,7 +2784,10 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
         let word = u64::from_ne_bytes([
             chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
         ]);
-        extra_slots.push(Value::from_bits(word as usize));
+        extra_slots.push(unsafe {
+            /* SAFETY: dumped word */
+            Value::from_bits(word as usize)
+        });
     }
     cursor = extra_end;
 
@@ -2803,7 +2820,10 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
         Vec::new().into()
     };
 
-    let word_value = |word: u64| Value::from_bits(word as usize);
+    let word_value = |word: u64| unsafe {
+        /* SAFETY: dumped word */
+        Value::from_bits(word as usize)
+    };
     let arglist = if flags & BC_FLAG_HAS_ARGLIST != 0 {
         word_value(header.arglist_word)
     } else {
@@ -2870,7 +2890,10 @@ pub(crate) fn materialize_and_publish_stub(value: Value) {
         return;
     }
     crate::tagged::gc::note_heap_write(
-        crate::tagged::value::TaggedValue::from_bits(value.bits()),
+        unsafe {
+            /* SAFETY: dumped word */
+            crate::tagged::value::TaggedValue::from_bits(value.bits())
+        },
         crate::tagged::gc::HeapWriteKind::ByteCodeData,
     );
     let function = unsafe { materialize_bytecode_from_extras_at(value) };
@@ -2914,7 +2937,10 @@ pub(crate) unsafe fn stub_interactive_probe(
     if header.n_extra_slots > 0 {
         count = count.max(6 + header.n_extra_slots as usize);
     }
-    let word_value = |word: u64| Value::from_bits(word as usize);
+    let word_value = |word: u64| unsafe {
+        /* SAFETY: dumped word */
+        Value::from_bits(word as usize)
+    };
     crate::emacs_core::value::BytecodeInteractiveProbe {
         slot_count: count,
         interactive: (flags & BC_FLAG_HAS_INTERACTIVE != 0)
@@ -3034,7 +3060,7 @@ pub(crate) fn dump_bytecode(
             .iter()
             .map(|value| encoder.dump_value(value))
             .collect(),
-        ops_sealed: bc.ops_sealed,
+        ops_sealed: bc.ops_sealed(),
         // Filled by the caller, which holds the object (`ByteCodeObj`).
         code_object: None,
         constants_object: None,
@@ -3057,7 +3083,10 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
         HashKey::Window(w) => DumpHashKey::Window(*w),
         HashKey::Frame(f) => DumpHashKey::Frame(*f),
         HashKey::Ptr(p) => {
-            let value = TaggedValue::from_bits(*p);
+            let value = unsafe {
+                /* SAFETY: dumped word */
+                TaggedValue::from_bits(*p)
+            };
             if value.is_heap_object() {
                 let id = encoder.value_to_heap_ref(&value);
                 DumpHashKey::HeapRef(id.index)
@@ -4008,7 +4037,7 @@ pub(crate) fn dump_autoload_manager(
     am: &AutoloadManager,
 ) -> DumpAutoloadManager {
     DumpAutoloadManager {
-        entries_syms: OrderedDumpEntries::by_key(am.dump_entries(), |entry| entry.0.0)
+        entries_syms: OrderedDumpEntries::by_key(am.dump_entries(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -4046,7 +4075,7 @@ pub(crate) fn dump_autoload_manager(
             .collect(),
         obsolete_functions_syms: OrderedDumpEntries::by_key(
             am.dump_obsolete_functions(),
-            |entry| entry.0.0,
+            |entry| entry.0.to_raw(),
         )
         .into_iter()
         .map(|(name, (new_name, when))| {
@@ -4059,7 +4088,7 @@ pub(crate) fn dump_autoload_manager(
         obsolete_functions: Vec::new(),
         obsolete_variables_syms: OrderedDumpEntries::by_key(
             am.dump_obsolete_variables(),
-            |entry| entry.0.0,
+            |entry| entry.0.to_raw(),
         )
         .into_iter()
         .map(|(name, (new_name, when))| {
@@ -4142,7 +4171,7 @@ fn dump_mode_custom_type(encoder: &mut DumpEncoder, ct: &ModeCustomType) -> Dump
 
 pub(crate) fn dump_mode_registry(encoder: &mut DumpEncoder, mr: &ModeRegistry) -> DumpModeRegistry {
     DumpModeRegistry {
-        major_modes: OrderedDumpEntries::by_key(mr.dump_major_modes(), |entry| entry.0.0)
+        major_modes: OrderedDumpEntries::by_key(mr.dump_major_modes(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, m)| {
                 (
@@ -4160,7 +4189,7 @@ pub(crate) fn dump_mode_registry(encoder: &mut DumpEncoder, mr: &ModeRegistry) -
                 )
             })
             .collect(),
-        minor_modes: OrderedDumpEntries::by_key(mr.dump_minor_modes(), |entry| entry.0.0)
+        minor_modes: OrderedDumpEntries::by_key(mr.dump_minor_modes(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, m)| {
                 (
@@ -4202,40 +4231,44 @@ pub(crate) fn dump_mode_registry(encoder: &mut DumpEncoder, mr: &ModeRegistry) -
             .iter()
             .map(|(pattern, value)| (dump_lisp_string(pattern), encoder.dump_value(value)))
             .collect(),
-        custom_variables: OrderedDumpEntries::by_key(mr.dump_custom_variables(), |entry| entry.0.0)
-            .into_iter()
-            .map(|(k, cv)| {
-                (
-                    dump_sym_id(*k),
-                    DumpModeCustomVariable {
-                        default_value: encoder.dump_value(&cv.default_value),
-                        doc: cv.doc.as_ref().map(dump_lisp_string),
-                        custom_type: dump_mode_custom_type(encoder, &cv.type_),
-                        group: encoder.dump_opt_value(&cv.group),
-                        set_function: encoder.dump_opt_value(&cv.set_function),
-                        get_function: encoder.dump_opt_value(&cv.get_function),
-                        tag: cv.tag.as_ref().map(dump_lisp_string),
-                    },
-                )
-            })
-            .collect(),
-        custom_groups: OrderedDumpEntries::by_key(mr.dump_custom_groups(), |entry| entry.0.0)
-            .into_iter()
-            .map(|(k, g)| {
-                (
-                    dump_sym_id(*k),
-                    DumpModeCustomGroup {
-                        doc: g.doc.as_ref().map(dump_lisp_string),
-                        parent: encoder.dump_opt_value(&g.parent),
-                        members: g
-                            .members
-                            .iter()
-                            .map(|value| encoder.dump_value(value))
-                            .collect(),
-                    },
-                )
-            })
-            .collect(),
+        custom_variables: OrderedDumpEntries::by_key(mr.dump_custom_variables(), |entry| {
+            entry.0.to_raw()
+        })
+        .into_iter()
+        .map(|(k, cv)| {
+            (
+                dump_sym_id(*k),
+                DumpModeCustomVariable {
+                    default_value: encoder.dump_value(&cv.default_value),
+                    doc: cv.doc.as_ref().map(dump_lisp_string),
+                    custom_type: dump_mode_custom_type(encoder, &cv.type_),
+                    group: encoder.dump_opt_value(&cv.group),
+                    set_function: encoder.dump_opt_value(&cv.set_function),
+                    get_function: encoder.dump_opt_value(&cv.get_function),
+                    tag: cv.tag.as_ref().map(dump_lisp_string),
+                },
+            )
+        })
+        .collect(),
+        custom_groups: OrderedDumpEntries::by_key(mr.dump_custom_groups(), |entry| {
+            entry.0.to_raw()
+        })
+        .into_iter()
+        .map(|(k, g)| {
+            (
+                dump_sym_id(*k),
+                DumpModeCustomGroup {
+                    doc: g.doc.as_ref().map(dump_lisp_string),
+                    parent: encoder.dump_opt_value(&g.parent),
+                    members: g
+                        .members
+                        .iter()
+                        .map(|value| encoder.dump_value(value))
+                        .collect(),
+                },
+            )
+        })
+        .collect(),
         fundamental_mode: encoder.dump_value(&mr.dump_fundamental_mode()),
     }
 }
@@ -4254,7 +4287,7 @@ pub(crate) fn dump_coding_system_manager(
     csm: &CodingSystemManager,
 ) -> DumpCodingSystemManager {
     DumpCodingSystemManager {
-        systems_syms: OrderedDumpEntries::by_key(&csm.systems, |entry| entry.0.0)
+        systems_syms: OrderedDumpEntries::by_key(&csm.systems, |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -4280,7 +4313,7 @@ pub(crate) fn dump_coding_system_manager(
                         default_char: v.default_char,
                         for_unibyte: v.for_unibyte,
                         properties_syms: OrderedDumpEntries::by_key(&v.properties, |entry| {
-                            entry.0.0
+                            entry.0.to_raw()
                         })
                         .into_iter()
                         .map(|(k, v)| (dump_sym_id(*k), encoder.dump_value(v)))
@@ -4297,12 +4330,12 @@ pub(crate) fn dump_coding_system_manager(
             })
             .collect(),
         systems: Vec::new(),
-        aliases_syms: OrderedDumpEntries::by_key(&csm.aliases, |entry| entry.0.0)
+        aliases_syms: OrderedDumpEntries::by_key(&csm.aliases, |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, v)| (dump_sym_id(*k), dump_sym_id(*v)))
             .collect(),
         aliases: Vec::new(),
-        alias_order_syms: OrderedDumpEntries::by_key(&csm.alias_order, |entry| entry.0.0)
+        alias_order_syms: OrderedDumpEntries::by_key(&csm.alias_order, |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -4597,7 +4630,7 @@ fn dump_face(encoder: &mut DumpEncoder, f: &Face) -> DumpFace {
 
 pub(crate) fn dump_face_table(encoder: &mut DumpEncoder, ft: &FaceTable) -> DumpFaceTable {
     DumpFaceTable {
-        face_ids: OrderedDumpEntries::by_key(ft.dump_faces_by_sym_id(), |entry| entry.0.0)
+        face_ids: OrderedDumpEntries::by_key(ft.dump_faces_by_sym_id(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(id, f)| (dump_sym_id(id), dump_face(encoder, &f)))
             .collect(),
@@ -4694,7 +4727,7 @@ pub(crate) fn dump_bookmark_manager(bm: &BookmarkManager) -> DumpBookmarkManager
 
 pub(crate) fn dump_abbrev_manager(am: &AbbrevManager) -> DumpAbbrevManager {
     DumpAbbrevManager {
-        tables_syms: OrderedDumpEntries::by_key(am.dump_tables(), |entry| entry.0.0)
+        tables_syms: OrderedDumpEntries::by_key(am.dump_tables(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(sym, t)| {
                 (
@@ -4736,7 +4769,7 @@ pub(crate) fn dump_interactive_registry(
     ir: &InteractiveRegistry,
 ) -> DumpInteractiveRegistry {
     DumpInteractiveRegistry {
-        specs: OrderedDumpEntries::by_key(ir.dump_specs(), |entry| entry.0.0)
+        specs: OrderedDumpEntries::by_key(ir.dump_specs(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, s)| {
                 (
@@ -4755,7 +4788,7 @@ pub(crate) fn dump_watcher_list(
     wl: &VariableWatcherList,
 ) -> DumpVariableWatcherList {
     DumpVariableWatcherList {
-        watchers: OrderedDumpEntries::by_key(wl.dump_watchers(), |entry| entry.0.0)
+        watchers: OrderedDumpEntries::by_key(wl.dump_watchers(), |entry| entry.0.to_raw())
             .into_iter()
             .map(|(k, watchers)| {
                 (
@@ -5249,7 +5282,7 @@ pub(crate) fn load_symbol_table_parts(
             slot.is_none(),
             "pdump symbol remap should not already be initialized"
         );
-        let identity = symbols.iter().enumerate().all(|(i, id)| id.0 as usize == i);
+        let identity = symbols.iter().enumerate().all(|(i, id)| id.to_raw() as usize == i);
         PDUMP_LOAD_SYM_IDENTITY.with(|flag| flag.set(identity));
         if !identity {
             // The fallback is a permanent production path (bootstrap
@@ -5269,13 +5302,13 @@ pub(crate) fn load_symbol_table_parts(
             let mismatch_count = symbols
                 .iter()
                 .enumerate()
-                .filter(|(i, id)| id.0 as usize != *i)
+                .filter(|(i, id)| id.to_raw() as usize != *i)
                 .count();
             let first: Vec<(usize, u32)> = symbols
                 .iter()
                 .enumerate()
-                .filter(|(i, id)| id.0 as usize != *i)
-                .map(|(i, id)| (i, id.0))
+                .filter(|(i, id)| id.to_raw() as usize != *i)
+                .map(|(i, id)| (i, id.to_raw()))
                 .take(8)
                 .collect();
             eprintln!(
@@ -5413,7 +5446,7 @@ pub(crate) fn load_obarray(
         if !seen_symbol_ids.insert(sym_id) {
             return Err(DumpError::DeserializationError(format!(
                 "pdump obarray is inconsistent: duplicate symbol slot {}",
-                sym_id.0
+                sym_id.to_raw()
             )));
         }
         let symbol = load_symbol_data(decoder, sym_id, sd)?;
@@ -5497,17 +5530,20 @@ pub(crate) fn load_obarray(
             if !seen_symbol_ids.insert(sym_id) {
                 return Err(DumpError::DeserializationError(format!(
                     "pdump obarray is inconsistent: duplicate symbol row {}",
-                    sym_id.0
+                    sym_id.to_raw()
                 )));
             }
-            let val = crate::tagged::value::TaggedValue::from_bits(val_word);
+            let val = unsafe {
+                /* SAFETY: dumped word */
+                crate::tagged::value::TaggedValue::from_bits(val_word)
+            };
             // The row's redirect and its word decode together into the cell.
             let cell = match redirect {
                 SymbolRedirect::Varalias => {
                     DumpedCell::Alias(val.as_bare_symbol_id().ok_or_else(|| {
                         DumpError::DeserializationError(format!(
                             "obarray alias row {} target is not a symbol",
-                            sym_id.0
+                            sym_id.to_raw()
                         ))
                     })?)
                 }
@@ -5524,8 +5560,14 @@ pub(crate) fn load_obarray(
                     declared_special,
                 },
                 cell,
-                crate::tagged::value::TaggedValue::from_bits(function),
-                crate::tagged::value::TaggedValue::from_bits(plist),
+                unsafe {
+                    /* SAFETY: dumped word */
+                    crate::tagged::value::TaggedValue::from_bits(function)
+                },
+                unsafe {
+                    /* SAFETY: dumped word */
+                    crate::tagged::value::TaggedValue::from_bits(plist)
+                },
             );
             symbols.push((sym_id, symbol));
         }
@@ -5544,7 +5586,7 @@ pub(crate) fn load_obarray(
             if !seen.insert(sym_id) {
                 return Err(DumpError::DeserializationError(format!(
                     "pdump obarray is inconsistent: duplicate {label} entry for symbol slot {}",
-                    sym_id.0
+                    sym_id.to_raw()
                 )));
             }
             loaded.push(sym_id);

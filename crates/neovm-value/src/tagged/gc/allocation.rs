@@ -147,7 +147,8 @@ impl TaggedHeap {
     /// boxing shim, which makes nearly every float a float loop allocates.
     /// Other callers keep the call, so the VM's arithmetic arms stay small.
     #[inline(always)]
-    pub(crate) fn alloc_float_inline(&mut self, value: f64) -> TaggedValue {
+    #[doc(hidden)]
+    pub fn alloc_float_inline(&mut self, value: f64) -> TaggedValue {
         let ptr = self.take_float_slot();
         // SAFETY: a reserved slot of an owned float page whose header the
         // region wrote; only the value is left.
@@ -527,7 +528,8 @@ impl TaggedHeap {
     /// Move a fully initialized thread payload onto the existing Thread tag.
     /// Allocation cannot collect; the caller roots the returned identity before
     /// its next safe point. Linking publishes the complete child schema.
-    pub(crate) fn alloc_thread(
+    #[doc(hidden)]
+    pub fn alloc_thread(
         &mut self,
         payload: crate::heap_types::threading::ThreadPayload,
     ) -> TaggedValue {
@@ -542,7 +544,8 @@ impl TaggedHeap {
     }
 
     /// Allocate a mutex with its owned state and name storage charged together.
-    pub(crate) fn alloc_mutex(
+    #[doc(hidden)]
+    pub fn alloc_mutex(
         &mut self,
         payload: crate::heap_types::threading::MutexPayload,
     ) -> TaggedValue {
@@ -557,7 +560,8 @@ impl TaggedHeap {
     }
 
     /// Allocate a condition variable, including its strong mutex child.
-    pub(crate) fn alloc_condvar(
+    #[doc(hidden)]
+    pub fn alloc_condvar(
         &mut self,
         payload: crate::heap_types::threading::CondVarPayload,
     ) -> TaggedValue {

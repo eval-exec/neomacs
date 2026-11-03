@@ -99,7 +99,8 @@ impl CanonicalBlv {
 
     /// The record, for the obarray that owns it.
     #[inline]
-    pub(crate) fn blv(self) -> BlvPtr {
+    #[doc(hidden)]
+    pub fn blv(self) -> BlvPtr {
         self.0
     }
 }
@@ -257,7 +258,8 @@ impl ThreadProjectionDescriptor {
     /// cell, the BLV's (if any) for a localized one, the builtin itself for a
     /// forwarded one.
     #[inline]
-    pub(crate) fn logical_forwarder(&self) -> Option<FwdRef> {
+    #[doc(hidden)]
+    pub fn logical_forwarder(&self) -> Option<FwdRef> {
         match self.arm() {
             CanonicalArm::Plain => None,
             // SAFETY: a projection's localized arm names a live record of
@@ -370,7 +372,8 @@ impl ThreadProjectionTable {
     /// Visit the canonical plain word of every descriptor issued: the table
     /// roots them, as the World's owner slabs are rooted, so making a
     /// descriptor never needs the obarray (VOID's word is always void).
-    pub(crate) fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
+    #[doc(hidden)]
+    pub fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
         for projection in &self.issued {
             visit(projection.plain_value());
         }
@@ -378,7 +381,8 @@ impl ThreadProjectionTable {
 
     /// The index the ORDINAL-th next [`Self::issue`] will give (0 = the
     /// next): admission sizes an owner's slab before it issues.
-    pub(crate) fn upcoming_index(&self, ordinal: usize) -> TlsIndex {
+    #[doc(hidden)]
+    pub fn upcoming_index(&self, ordinal: usize) -> TlsIndex {
         self.issued
             .len()
             .checked_add(ordinal)
@@ -398,7 +402,8 @@ impl ThreadProjectionTable {
     /// Make room for N more descriptors and the VOID one without allocating
     /// later: arena pages and the issued list. A refusal changes nothing a
     /// reader can see (pages reserved before it stay reserved).
-    pub(crate) fn try_reserve(&mut self, n: usize) -> Result<(), ProjectionCapacityError> {
+    #[doc(hidden)]
+    pub fn try_reserve(&mut self, n: usize) -> Result<(), ProjectionCapacityError> {
         let needed = n.saturating_add(usize::from(self.void.is_none()));
         self.issued
             .try_reserve(n)
@@ -417,7 +422,8 @@ impl ThreadProjectionTable {
     }
 
     /// The World's shared VOID descriptor, made on first use.
-    pub(crate) fn void_descriptor(&mut self) -> &'static ThreadProjectionDescriptor {
+    #[doc(hidden)]
+    pub fn void_descriptor(&mut self) -> &'static ThreadProjectionDescriptor {
         if let Some(void) = self.void {
             return void;
         }

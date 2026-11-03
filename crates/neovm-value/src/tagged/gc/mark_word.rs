@@ -27,7 +27,10 @@ impl MarkWord {
     /// mutator.
     #[inline(always)]
     pub(super) fn value(self) -> TaggedValue {
-        TaggedValue::from_bits(self.0)
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(self.0)
+        }
     }
 }
 

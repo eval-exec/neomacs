@@ -297,7 +297,7 @@ pub(crate) const BYTECODE_OBJ_DATA_OFFSET: usize =
 /// [`runtime_identity_word`] answers -- NOT `Arc::as_ptr`, which is 16 bytes
 /// further on (P2.1 correction 5): compare against this word only.
 pub(crate) const BYTECODE_RUNTIME_WORD_OFFSET: usize =
-    BYTECODE_OBJ_DATA_OFFSET + offset_of!(crate::emacs_core::bytecode::ByteCodeFunction, runtime);
+    BYTECODE_OBJ_DATA_OFFSET + crate::emacs_core::bytecode::ByteCodeFunction::RUNTIME_OFFSET;
 
 const _: () = assert!(size_of::<Option<crate::emacs_core::jit::Runtime>>() == WORD);
 
@@ -319,7 +319,7 @@ pub(crate) fn runtime_identity_word(runtime: &crate::emacs_core::jit::Runtime) -
 /// Threading: the owning relocated template keeps its Runtime Arc alive; an
 /// emitted atomic load reads the shared counter, never mutator Lisp state.
 pub(crate) fn runtime_patched_prefix_address(runtime: &crate::emacs_core::jit::Runtime) -> usize {
-    std::ptr::from_ref(&runtime.patched_prefix) as usize
+    std::ptr::from_ref(runtime.patched_prefix_ref()) as usize
 }
 
 /// From the untagged address of a byte-code object, the `(data pointer,

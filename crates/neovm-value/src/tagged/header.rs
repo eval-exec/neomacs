@@ -73,7 +73,10 @@ impl ConsWord {
         // SAFETY: the cell is live and aligned; concurrent access is atomic.
         let word =
             unsafe { AtomicUsize::from_ptr(self.0.get().cast::<usize>()).load(Ordering::Acquire) };
-        TaggedValue::from_bits(word)
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(word)
+        }
     }
 
     /// Atomic (release) store. Release-ordered: publishing a heap pointer into
@@ -162,7 +165,10 @@ impl ConsCdrWord {
         // SAFETY: the cell is live and aligned; concurrent access is atomic.
         let word =
             unsafe { AtomicUsize::from_ptr(self.0.get().cast::<usize>()).load(Ordering::Acquire) };
-        TaggedValue::from_bits(word)
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(word)
+        }
     }
 
     /// Atomic (release) store of the cdr word. See [`ConsWord::store_atomic`].
@@ -677,7 +683,8 @@ impl GcHeader {
     }
 
     #[inline]
-    pub(crate) fn collection_observed(&self) -> bool {
+    #[doc(hidden)]
+    pub fn collection_observed(&self) -> bool {
         self.collection_observed.load(Ordering::Acquire)
             != CollectionObservedState::Unobserved as u8
     }
@@ -744,7 +751,8 @@ impl GcHeader {
     /// needs the write barrier outside its window — tenured, not yet
     /// remembered — read as one native-endian `u16`.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) const NEEDS_REMEMBERING_U16: u16 = u16::from_ne_bytes([1, 0]);
+    #[doc(hidden)]
+    pub const NEEDS_REMEMBERING_U16: u16 = u16::from_ne_bytes([1, 0]);
 
     /// Whether a write by the (non-cons, outside-the-window) owner whose
     /// header is at `header` must reach the heap: it is tenured and the
@@ -1263,7 +1271,8 @@ impl LispValueVec {
     /// `ptr..ptr+len` must remain mapped and immutable for the lifetime of the
     /// returned storage unless a mutation first copies the slots into owned
     /// storage.
-    pub(crate) unsafe fn mapped(ptr: *const TaggedValue, len: usize) -> Self {
+    #[doc(hidden)]
+    pub unsafe fn mapped(ptr: *const TaggedValue, len: usize) -> Self {
         Self {
             storage: LispValueVecStorage::Mapped { ptr, len },
         }
@@ -1274,7 +1283,8 @@ impl LispValueVec {
     /// offsets, which compiled code then reads directly (`None` otherwise:
     /// the storage enum's layout is the compiler's choice, so it is measured
     /// here rather than assumed).
-    pub(crate) fn jit_slice_offsets() -> Option<(usize, usize)> {
+    #[doc(hidden)]
+    pub fn jit_slice_offsets() -> Option<(usize, usize)> {
         static OFFSETS: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
         *OFFSETS.get_or_init(|| {
             const WORD: usize = std::mem::size_of::<usize>();
@@ -1316,7 +1326,8 @@ impl LispValueVec {
     /// capacities (empty, exact, spare) against mapped storage of two
     /// different pointers and lengths.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn jit_owned_probe() -> Option<(usize, usize)> {
+    #[doc(hidden)]
+    pub fn jit_owned_probe() -> Option<(usize, usize)> {
         static PROBE: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
         *PROBE.get_or_init(|| {
             const WORD: usize = std::mem::size_of::<usize>();
@@ -1467,7 +1478,8 @@ impl LispValueVec {
     /// mutation (a `Mapped` backing reads the immutable dump; `ensure_owned` promotes
     /// it to a fresh `Owned` the GC's snapshot never points at, so no clone needed).
     #[inline]
-    pub(crate) fn is_owned(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_owned(&self) -> bool {
         matches!(self.storage, LispValueVecStorage::Owned(_))
     }
 
@@ -1948,7 +1960,10 @@ impl ByteCodeSlotObjects {
     /// [`load_value_atomic`]).
     #[inline(always)]
     pub fn get(&self, slot: ByteCodeSlotObject) -> TaggedValue {
-        TaggedValue::from_bits(self.word(slot).load(Ordering::Acquire))
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(self.word(slot).load(Ordering::Acquire))
+        }
     }
 
     /// Byte offset of `slot`'s word in this struct (the pdump bakes a
@@ -1973,7 +1988,8 @@ impl ByteCodeSlotObjects {
     /// (after the write barrier) and the pdump loader (before publication)
     /// call this.
     #[inline]
-    pub(crate) fn set(&self, slot: ByteCodeSlotObject, object: TaggedValue) {
+    #[doc(hidden)]
+    pub fn set(&self, slot: ByteCodeSlotObject, object: TaggedValue) {
         self.word(slot).store(object.0, Ordering::Release);
     }
 }
@@ -2609,3 +2625,27 @@ mod sqlite_finalizer_tests;
 #[cfg(test)]
 #[path = "header/tests/header_test.rs"]
 mod tests;
+
+impl CondVarObj {
+    #[inline]
+    #[doc(hidden)]
+    pub fn payload(&self) -> &crate::heap_types::threading::CondVarPayload {
+        &self.payload
+    }
+}
+
+impl MutexObj {
+    #[inline]
+    #[doc(hidden)]
+    pub fn payload(&self) -> &crate::heap_types::threading::MutexPayload {
+        &self.payload
+    }
+}
+
+impl ThreadObj {
+    #[inline]
+    #[doc(hidden)]
+    pub fn payload(&self) -> &crate::heap_types::threading::ThreadPayload {
+        &self.payload
+    }
+}

@@ -111,7 +111,10 @@ impl<'brand> RunSlice<'brand, '_> {
         result: &mut SliceRoot<'brand>,
         bits: usize,
     ) -> Result<(), RegistrationError> {
-        let value = TaggedValue::from_bits(bits);
+        let value = unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(bits)
+        };
         if !(value.is_fixnum() || value.is_nil() || value.is_t()) {
             return Err(RegistrationError::Publication);
         }

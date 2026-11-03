@@ -268,7 +268,7 @@ const fn compute_abi_tag() -> u32 {
     // DeoptCells layout: 5 i64 cells (pc, depth, handlers, reason, chain).
     mix_u64!(core::mem::size_of::<DeoptCells>() as u64);
     mix_u64!(core::mem::size_of::<super::RuntimeState>() as u64);
-    mix_u64!(core::mem::offset_of!(super::RuntimeState, aot_retiered) as u64);
+    mix_u64!(super::RuntimeState::AOT_RETIERED_OFFSET as u64);
     // Shim name set (count + each byte) — a shim-ABI change re-tags artifacts.
     mix_u64!(MIR_SHIM_NAMES.len() as u64);
     let mut si = 0;
@@ -2657,7 +2657,13 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
                 vm.execute(&g, vec![x])
                     .map_err(|_| "interp run raised".to_string())?
             };
-            Ok((Value::from_bits(aot), interp))
+            Ok((
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(aot)
+                },
+                interp,
+            ))
         };
 
     // (1) In-range: x=7 → 49, native (no deopt). AOT == interp (by value).
@@ -2803,7 +2809,13 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Re
             vm.execute(&g, vec![a, b])
                 .map_err(|_| "interp raised".to_string())?
         };
-        Ok((Value::from_bits(bits), interp))
+        Ok((
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(bits)
+            },
+            interp,
+        ))
     };
 
     // (1) No-deopt: (* (+ 3 1) (+ 4 1)) = 4*5 = 20.
@@ -2951,17 +2963,35 @@ pub fn testkit_callbuiltinsym_aot_selftest(dir: &std::path::Path) -> Result<(), 
         vm.execute(&g, vec![arg])
             .map_err(|_| "interp raised".to_string())?
     };
-    if !crate::emacs_core::value::eql_value(&Value::from_bits(aot), &interp) {
+    if !crate::emacs_core::value::eql_value(
+        &unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(aot)
+        },
+        &interp,
+    ) {
         return Err(format!(
             "CallBuiltinSym: AOT {:?} != interp {:?}",
-            Value::from_bits(aot),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            },
             interp
         ));
     }
-    if Value::from_bits(aot).as_fixnum() != Some(3) {
+    if unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(aot)
+    }
+    .as_fixnum()
+        != Some(3)
+    {
         return Err(format!(
             "CallBuiltinSym: wrong (length ...) result {:?} (expected 3 — reloc'd to the WRONG builtin?)",
-            Value::from_bits(aot)
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            }
         ));
     }
 
@@ -3086,10 +3116,19 @@ fn cbsym_aot_serve_and_check(
         vm.execute(&g, args.to_vec())
             .map_err(|_| format!("{label}: interp raised"))?
     };
-    if !crate::emacs_core::value::eql_value(&Value::from_bits(aot), &interp) {
+    if !crate::emacs_core::value::eql_value(
+        &unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(aot)
+        },
+        &interp,
+    ) {
         return Err(format!(
             "{label}: AOT {:?} != interp {:?}",
-            Value::from_bits(aot),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            },
             interp
         ));
     }
@@ -3354,11 +3393,21 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
         // `symbol-name` is a distinct allocation per call, so an identity compare
         // would falsely fail even though the names match. `equal_value` is also
         // correct for fixnum/float/bignum results.
-        if !crate::emacs_core::value::equal_value(&Value::from_bits(aot), &interp, 0) {
+        if !crate::emacs_core::value::equal_value(
+            &unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            },
+            &interp,
+            0,
+        ) {
             return Err(format!(
                 "{}: AOT {:?} != interp {:?}",
                 b.label,
-                Value::from_bits(aot),
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(aot)
+                },
                 interp
             ));
         }
@@ -3391,13 +3440,13 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
             // address calculation directly. Growing the intern table alone
             // never changes a previously interned symbol's identity.
             let original = Value::symbol("aot-dynvar");
-            let original_id = original.as_bare_symbol_id().unwrap().0 as usize;
+            let original_id = original.as_bare_symbol_id().unwrap().to_raw() as usize;
             let slots = crate::emacs_core::symbol::OBARRAY_CHUNK_SLOTS;
             for i in 0..=slots {
                 crate::emacs_core::intern::intern(&format!("aot-varref-offset-decoy-{i}"));
             }
             let relocated = Value::symbol("aot-varref-offset-target");
-            let relocated_id = relocated.as_bare_symbol_id().unwrap().0 as usize;
+            let relocated_id = relocated.as_bare_symbol_id().unwrap().to_raw() as usize;
             assert_ne!(original_id / slots, relocated_id / slots);
             // Keep the original cell bound: an incorrectly baked address must
             // return the wrong value, instead of falling through to the shim.
@@ -3413,7 +3462,13 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
             assert_eq!(leaf.reloc_data.as_ptr(), base);
             match leaf.call(ctx as *mut u8, &[]) {
                 super::compile::NativeRun::Ok(bits) => {
-                    assert_eq!(Value::from_bits(bits), Value::make_int(42));
+                    assert_eq!(
+                        unsafe {
+                            /* SAFETY: JIT constant-pool word */
+                            Value::from_bits(bits)
+                        },
+                        Value::make_int(42)
+                    );
                 }
                 other => return Err(format!("relocated variable leaf: {other:?}")),
             }
@@ -3688,11 +3743,21 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
             vm.execute(&h, c.args.clone())
                 .map_err(|_| format!("{}: interp raised", c.label))?
         };
-        if !crate::emacs_core::value::equal_value(&Value::from_bits(aot), &interp, 0) {
+        if !crate::emacs_core::value::equal_value(
+            &unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            },
+            &interp,
+            0,
+        ) {
             return Err(format!(
                 "{}: AOT {:?} != interp {:?}",
                 c.label,
-                Value::from_bits(aot),
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(aot)
+                },
                 interp
             ));
         }
@@ -3738,7 +3803,10 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
         if super::cache::cached_leaf_is_aot_for_func(&g) != Some(true) {
             return Err("crux: not served AOT-backed".into());
         }
-        let aot_v = Value::from_bits(aot);
+        let aot_v = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(aot)
+        };
         // Ground truth for the CURRENT (stringp) binding: interp of the same body.
         let interp = {
             let h = mk_fn("aot-spec-crux", 1, &[Op::StackRef(1)]);
@@ -3924,10 +3992,20 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
         vm.execute(&h, args.clone())
             .map_err(|_| "pgo-roundtrip: interp raised".to_string())?
     };
-    if !crate::emacs_core::value::equal_value(&Value::from_bits(aot), &interp, 0) {
+    if !crate::emacs_core::value::equal_value(
+        &unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(aot)
+        },
+        &interp,
+        0,
+    ) {
         return Err(format!(
             "pgo-roundtrip: AOT {:?} != interp {:?}",
-            Value::from_bits(aot),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            },
             interp
         ));
     }
@@ -4059,10 +4137,20 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
         vm.execute(&h, args.clone())
             .map_err(|_| "pgo-drain: interp raised".to_string())?
     };
-    if !crate::emacs_core::value::equal_value(&Value::from_bits(aot), &interp, 0) {
+    if !crate::emacs_core::value::equal_value(
+        &unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(aot)
+        },
+        &interp,
+        0,
+    ) {
         return Err(format!(
             "pgo-drain: AOT {:?} != interp {:?}",
-            Value::from_bits(aot),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(aot)
+            },
             interp
         ));
     }

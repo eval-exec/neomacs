@@ -10,7 +10,8 @@ static_assertions::assert_impl_all!(CErrorMessage<'static>: Send, Sync);
 
 impl<'a> CErrorMessage<'a> {
     /// The raw GNU template, before quote substitution.
-    pub(crate) fn template(self) -> &'a str {
+    #[doc(hidden)]
+    pub fn template(self) -> &'a str {
         self.0
     }
 }

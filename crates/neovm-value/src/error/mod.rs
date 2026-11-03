@@ -77,7 +77,8 @@ impl EvalError {
 
     /// Transfer an existing signal without dropping its owning roots or
     /// restarting delivery after loader cleanups cross this public boundary.
-    pub(crate) fn from_signal(signal: SignalData) -> Self {
+    #[doc(hidden)]
+    pub fn from_signal(signal: SignalData) -> Self {
         let SignalData {
             symbol,
             data,
@@ -109,7 +110,8 @@ impl EvalError {
 
     /// Transfer the selected catch equality and owning roots together.
     /// GNU eval.c:1477 selects the catch before eval.c:1449 unbinds.
-    pub(crate) fn from_throw(thrown: ThrowData) -> Self {
+    #[doc(hidden)]
+    pub fn from_throw(thrown: ThrowData) -> Self {
         let ThrowData {
             tag,
             value,
@@ -283,11 +285,8 @@ pub use with_signal_result;
 
 impl Flow {
     /// Keep GNU's throw-time EQ policy while dynamic bindings unwind.
-    pub(crate) fn throw_with_symbols(
-        tag: Value,
-        value: Value,
-        mode: crate::tagged::SymbolMode,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn throw_with_symbols(tag: Value, value: Value, mode: crate::tagged::SymbolMode) -> Self {
         Self::from_kind(FlowKind::Throw(Box::new(ThrowData::new_with_symbols(
             tag, value, mode,
         ))))
@@ -296,12 +295,14 @@ impl Flow {
 
 impl Flow {
     /// Pin the throw payload for the entire carrier lifetime.
-    pub(crate) fn throw(tag: Value, value: Value) -> Self {
+    #[doc(hidden)]
+    pub fn throw(tag: Value, value: Value) -> Self {
         Self::from_kind(FlowKind::Throw(Box::new(ThrowData::new(tag, value))))
     }
 
     /// Pin the cooperative yield payload for the entire carrier lifetime.
-    pub(crate) fn thread_blocked(blocker: Value, remaining_forms: Value) -> Self {
+    #[doc(hidden)]
+    pub fn thread_blocked(blocker: Value, remaining_forms: Value) -> Self {
         Self::from_kind(FlowKind::ThreadBlocked(Box::new(ThreadBlockedData::new(
             blocker,
             remaining_forms,
@@ -381,12 +382,14 @@ impl ThrowData {
         }
     }
 
-    pub(crate) fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+    #[doc(hidden)]
+    pub fn symbol_mode(&self) -> crate::tagged::SymbolMode {
         self.symbol_mode
     }
 
     /// GNU eval.c:1477 selects the catch before unbinding the throwing extent.
-    pub(crate) fn matches_tag(&self, tag: Value) -> bool {
+    #[doc(hidden)]
+    pub fn matches_tag(&self, tag: Value) -> bool {
         self.tag.bits() == tag.bits()
             || (self.symbol_mode == crate::tagged::SymbolMode::Positioned
                 && self.symbol_mode.unwrap(self.tag).bits() == self.symbol_mode.unwrap(tag).bits())
@@ -515,7 +518,8 @@ pub struct SignalData {
 impl SignalData {
     /// Compatibility constructor for ordinary or hook-suppressed signals.
     /// Every constructor pins its payload for the lifetime of this value.
-    pub(crate) fn new(
+    #[doc(hidden)]
+    pub fn new(
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
@@ -531,7 +535,8 @@ impl SignalData {
 
     /// Build a signal with its typed delivery policy, pinning both the payload
     /// and any original memory-exhaustion binding for the entire signal lifetime.
-    pub(crate) fn new_with_delivery(
+    #[doc(hidden)]
+    pub fn new_with_delivery(
         symbol: SymId,
         data: Vec<Value>,
         raw_data: Option<Value>,
@@ -559,7 +564,8 @@ impl SignalData {
         }
     }
 
-    pub(crate) fn delivery(&self) -> SignalDelivery {
+    #[doc(hidden)]
+    pub fn delivery(&self) -> SignalDelivery {
         self.delivery
     }
 
@@ -631,7 +637,10 @@ impl PinnedWord {
     }
 
     fn value(self) -> Value {
-        Value::from_bits(self.0)
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            Value::from_bits(self.0)
+        }
     }
 }
 
@@ -1290,4 +1299,37 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         h,
         IN_FLIGHT_ROOTS.with(|slot| slot.borrow().is_some() as u64),
     );
+}
+
+impl SignalData {
+    #[inline]
+    #[doc(hidden)]
+    pub fn bytecode_error_backtrace(&self) -> &Option<BytecodeErrorBacktrace> {
+        &self.bytecode_error_backtrace
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn bytecode_error_backtrace_mut(&mut self) -> &mut Option<BytecodeErrorBacktrace> {
+        &mut self.bytecode_error_backtrace
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn search_complete(&self) -> bool {
+        self.search_complete
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn search_complete_mut(&mut self) -> &mut bool {
+        &mut self.search_complete
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn selected_resume(&self) -> &Option<ResumeTarget> {
+        &self.selected_resume
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn selected_resume_mut(&mut self) -> &mut Option<ResumeTarget> {
+        &mut self.selected_resume
+    }
 }

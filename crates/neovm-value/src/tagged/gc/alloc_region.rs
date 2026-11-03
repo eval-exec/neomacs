@@ -404,7 +404,8 @@ impl TaggedHeap {
     /// unused tail. Called before every change of collector phase and at the
     /// top of every collector walker; cheap when nothing is open.
     #[inline]
-    pub(crate) fn close_alloc_regions(&mut self) {
+    #[doc(hidden)]
+    pub fn close_alloc_regions(&mut self) {
         if self.region_book.cons != ConsRegionSource::Closed {
             self.close_cons_region();
         }

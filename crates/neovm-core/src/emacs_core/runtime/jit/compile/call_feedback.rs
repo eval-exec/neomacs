@@ -285,7 +285,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_record_call_target<const WINDOWED: boo
     // SAFETY: the calling leaf keeps its source's table alive.
     let site = unsafe { &*site };
     if !WINDOWED || site.window_open() {
-        site.observe_counted(Value::from_bits(target as usize));
+        site.observe_counted(unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(target as usize)
+        });
     }
 }
 
@@ -303,11 +306,20 @@ pub(super) fn record_at(
     let site = unsafe { &*site };
     let arg0 = if nargs > 0 {
         // SAFETY: the generated code stored `nargs` words at `args_ptr`.
-        Value::from_bits(unsafe { *args_ptr } as usize)
+        unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(unsafe { *args_ptr } as usize)
+        }
     } else {
         Value::NIL
     };
-    site.observe_counted(site.target_of(Value::from_bits(func_bits as usize), arg0));
+    site.observe_counted(site.target_of(
+        unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(func_bits as usize)
+        },
+        arg0,
+    ));
 }
 
 /// The CLIF signature of the two `_prof` call shims: `neovm_jit_call`'s

@@ -31,7 +31,8 @@ pub struct StackProof {
 // the upper verifier constructs the proof, and the upper VM reads it; no
 // consumer of the lowered type needs an upper-layer helper to interpret it.
 impl StackProof {
-    pub(crate) const UNREACHABLE: u32 = u32::MAX;
+    #[doc(hidden)]
+    pub const UNREACHABLE: u32 = u32::MAX;
 
     /// The pre-resolved instruction index of an admitted jump-table value.
     #[inline]

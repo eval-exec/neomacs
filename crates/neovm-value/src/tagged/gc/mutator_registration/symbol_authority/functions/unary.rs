@@ -13,7 +13,8 @@ pub struct PreparedUnaryFunction {
 }
 
 impl PreparedUnaryFunction {
-    pub(crate) fn symbol(&self) -> &SymbolHandle {
+    #[doc(hidden)]
+    pub fn symbol(&self) -> &SymbolHandle {
         &self.key
     }
     pub(super) fn key(&self) -> &SymbolHandle {

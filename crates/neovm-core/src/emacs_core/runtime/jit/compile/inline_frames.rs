@@ -305,9 +305,12 @@ impl Frames {
                         lowering::emit_guard(fb, identity, same);
                     }
                     RegionKind::Closure { prefix, .. } => {
-                        let code = Value::from_bits(region.callee_bits as usize)
-                            .get_bytecode_data()
-                            .ok_or(CompileError::BadOperand)?;
+                        let code = unsafe {
+                            /* SAFETY: JIT constant-pool word */
+                            Value::from_bits(region.callee_bits as usize)
+                        }
+                        .get_bytecode_data()
+                        .ok_or(CompileError::BadOperand)?;
                         let word = jit_layout::runtime_identity_word(&code.jit_runtime());
                         let miss = super::source_slots::emit_source_guard(fb, actual, word as u64);
                         // The source guard has no calls or side effects; its miss

@@ -43,7 +43,8 @@ pub enum HofPreparationError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HofRegistrationEpoch(u64);
 impl HofRegistrationEpoch {
-    pub(crate) const fn from_observed(generation: u64) -> Self {
+    #[doc(hidden)]
+    pub const fn from_observed(generation: u64) -> Self {
         Self(generation)
     }
 }
@@ -57,10 +58,12 @@ impl HofRegistrationClock {
     /// The static is the actual completed native-registration publication
     /// clock. Every relevant registration/reset publishes Release after its
     /// complete update. A seed must carry that same clock and its observed stamp.
-    pub(crate) unsafe fn from_publisher(clock: &'static AtomicU64) -> Self {
+    #[doc(hidden)]
+    pub unsafe fn from_publisher(clock: &'static AtomicU64) -> Self {
         Self(clock)
     }
-    pub(crate) fn snapshot(self) -> HofRegistrationEpoch {
+    #[doc(hidden)]
+    pub fn snapshot(self) -> HofRegistrationEpoch {
         HofRegistrationEpoch::from_observed(self.0.load(Ordering::Acquire))
     }
 }
@@ -108,7 +111,8 @@ impl CanonicalHofSeed {
     /// `registration_clock` is the very publisher from which this stamp was
     /// observed; the live observer must be retained for running revalidation.
     /// Consumers may compare identity only; no subr entry is authorized to run.
-    pub(crate) unsafe fn from_canonical_static_subr(
+    #[doc(hidden)]
+    pub unsafe fn from_canonical_static_subr(
         operation: HofOperation,
         symbol: SymId,
         canonical: TaggedValue,

@@ -239,7 +239,7 @@ fn op_key_word(op: &Op) -> u64 {
         Op::SaveWindowExcursion => (OpKeyTag::SaveWindowExcursion, 0, 0),
         Op::MakeClosure(n) => (OpKeyTag::MakeClosure, u32::from(*n), 0),
         Op::CallBuiltin(n, m) => (OpKeyTag::CallBuiltin, u32::from(*n), *m),
-        Op::CallBuiltinSym(sym, m) => (OpKeyTag::CallBuiltinSym, sym.0, *m),
+        Op::CallBuiltinSym(sym, m) => (OpKeyTag::CallBuiltinSym, sym.to_raw(), *m),
         Op::TrapOutOfRangeConstant(n) => (OpKeyTag::TrapOutOfRangeConstant, u32::from(*n), 0),
     };
     u64::from(tag as u8) | (u64::from(a) << 8) | (u64::from(b) << 40)

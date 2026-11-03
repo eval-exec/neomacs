@@ -362,7 +362,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         self.by_identity.contains_key(&identity)
     }
 
-    pub(crate) fn insert(&mut self, record: R) -> bool {
+    #[doc(hidden)]
+    pub fn insert(&mut self, record: R) -> bool {
         if self.by_identity.contains_key(&record.identity()) {
             return false;
         }
@@ -512,7 +513,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         right
     }
 
-    pub(crate) fn remove(&mut self, identity: R::Identity) -> Option<R> {
+    #[doc(hidden)]
+    pub fn remove(&mut self, identity: R::Identity) -> Option<R> {
         let leaf = *self.by_identity.get(&identity)?;
         #[cfg(test)]
         self.membership_mutations
@@ -720,7 +722,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(crate) fn shift_at_or_after(
+    #[doc(hidden)]
+    pub fn shift_at_or_after(
         &mut self,
         position: EmacsBytePos,
         inclusive: bool,
@@ -777,14 +780,13 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         self.refresh(id);
     }
 
-    pub(crate) fn matches<Q: OrderedTreeQuery<R>>(
-        &self,
-        query: Q,
-    ) -> OrderedTreeMatches<&Self, R, Q> {
+    #[doc(hidden)]
+    pub fn matches<Q: OrderedTreeQuery<R>>(&self, query: Q) -> OrderedTreeMatches<&Self, R, Q> {
         OrderedTreeMatches::new(self, query)
     }
 
-    pub(crate) fn matches_reverse<Q: OrderedTreeQuery<R>>(
+    #[doc(hidden)]
+    pub fn matches_reverse<Q: OrderedTreeQuery<R>>(
         &self,
         query: Q,
     ) -> OrderedTreeMatches<&Self, R, Q> {
@@ -915,7 +917,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         }
     }
 
-    pub(crate) fn next_position_after(
+    #[doc(hidden)]
+    pub fn next_position_after(
         &self,
         position: EmacsBytePos,
         limit: EmacsBytePos,
@@ -963,7 +966,8 @@ impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
         }
     }
 
-    pub(crate) fn previous_position_before(
+    #[doc(hidden)]
+    pub fn previous_position_before(
         &self,
         position: EmacsBytePos,
         limit: EmacsBytePos,
@@ -1739,7 +1743,8 @@ impl<R: OrderedFilteredRecord> OrderedShiftTree<R> {
     /// the first node whose union is unchanged. Returns the previous class,
     /// or `None` when `identity` is not indexed. The caller holds the owning
     /// buffer's exclusive mutation; nothing is shared with other mutators.
-    pub(crate) fn replace_filter_mask(
+    #[doc(hidden)]
+    pub fn replace_filter_mask(
         &mut self,
         identity: R::Identity,
         mask: OrderedFilterMask,

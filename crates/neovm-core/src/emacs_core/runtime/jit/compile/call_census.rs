@@ -287,7 +287,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_census(
         None => v,
     };
     let nargs = nargs as usize;
-    let mut callee = Value::from_bits(word as usize);
+    let mut callee = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(word as usize)
+    };
     if site == CensusSite::Value
         && callee.as_bare_symbol_id() == Some(crate::emacs_core::bytecode::Vm::apply_builtin_id())
     {
@@ -295,7 +298,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_census(
         // A call of the builtin carries `apply` as its callee and the
         // applied function as arg0. Op::Apply already carries the applied
         // function itself, which may be a symbol too.
-        callee = Value::from_bits(arg0 as usize);
+        callee = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(arg0 as usize)
+        };
     }
     let shape = match site {
         CensusSite::Named => {
@@ -359,7 +365,13 @@ pub(crate) fn emit_site_census(
         (_, Some(_)) => return,
         (_, None) => {
             let constant = super::lowering::const_value_bits(fb, callee, reloc_base, reloc_index)
-                .is_some_and(|bits| Value::from_bits(bits as usize).is_bytecode());
+                .is_some_and(|bits| {
+                    unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits(bits as usize)
+                    }
+                    .is_bytecode()
+                });
             if constant {
                 (CensusSite::Constant, callee)
             } else {

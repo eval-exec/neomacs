@@ -1267,7 +1267,8 @@ impl TaggedHeap {
         heap
     }
 
-    pub(crate) fn identity(&self) -> usize {
+    #[doc(hidden)]
+    pub fn identity(&self) -> usize {
         self.identity.get()
     }
 
@@ -1312,7 +1313,8 @@ impl TaggedHeap {
     /// the allocation cap (`bytes_since_gc > gc_threshold*4`). Called by the
     /// evaluator right before the forced `terminate_concurrent_mark`, so
     /// `incremental_finish` can treat the truncated mark window accordingly.
-    pub(crate) fn note_must_finish(&mut self) {
+    #[doc(hidden)]
+    pub fn note_must_finish(&mut self) {
         self.must_finish_count += 1;
         self.forced_termination_pending = true;
         if std::env::var("NEOVM_GC_TRACE").as_deref() == Ok("1") {
@@ -1334,7 +1336,8 @@ impl TaggedHeap {
     /// Trace probe: the projected mark-window allocation in bytes (the
     /// cap-pressure field detector). For the `NEOVM_GC concurrent_start`
     /// line; informational since the paced trigger was reverted.
-    pub(crate) fn pace_probe(&self) -> usize {
+    #[doc(hidden)]
+    pub fn pace_probe(&self) -> usize {
         self.pace_lead_bytes
     }
 
@@ -1410,7 +1413,8 @@ impl TaggedHeap {
         self.is_value_marked(value)
     }
 
-    pub(crate) fn sweep_stats(&self) -> SweepStats {
+    #[doc(hidden)]
+    pub fn sweep_stats(&self) -> SweepStats {
         SweepStats {
             sweep_us: self.sweep_slice_us_total,
             slice_count: self.sweep_slice_count,
@@ -1439,13 +1443,15 @@ impl TaggedHeap {
 
     /// Handshake-pause instrumentation snapshot (per phase, per root group,
     /// size probes). Sibling of `sweep_stats`.
-    pub(crate) fn handshake_stats(&self) -> HandshakeStats {
+    #[doc(hidden)]
+    pub fn handshake_stats(&self) -> HandshakeStats {
         self.handshake.clone()
     }
 
     /// Mutable access for the evaluator to record the context-side handshake
     /// parts (root-group breakdowns, whole-pause totals, context probes).
-    pub(crate) fn handshake_stats_mut(&mut self) -> &mut HandshakeStats {
+    #[doc(hidden)]
+    pub fn handshake_stats_mut(&mut self) -> &mut HandshakeStats {
         &mut self.handshake
     }
 
@@ -1460,7 +1466,8 @@ impl TaggedHeap {
     /// per object handed out, the open allocation regions' unused cells
     /// excluded (they were charged when the region was granted).
     #[inline]
-    pub(crate) fn memory_use_counts_snapshot(&self) -> [u64; MEMORY_USE_COUNT_LEN] {
+    #[doc(hidden)]
+    pub fn memory_use_counts_snapshot(&self) -> [u64; MEMORY_USE_COUNT_LEN] {
         let delta = self.allocation_region_deltas();
         self.mutators()
             .map(|state| state.exact_memory_use_counts(delta))
@@ -1498,7 +1505,8 @@ impl TaggedHeap {
     /// It banks what is being cleared, so that [`Self::total_allocated_bytes`]
     /// stays exact without the allocation path counting it a second time.
     /// Every collector site resets through here for that reason.
-    pub(crate) fn reset_bytes_since_gc(&mut self) {
+    #[doc(hidden)]
+    pub fn reset_bytes_since_gc(&mut self) {
         // Close first, so what is banked is exactly what was handed out.
         self.close_alloc_regions();
         for state in self.mutators_mut() {
@@ -1566,7 +1574,8 @@ impl TaggedHeap {
     /// # Safety
     /// `start..start+len` must remain mapped and writable for the lifetime of
     /// this heap.  The range must contain aligned `ConsCell` objects.
-    pub(crate) unsafe fn register_mapped_cons_range(&mut self, start: *mut ConsCell, len: usize) {
+    #[doc(hidden)]
+    pub unsafe fn register_mapped_cons_range(&mut self, start: *mut ConsCell, len: usize) {
         if len == 0 {
             return;
         }
@@ -1586,7 +1595,8 @@ impl TaggedHeap {
     /// # Safety
     /// `start..start+len` must remain mapped and writable for the lifetime of
     /// this heap.  The range must contain aligned `FloatObj` objects.
-    pub(crate) unsafe fn register_mapped_float_range(&mut self, start: *mut FloatObj, len: usize) {
+    #[doc(hidden)]
+    pub unsafe fn register_mapped_float_range(&mut self, start: *mut FloatObj, len: usize) {
         if len == 0 {
             return;
         }
@@ -1616,7 +1626,8 @@ impl TaggedHeap {
         self.mapped_string_index_by_addr.reserve(strings);
     }
 
-    pub(crate) unsafe fn register_mapped_veclike_object(
+    #[doc(hidden)]
+    pub unsafe fn register_mapped_veclike_object(
         &mut self,
         header: *mut VecLikeHeader,
         byte_len: usize,
@@ -1643,11 +1654,8 @@ impl TaggedHeap {
     /// # Safety
     /// `ptr` must point at a complete, aligned string object that remains
     /// mapped and writable for the lifetime of this heap.
-    pub(crate) unsafe fn register_mapped_string_object(
-        &mut self,
-        ptr: *mut StringObj,
-        byte_len: usize,
-    ) {
+    #[doc(hidden)]
+    pub unsafe fn register_mapped_string_object(&mut self, ptr: *mut StringObj, byte_len: usize) {
         if byte_len == 0 {
             return;
         }
@@ -1682,7 +1690,8 @@ impl TaggedHeap {
     /// The loader calls this once per reconstructed image row before the
     /// image is published, so the byte is written before any mutator or
     /// collector can observe the object.
-    pub(crate) fn note_image_object(&mut self, value: TaggedValue) -> ImageStamp {
+    #[doc(hidden)]
+    pub fn note_image_object(&mut self, value: TaggedValue) -> ImageStamp {
         if value.is_cons() {
             return ImageStamp::NotStamped;
         }
@@ -1876,7 +1885,8 @@ impl TaggedHeap {
     /// the heap). A spurious entry only re-scans one cons per collection.
     /// `false`, doing nothing, for anything but a mapped cons of a heap with
     /// the dump partition on.
-    pub(crate) fn remember_mapped_cons_ahead_of_writes(&mut self, cons: TaggedValue) -> bool {
+    #[doc(hidden)]
+    pub fn remember_mapped_cons_ahead_of_writes(&mut self, cons: TaggedValue) -> bool {
         if self.generational.enabled
             || !cons.is_cons()
             || !self.partition_dump
@@ -1966,7 +1976,8 @@ impl TaggedHeap {
     /// Derived rather than counted: `bytes_banked_at_resets` is advanced by
     /// [`Self::reset_bytes_since_gc`], the one place `bytes_since_gc` returns
     /// to zero, so the sum is exact by construction.
-    pub(crate) fn total_allocated_bytes(&self) -> u64 {
+    #[doc(hidden)]
+    pub fn total_allocated_bytes(&self) -> u64 {
         let delta = self.allocation_region_deltas();
         self.mutators()
             .map(|state| {
@@ -2331,7 +2342,8 @@ impl TaggedHeap {
     /// process RSS: symbol registries, evaluator stacks, display caches,
     /// allocator metadata, and nested hash-key allocations live outside this
     /// accounting and are intentionally exposed as the RSS remainder.
-    pub(crate) fn layout_stats(&self) -> HeapLayoutStats {
+    #[doc(hidden)]
+    pub fn layout_stats(&self) -> HeapLayoutStats {
         // The free-list walk below would miss an open region's cells and
         // `cons_live_count` would count them: callers close first.
         debug_assert!(

@@ -511,10 +511,13 @@ fn fuse_front(
             let end = const_base.checked_add(*prefix)?;
             body.constants.get_mut(const_base..end)?.fill(Value::NIL);
         }
-        const_base += Value::from_bits(region.callee_bits as usize)
-            .get_bytecode_data()?
-            .constants
-            .len();
+        const_base += unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(region.callee_bits as usize)
+        }
+        .get_bytecode_data()?
+        .constants
+        .len();
     }
     let mut hof_at = BTreeMap::new();
     for (fused_pc, &original_pc) in body.caller_of_fused.iter().enumerate() {

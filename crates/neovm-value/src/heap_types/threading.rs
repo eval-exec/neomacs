@@ -91,7 +91,8 @@ const _: () = assert!(size_of::<ThreadIds>() == 32);
 const _: () = assert!(std::mem::offset_of!(ThreadIds, next_thread) == 24);
 
 impl ThreadIds {
-    pub(crate) const NEXT_THREAD_OFFSET: usize = std::mem::offset_of!(Self, next_thread);
+    #[doc(hidden)]
+    pub const NEXT_THREAD_OFFSET: usize = std::mem::offset_of!(Self, next_thread);
 
     pub(crate) fn new(heap: HeapIdentity) -> Self {
         Self {
@@ -107,18 +108,21 @@ impl ThreadIds {
     }
 
     #[inline(always)]
-    pub(crate) fn any_thread_created(&self) -> bool {
+    #[doc(hidden)]
+    pub fn any_thread_created(&self) -> bool {
         self.next_thread.get() > 1
     }
 
-    pub(crate) const fn main_thread(&self) -> ThreadId {
+    #[doc(hidden)]
+    pub const fn main_thread(&self) -> ThreadId {
         ThreadId {
             heap: self.heap,
             ordinal: 0,
         }
     }
 
-    pub(crate) fn issue_thread(&mut self) -> Result<ThreadId, NativeIdExhausted> {
+    #[doc(hidden)]
+    pub fn issue_thread(&mut self) -> Result<ThreadId, NativeIdExhausted> {
         let ordinal = self.next_thread.take().ok_or(NativeIdExhausted::Thread)?;
         Ok(ThreadId {
             heap: self.heap,
@@ -126,7 +130,8 @@ impl ThreadIds {
         })
     }
 
-    pub(crate) fn issue_mutex(&mut self) -> Result<MutexId, NativeIdExhausted> {
+    #[doc(hidden)]
+    pub fn issue_mutex(&mut self) -> Result<MutexId, NativeIdExhausted> {
         let ordinal = Self::take(&mut self.next_mutex).ok_or(NativeIdExhausted::Mutex)?;
         Ok(MutexId {
             heap: self.heap,
@@ -134,7 +139,8 @@ impl ThreadIds {
         })
     }
 
-    pub(crate) fn issue_condvar(&mut self) -> Result<CondVarId, NativeIdExhausted> {
+    #[doc(hidden)]
+    pub fn issue_condvar(&mut self) -> Result<CondVarId, NativeIdExhausted> {
         let ordinal = Self::take(&mut self.next_condvar).ok_or(NativeIdExhausted::CondVar)?;
         Ok(CondVarId {
             heap: self.heap,
@@ -144,21 +150,24 @@ impl ThreadIds {
 
     /// Re-type only an identity issued by this World. This validates native
     /// numbering, not object liveness or permission to access a payload.
-    pub(crate) fn thread_from_native_key(&self, key: u64) -> Option<ThreadId> {
+    #[doc(hidden)]
+    pub fn thread_from_native_key(&self, key: u64) -> Option<ThreadId> {
         (key < self.next_thread.get()).then_some(ThreadId {
             heap: self.heap,
             ordinal: key,
         })
     }
 
-    pub(crate) fn mutex_from_native_key(&self, key: u64) -> Option<MutexId> {
+    #[doc(hidden)]
+    pub fn mutex_from_native_key(&self, key: u64) -> Option<MutexId> {
         Self::issued_nonzero(self.next_mutex, key).then_some(MutexId {
             heap: self.heap,
             ordinal: key,
         })
     }
 
-    pub(crate) fn condvar_from_native_key(&self, key: u64) -> Option<CondVarId> {
+    #[doc(hidden)]
+    pub fn condvar_from_native_key(&self, key: u64) -> Option<CondVarId> {
         Self::issued_nonzero(self.next_condvar, key).then_some(CondVarId {
             heap: self.heap,
             ordinal: key,
@@ -185,9 +194,11 @@ pub struct ThreadName(TaggedValue);
 pub(crate) struct InvalidThreadName;
 
 impl ThreadName {
-    pub(crate) const UNNAMED: Self = Self(TaggedValue::NIL);
+    #[doc(hidden)]
+    pub const UNNAMED: Self = Self(TaggedValue::NIL);
 
-    pub(crate) fn from_value(value: TaggedValue) -> Result<Self, InvalidThreadName> {
+    #[doc(hidden)]
+    pub fn from_value(value: TaggedValue) -> Result<Self, InvalidThreadName> {
         if value.is_nil() || value.is_string() {
             Ok(Self(value))
         } else {
@@ -195,11 +206,13 @@ impl ThreadName {
         }
     }
 
-    pub(crate) fn is_unnamed(self) -> bool {
+    #[doc(hidden)]
+    pub fn is_unnamed(self) -> bool {
         self.0.is_nil()
     }
 
-    pub(crate) const fn stored(self) -> TaggedValue {
+    #[doc(hidden)]
+    pub const fn stored(self) -> TaggedValue {
         self.0
     }
 }
@@ -251,7 +264,8 @@ impl StoredThreadEvent {
     /// Admit all three transport roots to the target's heap before producing
     /// ordinary child words. A foreign sender, symbol or data leaves the
     /// target untouched; the caller still owns every transport lease.
-    pub(crate) fn try_from_roots(
+    #[doc(hidden)]
+    pub fn try_from_roots(
         heap: &TaggedHeap,
         roots: &[SharedRoot; 3],
     ) -> Result<Self, SharedRootError> {
@@ -292,7 +306,8 @@ pub struct ThreadNativeState {
 }
 
 impl ThreadNativeState {
-    pub(crate) const fn new(phase: ThreadPhase, current_buffer: Option<BufferId>) -> Self {
+    #[doc(hidden)]
+    pub const fn new(phase: ThreadPhase, current_buffer: Option<BufferId>) -> Self {
         Self {
             phase,
             join_observation: JoinObservation::Unobserved,
@@ -329,11 +344,8 @@ pub struct ThreadPayload {
 }
 
 impl ThreadPayload {
-    pub(crate) const fn new(
-        id: ThreadId,
-        native: ThreadNativeState,
-        children: ThreadChildren,
-    ) -> Self {
+    #[doc(hidden)]
+    pub const fn new(id: ThreadId, native: ThreadNativeState, children: ThreadChildren) -> Self {
         Self {
             id,
             native,
@@ -433,20 +445,24 @@ impl ThreadChildren {
 pub struct RecursionDepth(NonZeroU32);
 
 impl RecursionDepth {
-    pub(crate) const ONE: Self = Self(NonZeroU32::MIN);
+    #[doc(hidden)]
+    pub const ONE: Self = Self(NonZeroU32::MIN);
 
-    pub(crate) const fn new(count: u32) -> Option<Self> {
+    #[doc(hidden)]
+    pub const fn new(count: u32) -> Option<Self> {
         match NonZeroU32::new(count) {
             Some(depth) => Some(Self(depth)),
             None => None,
         }
     }
 
-    pub(crate) const fn get(self) -> u32 {
+    #[doc(hidden)]
+    pub const fn get(self) -> u32 {
         self.0.get()
     }
 
-    pub(crate) fn checked_increment(self) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn checked_increment(self) -> Option<Self> {
         self.get().checked_add(1).and_then(Self::new)
     }
 }
@@ -509,7 +525,8 @@ pub struct MutexReference {
 impl MutexReference {
     /// The caller keeps `value` rooted while borrowing its actual object and
     /// while allocating the condition that will own the returned heap edge.
-    pub(crate) fn from_mutex(value: TaggedValue, object: &MutexObj) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_mutex(value: TaggedValue, object: &MutexObj) -> Option<Self> {
         let header = value.as_veclike_ptr()?;
         if object.header.type_tag != crate::tagged::header::VecLikeType::Mutex
             || !std::ptr::eq(header, std::ptr::addr_of!(object.header))
@@ -544,7 +561,8 @@ pub struct CondVarPayload {
 pub(crate) struct ForeignMutexAssociation;
 
 impl CondVarPayload {
-    pub(crate) fn new(
+    #[doc(hidden)]
+    pub fn new(
         id: CondVarId,
         name: Option<LispString>,
         association: MutexReference,
@@ -615,3 +633,158 @@ static_assertions::assert_not_impl_any!(ThreadChildren: Send, Sync);
 static_assertions::assert_not_impl_any!(ThreadPayload: Send, Sync);
 static_assertions::assert_not_impl_any!(MutexPayload: Send, Sync);
 static_assertions::assert_not_impl_any!(CondVarPayload: Send, Sync);
+
+impl CondVarPayload {
+    #[inline]
+    #[doc(hidden)]
+    pub fn name(&self) -> &Option<LispString> {
+        &self.name
+    }
+}
+
+impl MutexPayload {
+    #[inline]
+    #[doc(hidden)]
+    pub fn name(&self) -> &Option<LispString> {
+        &self.name
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn ownership(&self) -> MutexOwnership {
+        self.ownership
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn ownership_mut(&mut self) -> &mut MutexOwnership {
+        &mut self.ownership
+    }
+}
+
+impl ThreadChildren {
+    #[inline]
+    #[doc(hidden)]
+    pub fn blocked_remaining_forms(&self) -> TaggedValue {
+        self.blocked_remaining_forms
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn blocked_remaining_forms_mut(&mut self) -> &mut TaggedValue {
+        &mut self.blocked_remaining_forms
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn buffer_disposition(&self) -> TaggedValue {
+        self.buffer_disposition
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn buffer_disposition_mut(&mut self) -> &mut TaggedValue {
+        &mut self.buffer_disposition
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn error_data(&self) -> TaggedValue {
+        self.error_data
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn error_data_mut(&mut self) -> &mut TaggedValue {
+        &mut self.error_data
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn error_symbol(&self) -> TaggedValue {
+        self.error_symbol
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn error_symbol_mut(&mut self) -> &mut TaggedValue {
+        &mut self.error_symbol
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn event_object(&self) -> TaggedValue {
+        self.event_object
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn event_object_mut(&mut self) -> &mut TaggedValue {
+        &mut self.event_object
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn last_error(&self) -> Option<TaggedValue> {
+        self.last_error
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn last_error_mut(&mut self) -> &mut Option<TaggedValue> {
+        &mut self.last_error
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn result(&self) -> TaggedValue {
+        self.result
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn result_mut(&mut self) -> &mut TaggedValue {
+        &mut self.result
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn stored_events(&self) -> &Vec<StoredThreadEvent> {
+        &self.stored_events
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn stored_events_mut(&mut self) -> &mut Vec<StoredThreadEvent> {
+        &mut self.stored_events
+    }
+}
+
+impl ThreadNativeState {
+    #[inline]
+    #[doc(hidden)]
+    pub fn current_buffer(&self) -> Option<BufferId> {
+        self.current_buffer
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn current_buffer_mut(&mut self) -> &mut Option<BufferId> {
+        &mut self.current_buffer
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn join_observation(&self) -> JoinObservation {
+        self.join_observation
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn join_observation_mut(&mut self) -> &mut JoinObservation {
+        &mut self.join_observation
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn phase(&self) -> ThreadPhase {
+        self.phase
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn phase_mut(&mut self) -> &mut ThreadPhase {
+        &mut self.phase
+    }
+}
+
+impl ThreadPayload {
+    #[inline]
+    #[doc(hidden)]
+    pub fn children(&self) -> &ThreadChildren {
+        &self.children
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn native(&self) -> ThreadNativeState {
+        self.native
+    }
+}

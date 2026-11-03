@@ -159,9 +159,12 @@ fn profiling_call(rt: &RtCtx) -> Option<T2Emit> {
 /// credit call and no changes to the existing subr shim's hot path.
 pub(crate) fn subr_profiler(rt: &RtCtx, expected: u64) -> Option<T2Emit> {
     profiling_call(rt).filter(|_| {
-        Value::from_bits(expected as usize)
-            .as_subr_id()
-            .is_some_and(is_mapping_builtin)
+        unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(expected as usize)
+        }
+        .as_subr_id()
+        .is_some_and(is_mapping_builtin)
     })
 }
 
@@ -242,7 +245,10 @@ fn credit_generic(
     if nargs < 2 || !credit_window_open(obs) {
         return;
     }
-    let callee = Value::from_bits(func_bits as usize);
+    let callee = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(func_bits as usize)
+    };
     // SAFETY: same Context contract as the existing generic call shim. This
     // borrow ends before the call, and the credit cannot collect or run Lisp.
     let ctx = unsafe { &*(ctx as *const Context) };
@@ -474,7 +480,10 @@ pub unsafe extern "C" fn neovm_jit_t2_record_call_use_target(
 ) {
     if credit_window_open(obs) {
         // SAFETY: the calling leaf keeps its source's table alive.
-        unsafe { &*site }.observe_counted(Value::from_bits(target as usize));
+        unsafe { &*site }.observe_counted(unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(target as usize)
+        });
     }
 }
 

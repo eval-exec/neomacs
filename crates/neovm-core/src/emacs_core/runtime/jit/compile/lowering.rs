@@ -8727,7 +8727,7 @@ fn lower_simple_op_arms(
                 Op::CallBuiltin(name_idx, n) => {
                     (0, const_sym_id(constants, *name_idx)?, *n as usize)
                 }
-                Op::CallBuiltinSym(sym, n) => (1, sym.0, *n as usize),
+                Op::CallBuiltinSym(sym, n) => (1, sym.to_raw(), *n as usize),
                 _ => unreachable!("matched named-builtin ops above"),
             };
             if stack.len() < nargs {

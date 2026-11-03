@@ -33,7 +33,10 @@ pub(crate) extern "C" fn neovm_jit_hof_length(sequence: i64) -> i64 {
         if crate::tagged::collection_reads::reads_need_observation() {
             return -1;
         }
-        let mut tail = Value::from_bits(sequence as usize);
+        let mut tail = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(sequence as usize)
+        };
         let mut tortoise = tail;
         let mut span = 2u32;
         let mut remaining = span;
@@ -88,10 +91,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_hof_start(
         let parent = unsafe { core::slice::from_raw_parts(parent, count) };
         ctx.push_vm_root_frame();
         for &word in parent {
-            ctx.push_vm_frame_root(Value::from_bits(word as usize));
+            ctx.push_vm_frame_root(unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(word as usize)
+            });
         }
-        let callback = Value::from_bits(parent[count - 2] as usize);
-        let sequence = Value::from_bits(parent[count - 1] as usize);
+        let callback = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(parent[count - 2] as usize)
+        };
+        let sequence = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(parent[count - 1] as usize)
+        };
         assert_eq!(ctx.push_vm_frame_root_slot(sequence), count);
         if kind == HofKind::Mapcar {
             assert_eq!(ctx.reserve_vm_frame_root_slots(len), count + 1);
@@ -107,7 +119,13 @@ pub(crate) unsafe extern "C" fn neovm_jit_hof_start(
             }
         }
         let bt = ctx.specpdl.len();
-        ctx.push_backtrace_frame(Value::from_bits(map as usize), &[callback, sequence]);
+        ctx.push_backtrace_frame(
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(map as usize)
+            },
+            &[callback, sequence],
+        );
         bt as i64
     })
 }
@@ -122,10 +140,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_hof_start(
 pub(crate) unsafe extern "C" fn neovm_jit_hof_store(ctx: *mut u8, index: i64, value: i64) -> i64 {
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        ctx.set_vm_frame_root_slot(
-            usize::try_from(index).expect("HOF result slot"),
-            Value::from_bits(value as usize),
-        );
+        ctx.set_vm_frame_root_slot(usize::try_from(index).expect("HOF result slot"), unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(value as usize)
+        });
         value
     })
 }
@@ -141,10 +159,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_hof_store(ctx: *mut u8, index: i64, va
 pub(crate) unsafe extern "C" fn neovm_jit_hof_cursor(ctx: *mut u8, slot: i64, tail: i64) -> i64 {
     jit_shim_contain!(ctx, VALUE_SHIM_SIGNAL, {
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        ctx.set_vm_frame_root_slot(
-            usize::try_from(slot).expect("HOF cursor slot"),
-            Value::from_bits(tail as usize),
-        );
+        ctx.set_vm_frame_root_slot(usize::try_from(slot).expect("HOF cursor slot"), unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(tail as usize)
+        });
         Value::NIL.bits() as i64
     })
 }
@@ -193,7 +211,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_hof_finish(
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         match finish_mapping(
             ctx,
-            Value::from_bits(sequence as usize),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(sequence as usize)
+            },
             usize::try_from(mapped).expect("HOF mapped count"),
             usize::try_from(bt).expect("HOF backtrace index"),
             usize::try_from(base).expect("HOF sink base"),

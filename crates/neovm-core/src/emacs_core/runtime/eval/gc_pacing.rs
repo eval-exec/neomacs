@@ -49,11 +49,15 @@ impl Context {
                     _ => None,
                 }),
         );
-        called.sort_unstable_by_key(|sym| sym.0);
+        called.sort_unstable_by_key(|sym| sym.to_raw());
         called.dedup();
         cache::trace_redefined_pins(
             heap_id,
-            &|sym| called.binary_search_by_key(&sym.0, |s| s.0).is_ok(),
+            &|sym| {
+                called
+                    .binary_search_by_key(&sym.to_raw(), |s| s.to_raw())
+                    .is_ok()
+            },
             visit,
         );
         called.clear();
@@ -281,7 +285,10 @@ impl Context {
                     // (`detach_native_frames_into`) -- and root seeding
                     // runs with the mutator stopped.
                     for i in 0..*nargs as usize {
-                        visit(Value::from_bits(unsafe { *args_ptr.add(i) } as usize));
+                        visit(unsafe {
+                            /* SAFETY: real Value word */
+                            Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+                        });
                     }
                 }
                 SpecBinding::UnwindProtect { forms, lexenv } => {

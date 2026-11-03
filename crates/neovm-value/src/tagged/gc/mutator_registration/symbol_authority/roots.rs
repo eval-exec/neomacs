@@ -25,7 +25,8 @@ impl KeeperSymbols<'_> {
 
     /// Copy current cells and residual pools, including nonmember slots.
     /// The stop remains exclusively borrowed until this receiver drops.
-    pub(crate) fn append_current_symbol_roots(
+    #[doc(hidden)]
+    pub fn append_current_symbol_roots(
         &self,
         keeper: &KeeperWorldDesignator<'_>,
         out: &mut Vec<TaggedValue>,
@@ -42,7 +43,8 @@ impl KeeperSymbols<'_> {
 
     /// Copy every currently issued canonical projection, not an admission
     /// snapshot. VOID has no managed word; no descriptor reference escapes.
-    pub(crate) fn append_current_projection_roots(
+    #[doc(hidden)]
+    pub fn append_current_projection_roots(
         &self,
         keeper: &KeeperWorldDesignator<'_>,
         out: &mut Vec<TaggedValue>,

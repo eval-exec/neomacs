@@ -141,7 +141,7 @@ pub(crate) fn collect(ctx: &crate::emacs_core::eval::Context) -> (usize, Vec<Sit
         let Some(bc) = f.bytecode_data_if_materialized() else {
             continue;
         };
-        let Some(runtime) = bc.runtime.as_ref() else {
+        let Some(runtime) = bc.runtime().as_ref() else {
             continue;
         };
         names.entry(runtime.state_ptr()).or_insert_with(|| {

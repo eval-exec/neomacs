@@ -70,7 +70,8 @@ impl TaggedHeap {
     /// Due-only selection. Explicit collections bypass this helper and always
     /// use begin_stw_collection. The bootstrap/first partition stays major.
     #[inline]
-    pub(crate) fn should_run_minor(&self, memory_full: bool, stress: bool) -> bool {
+    #[doc(hidden)]
+    pub fn should_run_minor(&self, memory_full: bool, stress: bool) -> bool {
         #[cfg(feature = "gc-memory-telemetry")]
         memory_telemetry::note_selection(self, memory_full, stress);
         self.generational.enabled
@@ -108,7 +109,8 @@ impl TaggedHeap {
     /// begin entry. Neither continuation polls nor explicit GC call this.
     #[cold]
     #[inline(never)]
-    pub(crate) fn note_generation_stress_cycle_started(&mut self) {
+    #[doc(hidden)]
+    pub fn note_generation_stress_cycle_started(&mut self) {
         if !self.generational.enabled {
             return;
         }

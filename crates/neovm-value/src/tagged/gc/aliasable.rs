@@ -58,7 +58,8 @@ unsafe impl<T: Send> Send for AliasableBox<T> {}
 
 impl<T> AliasableBox<T> {
     /// Take ownership of `value` on the heap.
-    pub(crate) fn new(value: T) -> Self {
+    #[doc(hidden)]
+    pub fn new(value: T) -> Self {
         Self::from_box(Box::new(value))
     }
 
@@ -77,13 +78,15 @@ impl<T> AliasableBox<T> {
     /// The one provenance root. Copying this pointer is how views and the
     /// thread-local slot name the allocation; nothing else may be stored.
     #[inline(always)]
-    pub(crate) fn root(&self) -> NonNull<T> {
+    #[doc(hidden)]
+    pub fn root(&self) -> NonNull<T> {
         self.ptr
     }
 
     /// Exclusive access, derived from the root.
     #[inline(always)]
-    pub(crate) fn get_mut(&mut self) -> &mut T {
+    #[doc(hidden)]
+    pub fn get_mut(&mut self) -> &mut T {
         // SAFETY: `&mut self` proves no other `&mut T` derived from this
         // owner is live; the root pointer is valid for the whole `self`
         // lifetime, and this keys off `self`'s exclusive borrow in the same

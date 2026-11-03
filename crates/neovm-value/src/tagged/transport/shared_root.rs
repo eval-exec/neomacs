@@ -225,7 +225,10 @@ impl SharedRoot {
         }
         let values: Vec<_> = roots
             .iter()
-            .map(|root| TaggedValue::from_bits(root.word()))
+            .map(|root| unsafe {
+                /* SAFETY: value-internal construction from a real Value */
+                TaggedValue::from_bits(root.word())
+            })
             .collect();
         // SAFETY: each checked input belongs to the installed heap, and its
         // borrowed lease keeps its child alive across allocation. Only this
@@ -278,7 +281,10 @@ impl SharedRoot {
             Transport::Untraced(_) => None,
             Transport::Rooted(lease) => Some(lease.word()),
             Transport::BatchElement { child, .. } => {
-                TracedWord::of(TaggedValue::from_bits(child.0))
+                TracedWord::of(unsafe {
+                    /* SAFETY: value-internal construction from a real Value */
+                    TaggedValue::from_bits(child.0)
+                })
             }
         }
     }
@@ -300,7 +306,10 @@ impl SharedRoot {
             });
         }
         Ok(LocalRoot {
-            value: TaggedValue::from_bits(self.word()),
+            value: unsafe {
+                /* SAFETY: value-internal construction from a real Value */
+                TaggedValue::from_bits(self.word())
+            },
             _borrows: PhantomData,
         })
     }
@@ -309,9 +318,13 @@ impl SharedRoot {
     /// crate code that reaches its heap only through the installed view. The
     /// installed identity is this thread's proof that it is that heap's
     /// mutator, and the root keeps the object alive while `&self` lives.
-    pub(crate) fn value_on_current_mutator(&self) -> Option<TaggedValue> {
+    #[doc(hidden)]
+    pub fn value_on_current_mutator(&self) -> Option<TaggedValue> {
         let installed = current_tagged_heap_identity().and_then(HeapIdentity::from_legacy_word)?;
-        (installed == self.heap).then(|| TaggedValue::from_bits(self.word()))
+        (installed == self.heap).then(|| unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(self.word())
+        })
     }
 
     /// Whether both roots hold the same object of the same heap (Lisp `eq`).

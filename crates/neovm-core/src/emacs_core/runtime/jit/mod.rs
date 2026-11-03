@@ -486,7 +486,7 @@ impl FeedbackVecExt for FeedbackVec {
     /// whichever allocation wins.
     #[inline]
     fn slots(&self, len: usize) -> &[AtomicU64] {
-        self.slots
+        self.slots_ref()
             .get_or_init(|| (0..len).map(|_| AtomicU64::new(0)).collect())
     }
 
@@ -530,7 +530,7 @@ impl FeedbackVecExt for FeedbackVec {
     /// Operand-type feedback at arithmetic site `pc`.
     #[inline]
     fn numeric_at(&self, pc: usize) -> NumericFeedback {
-        match self.slots.get() {
+        match self.slots_ref().get() {
             None => NumericFeedback::FixnumOnly,
             Some(slots) => slots.get(pc).map_or(NumericFeedback::FixnumOnly, |s| {
                 NumericFeedback::unpack(s.load(Ordering::Relaxed))
@@ -541,7 +541,7 @@ impl FeedbackVecExt for FeedbackVec {
     /// Feedback at call-site `pc` (or `Uninit` if unallocated / out of range).
     #[inline]
     fn call_at(&self, pc: usize) -> CallFeedback {
-        match self.slots.get() {
+        match self.slots_ref().get() {
             None => CallFeedback::Uninit,
             Some(slots) => slots.get(pc).map_or(CallFeedback::Uninit, |s| {
                 CallFeedback::unpack(s.load(Ordering::Relaxed))
@@ -1156,7 +1156,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// patched) for this source; 0 for a plain function.
     #[inline]
     fn patched_prefix(&self) -> usize {
-        self.patched_prefix.load(Ordering::Relaxed) as usize
+        self.patched_prefix_ref().load(Ordering::Relaxed) as usize
     }
 
     /// Record a `make-closure` patch of width `n`. Returns `Some(compiled_id)`
@@ -1171,14 +1171,14 @@ impl RuntimeStateTieringExt for RuntimeState {
     #[inline]
     fn note_patched_prefix(&self, n: usize) -> Option<u64> {
         let n = u32::try_from(n).unwrap_or(u32::MAX);
-        if n <= self.patched_prefix.load(Ordering::Relaxed) {
+        if n <= self.patched_prefix_ref().load(Ordering::Relaxed) {
             return None;
         }
-        let prev = self.patched_prefix.fetch_max(n, Ordering::Relaxed);
+        let prev = self.patched_prefix_ref().fetch_max(n, Ordering::Relaxed);
         if n > prev {
             // The caller evicts the cached verdict for this id; forget ours
             // too, so the next dispatch re-consults the cache like before.
-            self.native_rejected_epoch.store(0, Ordering::Relaxed);
+            self.native_rejected_epoch_ref().store(0, Ordering::Relaxed);
             self.compiled_id()
         } else {
             None
@@ -1187,7 +1187,8 @@ impl RuntimeStateTieringExt for RuntimeState {
 
     /// Defer this body's tier-up to `heat` (see `profit_deferred_heat`).
     fn defer_tier_up(&self, heat: u32) {
-        self.profit_deferred_heat.store(heat, Ordering::Relaxed);
+        self.profit_deferred_heat_ref()
+            .store(heat, Ordering::Relaxed);
     }
 
     /// The deferral heat of a parked body: one no heat reaches.
@@ -1204,14 +1205,14 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// the release: a parker that rechecks its job after parking and a
     /// publisher that releases after publishing cannot both miss.
     fn park_tier_up(&self) {
-        self.profit_deferred_heat
+        self.profit_deferred_heat_ref()
             .store(Self::PARKED_HEAT, Ordering::SeqCst);
     }
 
     /// End a park: the next call tiers up, finding the backend's result.
     /// Only a park is ended; a hold set since by another owner stays.
     fn release_parked_tier_up(&self) {
-        let _ = self.profit_deferred_heat.compare_exchange(
+        let _ = self.profit_deferred_heat_ref().compare_exchange(
             Self::PARKED_HEAT,
             Self::RELEASED_HEAT,
             Ordering::SeqCst,
@@ -1221,25 +1222,25 @@ impl RuntimeStateTieringExt for RuntimeState {
 
     /// Whether this body is parked (see [`Self::park_tier_up`]).
     fn tier_up_parked(&self) -> bool {
-        self.profit_deferred_heat.load(Ordering::Relaxed) == Self::PARKED_HEAT
+        self.profit_deferred_heat_ref().load(Ordering::Relaxed) == Self::PARKED_HEAT
     }
 
     /// The heat this body's tier-up is deferred to (0 = not deferred).
     fn deferred_heat(&self) -> u32 {
-        self.profit_deferred_heat.load(Ordering::Relaxed)
+        self.profit_deferred_heat_ref().load(Ordering::Relaxed)
     }
 
     /// Whether a profitability deferral is still holding at heat `now`.
     #[inline]
     fn tier_up_deferred(&self, now: u32) -> bool {
-        let at = self.profit_deferred_heat.load(Ordering::Relaxed);
+        let at = self.profit_deferred_heat_ref().load(Ordering::Relaxed);
         at != 0 && now < at
     }
 
     /// Whether this body's deferral has run out: it was deferred and its heat
     /// has reached the deferral point, so the next compile bypasses the gate.
     fn profit_deferral_expired(&self) -> bool {
-        let at = self.profit_deferred_heat.load(Ordering::Relaxed);
+        let at = self.profit_deferred_heat_ref().load(Ordering::Relaxed);
         at != 0 && self.heat() >= at
     }
 
@@ -1247,7 +1248,8 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// under NotCompilable generation `epoch` — see `native_rejected_epoch`.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn mark_native_rejected(&self, epoch: u64) {
-        self.native_rejected_epoch.store(epoch, Ordering::Relaxed);
+        self.native_rejected_epoch_ref()
+            .store(epoch, Ordering::Relaxed);
     }
 
     /// Whether a remembered `NotCompilable` verdict is still current, i.e. a
@@ -1256,7 +1258,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     fn native_rejected(&self) -> bool {
         #[cfg(feature = "jit")]
         {
-            let stamped = self.native_rejected_epoch.load(Ordering::Relaxed);
+            let stamped = self.native_rejected_epoch_ref().load(Ordering::Relaxed);
             stamped != 0 && stamped == super::jit::cache::rejection_epoch()
         }
         #[cfg(not(feature = "jit"))]
@@ -1364,10 +1366,10 @@ impl RuntimeStateTieringExt for RuntimeState {
         if self.force_interpret.load(Ordering::Relaxed) {
             return Plan::Interpret;
         }
-        let prev = self.heat.load(Ordering::Relaxed);
+        let prev = self.heat_ref().load(Ordering::Relaxed);
         let now = prev.saturating_add(1);
-        self.heat.store(now, Ordering::Relaxed);
-        if self.aot_prewarmed.load(Ordering::Relaxed) {
+        self.heat_ref().store(now, Ordering::Relaxed);
+        if self.aot_prewarmed_ref().load(Ordering::Relaxed) {
             return Plan::Compiled;
         }
         if self.native_rejected() || self.tier_up_deferred(now) {
@@ -1382,7 +1384,7 @@ impl RuntimeStateTieringExt for RuntimeState {
         // again: for the 200–800-op font-lock bodies it meant 5–12K more
         // calls, i.e. never within a session (org op −7.6% Ir when they run
         // native).
-        if self.profit_deferred_heat.load(Ordering::Relaxed) != 0 {
+        if self.profit_deferred_heat_ref().load(Ordering::Relaxed) != 0 {
             #[cfg(feature = "jit")]
             super::jit::stats::record_dispatch(true);
             return Plan::Compiled;
@@ -1424,10 +1426,10 @@ impl RuntimeStateTieringExt for RuntimeState {
             return Plan::Interpret;
         }
         // Saturating bump — a long-lived hot function must never wrap to cold.
-        let prev = self.heat.load(Ordering::Relaxed);
+        let prev = self.heat_ref().load(Ordering::Relaxed);
         let now = prev.saturating_add(1);
-        self.heat.store(now, Ordering::Relaxed);
-        if self.aot_prewarmed.load(Ordering::Relaxed) {
+        self.heat_ref().store(now, Ordering::Relaxed);
+        if self.aot_prewarmed_ref().load(Ordering::Relaxed) {
             Plan::Compiled
         } else if self.native_rejected() || self.tier_up_deferred(now) {
             Plan::Interpret
@@ -1484,7 +1486,7 @@ impl RuntimeStateTieringExt for RuntimeState {
         if self.force_interpret.load(Ordering::Relaxed) {
             return false;
         }
-        self.heat.load(Ordering::Relaxed) >= hot_threshold()
+        self.heat_ref().load(Ordering::Relaxed) >= hot_threshold()
     }
 
     /// Current invocation count.
@@ -1494,8 +1496,8 @@ impl RuntimeStateTieringExt for RuntimeState {
     #[cfg(feature = "jit")]
     #[inline(always)]
     fn bump_heat(&self) -> u32 {
-        let now = self.heat.load(Ordering::Relaxed).saturating_add(1);
-        self.heat.store(now, Ordering::Relaxed);
+        let now = self.heat_ref().load(Ordering::Relaxed).saturating_add(1);
+        self.heat_ref().store(now, Ordering::Relaxed);
         now
     }
 
@@ -1504,7 +1506,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     #[cfg(feature = "jit")]
     #[inline]
     fn peek_heat(&self) -> u32 {
-        self.heat.load(Ordering::Relaxed)
+        self.heat_ref().load(Ordering::Relaxed)
     }
 
     #[cfg(all(feature = "jit", test))]
@@ -1514,7 +1516,7 @@ impl RuntimeStateTieringExt for RuntimeState {
 
     #[inline]
     fn heat(&self) -> u32 {
-        self.heat.load(Ordering::Relaxed)
+        self.heat_ref().load(Ordering::Relaxed)
     }
 
     /// Backward branches per loop-heat wrap — the interpreter's `branch_to!`
@@ -1543,8 +1545,8 @@ impl RuntimeStateTieringExt for RuntimeState {
         if credit == 0 || !jit_runtime_enabled() {
             return;
         }
-        let prev = self.heat.load(Ordering::Relaxed);
-        self.heat
+        let prev = self.heat_ref().load(Ordering::Relaxed);
+        self.heat_ref()
             .store(prev.saturating_add(credit), Ordering::Relaxed);
     }
 
@@ -1555,8 +1557,8 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// a racing credit may be lost.
     #[cfg(feature = "jit")]
     fn note_callback_work(&self, credit: u32) {
-        let prev = self.heat.load(Ordering::Relaxed);
-        self.heat
+        let prev = self.heat_ref().load(Ordering::Relaxed);
+        self.heat_ref()
             .store(prev.saturating_add(credit), Ordering::Relaxed);
     }
 
@@ -1565,7 +1567,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// answer. Concurrent first calls may both compute it; they agree.
     #[cfg(feature = "jit")]
     fn hof_caller(&self, selectable: impl FnOnce() -> bool) -> bool {
-        match self.hof_caller.load(Ordering::Relaxed) {
+        match self.hof_caller_ref().load(Ordering::Relaxed) {
             bit if bit == HofCallerBit::Yes as u8 => true,
             bit if bit == HofCallerBit::No as u8 => false,
             _ => {
@@ -1575,7 +1577,7 @@ impl RuntimeStateTieringExt for RuntimeState {
                 } else {
                     HofCallerBit::No
                 };
-                self.hof_caller.store(bit as u8, Ordering::Relaxed);
+                self.hof_caller_ref().store(bit as u8, Ordering::Relaxed);
                 yes
             }
         }
@@ -1586,13 +1588,13 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// Mark this function as served by a prepopulated AOT leaf (see the
     /// field doc): `dispatch` returns `Plan::Compiled` from call 1.
     fn mark_aot_prewarmed(&self) {
-        self.aot_prewarmed
+        self.aot_prewarmed_ref()
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Whether this function is marked to run a preload leaf from call 1.
     fn is_aot_prewarmed(&self) -> bool {
-        self.aot_prewarmed
+        self.aot_prewarmed_ref()
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
@@ -1646,14 +1648,14 @@ impl RuntimeStateTieringExt for RuntimeState {
     #[inline]
     fn wants_numeric_feedback(&self) -> bool {
         !self
-            .numeric_feedback_consumed
+            .numeric_feedback_consumed_ref()
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Mark this body's numeric feedback as read by a compile.
     #[inline]
     fn note_numeric_feedback_consumed(&self) {
-        self.numeric_feedback_consumed
+        self.numeric_feedback_consumed_ref()
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -1663,13 +1665,13 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// The ceiling every later compile of this source respects.
     #[inline]
     fn reopt_level(&self) -> ReoptLevel {
-        ReoptLevel::from_u8(self.reopt_level.load(Ordering::Relaxed))
+        ReoptLevel::from_u8(self.reopt_level_ref().load(Ordering::Relaxed))
     }
 
     /// Deopt-driven invalidations of this source so far (saturating).
     #[inline]
     fn reopt_count(&self) -> u8 {
-        self.reopt_count.load(Ordering::Relaxed)
+        self.reopt_count_ref().load(Ordering::Relaxed)
     }
 
     /// Record one invalidation whose cause asks for at least `floor`, and
@@ -1680,13 +1682,13 @@ impl RuntimeStateTieringExt for RuntimeState {
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn note_reopt(&self, floor: ReoptLevel, max_reopts: u8) -> ReoptLevel {
         let count = self.reopt_count().saturating_add(1);
-        self.reopt_count.store(count, Ordering::Relaxed);
+        self.reopt_count_ref().store(count, Ordering::Relaxed);
         let cur = self.reopt_level();
         let mut next = cur.max(floor);
         if count > max_reopts {
             next = next.max(cur.next());
         }
-        self.reopt_level.store(next as u8, Ordering::Relaxed);
+        self.reopt_level_ref().store(next as u8, Ordering::Relaxed);
         next
     }
 
@@ -1694,7 +1696,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// compile consumes it.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn reopen_numeric_feedback(&self) {
-        self.numeric_feedback_consumed
+        self.numeric_feedback_consumed_ref()
             .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -1752,7 +1754,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn clear_aot_prewarmed(&self) {
-        self.aot_prewarmed.store(false, Ordering::Relaxed);
+        self.aot_prewarmed_ref().store(false, Ordering::Relaxed);
     }
 }
 

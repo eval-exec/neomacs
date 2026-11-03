@@ -1959,7 +1959,8 @@ impl HashTableMakeKeyword {
         name.strip_prefix(':')?.parse().ok()
     }
 
-    pub(crate) fn from_symbol_value(value: &Value) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_symbol_value(value: &Value) -> Option<Self> {
         Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
@@ -1987,7 +1988,8 @@ impl HashTableLiteralKey {
         name.parse().ok()
     }
 
-    pub(crate) fn from_symbol_value(value: &Value) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_symbol_value(value: &Value) -> Option<Self> {
         Self::from_symbol_name(value.as_bare_symbol_name()?)
     }
 
@@ -2434,7 +2436,8 @@ impl LispHashTable {
         Self::new_with_options(test, 0, None, 1.5, 0.8125)
     }
 
-    pub(crate) fn new_unpopulated_with_options(
+    #[doc(hidden)]
+    pub fn new_unpopulated_with_options(
         test: HashTableTest,
         size: i64,
         weakness: Option<HashTableWeakness>,
@@ -2873,7 +2876,8 @@ impl TaggedValue {
     /// kernel's result goes from registers straight into its slot. The 53
     /// other callers keep the out-of-line `bignum`.
     #[inline(always)]
-    pub(crate) fn bignum_inline(value: Integer) -> Self {
+    #[doc(hidden)]
+    pub fn bignum_inline(value: Integer) -> Self {
         with_tagged_heap(|h| h.alloc_bignum_inline(value))
     }
 
@@ -2905,7 +2909,8 @@ impl TaggedValue {
     /// `Integer` to inspect. `MOST_NEGATIVE_FIXNUM` is `-(2^61)`, one more
     /// in magnitude than `MOST_POSITIVE_FIXNUM`.
     #[inline(always)]
-    pub(crate) const fn fixnum_from_sign_magnitude(negative: bool, m: u64) -> Option<i64> {
+    #[doc(hidden)]
+    pub const fn fixnum_from_sign_magnitude(negative: bool, m: u64) -> Option<i64> {
         const MAX: u64 = TaggedValue::MOST_POSITIVE_FIXNUM as u64;
         if !negative {
             if m <= MAX { Some(m as i64) } else { None }
@@ -3046,7 +3051,8 @@ impl TaggedValue {
     }
 
     /// Allocate an opaque opened-font pseudovector (`PVEC_FONT`).
-    pub(crate) fn make_font(data: FontObjectData) -> Self {
+    #[doc(hidden)]
+    pub fn make_font(data: FontObjectData) -> Self {
         with_tagged_heap(|h| h.alloc_font(data))
     }
 
@@ -3258,7 +3264,8 @@ impl TaggedValue {
 
     /// The native scheduler key inside a thread, mutex or condition variable.
     /// This does not establish registry membership or extend object liveness.
-    pub(crate) fn threading_handle_id(self) -> Option<u64> {
+    #[doc(hidden)]
+    pub fn threading_handle_id(self) -> Option<u64> {
         use crate::tagged::header::{CondVarObj, MutexObj, ThreadObj};
         let header = self.as_veclike_ptr()?;
         // SAFETY: the observed live vectorlike value owns its initialized
@@ -3309,7 +3316,8 @@ impl TaggedValue {
     }
 
     /// Allocate an opaque SQLite database or statement object.
-    pub(crate) fn make_sqlite(is_statement: bool, id: i64) -> Self {
+    #[doc(hidden)]
+    pub fn make_sqlite(is_statement: bool, id: i64) -> Self {
         with_tagged_heap(|h| h.alloc_sqlite(is_statement, id))
     }
 
@@ -3699,7 +3707,8 @@ impl TaggedValue {
     /// stub. Never materializes a stub. The call-target recorder's key.
     #[cfg(feature = "jit")]
     #[inline(always)]
-    pub(crate) fn bytecode_runtime_word(self) -> Option<usize> {
+    #[doc(hidden)]
+    pub fn bytecode_runtime_word(self) -> Option<usize> {
         if self.veclike_type()? != VecLikeType::ByteCode {
             return None;
         }
@@ -3974,7 +3983,8 @@ impl TaggedValue {
     }
 
     /// Borrow the typed native payload of an opened-font pseudovector.
-    pub(crate) fn as_font_data(self) -> Option<&'static FontObjectData> {
+    #[doc(hidden)]
+    pub fn as_font_data(self) -> Option<&'static FontObjectData> {
         if self.is_font_object() {
             let ptr = self.as_veclike_ptr().unwrap() as *const FontObj;
             Some(unsafe { &(*ptr).data })
@@ -4066,7 +4076,8 @@ impl TaggedValue {
     /// Tier-H must stay inactive until return. The closure must not invoke
     /// Lisp or collect, and the mode decision must not span a GC safepoint.
     #[inline]
-    pub(crate) unsafe fn with_hash_table_mut_inactive<R>(
+    #[doc(hidden)]
+    pub unsafe fn with_hash_table_mut_inactive<R>(
         self,
         f: impl FnOnce(&mut LispHashTable) -> R,
     ) -> Option<R> {
@@ -4076,7 +4087,8 @@ impl TaggedValue {
 
     /// Active mutation accessor for a caller that has already dispatched.
     #[inline]
-    pub(crate) fn with_hash_table_mut_concurrent<R>(
+    #[doc(hidden)]
+    pub fn with_hash_table_mut_concurrent<R>(
         self,
         f: impl FnOnce(&mut LispHashTable) -> R,
     ) -> Option<R> {
@@ -4172,7 +4184,8 @@ impl TaggedValue {
         self.to_eql_key()
     }
 
-    pub(crate) fn to_eq_key(self) -> HashKey {
+    #[doc(hidden)]
+    pub fn to_eq_key(self) -> HashKey {
         match self.kind() {
             ValueKind::Nil => HashKey::Nil,
             ValueKind::T => HashKey::True,
@@ -4229,7 +4242,8 @@ impl TaggedValue {
         self.to_equal_key_depth_swp(0, &mut seen, symbols_with_pos_enabled)
     }
 
-    pub(crate) fn to_equal_key_depth_swp(
+    #[doc(hidden)]
+    pub fn to_equal_key_depth_swp(
         self,
         depth: usize,
         seen: &mut Vec<usize>,
@@ -4367,7 +4381,8 @@ impl TaggedValue {
         }
     }
 
-    pub(crate) fn memory_use_counts_snapshot() -> [i64; 7] {
+    #[doc(hidden)]
+    pub fn memory_use_counts_snapshot() -> [i64; 7] {
         let mut counts = with_tagged_heap(|heap| heap.memory_use_counts_snapshot());
         let thread_local_counts = THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| counts.get());
         for (count, extra) in counts.iter_mut().zip(thread_local_counts) {
@@ -4549,7 +4564,8 @@ pub struct EqualSeenPair {
 }
 
 impl EqualSeenPair {
-    pub(crate) fn new(left: Value, right: Value) -> Self {
+    #[doc(hidden)]
+    pub fn new(left: Value, right: Value) -> Self {
         Self {
             left_bits: left.bits(),
             right_bits: right.bits(),
@@ -5913,3 +5929,21 @@ mod gc_generational_hydration;
 #[cfg(test)]
 #[path = "tests/p2ht_authority_test.rs"]
 mod p2ht_authority;
+
+impl BytecodeInteractiveProbe {
+    #[inline]
+    #[doc(hidden)]
+    pub fn doc_form(&self) -> Option<Value> {
+        self.doc_form
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn interactive(&self) -> Option<Value> {
+        self.interactive
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn slot_count(&self) -> usize {
+        self.slot_count
+    }
+}

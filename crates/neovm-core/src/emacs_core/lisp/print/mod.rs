@@ -1091,13 +1091,13 @@ fn object_identity_key(value: &Value) -> Option<u64> {
         | ValueKind::String
         | ValueKind::Veclike(VecLikeType::Lambda)
         | ValueKind::Veclike(VecLikeType::Macro)
-        | ValueKind::Veclike(VecLikeType::ByteCode) => Some(value.0 as u64),
+        | ValueKind::Veclike(VecLikeType::ByteCode) => Some(value.bits() as u64),
         ValueKind::Symbol(id) => {
             // Use a distinct namespace to avoid collisions with heap pointer keys.
             // Set the high bit to separate from pointer keys.
-            Some((1u64 << 63) | (id.0 as u64))
+            Some((1u64 << 63) | (id.to_raw() as u64))
         }
-        ValueKind::Unbound => Some((1u64 << 63) | (super::intern::UNBOUND_SYM_ID.0 as u64)),
+        ValueKind::Unbound => Some((1u64 << 63) | (super::intern::UNBOUND_SYM_ID.to_raw() as u64)),
         _ => None,
     }
 }
@@ -2082,7 +2082,7 @@ fn write_value_stateful_inner(
         ValueKind::Unbound => {
             out.extend_from_slice(&symbol_bytes(super::intern::UNBOUND_SYM_ID, state.options))
         }
-        ValueKind::Unknown => write!(out, "#<unknown {:#x}>", value.0).unwrap(),
+        ValueKind::Unknown => write!(out, "#<unknown {:#x}>", value.bits()).unwrap(),
     }
 }
 
@@ -3380,7 +3380,7 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
             }
             let _byte_guard = BytePrintObjectStackGuard::enter(value);
             let bytes = with_print_object_guard(
-                PrintObjectRef::Lambda(value.0),
+                PrintObjectRef::Lambda(value.bits()),
                 |index| format!("#{index}").into_bytes(),
                 || format_interpreted_closure_bytes(value, options),
             );
@@ -3515,7 +3515,7 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
             append_symbol_bytes(super::intern::UNBOUND_SYM_ID, out, options);
         }
         ValueKind::Unknown => {
-            out.extend_from_slice(format!("#<unknown {:#x}>", value.0).as_bytes());
+            out.extend_from_slice(format!("#<unknown {:#x}>", value.bits()).as_bytes());
         }
     }
 }

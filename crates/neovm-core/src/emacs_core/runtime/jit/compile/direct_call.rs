@@ -255,7 +255,11 @@ impl DirectSite {
         if jit_direct_sites() == DirectSitesMode::Unbounded && !unbounded_body() {
             return None;
         }
-        let bc = Value::from_bits(expected as usize).bytecode_data_if_materialized()?;
+        let bc = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(expected as usize)
+        }
+        .bytecode_data_if_materialized()?;
         let params = JitParamShape::try_from(bc).ok()?;
         let self_only = jit_direct_sites() == DirectSitesMode::SelfOnly;
         if self_only {
@@ -1035,13 +1039,19 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_finish(
     // (retired leaves are never freed under a native frame).
     let leaf = unsafe { &*(leaf as usize as *const CompiledLeaf) };
     let run = if status == STATUS_OK {
-        super::dispatch::FastRun::Done(Value::from_bits(value as usize))
+        super::dispatch::FastRun::Done(unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(value as usize)
+        })
     } else {
         super::dispatch::FastRun::Raw(status)
     };
     super::dispatch::call_spec_finish(
         ctx,
-        Value::from_bits(expected as usize),
+        unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(expected as usize)
+        },
         leaf,
         args,
         nargs,

@@ -418,7 +418,7 @@ const STATE_MEGA: u64 = 0b100;
 #[inline(always)]
 fn target_key(target: Value) -> u64 {
     if let Some(id) = target.as_bare_symbol_id() {
-        return (u64::from(id.0) << 3) | TAG_SYM;
+        return (u64::from(id.to_raw()) << 3) | TAG_SYM;
     }
     #[cfg(not(feature = "jit"))]
     return STATE_MEGA;
@@ -606,7 +606,7 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
         let Some(bc) = target.bytecode_data_if_materialized() else {
             return false;
         };
-        let Some(runtime) = bc.runtime.as_ref() else {
+        let Some(runtime) = bc.runtime().as_ref() else {
             return false;
         };
         let source = Arc::downgrade(runtime.shared());
@@ -627,7 +627,7 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
     fn holds_source(&self, n: usize, target: Value) -> bool {
         let Some(runtime) = target
             .bytecode_data_if_materialized()
-            .and_then(|bc| bc.runtime.as_ref())
+            .and_then(|bc| bc.runtime().as_ref())
         else {
             return false;
         };

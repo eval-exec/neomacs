@@ -319,7 +319,10 @@ impl Context {
         // native argument buffer remains valid throughout the frame's life.
         unsafe {
             let slot = self.specpdl.as_mut_ptr().add(len);
-            let read = |i: usize| Value::from_bits(*args_ptr.add(i) as usize);
+            let read = |i: usize| unsafe {
+                /* SAFETY: real Value word */
+                Value::from_bits(*args_ptr.add(i) as usize)
+            };
             match nargs {
                 1 => slot.write(SpecBinding::Backtrace1 {
                     function,
@@ -415,7 +418,10 @@ impl Context {
             }
             // SAFETY: the slot is live (this function's contract) and holds
             // the `nargs` words the entry recorded.
-            let read = |i: usize| Value::from_bits(unsafe { *frame_args.add(i) } as usize);
+            let read = |i: usize| unsafe {
+                /* SAFETY: real Value word */
+                Value::from_bits(unsafe { *frame_args.add(i) } as usize)
+            };
             self.specpdl[index] = match NativeFrameArity::of(nargs) {
                 NativeFrameArity::One => SpecBinding::Backtrace1 {
                     function,
@@ -861,7 +867,10 @@ impl Context {
                 // SAFETY: variant contract — the caller's call-args slot
                 // outlives this entry.
                 let args = (0..*nargs as usize)
-                    .map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize))
+                    .map(|i| unsafe {
+                        /* SAFETY: real Value word */
+                        Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+                    })
                     .collect();
                 Some((*function, args, false, false))
             }
@@ -1030,7 +1039,10 @@ impl Context {
                 // SAFETY: variant contract -- the native caller's call-args
                 // slot outlives this entry, and the entry is live here.
                 let values = (0..nargs)
-                    .map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize))
+                    .map(|i| unsafe {
+                        /* SAFETY: real Value word */
+                        Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+                    })
                     .collect::<LispArgVec>();
                 (function, values)
             }
@@ -2363,7 +2375,7 @@ impl Context {
         let result = self.dispatch_signal_result_if_needed(result);
         self.truncate_condition_stack(condition_stack_base);
         let result = match result.kinded() {
-            Err(FlowKind::Signal(flow)) if flow.selected_resume.as_ref() == Some(&resume) => {
+            Err(FlowKind::Signal(flow)) if flow.selected_resume().as_ref() == Some(&resume) => {
                 tracing::debug!(?flow, "error muted by safe_funcall");
                 Ok(Value::NIL)
             }
@@ -2401,7 +2413,7 @@ impl Context {
         let result = self.dispatch_signal_result_if_needed(result);
         self.truncate_condition_stack(condition_stack_base);
         let result = match result.kinded() {
-            Err(FlowKind::Signal(flow)) if flow.selected_resume.as_ref() == Some(&resume) => {
+            Err(FlowKind::Signal(flow)) if flow.selected_resume().as_ref() == Some(&resume) => {
                 tracing::debug!(?flow, "menu-item property error muted");
                 Ok(Value::NIL)
             }
@@ -2579,7 +2591,10 @@ impl Context {
                 };
                 restore_scratch_gc_roots(saved_roots);
                 return match native {
-                    Ok(Some(b)) => Ok(crate::emacs_core::value::Value::from_bits(b)),
+                    Ok(Some(b)) => Ok(unsafe {
+                        /* SAFETY: real Value word */
+                        crate::emacs_core::value::Value::from_bits(b)
+                    }),
                     Ok(None) => {
                         crate::emacs_core::jit::note_seam_interp_fallback();
                         let mut vm = super::super::bytecode::Vm::from_context(self);
@@ -2645,7 +2660,10 @@ impl Context {
                 }
                 restore_scratch_gc_roots(saved_roots);
                 match native {
-                    Ok(Some(bits)) => Ok(crate::emacs_core::value::Value::from_bits(bits)),
+                    Ok(Some(bits)) => Ok(unsafe {
+                        /* SAFETY: real Value word */
+                        crate::emacs_core::value::Value::from_bits(bits)
+                    }),
                     Ok(None) => {
                         crate::emacs_core::jit::note_seam_interp_fallback();
                         let mut vm = super::super::bytecode::Vm::from_context(self);
@@ -2945,7 +2963,10 @@ impl Context {
                 cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr())
             };
             return match native {
-                Ok(Some(b)) => Ok(Value::from_bits(b)),
+                Ok(Some(b)) => Ok(unsafe {
+                    /* SAFETY: real Value word */
+                    Value::from_bits(b)
+                }),
                 Ok(None) => {
                     crate::emacs_core::jit::note_seam_interp_fallback();
                     let mut args = LispArgVec::new();
@@ -3106,7 +3127,10 @@ impl Context {
                 cache::run_armed_leaf(ctx_ptr, bc_data, function, leaf, bits.as_ptr())
             };
             return match native {
-                Ok(Some(bits)) => Ok(Value::from_bits(bits)),
+                Ok(Some(bits)) => Ok(unsafe {
+                    /* SAFETY: real Value word */
+                    Value::from_bits(bits)
+                }),
                 Ok(None) => {
                     crate::emacs_core::jit::note_seam_interp_fallback();
                     let mut vm = super::super::bytecode::Vm::from_context(self);
@@ -3252,9 +3276,10 @@ impl Context {
         native: Result<Option<usize>, Flow>,
     ) -> BytecodeStackCallDispatch {
         match native {
-            Ok(Some(bits)) => BytecodeStackCallDispatch::Complete(Ok(
-                crate::emacs_core::value::Value::from_bits(bits),
-            )),
+            Ok(Some(bits)) => BytecodeStackCallDispatch::Complete(Ok(unsafe {
+                /* SAFETY: real Value word */
+                crate::emacs_core::value::Value::from_bits(bits)
+            })),
             Ok(None) => {
                 crate::emacs_core::jit::note_seam_interp_fallback();
                 BytecodeStackCallDispatch::Interpret

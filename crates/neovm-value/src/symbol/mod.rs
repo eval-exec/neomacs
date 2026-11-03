@@ -601,7 +601,8 @@ pub struct SetInternalAlist(Value);
 
 impl SetInternalAlist {
     /// The alist head, for storing into a buffer.
-    pub(crate) fn into_value(self) -> Value {
+    #[doc(hidden)]
+    pub fn into_value(self) -> Value {
         self.0
     }
 }
@@ -691,7 +692,8 @@ impl LispSymbol {
     /// the current epoch (see [`BlvCacheHit`]); `None` for a miss or any
     /// other redirect.
     #[inline]
-    pub(crate) fn blv_cache_hit(
+    #[doc(hidden)]
+    pub fn blv_cache_hit(
         &self,
         buffer: crate::value::buffer_vocab::BufferId,
     ) -> Option<BlvCacheHit> {
@@ -726,7 +728,8 @@ impl LispSymbol {
     /// needs (it writes `defcell` in any buffer). `None` for any other
     /// redirect.
     #[inline]
-    pub(crate) fn blv_default_cells(&self) -> Option<BlvDefaultCells> {
+    #[doc(hidden)]
+    pub fn blv_default_cells(&self) -> Option<BlvDefaultCells> {
         let blv = self.localized_blv()?;
         // SAFETY: as in `blv_cache_hit`.
         let blv = unsafe { &*blv.as_ptr() };
@@ -1726,7 +1729,8 @@ impl Obarray {
     /// whose [`Self::generation`] the JIT cache pins. `None` for an id past
     /// the last chunk. The slot may be empty (it reads as an unbound
     /// `Plainval` cell).
-    pub(crate) fn jit_symbol_cell_addr(&self, id: SymId) -> Option<usize> {
+    #[doc(hidden)]
+    pub fn jit_symbol_cell_addr(&self, id: SymId) -> Option<usize> {
         let idx = Self::slot_index(id);
         (idx < self.symbols.len).then(|| {
             self.symbols.chunks[idx >> OBARRAY_CHUNK_BITS].as_ptr() as usize
@@ -1824,7 +1828,8 @@ impl Obarray {
     /// point the cons-block snapshot is taken), so `n_slots`/`n_chunks` are a
     /// consistent picture of the obarray at start. Chunk arrays + seq boxes never
     /// move, so the captured raw pointers stay valid for the whole cycle.
-    pub(crate) fn scan_snapshot(
+    #[doc(hidden)]
+    pub fn scan_snapshot(
         &self,
         world: &crate::tagged::gc::scan_contract::SingleMutatorWorld<'_>,
     ) -> ObarrayScanSnapshot {
@@ -1838,7 +1843,8 @@ impl Obarray {
 
     /// Current logical slot count (chunk-boundary-rounded). Used by the Stage 1b
     /// termination residual to bound the new-symbol re-seed range.
-    pub(crate) fn current_slot_len(&self) -> usize {
+    #[doc(hidden)]
+    pub fn current_slot_len(&self) -> usize {
         self.symbols.len()
     }
 
@@ -1848,7 +1854,8 @@ impl Obarray {
     /// arm of [`trace_roots`] but bounded to the new range. Runs at the STW
     /// termination (single-threaded, no seqlock needed). The BLV pool is re-scanned
     /// separately by the unbounded `trace_roots` BLV loop, so it is not repeated here.
-    pub(crate) fn trace_new_symbol_cells(&self, from_slot: usize, mut push: impl FnMut(Value)) {
+    #[doc(hidden)]
+    pub fn trace_new_symbol_cells(&self, from_slot: usize, mut push: impl FnMut(Value)) {
         let len = self.symbols.len();
         for idx in from_slot..len {
             let Some(sym) = self.symbols.get(idx) else {
@@ -1932,7 +1939,8 @@ impl Obarray {
     /// in hand -- GNU's `specbind`/`do_one_unbind` never probe a side table,
     /// and this port's watcher map is never empty (the display variables are
     /// watched from startup), so every bind and unbind used to hash into it.
-    pub(crate) fn note_watchers_changed(&mut self, id: SymId, has_watchers: bool) {
+    #[doc(hidden)]
+    pub fn note_watchers_changed(&mut self, id: SymId, has_watchers: bool) {
         let sym = self.ensure_slot(id);
         match (sym.trapped_write(), has_watchers) {
             (SymbolTrappedWrite::Untrapped, true) => {
@@ -1964,7 +1972,8 @@ impl Obarray {
     /// `Fsnarf_documentation` asks it of every `etc/DOC` record and skips the
     /// ones that answer no (`if (SYMBOLP (sym))`, `src/doc.c:600`), which is
     /// why scanning the DOC file cannot add symbols to the obarray.
-    pub(crate) fn is_global_member(&self, id: SymId) -> bool {
+    #[doc(hidden)]
+    pub fn is_global_member(&self, id: SymId) -> bool {
         self.slot(id).is_some_and(|sym| sym.interned_global)
     }
 
@@ -2022,7 +2031,8 @@ impl Obarray {
     /// canonicality, so a table spelling uninterned before this obarray was
     /// created is not resurrected. Callers that model a pre-GNU image (the
     /// legacy dump fixture) deliberately skip it.
-    pub(crate) fn seed_well_known_members(&mut self) {
+    #[doc(hidden)]
+    pub fn seed_well_known_members(&mut self) {
         for symbol in crate::intern::WellKnown::VARIANTS {
             self.ensure_global_member_if_canonical(symbol.id());
         }
@@ -2082,7 +2092,8 @@ impl Obarray {
 
     /// Look up raw GNU name metadata before allocating a Lisp name string.
     #[inline]
-    pub(crate) fn intern_soft_name_query(
+    #[doc(hidden)]
+    pub fn intern_soft_name_query(
         &self,
         query: crate::intern::SymbolNameQuery<'_>,
     ) -> Option<SymId> {
@@ -2199,7 +2210,8 @@ impl Obarray {
     /// answering the arms [`Self::value_with`] gives it: BUF's slot and
     /// local binding are canonical storage, which no projection changes.
     #[inline(always)]
-    pub(crate) fn value_in_buffer_with<B: BufferLocalView>(
+    #[doc(hidden)]
+    pub fn value_in_buffer_with<B: BufferLocalView>(
         &self,
         buf: Option<&B>,
         id: SymId,
@@ -2214,7 +2226,8 @@ impl Obarray {
     /// [`Self::value_in_buffer_with`] once ID is known not to be one of
     /// BUF's slots: BUF's local binding, else the global read.
     #[inline(always)]
-    pub(crate) fn unslotted_value_with<B: BufferLocalView>(
+    #[doc(hidden)]
+    pub fn unslotted_value_with<B: BufferLocalView>(
         &self,
         buf: Option<&B>,
         id: SymId,
@@ -2248,7 +2261,8 @@ impl Obarray {
     /// cases, where `get_buffer_local` would answer `None` and lose it. No
     /// projection changes it: an owner's binding of a slot stays in the slot.
     #[inline(always)]
-    pub(crate) fn buffer_slot_value<B: BufferLocalView>(buf: &B, id: SymId) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn buffer_slot_value<B: BufferLocalView>(buf: &B, id: SymId) -> Option<Value> {
         slot_meta(id).map(|meta| buf.slot_value(meta.offset))
     }
 
@@ -2339,7 +2353,8 @@ impl Obarray {
     /// two words: a larger closure is passed to the cold alias arm through
     /// memory, built on every read.
     #[inline(always)]
-    pub(crate) fn value_with(
+    #[doc(hidden)]
+    pub fn value_with(
         &self,
         id: SymId,
         projected: impl FnOnce(&Self, SymId) -> Option<Value>,
@@ -2466,7 +2481,8 @@ impl Obarray {
     /// arm its header already takes, where the plain write commits nothing.
     /// Every other cell executes the canonical write.
     #[inline(always)]
-    pub(crate) fn set_canonical_value_routed(&mut self, id: SymId, value: Value) -> CanonicalWrite {
+    #[doc(hidden)]
+    pub fn set_canonical_value_routed(&mut self, id: SymId, value: Value) -> CanonicalWrite {
         self.ensure_global_member_if_canonical(id);
         let target = self.resolve_alias_for_write(id);
         let blv = match self.cell_write_ensure(target).arm() {
@@ -2561,11 +2577,8 @@ impl Obarray {
     /// needs then; the mark cannot start inside this call, which reaches no
     /// safe point.
     #[inline(always)]
-    pub(crate) fn swap_plain_untrapped_value_id(
-        &mut self,
-        id: SymId,
-        value: Value,
-    ) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn swap_plain_untrapped_value_id(&mut self, id: SymId, value: Value) -> Option<Value> {
         let gate = MarkGate::read();
         if gate.is_marking() {
             return self.swap_plain_untrapped_value_id_while_marking(id, value, gate);
@@ -2607,7 +2620,8 @@ impl Obarray {
     /// (the common case) the slot is visited once, with no seqlock bracket
     /// and no SATB note, neither of which a store needs then.
     #[inline(always)]
-    pub(crate) fn set_plain_untrapped_value_id(&mut self, id: SymId, value: Value) -> bool {
+    #[doc(hidden)]
+    pub fn set_plain_untrapped_value_id(&mut self, id: SymId, value: Value) -> bool {
         let gate = MarkGate::read();
         if gate.is_marking() {
             return self
@@ -2635,7 +2649,8 @@ impl Obarray {
     /// so a writer can run its own refusals first and so the writes that are
     /// not plain (buffer-local, forwarded, watched) leave after one load.
     #[inline]
-    pub(crate) fn is_plain_value_cell_id(&self, id: SymId) -> bool {
+    #[doc(hidden)]
+    pub fn is_plain_value_cell_id(&self, id: SymId) -> bool {
         self.slot(id)
             .is_some_and(|sym| sym.flags().is_plain_untrapped_unprojected() && sym.interned_global)
     }
@@ -2643,7 +2658,8 @@ impl Obarray {
     /// Mark `id` as carrying a host projection (see
     /// `SymbolFlags::RUNTIME_PROJECTED_BIT`).  Armed at `Context`
     /// construction, not carried by a dump image.
-    pub(crate) fn mark_runtime_projected_id(&mut self, id: SymId) {
+    #[doc(hidden)]
+    pub fn mark_runtime_projected_id(&mut self, id: SymId) {
         self.ensure_slot(id).set_runtime_projected(true);
     }
 
@@ -2655,7 +2671,8 @@ impl Obarray {
     /// (`src/data.c:1714-1718`): a plain store can no longer land in a
     /// buffer-local record or a forwarder's place.
     #[inline]
-    pub(crate) fn store_plain_value_id(&mut self, id: SymId, value: Value) -> Result<(), NotPlain> {
+    #[doc(hidden)]
+    pub fn store_plain_value_id(&mut self, id: SymId, value: Value) -> Result<(), NotPlain> {
         let idx = Self::slot_index(id);
         if !self.symbols.get(idx).is_some_and(|sym| sym.interned_global) {
             // Membership is marked before the store, for canonical ids only —
@@ -2698,7 +2715,8 @@ impl Obarray {
     /// the existing BLV record). `None` when the alias chain from `id` does
     /// not end (a cycle GNU's `indirect_variable` refuses): an alias cell
     /// cannot be localized.
-    pub(crate) fn make_symbol_localized(&mut self, id: SymId, default: Value) -> Option<BlvPtr> {
+    #[doc(hidden)]
+    pub fn make_symbol_localized(&mut self, id: SymId, default: Value) -> Option<BlvPtr> {
         let target = self.resolve_alias_for_write(id);
         // Check existing state before mutating. GNU `make_blv` keeps the
         // forwarder when the symbol it localizes was SYMBOL_FORWARDED
@@ -2811,7 +2829,8 @@ impl Obarray {
     /// Pure discovery, with no canonical publication. Owning views complete
     /// this read before constructing their current-owner publication capability.
     #[inline(always)]
-    pub(crate) fn discover_debug_on_next_call_descriptor(
+    #[doc(hidden)]
+    pub fn discover_debug_on_next_call_descriptor(
         &self,
         id: SymId,
     ) -> Option<&'static crate::forward::LispBoolFwd> {
@@ -2823,7 +2842,8 @@ impl Obarray {
     /// only selects the absent stand-in or descriptor and stores its pointer;
     /// it cannot allocate, look up a symbol, assert or unwind.
     #[inline(always)]
-    pub(crate) fn publish_debug_on_next_call_descriptor(
+    #[doc(hidden)]
+    pub fn publish_debug_on_next_call_descriptor(
         &mut self,
         resolved: Option<&'static crate::forward::LispBoolFwd>,
     ) -> Option<&'static crate::forward::LispBoolFwd> {
@@ -2974,7 +2994,8 @@ impl Obarray {
     /// the symbol's slot (it dispatched on its redirect): the obarray lookup
     /// is not repeated. `None` unless `sym` is LOCALIZED.
     #[inline]
-    pub(crate) fn read_localized_symbol_for_buffer(
+    #[doc(hidden)]
+    pub fn read_localized_symbol_for_buffer(
         &self,
         id: SymId,
         sym: &LispSymbol,
@@ -3017,7 +3038,8 @@ impl Obarray {
     /// Resolve through the buffer's canonical binding index when its owner
     /// is available. A cache miss must not scan unrelated binding conses:
     /// dependency observers would otherwise subscribe to their value writes.
-    pub(crate) fn read_localized_in_buffer<B: BufferLocalView>(
+    #[doc(hidden)]
+    pub fn read_localized_in_buffer<B: BufferLocalView>(
         &self,
         id: SymId,
         buffer: &B,
@@ -3661,7 +3683,8 @@ impl Obarray {
     ///
     /// Returns the updated alist (consed if a new cell was created;
     /// unchanged otherwise).
-    pub(crate) fn set_internal_localized(
+    #[doc(hidden)]
+    pub fn set_internal_localized(
         &mut self,
         sym_id: SymId,
         value: Value,
@@ -3681,7 +3704,8 @@ impl Obarray {
     /// `let_shadows_buffer_binding_p` -- a walk of the whole specpdl -- only
     /// there too; asking on every write made a `setq` of a buffer-local
     /// variable O(stack depth).
-    pub(crate) fn set_internal_localized_with(
+    #[doc(hidden)]
+    pub fn set_internal_localized_with(
         &mut self,
         sym_id: SymId,
         value: Value,
@@ -3894,7 +3918,8 @@ impl Obarray {
 
     /// Snapshot the complete function-cell state with one symbol-slot read.
     #[inline(always)]
-    pub(crate) fn function_cell_snapshot(&self, id: SymId) -> FunctionCellSnapshot {
+    #[doc(hidden)]
+    pub fn function_cell_snapshot(&self, id: SymId) -> FunctionCellSnapshot {
         let Some(symbol) = self.slot(id) else {
             return FunctionCellSnapshot::Empty;
         };
@@ -3949,7 +3974,8 @@ impl Obarray {
     /// new value, so [`Self::fn_unchanged_since`] proves nothing validated
     /// before it. `why` is observability only (the JIT's epoch report counts
     /// per reason).
-    pub(crate) fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
+    #[doc(hidden)]
+    pub fn invalidate_all_function_bindings(&mut self, why: FunctionEpochBump) {
         #[cfg(debug_assertions)]
         leaf_activity::assert_no_leaf_active("a function-epoch bump");
         let epoch = self.next_function_epoch();
@@ -4046,7 +4072,8 @@ impl Obarray {
 
     /// [`Self::set_symbol_function_id`] attributing the epoch bump to `why`
     /// (the Lisp-level writers: `fset`, `defalias`, the pdump restore).
-    pub(crate) fn set_symbol_function_id_for(
+    #[doc(hidden)]
+    pub fn set_symbol_function_id_for(
         &mut self,
         id: SymId,
         function: Value,
@@ -4178,7 +4205,8 @@ impl Obarray {
     /// projection answers [`CanonicalWrite::Projected`] from the forwarded
     /// arm, which leaves every forwarder as it is.
     #[inline(always)]
-    pub(crate) fn makunbound_canonical_routed(&mut self, id: SymId) -> CanonicalWrite {
+    #[doc(hidden)]
+    pub fn makunbound_canonical_routed(&mut self, id: SymId) -> CanonicalWrite {
         self.ensure_global_member_if_canonical(id);
         let target = self.resolve_alias_for_write(id);
         if self
@@ -4243,7 +4271,8 @@ impl Obarray {
     /// (`boundp`) answers it there; [`Self::boundp_id`] answers by default.
     /// Inlined into every caller, as the walk always was.
     #[inline(always)]
-    pub(crate) fn boundp_id_with(
+    #[doc(hidden)]
+    pub fn boundp_id_with(
         &self,
         id: SymId,
         projected: impl FnOnce(crate::forward::FwdRef) -> bool,
@@ -4368,7 +4397,8 @@ impl Obarray {
     /// `setplist` accepts arbitrary Lisp objects.  A non-cons value therefore
     /// means the same thing as nil to GNU's `plist_get`, even though
     /// [`Self::symbol_plist_id`] must continue returning it verbatim.
-    pub(crate) fn symbol_plist_snapshot_id(&self, id: SymId) -> SymbolPlistSnapshot {
+    #[doc(hidden)]
+    pub fn symbol_plist_snapshot_id(&self, id: SymId) -> SymbolPlistSnapshot {
         match self.slot(id).map(|symbol| symbol.plist.get()) {
             Some(plist) if plist.is_cons() => SymbolPlistSnapshot::Entries(plist),
             _ => SymbolPlistSnapshot::NoEntries,
@@ -4718,7 +4748,8 @@ impl Obarray {
     /// thread projection: only that arm calls it, so a caller that routes it
     /// to an owner pays nothing on any other cell.
     #[inline(always)]
-    pub(crate) fn default_value_with(
+    #[doc(hidden)]
+    pub fn default_value_with(
         &self,
         id: SymId,
         projected: impl FnOnce(&crate::forward::ThreadProjectionDescriptor) -> Option<Value>,
@@ -4851,7 +4882,8 @@ impl Obarray {
     /// away — physically unreachable; widen to u128 if that ever stops holding.
     /// See the `generation` field.
     #[inline]
-    pub(crate) fn generation(&self) -> u64 {
+    #[doc(hidden)]
+    pub fn generation(&self) -> u64 {
         self.generation
     }
 
@@ -4898,7 +4930,8 @@ impl Obarray {
     // -----------------------------------------------------------------------
 
     /// Iterate over all (SymId, &LispSymbol) pairs (for pdump serialization).
-    pub(crate) fn iter_symbols(&self) -> impl Iterator<Item = (SymId, &LispSymbol)> {
+    #[doc(hidden)]
+    pub fn iter_symbols(&self) -> impl Iterator<Item = (SymId, &LispSymbol)> {
         self.symbols.iter().enumerate().filter_map(|(idx, slot)| {
             debug_assert!(idx <= u32::MAX as usize, "symbol index overflow");
             // `iter()` yields every slot including empty tail slots; skip those.
@@ -4907,7 +4940,8 @@ impl Obarray {
     }
 
     /// Iterate over ids interned in the global obarray.
-    pub(crate) fn global_member_ids(&self) -> impl Iterator<Item = SymId> + '_ {
+    #[doc(hidden)]
+    pub fn global_member_ids(&self) -> impl Iterator<Item = SymId> + '_ {
         self.iter_symbols()
             .filter(|(_, sym)| sym.interned_global)
             .map(|(id, _)| id)
@@ -4917,7 +4951,8 @@ impl Obarray {
     /// membership epoch + obarray length, computing (and caching) it on
     /// miss. The dump-load path resets nothing here: from_dump builds a
     /// fresh Obarray with an empty cache.
-    pub(crate) fn completion_bucket_order_cached(
+    #[doc(hidden)]
+    pub fn completion_bucket_order_cached(
         &self,
         obarray_len: usize,
         compute: impl FnOnce() -> Vec<SymId>,
@@ -4942,7 +4977,8 @@ impl Obarray {
     }
 
     /// Iterate over fmakunbound'd symbol ids (for pdump serialization).
-    pub(crate) fn function_unbound_ids(&self) -> impl Iterator<Item = SymId> + '_ {
+    #[doc(hidden)]
+    pub fn function_unbound_ids(&self) -> impl Iterator<Item = SymId> + '_ {
         self.iter_symbols()
             .filter(|(_, sym)| sym.function_unbound)
             .map(|(id, _)| id)
@@ -4953,7 +4989,8 @@ impl Obarray {
     /// A global-member or function-unbound entry whose slot has no symbol row
     /// is a corrupt dump: return the typed [`ObarrayRestoreError`] instead of panicking
     /// (release builds run no member pre-validation).
-    pub(crate) fn from_dump(
+    #[doc(hidden)]
+    pub fn from_dump(
         symbols: Vec<(SymId, LispSymbol)>,
         global_members: Vec<SymId>,
         function_unbound: Vec<SymId>,
@@ -5087,7 +5124,8 @@ impl Drop for SeedSkipCellsScope {
 static_assertions::assert_not_impl_any!(ObarraySymbolCellSkipGuard: Send, Sync);
 
 impl ObarraySymbolCellSkipGuard {
-    pub(crate) fn new() -> Self {
+    #[doc(hidden)]
+    pub fn new() -> Self {
         Self {
             _scope: SeedSkipCellsScope::new(true),
         }
@@ -5210,3 +5248,34 @@ mod symbol_plist_regression_test;
 #[cfg(test)]
 #[path = "tests/redirect_regression_test.rs"]
 mod symbol_redirect_regression_test;
+
+impl BlvCacheHit {
+    #[inline]
+    #[doc(hidden)]
+    pub fn defcell(&self) -> Value {
+        self.defcell
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn found(&self) -> bool {
+        self.found
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn fwd(&self) -> Option<crate::forward::FwdRef> {
+        self.fwd
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn valcell(&self) -> Value {
+        self.valcell
+    }
+}
+
+impl Obarray {
+    #[inline]
+    #[doc(hidden)]
+    pub fn max_lisp_eval_depth_localized(&self) -> bool {
+        self.max_lisp_eval_depth_localized
+    }
+}

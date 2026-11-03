@@ -675,9 +675,10 @@ pub(crate) fn unnamed_params(
             {
                 return Err(DumpError::BytecodeParameterShape);
             }
-            let params = FunctionParams::try_from(crate::emacs_core::value::Value::from_bits(
-                extras.arglist_word as usize,
-            ))
+            let params = FunctionParams::try_from(unsafe {
+                /* SAFETY: dumped word */
+                crate::emacs_core::value::Value::from_bits(extras.arglist_word as usize)
+            })
             .map_err(|_| DumpError::BytecodeParameterShape)?;
             if matches!(
                 (&params, kind),
@@ -817,7 +818,7 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         // the pointer-niched Nones (runtime, lazy_gnu_code: None = null
         // word) stay at the template's zeros.
         addr_of_mut!((*p).ops).write(Vec::new());
-        addr_of_mut!((*p).ops_sealed).write(true);
+        ByteCodeFunction::ops_sealed_ptr(p).write(true);
         addr_of_mut!((*p).constants).write(Vec::new().into());
         // SAFETY: FunctionParams has repr(C, u8), with first variant
         // Stack's tag equal to zero; ArgTemplate is repr(transparent) i64.
@@ -854,8 +855,8 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
             stub.is_pdump_stub(),
             "baked template must read back as a stub"
         );
-        assert_eq!(stub.source_id, 0);
-        assert!(!stub.stack_verified);
+        assert_eq!(stub.source_id(), 0);
+        assert!(!stub.stack_verified());
         assert!(stub.constants.as_slice().is_empty());
         assert_eq!(
             stub.max_stack,
@@ -878,8 +879,8 @@ pub(crate) fn baked_stub_template(extras_len: usize) -> Box<[u8]> {
         assert_eq!(stub.closure_slot_count, extras_len);
         assert!(stub.extra_slots.is_empty());
         #[cfg(feature = "jit")]
-        assert!(stub.runtime.is_none());
-        assert!(stub.lazy_gnu_code.is_none());
+        assert!(stub.runtime().is_none());
+        assert!(stub.lazy_gnu_code().is_none());
 
         // All fields own nothing, so the template needs no drop. The bytes
         // are copied out because the image buffer is not 8-aligned at dump

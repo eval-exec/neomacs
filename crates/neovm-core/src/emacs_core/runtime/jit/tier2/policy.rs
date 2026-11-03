@@ -42,7 +42,7 @@ impl Version {
     fn read(source: &RuntimeState, ops_len: usize) -> Self {
         Self {
             numeric: (0..ops_len)
-                .map(|pc| source.feedback.numeric_at(pc))
+                .map(|pc| source.feedback_ref().numeric_at(pc))
                 .collect(),
             calls: source.call_sites().map_or_else(Vec::new, |sites| {
                 sites
@@ -311,7 +311,10 @@ fn request_decision_legacy(leaf: &CompiledLeaf, source: &RuntimeState) -> Option
     }
     let k = jit_tier2_policy();
     let t2 = &leaf.obs.t2;
-    let banned = source.t2_reopts.load(std::sync::atomic::Ordering::Relaxed) >= k.max_reopt
+    let banned = source
+        .t2_reopts_ref()
+        .load(std::sync::atomic::Ordering::Relaxed)
+        >= k.max_reopt
         || source.reopt_level() >= super::super::ReoptLevel::BaselineOnly;
     if banned {
         return match decide(leaf) {
@@ -372,7 +375,10 @@ fn request_decision_opt(leaf: &CompiledLeaf, source: &RuntimeState) -> Option<T2
     }
     let k = jit_tier2_policy();
     let t2 = &leaf.obs.t2;
-    let banned = source.t2_reopts.load(std::sync::atomic::Ordering::Relaxed) >= k.max_reopt
+    let banned = source
+        .t2_reopts_ref()
+        .load(std::sync::atomic::Ordering::Relaxed)
+        >= k.max_reopt
         || source.reopt_level() >= super::super::ReoptLevel::BaselineOnly;
     if banned {
         return match decide(leaf) {
@@ -505,10 +511,12 @@ pub(crate) fn revert_if_t2(
             s.set(RetreatBit::Invalidated);
         }
     }
-    source.reopt_level.fetch_max(floor as u8, Ordering::Relaxed);
+    source
+        .reopt_level_ref()
+        .fetch_max(floor as u8, Ordering::Relaxed);
     source.reopen_numeric_feedback();
     source
-        .t2_reopts
+        .t2_reopts_ref()
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             Some(n.saturating_add(1))
         })

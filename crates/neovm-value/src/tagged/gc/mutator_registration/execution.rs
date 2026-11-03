@@ -30,8 +30,12 @@ pub enum ImmediateResultError {
     NotImmediate,
 }
 impl ImmediateResult {
-    pub(crate) fn from_word(bits: usize) -> Result<Self, ImmediateResultError> {
-        let value = TaggedValue::from_bits(bits);
+    #[doc(hidden)]
+    pub fn from_word(bits: usize) -> Result<Self, ImmediateResultError> {
+        let value = unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(bits)
+        };
         if value.is_nil() {
             Ok(Self::Nil)
         } else if value.is_t() {
@@ -42,7 +46,8 @@ impl ImmediateResult {
             Err(ImmediateResultError::NotImmediate)
         }
     }
-    pub(crate) fn word(self) -> usize {
+    #[doc(hidden)]
+    pub fn word(self) -> usize {
         match self {
             Self::Nil => TaggedValue::NIL.bits(),
             Self::True => TaggedValue::T.bits(),
@@ -90,7 +95,8 @@ impl<K: EraKeeper> EraCoreExecutionExt for EraCore<'_, K> {
 impl<'era> ParallelExecutionAdmission<'era> {
     /// Validate exact registry/owner/home identity before entering a bounded
     /// activation. Refusal neither enters the body nor changes its result.
-    pub(crate) fn with_activation<'owner, R>(
+    #[doc(hidden)]
+    pub fn with_activation<'owner, R>(
         &self,
         run: &mut RunAccess<'owner, 'era>,
         result: &OwnerRootSlot<'era>,
@@ -135,7 +141,8 @@ impl ExecutionActivation<'_, '_, '_> {
 
     /// The stack-confined consumer loads one immutable descriptor from this
     /// slot, never from the mutable backing spine. IN_SLICE covers all uses.
-    pub(crate) fn publication(&self) -> PublicationView<'_> {
+    #[doc(hidden)]
+    pub fn publication(&self) -> PublicationView<'_> {
         self.registry.symbols.tables.publication()
     }
 
@@ -154,7 +161,10 @@ impl ExecutionActivation<'_, '_, '_> {
             .as_mut()
             .and_then(|local| local.root_scratch.get_mut(self.result.index))
             .ok_or(RegistrationError::StaleRegistration)?;
-        *destination = MarkWord::of(TaggedValue::from_bits(result.word()));
+        *destination = MarkWord::of(unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(result.word())
+        });
         Ok(())
     }
 }

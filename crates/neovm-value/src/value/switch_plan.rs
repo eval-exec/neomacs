@@ -177,8 +177,13 @@ pub(crate) struct InlineSwitchKey {
 /// A key node's bits as an inline immediate, or `None` for a heap object's
 /// identity (an `eq`/`eql` key), whose address JIT code must not bake.
 fn inline_immediate(bits: usize) -> Option<InlineKeyNode> {
-    (bits & TAG_MASK == TAG_SYMBOL || Value::from_bits(bits).is_fixnum())
-        .then_some(InlineKeyNode::Imm(bits))
+    (bits & TAG_MASK == TAG_SYMBOL
+        || unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            Value::from_bits(bits)
+        }
+        .is_fixnum())
+    .then_some(InlineKeyNode::Imm(bits))
 }
 
 /// How a planned table answers; for tracing and tests.
@@ -285,7 +290,8 @@ impl LispHashTable {
     /// answered through the table's switch plan. Always exactly
     /// `self.data.lookup(value, self.test, swp).copied()`.
     #[inline(always)]
-    pub(crate) fn switch_target(&self, value: Value, swp: bool) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn switch_target(&self, value: Value, swp: bool) -> Option<Value> {
         let answer = match self.data.switch_plan.slot.get() {
             Some(slot) => slot.lookup(self, value, swp),
             None => self.switch_target_unplanned(value, swp),
@@ -365,7 +371,8 @@ impl LispHashTable {
     /// lookup's, so the inline answer is too; with it on only a hit is
     /// (every matched leaf is an immediate, so the value holds no
     /// positioned symbol there), and a miss must ask the lookup.
-    pub(crate) fn switch_inline_plan(&self, max_nodes: usize) -> Option<InlineSwitchPlan> {
+    #[doc(hidden)]
+    pub fn switch_inline_plan(&self, max_nodes: usize) -> Option<InlineSwitchPlan> {
         // A weak table is mutated by the GC's sweep, which neither drops a
         // plan nor moves the epoch.
         if self.weakness.is_some() {
@@ -613,7 +620,11 @@ fn dense_fixnums(keys: &[CompiledKey], nodes: &[KeyNode]) -> Option<PlanBody> {
     let fixnums: Vec<i64> = keys
         .iter()
         .map(|key| match nodes[key.start] {
-            KeyNode::Bits(bits) => Value::from_bits(bits).as_fixnum(),
+            KeyNode::Bits(bits) => unsafe {
+                /* SAFETY: value-internal construction from a real Value */
+                Value::from_bits(bits)
+            }
+            .as_fixnum(),
             _ => None,
         })
         .collect::<Option<_>>()?;

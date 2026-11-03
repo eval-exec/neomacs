@@ -2007,7 +2007,7 @@ impl Context {
             .filter(|(_, record)| record.channel == channel)
             .map(|(_, record)| record.sym)
             .collect();
-        bound.sort_unstable_by_key(|id| id.0);
+        bound.sort_unstable_by_key(|id| id.to_raw());
         bound.dedup();
         bound
             .into_iter()

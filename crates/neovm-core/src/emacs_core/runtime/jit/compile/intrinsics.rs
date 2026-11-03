@@ -498,7 +498,10 @@ fn emit_nth(
     let Some(bits) = constant_bits(fb, index) else {
         return false;
     };
-    let index = Value::from_bits(bits as usize);
+    let index = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(bits as usize)
+    };
     let Some(k) = index
         .as_fixnum()
         .filter(|k| (0..=NTH_INLINE_MAX).contains(k))
@@ -605,7 +608,10 @@ fn emit_memq(
     merge: Block,
     miss: Block,
 ) -> bool {
-    let key_const = constant_bits(fb, key).map(|bits| Value::from_bits(bits as usize));
+    let key_const = constant_bits(fb, key).map(|bits| unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(bits as usize)
+    });
     if which == Intrinsic::Member
         && key_const.is_some_and(|k| !(k.is_bare_symbol() || k.is_fixnum()))
     {
@@ -730,13 +736,16 @@ fn emit_symbol_value(
 ) -> bool {
     let (sym_v, refuse_nil) = match constant_bits(fb, symbol) {
         Some(bits) => {
-            let v = Value::from_bits(bits as usize);
+            let v = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(bits as usize)
+            };
             let Some(sym) = v.as_bare_symbol_id() else {
                 // A constant non-symbol: always the call's (it signals).
                 return false;
             };
             (
-                fb.ins().iconst(types::I64, i64::from(sym.0)),
+                fb.ins().iconst(types::I64, i64::from(sym.to_raw())),
                 crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(sym).is_some(),
             )
         }

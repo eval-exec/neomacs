@@ -32,7 +32,8 @@ impl HeapIdentity {
     /// Re-type a plain identity word from a legacy side table or the thread's
     /// installed-heap view; `None` for zero (no heap).
     #[inline]
-    pub(crate) const fn from_legacy_word(word: usize) -> Option<Self> {
+    #[doc(hidden)]
+    pub const fn from_legacy_word(word: usize) -> Option<Self> {
         if word == 0 { None } else { Some(Self(word)) }
     }
 

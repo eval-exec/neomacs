@@ -182,8 +182,8 @@ fn opaque_initial_bytecode(value: TaggedValue) -> bool {
         f.lexical
             && f.params.fixed_arity() == Some(0)
             && f.arglist.is_nil()
-            && f.ops_sealed
-            && f.stack_verified
+            && f.ops_sealed()
+            && f.stack_verified()
             && f.ops.as_slice() == [Op::Constant(0), Op::Return]
             && f.constants.len() == 1
             && f.constants
@@ -196,7 +196,7 @@ fn opaque_initial_bytecode(value: TaggedValue) -> bool {
             && f.extra_slots.is_empty()
             && f.gnu_bytecode_bytes.is_none()
             && f.gnu_byte_offset_map.is_none()
-            && f.lazy_gnu_code.is_none()
+            && f.lazy_gnu_code().is_none()
     })
 }
 

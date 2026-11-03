@@ -91,19 +91,34 @@ pub(crate) unsafe fn for_each_stub_bytecode_child(
     let header: BytecodeExtras =
         unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
     let word_at = |ptr: *const u8| -> TaggedValue {
-        TaggedValue::from_bits(unsafe { std::ptr::read_unaligned(ptr.cast::<usize>()) })
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(unsafe { std::ptr::read_unaligned(ptr.cast::<usize>()) })
+        }
     };
     if header.flags & BC_FLAG_HAS_ARGLIST != 0 {
-        f(TaggedValue::from_bits(header.arglist_word as usize));
+        f(unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(header.arglist_word as usize)
+        });
     }
     if header.flags & BC_FLAG_HAS_ENV != 0 {
-        f(TaggedValue::from_bits(header.env_word as usize));
+        f(unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(header.env_word as usize)
+        });
     }
     if header.flags & BC_FLAG_HAS_DOC_FORM != 0 {
-        f(TaggedValue::from_bits(header.doc_form_word as usize));
+        f(unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(header.doc_form_word as usize)
+        });
     }
     if header.flags & BC_FLAG_HAS_INTERACTIVE != 0 {
-        f(TaggedValue::from_bits(header.interactive_word as usize));
+        f(unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(header.interactive_word as usize)
+        });
     }
     let ids = header.n_required as usize + header.n_optional as usize;
     let extra_off = (std::mem::size_of::<BytecodeExtras>() + ids * 4 + 7) & !7;

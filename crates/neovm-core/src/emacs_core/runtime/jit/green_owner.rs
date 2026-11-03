@@ -191,7 +191,9 @@ impl ParkedJit {
                 .iter()
                 .filter_map(|function| function.as_symbol_id(context.symbol_mode())),
         );
-        scratch.called.sort_unstable_by_key(|symbol| symbol.0);
+        scratch
+            .called
+            .sort_unstable_by_key(|symbol| symbol.to_raw());
         scratch.called.dedup();
         scratch
             .sources
@@ -221,7 +223,11 @@ impl ParkedJit {
         let roots = &mut scratch.roots;
         super::cache::trace_redefined_pins(
             context.tagged_heap.identity(),
-            &|symbol| called.binary_search_by_key(&symbol.0, |s| s.0).is_ok(),
+            &|symbol| {
+                called
+                    .binary_search_by_key(&symbol.to_raw(), |s| s.to_raw())
+                    .is_ok()
+            },
             &mut |function| roots.push(function),
         );
         // The called-symbol temporary ended at prepare's return originally.

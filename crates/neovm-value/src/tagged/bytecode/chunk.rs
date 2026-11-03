@@ -57,7 +57,8 @@ pub struct LazyGnuCode {
 }
 
 impl LazyGnuCode {
-    pub(crate) fn new() -> Self {
+    #[doc(hidden)]
+    pub fn new() -> Self {
         Self {
             decoded: OnceLock::new(),
             proof: OnceLock::new(),
@@ -406,7 +407,8 @@ impl ByteCodeFunction {
     /// This is the release-safety gate for the unchecked-fetch dispatch
     /// driver; see the field documentation on [`Self::ops_sealed`].
     #[inline(always)]
-    pub(crate) fn executes_sealed_ops(&self) -> bool {
+    #[doc(hidden)]
+    pub fn executes_sealed_ops(&self) -> bool {
         self.lazy_gnu_code.is_some() || self.ops_sealed
     }
 
@@ -434,7 +436,8 @@ impl ByteCodeFunction {
     /// image and the loader writes NOTHING into bytecode struct spans.
     /// `source_id` 0 is a debug second-witness (real ids start at 1).
     #[inline(always)]
-    pub(crate) fn is_pdump_stub(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_pdump_stub(&self) -> bool {
         self.ops_sealed && self.ops.is_empty()
     }
 
@@ -518,7 +521,8 @@ impl ByteCodeFunction {
     /// constants vector.  A function with no retained GNU bytes compares its
     /// decoded instructions instead, so two functions with different code are
     /// never equal even though GNU's slot 1 would be `nil` for both.
-    pub(crate) fn structural_parts(&self) -> ByteCodeStructuralParts<'_> {
+    #[doc(hidden)]
+    pub fn structural_parts(&self) -> ByteCodeStructuralParts<'_> {
         use ByteCodeStructuralPart as Part;
 
         ByteCodeStructuralParts {
@@ -610,5 +614,89 @@ impl ByteCodeFunction {
             }
             _ => panic!("patch_jump on non-jump instruction at {}", idx),
         }
+    }
+}
+
+impl ByteCodeFunction {
+    #[inline]
+    #[doc(hidden)]
+    pub fn lazy_gnu_code(&self) -> &Option<std::sync::Arc<LazyGnuCode>> {
+        &self.lazy_gnu_code
+    }
+    #[doc(hidden)]
+    pub fn install_fresh_lazy_gnu_code(&mut self, code: std::sync::Arc<LazyGnuCode>) {
+        debug_assert!(self.lazy_gnu_code.is_none());
+        self.lazy_gnu_code = Some(code);
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn ops_sealed(&self) -> bool {
+        self.ops_sealed
+    }
+    /// # Safety
+    /// only immediately after seal_ops / verify_stack_effects succeeded on these exact ops.
+    #[doc(hidden)]
+    pub unsafe fn mark_ops_sealed(&mut self) {
+        self.ops_sealed = true;
+    }
+    #[doc(hidden)]
+    pub fn clear_ops_sealed(&mut self) {
+        self.ops_sealed = false;
+    }
+    /// PC11-F raw place accessor for core's raw template initializer.
+    ///
+    /// # Safety
+    /// `this` must point to a valid, live `ByteCodeFunction`.
+    #[doc(hidden)]
+    pub unsafe fn ops_sealed_ptr(this: *mut Self) -> *mut bool {
+        // SAFETY: the caller guarantees `this` is a valid object.
+        unsafe { &raw mut (*this).ops_sealed }
+    }
+    #[cfg(feature = "jit")]
+    #[inline]
+    #[doc(hidden)]
+    pub fn runtime(&self) -> &Option<Runtime> {
+        &self.runtime
+    }
+    #[cfg(feature = "jit")]
+    #[doc(hidden)]
+    pub const RUNTIME_OFFSET: usize = core::mem::offset_of!(Self, runtime);
+    #[inline]
+    #[doc(hidden)]
+    pub fn source_id(&self) -> u64 {
+        self.source_id
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn stack_verified(&self) -> bool {
+        self.stack_verified
+    }
+    /// # Safety
+    /// only immediately after seal_ops / verify_stack_effects succeeded on these exact ops.
+    #[doc(hidden)]
+    pub unsafe fn mark_stack_verified(&mut self) {
+        self.stack_verified = true;
+    }
+    #[doc(hidden)]
+    pub fn clear_stack_verified(&mut self) {
+        self.stack_verified = false;
+    }
+}
+
+impl DecodedGnuCode {
+    #[inline]
+    #[doc(hidden)]
+    pub fn byte_offset_map(&self) -> &Vec<GnuByteOffsetMapEntry> {
+        &self.byte_offset_map
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn ops(&self) -> &Vec<Op> {
+        &self.ops
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn stack_verified(&self) -> bool {
+        self.stack_verified
     }
 }

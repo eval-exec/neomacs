@@ -78,7 +78,11 @@ pub(super) fn binding_valid(
     if before != expected_epoch {
         return false;
     }
-    let Some(sym) = Value::from_bits(symbol_bits as usize).as_bare_symbol_id() else {
+    let Some(sym) = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(symbol_bits as usize)
+    }
+    .as_bare_symbol_id() else {
         return false;
     };
     let FunctionCellSnapshot::Bound(binding) = ctx.obarray.function_cell_snapshot(sym) else {

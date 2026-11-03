@@ -1071,7 +1071,10 @@ pub(super) fn emit(mut ctx: EmitContext<'_, '_>) -> Result<(), CompileError> {
         .func
         .consts
         .iter()
-        .map(|bits| Value::from_bits(bits.0 as usize))
+        .map(|bits| unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(bits.0 as usize)
+        })
         .collect();
     let switches = switch_emission::Plans::build(&ctx, &constants)?;
     for (index, data) in ctx.func.blocks.iter().enumerate() {

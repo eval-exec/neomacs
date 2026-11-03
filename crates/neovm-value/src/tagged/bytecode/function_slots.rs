@@ -275,7 +275,8 @@ impl FunctionParams {
     /// separately stored, observable original arglist slot.
     #[inline]
     #[deny(clippy::wildcard_enum_match_arm)]
-    pub(crate) fn heap_child(&self) -> Option<Value> {
+    #[doc(hidden)]
+    pub fn heap_child(&self) -> Option<Value> {
         match self {
             Self::Dynamic(params) => Some(params.value()),
             Self::Stack(_) | Self::Named(_) => None,
@@ -288,5 +289,52 @@ impl StackDepth {
     pub fn value(self) -> Value {
         // Constructor invariants bound the value by the positive fixnum limit.
         Value::fixnum(self.0 as i64)
+    }
+}
+
+impl ArgTemplate {
+    #[inline]
+    #[doc(hidden)]
+    pub fn field_0(&self) -> i64 {
+        self.0
+    }
+}
+
+impl DynamicArglist {
+    #[inline]
+    #[doc(hidden)]
+    pub fn field_0(&self) -> Value {
+        self.0
+    }
+}
+
+impl FormalMarkers {
+    #[inline]
+    #[doc(hidden)]
+    pub fn optional(&self) -> SymId {
+        self.optional
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn rest(&self) -> SymId {
+        self.rest
+    }
+}
+
+impl StackParamShape {
+    #[inline]
+    #[doc(hidden)]
+    pub fn nonrest_ref(&self) -> usize {
+        self.nonrest
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn required_ref(&self) -> usize {
+        self.required
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn rest_ref(&self) -> RestSlot {
+        self.rest
     }
 }

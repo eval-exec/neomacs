@@ -29,7 +29,8 @@ impl FrozenLegacyRoots {
     /// actual keeper. Quiescent certifies that no suspended legacy Lisp/native
     /// activation or outstanding compiled job may read a replaced function.
     /// Only eval/world may mint this census, before its exclusive heap loan.
-    pub(crate) unsafe fn new(
+    #[doc(hidden)]
+    pub unsafe fn new(
         heap: HeapIdentity,
         words: Vec<TaggedValue>,
         functions: FrozenFunctionRoots,

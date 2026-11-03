@@ -2141,7 +2141,7 @@ impl SymbolByteCodeCallCache {
     }
     #[inline(always)]
     const fn index(symbol: SymId) -> usize {
-        symbol.0 as usize & (SYMBOL_BYTECODE_CALL_CACHE_CAPACITY - 1)
+        symbol.to_raw() as usize & (SYMBOL_BYTECODE_CALL_CACHE_CAPACITY - 1)
     }
     #[inline(always)]
     fn get(&self, symbol: SymId, function_epoch: u64) -> Option<ResolvedStackCallTarget> {
@@ -3322,7 +3322,14 @@ impl<'a> Vm<'a> {
                         panic!(
                             "RUN_FRAME ARG BUG: arg[{}] = {:#x} (ptr {:?}, kind={:?}) is corrupt string. \
                              nargs={}, func has {} required, {} optional, rest={}",
-                            i, v.0, ptr, hdr.kind, nargs, n_required, n_optional, has_rest,
+                            i,
+                            v.bits(),
+                            ptr,
+                            hdr.kind,
+                            nargs,
+                            n_required,
+                            n_optional,
+                            has_rest,
                         );
                     }
                 }
@@ -4189,7 +4196,10 @@ impl<'a> Vm<'a> {
             )
         } {
             OsrProbe::Ran(NativeRun::Ok(bits)) => {
-                return OsrOutcome::Returned(Value::from_bits(bits));
+                return OsrOutcome::Returned(unsafe {
+                    /* SAFETY: bytecode word */
+                    Value::from_bits(bits)
+                });
             }
             OsrProbe::Ran(NativeRun::Signal) => return OsrOutcome::Exited,
             OsrProbe::Ran(NativeRun::DeoptAt(resume)) => resume,
@@ -4703,7 +4713,7 @@ impl<'a> Vm<'a> {
                         panic!(
                             "BC_BUF PUSH BUG: pushing corrupt string {:#x} (ptr {:?}, kind={:?}) \
                              at pc={}, op={:?}, bc_buf.len()={}, frame_base={}",
-                            v.0,
+                            v.bits(),
                             ptr,
                             hdr.kind,
                             pc_local.saturating_sub(1),
@@ -5605,8 +5615,10 @@ impl<'a> Vm<'a> {
                                 if let Some(encoded) = fixnum_tagged_i64(a).checked_add(rhs_payload)
                                 {
                                     unsafe {
-                                        *cursor.get_unchecked_mut(len - 2) =
-                                            Value::from_bits(encoded as usize);
+                                        *cursor.get_unchecked_mut(len - 2) = unsafe {
+                                            /* SAFETY: bytecode word */
+                                            Value::from_bits(encoded as usize)
+                                        };
                                     }
                                     cursor.len = len - 1;
                                     None
@@ -5653,7 +5665,10 @@ impl<'a> Vm<'a> {
                             // the Lisp sum/difference fits the fixnum payload.
                             let rhs_payload = fixnum_tagged_i64(b) - FIXNUM_CHECK_VALUE as i64;
                             if let Some(encoded) = fixnum_tagged_i64(a).checked_sub(rhs_payload) {
-                                stk!()[len - 2] = Value::from_bits(encoded as usize);
+                                stk!()[len - 2] = unsafe {
+                                    /* SAFETY: bytecode word */
+                                    Value::from_bits(encoded as usize)
+                                };
                                 stk!().pop();
                             } else {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
@@ -5803,8 +5818,10 @@ impl<'a> Vm<'a> {
                                     fixnum_tagged_i64(top).checked_add(1_i64 << FIXNUM_SHIFT)
                                 {
                                     unsafe {
-                                        *cursor.get_unchecked_mut(len - 1) =
-                                            Value::from_bits(encoded as usize);
+                                        *cursor.get_unchecked_mut(len - 1) = unsafe {
+                                            /* SAFETY: bytecode word */
+                                            Value::from_bits(encoded as usize)
+                                        };
                                     }
                                     None
                                 } else {
@@ -5835,7 +5852,10 @@ impl<'a> Vm<'a> {
                             if let Some(encoded) =
                                 fixnum_tagged_i64(top).checked_sub(1_i64 << FIXNUM_SHIFT)
                             {
-                                *stk!().last_mut().unwrap() = Value::from_bits(encoded as usize);
+                                *stk!().last_mut().unwrap() = unsafe {
+                                    /* SAFETY: bytecode word */
+                                    Value::from_bits(encoded as usize)
+                                };
                             } else {
                                 let args_start = stk!().len() - 1;
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
@@ -5903,7 +5923,11 @@ impl<'a> Vm<'a> {
                             & FIXNUM_CHECK_MASK)
                             == 0
                         {
-                            stk!()[len - 2] = if a.0 == b.0 { Value::T } else { Value::NIL };
+                            stk!()[len - 2] = if a.bits() == b.bits() {
+                                Value::T
+                            } else {
+                                Value::NIL
+                            };
                             stk!().pop();
                         } else {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
@@ -6317,7 +6341,7 @@ impl<'a> Vm<'a> {
                         let len = stk!().len();
                         let b = stk!()[len - 1];
                         let a = stk!()[len - 2];
-                        let result = if a.0 == b.0 {
+                        let result = if a.bits() == b.bits() {
                             true
                         } else if self.ctx.symbols_with_pos_enabled {
                             crate::emacs_core::value::eq_value_swp(&a, &b, true)
@@ -7832,7 +7856,10 @@ impl<'a> Vm<'a> {
             ctx.apply_fast_path_epoch.set(epoch);
         }
         // SAFETY: the caller's `nargs` words.
-        let arg = |i: usize| Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
+        let arg = |i: usize| unsafe {
+            /* SAFETY: bytecode word */
+            Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+        };
         let function = arg(0);
         let bc = function.get_bytecode_data()?;
         // The spread: the leading arguments, then LIST's elements. Nothing
@@ -8078,7 +8105,10 @@ impl<'a> Vm<'a> {
                 let mut rest = Value::NIL;
                 for i in (nonrest..nargs).rev() {
                     // SAFETY: args_ptr addresses `nargs` valid words.
-                    let arg = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
+                    let arg = unsafe {
+                        /* SAFETY: bytecode word */
+                        Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+                    };
                     rest = heap.alloc_cons(arg, rest);
                 }
                 slots[nonrest] = rest.bits() as i64;
@@ -8170,7 +8200,10 @@ impl<'a> Vm<'a> {
         let mut args = Vec::with_capacity(nargs);
         for i in 0..nargs {
             // SAFETY: args_ptr addresses `nargs` valid words.
-            args.push(Value::from_bits(unsafe { *args_ptr.add(i) } as usize));
+            args.push(unsafe {
+                /* SAFETY: bytecode word */
+                Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+            });
         }
         // SAFETY: the seam-provided dormant Context.
         let mut vm = Vm::from_context(unsafe { &mut *ctx_ptr });
@@ -9363,7 +9396,7 @@ impl<'a> Vm<'a> {
                 }) = unwind_handlers_to_selected_resume(
                     handlers,
                     &mut self.ctx.condition_stack,
-                    sig.selected_resume.as_ref(),
+                    sig.selected_resume().as_ref(),
                 ) {
                     let root_scope = self.ctx.save_vm_roots();
                     self.ctx.push_vm_frame_root(Value::from_sym_id(sig.symbol));

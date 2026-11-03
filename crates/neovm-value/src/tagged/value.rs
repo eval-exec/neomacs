@@ -84,12 +84,14 @@ impl Fixnum {
     /// Interpret GNU's explicit fixnum payload bit pattern as a signed integer.
     /// This operation is for representation-level callers, not Lisp integers.
     #[inline]
-    pub(crate) const fn from_payload_bits(bits: u64) -> Self {
+    #[doc(hidden)]
+    pub const fn from_payload_bits(bits: u64) -> Self {
         Self((bits.wrapping_shl(FIXNUM_SHIFT) as i64) >> FIXNUM_SHIFT)
     }
 
     #[inline]
-    pub(crate) fn saturating(value: i64) -> Self {
+    #[doc(hidden)]
+    pub fn saturating(value: i64) -> Self {
         Self(value.clamp(
             TaggedValue::MOST_NEGATIVE_FIXNUM,
             TaggedValue::MOST_POSITIVE_FIXNUM,
@@ -416,7 +418,8 @@ impl TaggedValue {
 
     /// Encode a validated immediate integer without an additional range check.
     #[inline]
-    pub(crate) fn from_fixnum(value: Fixnum) -> Self {
+    #[doc(hidden)]
+    pub fn from_fixnum(value: Fixnum) -> Self {
         Self(
             ((value.0 as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE,
             PhantomData,
@@ -576,7 +579,8 @@ impl TaggedValue {
     ///
     /// [`bits`]: Self::bits
     #[inline(always)]
-    pub(crate) const fn from_bits(bits: usize) -> Self {
+    #[doc(hidden)]
+    pub const unsafe fn from_bits(bits: usize) -> Self {
         Self(bits, PhantomData)
     }
 
@@ -737,7 +741,8 @@ impl TaggedValue {
     /// Same capture precondition as [`Self::cons_car_unobserved`]. A pure
     /// scan can unwrap positioned symbols without another scope check.
     #[inline(always)]
-    pub(crate) fn as_symbol_with_pos_sym_unobserved(self) -> Option<TaggedValue> {
+    #[doc(hidden)]
+    pub fn as_symbol_with_pos_sym_unobserved(self) -> Option<TaggedValue> {
         if !self.is_veclike() {
             return None;
         }
@@ -783,7 +788,8 @@ impl TaggedValue {
     /// The fixnum payload as a [`Fixnum`]: decoding never leaves the fixnum
     /// range, so callers need no further range check.
     #[inline]
-    pub(crate) fn as_fixnum_value(self) -> Option<Fixnum> {
+    #[doc(hidden)]
+    pub fn as_fixnum_value(self) -> Option<Fixnum> {
         self.as_fixnum().map(Fixnum)
     }
 
@@ -950,7 +956,8 @@ impl TaggedValue {
     /// before traversal resumes. Other mutators' captures observe their own
     /// reads and do not require this mutator to record dependencies.
     #[inline(always)]
-    pub(crate) fn cons_car_unobserved(self) -> Self {
+    #[doc(hidden)]
+    pub fn cons_car_unobserved(self) -> Self {
         debug_assert!(self.is_cons());
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.
@@ -963,7 +970,8 @@ impl TaggedValue {
 
     /// Same capture precondition as [`Self::cons_car_unobserved`].
     #[inline(always)]
-    pub(crate) fn cons_cdr_unobserved(self) -> Self {
+    #[doc(hidden)]
+    pub fn cons_cdr_unobserved(self) -> Self {
         debug_assert!(self.is_cons());
         // An admitted cons has exact tag TAG_CONS. Subtracting it
         // recovers the same aligned base and permits a field displacement.

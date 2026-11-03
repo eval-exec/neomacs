@@ -66,7 +66,7 @@ impl LexenvConstant {
         // The constant ids are the first seeds.  One unsigned range check is
         // the whole dynamic-symbol rejection: the fast path runs once per
         // interpreted symbol read, so classification stays one compare.
-        if sym_id.0 >= Self::COUNT as u32 {
+        if sym_id.to_raw() >= Self::COUNT as u32 {
             return None;
         }
         if sym_id == NIL_SYM_ID {
@@ -106,8 +106,8 @@ const _: () = {
     assert!(LexenvConstant::T.slot() < LEXENV_ASSQ_CACHE_CAPACITY);
     assert!(LexenvConstant::Nil.slot() != LexenvConstant::T.slot());
     assert!(LexenvConstant::T.slot() + 1 == LEXENV_ASSQ_CACHE_CAPACITY);
-    assert!(NIL_SYM_ID.0 < LexenvConstant::COUNT as u32);
-    assert!(T_SYM_ID.0 < LexenvConstant::COUNT as u32);
+    assert!(NIL_SYM_ID.to_raw() < LexenvConstant::COUNT as u32);
+    assert!(T_SYM_ID.to_raw() < LexenvConstant::COUNT as u32);
     assert!(LEXENV_ASSQ_CACHE_CAPACITY & (LEXENV_ASSQ_CACHE_CAPACITY - 1) == 0);
     assert!(LEXENV_ASSQ_CACHE_CAPACITY == LexenvConstant::COUNT + LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS);
 };
@@ -124,7 +124,7 @@ fn lexenv_assq_slot(lexenv_bits: usize, sym_id: SymId) -> usize {
     if let Some(constant) = LexenvConstant::from_sym_id(sym_id) {
         return constant.slot();
     }
-    let mixed = lexenv_bits.rotate_left(7) ^ (sym_id.0 as usize).wrapping_mul(0x9E37_79B1);
+    let mixed = lexenv_bits.rotate_left(7) ^ (sym_id.to_raw() as usize).wrapping_mul(0x9E37_79B1);
     let bucket = mixed & (LEXENV_ASSQ_CACHE_CAPACITY - 1);
     if bucket < LEXENV_ASSQ_CACHE_DYNAMIC_SLOTS {
         bucket

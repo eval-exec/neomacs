@@ -55,9 +55,12 @@ impl SelfSourceScope {
 /// The expected materialized callee is of the compiler's source. Lazy
 /// pdump stubs decline rather than materializing during this proof.
 pub(crate) fn expected_is_source(expected: u64, source: usize) -> bool {
-    Value::from_bits(expected as usize)
-        .bytecode_data_if_materialized()
-        .is_some_and(|bc| runtime_identity_word(bc.jit_runtime()) == source)
+    unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(expected as usize)
+    }
+    .bytecode_data_if_materialized()
+    .is_some_and(|bc| runtime_identity_word(bc.jit_runtime()) == source)
 }
 
 /// Whether an already selected site actually calls this exact source with
@@ -102,16 +105,19 @@ pub(crate) fn has_exact_mir_self_site(
 
 fn exact_site_of_source(site: &SpecSite, arity: usize, source: usize) -> bool {
     site.kind == SpecCalleeKind::Bytecode
-        && Value::from_bits(site.expected_bits as usize)
-            .bytecode_data_if_materialized()
-            .is_some_and(|bc| {
-                JitParamShape::try_from(bc)
-                    .ok()
-                    .and_then(JitParamShape::fixed_arity)
-                    == Some(arity)
-                    && bc.jit_runtime().patched_prefix() == 0
-                    && runtime_identity_word(bc.jit_runtime()) == source
-            })
+        && unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(site.expected_bits as usize)
+        }
+        .bytecode_data_if_materialized()
+        .is_some_and(|bc| {
+            JitParamShape::try_from(bc)
+                .ok()
+                .and_then(JitParamShape::fixed_arity)
+                == Some(arity)
+                && bc.jit_runtime().patched_prefix() == 0
+                && runtime_identity_word(bc.jit_runtime()) == source
+        })
 }
 
 /// A register body's parent-source token for `RtCtx`. A memory body emits

@@ -48,7 +48,8 @@ impl TaggedHeap {
     /// Classify without a new stored discriminant or an atomic gc_done load.
     /// gc_done is a tentative work-queue observation, not worker termination.
     #[inline]
-    pub(crate) fn mark_phase(&self) -> MarkPhase {
+    #[doc(hidden)]
+    pub fn mark_phase(&self) -> MarkPhase {
         debug_assert!(
             !self.concurrent_mark_running || (self.mark_in_progress && !self.sweep_in_progress),
             "a concurrent worker requires marking and excludes sweep"
@@ -172,7 +173,8 @@ impl TaggedHeap {
     /// set. Finishing the armed cycle here instead (promote, then trace) would
     /// tenure the objects it allocated black during its mark, dead or not, so
     /// the explicit collection could never free them.
-    pub(crate) fn begin_stw_collection(&mut self) {
+    #[doc(hidden)]
+    pub fn begin_stw_collection(&mut self) {
         assert!(
             !self.concurrent_mark_running,
             "collection requires an explicit successful marker finish"
@@ -275,7 +277,8 @@ impl TaggedHeap {
     /// `launch_concurrent_mark` to move into the job. Called from
     /// `start_concurrent_mark` at the world-stopped start handshake (once per
     /// concurrent mark).
-    pub(crate) fn set_pending_obarray_scan(&mut self, snap: crate::symbol::ObarrayScanSnapshot) {
+    #[doc(hidden)]
+    pub fn set_pending_obarray_scan(&mut self, snap: crate::symbol::ObarrayScanSnapshot) {
         assert_eq!(
             snap.heap_identity(),
             self.identity(),
@@ -290,7 +293,8 @@ impl TaggedHeap {
     /// Stage 1b: take the start-of-cycle obarray slot count (set at the start
     /// handshake) for the termination residual re-seed. `None` for a cycle with
     /// no concurrent mark (e.g. a stop-the-world full collection).
-    pub(crate) fn take_concurrent_obarray_start_slots(&mut self) -> Option<usize> {
+    #[doc(hidden)]
+    pub fn take_concurrent_obarray_start_slots(&mut self) -> Option<usize> {
         self.concurrent_obarray_start_slots.take()
     }
 
@@ -663,7 +667,8 @@ impl TaggedHeap {
     /// Stop the GC thread and fold its residual work back into the gray queue so
     /// the caller can finish marking stop-the-world. After this, the heap is
     /// owned exclusively by the mutator again (the GC thread has exited its loop).
-    pub(crate) fn join_concurrent_mark(&mut self) {
+    #[doc(hidden)]
+    pub fn join_concurrent_mark(&mut self) {
         // Collector callers require a completed handoff before tracing or
         // sweeping. Failure is a terminal collector invariant failure, never
         // an empty result that would discard live promotion records.
@@ -836,7 +841,13 @@ impl TaggedHeap {
         drop(world);
         clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
         for bits in written {
-            self.push_value_children_to_gray(TaggedValue::from_bits(bits), "satb-written-retrace");
+            self.push_value_children_to_gray(
+                unsafe {
+                    /* SAFETY: value-internal construction from a real Value */
+                    TaggedValue::from_bits(bits)
+                },
+                "satb-written-retrace",
+            );
         }
         // Classify what the drain is about to trace, per kind — the measurement
         // that decides which kinds a concurrent-tracing extension should take
@@ -1182,7 +1193,8 @@ impl TaggedHeap {
     /// holds this World's serial authority; no alias reads or mutates the
     /// payload until the closure returns. The closure must not reach a safe
     /// point, run Lisp, yield, or retain any payload reference.
-    pub(crate) unsafe fn with_thread_payload_mut<R>(
+    #[doc(hidden)]
+    pub unsafe fn with_thread_payload_mut<R>(
         &mut self,
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::ThreadChildren) -> R,
@@ -1220,7 +1232,8 @@ impl TaggedHeap {
     /// holds this World's serial authority; no alias reads or mutates the
     /// payload until the closure returns. The closure must not reach a safe
     /// point, run Lisp, yield, or retain any payload reference.
-    pub(crate) unsafe fn with_thread_native_mut<R>(
+    #[doc(hidden)]
+    pub unsafe fn with_thread_native_mut<R>(
         &mut self,
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::ThreadNativeState) -> R,
@@ -1252,7 +1265,8 @@ impl TaggedHeap {
     /// holds this World's serial authority; no alias reads or mutates the
     /// payload until the closure returns. The closure must not reach a safe
     /// point, run Lisp, yield, or retain any payload reference.
-    pub(crate) unsafe fn with_mutex_payload_mut<R>(
+    #[doc(hidden)]
+    pub unsafe fn with_mutex_payload_mut<R>(
         &mut self,
         value: TaggedValue,
         update: impl FnOnce(&mut crate::heap_types::threading::MutexPayload) -> R,

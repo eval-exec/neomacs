@@ -38,7 +38,8 @@ pub enum OverlayBatchOrder {
 pub struct OverlayIdentity(usize);
 
 impl OverlayIdentity {
-    pub(crate) fn of(overlay: Value) -> Self {
+    #[doc(hidden)]
+    pub fn of(overlay: Value) -> Self {
         Self(overlay.bits())
     }
 }
@@ -63,7 +64,8 @@ pub struct OverlayPositionHandle {
 }
 
 impl OverlayPositionHandle {
-    pub(crate) fn new(overlay: Value, intervals: &Arc<RwLock<IntervalBPlusTree>>) -> Self {
+    #[doc(hidden)]
+    pub fn new(overlay: Value, intervals: &Arc<RwLock<IntervalBPlusTree>>) -> Self {
         Self {
             intervals: Arc::downgrade(intervals),
             identity: OverlayIdentity::of(overlay),
@@ -77,7 +79,8 @@ impl OverlayPositionHandle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct IntervalKey {
+#[doc(hidden)]
+pub struct IntervalKey {
     pub(crate) start: EmacsBytePos,
     pub(crate) attachment_order: u64,
 }
@@ -97,7 +100,8 @@ impl PartialOrd for IntervalKey {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct IntervalRecord {
+#[doc(hidden)]
+pub struct IntervalRecord {
     pub(crate) key: IntervalKey,
     pub(crate) identity: OverlayIdentity,
     pub(crate) range: EmacsByteRange,
@@ -289,17 +293,16 @@ pub struct IntervalBPlusTree {
 }
 
 impl IntervalBPlusTree {
-    pub(crate) fn new() -> Self {
+    #[doc(hidden)]
+    pub fn new() -> Self {
         Self {
             records: OrderedShiftTree::new(),
             next_attachment_order: 0,
         }
     }
 
-    pub(crate) fn from_entries(
-        entries: &[(Value, EmacsByteRange)],
-        order: OverlayBatchOrder,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn from_entries(entries: &[(Value, EmacsByteRange)], order: OverlayBatchOrder) -> Self {
         let last_attachment_order = entries.len().saturating_sub(1);
         let records = entries
             .iter()
@@ -326,7 +329,8 @@ impl IntervalBPlusTree {
     /// Reserve call-local ranks under the buffer owner's exclusive mutation.
     /// Reversing this range preserves ascending structural order within new
     /// equal-start groups, with no per-overlay path allocation or second move.
-    pub(crate) fn reserve_attachment_orders(&mut self, count: usize) -> std::ops::Range<u64> {
+    #[doc(hidden)]
+    pub fn reserve_attachment_orders(&mut self, count: usize) -> std::ops::Range<u64> {
         let first = self.next_attachment_order;
         self.next_attachment_order = first
             .checked_add(count as u64)
@@ -334,7 +338,8 @@ impl IntervalBPlusTree {
         first..self.next_attachment_order
     }
 
-    pub(crate) fn insert(&mut self, overlay: Value, range: EmacsByteRange) -> bool {
+    #[doc(hidden)]
+    pub fn insert(&mut self, overlay: Value, range: EmacsByteRange) -> bool {
         let attachment_order = self.next_attachment_order;
         self.next_attachment_order = self
             .next_attachment_order
@@ -343,7 +348,8 @@ impl IntervalBPlusTree {
         self.insert_with_order(overlay, range, attachment_order)
     }
 
-    pub(crate) fn insert_with_order(
+    #[doc(hidden)]
+    pub fn insert_with_order(
         &mut self,
         overlay: Value,
         range: EmacsByteRange,
@@ -360,7 +366,8 @@ impl IntervalBPlusTree {
         })
     }
 
-    pub(crate) fn take(&mut self, overlay: Value) -> Option<(EmacsByteRange, u64)> {
+    #[doc(hidden)]
+    pub fn take(&mut self, overlay: Value) -> Option<(EmacsByteRange, u64)> {
         let record = self.records.remove(OverlayIdentity::of(overlay))?;
         Some((record.range, record.key.attachment_order))
     }
@@ -372,7 +379,8 @@ impl IntervalBPlusTree {
     /// assigns the same next serial exactly once. The caller retains the
     /// buffer owner's exclusive write guard and still mutates GNU topology.
     #[inline]
-    pub(crate) fn try_move_preserving_neighbors(
+    #[doc(hidden)]
+    pub fn try_move_preserving_neighbors(
         &mut self,
         overlay: Value,
         range: EmacsByteRange,
@@ -402,7 +410,8 @@ impl IntervalBPlusTree {
         }
     }
 
-    pub(crate) fn update_end_preserving_order(
+    #[doc(hidden)]
+    pub fn update_end_preserving_order(
         &mut self,
         overlay: Value,
         range: EmacsByteRange,
@@ -416,27 +425,30 @@ impl IntervalBPlusTree {
         Some(previous.range)
     }
 
-    pub(crate) fn range_by_identity(&self, identity: OverlayIdentity) -> Option<EmacsByteRange> {
+    #[doc(hidden)]
+    pub fn range_by_identity(&self, identity: OverlayIdentity) -> Option<EmacsByteRange> {
         self.records.record(identity).map(|record| record.range)
     }
 
-    pub(crate) fn contains(&self, overlay: Value) -> bool {
+    #[doc(hidden)]
+    pub fn contains(&self, overlay: Value) -> bool {
         self.records.contains(OverlayIdentity::of(overlay))
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
 
-    pub(crate) fn entries(&self) -> impl Iterator<Item = (Value, EmacsByteRange)> + '_ {
+    #[doc(hidden)]
+    pub fn entries(&self) -> impl Iterator<Item = (Value, EmacsByteRange)> + '_ {
         self.records
             .matches(IntervalBPlusQuery::All)
             .map(|record| (record.overlay, record.range))
     }
 
-    pub(crate) fn endpoint_entries_in_attachment_order(
-        &self,
-    ) -> Vec<(Value, EndpointKind, EmacsBytePos)> {
+    #[doc(hidden)]
+    pub fn endpoint_entries_in_attachment_order(&self) -> Vec<(Value, EndpointKind, EmacsBytePos)> {
         let mut records: Vec<_> = self.records.matches(IntervalBPlusQuery::All).collect();
         records.sort_unstable_by_key(|record| record.key.attachment_order);
         records
@@ -450,7 +462,8 @@ impl IntervalBPlusTree {
             .collect()
     }
 
-    pub(crate) fn overlays_touching(&self, position: EmacsBytePos, out: &mut Vec<Value>) {
+    #[doc(hidden)]
+    pub fn overlays_touching(&self, position: EmacsBytePos, out: &mut Vec<Value>) {
         out.extend(
             self.records
                 .matches(IntervalBPlusQuery::ClosedPoint(position))
@@ -458,7 +471,8 @@ impl IntervalBPlusTree {
         );
     }
 
-    pub(crate) fn all_ascending(&self, out: &mut Vec<Value>) {
+    #[doc(hidden)]
+    pub fn all_ascending(&self, out: &mut Vec<Value>) {
         out.extend(self.records.matches(IntervalBPlusQuery::All).map(|record| {
             #[cfg(test)]
             instrumentation::record_overlay_full_enumeration_visit();
@@ -466,7 +480,8 @@ impl IntervalBPlusTree {
         }));
     }
 
-    pub(crate) fn shift_at_or_after(
+    #[doc(hidden)]
+    pub fn shift_at_or_after(
         &mut self,
         position: EmacsBytePos,
         inclusive: bool,
@@ -490,7 +505,8 @@ impl IntervalBPlusTree {
         self.records.assert_invariants();
     }
 
-    pub(crate) fn len(&self) -> usize {
+    #[doc(hidden)]
+    pub fn len(&self) -> usize {
         self.records.len()
     }
 }
@@ -522,3 +538,19 @@ pub(crate) fn current_overlay_range(
 #[cfg(test)]
 #[path = "tests/handle_test.rs"]
 mod handle_tests;
+
+impl IntervalBPlusTree {
+    #[inline]
+    #[doc(hidden)]
+    pub fn records(&self) -> &OrderedShiftTree<IntervalRecord> {
+        &self.records
+    }
+}
+
+impl IntervalRecord {
+    #[inline]
+    #[doc(hidden)]
+    pub fn overlay(&self) -> Value {
+        self.overlay
+    }
+}

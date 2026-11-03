@@ -183,12 +183,12 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     #[inline(always)]
     fn jit_runtime(&self) -> &crate::emacs_core::jit::Runtime {
         debug_assert!(
-            self.runtime.is_some(),
+            self.runtime().is_some(),
             "jit runtime read on an unmaterialized pdump stub"
         );
         // SAFETY: `runtime` is `None` only on a pdump stub, and stubs are
         // unreachable here (chokepoints materialize first; see field doc).
-        unsafe { self.runtime.as_ref().unwrap_unchecked() }
+        unsafe { self.runtime().as_ref().unwrap_unchecked() }
     }
     /// The constant base a compiled leaf of this function reads its
     /// `make-closure`-patched constants through (the leaf entry's `aux`
@@ -211,10 +211,10 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             "deferred GNU decode requires original bytecode bytes"
         );
         self.ops = Vec::new();
-        self.ops_sealed = false;
-        self.stack_verified = false;
+        self.clear_ops_sealed();
+        self.clear_stack_verified();
         self.gnu_byte_offset_map = None;
-        self.lazy_gnu_code = Some(std::sync::Arc::new(LazyGnuCode::new()));
+        self.install_fresh_lazy_gnu_code(std::sync::Arc::new(LazyGnuCode::new()));
     }
     /// Operand-stack entry depth the verifier must assume, mirroring
     /// `run_frame`'s argument staging exactly: params-on-stack conventions
@@ -245,7 +245,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// prototype's admission, or consume admission from that prototype.
     #[inline(always)]
     fn lazy_iterative_admission(&self, nargs: usize) -> Option<bool> {
-        let lazy = self.lazy_gnu_code.as_ref()?;
+        let lazy = self.lazy_gnu_code().as_ref()?;
         if self.env.is_some() {
             return Some(false);
         }
@@ -261,7 +261,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     #[inline(never)]
     fn initialize_lazy_iterative_admission(&self, nargs: usize) -> bool {
         let lazy = self
-            .lazy_gnu_code
+            .lazy_gnu_code()
             .as_ref()
             .expect("lazy admission initialization needs GNU metadata");
         debug_assert!(self.env.is_none());
@@ -310,7 +310,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// `verify_stack_effects` proof. Resolves the lazy decode if needed —
     /// callers are classification-time, never the dispatch hot path.
     fn executes_verified_ops(&self) -> bool {
-        match &self.lazy_gnu_code {
+        match &self.lazy_gnu_code() {
             Some(lazy) => {
                 if let Some(decoded) = lazy.decoded_ready() {
                     return decoded.stack_verified;
@@ -326,9 +326,9 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                     || (self.verifier_entry_depth(), self.constants.as_slice()),
                     self.max_stack.get(),
                 )
-                .stack_verified
+                .stack_verified()
             }
-            None => self.stack_verified,
+            None => self.stack_verified(),
         }
     }
     /// Resolve a switch hit through the standing proof, if this function has
@@ -342,7 +342,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// resolver's existing behavior. `Some(None)` rejects an unsafe target.
     #[inline(never)]
     fn verified_switch_pc(&self, raw: i64) -> Option<Option<usize>> {
-        let lazy = self.lazy_gnu_code.as_ref()?;
+        let lazy = self.lazy_gnu_code().as_ref()?;
         let decoded = lazy.decoded_ready()?;
         if !decoded.stack_verified {
             return None;
@@ -360,9 +360,13 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// the last point before publication, after every shape field
     /// (params/lexical/arglist/env/max_stack) has its final value.
     fn refresh_stack_verification(&mut self) {
-        self.stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+        if self.verifier_entry_depth().is_some_and(|depth| {
             super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
-        });
+        }) {
+            unsafe { self.mark_stack_verified() }
+        } else {
+            self.clear_stack_verified()
+        };
     }
     /// Run hand-assembled instructions through the real sealing normalizer
     /// so synthesized chunks may enter the unchecked-fetch driver. For the
@@ -375,10 +379,14 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
             return;
         }
         self.ops = super::decode::seal_ops(std::mem::take(&mut self.ops), self.constants.len());
-        self.ops_sealed = true;
-        self.stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+        unsafe { self.mark_ops_sealed() };
+        if self.verifier_entry_depth().is_some_and(|depth| {
             super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
-        });
+        }) {
+            unsafe { self.mark_stack_verified() }
+        } else {
+            self.clear_stack_verified()
+        };
     }
     /// Unit-test alias for [`Self::seal_hand_assembled_ops`].
     #[cfg(test)]
@@ -405,24 +413,28 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                 &mut self.constants.ensure_owned(),
             )?;
             self.ops = ops;
-            self.ops_sealed = true;
-            self.stack_verified = self.verifier_entry_depth().is_some_and(|depth| {
+            unsafe { self.mark_ops_sealed() };
+            if self.verifier_entry_depth().is_some_and(|depth| {
                 super::decode::verify_stack_effects(&self.ops, depth, self.max_stack.get())
-            });
+            }) {
+                unsafe { self.mark_stack_verified() }
+            } else {
+                self.clear_stack_verified()
+            };
             self.gnu_byte_offset_map = Some(byte_offset_map);
         } else {
             self.ops.clear();
-            self.ops_sealed = false;
-            self.stack_verified = false;
+            self.clear_ops_sealed();
+            self.clear_stack_verified();
             self.gnu_byte_offset_map = None;
-            self.lazy_gnu_code = Some(std::sync::Arc::new(LazyGnuCode::new()));
+            self.install_fresh_lazy_gnu_code(std::sync::Arc::new(LazyGnuCode::new()));
         }
         Ok(())
     }
     /// Executable instructions, decoding a cold GNU byte string on first use.
     #[inline]
     fn executable_ops(&self) -> &[Op] {
-        match &self.lazy_gnu_code {
+        match &self.lazy_gnu_code() {
             Some(lazy) => {
                 let decoded = match lazy.decoded_ready() {
                     Some(decoded) => decoded,
@@ -440,7 +452,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                         )
                     }
                 };
-                &decoded.ops
+                decoded.ops()
             }
             None => &self.ops,
         }
@@ -448,7 +460,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
     /// GNU byte offsets corresponding to [`Self::executable_ops`].
     #[inline]
     fn executable_gnu_byte_offset_map(&self) -> Option<&[GnuByteOffsetMapEntry]> {
-        match &self.lazy_gnu_code {
+        match &self.lazy_gnu_code() {
             Some(lazy) => {
                 let decoded = match lazy.decoded_ready() {
                     Some(decoded) => decoded,
@@ -466,7 +478,7 @@ impl ByteCodeFunctionExt for ByteCodeFunction {
                         )
                     }
                 };
-                let map = &decoded.byte_offset_map;
+                let map = decoded.byte_offset_map();
                 (!map.is_empty()).then_some(map)
             }
             None => self.gnu_byte_offset_map.as_deref(),

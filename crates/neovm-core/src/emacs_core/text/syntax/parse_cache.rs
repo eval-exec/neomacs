@@ -628,7 +628,10 @@ impl Descriptor {
     /// while a state at or after `first_char` survives, so the interval that
     /// held the cons there still does (see the module documentation).
     fn unchanged(&self) -> bool {
-        let value = Value::from_bits(self.bits);
+        let value = unsafe {
+            /* SAFETY: real Value word */
+            Value::from_bits(self.bits)
+        };
         value.cons_car().bits() == self.car && value.cons_cdr().bits() == self.cdr
     }
 }

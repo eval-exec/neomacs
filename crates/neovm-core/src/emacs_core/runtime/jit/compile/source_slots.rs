@@ -339,7 +339,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
 ) -> i64 {
     // SAFETY: the seam's dormant Context (the shim contract).
     let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
-    let callee = Value::from_bits(callee_bits as usize);
+    let callee = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(callee_bits as usize)
+    };
     let nargs = nargs as usize;
     debug_assert!({
         // SAFETY: the executing leaf's slot.
@@ -419,7 +422,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
                 unsafe { *out = bits };
                 return STATUS_OK;
             }
-            FastRun::Done(Value::from_bits(bits as usize))
+            FastRun::Done(unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(bits as usize)
+            })
         } else {
             FastRun::Raw(status)
         }
@@ -434,7 +440,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_call_source_spec(
                     unsafe { *out = bits as i64 };
                     return STATUS_OK;
                 }
-                FastRun::Done(Value::from_bits(bits))
+                FastRun::Done(unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(bits)
+                })
             }
             // A contained panic: its residue is the caller's healing
             // points' (see `neovm_jit_call_spec`).

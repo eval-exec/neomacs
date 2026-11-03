@@ -148,7 +148,7 @@ fn const_sym_id(constants: &[Value], idx: u16) -> Result<u32, CompileError> {
             v.as_symbol_with_pos_sym()
                 .and_then(|s| s.as_bare_symbol_id())
         })
-        .map(|id| id.0)
+        .map(|id| id.to_raw())
         .ok_or(CompileError::BadOperand)
 }
 
@@ -683,7 +683,7 @@ fn inline_arith_callee_syms(
             })
             .map(|(_, sym, _)| sym)
             .collect();
-    syms.sort_by_key(|s| s.0);
+    syms.sort_by_key(|s| s.to_raw());
     syms.dedup();
     syms
 }
@@ -2011,7 +2011,7 @@ fn find_spec_sites(
                     sites.insert(
                         i,
                         SpecSite {
-                            sym: sym_id.0,
+                            sym: sym_id.to_raw(),
                             expected_bits: binding.bits() as u64,
                             slot: next_slot,
                             kind,
@@ -2233,7 +2233,7 @@ fn append_cbsym_spec_sites(
         sites.insert(
             i,
             SpecSite {
-                sym: sym.0,
+                sym: sym.to_raw(),
                 // Unused for CBSym: the target is name-canonical (no epoch
                 // guard); the shim recomputes `subr_from_sym_id(sym)` itself.
                 expected_bits: 0,
@@ -3828,7 +3828,10 @@ fn lower_leaf_body_with_plan(
     }
     if let Some(fused) = inline::active_fused().filter(|f| f.is_v2()) {
         for region in &fused.regions {
-            let v = Value::from_bits(region.callee_bits as usize);
+            let v = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(region.callee_bits as usize)
+            };
             if !reloc_index.contains_key(&v.bits()) {
                 reloc_index.insert(v.bits(), reloc_vals.len() as u32);
                 reloc_vals.push(v);

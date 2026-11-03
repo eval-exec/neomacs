@@ -2013,9 +2013,10 @@ impl BufferText {
         let pos = byte_pos.get() as u64;
         for entry in storage.syntax_byte_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry
-                    .value_present
-                    .then(|| Value::from_bits(entry.value_bits as usize));
+                let value = entry.value_present.then(|| unsafe {
+                    /* SAFETY: buffer text word */
+                    Value::from_bits(entry.value_bits as usize)
+                });
                 return Some((entry.start, entry.end, value));
             }
         }
@@ -2053,9 +2054,10 @@ impl BufferText {
         let pos = pos as u64;
         for entry in storage.syntax_char_run_memo.borrow().iter() {
             if entry.epoch == epoch && entry.tick == tick && pos >= entry.start && pos < entry.end {
-                let value = entry
-                    .value_present
-                    .then(|| Value::from_bits(entry.value_bits as usize));
+                let value = entry.value_present.then(|| unsafe {
+                    /* SAFETY: buffer text word */
+                    Value::from_bits(entry.value_bits as usize)
+                });
                 return Some((entry.start, entry.end, value));
             }
         }

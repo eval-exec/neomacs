@@ -94,7 +94,7 @@ pub(crate) fn emit(
         .load(types::I64, flags, obarray, OBARRAY_JIT_LEN_OFFSET as i32);
     let exists = fb
         .ins()
-        .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(sym.0));
+        .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(sym.to_raw()));
     emit_guard(fb, identity, exists);
     let spine = fb
         .ins()
@@ -103,13 +103,13 @@ pub(crate) fn emit(
         types::I64,
         flags,
         spine,
-        ((sym.0 as usize >> OBARRAY_CHUNK_BITS) * 8) as i32,
+        ((sym.to_raw() as usize >> OBARRAY_CHUNK_BITS) * 8) as i32,
     );
     let actual = fb.ins().load(
         types::I64,
         flags,
         chunk,
-        (((sym.0 as usize & (OBARRAY_CHUNK_SLOTS - 1)) * LISP_SYMBOL_SIZE)
+        (((sym.to_raw() as usize & (OBARRAY_CHUNK_SLOTS - 1)) * LISP_SYMBOL_SIZE)
             + LISP_SYMBOL_FUNCTION_OFFSET) as i32,
     );
     let expected = fb.ins().iconst(

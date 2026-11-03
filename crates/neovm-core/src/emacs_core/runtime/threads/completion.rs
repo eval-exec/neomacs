@@ -107,7 +107,7 @@ impl ThreadManager {
         if thread == self.ids.main_thread() {
             return Err(CompletionError::MainThread);
         }
-        match payload.native.phase {
+        match payload.native().phase {
             ThreadPhase::Terminal(_) => return Err(CompletionError::AlreadyPrepared),
             ThreadPhase::New | ThreadPhase::Active(_) | ThreadPhase::Completing(_) => {}
         }
@@ -137,7 +137,7 @@ impl ThreadManager {
         if payload.id() != thread {
             return Err(CompletionError::MissingRegistration);
         }
-        match payload.native.phase {
+        match payload.native().phase {
             ThreadPhase::Active(RunState::Blocked) => Ok(SimCompletion::Blocked),
             ThreadPhase::New
             | ThreadPhase::Active(RunState::Running)

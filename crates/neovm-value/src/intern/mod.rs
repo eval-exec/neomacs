@@ -41,7 +41,8 @@ impl SymId {
     /// function; forging one is the authority, and that goes through the
     /// interner or [`SymId::from_raw`].
     #[inline]
-    pub(crate) const fn to_raw(self) -> u32 {
+    #[doc(hidden)]
+    pub const fn to_raw(self) -> u32 {
         self.0
     }
 
@@ -60,7 +61,8 @@ impl SymId {
     /// core's facade re-exports it at `pub(crate)`, so core's own surface
     /// does not widen.
     #[inline]
-    pub(crate) const unsafe fn from_raw(id: u32) -> Self {
+    #[doc(hidden)]
+    pub const unsafe fn from_raw(id: u32) -> Self {
         Self(id)
     }
 }
@@ -428,10 +430,8 @@ pub struct SymbolNameQuery<'a> {
 }
 
 impl<'a> SymbolNameQuery<'a> {
-    pub(crate) fn new(
-        bytes: &'a [u8],
-        chars: crate::heap_types::GnuDeclaredCharacterCount,
-    ) -> Self {
+    #[doc(hidden)]
+    pub fn new(bytes: &'a [u8], chars: crate::heap_types::GnuDeclaredCharacterCount) -> Self {
         Self {
             bytes,
             chars: SymbolNameCharacterCount(usize::from(chars)),
@@ -439,11 +439,13 @@ impl<'a> SymbolNameQuery<'a> {
         }
     }
 
-    pub(crate) fn as_bytes(self) -> &'a [u8] {
+    #[doc(hidden)]
+    pub fn as_bytes(self) -> &'a [u8] {
         self.bytes
     }
 
-    pub(crate) fn matches(self, name: &LispString) -> bool {
+    #[doc(hidden)]
+    pub fn matches(self, name: &LispString) -> bool {
         name.schars() == self.chars.0 && name.as_bytes() == self.bytes
     }
 }
@@ -715,7 +717,10 @@ impl HeapNameWord {
     /// The name object. Callers have matched the word's heap with the heap
     /// the lookup is for.
     fn value(self) -> TaggedValue {
-        TaggedValue::from_bits(self.0)
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(self.0)
+        }
     }
 }
 
@@ -2535,4 +2540,12 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
             ((c.heap_id.is_some() as u64) << 32) ^ (c.names.len() as u64)
         }),
     );
+}
+
+impl NameId {
+    #[inline]
+    #[doc(hidden)]
+    pub fn to_raw(&self) -> u32 {
+        self.0
+    }
 }

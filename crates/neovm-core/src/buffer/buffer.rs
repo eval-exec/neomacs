@@ -1156,7 +1156,7 @@ fn buffer_slot_sym_map() -> &'static [Option<&'static BufferSlotInfo>] {
                     continue;
                 }
                 let sym_id = intern(info.name);
-                let index = sym_id.0 as usize;
+                let index = sym_id.to_raw() as usize;
                 if entries.len() <= index {
                     entries.resize(index + 1, None);
                     metas.resize(index + 1, None);
@@ -1184,7 +1184,7 @@ pub(crate) fn force_slot_schema_install() {
 
 pub fn lookup_buffer_slot_by_sym_id(sym_id: SymId) -> Option<&'static BufferSlotInfo> {
     buffer_slot_sym_map()
-        .get(sym_id.0 as usize)
+        .get(sym_id.to_raw() as usize)
         .and_then(|slot| *slot)
 }
 
@@ -1362,7 +1362,7 @@ pub fn variable_affects_chrome_by_sym_id(sym_id: SymId) -> bool {
             let mut entries: Vec<bool> = Vec::new();
             for &name in CHROME_FORMAT_VARS {
                 let id = intern(name);
-                let index = id.0 as usize;
+                let index = id.to_raw() as usize;
                 if entries.len() <= index {
                     entries.resize(index + 1, false);
                 }
@@ -1370,7 +1370,7 @@ pub fn variable_affects_chrome_by_sym_id(sym_id: SymId) -> bool {
             }
             entries.into_boxed_slice()
         })
-        .get(sym_id.0 as usize)
+        .get(sym_id.to_raw() as usize)
         .copied()
         .unwrap_or(false)
 }
@@ -1382,7 +1382,7 @@ pub fn variable_affects_display_by_sym_id(sym_id: SymId) -> bool {
             let mut entries: Vec<bool> = Vec::new();
             let mut mark = |name: &str| {
                 let id = intern(name);
-                let index = id.0 as usize;
+                let index = id.to_raw() as usize;
                 if entries.len() <= index {
                     entries.resize(index + 1, false);
                 }
@@ -1396,7 +1396,7 @@ pub fn variable_affects_display_by_sym_id(sym_id: SymId) -> bool {
             }
             entries.into_boxed_slice()
         })
-        .get(sym_id.0 as usize)
+        .get(sym_id.to_raw() as usize)
         .copied()
         .unwrap_or(false)
 }

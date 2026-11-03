@@ -54,7 +54,10 @@ impl<'era> HofSingleton<'era> {
         let argument = run.private_nil_root()?;
         let tail = run.private_nil_root()?;
         let mut list = run.private_nil_root()?;
-        store(run, &argument, TaggedValue::from_bits(element.word()))?;
+        store(run, &argument, unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(element.word())
+        })?;
         run.cons_into(&argument, &tail, &mut list)?;
         Ok(Self {
             state: SingletonState::Ready,
@@ -123,7 +126,8 @@ impl<'era> ExecutionActivation<'_, '_, 'era> {
     /// Native descriptor borrows end before this sealed semantic leaf. Exactly
     /// one callback executes, using the same mapper/callback reader and private
     /// activation root as the qualified guard. No lease survives allocation.
-    pub(crate) fn map_singleton(
+    #[doc(hidden)]
+    pub fn map_singleton(
         &mut self,
         mapper: &PreparedHofBuiltin,
         callback: &PreparedUnaryFunction,

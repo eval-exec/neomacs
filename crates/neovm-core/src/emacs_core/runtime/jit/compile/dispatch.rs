@@ -223,7 +223,10 @@ pub(crate) fn direct_builtin_spec(op: &Op) -> Option<(u8, usize)> {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_builtin1(ctx: *mut u8, idx: i64, a: i64, out: *mut i64) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        let a = Value::from_bits(a as usize);
+        let a = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(a as usize)
+        };
         if let Some(pure) = JIT_BUILTIN1_PURE[idx as usize] {
             // No collection can run (see `JitBuiltin2Pure`): no scratch roots.
             // SAFETY: see neovm_jit_call's function-level contract.
@@ -273,8 +276,14 @@ pub unsafe extern "C" fn neovm_jit_builtin2(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        let a = Value::from_bits(a as usize);
-        let b = Value::from_bits(b as usize);
+        let a = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(a as usize)
+        };
+        let b = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(b as usize)
+        };
         if let Some(pure) = JIT_BUILTIN2_PURE[idx as usize] {
             // No collection can run (see `JitBuiltin2Pure`): no scratch roots.
             // SAFETY: see neovm_jit_call's function-level contract.
@@ -348,8 +357,14 @@ mod array_projection_capture;
 pub unsafe extern "C" fn neovm_jit_aref(ctx: *mut u8, array: i64, index: i64) -> i64 {
     #[cfg(test)]
     AREF_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let array = Value::from_bits(array as usize);
-    let index = Value::from_bits(index as usize);
+    let array = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(array as usize)
+    };
+    let index = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(index as usize)
+    };
     match aref_fast(array, index) {
         Some(value) => value.bits() as i64,
         None => aref_slow(ctx, array, index),
@@ -705,8 +720,14 @@ fn assq_positioned_key_walk<const OBSERVE: bool>(
 pub unsafe extern "C" fn neovm_jit_memq(ctx: *mut u8, elt: i64, list: i64) -> i64 {
     #[cfg(test)]
     LIST_SEARCH_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let elt = Value::from_bits(elt as usize);
-    let list = Value::from_bits(list as usize);
+    let elt = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(elt as usize)
+    };
+    let list = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(list as usize)
+    };
     // SAFETY: seam-provided dormant Context; read-only access.
     let ctx_ref = unsafe { &*(ctx as *const Context) };
     match memq_fast(ctx_ref, elt, list) {
@@ -723,8 +744,14 @@ pub unsafe extern "C" fn neovm_jit_memq(ctx: *mut u8, elt: i64, list: i64) -> i6
 pub unsafe extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64) -> i64 {
     #[cfg(test)]
     LIST_SEARCH_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let key = Value::from_bits(key as usize);
-    let list = Value::from_bits(list as usize);
+    let key = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(key as usize)
+    };
+    let list = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(list as usize)
+    };
     // SAFETY: seam-provided dormant Context; read-only access.
     let ctx_ref = unsafe { &*(ctx as *const Context) };
     match assq_fast(ctx_ref, key, list) {
@@ -745,8 +772,14 @@ pub unsafe extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64) -> i6
 pub unsafe extern "C" fn neovm_jit_setcar_collection(ctx: *mut u8, cell: i64, new_car: i64) -> i64 {
     #[cfg(test)]
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let cell = Value::from_bits(cell as usize);
-    let new_car = Value::from_bits(new_car as usize);
+    let cell = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(cell as usize)
+    };
+    let new_car = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(new_car as usize)
+    };
     if compiled_cons_store(cell, new_car, false) {
         return new_car.bits() as i64;
     }
@@ -764,8 +797,14 @@ pub unsafe extern "C" fn neovm_jit_setcar_collection(ctx: *mut u8, cell: i64, ne
 pub unsafe extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64 {
     #[cfg(test)]
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let cell = Value::from_bits(cell as usize);
-    let new_car = Value::from_bits(new_car as usize);
+    let cell = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(cell as usize)
+    };
+    let new_car = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(new_car as usize)
+    };
     if crate::tagged::mutate::set_cons_car(cell, new_car) {
         return new_car.bits() as i64;
     }
@@ -779,8 +818,14 @@ pub unsafe extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64)
 pub unsafe extern "C" fn neovm_jit_setcdr_collection(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64 {
     #[cfg(test)]
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let cell = Value::from_bits(cell as usize);
-    let new_cdr = Value::from_bits(new_cdr as usize);
+    let cell = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(cell as usize)
+    };
+    let new_cdr = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(new_cdr as usize)
+    };
     if compiled_cons_store(cell, new_cdr, true) {
         return new_cdr.bits() as i64;
     }
@@ -798,8 +843,14 @@ pub unsafe extern "C" fn neovm_jit_setcdr_collection(ctx: *mut u8, cell: i64, ne
 pub unsafe extern "C" fn neovm_jit_setcdr(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64 {
     #[cfg(test)]
     LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let cell = Value::from_bits(cell as usize);
-    let new_cdr = Value::from_bits(new_cdr as usize);
+    let cell = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(cell as usize)
+    };
+    let new_cdr = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(new_cdr as usize)
+    };
     if crate::tagged::mutate::set_cons_cdr(cell, new_cdr) {
         return new_cdr.bits() as i64;
     }
@@ -1065,9 +1116,18 @@ pub unsafe extern "C" fn neovm_jit_aset_collection(
 ) -> i64 {
     #[cfg(test)]
     ASET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let array = Value::from_bits(array as usize);
-    let index = Value::from_bits(index as usize);
-    let value = Value::from_bits(value as usize);
+    let array = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(array as usize)
+    };
+    let index = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(index as usize)
+    };
+    let value = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(value as usize)
+    };
     if aset_collection_fast(array, index, value) {
         return value.bits() as i64;
     }
@@ -1086,9 +1146,18 @@ pub unsafe extern "C" fn neovm_jit_aset_collection(
 pub unsafe extern "C" fn neovm_jit_aset(ctx: *mut u8, array: i64, index: i64, value: i64) -> i64 {
     #[cfg(test)]
     ASET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
-    let array = Value::from_bits(array as usize);
-    let index = Value::from_bits(index as usize);
-    let value = Value::from_bits(value as usize);
+    let array = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(array as usize)
+    };
+    let index = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(index as usize)
+    };
+    let value = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(value as usize)
+    };
     if aset_fast(array, index, value) {
         return value.bits() as i64;
     }
@@ -1129,9 +1198,18 @@ pub unsafe extern "C" fn neovm_jit_builtin3(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        let a = Value::from_bits(a as usize);
-        let b = Value::from_bits(b as usize);
-        let c = Value::from_bits(c as usize);
+        let a = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(a as usize)
+        };
+        let b = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(b as usize)
+        };
+        let c = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(c as usize)
+        };
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(a);
         push_scratch_gc_root(b);
@@ -1243,7 +1321,10 @@ pub unsafe extern "C" fn neovm_jit_named_builtin(
         debug_assert!(matches!(variant, 0 | 1), "primitive opcode shim variant");
         let mut args = LispArgVec::new();
         for i in 0..nargs {
-            let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
+            let v = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+            };
             push_scratch_gc_root(v);
             args.push(v);
         }
@@ -1288,7 +1369,10 @@ pub unsafe extern "C" fn neovm_jit_save_window_excursion(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        let body = Value::from_bits(body as usize);
+        let body = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(body as usize)
+        };
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let root_scope = save_scratch_gc_roots();
@@ -1406,8 +1490,10 @@ fn stack_call_from_native(
     let args_start = ctx.bc_buf.len();
     // SAFETY: the generated code stored exactly `nargs` argument words at
     // `args_ptr` (its call-args slot) immediately before this call.
-    ctx.bc_buf
-        .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
+    ctx.bc_buf.extend((0..nargs).map(|i| unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+    }));
     let res = call(&mut Vm::from_context(ctx), args_start);
     ctx.bc_buf.truncate(args_start);
     restore_scratch_gc_roots(saved);
@@ -1453,7 +1539,10 @@ macro_rules! spec_call_body {
             // the constant base of the object the slot was armed for, which the
             // epoch proof keeps alive (the slot is cleared on every re-arm).
             let leaf = unsafe { &*slot_ref.leaf_ptr() };
-            let callee = Value::from_bits($expected as usize);
+            let callee = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits($expected as usize)
+            };
             let $nargs = $nargs as usize;
             let bt_count = ctx_ref.specpdl.len();
             // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
@@ -1463,7 +1552,10 @@ macro_rules! spec_call_body {
             // frame (`cache::pin_redefined_function`).
             unsafe {
                 ctx_ref.push_backtrace_frame_from_native_args(
-                    Value::from_bits($sym_bits as usize),
+                    unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits($sym_bits as usize)
+                    },
                     $args_ptr,
                     $nargs,
                 )
@@ -1524,7 +1616,10 @@ macro_rules! spec_call_body {
                         unsafe { *$out = bits };
                         return STATUS_OK;
                     }
-                    FastRun::Done(Value::from_bits(bits as usize))
+                    FastRun::Done(unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits(bits as usize)
+                    })
                 } else {
                     FastRun::Raw(status)
                 }
@@ -1545,7 +1640,10 @@ macro_rules! spec_call_body {
                         unsafe { *$out = ret.value };
                         return STATUS_OK;
                     }
-                    FastRun::Done(Value::from_bits(ret.value as usize))
+                    FastRun::Done(unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits(ret.value as usize)
+                    })
                 } else {
                     FastRun::Raw(ret.status)
                 }
@@ -1566,7 +1664,10 @@ macro_rules! spec_call_body {
                             unsafe { *$out = bits as i64 };
                             return STATUS_OK;
                         }
-                        FastRun::Done(Value::from_bits(bits))
+                        FastRun::Done(unsafe {
+                            /* SAFETY: JIT constant-pool word */
+                            Value::from_bits(bits)
+                        })
                     }
                     // A panic contained in the framed entry: leave its marker
                     // and the residue -- this frame's backtrace entry, the
@@ -1861,7 +1962,10 @@ fn call_spec_slow(
     // callee's frame records, handed down as they are. Its id is only for
     // the obarray reads below (the lowering bakes a symbol here; a tag test
     // and a panic path on every slow call were measured, so debug-only).
-    let called = Value::from_bits(sym_bits as usize);
+    let called = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(sym_bits as usize)
+    };
     debug_assert!(
         called.is_bare_symbol(),
         "a speculated call site's callee is a symbol"
@@ -1942,7 +2046,7 @@ fn call_spec_slow(
                 // immediately).
                 use crate::emacs_core::jit::cache::NativeCallOutcome;
                 let outcome = if armed {
-                    let target = Value::from_bits(expected as usize);
+                    let target = unsafe { /* SAFETY: JIT constant-pool word */ Value::from_bits(expected as usize) };
                     // About to resolve (and maybe compile) the callee's leaf
                     // before its backtrace frame exists: hand its symbol to
                     // the leaf's perf-map label. Naming-only, cold.
@@ -2273,7 +2377,12 @@ fn run_screened_fixed_builtin(
     // `args_ptr` (its call-args slot) immediately before this call.
     let arg = |i: usize| {
         if i < nargs {
-            unsafe { Value::from_bits(*args_ptr.add(i) as usize) }
+            unsafe {
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(*args_ptr.add(i) as usize)
+                }
+            }
         } else {
             Value::NIL
         }
@@ -2529,7 +2638,7 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
                     ctx, sym_id, entry, args_ptr, nargs,
                 )),
                 None => {
-                    let target = Value::from_bits(expected as usize);
+                    let target = unsafe { /* SAFETY: JIT constant-pool word */ Value::from_bits(expected as usize) };
                     call_fixed_builtin_from_native(ctx, sym_id, target, slot, args_ptr, nargs)
                 }
             };
@@ -2549,7 +2658,7 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
             return call_stack_builtin_from_native(
                 ctx,
                 sym_id,
-                Value::from_bits(expected as usize),
+                unsafe { /* SAFETY: JIT constant-pool word */ Value::from_bits(expected as usize) },
                 args_ptr,
                 nargs,
                 out,
@@ -2585,7 +2694,10 @@ fn subr_spec_call_reference(
     }
     #[cfg(debug_assertions)]
     SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-    let target = Value::from_bits(expected as usize);
+    let target = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(expected as usize)
+    };
     // Direct fixed-arity call (the common case): the subr object is re-read
     // on EVERY call (its entry is rewritten in place at registration, so the
     // fn pointer is never cached), the frame records the SYMBOL over the
@@ -2646,8 +2758,10 @@ fn call_stack_builtin_from_native(
     let args_start = ctx.bc_buf.len();
     // SAFETY: the calling shim's generated caller stored exactly `nargs`
     // tagged words at `args_ptr`; that native slot outlives this call.
-    ctx.bc_buf
-        .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
+    ctx.bc_buf.extend((0..nargs).map(|i| unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+    }));
     let res = ctx.call_spec_subr_from_bc_stack(sym_id, target, args_start, nargs);
     ctx.bc_buf.truncate(args_start);
     let status = match res {
@@ -2729,7 +2843,10 @@ pub unsafe extern "C" fn neovm_jit_pred_spec(
         }
         #[cfg(debug_assertions)]
         SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-        let v = Value::from_bits(a as usize);
+        let v = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(a as usize)
+        };
         let result = match kind {
             // `is_record`/`is_symbol_with_pos` = tag check BEFORE any header
             // deref (`veclike_type` guards on `is_veclike` first) — safe on
@@ -2839,7 +2956,7 @@ pub unsafe extern "C" fn neovm_jit_fboundp_spec(
         let (sym, expected) = slot.subr_binding();
         if ctx.debug_on_next_call_is_armed()
             || ctx.depth >= ctx.max_depth
-            || !subr_spec_armed(ctx, sym.0 as i64, expected as i64, slot)
+            || !subr_spec_armed(ctx, sym.to_raw() as i64, expected as i64, slot)
         {
             #[cfg(debug_assertions)]
             SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -2847,7 +2964,10 @@ pub unsafe extern "C" fn neovm_jit_fboundp_spec(
         }
         #[cfg(debug_assertions)]
         SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-        let v = Value::from_bits(a as usize);
+        let v = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(a as usize)
+        };
         // `builtin_fboundp_1`: a symbol's function cell, read off the obarray
         // with no allocation, no Lisp and no safe point (a symbol-with-pos is
         // a symbol here exactly when the builtin says so, i.e. only while
@@ -3015,7 +3135,16 @@ pub unsafe extern "C" fn neovm_jit_arith_generic(
         let nargs = kind.arity();
         // The all-integer answer first, straight from the registers: it
         // cannot reach a safe point, so `a` and `b` need no staging.
-        let operands = [Value::from_bits(a as usize), Value::from_bits(b as usize)];
+        let operands = [
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(a as usize)
+            },
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(b as usize)
+            },
+        ];
         if let Some(value) = Vm::arith_integer_fast(kind, &operands[..nargs]) {
             // SAFETY: `out` is the generated code's result stack slot.
             unsafe { *out = value.bits() as i64 };
@@ -3107,8 +3236,16 @@ pub unsafe extern "C" fn neovm_jit_arith_spec(
             // the generic bounce below. lognot is 1-arg (dummy `b`, ignored); the
             // 2-arg ops read both operands only inside their own arm.
             let fix2 = || match (
-                Value::from_bits(a as usize).as_fixnum(),
-                Value::from_bits(b as usize).as_fixnum(),
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                }
+                .as_fixnum(),
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                }
+                .as_fixnum(),
             ) {
                 (Some(l), Some(r)) => Some((l, r)),
                 _ => None,
@@ -3133,7 +3270,12 @@ pub unsafe extern "C" fn neovm_jit_arith_spec(
                 }),
                 _ => {
                     debug_assert_eq!(kind, ARITH_KIND_LOGNOT);
-                    Value::from_bits(a as usize).as_fixnum().map(|n| !n)
+                    unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits(a as usize)
+                    }
+                    .as_fixnum()
+                    .map(|n| !n)
                 }
             };
             if let Some(res) = res {
@@ -3242,7 +3384,10 @@ pub unsafe extern "C" fn neovm_jit_cbsym_spec(
         let saved = save_scratch_gc_roots();
         let args_start = ctx.bc_buf.len();
         for i in 0..nargs {
-            let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
+            let v = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+            };
             ctx.bc_buf.push(v);
         }
         // The operand-stack copy above is what roots the arguments while the
@@ -3377,7 +3522,10 @@ pub unsafe extern "C" fn neovm_jit_cbsym_read(
         CBSYM_A_MATCH_BEGINNING | CBSYM_A_MATCH_END => {
             // SAFETY: the generated code stored exactly one argument word at
             // `args_ptr` immediately before this call.
-            let group = Value::from_bits(unsafe { *args_ptr } as usize);
+            let group = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(unsafe { *args_ptr } as usize)
+            };
             match group.as_fixnum().filter(|group| *group >= 0) {
                 Some(index) => Some(
                     match ctx_ref
@@ -3501,8 +3649,14 @@ unsafe fn cbsym_read_contained(
 pub extern "C" fn neovm_jit_throw(tag: i64, value: i64) {
     jit_shim_contain!(no_ctx, (), {
         stash_pending_flow(Flow::throw(
-            Value::from_bits(tag as usize),
-            Value::from_bits(value as usize),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(tag as usize)
+            },
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(value as usize)
+            },
         ));
     })
 }
@@ -3517,8 +3671,14 @@ pub unsafe extern "C" fn neovm_jit_throw_with_symbols(ctx: *mut u8, tag: i64, va
         // leaf's operand slots are unrooted.
         let symbol_mode = unsafe { &*(ctx as *const Context) }.symbol_mode();
         stash_pending_flow(Flow::throw_with_symbols(
-            Value::from_bits(tag as usize),
-            Value::from_bits(value as usize),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(tag as usize)
+            },
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(value as usize)
+            },
             symbol_mode,
         ));
     })
@@ -3529,7 +3689,10 @@ pub unsafe extern "C" fn neovm_jit_throw_with_symbols(ctx: *mut u8, tag: i64, va
 /// pure, never allocates or signals.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_integerp_slow(v: i64) -> i64 {
-    let v = Value::from_bits(v as usize);
+    let v = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(v as usize)
+    };
     (if v.is_integer() {
         Value::T.bits()
     } else {
@@ -3541,7 +3704,10 @@ pub extern "C" fn neovm_jit_integerp_slow(v: i64) -> i64 {
 /// Context-free, pure, never allocates or signals.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_numberp_slow(v: i64) -> i64 {
-    let v = Value::from_bits(v as usize);
+    let v = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(v as usize)
+    };
     (if v.is_number() {
         Value::T.bits()
     } else {
@@ -3604,7 +3770,10 @@ pub unsafe extern "C" fn neovm_jit_save_restriction(ctx: *mut u8) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_unwind_protect(ctx: *mut u8, forms: i64) {
     use crate::emacs_core::eval::SpecBinding;
-    let forms = Value::from_bits(forms as usize);
+    let forms = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(forms as usize)
+    };
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     ctx.jit_bind_stack.push(ctx.specpdl.len());
@@ -3652,7 +3821,10 @@ pub unsafe extern "C" fn neovm_jit_push_cc_raw(
     stack_len: i64,
     conditions: i64,
 ) {
-    let conditions = Value::from_bits(conditions as usize);
+    let conditions = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(conditions as usize)
+    };
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
@@ -3676,7 +3848,10 @@ pub unsafe extern "C" fn neovm_jit_push_cc_raw(
 /// Same vmctx contract as [`neovm_jit_call`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_push_catch(ctx: *mut u8, target: i64, stack_len: i64, tag: i64) {
-    let tag = Value::from_bits(tag as usize);
+    let tag = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(tag as usize)
+    };
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let resume_id = ctx.allocate_resume_id();
@@ -3833,7 +4008,7 @@ pub unsafe extern "C" fn neovm_jit_match_handler(ctx: *mut u8, ours: i64, out: *
                             continue;
                         }
                     };
-                    let Some(selected) = sig.selected_resume.clone() else {
+                    let Some(selected) = sig.selected_resume().clone() else {
                         for _ in 0..remaining {
                             ctx.pop_condition_frame();
                         }
@@ -3910,8 +4085,14 @@ pub(crate) const JIT_SWITCH_STALE: i64 = -2;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn neovm_jit_switch(ctx: *mut u8, dispatch: i64, table: i64) -> i64 {
     jit_shim_contain!(ctx, JIT_SWITCH_STALE, {
-        let table = Value::from_bits(table as usize);
-        let dispatch = Value::from_bits(dispatch as usize);
+        let table = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(table as usize)
+        };
+        let dispatch = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(dispatch as usize)
+        };
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let Some(ht) = table.as_hash_table() else {

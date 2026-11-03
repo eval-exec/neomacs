@@ -49,7 +49,7 @@ pub(crate) fn prepare(leaf: &mut CompiledLeaf, source: &Runtime) {
 pub(crate) fn may_load(source: &RuntimeState) -> bool {
     !jit_aot_retier_on()
         || super::super::compile::lowering::forced_regalloc().is_some()
-        || (!source.aot_retiered.load(Ordering::Relaxed)
+        || (!source.aot_retiered_ref().load(Ordering::Relaxed)
             && heat().is_none_or(|at| source.heat() < at))
 }
 
@@ -61,7 +61,7 @@ pub(crate) fn may_load(source: &RuntimeState) -> bool {
 pub(crate) fn earned_native_admission(source: &RuntimeState) -> bool {
     jit_aot_retier_on()
         && super::super::compile::lowering::forced_regalloc().is_none()
-        && source.aot_retiered.load(Ordering::Relaxed)
+        && source.aot_retiered_ref().load(Ordering::Relaxed)
 }
 
 /// Only the existing AOT sidecar branch calls this helper. Off, its credit is
@@ -82,7 +82,7 @@ pub(crate) fn entry(obs: &LeafObs) {
 #[inline(never)]
 fn request(obs: &LeafObs) {
     if let Some(source) = obs.t2.source.borrow().as_ref() {
-        source.aot_retiered.store(true, Ordering::Relaxed);
+        source.aot_retiered_ref().store(true, Ordering::Relaxed);
     }
     super::super::tier2::request(obs);
 }
@@ -100,7 +100,7 @@ pub(crate) fn legacy_request(leaf: &CompiledLeaf, source: &RuntimeState) -> Opti
     {
         return None;
     }
-    source.aot_retiered.store(true, Ordering::Relaxed);
+    source.aot_retiered_ref().store(true, Ordering::Relaxed);
     leaf.obs.t2.budget.set(DISARMED);
     leaf.obs.t2.state.set(T2State::Due(T2Upgrade::Retier));
     Some(T2Upgrade::Retier)

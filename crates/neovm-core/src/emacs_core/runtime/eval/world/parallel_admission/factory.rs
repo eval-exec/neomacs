@@ -66,10 +66,13 @@ impl AdmissionPlan for ProductionPlan {
         };
         ParallelHeapEra::admit_rooted(admission, keeper, roots)
             .map(|era| OwnedParallelProjection { era })
-            .map_err(|failure| AdmissionFailure {
-                reason: map_registration(failure.reason),
-                collector: failure.collector,
-                keeper: failure.keeper,
+            .map_err(|failure| {
+                let (reason, collector, keeper) = failure.into_parts();
+                AdmissionFailure {
+                    reason: map_registration(reason),
+                    collector,
+                    keeper,
+                }
             })
     }
 }
@@ -90,10 +93,13 @@ impl AdmissionPlan for ProofPlan {
     ) -> Result<Self::Projection<'heap>, AdmissionFailure<'heap>> {
         ProofEra::admit_rooted(collector, keeper, roots)
             .map(|era| OwnedProofProjection { era })
-            .map_err(|failure| AdmissionFailure {
-                reason: map_registration(failure.reason),
-                collector: failure.collector,
-                keeper: failure.keeper,
+            .map_err(|failure| {
+                let (reason, collector, keeper) = failure.into_parts();
+                AdmissionFailure {
+                    reason: map_registration(reason),
+                    collector,
+                    keeper,
+                }
             })
     }
 }
@@ -116,10 +122,13 @@ impl AdmissionPlan for WeakProofPlan<'_> {
     ) -> Result<Self::Projection<'heap>, AdmissionFailure<'heap>> {
         ProofEra::admit_rooted_with_weak_tables_for_test(collector, keeper, roots, self.tables)
             .map(|era| OwnedProofProjection { era })
-            .map_err(|failure| AdmissionFailure {
-                reason: map_registration(failure.reason),
-                collector: failure.collector,
-                keeper: failure.keeper,
+            .map_err(|failure| {
+                let (reason, collector, keeper) = failure.into_parts();
+                AdmissionFailure {
+                    reason: map_registration(reason),
+                    collector,
+                    keeper,
+                }
             })
     }
 }

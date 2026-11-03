@@ -3338,7 +3338,10 @@ pub(crate) fn run_resolved_leaf_native(
         if status == super::compile::STATUS_OK {
             #[cfg(any(test, debug_assertions))]
             NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return NativeCallOutcome::Value(Value::from_bits(out as usize));
+            return NativeCallOutcome::Value(unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(out as usize)
+            });
         }
         #[cfg(any(test, debug_assertions))]
         count_native_status(status);
@@ -3368,7 +3371,10 @@ fn run_resolved_leaf_native_outlined(
         if ret.status == super::compile::STATUS_OK {
             #[cfg(any(test, debug_assertions))]
             NATIVE_OK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return NativeCallOutcome::Value(Value::from_bits(ret.value as usize));
+            return NativeCallOutcome::Value(unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(ret.value as usize)
+            });
         }
         #[cfg(any(test, debug_assertions))]
         count_native_status(ret.status);
@@ -3393,7 +3399,10 @@ pub(crate) fn finish_framed_run(
     #[cfg(any(test, debug_assertions))]
     count_native_outcome(&outcome);
     match outcome {
-        NativeRun::Ok(bits) => NativeCallOutcome::Value(Value::from_bits(bits)),
+        NativeRun::Ok(bits) => NativeCallOutcome::Value(unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(bits)
+        }),
         // call_premarshaled maps null-vmctx deopts to Deopt; defensive only —
         // the caller re-runs the callee on the interpreter.
         NativeRun::Deopt => {
@@ -3471,7 +3480,7 @@ pub(crate) fn direct_call_cold(
         // pair as an ordinary native signal return; first dispatch still runs
         // with this activation's roots and arguments live.
         if let Some(sig) = flow.as_signal()
-            && sig.search_complete
+            && sig.search_complete()
         {
             stash_pending_flow(flow);
             return NativeCallOutcome::FlowStashed;

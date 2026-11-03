@@ -139,10 +139,10 @@ pub(crate) fn note_compile(f: &ByteCodeFunction, obarray: Option<&Obarray>) {
     let mut census = census().lock().unwrap_or_else(|p| p.into_inner());
     let compiles = census
         .sources
-        .get(&f.source_id)
+        .get(&f.source_id())
         .map_or(1, |s| s.compiles + 1);
     census.sources.insert(
-        f.source_id,
+        f.source_id(),
         Source {
             name,
             compiled_id: f.jit_runtime().compiled_id(),
@@ -169,7 +169,7 @@ pub(crate) fn note_compile_outcome(
         Err(_) => CompileOutcome::NotCompilable,
     };
     let mut census = census().lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(source) = census.sources.get_mut(&f.source_id) {
+    if let Some(source) = census.sources.get_mut(&f.source_id()) {
         source.outcome = outcome;
     }
 }
@@ -188,7 +188,7 @@ pub(crate) fn note_selected_compile_outcome(
         return;
     }
     let mut census = census().lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(source) = census.sources.get_mut(&f.source_id) {
+    if let Some(source) = census.sources.get_mut(&f.source_id()) {
         source.outcome = CompileOutcome::Opt;
     }
 }
@@ -217,7 +217,7 @@ fn record_callback(function: Value) {
     let mut census = census().lock().unwrap_or_else(|p| p.into_inner());
     let row = census
         .callbacks
-        .entry(f.source_id)
+        .entry(f.source_id())
         .or_insert_with(|| Callback {
             name: super::perf_map::anon_name(f).into(),
             count: 0,
@@ -370,7 +370,7 @@ pub(crate) fn report_at_exit(ctx: &Context) {
     let mut names = BTreeMap::new();
     for (name, function) in ctx.obarray.interned_function_cells_with_names() {
         if let Some(f) = function.bytecode_data_if_materialized() {
-            names.entry(f.source_id).or_insert_with(|| {
+            names.entry(f.source_id()).or_insert_with(|| {
                 super::epoch::report_token(
                     crate::emacs_core::intern::resolve_name_lisp_string(name)
                         .as_utf8_str()

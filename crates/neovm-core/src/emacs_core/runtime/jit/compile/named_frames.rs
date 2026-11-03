@@ -42,7 +42,7 @@ pub(super) fn emit_identity_guard(
         .load(types::I64, flags, obarray, OBARRAY_JIT_LEN_OFFSET as i32);
     let exists = fb
         .ins()
-        .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(symbol.0));
+        .icmp_imm_u(IntCC::UnsignedGreaterThan, len, i64::from(symbol.to_raw()));
     emit_guard(fb, deopt, exists);
     let spine = fb
         .ins()
@@ -51,13 +51,13 @@ pub(super) fn emit_identity_guard(
         types::I64,
         flags,
         spine,
-        ((symbol.0 as usize >> OBARRAY_CHUNK_BITS) * 8) as i32,
+        ((symbol.to_raw() as usize >> OBARRAY_CHUNK_BITS) * 8) as i32,
     );
     let function = fb.ins().load(
         types::I64,
         flags,
         chunk,
-        (((symbol.0 as usize & (OBARRAY_CHUNK_SLOTS - 1)) * LISP_SYMBOL_SIZE)
+        (((symbol.to_raw() as usize & (OBARRAY_CHUNK_SLOTS - 1)) * LISP_SYMBOL_SIZE)
             + LISP_SYMBOL_FUNCTION_OFFSET) as i32,
     );
     let expected = fb.ins().iconst(types::I64, expected_bits as i64);

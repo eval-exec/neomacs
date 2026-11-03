@@ -10,7 +10,8 @@ pub struct RowsOwnedDomain {
 }
 
 impl TaggedHeap {
-    pub(crate) fn rows_observation_idle(&self) -> bool {
+    #[doc(hidden)]
+    pub fn rows_observation_idle(&self) -> bool {
         if self.concurrent_mark_running
             || self.mark_in_progress
             || self.sweep_in_progress
@@ -40,7 +41,8 @@ impl TaggedHeap {
 
     /// Caller checks GEN1, owner and comprehensive idle state before this read.
     /// First scope refuses chunk-map-off and every residual Box dependency.
-    pub(crate) fn capture_rows_owned_domain(&self) -> Option<RowsOwnedDomain> {
+    #[doc(hidden)]
+    pub fn capture_rows_owned_domain(&self) -> Option<RowsOwnedDomain> {
         self.chunk_map.as_ref()?;
         let mut start_count = [0; CHUNK_CLASS_COUNT];
         start_count[ChunkClass::Cons as usize] = self.cons_blocks.len();
@@ -59,11 +61,8 @@ impl TaggedHeap {
     /// satisfy this contract. A GEN1 -> GEN0 -> panic -> GEN1 transition
     /// would invalidate this proof, and must never become a production API.
     /// This proves storage origin, not validity of arbitrary caller-made bits.
-    pub(crate) fn rows_dependency_in_start_domain(
-        &self,
-        domain: &RowsOwnedDomain,
-        bits: usize,
-    ) -> bool {
+    #[doc(hidden)]
+    pub fn rows_dependency_in_start_domain(&self, domain: &RowsOwnedDomain, bits: usize) -> bool {
         use super::super::value::{TAG_CONS, TAG_MASK, TAG_STRING, TAG_VECLIKE};
         let address = bits & !TAG_MASK;
         if address == 0 {

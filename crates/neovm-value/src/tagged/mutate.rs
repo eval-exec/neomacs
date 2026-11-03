@@ -62,7 +62,8 @@ impl LispCollectionRevision {
     }
 
     #[inline]
-    pub(crate) fn changed(value: TaggedValue) {
+    #[doc(hidden)]
+    pub fn changed(value: TaggedValue) {
         if !super::collection_reads::history_required() {
             return;
         }
@@ -93,7 +94,8 @@ static_assertions::assert_not_impl_any!(HeapMutClosureGuard: Send, Sync);
 #[cfg(debug_assertions)]
 impl HeapMutClosureGuard {
     #[inline]
-    pub(crate) fn enter() -> Self {
+    #[doc(hidden)]
+    pub fn enter() -> Self {
         Self {
             _scope: crate::tls_scope::TlsScope::new(&IN_HEAP_MUT_CLOSURE, true),
         }

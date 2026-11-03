@@ -26,10 +26,8 @@ pub enum CellReadError {
 
 impl<'era> ExecutionActivation<'_, '_, 'era> {
     /// Return checked handle metadata without loading a symbol cell or backing.
-    pub(crate) fn symbol_slot(
-        &self,
-        symbol: &SymbolHandle,
-    ) -> Result<SymbolSlotIndex, RegistrationError> {
+    #[doc(hidden)]
+    pub fn symbol_slot(&self, symbol: &SymbolHandle) -> Result<SymbolSlotIndex, RegistrationError> {
         self.run.checked_symbol_slot(symbol)
     }
 
@@ -48,7 +46,8 @@ impl<'era> ExecutionActivation<'_, '_, 'era> {
     /// The existing primitive installs even a managed answer before releasing
     /// reader authority. A refusal preserves the previous home and returns
     /// Busy as a typed result; contention retry belongs to the caller.
-    pub(crate) fn read_cell(
+    #[doc(hidden)]
+    pub fn read_cell(
         &mut self,
         symbol: &SymbolHandle,
         operation: CellRead,

@@ -858,7 +858,8 @@ impl TaggedHeap {
     /// # Safety
     /// The caller must keep mutators stopped until the returned loan is dropped.
     /// No borrow of the heap is retained, so seeding may mutate it meanwhile.
-    pub(crate) unsafe fn root_seed_scratch(&mut self) -> root_seed_scratch::RootSeedLoan {
+    #[doc(hidden)]
+    pub unsafe fn root_seed_scratch(&mut self) -> root_seed_scratch::RootSeedLoan {
         debug_assert!(!self.sweep_in_progress());
         self._satb_layout_reserve.0.root_seed_scratch.loan()
     }

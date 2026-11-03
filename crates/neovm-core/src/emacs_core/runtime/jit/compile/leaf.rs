@@ -1032,7 +1032,7 @@ impl CompiledLeaf {
             // as before: SPEC_EPOCH_DISARMED never re-arms, and nothing that
             // needs the binding words can reach it.
             let slot = match (SpecCalleeKind::from_spec_disc(site.kind_disc), armed_sym) {
-                (Some(kind), Some(sym)) => SpecSlot::for_site(kind, epoch, sym.0, expected),
+                (Some(kind), Some(sym)) => SpecSlot::for_site(kind, epoch, sym.to_raw(), expected),
                 _ => SpecSlot::at_epoch(epoch),
             };
             spec_slots_vec.push(slot);
@@ -1689,7 +1689,10 @@ impl CompiledLeaf {
                         super::lowering::UNBOXED_FLOAT_TAG_WORD,
                         "an unboxed-float tag word reached a deopt framestate"
                     );
-                    Value::from_bits(bits as usize)
+                    unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits(bits as usize)
+                    }
                 })
                 .collect();
             let binds: Vec<usize> = match bind_frame {
@@ -1733,7 +1736,7 @@ impl CompiledLeaf {
                                         .function
                                         .get_bytecode_data()
                                         .expect("validated")
-                                        .source_id,
+                                        .source_id(),
                                     frame.pc as u32,
                                 )
                             })
@@ -1879,7 +1882,10 @@ impl CompiledLeaf {
                 // the successful return value—through the shared unwinder, and
                 // publish the final winning cleanup flow back to the dispatcher.
                 let result = match status {
-                    STATUS_OK => Ok(Value::from_bits(out as usize)),
+                    STATUS_OK => Ok(unsafe {
+                        /* SAFETY: JIT constant-pool word */
+                        Value::from_bits(out as usize)
+                    }),
                     STATUS_SIGNAL => Err(take_pending_flow()
                         .expect("STATUS_SIGNAL frame exit must carry a pending flow")),
                     _ => Ok(Value::NIL),

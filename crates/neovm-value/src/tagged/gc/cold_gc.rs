@@ -244,7 +244,8 @@ impl TaggedHeap {
     /// Kept outside SweepStats so ordinary stats retain their BASE layout.
     #[cold]
     #[inline(never)]
-    pub(crate) fn last_concurrent_claim_counts(&self) -> (usize, usize) {
+    #[doc(hidden)]
+    pub fn last_concurrent_claim_counts(&self) -> (usize, usize) {
         self.concurrent_claims_state().map_or((0, 0), |state| {
             (state.last_leaf_claimed, state.last_hash_claimed)
         })

@@ -168,16 +168,17 @@ pub(super) fn evaluator_handler(sym_id: SymId) -> Option<EvaluatorHandler> {
         .get_or_init(|| {
             let max_id = EVALUATOR_SUBRS
                 .iter()
-                .map(|declaration| intern(declaration.spec.name()).0 as usize)
+                .map(|declaration| intern(declaration.spec.name()).to_raw() as usize)
                 .max()
                 .unwrap_or(0);
             let mut handlers = vec![None; max_id + 1];
             for declaration in EVALUATOR_SUBRS {
-                handlers[intern(declaration.spec.name()).0 as usize] = Some(declaration.handler);
+                handlers[intern(declaration.spec.name()).to_raw() as usize] =
+                    Some(declaration.handler);
             }
             handlers
         })
-        .get(sym_id.0 as usize)
+        .get(sym_id.to_raw() as usize)
         .copied()
         .flatten()
 }

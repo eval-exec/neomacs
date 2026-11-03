@@ -1841,19 +1841,19 @@ pub(crate) fn builtin_intern_fn(eval: &mut super::eval::Context, args: Vec<Value
             let bc_frames_info: Vec<String> = eval
                 .bc_frames
                 .iter()
-                .map(|f| format!("base={} fun={:#x}", f.base, f.fun.0))
+                .map(|f| format!("base={} fun={:#x}", f.base, f.fun.bits()))
                 .collect();
             panic!(
                 "INTERN BUG: string arg {:#x} (ptr {:?}) has header.kind={:?}\n\
                  bc_buf.len()={}, bc_frames={:?}\n\
                  All args: {:?}",
-                args[0].0,
+                args[0].bits(),
                 ptr,
                 header.kind,
                 bc_buf_len,
                 bc_frames_info,
                 args.iter()
-                    .map(|a| format!("{:#x}", a.0))
+                    .map(|a| format!("{:#x}", a.bits()))
                     .collect::<Vec<_>>(),
             );
         }
@@ -4489,12 +4489,12 @@ fn interactive_form_from_quoted_lambda(
 
 fn interactive_form_from_bytecode_value(function: Value) -> Option<Value> {
     let probe = function.bytecode_interactive_probe()?;
-    if probe.slot_count <= 5 {
+    if probe.slot_count() <= 5 {
         return None;
     }
     // GNU's `Qinteractive`; this form is reconstructed per command lookup.
     static INTERACTIVE_FORM_SYMBOL: WellKnown = WellKnown::Interactive;
-    let spec_val = stored_interactive_spec_value(probe.interactive.unwrap_or(Value::NIL));
+    let spec_val = stored_interactive_spec_value(probe.interactive().unwrap_or(Value::NIL));
     Some(Value::list(vec![
         Value::symbol(&INTERACTIVE_FORM_SYMBOL),
         spec_val,
@@ -4705,7 +4705,7 @@ pub(crate) fn builtin_interactive_form(
             // Bytecode has no interactive slot. Check for an oclosure
             // tag in the doc slot.
             if let Some(probe) = fun.bytecode_interactive_probe()
-                && probe.doc_form.is_some()
+                && probe.doc_form().is_some()
             {
                 genfun = true;
             }

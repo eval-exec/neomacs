@@ -35,7 +35,7 @@ fn autoload_symbol_id() -> SymId {
         return unsafe { SymId::from_raw(cached) };
     }
     let id = intern("autoload");
-    AUTOLOAD_SYMBOL_ID.store(id.0, Ordering::Relaxed);
+    AUTOLOAD_SYMBOL_ID.store(id.to_raw(), Ordering::Relaxed);
     id
 }
 

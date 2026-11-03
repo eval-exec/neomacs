@@ -28,7 +28,8 @@ pub enum InlineErrorOp {
 /// before the debugger runs. Existing specpdl unwinding owns the frame after
 /// delivery, including condition-case and unwind-protect exits.
 #[derive(Clone, Debug)]
-pub(crate) struct BytecodeErrorBacktrace {
+#[doc(hidden)]
+pub struct BytecodeErrorBacktrace {
     function: Value,
     args: Vec<Value>,
     _pin: InFlightRoots,
@@ -96,7 +97,8 @@ impl Flow {
     /// Context immutably; delivery records after their leaf witness is gone.
     #[cold]
     #[inline(never)]
-    pub(crate) fn with_bytecode_error_backtrace(self, op: InlineErrorOp, args: &[Value]) -> Self {
+    #[doc(hidden)]
+    pub fn with_bytecode_error_backtrace(self, op: InlineErrorOp, args: &[Value]) -> Self {
         let mut kind = self.into_kind();
         if let FlowKind::Signal(signal) = &mut kind
             && signal.bytecode_error_backtrace.is_none()

@@ -382,7 +382,7 @@ pub(crate) enum LeafChange {
 pub(crate) fn record_subr_leaf(sym: SymId, leaf: Option<&'static LeafSpec>) -> LeafChange {
     LEAF_BY_SUBR.with(|table| {
         let mut table = table.borrow_mut();
-        let idx = sym.0 as usize;
+        let idx = sym.to_raw() as usize;
         if table.len() <= idx {
             if leaf.is_none() {
                 return LeafChange::Unchanged;
@@ -400,7 +400,7 @@ pub(crate) fn record_subr_leaf(sym: SymId, leaf: Option<&'static LeafSpec>) -> L
 
 /// The [`LeafShape::Bcall`] leaf of the builtin registered under `sym`.
 pub(crate) fn subr_leaf(sym: SymId) -> Option<&'static LeafSpec> {
-    LEAF_BY_SUBR.with(|table| table.borrow().get(sym.0 as usize).copied().flatten())
+    LEAF_BY_SUBR.with(|table| table.borrow().get(sym.to_raw() as usize).copied().flatten())
 }
 
 // ---------------------------------------------------------------------------

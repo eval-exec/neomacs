@@ -395,7 +395,8 @@ impl PreparedRootBatch {
 
     /// Reserve under the Green Baton's already retained marking exclusion.
     /// The heap identity check prevents using another World's authority.
-    pub(crate) fn reserve_retained(
+    #[doc(hidden)]
+    pub fn reserve_retained(
         heap: &TaggedHeap,
         epoch: FacadeEpochRetention,
         capacity: usize,
@@ -438,7 +439,8 @@ impl PreparedRootBatch {
 
     /// Grow a uniquely prepared buffer only when its next census exceeds the
     /// previous high-water mark. Published storage is never changed here.
-    pub(crate) fn ensure_capacity(&mut self, capacity: usize) -> Result<(), RootBatchError> {
+    #[doc(hidden)]
+    pub fn ensure_capacity(&mut self, capacity: usize) -> Result<(), RootBatchError> {
         let payload = Arc::get_mut(&mut self.payload).ok_or(RootBatchError::NonUniquePayload)?;
         debug_assert_eq!(payload.used, 0, "only an empty prepared batch can grow");
         if capacity > payload.words.len() {
@@ -460,7 +462,8 @@ impl PreparedRootBatch {
     /// prevents concurrent marking but does not inhibit synchronous collection.
     /// The heap must outlive all root-table scans and reader materializations.
     /// Part B must additionally require its completed reverse-exchange witness.
-    pub(crate) unsafe fn finalize(
+    #[doc(hidden)]
+    pub unsafe fn finalize(
         mut self,
         values: &[TaggedValue],
     ) -> Result<FinalizedRootBatch, RootBatchFinalizeFailure> {
@@ -576,7 +579,8 @@ impl RootBatchLease {
     /// reader admission; Closing excludes later readers. Only after those
     /// checks can Arc uniqueness authorize changing the old immutable objects.
     /// Failure retains the rooted lease for retry, as ordinary retirement does.
-    pub(crate) fn try_recycle(mut self) -> Result<PreparedRootBatch, RootBatchFinishFailure> {
+    #[doc(hidden)]
+    pub fn try_recycle(mut self) -> Result<PreparedRootBatch, RootBatchFinishFailure> {
         let check = (|| {
             let ownership = self.ownership.as_ref().ok_or(RootBatchError::Retired)?;
             let table = Arc::clone(&ownership.table);
@@ -661,7 +665,8 @@ impl RootBatchLease {
     /// completed marking may remain: it never reads root tables, and later
     /// collections read the restored owner's roots. Terminated-owner cleanup
     /// instead requires full collector quiescence before retiring its roots.
-    pub(crate) fn try_finish(mut self) -> Result<RetiredRootBatch, RootBatchFinishFailure> {
+    #[doc(hidden)]
+    pub fn try_finish(mut self) -> Result<RetiredRootBatch, RootBatchFinishFailure> {
         let result = (|| {
             let ownership = self.ownership.as_ref().ok_or(RootBatchError::Retired)?;
             let cells = ownership.table.try_lock().ok_or(RootBatchError::Busy)?;

@@ -3377,8 +3377,8 @@ fn remap_text_property_table(
             (start < end).then_some(crate::buffer::text_props::PropertyInterval {
                 start,
                 end,
+                key_order: interval.key_order().clone(),
                 properties: interval.properties,
-                key_order: interval.key_order,
             })
         })
         .collect();

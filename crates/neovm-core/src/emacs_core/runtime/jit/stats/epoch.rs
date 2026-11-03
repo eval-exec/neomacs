@@ -238,7 +238,7 @@ pub(crate) fn top_redefined(n: usize) -> String {
     FN_REDEFINED.with(|m| {
         let m = m.borrow();
         let mut v: Vec<(SymId, u64)> = m.iter().map(|(&s, &c)| (s, c)).collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.0.cmp(&b.0.0)));
+        v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.to_raw().cmp(&b.0.to_raw())));
         v.iter()
             .take(n)
             .map(|&(sym, count)| format!("{}={count}", symbol_label(sym)))

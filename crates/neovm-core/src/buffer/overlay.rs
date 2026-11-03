@@ -2188,7 +2188,7 @@ fn hash_value_content(value: Value, depth: u32, hasher: &mut rustc_hash::FxHashe
         }
         ValueKind::Symbol(id) | ValueKind::Subr(id) => {
             hasher.write_u8(4);
-            hasher.write_u32(id.0);
+            hasher.write_u32(id.to_raw());
         }
         ValueKind::String => {
             hasher.write_u8(5);

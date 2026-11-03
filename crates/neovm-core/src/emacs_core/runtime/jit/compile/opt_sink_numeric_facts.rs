@@ -158,8 +158,11 @@ fn static_float(func: &ir::Func, original: ir::Value) -> bool {
         return false;
     };
     index as usize >= func.dynamic_prefix
-        && func
-            .consts
-            .get(index as usize)
-            .is_some_and(|bits| Value::from_bits(bits.0 as usize).is_float())
+        && func.consts.get(index as usize).is_some_and(|bits| {
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(bits.0 as usize)
+            }
+            .is_float()
+        })
 }

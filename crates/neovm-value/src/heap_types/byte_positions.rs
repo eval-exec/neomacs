@@ -99,20 +99,24 @@ impl EmacsByteDelta {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) const ZERO: Self = Self(0);
 
-    pub(crate) fn insertion(len: EmacsByteLen) -> Self {
+    #[doc(hidden)]
+    pub fn insertion(len: EmacsByteLen) -> Self {
         Self(len.get() as isize)
     }
 
-    pub(crate) fn deletion(len: EmacsByteLen) -> Self {
+    #[doc(hidden)]
+    pub fn deletion(len: EmacsByteLen) -> Self {
         Self(-(len.get() as isize))
     }
 
-    pub(crate) fn replacement(old_len: EmacsByteLen, new_len: EmacsByteLen) -> Self {
+    #[doc(hidden)]
+    pub fn replacement(old_len: EmacsByteLen, new_len: EmacsByteLen) -> Self {
         Self(new_len.get() as isize - old_len.get() as isize)
     }
 
     #[inline(always)]
-    pub(crate) fn apply_to_pos(self, pos: EmacsBytePos) -> EmacsBytePos {
+    #[doc(hidden)]
+    pub fn apply_to_pos(self, pos: EmacsBytePos) -> EmacsBytePos {
         if self.is_zero() {
             return pos;
         }

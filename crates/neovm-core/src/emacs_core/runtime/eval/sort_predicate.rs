@@ -261,7 +261,7 @@ impl Context {
         let entered_depth = EnteredLispDepth::next_for(self)?;
         if !self.attention_clear(super::AttentionMask::QUIT)
             || self.debug_on_next_call_is_armed()
-            || self.obarray.max_lisp_eval_depth_localized
+            || self.obarray.max_lisp_eval_depth_localized()
             || entered_depth.get() > self.max_depth
             || self.obarray.function_epoch() != epoch
             || self.compiler_function_overrides_active()

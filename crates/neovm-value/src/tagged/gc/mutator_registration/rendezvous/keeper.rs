@@ -186,7 +186,8 @@ impl<'era> AllStopped<'era> {
         let registry = self.registry;
         super::super::symbol_authority::KeeperSymbols::mint(self, registry)
     }
-    pub(crate) fn check_world_roots(
+    #[doc(hidden)]
+    pub fn check_world_roots(
         &self,
         heap: super::super::HeapIdentity,
     ) -> Result<(), RendezvousError> {

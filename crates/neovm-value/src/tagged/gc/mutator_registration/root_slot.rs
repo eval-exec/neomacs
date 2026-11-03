@@ -184,9 +184,10 @@ impl<'owner, 'era> RunAccess<'owner, 'era> {
         debug_assert!(local.root_scratch.capacity() >= local.root_slot_limit);
         local
             .root_scratch
-            .push(super::super::mark_word::MarkWord::of(
-                TaggedValue::from_bits(word),
-            ));
+            .push(super::super::mark_word::MarkWord::of(unsafe {
+                /* SAFETY: value-internal construction from a real Value */
+                TaggedValue::from_bits(word)
+            }));
         Ok(OwnerRootSlot {
             key: self.owner.entry.key,
             generation: local.root_slot_generation,

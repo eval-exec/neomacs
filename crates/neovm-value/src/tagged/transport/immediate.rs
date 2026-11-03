@@ -54,7 +54,10 @@ impl ImmediateValue {
     /// The local value. Free: both types are the same word.
     #[inline]
     pub const fn value(self) -> TaggedValue {
-        TaggedValue::from_bits(self.0)
+        unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(self.0)
+        }
     }
 }
 

@@ -2435,7 +2435,8 @@ pub struct ShiftedTextPropertySource {
 }
 
 impl ShiftedTextPropertySource {
-    pub(crate) fn new(table: TextPropertyTable, char_offset: CharLen) -> Self {
+    #[doc(hidden)]
+    pub fn new(table: TextPropertyTable, char_offset: CharLen) -> Self {
         Self { table, char_offset }
     }
 }
@@ -2710,7 +2711,8 @@ impl<'a> TextPropertiesRef<'a> {
     }
 
     #[inline]
-    pub(crate) fn for_each_root(self, f: impl FnMut(Value)) {
+    #[doc(hidden)]
+    pub fn for_each_root(self, f: impl FnMut(Value)) {
         if let Some(table) = self.table {
             table.for_each_root(f);
         }
@@ -3052,7 +3054,8 @@ impl TextPropertyTable {
     /// every property can split, search, and rebalance the interval tree.  This
     /// constructor performs the same ordered-plist transformation in memory,
     /// then builds the destination tree once from all known runs.
-    pub(crate) fn from_shifted_sources(
+    #[doc(hidden)]
+    pub fn from_shifted_sources(
         sources: Vec<ShiftedTextPropertySource>,
         application: PropertyPlistApplication,
     ) -> Self {
@@ -3197,7 +3200,8 @@ impl TextPropertyTable {
         self.put_property_for_object_len_raw(range, object_len, name, value)
     }
 
-    pub(crate) fn apply_property_plist_for_object_char_len(
+    #[doc(hidden)]
+    pub fn apply_property_plist_for_object_char_len(
         &mut self,
         range: CharRange,
         object_len: CharLen,
@@ -4851,7 +4855,8 @@ impl TextPropertyTable {
         }
     }
 
-    pub(crate) fn try_for_each_interval_in_char_range<E>(
+    #[doc(hidden)]
+    pub fn try_for_each_interval_in_char_range<E>(
         &self,
         range: CharRange,
         f: impl FnMut(CharRange, &[(Value, Value)]) -> Result<(), E>,
@@ -4863,7 +4868,8 @@ impl TextPropertyTable {
     /// closure each interval's plist VALUE instead of materializing a
     /// `Vec<(Value, Value)>` pair slice per interval — that per-interval
     /// allocation dominated read-only verification over large ranges.
-    pub(crate) fn try_for_each_interval_plist_in_char_range<E>(
+    #[doc(hidden)]
+    pub fn try_for_each_interval_plist_in_char_range<E>(
         &self,
         range: CharRange,
         mut f: impl FnMut(CharRange, Value) -> Result<(), E>,
@@ -5043,7 +5049,8 @@ impl TextPropertyTable {
 
     /// Publish only freshly grafted plist roots through the enclosing walk's
     /// incremental root owner. The callback must not evaluate Lisp or collect.
-    pub(crate) fn append_source_slice_at_char_offset_with_roots(
+    #[doc(hidden)]
+    pub fn append_source_slice_at_char_offset_with_roots(
         &mut self,
         source: &TextPropertyTable,
         range: CharRange,
@@ -5108,7 +5115,8 @@ impl TextPropertyTable {
     /// Publish each newly copied plist, including the re-homed predecessor,
     /// without rewalking the destination interval tree. The callback cannot
     /// run Lisp or collect while this graft is in progress.
-    pub(crate) fn append_shifted_at_char_offset_with_roots(
+    #[doc(hidden)]
+    pub fn append_shifted_at_char_offset_with_roots(
         &mut self,
         other: &TextPropertyTable,
         offset: CharLen,
@@ -5359,7 +5367,8 @@ impl TextPropertyTable {
         self.replace_runs_preserving_shape(runs, ReplacementPropertyNames::Preserve);
     }
 
-    pub(crate) fn dump_intervals(&self) -> Vec<PropertyInterval> {
+    #[doc(hidden)]
+    pub fn dump_intervals(&self) -> Vec<PropertyInterval> {
         self.intervals_snapshot()
     }
 
@@ -5372,7 +5381,8 @@ impl TextPropertyTable {
             .collect()
     }
 
-    pub(crate) fn from_dump(intervals: Vec<PropertyInterval>) -> Self {
+    #[doc(hidden)]
+    pub fn from_dump(intervals: Vec<PropertyInterval>) -> Self {
         Self::from_interval_runs(
             intervals
                 .into_iter()
@@ -5387,7 +5397,8 @@ impl TextPropertyTable {
         )
     }
 
-    pub(crate) fn for_each_root(&self, mut f: impl FnMut(Value)) {
+    #[doc(hidden)]
+    pub fn for_each_root(&self, mut f: impl FnMut(Value)) {
         self.intervals.live_plists(self.intervals.root, &mut f);
     }
 }
@@ -5619,3 +5630,11 @@ mod tests;
 #[cfg(test)]
 #[path = "text_props/tests/bounded_absent_property_test.rs"]
 mod bounded_absent_property_test;
+
+impl PropertyInterval {
+    #[inline]
+    #[doc(hidden)]
+    pub fn key_order(&self) -> &Vec<Value> {
+        &self.key_order
+    }
+}

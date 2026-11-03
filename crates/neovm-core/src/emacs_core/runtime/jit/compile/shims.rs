@@ -29,7 +29,10 @@ pub extern "C" fn neovm_jit_gc_save() -> i64 {
 /// depth, so a variable push count is fine.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_gc_push(bits: i64) {
-    let v = Value::from_bits(bits as usize);
+    let v = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(bits as usize)
+    };
     if v.is_heap_object() {
         push_scratch_gc_root(v);
     }
@@ -51,7 +54,10 @@ pub extern "C" fn neovm_jit_gc_push(bits: i64) {
 pub unsafe extern "C" fn neovm_jit_gc_push_many(ptr: *const i64, count: i64) {
     for i in 0..count {
         // SAFETY: the generated code wrote `count` tagged words at `ptr`.
-        let v = Value::from_bits(unsafe { *ptr.add(i as usize) } as usize);
+        let v = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(unsafe { *ptr.add(i as usize) } as usize)
+        };
         if v.is_heap_object() {
             push_scratch_gc_root(v);
         }
@@ -74,8 +80,14 @@ pub extern "C" fn neovm_jit_cons(car: i64, cdr: i64) -> i64 {
     // in flight. Root snapshots happen only at mutator safe points (the
     // backedge/call shims, which root their live values) — the same invariant
     // that lets jitted code hold values in native slots between polls at all.
-    let car = Value::from_bits(car as usize);
-    let cdr = Value::from_bits(cdr as usize);
+    let car = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(car as usize)
+    };
+    let cdr = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(cdr as usize)
+    };
     Value::cons(car, cdr).bits() as i64
 }
 
@@ -572,7 +584,7 @@ pub unsafe extern "C" fn neovm_jit_call(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
-        let func_val = Value::from_bits(func_bits as usize);
+        let func_val = unsafe { /* SAFETY: JIT constant-pool word */ Value::from_bits(func_bits as usize) };
         let nargs = nargs as usize;
         // NATIVE-TO-NATIVE: the callee is already a bytecode object — what
         // the compiler emits for a `cl-flet` local, a `lambda` literal or any
@@ -762,7 +774,10 @@ pub unsafe extern "C" fn neovm_jit_apply(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        let func_val = Value::from_bits(func_bits as usize);
+        let func_val = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(func_bits as usize)
+        };
         let nargs = nargs as usize;
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(func_val);
@@ -770,7 +785,10 @@ pub unsafe extern "C" fn neovm_jit_apply(
         for i in 0..nargs {
             // SAFETY: the generated code stored exactly `nargs` argument words at
             // `args_ptr` (its call-args stack slot) immediately before this call.
-            let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
+            let v = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(unsafe { *args_ptr.add(i) } as usize)
+            };
             push_scratch_gc_root(v);
             args.push(v);
         }
@@ -1157,8 +1175,14 @@ thread_local! {
 pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
     #[cfg(test)]
     EQ_SLOW_CALLS.with(|c| c.set(c.get() + 1));
-    let a = Value::from_bits(a as usize);
-    let b = Value::from_bits(b as usize);
+    let a = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(a as usize)
+    };
+    let b = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(b as usize)
+    };
     // SAFETY: seam-provided dormant Context; read-only access.
     let ctx = unsafe { &*(ctx as *const Context) };
     let eq = ctx.symbols_with_pos_enabled && crate::emacs_core::value::eq_value_swp(&a, &b, true);
@@ -1185,7 +1209,10 @@ pub unsafe extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 
 pub unsafe extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
     #[cfg(test)]
     SYMBOLP_SLOW_CALLS.with(|c| c.set(c.get() + 1));
-    let v = Value::from_bits(v as usize);
+    let v = unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(v as usize)
+    };
     // SAFETY: seam-provided dormant Context; read-only access.
     let ctx = unsafe { &*(ctx as *const Context) };
     let is_sym = ctx.symbols_with_pos_enabled && v.is_symbol_with_pos();
@@ -1281,7 +1308,10 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
-        let value = Value::from_bits(val as usize);
+        let value = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(val as usize)
+        };
         {
             // SAFETY: see neovm_jit_call's function-level contract.
             let ctx = unsafe { &mut *(ctx as *mut Context) };
@@ -1327,7 +1357,10 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
     VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
-        let value = Value::from_bits(val as usize);
+        let value = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(val as usize)
+        };
         {
             // SAFETY: see neovm_jit_call's function-level contract.
             let ctx = unsafe { &mut *(ctx as *mut Context) };
@@ -1371,7 +1404,10 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
-        let value = Value::from_bits(val as usize);
+        let value = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(val as usize)
+        };
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let bind_depth = ctx.specpdl.len();
@@ -1421,7 +1457,10 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
     VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
-        let value = Value::from_bits(val as usize);
+        let value = unsafe {
+            /* SAFETY: JIT constant-pool word */
+            Value::from_bits(val as usize)
+        };
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let bind_depth = ctx.specpdl.len();

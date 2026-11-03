@@ -18,10 +18,12 @@ pub struct PreparedHofBuiltin {
     registration_clock: HofRegistrationClock,
 }
 impl PreparedHofBuiltin {
-    pub(crate) fn operation(&self) -> HofOperation {
+    #[doc(hidden)]
+    pub fn operation(&self) -> HofOperation {
         self.operation
     }
-    pub(crate) fn symbol(&self) -> &SymbolHandle {
+    #[doc(hidden)]
+    pub fn symbol(&self) -> &SymbolHandle {
         &self.key
     }
 }

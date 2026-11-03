@@ -82,7 +82,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
                 }
                 // A promoted/debug-on-exit frame needs the reference pop,
                 // with GNU's decrement-before-exit-debugger ordering.
-                FastRun::Done(Value::from_bits(bits))
+                FastRun::Done(unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(bits)
+                })
             }
             other => FastRun::Framed(other),
         };
@@ -90,7 +93,10 @@ pub(crate) unsafe extern "C" fn neovm_jit_direct_framed(
         // DeoptAt resume. In particular, a framed run is never FastRun::Raw.
         call_spec_finish(
             ctx,
-            Value::from_bits(callee_bits as usize),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(callee_bits as usize)
+            },
             leaf,
             args_ptr,
             nargs,

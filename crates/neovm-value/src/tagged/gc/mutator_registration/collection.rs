@@ -616,7 +616,10 @@ impl<'heap, 'stop, 'era> StoppedCollectorJob<'heap, 'stop, 'era> {
             heap.seed_root(root);
         }
         for word in words {
-            heap.seed_root(TaggedValue::from_bits(word));
+            heap.seed_root(unsafe {
+                /* SAFETY: value-internal construction from a real Value */
+                TaggedValue::from_bits(word)
+            });
         }
         for item in &images.work {
             trace_work(heap, item);
@@ -870,7 +873,13 @@ fn trace_work(heap: &mut TaggedHeap, work: &CollectionWork) {
         heap.push_value_children_to_gray(word.value(), "parallel-written-owner");
     }
     for &bits in work.mapped.iter().chain(&work.written_owners) {
-        heap.push_value_children_to_gray(TaggedValue::from_bits(bits), "parallel-owner-children");
+        heap.push_value_children_to_gray(
+            unsafe {
+                /* SAFETY: value-internal construction from a real Value */
+                TaggedValue::from_bits(bits)
+            },
+            "parallel-owner-children",
+        );
     }
     for &id in &work.symbols {
         heap.mark_symbol(id);

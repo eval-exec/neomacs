@@ -304,11 +304,13 @@ pub enum GnuStringCharPosError {
 }
 
 impl GnuStringCharPos {
-    pub(crate) const fn new(position: i64) -> Self {
+    #[doc(hidden)]
+    pub const fn new(position: i64) -> Self {
         Self(position)
     }
 
-    pub(crate) const fn get(self) -> i64 {
+    #[doc(hidden)]
+    pub const fn get(self) -> i64 {
         self.0
     }
 }
@@ -386,16 +388,21 @@ impl LispString {
     /// `aref`/`aset` use the word only behind `size_byte < 0 || size ==
     /// size_byte`, which a supplied count never passes, and a unibyte string
     /// never carries the bit.
-    pub(crate) const JIT_SIZE_OFFSET: usize = std::mem::offset_of!(LispString, size);
+    #[doc(hidden)]
+    pub const JIT_SIZE_OFFSET: usize = std::mem::offset_of!(LispString, size);
     /// Offset of `size_byte`: the byte count, or a negative unibyte marker.
-    pub(crate) const JIT_SIZE_BYTE_OFFSET: usize = std::mem::offset_of!(LispString, size_byte);
+    #[doc(hidden)]
+    pub const JIT_SIZE_BYTE_OFFSET: usize = std::mem::offset_of!(LispString, size_byte);
     /// Offset of the byte pointer.
-    pub(crate) const JIT_DATA_OFFSET: usize = std::mem::offset_of!(LispString, data);
+    #[doc(hidden)]
+    pub const JIT_DATA_OFFSET: usize = std::mem::offset_of!(LispString, data);
     /// Offset of the owned-storage capacity (zero for borrowed bytes).
-    pub(crate) const JIT_STORAGE_CAPACITY_OFFSET: usize =
+    #[doc(hidden)]
+    pub const JIT_STORAGE_CAPACITY_OFFSET: usize =
         std::mem::offset_of!(LispString, storage_capacity);
     /// `size_byte` of a normally allocated unibyte string (GNU's `-1`).
-    pub(crate) const JIT_SIZE_BYTE_UNIBYTE: i64 = SIZE_BYTE_UNIBYTE_NORMAL;
+    #[doc(hidden)]
+    pub const JIT_SIZE_BYTE_UNIBYTE: i64 = SIZE_BYTE_UNIBYTE_NORMAL;
 }
 
 impl LispString {
@@ -635,7 +642,8 @@ impl LispString {
     /// (`lread.c:5004`, `alloc.c:2241-2247`). This constructor does not assert
     /// a decode-count invariant. Accessors must bound all payload reads.
     /// As GNU `alloc.c:2332` does, zero bytes select the empty multibyte shape.
-    pub(crate) fn from_emacs_bytes_with_declared_chars(
+    #[doc(hidden)]
+    pub fn from_emacs_bytes_with_declared_chars(
         data: Vec<u8>,
         chars: GnuDeclaredCharacterCount,
     ) -> Self {
@@ -679,7 +687,8 @@ impl LispString {
     /// `ptr..ptr+len+1` must remain mapped and immutable for the lifetime of
     /// the returned `LispString`, with `ptr[len] == 0`. Mutation first copies
     /// these bytes into owned storage.
-    pub(crate) unsafe fn from_mapped_bytes(
+    #[doc(hidden)]
+    pub unsafe fn from_mapped_bytes(
         ptr: *const u8,
         len: usize,
         size: usize,
@@ -692,7 +701,8 @@ impl LispString {
 
     /// `from_unibyte` from a borrowed slice, copying with the spare NUL slot
     /// up front so the constructor never reallocates the fresh copy.
-    pub(crate) fn from_unibyte_slice(bytes: &[u8]) -> Self {
+    #[doc(hidden)]
+    pub fn from_unibyte_slice(bytes: &[u8]) -> Self {
         Self::from_unibyte(Self::copy_payload(bytes))
     }
 
@@ -725,11 +735,8 @@ impl LispString {
         }
     }
 
-    pub(crate) fn from_registered_rodata_unibyte(
-        key: u64,
-        len: usize,
-        size: usize,
-    ) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_registered_rodata_unibyte(key: u64, len: usize, size: usize) -> Option<Self> {
         if size != len {
             return None;
         }
@@ -745,7 +752,8 @@ impl LispString {
     /// `ptr..ptr+len+1` must remain mapped and immutable for the lifetime of
     /// this string, with `ptr[len] == 0`.
     #[cfg_attr(not(debug_assertions), allow(dead_code))] // debug-only verification caller (pdump convert.rs)
-    pub(crate) unsafe fn install_mapped_storage_sidecar(
+    #[doc(hidden)]
+    pub unsafe fn install_mapped_storage_sidecar(
         &mut self,
         ptr: *const u8,
         len: usize,
@@ -758,7 +766,8 @@ impl LispString {
 
     /// Install runtime ownership metadata for a raw rodata string object
     /// loaded from a mapped pdump image.
-    pub(crate) fn install_registered_rodata_sidecar(
+    #[doc(hidden)]
+    pub fn install_registered_rodata_sidecar(
         &mut self,
         key: u64,
         len: usize,
@@ -801,7 +810,8 @@ impl LispString {
         Ok(())
     }
 
-    pub(crate) const fn data_field_offset() -> usize {
+    #[doc(hidden)]
+    pub const fn data_field_offset() -> usize {
         std::mem::offset_of!(LispString, data)
     }
 
@@ -855,7 +865,8 @@ impl LispString {
     /// pointer; `from_borrowed_bytes` and both sidecar installers reject
     /// null), so a null `data` means exactly one thing.
     #[inline]
-    pub(crate) fn is_reclaimed(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_reclaimed(&self) -> bool {
         self.data.is_null()
     }
 
@@ -883,11 +894,8 @@ impl LispString {
     /// Regenerate count proof at a cold image/reconstruction boundary. Numeric
     /// dump sizes remain SCHARS; mapped images bake the encoded private word.
     /// The scan happens while building an image, never during regex lookup.
-    pub(crate) fn character_count_word_for_image(
-        payload: &[u8],
-        count: usize,
-        size_byte: i64,
-    ) -> usize {
+    #[doc(hidden)]
+    pub fn character_count_word_for_image(payload: &[u8], count: usize, size_byte: i64) -> usize {
         let kind = if size_byte < 0 || Self::is_decoded_multibyte_count(payload, count) {
             StringCharacterCountKind::Computed
         } else {
@@ -909,7 +917,8 @@ impl LispString {
     }
 
     #[inline]
-    pub(crate) fn character_count_kind(&self) -> StringCharacterCountKind {
+    #[doc(hidden)]
+    pub fn character_count_kind(&self) -> StringCharacterCountKind {
         let flags = StringCharacterCountFlags::from_bits_truncate(self.size);
         if flags.contains(StringCharacterCountFlags::SUPPLIED) {
             StringCharacterCountKind::Supplied
@@ -925,7 +934,8 @@ impl LispString {
     /// qualifies, even one equal to the byte count. Compiled `aref`/`aset`
     /// test the same raw words.
     #[inline]
-    pub(crate) fn has_one_byte_characters(&self) -> bool {
+    #[doc(hidden)]
+    pub fn has_one_byte_characters(&self) -> bool {
         self.size_byte < 0 || self.size == self.size_byte as usize
     }
 
@@ -951,7 +961,8 @@ impl LispString {
         self.size_byte >= 0
     }
 
-    pub(crate) fn storage_kind(&self) -> LispStringStorageKind {
+    #[doc(hidden)]
+    pub fn storage_kind(&self) -> LispStringStorageKind {
         if self.is_multibyte() {
             LispStringStorageKind::Multibyte
         } else {
@@ -964,7 +975,8 @@ impl LispString {
         self.size_byte
     }
 
-    pub(crate) fn rodata_key(&self) -> Option<u64> {
+    #[doc(hidden)]
+    pub fn rodata_key(&self) -> Option<u64> {
         if !self.is_rodata() {
             return None;
         }
@@ -1100,7 +1112,8 @@ impl LispString {
     /// conversion then demotes its marker. Borrowed dump or static bytes receive
     /// a separate zero payload.
     /// Published owners must use the `with_lisp_string_mut` mutation wrapper.
-    pub(crate) fn clear_contents_to_unibyte(&mut self) {
+    #[doc(hidden)]
+    pub fn clear_contents_to_unibyte(&mut self) {
         let len = self.sbytes();
         self.clear_intervals();
         if len != 0 || self.is_multibyte() {
@@ -1141,7 +1154,8 @@ impl LispString {
         self.is_multibyte()
     }
 
-    pub(crate) fn byte_len(&self) -> usize {
+    #[doc(hidden)]
+    pub fn byte_len(&self) -> usize {
         self.sbytes()
     }
 
@@ -1150,7 +1164,8 @@ impl LispString {
     /// Mirrors GNU `string_char_to_byte`: when `SCHARS == SBYTES`, every
     /// character occupies one byte even if the string is marked multibyte, so
     /// the conversion is an O(1) identity operation.
-    pub(crate) fn char_to_byte_pos(&self, char_pos: usize) -> usize {
+    #[doc(hidden)]
+    pub fn char_to_byte_pos(&self, char_pos: usize) -> usize {
         let schars = self.schars();
         let char_pos = char_pos.min(schars);
         if !self.is_multibyte() || schars == self.sbytes() {
@@ -1173,7 +1188,8 @@ impl LispString {
     /// sizes are bounded by Vec's isize::MAX and supplied counts validate that
     /// bound. Existing dump constructors require valid GNU metadata too.
     /// Physical scans stay inside the initialized byte slice.
-    pub(crate) fn byte_to_gnu_char_pos(&self, byte_pos: usize) -> GnuStringCharPos {
+    #[doc(hidden)]
+    pub fn byte_to_gnu_char_pos(&self, byte_pos: usize) -> GnuStringCharPos {
         let sbytes = self.sbytes();
         let byte_pos = byte_pos.min(sbytes);
         let char_pos = if !self.is_multibyte() || self.schars() == sbytes {
@@ -1200,11 +1216,13 @@ impl LispString {
         self.storage_capacity != 0
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_empty(&self) -> bool {
         self.sbytes() == 0
     }
 
-    pub(crate) fn is_ascii(&self) -> bool {
+    #[doc(hidden)]
+    pub fn is_ascii(&self) -> bool {
         self.as_bytes().is_ascii()
     }
 
@@ -1323,7 +1341,8 @@ impl LispString {
 
     /// Byte-index slice without text properties when the caller already knows
     /// the corresponding character bounds.
-    pub(crate) fn slice_no_properties_with_char_bounds(
+    #[doc(hidden)]
+    pub fn slice_no_properties_with_char_bounds(
         &self,
         start: usize,
         end: usize,
@@ -1357,7 +1376,8 @@ impl LispString {
     /// Byte-index slice that preserves text properties when the caller already
     /// knows the corresponding character bounds, matching GNU
     /// `substring_both`.
-    pub(crate) fn slice_with_char_bounds(
+    #[doc(hidden)]
+    pub fn slice_with_char_bounds(
         &self,
         start: usize,
         end: usize,
@@ -1758,7 +1778,8 @@ impl Clone for OverlayData {
 }
 
 impl OverlayData {
-    pub(crate) fn current_range(&self) -> (usize, usize) {
+    #[doc(hidden)]
+    pub fn current_range(&self) -> (usize, usize) {
         self::overlay_storage::current_overlay_range(self)
             .map(|range| (range.start().get(), range.end().get()))
             .unwrap_or((self.start, self.end))
@@ -2029,3 +2050,18 @@ mod character_count_kind_tests;
 /// This is identity data only. The process layer owns ID issuance, process
 /// table access and OS operations; an ID grants none of that authority.
 pub type ProcessId = u64;
+
+impl OverlayData {
+    #[inline]
+    #[doc(hidden)]
+    pub fn position_handle(&self) -> &Option<self::overlay_storage::OverlayPositionHandle> {
+        &self.position_handle
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn position_handle_mut(
+        &mut self,
+    ) -> &mut Option<self::overlay_storage::OverlayPositionHandle> {
+        &mut self.position_handle
+    }
+}

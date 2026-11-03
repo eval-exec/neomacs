@@ -52,7 +52,8 @@ impl GenState {
 
 impl TaggedHeap {
     #[inline]
-    pub(crate) fn generational_enabled(&self) -> bool {
+    #[doc(hidden)]
+    pub fn generational_enabled(&self) -> bool {
         self.generational.enabled
     }
 
@@ -246,7 +247,8 @@ impl TaggedHeap {
     /// residual major after a worker joins or an unpublished capture drops.
     #[cold]
     #[inline(never)]
-    pub(crate) fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
+    #[doc(hidden)]
+    pub fn begin_minor_collection(&mut self) -> Result<(), MinorCollectionAdmissionError> {
         // Admission precedes EVERY mutation, even for a GEN0 heap. Joining a
         // worker alone does not finish its major's residual mark or sweep.
         self.check_minor_admission()?;
@@ -343,7 +345,8 @@ impl TaggedHeap {
     /// tracing a survivor and setting its generation bit.
     #[cold]
     #[inline(never)]
-    pub(crate) fn complete_minor_collection(&mut self) {
+    #[doc(hidden)]
+    pub fn complete_minor_collection(&mut self) {
         assert!(self.generational.cycle == GenerationCycle::Minor);
         self.close_alloc_regions();
         let bytes_before = self.live_bytes;

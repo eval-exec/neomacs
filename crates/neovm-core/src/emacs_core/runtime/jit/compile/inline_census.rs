@@ -227,7 +227,7 @@ pub(crate) fn census_sites(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> V
             rows.push(CensusSite {
                 pc,
                 shape,
-                target_source: callee.map(|f| f.source_id),
+                target_source: callee.map(|f| f.source_id()),
                 replay,
                 v2,
             });

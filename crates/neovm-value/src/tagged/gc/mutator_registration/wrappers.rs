@@ -50,7 +50,8 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
     /// prepare must return the original retained keeper's epoch and backing,
     /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) unsafe fn admit_with(
+    #[doc(hidden)]
+    pub unsafe fn admit_with(
         admission: Gen1Admission<'heap>,
         keeper: K,
         prepare: impl FnOnce(
@@ -71,7 +72,8 @@ impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
     /// prepare must return the original retained keeper's epoch and backing,
     /// without executing Lisp, resuming owners, or leaking a manager reference.
     #[cold]
-    pub(crate) unsafe fn admit_rooted_with(
+    #[doc(hidden)]
+    pub unsafe fn admit_rooted_with(
         admission: Gen1Admission<'heap>,
         keeper: K,
         roots: FrozenLegacyRoots,

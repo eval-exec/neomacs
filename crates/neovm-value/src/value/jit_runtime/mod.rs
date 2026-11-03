@@ -283,7 +283,8 @@ impl RuntimeState {
     /// opaque here: the upper layer minted it and owns its meaning; this layer
     /// only stores and returns it.
     #[inline(always)]
-    pub(crate) fn compiled_id_word(&self) -> u64 {
+    #[doc(hidden)]
+    pub fn compiled_id_word(&self) -> u64 {
         self.compiled_id.load(std::sync::atomic::Ordering::Acquire)
     }
 
@@ -292,7 +293,8 @@ impl RuntimeState {
     /// never dereferences it and never names the compiler type.
     #[cfg(feature = "jit")]
     #[inline]
-    pub(crate) fn armed_leaf_word(&self, epoch: u64) -> Option<std::num::NonZeroU64> {
+    #[doc(hidden)]
+    pub fn armed_leaf_word(&self, epoch: u64) -> Option<std::num::NonZeroU64> {
         let word = self.leaf_slot.load(std::sync::atomic::Ordering::Relaxed);
         if word == 0
             || self
@@ -308,7 +310,8 @@ impl RuntimeState {
     /// Empty the direct-entry slot. Safe: clearing removes an executable
     /// target and can never install one; the reader also requires the epoch.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    pub(crate) fn disarm_leaf_slot(&self) {
+    #[doc(hidden)]
+    pub fn disarm_leaf_slot(&self) {
         self.leaf_slot
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
@@ -455,4 +458,85 @@ pub fn runtime_shared_identity_word(state: &std::sync::Arc<RuntimeState>) -> usi
     let word = unsafe { std::ptr::from_ref(&*held).cast::<usize>().read() };
     drop(ManuallyDrop::into_inner(held));
     word
+}
+
+impl FeedbackVec {
+    #[inline]
+    #[doc(hidden)]
+    pub fn slots_ref(&self) -> &OnceLock<Box<[AtomicU64]>> {
+        &self.slots
+    }
+}
+
+impl RuntimeState {
+    #[inline]
+    #[doc(hidden)]
+    pub fn aot_prewarmed_ref(&self) -> &std::sync::atomic::AtomicBool {
+        &self.aot_prewarmed
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn aot_retiered_ref(&self) -> &std::sync::atomic::AtomicBool {
+        &self.aot_retiered
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[doc(hidden)]
+    pub const AOT_RETIERED_OFFSET: usize = core::mem::offset_of!(Self, aot_retiered);
+    #[inline]
+    #[doc(hidden)]
+    pub fn feedback_ref(&self) -> &feedback::SourceFeedback {
+        &self.feedback
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn heat_ref(&self) -> &AtomicU32 {
+        &self.heat
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn hof_caller_ref(&self) -> &std::sync::atomic::AtomicU8 {
+        &self.hof_caller
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn native_rejected_epoch_ref(&self) -> &AtomicU64 {
+        &self.native_rejected_epoch
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn numeric_feedback_consumed_ref(&self) -> &std::sync::atomic::AtomicBool {
+        &self.numeric_feedback_consumed
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn patched_prefix_ref(&self) -> &AtomicU32 {
+        &self.patched_prefix
+    }
+    #[inline]
+    #[doc(hidden)]
+    pub fn profit_deferred_heat_ref(&self) -> &AtomicU32 {
+        &self.profit_deferred_heat
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn reopt_count_ref(&self) -> &std::sync::atomic::AtomicU8 {
+        &self.reopt_count
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn reopt_level_ref(&self) -> &std::sync::atomic::AtomicU8 {
+        &self.reopt_level
+    }
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    #[inline]
+    #[doc(hidden)]
+    pub fn t2_reopts_ref(&self) -> &std::sync::atomic::AtomicU8 {
+        &self.t2_reopts
+    }
 }

@@ -207,9 +207,13 @@ impl TaggedHeap {
     /// owner. This touches only the mutator's Rust bookkeeping: no Lisp
     /// allocation, callback, collection or safe point can run here.
     #[cfg(feature = "jit")]
-    pub(crate) extern "C" fn record_compiled_collection_write(bits: usize) {
+    #[doc(hidden)]
+    pub extern "C" fn record_compiled_collection_write(bits: usize) {
         use super::super::collection_reads::{WriteProjection, record_projected_write};
-        let owner = TaggedValue::from_bits(bits);
+        let owner = unsafe {
+            /* SAFETY: value-internal construction from a real Value */
+            TaggedValue::from_bits(bits)
+        };
         let projection = if owner.is_cons() {
             WriteProjection::Cons
         } else {
@@ -493,7 +497,10 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
 pub extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
     use super::super::collection_reads::{CompiledJournalMode, compiled_journal_mode};
     let bits = owner_bits as usize;
-    let owner = TaggedValue::from_bits(bits);
+    let owner = unsafe {
+        /* SAFETY: value-internal construction from a real Value */
+        TaggedValue::from_bits(bits)
+    };
     if !owner.is_cons() {
         return 0;
     }

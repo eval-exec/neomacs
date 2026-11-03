@@ -192,7 +192,7 @@ impl Context {
         self.depth += 1;
         // `max_lisp_eval_depth_localized` stands in for the per-call symbol
         // lookup: it is set the one time the variable is made buffer-local.
-        if self.depth <= self.max_depth && !self.obarray.max_lisp_eval_depth_localized {
+        if self.depth <= self.max_depth && !self.obarray.max_lisp_eval_depth_localized() {
             return Ok(());
         }
         self.enter_interpreted_eval_depth_slow()

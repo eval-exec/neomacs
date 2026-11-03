@@ -236,7 +236,10 @@ macro_rules! bare_trampoline {
         /// caller that upholds this contract.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64) -> i64 {
-            let a = Value::from_bits(a as usize);
+            let a = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(a as usize)
+            };
             let (c, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |c| $body(c, a));
             leaf_finish(active, c, word)
@@ -250,7 +253,16 @@ macro_rules! bare_trampoline {
         /// caller that upholds this contract.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
-            let (a, b) = (Value::from_bits(a as usize), Value::from_bits(b as usize));
+            let (a, b) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+            );
             let (c, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |c| $body(c, a, b));
             leaf_finish(active, c, word)
@@ -264,7 +276,16 @@ macro_rules! bare_trampoline {
         /// caller that upholds this contract.
         #[unsafe(no_mangle)]
         pub unsafe extern "C" fn $bare(ctx: *const Context, a: i64, b: i64) -> i64 {
-            let (a, b) = (Value::from_bits(a as usize), Value::from_bits(b as usize));
+            let (a, b) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+            );
             let (c, active) = leaf_enter(ctx, &$spec);
             let word = match $fast(c, &[a, b, Value::NIL, Value::NIL]) {
                 Some(value) => value.bits() as i64,
@@ -430,7 +451,10 @@ macro_rules! bcall_trampoline {
             if !bcall_guard(cx, slot) {
                 return bcall_declined($spec.id);
             }
-            let a = Value::from_bits(a as usize);
+            let a = unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(a as usize)
+            };
             let (cx, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a));
             leaf_finish(active, cx, word)
@@ -456,7 +480,16 @@ macro_rules! bcall_trampoline {
             if !bcall_guard(cx, slot) {
                 return bcall_declined($spec.id);
             }
-            let (a, b) = (Value::from_bits(a as usize), Value::from_bits(b as usize));
+            let (a, b) = (
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+            );
             let (cx, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b));
             leaf_finish(active, cx, word)
@@ -484,9 +517,18 @@ macro_rules! bcall_trampoline {
                 return bcall_declined($spec.id);
             }
             let (a, b, c) = (
-                Value::from_bits(a as usize),
-                Value::from_bits(b as usize),
-                Value::from_bits(c as usize),
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(a as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(b as usize)
+                },
+                unsafe {
+                    /* SAFETY: JIT constant-pool word */
+                    Value::from_bits(c as usize)
+                },
             );
             let (cx, active) = leaf_enter(ctx, &$spec);
             let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b, c));
@@ -602,7 +644,10 @@ pub(crate) fn bcall_leaf_site(expected: u64, nargs: usize, aot: bool) -> Option<
     if aot || !(knob.bcall || knob.vars || knob.batch) {
         return None;
     }
-    let (subr_sym, entry) = subr_entry_from_value(Value::from_bits(expected as usize))?;
+    let (subr_sym, entry) = subr_entry_from_value(unsafe {
+        /* SAFETY: JIT constant-pool word */
+        Value::from_bits(expected as usize)
+    })?;
     let leaf = crate::emacs_core::subr::leaf::subr_leaf(subr_sym)?;
     if leaf.shape != LeafShape::Bcall
         || !leaf_part_on(knob, leaf)

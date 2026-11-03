@@ -450,7 +450,7 @@ impl EndpointBPlusTree {
 fn set_overlay_position_handle(overlay: Value, intervals: &Arc<RwLock<IntervalBPlusTree>>) {
     let handle = OverlayPositionHandle::new(overlay, intervals);
     let _ = overlay.with_overlay_data_mut(|data| {
-        data.position_handle = Some(handle);
+        *data.position_handle_mut() = Some(handle);
     });
 }
 
@@ -458,7 +458,7 @@ fn materialize_overlay_position(overlay: Value, range: EmacsByteRange) {
     let _ = overlay.with_overlay_data_mut(|data| {
         data.start = range.start().get();
         data.end = range.end().get();
-        data.position_handle = None;
+        *data.position_handle_mut() = None;
     });
 }
 
@@ -674,7 +674,7 @@ impl OverlayIndex {
                 // linear scan of the collapsed cluster.
                 let successor = if local_moves {
                     intervals
-                        .records
+                        .records()
                         .successor_identity(OverlayIdentity::of(overlay))
                 } else {
                     None
@@ -1113,13 +1113,13 @@ impl OverlayIndex {
     fn deletion_exceptions(&self, range: EmacsByteRange) -> (SmallVec<[Value; 8]>, bool) {
         let mut exceptions = SmallVec::new();
         let mut starts_contract = false;
-        self.intervals
-            .read()
-            .records
-            .for_each_match(IntervalDeletionQuery::new(range), |record| {
+        self.intervals.read().records().for_each_match(
+            IntervalDeletionQuery::new(range),
+            |record| {
                 starts_contract |= record.range.start() > range.start();
                 exceptions.push(record.overlay);
-            });
+            },
+        );
         (exceptions, starts_contract)
     }
 
@@ -1205,16 +1205,16 @@ impl OverlayIndex {
     }
 
     pub(super) fn values(&self) -> impl Iterator<Item = Value> + '_ {
-        let records = RwLockReadGuard::map(self.intervals.read(), |tree| &tree.records);
+        let records = RwLockReadGuard::map(self.intervals.read(), |tree| tree.records());
         OrderedShiftTree::matches_owned(records, IntervalBPlusQuery::All)
-            .map(|record| record.overlay)
+            .map(|record| record.overlay())
     }
 
     pub(super) fn overlays_at(&self, pos: EmacsBytePos) -> Vec<Value> {
         let intervals = self.intervals.read();
         let mut overlays = Vec::new();
         intervals
-            .records
+            .records()
             .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
                 overlays.push(record.overlay);
             });
@@ -1228,16 +1228,16 @@ impl OverlayIndex {
     pub(super) fn for_each_overlay_at(&self, pos: EmacsBytePos, mut visit: impl FnMut(Value)) {
         let intervals = self.intervals.read();
         intervals
-            .records
+            .records()
             .for_each_match(IntervalBPlusQuery::Point(pos), |record| {
                 visit(record.overlay);
             });
     }
 
     pub(super) fn overlays_at_iter(&self, pos: EmacsBytePos) -> impl Iterator<Item = Value> + '_ {
-        let records = RwLockReadGuard::map(self.intervals.read(), |tree| &tree.records);
+        let records = RwLockReadGuard::map(self.intervals.read(), |tree| tree.records());
         OrderedShiftTree::matches_owned(records, IntervalBPlusQuery::Point(pos))
-            .map(|record| record.overlay)
+            .map(|record| record.overlay())
     }
 
     /// Return intervals whose closed bounds touch `pos`.
@@ -1256,7 +1256,7 @@ impl OverlayIndex {
         range: EmacsByteRange,
         accessible_end: EmacsBytePos,
     ) -> impl Iterator<Item = Value> + '_ {
-        let records = RwLockReadGuard::map(self.intervals.read(), |tree| &tree.records);
+        let records = RwLockReadGuard::map(self.intervals.read(), |tree| tree.records());
         OrderedShiftTree::matches_owned(
             records,
             IntervalBPlusQuery::Region {
@@ -1264,14 +1264,14 @@ impl OverlayIndex {
                 accessible_end,
             },
         )
-        .map(|record| record.overlay)
+        .map(|record| record.overlay())
     }
 
     pub(super) fn overlays_intersecting(&self, range: EmacsByteRange) -> Vec<Value> {
         let intervals = self.intervals.read();
         let mut overlays = Vec::with_capacity(intervals.len());
         intervals
-            .records
+            .records()
             .for_each_match(IntervalIntersectionQuery::new(range), |record| {
                 overlays.push(record.overlay);
             });
@@ -1285,7 +1285,7 @@ impl OverlayIndex {
     ) -> Vec<Value> {
         let intervals = self.intervals.read();
         let mut overlays = Vec::new();
-        intervals.records.for_each_match(
+        intervals.records().for_each_match(
             IntervalBPlusQuery::Region {
                 range,
                 accessible_end,
@@ -1360,7 +1360,7 @@ impl OverlayIndex {
         let intervals = self.intervals.read();
         let mut next = None;
         intervals
-            .records
+            .records()
             .for_each_match(IntervalBPlusQuery::All, |record| {
                 for endpoint in [record.range.start(), record.range.end()] {
                     if pos < endpoint

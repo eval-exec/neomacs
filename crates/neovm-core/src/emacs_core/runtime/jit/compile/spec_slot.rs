@@ -310,7 +310,11 @@ impl SpecSlot {
     /// silent fall to the reference path.
     pub(crate) fn bind_subr(&self, sym: u32, expected: u64) {
         debug_assert!(
-            Value::from_bits(expected as usize).is_veclike(),
+            unsafe {
+                /* SAFETY: JIT constant-pool word */
+                Value::from_bits(expected as usize)
+            }
+            .is_veclike(),
             "a subr binding is a tagged subr object"
         );
         self.leaf.store(expected, Ordering::Relaxed);

@@ -537,3 +537,412 @@ SafeTailGuard::new	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs
 SafeTailGuard::found_cycle_after_advance	method	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:206	emacs_core::symbol::plist_core	pc1-d DATA: signed plist addendum; existing body/inline unchanged, private traversal state; upper crates/neovm-core/src/emacs_core/runtime/plist/mod.rs:15 and its command-layer traversal callers
 IntervalDeletionQuery::new	fn	(new ctor)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:150	heap_types::overlay_storage	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new
 IntervalIntersectionQuery::new	fn	(new ctor)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:186	heap_types::overlay_storage	pc1-d ctor per coordinator ruling 15:56:33Z; tuple field stays pub(crate); exact core sites overlay_index.rs:1119/1275 use ::new
+Flow::with_bytecode_error_backtrace	method	pub(restricted)	crates/neovm-value/src/error/bytecode_backtrace.rs:99	error::bytecode_backtrace	BULK (PC11-M)
+EvalError::from_throw	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:112	error	BULK (PC11-M)
+Flow::throw_with_symbols	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:286	error	BULK (PC11-M)
+Flow::throw	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:299	error	BULK (PC11-M)
+Flow::thread_blocked	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:304	error	BULK (PC11-M)
+ThrowData::symbol_mode	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:384	error	BULK (PC11-M)
+ThrowData::matches_tag	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:389	error	BULK (PC11-M)
+SignalData::new	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:518	error	BULK (PC11-M)
+SignalData::new_with_delivery	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:534	error	BULK (PC11-M)
+SignalData::delivery	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:562	error	BULK (PC11-M)
+EvalError::from_signal	method	pub(restricted)	crates/neovm-value/src/error/mod.rs:80	error	BULK (PC11-M)
+CErrorMessage::template	method	pub(restricted)	crates/neovm-value/src/errors/native_message.rs:13	errors::native_message	BULK (PC11-M)
+LispKboardObjFwd::select_keyboard	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:1098	forward	C: approved typed parameters (unsafe stays unsafe); callers: crates/neovm-core/src/emacs_core/runtime/eval/keyboard_forwarding.rs:21; crates/neovm-core/src/emacs_core/runtime/eval/keyboard_forwarding.rs:39
+LispKboardObjFwd::exchange_for_owner	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:1145	forward	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/specpdl.rs:1215; crates/neovm-core/src/emacs_core/runtime/eval/specpdl.rs:1232
+LispKboardObjFwd::forget_keyboard	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:1167	forward	C: approved typed parameters (unsafe stays unsafe); callers: crates/neovm-core/src/emacs_core/runtime/eval/keyboard_forwarding.rs:38; crates/neovm-core/src/emacs_core/runtime/eval/keyboard_forwarding.rs:56
+FwdRef::address	method	pub(restricted)	crates/neovm-value/src/forward/mod.rs:301	forward	BULK (PC11-M)
+CanonicalBlv::blv	method	pub(restricted)	crates/neovm-value/src/forward/thread_projection.rs:102	forward::thread_projection	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/owner_bindings.rs:2171; crates/neovm-core/src/emacs_core/runtime/eval/owner_bindings.rs:2222; crates/neovm-core/src/emacs_core/runtime/eval/owner_bindings.rs:920; crates/neovm-core/src/emacs_core/runtime/eval/thread_projection.rs:272; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3625
+ThreadProjectionDescriptor::logical_forwarder	method	pub(restricted)	crates/neovm-value/src/forward/thread_projection.rs:260	forward::thread_projection	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:6991; crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:7046; crates/neovm-core/src/emacs_core/runtime/eval/owner_bindings.rs:1009
+ThreadProjectionTable::trace_roots	method	pub(restricted)	crates/neovm-value/src/forward/thread_projection.rs:373	forward::thread_projection	BULK (PC11-M)
+ThreadProjectionTable::upcoming_index	method	pub(restricted)	crates/neovm-value/src/forward/thread_projection.rs:381	forward::thread_projection	BULK (PC11-M)
+ThreadProjectionTable::try_reserve	method	pub(restricted)	crates/neovm-value/src/forward/thread_projection.rs:401	forward::thread_projection	m1-approved
+ThreadProjectionTable::void_descriptor	method	pub(restricted)	crates/neovm-value/src/forward/thread_projection.rs:420	forward::thread_projection	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/world.rs:1334
+LispString::clear_contents_to_unibyte	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1103	heap_types	BULK (PC11-M)
+LispString::byte_len	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1144	heap_types	BULK (PC11-M)
+LispString::char_to_byte_pos	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1153	heap_types	BULK (PC11-M)
+LispString::byte_to_gnu_char_pos	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1176	heap_types	BULK (PC11-M)
+LispString::is_empty	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1203	heap_types	BULK (PC11-M)
+LispString::is_ascii	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1207	heap_types	BULK (PC11-M)
+LispString::slice_no_properties_with_char_bounds	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1326	heap_types	BULK (PC11-M)
+LispString::slice_with_char_bounds	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1360	heap_types	BULK (PC11-M)
+OverlayData::current_range	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:1761	heap_types	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay.rs:1752; crates/neovm-core/src/emacs_core/editing/buffer/mod.rs:2198; crates/neovm-core/src/emacs_core/lisp/print/error_format.rs:120; crates/neovm-core/src/emacs_core/lisp/print/mod.rs:3052; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3741
+GnuStringCharPos::new	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:307	heap_types	BULK (PC11-M)
+GnuStringCharPos::get	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:311	heap_types	BULK (PC11-M)
+LispString::JIT_SIZE_OFFSET	const	pub(restricted)	crates/neovm-value/src/heap_types.rs:389	heap_types	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/intrinsics.rs:381; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1133; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1280
+LispString::JIT_SIZE_BYTE_OFFSET	const	pub(restricted)	crates/neovm-value/src/heap_types.rs:391	heap_types	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1139; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1286
+LispString::JIT_DATA_OFFSET	const	pub(restricted)	crates/neovm-value/src/heap_types.rs:393	heap_types	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1156; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1342
+LispString::JIT_STORAGE_CAPACITY_OFFSET	const	pub(restricted)	crates/neovm-value/src/heap_types.rs:395	heap_types	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1297
+LispString::JIT_SIZE_BYTE_UNIBYTE	const	pub(restricted)	crates/neovm-value/src/heap_types.rs:398	heap_types	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1217; crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1322
+LispString::from_emacs_bytes_with_declared_chars	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:638	heap_types	BULK (PC11-M)
+LispString::from_mapped_bytes	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:682	heap_types	B1 unsafe (A5); Safety doc verbatim; callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:1221; crates/neovm-core/src/emacs_core/runtime/pdump/symbol_table_image.rs:241
+LispString::from_unibyte_slice	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:695	heap_types	BULK (PC11-M)
+LispString::from_registered_rodata_unibyte	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:728	heap_types	BULK (PC11-M)
+LispString::install_mapped_storage_sidecar	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:748	heap_types	C: pub unsafe fn; exact caller; callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:1272
+LispString::install_registered_rodata_sidecar	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:761	heap_types	C: SEAL; exact pdump caller; callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:1287
+LispString::data_field_offset	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:804	heap_types	BULK (PC11-M)
+LispString::is_reclaimed	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:858	heap_types	BULK (PC11-M)
+LispString::character_count_word_for_image	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:886	heap_types	BULK (PC11-M)
+LispString::character_count_kind	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:912	heap_types	BULK (PC11-M)
+LispString::has_one_byte_characters	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:928	heap_types	BULK (PC11-M)
+LispString::storage_kind	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:954	heap_types	BULK (PC11-M)
+LispString::rodata_key	method	pub(restricted)	crates/neovm-value/src/heap_types.rs:967	heap_types	BULK (PC11-M)
+EmacsByteDelta::insertion	method	pub(restricted)	crates/neovm-value/src/heap_types/byte_positions.rs:102	heap_types::byte_positions	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay_index.rs:835; crates/neovm-core/src/buffer/overlay_index.rs:855; crates/neovm-core/src/buffer/overlay_index.rs:897; crates/neovm-core/src/buffer/text/edit.rs:130
+EmacsByteDelta::deletion	method	pub(restricted)	crates/neovm-value/src/heap_types/byte_positions.rs:106	heap_types::byte_positions	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay_index.rs:986; crates/neovm-core/src/buffer/text/edit.rs:137
+EmacsByteDelta::replacement	method	pub(restricted)	crates/neovm-value/src/heap_types/byte_positions.rs:110	heap_types::byte_positions	B2 approved (A7); callers: crates/neovm-core/src/buffer/text/edit.rs:144
+EmacsByteDelta::apply_to_pos	method	pub(restricted)	crates/neovm-value/src/heap_types/byte_positions.rs:115	heap_types::byte_positions	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay_index.rs:1004; crates/neovm-core/src/buffer/overlay_index.rs:1014; crates/neovm-core/src/buffer/overlay_index.rs:1057; crates/neovm-core/src/buffer/overlay_index.rs:1064; crates/neovm-core/src/buffer/overlay_index.rs:227; crates/neovm-core/src/buffer/overlay_index.rs:232; crates/neovm-core/src/buffer/overlay_index.rs:838; crates/neovm-core/src/buffer/overlay_index.rs:935 (+2 more)
+IntervalBPlusTree::new	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:292	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::from_entries	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:299	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::reserve_attachment_orders	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:329	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::insert	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:337	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::insert_with_order	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:346	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::take	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:363	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::try_move_preserving_neighbors	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:375	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::update_end_preserving_order	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:405	heap_types::overlay_storage	BULK (PC11-M)
+OverlayIdentity::of	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:41	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::range_by_identity	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:419	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::contains	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:423	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::is_empty	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:427	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::entries	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:431	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::endpoint_entries_in_attachment_order	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:437	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::overlays_touching	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:453	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::all_ascending	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:461	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::shift_at_or_after	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:469	heap_types::overlay_storage	BULK (PC11-M)
+IntervalBPlusTree::len	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:493	heap_types::overlay_storage	BULK (PC11-M)
+OverlayPositionHandle::new	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:66	heap_types::overlay_storage	BULK (PC11-M)
+OrderedShiftTree::replace_filter_mask	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:1742	heap_types::overlay_storage::ordered	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay_index.rs:418
+OrderedShiftTree::insert	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:365	heap_types::overlay_storage::ordered	BULK (PC11-M)
+OrderedShiftTree::remove	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:515	heap_types::overlay_storage::ordered	B2 approved (A7); callers: crates/neovm-core/src/buffer/overlay_index.rs:377
+OrderedShiftTree::shift_at_or_after	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:723	heap_types::overlay_storage::ordered	BULK (PC11-M)
+OrderedShiftTree::matches	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:780	heap_types::overlay_storage::ordered	BULK (PC11-M)
+OrderedShiftTree::matches_reverse	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:787	heap_types::overlay_storage::ordered	BULK (PC11-M)
+OrderedShiftTree::next_position_after	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:918	heap_types::overlay_storage::ordered	BULK (PC11-M)
+OrderedShiftTree::previous_position_before	method	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/ordered.rs:966	heap_types::overlay_storage::ordered	BULK (PC11-M)
+ThreadIds::any_thread_created	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:110	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:82
+ThreadIds::main_thread	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:114	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/completion.rs:107; crates/neovm-core/src/emacs_core/runtime/threads/completion.rs:157; crates/neovm-core/src/emacs_core/runtime/threads/completion.rs:158; crates/neovm-core/src/emacs_core/runtime/threads/mailbox.rs:30; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:12; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:825; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:837; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:886 (+1 more)
+ThreadIds::issue_thread	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:121	heap_types::threading	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:49
+ThreadIds::issue_mutex	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:129	heap_types::threading	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:554
+ThreadIds::issue_condvar	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:137	heap_types::threading	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:706
+ThreadIds::thread_from_native_key	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:147	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:104; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:163; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:623; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:687; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:91
+ThreadIds::mutex_from_native_key	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:154	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:593
+ThreadIds::condvar_from_native_key	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:161	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:741
+ThreadName::UNNAMED	const	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:188	heap_types::threading	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:18; crates/neovm-core/src/emacs_core/runtime/threads/mod.rs:93
+ThreadName::from_value	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:190	heap_types::threading	BULK (PC11-M)
+ThreadName::is_unnamed	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:198	heap_types::threading	BULK (PC11-M)
+ThreadName::stored	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:202	heap_types::threading	BULK (PC11-M)
+StoredThreadEvent::try_from_roots	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:254	heap_types::threading	BULK (PC11-M)
+ThreadNativeState::new	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:295	heap_types::threading	BULK (PC11-M)
+ThreadPayload::new	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:332	heap_types::threading	BULK (PC11-M)
+RecursionDepth::ONE	const	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:436	heap_types::threading	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:631
+RecursionDepth::new	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:438	heap_types::threading	BULK (PC11-M)
+RecursionDepth::get	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:445	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:652
+RecursionDepth::checked_increment	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:449	heap_types::threading	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:636
+MutexReference::from_mutex	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:512	heap_types::threading	BULK (PC11-M)
+CondVarPayload::new	method	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:547	heap_types::threading	BULK (PC11-M)
+ThreadIds::NEXT_THREAD_OFFSET	const	pub(restricted)	crates/neovm-value/src/heap_types/threading.rs:94	heap_types::threading	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/threads/layout.rs:42; crates/neovm-core/src/emacs_core/runtime/threads/mod.rs:279
+SymbolNameQuery::new	method	pub(restricted)	crates/neovm-value/src/intern/mod.rs:431	intern	BULK (PC11-M)
+SymId::to_raw	method	pub(restricted)	crates/neovm-value/src/intern/mod.rs:44	intern	BULK (PC11-M)
+SymbolNameQuery::as_bytes	method	pub(restricted)	crates/neovm-value/src/intern/mod.rs:442	intern	BULK (PC11-M)
+SymbolNameQuery::matches	method	pub(restricted)	crates/neovm-value/src/intern/mod.rs:446	intern	BULK (PC11-M)
+SymId::from_raw	method	pub(restricted)	crates/neovm-value/src/intern/mod.rs:63	intern	C/N8: pub unsafe fn; Safety text verbatim; N8 mint pins; callers: crates/neovm-core/src/emacs_core/lisp/autoload/mod.rs:35; crates/neovm-core/src/emacs_core/runtime/eval/form_head_cache.rs:48; crates/neovm-core/src/emacs_core/runtime/eval/green/bootstrap.rs:59; crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:3807; crates/neovm-core/src/emacs_core/runtime/eval/owner_mirrors.rs:89; crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:2301; crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:2303; crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:2439 (+47 more)
+BlvPtr::as_ptr	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:310	symbol::cell	C: approved raw pointer; callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/inline_vars.rs:256; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3563
+LispSymbol::from_dump	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:678	symbol::cell	BULK (PC11-M)
+LispSymbol::set_trapped_write	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:772	symbol::cell	BULK (PC11-M)
+LispSymbol::set_interned	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:778	symbol::cell	BULK (PC11-M)
+LispSymbol::set_declared_special	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:784	symbol::cell	BULK (PC11-M)
+LispSymbol::write_window	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:799	symbol::cell	BULK (PC11-M)
+LispSymbol::value_cell	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:812	symbol::cell	BULK (PC11-M)
+LispSymbol::plain_value	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:837	symbol::cell	BULK (PC11-M)
+LispSymbol::forwarded_descriptor	method	pub(restricted)	crates/neovm-value/src/symbol/cell.rs:868	symbol::cell	BULK (PC11-M)
+Obarray::jit_symbol_cell_addr	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1729	symbol	BULK (PC11-M)
+Obarray::scan_snapshot	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1827	symbol	BULK (PC11-M)
+Obarray::current_slot_len	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1841	symbol	BULK (PC11-M)
+Obarray::trace_new_symbol_cells	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1851	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:3053
+Obarray::note_watchers_changed	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1935	symbol	m1-approved
+Obarray::is_global_member	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:1967	symbol	BULK (PC11-M)
+Obarray::seed_well_known_members	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2025	symbol	m1-approved
+Obarray::intern_soft_name_query	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2085	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:1914; crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:2171; crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:2205
+Obarray::value_in_buffer_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2202	symbol	BULK (PC11-M)
+Obarray::unslotted_value_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2217	symbol	BULK (PC11-M)
+Obarray::buffer_slot_value	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2251	symbol	BULK (PC11-M)
+Obarray::value_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2342	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:114
+Obarray::set_canonical_value_routed	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2469	symbol	m1-approved
+Obarray::swap_plain_untrapped_value_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2564	symbol	m1-approved
+Obarray::set_plain_untrapped_value_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2610	symbol	m1-approved
+Obarray::is_plain_value_cell_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2638	symbol	BULK (PC11-M)
+Obarray::mark_runtime_projected_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2646	symbol	m1-approved
+Obarray::store_plain_value_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2658	symbol	m1-approved
+Obarray::make_symbol_localized	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2701	symbol	m1-approved
+Obarray::discover_debug_on_next_call_descriptor	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2814	symbol	BULK (PC11-M)
+Obarray::publish_debug_on_next_call_descriptor	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2826	symbol	m1-approved
+Obarray::read_localized_symbol_for_buffer	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:2977	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/editing/editfns/mod.rs:279; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6695; crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:6060; crates/neovm-core/src/emacs_core/text/textprop/mod.rs:305
+Obarray::read_localized_in_buffer	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3020	symbol	BULK (PC11-M)
+Obarray::set_internal_localized	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3664	symbol	m1-approved
+Obarray::set_internal_localized_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3684	symbol	m1-approved
+Obarray::function_cell_snapshot	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3897	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:1481; crates/neovm-core/src/emacs_core/runtime/jit/compile/sqrt_binding.rs:84
+Obarray::invalidate_all_function_bindings	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:3952	symbol	m1-approved
+Obarray::set_symbol_function_id_for	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4049	symbol	m1-approved
+Obarray::makunbound_canonical_routed	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4181	symbol	m1-approved
+Obarray::boundp_id_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4246	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:292; crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:262
+Obarray::symbol_plist_snapshot_id	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4371	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:981
+Obarray::default_value_with	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4721	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:225
+Obarray::generation	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4854	symbol	BULK (PC11-M)
+Obarray::iter_symbols	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4901	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:387; crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:350; crates/neovm-core/src/emacs_core/runtime/eval/tier_i/mod.rs:610; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3653
+Obarray::global_member_ids	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4910	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/load/mod.rs:4800; crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:1617; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3666
+Obarray::completion_bucket_order_cached	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4920	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:1608
+Obarray::function_unbound_ids	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4945	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3669
+Obarray::from_dump	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:4956	symbol	C: SEAL; exact pdump caller; callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:5558
+ObarraySymbolCellSkipGuard::new	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:5090	symbol	C: SEAL constructor; callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2915; crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:3037
+SetInternalAlist::into_value	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:604	symbol	BULK (PC11-M)
+LispSymbol::blv_cache_hit	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:694	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/var_fast.rs:366; crates/neovm-core/src/emacs_core/runtime/eval/var_fast.rs:495; crates/neovm-core/src/emacs_core/runtime/eval/var_fast.rs:580; crates/neovm-core/src/emacs_core/runtime/eval/var_fast.rs:768
+LispSymbol::blv_default_cells	method	pub(restricted)	crates/neovm-value/src/symbol/mod.rs:729	symbol	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/var_fast.rs:819
+Obarray::births_projected	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:272	symbol::projection	BULK (PC11-M)
+Obarray::thread_projection_of	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:278	symbol::projection	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/editing/buffer/mod.rs:5514; crates/neovm-core/src/emacs_core/lisp/custom/mod.rs:110; crates/neovm-core/src/emacs_core/runtime/data/mod.rs:237; crates/neovm-core/src/emacs_core/runtime/data/mod.rs:430; crates/neovm-core/src/emacs_core/runtime/data/mod.rs:64; crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:510; crates/neovm-core/src/emacs_core/runtime/eval/owner_bindings.rs:1026; crates/neovm-core/src/emacs_core/runtime/eval/owner_bindings.rs:1180 (+23 more)
+Obarray::reveal_projection	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:287	symbol::projection	m1-approved
+Obarray::conceal_projection	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:313	symbol::projection	m1-approved
+Obarray::owned_thread_projection	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:348	symbol::projection	m1-approved
+Obarray::admission_plan	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:371	symbol::projection	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:345; crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:391
+Obarray::project_admitted_cell	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:435	symbol::projection	m1-approved
+Obarray::read_projected_localized	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:534	symbol::projection	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/thread_projection.rs:52; crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:487
+Obarray::with_revealed_projection	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:589	symbol::projection	m1-approved
+Obarray::projected_default_value	method	pub(restricted)	crates/neovm-value/src/symbol/projection.rs:607	symbol::projection	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/editing/buffer/mod.rs:5515; crates/neovm-core/src/emacs_core/runtime/data/mod.rs:431; crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:235; crates/neovm-core/src/emacs_core/runtime/eval/variable_access.rs:274
+ByteCodeFunction::executes_sealed_ops	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:409	tagged::bytecode::chunk	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:290; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:374; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:3668; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:4393; crates/neovm-core/src/emacs_core/runtime/jit/compile/inline_census.rs:74; crates/neovm-core/src/emacs_core/runtime/jit/vframe.rs:301; crates/neovm-core/src/emacs_core/runtime/jit/vframe.rs:504
+ByteCodeFunction::is_pdump_stub	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:437	tagged::bytecode::chunk	BULK (PC11-M)
+ByteCodeFunction::structural_parts	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:521	tagged::bytecode::chunk	BULK (PC11-M)
+LazyGnuCode::new	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/chunk.rs:60	tagged::bytecode::chunk	C: fresh empty cell; callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:217; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:418
+StackProof::UNREACHABLE	const	pub(restricted)	crates/neovm-value/src/tagged/bytecode/decode_data.rs:34	tagged::bytecode::decode_data	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/decode.rs:518
+FunctionParams::heap_child	method	pub(restricted)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:278	tagged::bytecode::function_slots	BULK (PC11-M)
+CollectionReads::all_dependency_bits	method	pub(restricted)	crates/neovm-value/src/tagged/collection_reads.rs:280	tagged::collection_reads	BULK (PC11-M)
+TaggedHeap::identity	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1270	tagged::gc	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/display/terminal/pure.rs:61; crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2763; crates/neovm-core/src/emacs_core/runtime/eval/gc_pacing.rs:107; crates/neovm-core/src/emacs_core/runtime/eval/gc_pacing.rs:859; crates/neovm-core/src/emacs_core/runtime/eval/green/host_service/owner_steps.rs:1153; crates/neovm-core/src/emacs_core/runtime/eval/green/switch.rs:338; crates/neovm-core/src/emacs_core/runtime/eval/world.rs:1242; crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:86 (+5 more)
+TaggedHeap::note_must_finish	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1315	tagged::gc	m1-approved
+TaggedHeap::pace_probe	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1337	tagged::gc	BULK (PC11-M)
+TaggedHeap::sweep_stats	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1413	tagged::gc	BULK (PC11-M)
+TaggedHeap::handshake_stats	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1442	tagged::gc	BULK (PC11-M)
+TaggedHeap::handshake_stats_mut	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1448	tagged::gc	C: approved stats; callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2934; crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:3081
+TaggedHeap::memory_use_counts_snapshot	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1463	tagged::gc	BULK (PC11-M)
+TaggedHeap::reset_bytes_since_gc	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1501	tagged::gc	m1-approved
+TaggedHeap::register_mapped_cons_range	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1569	tagged::gc	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:856; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:917
+TaggedHeap::register_mapped_float_range	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1589	tagged::gc	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:871; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:929
+TaggedHeap::register_mapped_veclike_object	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1619	tagged::gc	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:902
+TaggedHeap::register_mapped_string_object	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1646	tagged::gc	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:885
+TaggedHeap::note_image_object	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1685	tagged::gc	m1-approved
+TaggedHeap::remember_mapped_cons_ahead_of_writes	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1879	tagged::gc	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/inline_vars.rs:311
+TaggedHeap::total_allocated_bytes	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:1969	tagged::gc	BULK (PC11-M)
+TaggedHeap::layout_stats	method	pub(restricted)	crates/neovm-value/src/tagged/gc.rs:2334	tagged::gc	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins_extra/mod.rs:862
+AliasableBox::new	method	pub(restricted)	crates/neovm-value/src/tagged/gc/aliasable.rs:61	tagged::gc::aliasable	BULK (PC11-M)
+AliasableBox::root	method	pub(restricted)	crates/neovm-value/src/tagged/gc/aliasable.rs:80	tagged::gc::aliasable	BULK (PC11-M)
+AliasableBox::get_mut	method	pub(restricted)	crates/neovm-value/src/tagged/gc/aliasable.rs:86	tagged::gc::aliasable	C: approved; callers: crates/neovm-core/src/emacs_core/runtime/eval/world.rs:1048; crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:56; crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:75
+TaggedHeap::close_alloc_regions	method	pub(restricted)	crates/neovm-value/src/tagged/gc/alloc_region.rs:407	tagged::gc::alloc_region	m1-approved
+TaggedHeap::alloc_float_inline	method	pub(restricted)	crates/neovm-value/src/tagged/gc/allocation.rs:150	tagged::gc::allocation	m1-approved
+TaggedHeap::alloc_thread	method	pub(restricted)	crates/neovm-value/src/tagged/gc/allocation.rs:530	tagged::gc::allocation	m1-approved
+TaggedHeap::alloc_mutex	method	pub(restricted)	crates/neovm-value/src/tagged/gc/allocation.rs:545	tagged::gc::allocation	m1-approved
+TaggedHeap::alloc_condvar	method	pub(restricted)	crates/neovm-value/src/tagged/gc/allocation.rs:560	tagged::gc::allocation	m1-approved
+TaggedHeap::record_compiled_collection_write	method	pub(restricted)	crates/neovm-value/src/tagged/gc/barrier_window.rs:210	tagged::gc::barrier_window	BULK (PC11-M)
+TaggedHeap::last_concurrent_claim_counts	method	pub(restricted)	crates/neovm-value/src/tagged/gc/cold_gc.rs:247	tagged::gc::cold_gc	BULK (PC11-M)
+TaggedHeap::with_thread_payload_mut	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:1185	tagged::gc::concurrent	C: pub unsafe fn; Safety text verbatim; callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:130; crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:821
+TaggedHeap::with_thread_native_mut	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:1223	tagged::gc::concurrent	C: pub unsafe fn; Safety text verbatim; callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:152
+TaggedHeap::with_mutex_payload_mut	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:1255	tagged::gc::concurrent	C: pub unsafe fn; Safety text verbatim; callers: crates/neovm-core/src/emacs_core/runtime/threads/manager.rs:582
+TaggedHeap::begin_stw_collection	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:175	tagged::gc::concurrent	m1-approved
+TaggedHeap::set_pending_obarray_scan	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:278	tagged::gc::concurrent	m1-approved
+TaggedHeap::take_concurrent_obarray_start_slots	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:293	tagged::gc::concurrent	m1-approved
+TaggedHeap::mark_phase	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:51	tagged::gc::concurrent	BULK (PC11-M)
+TaggedHeap::join_concurrent_mark	method	pub(restricted)	crates/neovm-value/src/tagged/gc/concurrent.rs:666	tagged::gc::concurrent	m1-approved
+TaggedHeap::threads_admitted	method	pub(restricted)	crates/neovm-value/src/tagged/gc/cons_allocator.rs:1963	tagged::gc::cons_allocator	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/eval/world.rs:1284
+TaggedHeap::admit_threads_world_stopped	method	pub(restricted)	crates/neovm-value/src/tagged/gc/cons_allocator.rs:1973	tagged::gc::cons_allocator	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:158
+CanonicalHofSeed::from_canonical_static_subr	method	pub(restricted)	crates/neovm-value/src/tagged/gc/function_write_hooks.rs:111	tagged::gc::function_write_hooks	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:80
+HofRegistrationEpoch::from_observed	method	pub(restricted)	crates/neovm-value/src/tagged/gc/function_write_hooks.rs:46	tagged::gc::function_write_hooks	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/callback.rs:48
+HofRegistrationClock::from_publisher	method	pub(restricted)	crates/neovm-value/src/tagged/gc/function_write_hooks.rs:60	tagged::gc::function_write_hooks	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/callback.rs:44
+HofRegistrationClock::snapshot	method	pub(restricted)	crates/neovm-value/src/tagged/gc/function_write_hooks.rs:63	tagged::gc::function_write_hooks	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:25; crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:65
+Gen1Admission::check	method	pub(restricted)	crates/neovm-value/src/tagged/gc/gen1_admission.rs:40	tagged::gc::gen1_admission	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_admission/factory.rs:52
+TaggedHeap::begin_minor_collection	method	pub(restricted)	crates/neovm-value/src/tagged/gc/generational.rs:249	tagged::gc::generational	m1-approved
+TaggedHeap::complete_minor_collection	method	pub(restricted)	crates/neovm-value/src/tagged/gc/generational.rs:346	tagged::gc::generational	m1-approved
+TaggedHeap::generational_enabled	method	pub(restricted)	crates/neovm-value/src/tagged/gc/generational.rs:55	tagged::gc::generational	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2371; crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2567; crates/neovm-core/src/emacs_core/runtime/eval/rows_observation.rs:100; crates/neovm-core/src/emacs_core/runtime/eval/rows_observation.rs:248
+HeapIdentity::from_legacy_word	method	pub(restricted)	crates/neovm-value/src/tagged/gc/heap_identity.rs:35	tagged::gc::heap_identity	BULK (PC11-M)
+TaggedHeap::reseed_runtime_and_remembered_roots	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:20	tagged::gc::incremental	m1-approved
+TaggedHeap::gc_locks_poisoned	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:235	tagged::gc::incremental	BULK (PC11-M)
+TaggedHeap::retains_veclike	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:2442	tagged::gc::incremental	BULK (PC11-M)
+TaggedHeap::incremental_sweep_slice	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:262	tagged::gc::incremental	m1-approved
+TaggedHeap::incremental_drain_all	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:42	tagged::gc::incremental	m1-approved
+TaggedHeap::finish_incremental_sweep_now	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:456	tagged::gc::incremental	m1-approved
+TaggedHeap::incremental_finish	method	pub(restricted)	crates/neovm-value/src/tagged/gc/incremental.rs:55	tagged::gc::incremental	m1-approved
+TaggedHeap::seed_root	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mark_sweep.rs:1595	tagged::gc::mark_sweep	m1-approved
+TaggedHeap::seed_root_with_origin	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mark_sweep.rs:1599	tagged::gc::mark_sweep	m1-approved
+TaggedHeap::complete_collection	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mark_sweep.rs:1676	tagged::gc::mark_sweep	m1-approved
+TaggedHeap::live_finalizer_count	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mark_sweep.rs:1783	tagged::gc::mark_sweep	BULK (PC11-M)
+TaggedHeap::has_pending_doomed_finalizers	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mark_sweep.rs:1791	tagged::gc::mark_sweep	BULK (PC11-M)
+TaggedHeap::root_seed_scratch	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_gc.rs:861	tagged::gc::mutator_gc	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/command_loop.rs:2762
+ExecutionActivation::publication	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:138	tagged::gc::mutator_registration::execution	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/cell.rs:21; crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:35
+ImmediateResult::from_word	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:33	tagged::gc::mutator_registration::execution	BULK (PC11-M)
+ImmediateResult::word	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:45	tagged::gc::mutator_registration::execution	BULK (PC11-M)
+ParallelExecutionAdmission::with_activation	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution.rs:93	tagged::gc::mutator_registration::execution	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/cell.rs:68; crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:103; crates/neovm-core/src/emacs_core/runtime/jit/parallel/identity.rs:19; crates/neovm-core/src/emacs_core/runtime/jit/parallel/native.rs:223
+ExecutionActivation::map_singleton	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution/hof.rs:126	tagged::gc::mutator_registration::execution::hof	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:110
+ExecutionActivation::symbol_slot	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution/read.rs:29	tagged::gc::mutator_registration::execution::read	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/cell.rs:15; crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:25; crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:28
+ExecutionActivation::read_cell	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/execution/read.rs:51	tagged::gc::mutator_registration::execution::read	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/cell.rs:73
+FrozenLegacyRoots::new	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/keeper.rs:32	tagged::gc::mutator_registration::keeper	C: pub unsafe fn; Safety text verbatim; callers: crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:127
+AllStopped::check_world_roots	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/rendezvous/keeper.rs:189	tagged::gc::mutator_registration::rendezvous::keeper	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:171
+PreparedHofBuiltin::operation	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/hof.rs:21	tagged::gc::mutator_registration::symbol_authority::functions::hof	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:104
+PreparedHofBuiltin::symbol	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/hof.rs:24	tagged::gc::mutator_registration::symbol_authority::functions::hof	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:108
+PreparedUnaryFunction::symbol	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/unary.rs:16	tagged::gc::mutator_registration::symbol_authority::functions::unary	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/jit/parallel/hof.rs:108
+KeeperSymbols::append_current_symbol_roots	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/roots.rs:28	tagged::gc::mutator_registration::symbol_authority::roots	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:186
+KeeperSymbols::append_current_projection_roots	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/roots.rs:45	tagged::gc::mutator_registration::symbol_authority::roots	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:187
+ParallelHeapEra::admit_with	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:53	tagged::gc::mutator_registration::wrappers	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/era.rs:57
+ParallelHeapEra::admit_rooted_with	method	pub(restricted)	crates/neovm-value/src/tagged/gc/mutator_registration/wrappers.rs:74	tagged::gc::mutator_registration::wrappers	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/world/era.rs:68
+TaggedHeap::note_generation_stress_cycle_started	method	pub(restricted)	crates/neovm-value/src/tagged/gc/pacing.rs:111	tagged::gc::pacing	m1-approved
+TaggedHeap::should_run_minor	method	pub(restricted)	crates/neovm-value/src/tagged/gc/pacing.rs:73	tagged::gc::pacing	BULK (PC11-M)
+TaggedHeap::rows_observation_idle	method	pub(restricted)	crates/neovm-value/src/tagged/gc/rows_observation.rs:13	tagged::gc::rows_observation	BULK (PC11-M)
+TaggedHeap::capture_rows_owned_domain	method	pub(restricted)	crates/neovm-value/src/tagged/gc/rows_observation.rs:43	tagged::gc::rows_observation	BULK (PC11-M)
+TaggedHeap::rows_dependency_in_start_domain	method	pub(restricted)	crates/neovm-value/src/tagged/gc/rows_observation.rs:62	tagged::gc::rows_observation	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/eval/rows_observation.rs:332
+SymbolSlotIndex::get	method	pub(restricted)	crates/neovm-value/src/tagged/gc/symbol_table.rs:33	tagged::gc::symbol_table	BULK (PC11-M)
+LispValueVec::mapped	method	pub(restricted)	crates/neovm-value/src/tagged/header.rs:1266	tagged::header	B1 unsafe (A5); Safety doc verbatim; callers: crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:1312; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:1325; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:2800
+LispValueVec::jit_slice_offsets	method	pub(restricted)	crates/neovm-value/src/tagged/header.rs:1277	tagged::header	PC1-D (C); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/jit_layout.rs:331; crates/neovm-core/src/emacs_core/runtime/jit/compile/jit_layout/heap.rs:125
+LispValueVec::jit_owned_probe	method	pub(restricted)	crates/neovm-value/src/tagged/header.rs:1319	tagged::header	PC1-D (C); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/jit_layout/heap.rs:131
+LispValueVec::is_owned	method	pub(restricted)	crates/neovm-value/src/tagged/header.rs:1470	tagged::header	BULK (PC11-M)
+ByteCodeSlotObjects::set	method	pub(restricted)	crates/neovm-value/src/tagged/header.rs:1976	tagged::header	BULK (PC11-M)
+GcHeader::collection_observed	method	pub(restricted)	crates/neovm-value/src/tagged/header.rs:680	tagged::header	BULK (PC11-M)
+GcHeader::NEEDS_REMEMBERING_U16	const	pub(restricted)	crates/neovm-value/src/tagged/header.rs:747	tagged::header	PC1-D (A1 associated const); callers: crates/neovm-core/src/emacs_core/runtime/jit/compile/heap_inline.rs:449
+LispCollectionRevision::changed	method	pub(restricted)	crates/neovm-value/src/tagged/mutate.rs:65	tagged::mutate	BULK (PC11-M)
+HeapMutClosureGuard::enter	method	pub(restricted)	crates/neovm-value/src/tagged/mutate.rs:96	tagged::mutate	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/text/json/mod.rs:1274; crates/neovm-core/src/emacs_core/text/json/mod.rs:1320
+PreparedRootBatch::reserve_retained	method	pub(restricted)	crates/neovm-value/src/tagged/transport/root_batch.rs:398	tagged::transport::root_batch	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:171
+PreparedRootBatch::ensure_capacity	method	pub(restricted)	crates/neovm-value/src/tagged/transport/root_batch.rs:441	tagged::transport::root_batch	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/emacs_core/runtime/eval/green/switch.rs:604
+PreparedRootBatch::finalize	method	pub(restricted)	crates/neovm-value/src/tagged/transport/root_batch.rs:463	tagged::transport::root_batch	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/green/host_service.rs:603; crates/neovm-core/src/emacs_core/runtime/eval/green/host_service.rs:688; crates/neovm-core/src/emacs_core/runtime/eval/green/switch.rs:627
+RootBatchLease::try_recycle	method	pub(restricted)	crates/neovm-value/src/tagged/transport/root_batch.rs:579	tagged::transport::root_batch	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/green/switch.rs:1110
+RootBatchLease::try_finish	method	pub(restricted)	crates/neovm-value/src/tagged/transport/root_batch.rs:664	tagged::transport::root_batch	SEAL producer (A4); callers: crates/neovm-core/src/emacs_core/runtime/eval/green/root_registry.rs:13
+SharedRoot::value_on_current_mutator	method	pub(restricted)	crates/neovm-value/src/tagged/transport/shared_root.rs:312	tagged::transport::shared_root	signed privacy TOKEN-USE (A3); callers: crates/neovm-core/src/window/mod.rs:2978; crates/neovm-core/src/window/mod.rs:2979
+TaggedValue::from_fixnum	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:419	tagged::value	PC1a (C): safe fixnum; callers: crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs:3498; crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs:3550; crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs:612; crates/neovm-core/src/emacs_core/display/window_cmds/mod.rs:646; crates/neovm-core/src/emacs_core/display/xdisp/mode_line_output.rs:31; crates/neovm-core/src/emacs_core/display/xfaces/mod.rs:2800; crates/neovm-core/src/emacs_core/editing/buffer/mod.rs:2748; crates/neovm-core/src/emacs_core/editing/buffer/mod.rs:2854 (+21 more)
+TaggedValue::from_bits	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:579	tagged::value	B/C: pub const unsafe fn; Safety = bits originate from a real Value (JIT constant-pool / nil-t / tagged fixnum / dumped word); core sites wrapped; callers: crates/neovm-core/src/buffer/buffer_text.rs:2018; crates/neovm-core/src/buffer/buffer_text.rs:2058; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:4192; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:5609; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:5656; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:5807; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:5838; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:7835 (+174 more)
+TaggedValue::as_symbol_with_pos_sym_unobserved	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:740	tagged::value	BULK (PC11-M)
+TaggedValue::as_fixnum_value	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:786	tagged::value	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/editing/buffer/mod.rs:2692; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:5732
+Fixnum::from_payload_bits	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:87	tagged::value	BULK (PC11-M)
+Fixnum::saturating	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:92	tagged::value	BULK (PC11-M)
+TaggedValue::cons_car_unobserved	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:953	tagged::value	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/cons_list.rs:32; crates/neovm-core/src/emacs_core/lisp/native/builtins/higher_order.rs:341; crates/neovm-core/src/emacs_core/lisp/native/builtins/higher_order.rs:647; crates/neovm-core/src/emacs_core/lisp/native/builtins/leaves/fast.rs:66; crates/neovm-core/src/emacs_core/lisp/native/misc/mod.rs:188; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6089; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6096; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6143 (+3 more)
+TaggedValue::cons_cdr_unobserved	method	pub(restricted)	crates/neovm-value/src/tagged/value.rs:966	tagged::value	PC1a (A2); call-site fence; callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/cons_list.rs:41; crates/neovm-core/src/emacs_core/lisp/native/builtins/higher_order.rs:349; crates/neovm-core/src/emacs_core/lisp/native/builtins/higher_order.rs:652; crates/neovm-core/src/emacs_core/lisp/native/builtins/leaves/fast.rs:59; crates/neovm-core/src/emacs_core/lisp/native/misc/mod.rs:197; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6119; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6126; crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:6155 (+3 more)
+RuntimeState::compiled_id_word	method	pub(restricted)	crates/neovm-value/src/value/jit_runtime/mod.rs:286	value::jit_runtime	BULK (PC11-M)
+RuntimeState::armed_leaf_word	method	pub(restricted)	crates/neovm-value/src/value/jit_runtime/mod.rs:295	value::jit_runtime	BULK (PC11-M)
+RuntimeState::disarm_leaf_slot	method	pub(restricted)	crates/neovm-value/src/value/jit_runtime/mod.rs:311	value::jit_runtime	BULK (PC11-M)
+HashTableMakeKeyword::from_symbol_value	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:1962	value	BULK (PC11-M)
+HashTableLiteralKey::from_symbol_value	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:1990	value	BULK (PC11-M)
+LispHashTable::new_unpopulated_with_options	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:2437	value	BULK (PC11-M)
+TaggedValue::bignum_inline	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:2876	value	BULK (PC11-M)
+TaggedValue::fixnum_from_sign_magnitude	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:2908	value	BULK (PC11-M)
+TaggedValue::make_font	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:3049	value	BULK (PC11-M)
+TaggedValue::threading_handle_id	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:3261	value	BULK (PC11-M)
+TaggedValue::make_sqlite	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:3312	value	BULK (PC11-M)
+TaggedValue::bytecode_runtime_word	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:3702	value	BULK (PC11-M)
+TaggedValue::as_font_data	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:3977	value	BULK (PC11-M)
+TaggedValue::with_hash_table_mut_inactive	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4069	value	C: pub unsafe fn; Safety text verbatim; callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/collections.rs:1364; crates/neovm-core/src/emacs_core/lisp/native/builtins/collections.rs:1556; crates/neovm-core/src/emacs_core/lisp/native/builtins/collections.rs:1609; crates/neovm-core/src/emacs_core/text/json/mod.rs:1294
+TaggedValue::with_hash_table_mut_concurrent	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4079	value	C: approved safe (mutate::with_hash_table_mut_concurrent enforces exclusion; recorded in receipt); callers: crates/neovm-core/src/emacs_core/lisp/native/builtins/collections.rs:1406; crates/neovm-core/src/emacs_core/lisp/native/builtins/collections.rs:1584; crates/neovm-core/src/emacs_core/lisp/native/builtins/collections.rs:1630; crates/neovm-core/src/emacs_core/text/json/mod.rs:711
+TaggedValue::to_eq_key	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4175	value	BULK (PC11-M)
+TaggedValue::to_equal_key_depth_swp	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4232	value	BULK (PC11-M)
+TaggedValue::memory_use_counts_snapshot	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4370	value	BULK (PC11-M)
+EqualSeenPair::new	method	pub(restricted)	crates/neovm-value/src/value/mod.rs:4552	value	BULK (PC11-M)
+LispHashTable::switch_target	method	pub(restricted)	crates/neovm-value/src/value/switch_plan.rs:288	value::switch_plan	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/vm.rs:10003; crates/neovm-core/src/emacs_core/runtime/jit/compile/dispatch.rs:3930
+LispHashTable::switch_inline_plan	method	pub(restricted)	crates/neovm-value/src/value/switch_plan.rs:368	value::switch_plan	BULK (PC11-M)
+ShiftedTextPropertySource::new	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:2438	value::text_props	BULK (PC11-M)
+TextPropertiesRef::for_each_root	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:2713	value::text_props	BULK (PC11-M)
+TextPropertyTable::from_shifted_sources	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:3055	value::text_props	BULK (PC11-M)
+TextPropertyTable::apply_property_plist_for_object_char_len	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:3200	value::text_props	BULK (PC11-M)
+TextPropertyTable::try_for_each_interval_in_char_range	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:4854	value::text_props	BULK (PC11-M)
+TextPropertyTable::try_for_each_interval_plist_in_char_range	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:4866	value::text_props	BULK (PC11-M)
+TextPropertyTable::append_source_slice_at_char_offset_with_roots	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:5046	value::text_props	B2 approved (A7); callers: crates/neovm-core/src/emacs_core/display/xdisp/mod.rs:3224
+TextPropertyTable::append_shifted_at_char_offset_with_roots	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:5111	value::text_props	BULK (PC11-M)
+TextPropertyTable::dump_intervals	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:5362	value::text_props	BULK (PC11-M)
+TextPropertyTable::from_dump	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:5375	value::text_props	BULK (PC11-M)
+TextPropertyTable::for_each_root	method	pub(restricted)	crates/neovm-value/src/value/text_props.rs:5390	value::text_props	BULK (PC11-M)
+NameId::to_raw	field-accessor	pub(crate)	crates/neovm-value/src/intern/mod.rs:254	intern	u32 id getter (B ruling)
+BytecodeErrorBacktrace	type	pub(restricted)	crates/neovm-value/src/error/bytecode_backtrace.rs:31	error::bytecode_backtrace	B1 private type promotion (A9); fields stay private
+SignalData::bytecode_error_backtrace	field-accessor	pub(crate)	crates/neovm-value/src/error/mod.rs:503	error	PC11-F getter
+SignalData::bytecode_error_backtrace_mut	field-accessor	pub(crate)	crates/neovm-value/src/error/mod.rs:503	error	PC11-F mut accessor
+SignalData::search_complete	field-accessor	pub(crate)	crates/neovm-value/src/error/mod.rs:502	error	PC11-F getter
+SignalData::search_complete_mut	field-accessor	pub(crate)	crates/neovm-value/src/error/mod.rs:502	error	PC11-F mut accessor
+SignalData::selected_resume	field-accessor	pub(crate)	crates/neovm-value/src/error/mod.rs:501	error	PC11-F getter
+SignalData::selected_resume_mut	field-accessor	pub(crate)	crates/neovm-value/src/error/mod.rs:501	error	PC11-F mut accessor
+HashTestGcInhibitAccounting::charged_bytes_at_start	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:28	hashtab	PC11-F getter
+HashTestGcInhibitAccounting::collector_threshold_at_start	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:29	hashtab	PC11-F getter
+HashTestGcInhibitAccounting::entry_percentage_scaled	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:33	hashtab	PC11-F getter
+HashTestGcInhibitAccounting::entry_threshold_bytes	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:32	hashtab	PC11-F getter
+HashTestGcInhibitAccounting::memory_full	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:35	hashtab	PC11-F getter
+HashTestGcInhibitAccounting::startup_ceiling	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:36	hashtab	PC11-F getter
+HashTestGcInhibitAccounting::threshold_overridden	field-accessor	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:34	hashtab	PC11-F getter
+OverlayData::position_handle	field-accessor	pub(crate)	crates/neovm-value/src/heap_types.rs:1697	heap_types	PC11-F getter
+OverlayData::position_handle_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types.rs:1697	heap_types	PC11-F mut accessor
+IntervalRecord	type	pub(restricted)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:100	heap_types::overlay_storage	B1 private type promotion (A9); fields stay private
+IntervalBPlusTree::records	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:286	heap_types::overlay_storage	PC11-F getter
+IntervalRecord::overlay	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:103	heap_types::overlay_storage	PC11-F getter
+CondVarPayload::name	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:537	heap_types::threading	PC11-F getter
+MutexPayload::name	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:467	heap_types::threading	PC11-F getter
+MutexPayload::ownership	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:468	heap_types::threading	PC11-F getter
+MutexPayload::ownership_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:468	heap_types::threading	PC11-F mut accessor
+ThreadChildren::blocked_remaining_forms	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:316	heap_types::threading	PC11-F getter
+ThreadChildren::blocked_remaining_forms_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:316	heap_types::threading	PC11-F mut accessor
+ThreadChildren::buffer_disposition	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:312	heap_types::threading	PC11-F getter
+ThreadChildren::buffer_disposition_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:312	heap_types::threading	PC11-F mut accessor
+ThreadChildren::error_data	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:315	heap_types::threading	PC11-F getter
+ThreadChildren::error_data_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:315	heap_types::threading	PC11-F mut accessor
+ThreadChildren::error_symbol	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:314	heap_types::threading	PC11-F getter
+ThreadChildren::error_symbol_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:314	heap_types::threading	PC11-F mut accessor
+ThreadChildren::event_object	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:313	heap_types::threading	PC11-F getter
+ThreadChildren::event_object_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:313	heap_types::threading	PC11-F mut accessor
+ThreadChildren::last_error	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:311	heap_types::threading	PC11-F getter
+ThreadChildren::last_error_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:311	heap_types::threading	PC11-F mut accessor
+ThreadChildren::result	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:310	heap_types::threading	PC11-F getter
+ThreadChildren::result_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:310	heap_types::threading	PC11-F mut accessor
+ThreadChildren::stored_events	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:317	heap_types::threading	PC11-F getter
+ThreadChildren::stored_events_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:317	heap_types::threading	PC11-F mut accessor
+ThreadNativeState::current_buffer	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:290	heap_types::threading	PC11-F getter
+ThreadNativeState::current_buffer_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:290	heap_types::threading	PC11-F mut accessor
+ThreadNativeState::join_observation	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:289	heap_types::threading	PC11-F getter
+ThreadNativeState::join_observation_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:289	heap_types::threading	PC11-F mut accessor
+ThreadNativeState::phase	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:288	heap_types::threading	PC11-F getter
+ThreadNativeState::phase_mut	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:288	heap_types::threading	PC11-F mut accessor
+ThreadPayload::children	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:327	heap_types::threading	PC11-F getter
+ThreadPayload::native	field-accessor	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:326	heap_types::threading	PC11-F getter
+BlvCacheHit::defcell	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:506	symbol	PC11-F getter
+BlvCacheHit::found	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:508	symbol	PC11-F getter
+BlvCacheHit::fwd	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:512	symbol	PC11-F getter
+BlvCacheHit::valcell	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:503	symbol	PC11-F getter
+Obarray::max_lisp_eval_depth_localized	field-accessor	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1012	symbol	PC11-F getter
+ByteCodeFunction::lazy_gnu_code	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:205	tagged::bytecode::chunk	PC11-F getter (B ruling)
+ByteCodeFunction::install_fresh_lazy_gnu_code	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:205	tagged::bytecode::chunk	PC11-F fresh install (B ruling); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:217; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:248; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:264; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:313; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:345; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:401; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:418; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:425; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:451; crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:199; crates/neovm-core/src/emacs_core/runtime/pdump/mapped_heap.rs:882
+ByteCodeFunction::ops_sealed	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:131	tagged::bytecode::chunk	PC11-F getter (B ruling)
+ByteCodeFunction::mark_ops_sealed	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:131	tagged::bytecode::chunk	f1 DENIED _mut; mark/clear setters (B ruling); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:214; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:378; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:408; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:415; crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:185; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3037; crates/neovm-core/src/emacs_core/runtime/pdump/mapped_heap.rs:820
+ByteCodeFunction::clear_ops_sealed	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:131	tagged::bytecode::chunk	f1 DENIED _mut; mark/clear setters (B ruling); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:214; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:378; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:408; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:415; crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:185; crates/neovm-core/src/emacs_core/runtime/pdump/convert.rs:3037; crates/neovm-core/src/emacs_core/runtime/pdump/mapped_heap.rs:820
+ByteCodeFunction::runtime	field-accessor	private	crates/neovm-value/src/tagged/bytecode/chunk.rs:192	tagged::bytecode::chunk	PC11-F getter
+ByteCodeFunction::RUNTIME_OFFSET	const	(new const)	crates/neovm-value/src/tagged/bytecode/chunk.rs:192	tagged::bytecode::chunk	PC11-F offset_of const (generated; private field offset, field visibility unchanged)
+ByteCodeFunction::source_id	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:127	tagged::bytecode::chunk	PC11-F getter
+ByteCodeFunction::stack_verified	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:138	tagged::bytecode::chunk	PC11-F getter (B ruling)
+ByteCodeFunction::mark_stack_verified	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:138	tagged::bytecode::chunk	f1 DENIED _mut; mark/clear setters (B ruling); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:215; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:331; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:363; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:379; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:409; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:416; crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:186; crates/neovm-core/src/emacs_core/runtime/pdump/mapped_heap.rs:858
+ByteCodeFunction::clear_stack_verified	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:138	tagged::bytecode::chunk	f1 DENIED _mut; mark/clear setters (B ruling); callers: crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:215; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:331; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:363; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:379; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:409; crates/neovm-core/src/emacs_core/runtime/bytecode/chunk.rs:416; crates/neovm-core/src/emacs_core/runtime/eval/world/function_write_hooks.rs:186; crates/neovm-core/src/emacs_core/runtime/pdump/mapped_heap.rs:858
+DecodedGnuCode::byte_offset_map	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:30	tagged::bytecode::chunk	PC11-F getter
+DecodedGnuCode::ops	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:29	tagged::bytecode::chunk	PC11-F getter
+DecodedGnuCode::stack_verified	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:31	tagged::bytecode::chunk	PC11-F getter
+ArgTemplate::field_0	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:14	tagged::bytecode::function_slots	PC11-F getter
+DynamicArglist::field_0	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:53	tagged::bytecode::function_slots	PC11-F getter
+FormalMarkers::optional	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:37	tagged::bytecode::function_slots	Copy SymId read (B ruling)
+FormalMarkers::rest	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:38	tagged::bytecode::function_slots	Copy SymId read (B ruling)
+StackParamShape::nonrest_ref	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:19	tagged::bytecode::function_slots	PC11-F getter (name collision; suffixed _ref)
+StackParamShape::required_ref	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:18	tagged::bytecode::function_slots	PC11-F getter (name collision; suffixed _ref)
+StackParamShape::rest_ref	field-accessor	pub(crate)	crates/neovm-value/src/tagged/bytecode/function_slots.rs:20	tagged::bytecode::function_slots	PC11-F getter (name collision; suffixed _ref)
+CondVarObj::payload	field-accessor	pub(crate)	crates/neovm-value/src/tagged/header.rs:2254	tagged::header	PC11-F getter
+MutexObj::payload	field-accessor	pub(crate)	crates/neovm-value/src/tagged/header.rs:2233	tagged::header	PC11-F getter
+ThreadObj::payload	field-accessor	pub(crate)	crates/neovm-value/src/tagged/header.rs:2212	tagged::header	PC11-F getter
+BytecodeInteractiveProbe::doc_form	field-accessor	pub(crate)	crates/neovm-value/src/value/mod.rs:357	value	PC11-F getter
+BytecodeInteractiveProbe::interactive	field-accessor	pub(crate)	crates/neovm-value/src/value/mod.rs:356	value	PC11-F getter
+BytecodeInteractiveProbe::slot_count	field-accessor	pub(crate)	crates/neovm-value/src/value/mod.rs:355	value	PC11-F getter
+FeedbackVec::slots_ref	field-accessor	pub(crate)	crates/neovm-value/src/value/jit_runtime/mod.rs:75	value::jit_runtime	PC11-F getter (name collision; suffixed _ref)
+RuntimeState::aot_prewarmed_ref	field-accessor	pub(crate)	crates/neovm-value/src/value/jit_runtime/mod.rs:129	value::jit_runtime	PC11-F getter
+RuntimeState::aot_retiered_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:180	value::jit_runtime	PC11-F getter
+RuntimeState::AOT_RETIERED_OFFSET	const	(new const)	crates/neovm-value/src/value/jit_runtime/mod.rs:180	value::jit_runtime	PC11-F offset_of const (generated; private field offset, field visibility unchanged)
+RuntimeState::feedback_ref	field-accessor	pub(crate)	crates/neovm-value/src/value/jit_runtime/mod.rs:112	value::jit_runtime	PC11-F getter
+RuntimeState::heat_ref	field-accessor	pub(crate)	crates/neovm-value/src/value/jit_runtime/mod.rs:86	value::jit_runtime	PC11-F getter
+RuntimeState::hof_caller_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:195	value::jit_runtime	PC11-F getter
+RuntimeState::native_rejected_epoch_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:89	value::jit_runtime	PC11-F getter
+RuntimeState::numeric_feedback_consumed_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:136	value::jit_runtime	PC11-F getter
+RuntimeState::patched_prefix_ref	field-accessor	pub(crate)	crates/neovm-value/src/value/jit_runtime/mod.rs:159	value::jit_runtime	PC11-F getter
+RuntimeState::profit_deferred_heat_ref	field-accessor	pub(crate)	crates/neovm-value/src/value/jit_runtime/mod.rs:100	value::jit_runtime	PC11-F getter
+RuntimeState::reopt_count_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:171	value::jit_runtime	PC11-F getter
+RuntimeState::reopt_level_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:186	value::jit_runtime	PC11-F getter
+RuntimeState::t2_reopts_ref	field-accessor	private	crates/neovm-value/src/value/jit_runtime/mod.rs:175	value::jit_runtime	PC11-F getter
+PropertyInterval::key_order	field-accessor	pub(crate)	crates/neovm-value/src/value/text_props.rs:63	value::text_props	PC11-F getter
+ByteCodeFunction::ops_sealed_ptr	field-accessor	(new fn)	crates/neovm-value/src/tagged/bytecode/chunk.rs:643	tagged::bytecode::chunk	PC11-F raw place accessor (addr_of_mut! site mapped_heap.rs:820); unsafe ptr accessor, field visibility unchanged
+IntervalKey	type	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:83	heap_types::overlay_storage	B1 private type promotion (A9); trait associated type in the promoted IntervalRecord interface; fields stay private
