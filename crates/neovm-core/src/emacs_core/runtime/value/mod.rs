@@ -5518,7 +5518,240 @@ const LIST_LENGTH_SHORT_LIMIT: usize = 16;
 
 impl fmt::Display for TaggedValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", super::print::print_value(self))
+        display_hook::format_value(self, f)
+    }
+}
+
+/// One-time formatting table for `Display for TaggedValue`.
+///
+/// `TaggedValue` moves to the value crate while the Lisp printer (and the
+/// symbol names and signal payloads it reads) stays in `neovm-core`. The
+/// upper crate installs its one formatting algorithm through this typed
+/// table at the two install seams, evaluator construction and image restore;
+/// until then `Display` renders the distinguishable placeholder `<Value>`
+/// and never panics. No print logic crosses the boundary, only this function
+/// pointer.
+///
+/// Seal (PC2): the table field is private and the only constructor is
+/// [`ValueDisplayFormatter::new`]; installing is `unsafe` with the seam
+/// contract; re-installing the same table is idempotent, while a different
+/// table is refused with [`DisplayFormatterInstallError`] instead of being
+/// ignored. Exactly two production sites install it, `Context::new_inner`
+/// and `Context::from_dump`, enforced by
+/// `architecture_value_display_hook_guard_test`.
+pub mod display_hook {
+    use super::TaggedValue;
+    use std::fmt::{self, Formatter};
+    use std::ptr::fn_addr_eq;
+    use std::sync::OnceLock;
+
+    /// The evaluator's `TaggedValue` formatting algorithm.
+    ///
+    /// The field is private so a table can only be built through
+    /// [`ValueDisplayFormatter::new`]; forging one around an arbitrary
+    /// function is a compile error.
+    #[derive(Clone, Copy)]
+    pub struct ValueDisplayFormatter {
+        fmt: fn(&TaggedValue, &mut Formatter<'_>) -> fmt::Result,
+    }
+
+    impl ValueDisplayFormatter {
+        /// Build the table around the upper printer's algorithm.
+        pub const fn new(fmt: fn(&TaggedValue, &mut Formatter<'_>) -> fmt::Result) -> Self {
+            Self { fmt }
+        }
+
+        #[inline]
+        fn format(&self, value: &TaggedValue, f: &mut Formatter<'_>) -> fmt::Result {
+            (self.fmt)(value, f)
+        }
+    }
+
+    /// Why an install was refused.
+    ///
+    /// A different table can only come from a second, conflicting installer,
+    /// which the unsafe install contract forbids. The first table stays in
+    /// effect and the caller must treat the refusal as an error rather than
+    /// ignore it.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum DisplayFormatterInstallError {
+        /// A different formatting table already owns the slot.
+        DifferentTable,
+    }
+
+    static VALUE_DISPLAY_FORMATTER: OnceLock<ValueDisplayFormatter> = OnceLock::new();
+
+    /// Install the evaluator's formatter.
+    ///
+    /// Re-installing the same table is idempotent (every `Context`
+    /// construction and every image restore calls it); a different table is
+    /// refused.
+    ///
+    /// # Safety
+    ///
+    /// The caller must be one of the two one-time install seams, evaluator
+    /// construction (`Context::new_inner`) or image restore
+    /// (`Context::from_dump`). The formatter must not call
+    /// `Display for TaggedValue` (it would recurse); the upper printer
+    /// satisfies that because it formats through `print_value`.
+    pub unsafe fn install_value_display_formatter(
+        formatter: ValueDisplayFormatter,
+    ) -> Result<(), DisplayFormatterInstallError> {
+        install_once(&VALUE_DISPLAY_FORMATTER, formatter)
+    }
+
+    /// Install into `slot`: the same table is idempotent, a different one is
+    /// refused. Split out so the refusal path is testable without touching
+    /// the process-global table.
+    fn install_once(
+        slot: &OnceLock<ValueDisplayFormatter>,
+        formatter: ValueDisplayFormatter,
+    ) -> Result<(), DisplayFormatterInstallError> {
+        // `OnceLock::set` hands back the *offered* table on failure, not the
+        // installed one, so the installed table is read from the cell.
+        if let Some(existing) = slot.get() {
+            return if fn_addr_eq(existing.fmt, formatter.fmt) {
+                Ok(())
+            } else {
+                Err(DisplayFormatterInstallError::DifferentTable)
+            };
+        }
+        match slot.set(formatter) {
+            Ok(()) => Ok(()),
+            // Lost a race with another installer: accept only the same table.
+            Err(_) => match slot.get() {
+                Some(existing) if fn_addr_eq(existing.fmt, formatter.fmt) => Ok(()),
+                _ => Err(DisplayFormatterInstallError::DifferentTable),
+            },
+        }
+    }
+
+    /// Whether an evaluator has installed the formatter. Read-only
+    /// observation for the install-seam tests; the hook never goes away.
+    #[inline]
+    pub fn value_display_formatter_installed() -> bool {
+        VALUE_DISPLAY_FORMATTER.get().is_some()
+    }
+
+    /// Format `value` for `Display`: the installed table when there is one,
+    /// the signed placeholder `<Value>` before any evaluator exists.
+    #[inline]
+    pub(super) fn format_value(value: &TaggedValue, f: &mut Formatter<'_>) -> fmt::Result {
+        format_with(value, f, VALUE_DISPLAY_FORMATTER.get())
+    }
+
+    /// Format with an explicitly supplied table so the placeholder and the
+    /// delegation branch are both testable without process-global state.
+    fn format_with(
+        value: &TaggedValue,
+        f: &mut Formatter<'_>,
+        table: Option<&ValueDisplayFormatter>,
+    ) -> fmt::Result {
+        match table {
+            Some(table) => table.format(value, f),
+            None => f.write_str("<Value>"),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::Value;
+        use super::{
+            DisplayFormatterInstallError, ValueDisplayFormatter, format_with, install_once,
+        };
+        use std::fmt::{self, Formatter};
+        use std::sync::OnceLock;
+
+        struct Probe<'a> {
+            value: &'a Value,
+            table: Option<&'a ValueDisplayFormatter>,
+        }
+
+        impl fmt::Display for Probe<'_> {
+            fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+                format_with(self.value, formatter, self.table)
+            }
+        }
+
+        fn hooked(_value: &Value, formatter: &mut Formatter<'_>) -> fmt::Result {
+            formatter.write_str("HOOKED")
+        }
+
+        fn other(_value: &Value, formatter: &mut Formatter<'_>) -> fmt::Result {
+            formatter.write_str("OTHER")
+        }
+
+        #[test]
+        fn uninstalled_fallback_is_the_signed_placeholder() {
+            assert_eq!(
+                format!(
+                    "{}",
+                    Probe {
+                        value: &Value::NIL,
+                        table: None
+                    }
+                ),
+                "<Value>"
+            );
+        }
+
+        #[test]
+        fn installed_table_receives_the_value_and_formatter() {
+            let table = ValueDisplayFormatter::new(hooked);
+            assert_eq!(
+                format!(
+                    "{}",
+                    Probe {
+                        value: &Value::NIL,
+                        table: Some(&table)
+                    }
+                ),
+                "HOOKED"
+            );
+        }
+
+        #[test]
+        fn distinct_formatters_have_distinct_addresses() {
+            let first: fn(&Value, &mut Formatter<'_>) -> fmt::Result = hooked;
+            let second: fn(&Value, &mut Formatter<'_>) -> fmt::Result = other;
+            assert!(
+                !std::ptr::fn_addr_eq(first, second),
+                "the refusal test needs distinct formatters: first={:p} second={:p}",
+                first as *const (),
+                second as *const ()
+            );
+        }
+
+        #[test]
+        fn reinstalling_the_same_table_is_idempotent() {
+            let slot = OnceLock::new();
+            let table = ValueDisplayFormatter::new(hooked);
+            assert_eq!(install_once(&slot, table), Ok(()));
+            assert_eq!(install_once(&slot, table), Ok(()));
+        }
+
+        #[test]
+        fn a_different_table_is_refused_and_the_first_one_stays() {
+            let slot = OnceLock::new();
+            assert_eq!(
+                install_once(&slot, ValueDisplayFormatter::new(hooked)),
+                Ok(())
+            );
+            assert_eq!(
+                install_once(&slot, ValueDisplayFormatter::new(other)),
+                Err(DisplayFormatterInstallError::DifferentTable)
+            );
+            assert_eq!(
+                format!(
+                    "{}",
+                    Probe {
+                        value: &Value::NIL,
+                        table: slot.get()
+                    }
+                ),
+                "HOOKED"
+            );
+        }
     }
 }
 

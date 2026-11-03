@@ -520,6 +520,10 @@ mod architecture_debug_assert_side_effect_guard_test;
 mod architecture_leaf_slot_writer_guard_test;
 
 #[cfg(test)]
+#[path = "tests/architecture/value_display_hook_guard_test.rs"]
+mod architecture_value_display_hook_guard_test;
+
+#[cfg(test)]
 #[path = "tests/architecture/tagged_compile_seam_guard_test.rs"]
 mod architecture_tagged_compile_seam_guard_test;
 

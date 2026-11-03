@@ -3172,6 +3172,46 @@ pub fn print_value_with_options(value: &Value, options: PrintOptions) -> String 
     print_value_stateful(value, options)
 }
 
+/// The value layer's `Display for TaggedValue` algorithm.
+///
+/// This is the historical impl body verbatim: the value layer owns the type
+/// and the typed install table, and this printer supplies the one formatting
+/// algorithm through it. It must not format through `Display for
+/// TaggedValue`; it calls `print_value` directly, so delegation cannot
+/// recurse.
+fn format_value_for_display(value: &Value, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", print_value(value))
+}
+
+/// Install the value layer's `Display` formatter beside the other one-time
+/// hooks.
+///
+/// The lower installer is `unsafe` and returns a typed refusal when a
+/// different table already owns the slot. That refusal can only mean the
+/// seal contract was violated (the two seams and this wrapper install the
+/// same function), so it is fatal here rather than silently ignored.
+///
+/// # Panics
+///
+/// If a different formatter table was installed before an evaluator was
+/// constructed.
+pub(crate) fn install_value_display_format_hook() {
+    // SAFETY: called only from the two one-time install seams,
+    // `Context::new_inner` and `Context::from_dump`, exactly like the
+    // scratch-root hooks; `format_value_for_display` never formats through
+    // `Display for TaggedValue`, so the delegation cannot recurse.
+    let result = unsafe {
+        crate::emacs_core::value::display_hook::install_value_display_formatter(
+            crate::emacs_core::value::display_hook::ValueDisplayFormatter::new(
+                format_value_for_display,
+            ),
+        )
+    };
+    if let Err(refusal) = result {
+        panic!("value Display formatter install refused: {refusal:?}");
+    }
+}
+
 /// Print a `Value` as a Lisp byte sequence.
 ///
 /// This preserves non-UTF-8 byte payloads encoded via NeoVM string sentinels.

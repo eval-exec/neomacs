@@ -2384,6 +2384,9 @@ impl Context {
         // The value layer owns EvalError's Display table; the printer installs
         // its one formatting algorithm here, at the same one-time hooks.
         crate::emacs_core::print::install_eval_error_format_hook();
+        // The value layer also owns TaggedValue's Display table; the printer
+        // installs its one formatting algorithm at the same seam.
+        crate::emacs_core::print::install_value_display_format_hook();
         // The sqlite module's object finalizer travels through the same table
         // mechanism; the handle-construction path re-installs it idempotently
         // before the first SqliteObj exists.
