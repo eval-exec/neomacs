@@ -39,12 +39,12 @@ use super::undo;
 #[cfg(test)]
 use super::visited_file_modtime::BaseVisitedFileModtime;
 use super::visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
-use crate::emacs_core::eval::world::WorldLease;
 use crate::emacs_core::intern::{SymId, WellKnown, intern};
 use crate::emacs_core::symbol::SetInternalAlist;
 use crate::emacs_core::value::{RuntimeBindingValue, Value, ValueKind, eq_value};
 use crate::gc_trace::GcTrace;
 use crate::window::WindowId;
+use neovm_value::cold_retained::ColdWorldLease;
 use rustc_hash::FxHashMap;
 
 #[cfg(test)]
@@ -5860,15 +5860,24 @@ pub struct BufferStorage {
 }
 
 /// Cold ownership is separate from the common hot storage pointer.
+///
+/// `Leased` carries the two World-backed states as one variant: a live
+/// World view (`detached: None`) and a detached clone with its own
+/// storage copy (`detached: Some`). The lease is the evaluator's opaque
+/// [`ColdWorldLease`] — allocation lifetime only; edit never sees the
+/// World.
 #[deny(clippy::wildcard_enum_match_arm)]
 enum BufferBacking {
     Standalone(Box<UnsafeCell<BufferStorage>>),
-    World(WorldLease),
-    DetachedClone {
-        _storage: Box<UnsafeCell<BufferStorage>>,
-        lease: WorldLease,
+    Leased {
+        lease: ColdWorldLease,
+        detached: Option<Box<UnsafeCell<BufferStorage>>>,
     },
 }
+// The pre-`ColdWorldLease` three-variant enum measured 24 bytes (3 words,
+// niche-packed) on 6bfd9a2ea7; the erased-lease restructure must not grow
+// `BufferManager` (and therefore `Context`, pinned by context_layout_test).
+static_assertions::assert_eq_size!(BufferBacking, [usize; 3]);
 
 /// Owner-private selection transported only during closed World construction.
 #[derive(Debug)]
@@ -5933,11 +5942,14 @@ impl TryFrom<BufferManager> for OwnedBufferStorageParts {
                 },
             }),
             BufferManager {
-                backing: BufferBacking::World(_),
+                backing: BufferBacking::Leased { detached: None, .. },
                 ..
             } => Err(BufferStorageOwnershipError::WorldBacked),
             BufferManager {
-                backing: BufferBacking::DetachedClone { .. },
+                backing:
+                    BufferBacking::Leased {
+                        detached: Some(_), ..
+                    },
                 ..
             } => Err(BufferStorageOwnershipError::DetachedFromWorld),
         }
@@ -5999,8 +6011,10 @@ impl fmt::Debug for BufferBacking {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Standalone(_) => f.write_str("Standalone"),
-            Self::World(_) => f.write_str("World"),
-            Self::DetachedClone { .. } => f.write_str("DetachedClone"),
+            Self::Leased { detached: None, .. } => f.write_str("World"),
+            Self::Leased {
+                detached: Some(_), ..
+            } => f.write_str("DetachedClone"),
         }
     }
 }
@@ -6092,12 +6106,12 @@ impl Clone for BufferManager {
         let storage_ptr = unsafe { NonNull::new_unchecked(storage.get()) };
         let backing = match &self.backing {
             BufferBacking::Standalone(_) => BufferBacking::Standalone(storage),
-            BufferBacking::World(lease) | BufferBacking::DetachedClone { lease, .. } => {
-                BufferBacking::DetachedClone {
-                    _storage: storage,
-                    lease: lease.duplicate_for_view(),
-                }
-            }
+            // A clone always detaches: it owns its own storage copy, while
+            // the lease keeps the originating World's allocation alive.
+            BufferBacking::Leased { lease, .. } => BufferBacking::Leased {
+                lease: lease.duplicate_for_view(),
+                detached: Some(storage),
+            },
         };
         let mut clone = Self {
             storage_ptr,
@@ -6343,11 +6357,7 @@ impl BufferManager {
                 },
             )),
             retained_view @ Self {
-                backing: BufferBacking::World(_),
-                ..
-            }
-            | retained_view @ Self {
-                backing: BufferBacking::DetachedClone { .. },
+                backing: BufferBacking::Leased { .. },
                 ..
             } => Err(retained_view),
         }
@@ -6362,14 +6372,17 @@ impl BufferManager {
     pub(crate) unsafe fn from_world_parts(
         storage_ptr: NonNull<BufferStorage>,
         selection: BufferSelection,
-        lease: WorldLease,
+        lease: ColdWorldLease,
     ) -> Self {
         let mut manager = Self {
             storage_ptr,
             current: None,
             current_raw: 0,
             current_ptr: None,
-            backing: BufferBacking::World(lease),
+            backing: BufferBacking::Leased {
+                lease,
+                detached: None,
+            },
         };
         manager.set_current_id(selection.current);
         manager

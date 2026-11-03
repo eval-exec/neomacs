@@ -15,6 +15,9 @@ BC_FLAG_HAS_INTERACTIVE	const	pub(crate)	crates/neovm-value/src/tagged/pdump_ima
 BC_FLAG_HAS_REST	const	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:125	tagged::pdump_image	bulk
 BC_FLAG_LEXICAL	const	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:123	tagged::pdump_image	bulk
 BC_FLAG_OPS_SEALED	const	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:124	tagged::pdump_image	bulk
+ColdRetained	trait	(new)	crates/neovm-value/src/cold_retained.rs:22	cold_retained	stage-3 W ruling (PEER-RULING-STAGE3 addendum 22:1xZ): marker trait, no methods/Any/downcast; sole impl ColdRetained for World stays eval-side (runtime/eval/world.rs); edit reaches only ColdWorldLease
+ColdWorldLease	struct	(new)	crates/neovm-value/src/cold_retained.rs:27	cold_retained	stage-3 W ruling: !Send/!Sync/!Clone + assert_eq_size [usize;2]; Debug prints owners; duplicate_for_view #[cold] = Arc::clone (edit caller buffer/buffer.rs Clone); BufferBacking size-neutral vs 6bfd9a2ea7 (assert_eq_size 3 words)
+ColdWorldLease::from_erased	method	(new ctor)	crates/neovm-value/src/cold_retained.rs:44	cold_retained	stage-3 W ruling: SEAL producer; exact callers (the 2 eval mint paths): WorldLease::erase (runtime/eval/world.rs) -> publish_views -> BufferManager::from_world_parts, fed by construct.rs WorldStorageBuilder::build and green_owner.rs owner_views; unsizing coercion of the same Arc (strong count shared)
 BarrierWindow	struct	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:122	tagged::gc	bulk
 BlvCacheHit	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:488	emacs_core::symbol	bulk
 BlvPtr	struct	pub(crate)	crates/neovm-value/src/symbol/cell.rs:298	emacs_core::symbol	bulk

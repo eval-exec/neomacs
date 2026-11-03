@@ -115,10 +115,19 @@ fn selection_is_rederived_after_swap_replaces_a_live_box() {
 #[test]
 fn world_installation_reuses_the_existing_storage_allocation() {
     let context = Context::new();
-    assert!(matches!(context.buffers.backing, BufferBacking::World(_)));
+    assert!(matches!(
+        context.buffers.backing,
+        BufferBacking::Leased { detached: None, .. }
+    ));
     assert_selection_matches_storage(&context.buffers);
     let clone = context.buffers.clone();
-    assert!(matches!(clone.backing, BufferBacking::DetachedClone { .. }));
+    assert!(matches!(
+        clone.backing,
+        BufferBacking::Leased {
+            detached: Some(_),
+            ..
+        }
+    ));
     assert_selection_matches_storage(&clone);
     assert_ne!(clone.storage_ptr, context.buffers.storage_ptr);
 }
@@ -264,7 +273,10 @@ fn owned_parts_adapter_rejects_both_runtime_and_detached_world_views() {
 #[test]
 fn minimal_runtime_keeps_buffers_in_its_world_allocation() {
     let context = Context::new_minimal_vm_harness();
-    assert!(matches!(context.buffers.backing, BufferBacking::World(_)));
+    assert!(matches!(
+        context.buffers.backing,
+        BufferBacking::Leased { detached: None, .. }
+    ));
     assert_selection_matches_storage(&context.buffers);
     assert_eq!(context.buffers.buffer_list().len(), 1);
 }
@@ -276,7 +288,10 @@ fn cold_reset_retires_selection_and_preserves_the_storage_address() {
     let temporary = context.buffers.create_buffer("*before-minimal-reset*");
     assert!(context.buffers.switch_current(temporary));
     context.buffers.reset_for_minimal_runtime();
-    assert!(matches!(context.buffers.backing, BufferBacking::World(_)));
+    assert!(matches!(
+        context.buffers.backing,
+        BufferBacking::Leased { detached: None, .. }
+    ));
     assert_eq!(context.buffers.storage_ptr, pointer);
     assert_eq!(context.buffers.buffer_list().len(), 1);
     assert_eq!(

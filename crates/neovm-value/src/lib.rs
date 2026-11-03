@@ -7,6 +7,7 @@
 pub mod alloc;
 pub mod boolvec;
 pub mod chartab;
+pub mod cold_retained;
 pub mod emacs_char;
 pub mod error;
 pub mod errors;

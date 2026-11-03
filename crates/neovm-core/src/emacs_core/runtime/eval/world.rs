@@ -15,6 +15,7 @@ use crate::emacs_core::symbol::{
     RevealedProjection, SetInternalAlist, SetInternalBind,
 };
 use crate::heap_types::LispString;
+use neovm_value::cold_retained::{ColdRetained, ColdWorldLease};
 use std::cell::{Cell, UnsafeCell};
 use std::fmt;
 use std::marker::PhantomData;
@@ -104,6 +105,11 @@ impl fmt::Debug for World {
 }
 static_assertions::assert_not_impl_any!(World: Send, Sync);
 
+/// The World is an opaque cold allocation below this point (stage-3 W
+/// ruling): edit's `BufferBacking` retains it only through
+/// [`ColdWorldLease`], which grants no reach back.
+impl ColdRetained for World {}
+
 /// Allocation lifetime, never mutator authority or Lisp-object reachability.
 /// Duplication and destruction occur only at cold ownership boundaries.
 pub(crate) struct WorldLease(Arc<World>);
@@ -133,6 +139,15 @@ impl WorldLease {
     #[cold]
     pub(crate) fn duplicate_for_view(&self) -> Self {
         Self(Arc::clone(&self.0))
+    }
+
+    /// Erase the concrete World, yielding the cold token edit stores. An
+    /// unsizing coercion of the SAME `Arc`, so the strong count is shared
+    /// unchanged: `into_exclusive` still reports [`OutstandingWorldViews`]
+    /// while any World-backed or detached-clone buffer view is alive.
+    #[cold]
+    pub(crate) fn erase(self) -> ColdWorldLease {
+        ColdWorldLease::from_erased(self.0)
     }
 
     #[cold]
@@ -1226,7 +1241,7 @@ impl WorldStorageBuilder {
                 BufferManager::from_world_parts(
                     cell_ptr(&lease.0.buffers),
                     selection,
-                    lease.duplicate_for_view(),
+                    lease.duplicate_for_view().erase(),
                 )
             },
         }
