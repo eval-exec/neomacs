@@ -9,7 +9,7 @@
 // GNU Emacs seeds the default `char-width-table` from
 // `lisp/international/characters.el`.  Keep the built-in fallback aligned with
 // that default table rather than maintaining an ad hoc set of wide ranges.
-pub(crate) const GNU_DEFAULT_WIDE_RANGES: &[(u32, u32)] = &[
+pub const GNU_DEFAULT_WIDE_RANGES: &[(u32, u32)] = &[
     (0x1100, 0x115F),
     (0x231A, 0x231B),
     (0x2329, 0x232A),
@@ -152,7 +152,7 @@ pub(crate) const GNU_DEFAULT_WIDE_RANGES: &[(u32, u32)] = &[
 // the authoritative default char-width-table entry=0 set used by
 // GNU Emacs. Must stay sorted ascending by `start` for the binary
 // search in `codepoint_in_sorted_ranges` to work.
-pub(crate) const ZERO_WIDTH_RANGES: &[(u32, u32)] = &[
+pub const ZERO_WIDTH_RANGES: &[(u32, u32)] = &[
     (0x0300, 0x036F),
     (0x0483, 0x0489),
     (0x0591, 0x05BD),
