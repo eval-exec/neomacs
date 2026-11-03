@@ -375,7 +375,8 @@ fn p3sym_c6_keeper_foreign_world_and_backing_refuse_before_copy() {
 
 #[test]
 fn p3sym_c6_keeper_root_source_guard_test() {
-    let world = include_str!("../../../../../../src/emacs_core/runtime/eval/world/parallel_roots.rs");
+    let world =
+        include_str!("../../../../../../src/emacs_core/runtime/eval/world/parallel_roots.rs");
     let start = world
         .find("pub(crate) fn collect_parallel_world_roots(")
         .unwrap();
@@ -406,7 +407,9 @@ fn p3sym_c6_keeper_root_source_guard_test() {
         );
     }
     let bridge = include_str!("../../../../../../../neovm-value/src/symbol/parallel/roots.rs");
-    let receiver = include_str!("../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/roots.rs");
+    let receiver = include_str!(
+        "../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/roots.rs"
+    );
     for forbidden in [
         "thread_local!",
         "SEED_SKIP_OBARRAY_SYMBOL_CELLS",

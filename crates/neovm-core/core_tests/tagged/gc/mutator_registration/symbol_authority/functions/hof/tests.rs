@@ -395,7 +395,9 @@ fn nmjit_n4_hof_guard_native_registration_invalidates_receipt() {
 
 #[test]
 fn nmjit_n4_hof_guard_source_guard_test() {
-    let source = include_str!("../../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/hof.rs");
+    let source = include_str!(
+        "../../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/hof.rs"
+    );
     let running = source.split_once("impl<'era> RunAccess").unwrap().1;
     assert_eq!(
         running.matches(".symbol_ref(").count(),
@@ -418,7 +420,10 @@ fn nmjit_n4_hof_guard_source_guard_test() {
         );
     }
     assert_eq!(running.matches(".registration_clock.snapshot()").count(), 1);
-    let clock = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../neovm-value/src/tagged/gc/function_write_hooks.rs"));
+    let clock = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../neovm-value/src/tagged/gc/function_write_hooks.rs"
+    ));
     assert!(clock.contains("self.0.load(Ordering::Acquire)"));
     assert!(
         !clock.contains("AtomicU64::new"),

@@ -189,7 +189,9 @@ fn nmjit_n4_cell_read_stale_symbol_refuses_without_changing_home() {
 
 #[test]
 fn nmjit_n4_cell_read_sealed_home_source_guard_test() {
-    let source = include_str!("../../../../../../../../neovm-value/src/tagged/gc/mutator_registration/execution/read.rs");
+    let source = include_str!(
+        "../../../../../../../../neovm-value/src/tagged/gc/mutator_registration/execution/read.rs"
+    );
     assert!(source.contains("self.result.clone()"));
     for primitive in ["sym_value_into", "sym_boundp_into", "sym_function_into"] {
         assert!(source.contains(primitive));
