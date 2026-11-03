@@ -4111,15 +4111,32 @@ pub(crate) struct VmRootScopeState {
     saved_vm_root_frame_len: Option<usize>,
 }
 
+/// Opaque specpdl depth token for the edit host (PEER-RULING-STAGE3 C3):
+/// edit code counts dynamic bindings only through
+/// `EditHost::specpdl_index`, never a raw `usize`, so it can neither
+/// mint a count nor do arithmetic on one.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SpecpdlRootScopeState {
+#[doc(hidden)]
+pub struct SpecpdlCount {
+    count: usize,
+}
+
+/// Opaque GcRoot suffix mark for the edit host (PEER-RULING-STAGE3 C3):
+/// minted only by `EditHost::save_specpdl_roots`, consumed only by
+/// `EditHost::restore_specpdl_roots`.
+#[derive(Clone, Copy, Debug)]
+#[doc(hidden)]
+pub struct SpecpdlRootScopeState {
     saved_len: usize,
 }
 
 /// Handle to an updatable specpdl GcRoot entry; see
-/// [`Context::push_specpdl_root_slot`].
+/// [`Context::push_specpdl_root_slot`]. Opaque to edit code
+/// (PEER-RULING-STAGE3 C3): minted by `EditHost::push_specpdl_root_slot`,
+/// re-pointed by `EditHost::set_specpdl_root_slot`.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SpecpdlRootSlot {
+#[doc(hidden)]
+pub struct SpecpdlRootSlot {
     index: usize,
 }
 

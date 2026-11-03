@@ -15,6 +15,7 @@ use crate::buffer::{
     Buffer, BufferManager, CharLen, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
     TextChange, TextEditRange, TextExtent,
 };
+use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::emacs_core::eval::VariableView;
@@ -633,8 +634,13 @@ fn run_before_change_hooks(
         .buffers
         .get(current_id)
         .is_some_and(|buf| buf.modified_state_value().is_nil());
-    let specpdl_count = ctx.specpdl.len();
-    ctx.try_specbind_or_unwind_to(specpdl_count, inhibit_modification_hooks_symbol(), Value::T)?;
+    let specpdl_count = EditHost::specpdl_index(ctx);
+    EditHost::try_specbind_or_unwind_to(
+        ctx,
+        specpdl_count,
+        inhibit_modification_hooks_symbol(),
+        Value::T,
+    )?;
     let result = (|| -> Result<(), Flow> {
         if run_first_change {
             run_named_hook_without_reset(ctx, first_change_hook_symbol(), &[])?;
@@ -651,8 +657,7 @@ fn run_before_change_hooks(
 
         Ok(())
     })();
-    ctx.unbind_to_with_result(specpdl_count, result.map(|()| Value::NIL))
-        .map(|_| ())
+    EditHost::unbind_to_with_result(ctx, specpdl_count, result.map(|()| Value::NIL)).map(|_| ())
 }
 
 /// Run the before-change protocol for an edit whose range the caller will
@@ -911,15 +916,22 @@ fn signal_after_change_with_kind(
     let saved_interval_insert_behind_hooks = ctx.edit.interval_insert_behind_hooks;
     let saved_interval_insert_in_front_hooks = ctx.edit.interval_insert_in_front_hooks;
 
-    let specpdl_count = ctx.specpdl.len();
+    let specpdl_count = EditHost::specpdl_index(ctx);
     // The saved hook lists live only in the Rust locals above while
     // after-change-functions run arbitrary Lisp; if a hook clears the
     // context fields (their previous root), a GC frees the lists before
     // they are reinstated below. GcRoot entries unwind with the specpdl,
-    // so unbind_to(specpdl_count) pops them with the specbind.
-    ctx.push_specpdl_root(saved_interval_insert_behind_hooks);
-    ctx.push_specpdl_root(saved_interval_insert_in_front_hooks);
-    ctx.try_specbind_or_unwind_to(specpdl_count, inhibit_modification_hooks_symbol(), Value::T)?;
+    // so unbind_to(specpdl_count) pops them with the specbind. Roots are
+    // pushed BEFORE the specbind at one count — the order
+    // PEER-RULING-STAGE3 C3 pins ("that order is kept exactly").
+    EditHost::push_specpdl_root(ctx, saved_interval_insert_behind_hooks);
+    EditHost::push_specpdl_root(ctx, saved_interval_insert_in_front_hooks);
+    EditHost::try_specbind_or_unwind_to(
+        ctx,
+        specpdl_count,
+        inhibit_modification_hooks_symbol(),
+        Value::T,
+    )?;
     let result = (|| -> Result<(), Flow> {
         run_named_hook_reset_on_error(ctx, after_change_functions_symbol(), &hook_args)?;
 
@@ -945,8 +957,7 @@ fn signal_after_change_with_kind(
 
         Ok(())
     })();
-    ctx.unbind_to_with_result(specpdl_count, result.map(|()| Value::NIL))
-        .map(|_| ())
+    EditHost::unbind_to_with_result(ctx, specpdl_count, result.map(|()| Value::NIL)).map(|_| ())
 }
 
 pub(crate) fn signal_after_text_change(
@@ -1387,10 +1398,10 @@ fn run_recorded_overlay_change_hooks(
     if hooks.is_empty() {
         return Ok(());
     }
-    let roots = ctx.save_specpdl_roots();
+    let roots = EditHost::save_specpdl_roots(ctx);
     for hook in &hooks {
-        ctx.push_specpdl_root(hook.hook_list);
-        ctx.push_specpdl_root(hook.overlay);
+        EditHost::push_specpdl_root(ctx, hook.hook_list);
+        EditHost::push_specpdl_root(ctx, hook.overlay);
     }
     let apply_result = (|| -> Result<(), Flow> {
         for hook in &hooks {
@@ -1409,7 +1420,7 @@ fn run_recorded_overlay_change_hooks(
         }
         Ok(())
     })();
-    ctx.restore_specpdl_roots(roots);
+    EditHost::restore_specpdl_roots(ctx, roots);
     apply_result
 }
 
@@ -1425,8 +1436,11 @@ fn overlay_belongs_to_current_buffer(
         .is_some_and(|data| data.buffer == Some(current_id))
 }
 
-fn call_overlay_hook_list(
-    ctx: &mut crate::emacs_core::eval::Context,
+/// C3 EditHost conversion: the whole body needs only the specpdl-root
+/// API and `apply`, so it names no evaluator type (`H = Context` at
+/// every caller today).
+fn call_overlay_hook_list<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     hook_list: Value,
     overlay: Value,
     after_flag: Value,
@@ -1439,12 +1453,12 @@ fn call_overlay_hook_list(
     // freeing the conses this walk still reads. Root the moving cursor in a
     // single updatable slot: marking is transitive, so the remaining chain
     // survives exactly as GNU's conservatively-scanned tail local does.
-    let root_scope = ctx.save_specpdl_roots();
-    let cursor_slot = ctx.push_specpdl_root_slot(Value::NIL);
+    let root_scope = host.save_specpdl_roots();
+    let cursor_slot = host.push_specpdl_root_slot(Value::NIL);
     let result = (|| -> Result<(), Flow> {
         let mut cursor = hook_list;
         while cursor.is_cons() {
-            ctx.set_specpdl_root_slot(&cursor_slot, cursor);
+            host.set_specpdl_root_slot(&cursor_slot, cursor);
             let func = cursor.cons_car();
             let mut args = vec![
                 overlay,
@@ -1455,12 +1469,12 @@ fn call_overlay_hook_list(
             if let Some(old_len) = lisp_old_len {
                 args.push(Value::fixnum(old_len));
             }
-            ctx.apply(func, args)?;
+            host.apply(func, &args)?;
             cursor = cursor.cons_cdr();
         }
         Ok(())
     })();
-    ctx.restore_specpdl_roots(root_scope);
+    host.restore_specpdl_roots(root_scope);
     result
 }
 

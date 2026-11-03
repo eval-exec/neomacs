@@ -9,13 +9,17 @@
 //! the variable surface: reads over `VariableView`, `set_variable` the
 //! `set` subr body, `reset_variable_on_error` GNU `reset_var_on_error`
 //! (`insdel.c`), and the `inhibit-modification-hooks` flag read whose
-//! forwarding fast paths live with the symbol table.
+//! forwarding fast paths live with the symbol table. The C3 slice is
+//! the funcall family (`apply`, `funcall_general`), symbol mode,
+//! lexical binding, and the GNU-shaped opaque specpdl API whose
+//! `SpecCount`/`RootMark`/`RootSlot` tokens are minted only here
+//! (`pub struct`, private fields, no public constructor).
 
-use super::Context;
+use super::{Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot};
 use crate::buffer::Buffer;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
 use crate::emacs_core::edit_host::EditHost;
-use crate::emacs_core::error::EvalResult;
+use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::hook_runtime;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
@@ -148,5 +152,66 @@ impl EditHost for Context {
         }
         let sym = EditHost::hook_symbol_by_id(self, sym);
         hook_runtime::hook_value_by_id(self, sym).is_some_and(|v| v.is_truthy())
+    }
+
+    fn apply(&mut self, function: Value, args: &[Value]) -> EvalResult {
+        Context::apply(self, function, LispArgVec::from_slice(args))
+    }
+
+    fn funcall_general(&mut self, function: Value, args: &[Value]) -> EvalResult {
+        Context::funcall_general(self, function, LispArgVec::from_slice(args))
+    }
+
+    fn symbol_mode(&self) -> crate::tagged::SymbolMode {
+        Context::symbol_mode(self)
+    }
+
+    fn set_lexical_binding(&mut self, enabled: bool) {
+        Context::set_lexical_binding(self, enabled);
+    }
+
+    type SpecCount = SpecpdlCount;
+
+    type RootMark = SpecpdlRootScopeState;
+
+    type RootSlot = SpecpdlRootSlot;
+
+    fn specpdl_index(&self) -> Self::SpecCount {
+        SpecpdlCount {
+            count: self.specpdl.len(),
+        }
+    }
+
+    fn try_specbind_or_unwind_to(
+        &mut self,
+        count: Self::SpecCount,
+        sym: SymId,
+        value: Value,
+    ) -> Result<(), Flow> {
+        Context::try_specbind_or_unwind_to(self, count.count, sym, value)
+    }
+
+    fn unbind_to_with_result(&mut self, count: Self::SpecCount, result: EvalResult) -> EvalResult {
+        Context::unbind_to_with_result(self, count.count, result)
+    }
+
+    fn save_specpdl_roots(&self) -> Self::RootMark {
+        Context::save_specpdl_roots(self)
+    }
+
+    fn push_specpdl_root(&mut self, value: Value) {
+        Context::push_specpdl_root(self, value)
+    }
+
+    fn push_specpdl_root_slot(&mut self, value: Value) -> Self::RootSlot {
+        Context::push_specpdl_root_slot(self, value)
+    }
+
+    fn set_specpdl_root_slot(&mut self, slot: &Self::RootSlot, value: Value) {
+        Context::set_specpdl_root_slot(self, slot, value)
+    }
+
+    fn restore_specpdl_roots(&mut self, mark: Self::RootMark) {
+        Context::restore_specpdl_roots(self, mark)
     }
 }

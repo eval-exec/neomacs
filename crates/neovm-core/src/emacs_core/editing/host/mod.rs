@@ -20,9 +20,10 @@
 //! host-free code) — never here.
 
 use crate::buffer::Buffer;
-use crate::emacs_core::error::EvalResult;
+use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
+use crate::tagged::SymbolMode;
 
 pub trait EditHost {
     // -------------------------------------------------------------------------
@@ -93,6 +94,70 @@ pub trait EditHost {
     /// reads the `DEFVAR_BOOL` flag in one load; the fast paths over
     /// the forwarding live on the host, where the symbol table is. C2.
     fn inhibit_modification_hooks(&self) -> bool;
+
+    /// GNU `apply`: call a function value on already-evaluated
+    /// arguments. C3.
+    fn apply(&mut self, function: Value, args: &[Value]) -> EvalResult;
+
+    /// GNU `funcall_general`: unified function dispatch, the tree
+    /// walker's entry. C3.
+    fn funcall_general(&mut self, function: Value, args: &[Value]) -> EvalResult;
+
+    /// Symbol interpretation for this mutator's current dynamic binding
+    /// (`symbols-with-pos-enabled`). C3.
+    fn symbol_mode(&self) -> SymbolMode;
+
+    /// Set whether this runtime reads symbols lexically. C3.
+    fn set_lexical_binding(&mut self, enabled: bool);
+
+    // --- specpdl: GNU-shaped, opaque, mirroring today's call shapes 1:1
+    // (PEER-RULING-STAGE3 C3). SpecCount/RootMark/RootSlot are
+    // unforgeable tokens: `pub struct` with private fields, no public
+    // constructor. Edit never sees `SpecBinding`, `&mut specpdl`, a
+    // count as `usize`, or a push of an arbitrary entry. ---
+
+    /// Opaque specpdl depth (GNU `SPECPDL_INDEX`).
+    type SpecCount;
+
+    /// Opaque mark of the GcRoot suffix (one per rooted traversal).
+    type RootMark;
+
+    /// Opaque handle to one updatable GcRoot entry.
+    type RootSlot;
+
+    /// Current specpdl depth as a token.
+    fn specpdl_index(&self) -> Self::SpecCount;
+
+    /// Enter one dynamic binding inside an already-established scope;
+    /// if binding itself exits nonlocally (a variable watcher), drain
+    /// to `count` first. The fallible counterpart of GNU callers'
+    /// `specbind` + `unbind_to` pairs.
+    fn try_specbind_or_unwind_to(
+        &mut self,
+        count: Self::SpecCount,
+        sym: SymId,
+        value: Value,
+    ) -> Result<(), Flow>;
+
+    /// Unwind to `count`, passing `result` through (GNU `unbind_to`
+    /// with a value).
+    fn unbind_to_with_result(&mut self, count: Self::SpecCount, result: EvalResult) -> EvalResult;
+
+    /// Mark the current GcRoot suffix for later removal.
+    fn save_specpdl_roots(&self) -> Self::RootMark;
+
+    /// Push a GC root keeping `value` alive across Lisp calls.
+    fn push_specpdl_root(&mut self, value: Value);
+
+    /// Push an updatable GcRoot entry and return its handle.
+    fn push_specpdl_root_slot(&mut self, value: Value) -> Self::RootSlot;
+
+    /// Re-point an updatable root slot at a new value.
+    fn set_specpdl_root_slot(&mut self, slot: &Self::RootSlot, value: Value);
+
+    /// Remove only the GcRoot entries above `mark` (error unwinds pop
+    /// roots together with the frame).
+    fn restore_specpdl_roots(&mut self, mark: Self::RootMark);
 
     // -------------------------------------------------------------------------
     // display/system queries (stage-3 display-seam lane: C4b, C5, C15)
