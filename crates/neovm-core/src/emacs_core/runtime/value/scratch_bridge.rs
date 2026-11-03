@@ -11,7 +11,7 @@ use super::Value;
 use std::sync::OnceLock;
 
 /// The evaluator's scratch-root stack operations.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ScratchRootHooks {
     pub save: fn() -> usize,
     pub push: fn(Value),
@@ -20,10 +20,31 @@ pub(crate) struct ScratchRootHooks {
 
 static SCRATCH_ROOT_HOOKS: OnceLock<ScratchRootHooks> = OnceLock::new();
 
+/// A different scratch-root hook table is already installed. Installs are
+/// one-way and idempotent: re-offering the installed table is accepted, and
+/// offering a different one is a typed refusal rather than a silent skip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScratchHooksAlreadyInstalled;
+
 /// Install the evaluator's stack operations. Idempotent like the other
 /// one-time hooks: every `Context` construction calls it.
-pub(crate) fn install_scratch_root_hooks(hooks: ScratchRootHooks) {
-    let _ = SCRATCH_ROOT_HOOKS.set(hooks);
+///
+/// # Safety (peer seal N9, with the string-bytes stamp)
+///
+/// The table must route the value layer's intermediate text-property conses
+/// to the evaluator's scratch-root stack on the calling thread, and it may
+/// be installed only at the two evaluator seams: `Context` construction
+/// (`eval/construct.rs` `new_inner`) and image restore
+/// (`eval/pdump_reconstruct.rs`). The exact call-site guard in
+/// `emacs_core/tests/architecture/mint_seal_guard_test.rs` pins the seams.
+pub(crate) unsafe fn install_scratch_root_hooks(
+    hooks: ScratchRootHooks,
+) -> Result<(), ScratchHooksAlreadyInstalled> {
+    match SCRATCH_ROOT_HOOKS.set(hooks) {
+        Ok(()) => Ok(()),
+        Err(existing) if existing == hooks => Ok(()),
+        Err(_) => Err(ScratchHooksAlreadyInstalled),
+    }
 }
 
 #[inline]

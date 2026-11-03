@@ -219,6 +219,10 @@ path = "tests/p0s3_contracts.rs"
 name = "p1rv_contracts"
 path = "tests/p1rv_contracts.rs"
 
+[[test]]
+name = "mint_seal_contracts"
+path = "tests/mint_seal_contracts.rs"
+
 # Runs its checks on a child process's MAIN thread, which libtest never
 # offers; the file answers the libtest CLI subset nextest uses.
 [[test]]

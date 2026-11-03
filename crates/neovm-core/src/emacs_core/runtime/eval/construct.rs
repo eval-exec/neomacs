@@ -2350,18 +2350,36 @@ impl Context {
         // The text-property storage in the value layer roots its intermediate
         // conses through the evaluator's scratch-root stack; hand it the
         // stack operations here, at the same one-time hooks.
-        crate::emacs_core::value::scratch_bridge::install_scratch_root_hooks(
-            crate::emacs_core::value::scratch_bridge::ScratchRootHooks {
-                save: super::save_scratch_gc_roots,
-                push: super::push_scratch_gc_root,
-                restore: super::restore_scratch_gc_roots,
-            },
+        // SAFETY: seam install (peer seal N9). The table routes the value
+        // layer's conses to this evaluator's scratch-root stack, and this is
+        // `Context` construction, one of the two pinned seams.
+        let installed = unsafe {
+            crate::emacs_core::value::scratch_bridge::install_scratch_root_hooks(
+                crate::emacs_core::value::scratch_bridge::ScratchRootHooks {
+                    save: super::save_scratch_gc_roots,
+                    push: super::push_scratch_gc_root,
+                    restore: super::restore_scratch_gc_roots,
+                },
+            )
+        };
+        debug_assert!(
+            installed.is_ok(),
+            "a different scratch-root hook table is already installed"
         );
         // The string position cache lives above heap_types, but heap payload
         // mutations must invalidate it. Publish the cache's stamp at the same
         // one-time seam; the cache refuses to fill until it is installed.
-        crate::heap_types::install_string_bytes_changed_hook(
-            crate::emacs_core::string_pos_cache::note_string_bytes_changed,
+        // SAFETY: seam install (peer seal N9). The hook invalidates the
+        // position cache before returning, and this is `Context`
+        // construction, one of the two pinned seams.
+        let installed = unsafe {
+            crate::heap_types::install_string_bytes_changed_hook(
+                crate::emacs_core::string_pos_cache::note_string_bytes_changed,
+            )
+        };
+        debug_assert!(
+            installed.is_ok(),
+            "a different byte-mutation stamp is already installed"
         );
         // The value layer owns EvalError's Display table; the printer installs
         // its one formatting algorithm here, at the same one-time hooks.

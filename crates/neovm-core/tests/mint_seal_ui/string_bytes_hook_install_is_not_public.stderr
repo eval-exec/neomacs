@@ -1,0 +1,21 @@
+error[E0603]: function `install_string_bytes_changed_hook` is private
+ --> tests/mint_seal_ui/string_bytes_hook_install_is_not_public.rs:5:37
+  |
+5 |     let _ = neovm_core::heap_types::install_string_bytes_changed_hook(|| ());
+  |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private function
+  |
+note: the function `install_string_bytes_changed_hook` is defined here
+ --> src/heap_types.rs
+  |
+  | / pub(crate) unsafe fn install_string_bytes_changed_hook(
+  | |     hook: fn(),
+  | | ) -> Result<(), StringBytesHookAlreadyInstalled> {
+  | |________________________________________________^
+
+error[E0133]: call to unsafe function `heap_types::install_string_bytes_changed_hook` is unsafe and requires unsafe block
+ --> tests/mint_seal_ui/string_bytes_hook_install_is_not_public.rs:5:13
+  |
+5 |     let _ = neovm_core::heap_types::install_string_bytes_changed_hook(|| ());
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
+  |
+  = note: consult the function's documentation for information on how to avoid undefined behavior

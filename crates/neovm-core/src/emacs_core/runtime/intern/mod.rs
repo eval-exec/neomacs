@@ -35,6 +35,36 @@ use crate::tagged::value::TaggedValue;
 #[repr(transparent)]
 pub struct SymId(pub(crate) u32);
 
+impl SymId {
+    /// The raw id. Reading the representation carries no authority — the id
+    /// came from the interner either way — which is why this is a plain
+    /// function; forging one is the authority, and that goes through the
+    /// interner or [`SymId::from_raw`].
+    #[inline]
+    pub(crate) const fn to_raw(self) -> u32 {
+        self.0
+    }
+
+    /// Re-wrap a raw symbol id (peer seal N8).
+    ///
+    /// # Safety
+    ///
+    /// `id` must come from this process's interner or from an image remap
+    /// that was validated during load: a forged or stale id that is later
+    /// resolved indexes outside the interner's validated vocabulary.
+    /// Round-tripping a `SymId` through its `u32` representation — JIT and
+    /// AOT descriptors, pdump image words, `NonZero` niches — satisfies the
+    /// contract, because the id originated from the interner.
+    ///
+    /// The split promotes this constructor to `pub` in the value crate;
+    /// core's facade re-exports it at `pub(crate)`, so core's own surface
+    /// does not widen.
+    #[inline]
+    pub(crate) const unsafe fn from_raw(id: u32) -> Self {
+        Self(id)
+    }
+}
+
 impl std::fmt::Debug for SymId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Resolve the symbol name so logs read `SymId(696 peculiar-error)`

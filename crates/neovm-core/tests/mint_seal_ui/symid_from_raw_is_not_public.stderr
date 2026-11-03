@@ -1,0 +1,10 @@
+error[E0624]: associated function `from_raw` is private
+ --> tests/mint_seal_ui/symid_from_raw_is_not_public.rs:7:20
+  |
+7 |     let _ = SymId::from_raw(1);
+  |                    ^^^^^^^^ private associated function
+  |
+ ::: src/emacs_core/runtime/intern/mod.rs
+  |
+  |     pub(crate) const unsafe fn from_raw(id: u32) -> Self {
+  |     ---------------------------------------------------- private associated function defined here

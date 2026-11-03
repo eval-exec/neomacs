@@ -66,7 +66,15 @@ pub(crate) fn reset_string_pos_cache() {
 /// `never_stores_while_the_notification_hook_is_uninstalled`.
 #[cfg(test)]
 pub(crate) fn install_notification_hook_for_test() {
-    crate::heap_types::install_string_bytes_changed_hook(note_string_bytes_changed);
+    // SAFETY: the production hook and pointer (peer seal N9); the pinned
+    // seams install the same function, so this test-only offer is the
+    // idempotent re-offer, never a different hook.
+    let installed =
+        unsafe { crate::heap_types::install_string_bytes_changed_hook(note_string_bytes_changed) };
+    debug_assert!(
+        installed.is_ok(),
+        "a different byte-mutation stamp is already installed"
+    );
 }
 
 /// Validate ownership at activation, never during character/byte conversion.

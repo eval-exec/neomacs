@@ -19,6 +19,9 @@ use std::path::{Path, PathBuf};
 #[path = "keeper_world_designator_seam_guard_test.rs"]
 mod keeper_world_designator_seam_guard_test;
 
+#[path = "mint_seal_guard_test.rs"]
+mod mint_seal_guard_test;
+
 const STORE: &str = "plist.store_atomic(";
 const SEAM: &str = "fn store_plist_head";
 
