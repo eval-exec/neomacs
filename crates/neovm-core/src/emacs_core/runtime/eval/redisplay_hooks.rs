@@ -27,8 +27,6 @@ static WINDOW_RESIZE_ROOT_VERTICALLY: WellKnown = WellKnown::WindowResizeRootWin
 static WINDOW_RESIZE_MINI_FRAME: WellKnown = WellKnown::WindowResizeMiniFrame;
 use neomacs_display_protocol::types::Px;
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
-use std::sync::OnceLock;
 
 /// A renderer-inert GNU resize_mini_window request. The source buffer is
 /// explicit because inactive echo uses a temporary buffer, while the selected
@@ -50,78 +48,6 @@ pub struct RedisplayMiniGeometryRequest {
     pub buffer: BufferId,
     pub source: RedisplayMiniGeometrySource,
     pub exact: bool,
-}
-
-/// Immutable process policy published by OnceLock for concurrent numeric reads.
-/// Independent Context mutators share only this selector, with no Lisp-state cache.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum RedisplayHookPolicy {
-    #[default]
-    Legacy,
-    Gnu,
-}
-
-pub(super) fn parse_redisplay_hooks(value: Option<&OsStr>) -> RedisplayHookPolicy {
-    match value.and_then(OsStr::to_str) {
-        Some("on" | "1" | "true" | "yes") => RedisplayHookPolicy::Gnu,
-        _ => RedisplayHookPolicy::Legacy,
-    }
-}
-
-#[inline]
-pub(crate) fn gnu_redisplay_hooks_enabled() -> bool {
-    #[cfg(any(test, feature = "redisplay-test-policy"))]
-    if let Some(policy) = TEST_REDISPLAY_HOOK_POLICY.with(std::cell::Cell::get) {
-        return policy == RedisplayHookPolicy::Gnu;
-    }
-    static POLICY: OnceLock<RedisplayHookPolicy> = OnceLock::new();
-    *POLICY.get_or_init(|| {
-        parse_redisplay_hooks(std::env::var_os("NEOMACS_REDISPLAY_GNU_HOOKS").as_deref())
-    }) == RedisplayHookPolicy::Gnu
-}
-
-#[cfg(any(test, feature = "redisplay-test-policy"))]
-thread_local! {
-    /// Numeric test policy only, independently owned by each test thread. It
-    /// holds no Lisp values, caches or runtime state and does not exist in
-    /// builds without the test feature or alter the process-once policy lookup.
-    static TEST_REDISPLAY_HOOK_POLICY: std::cell::Cell<Option<RedisplayHookPolicy>> = const {
-        std::cell::Cell::new(None)
-    };
-}
-
-/// Restore a numeric fixture selector on normal return and Rust unwinding.
-/// The !Send/!Sync marker keeps this guard on its owning test mutator thread;
-/// independent test threads share no mutable selector or Lisp state.
-#[cfg(any(test, feature = "redisplay-test-policy"))]
-pub struct RedisplayHookPolicyGuard {
-    previous: Option<RedisplayHookPolicy>,
-    _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
-}
-
-#[cfg(any(test, feature = "redisplay-test-policy"))]
-impl RedisplayHookPolicyGuard {
-    pub fn legacy() -> Self {
-        Self::set(RedisplayHookPolicy::Legacy)
-    }
-
-    pub fn gnu() -> Self {
-        Self::set(RedisplayHookPolicy::Gnu)
-    }
-
-    fn set(policy: RedisplayHookPolicy) -> Self {
-        Self {
-            previous: TEST_REDISPLAY_HOOK_POLICY.with(|slot| slot.replace(Some(policy))),
-            _same_thread: std::marker::PhantomData,
-        }
-    }
-}
-
-#[cfg(any(test, feature = "redisplay-test-policy"))]
-impl Drop for RedisplayHookPolicyGuard {
-    fn drop(&mut self) {
-        TEST_REDISPLAY_HOOK_POLICY.with(|slot| slot.set(self.previous));
-    }
 }
 
 /// Numeric pending-work scope updated only through its owning Context borrow.

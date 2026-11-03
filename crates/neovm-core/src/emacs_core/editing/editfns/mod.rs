@@ -545,7 +545,7 @@ fn prepare_buffer_change(
     let mut start = range.char_start();
     let mut live = LiveChangeRange::new(range);
 
-    let gnu_hooks = crate::emacs_core::eval::gnu_redisplay_hooks_enabled();
+    let gnu_hooks = super::redisplay_policy::gnu_redisplay_hooks_enabled();
     if !gnu_hooks {
         verify_change_text_read_only(ctx, range.byte_range())?;
     }

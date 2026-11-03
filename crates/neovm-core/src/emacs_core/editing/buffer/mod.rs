@@ -1631,7 +1631,7 @@ pub(crate) fn builtin_kill_all_local_variables(
     // buffer's local variables and local hook value still in effect, and with
     // `major-mode' still naming the *previous* mode -- matches GNU exactly.
     run_buffer_change_major_mode_hook(eval)?;
-    let current_id = if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+    let current_id = if super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         eval.buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
@@ -1660,7 +1660,7 @@ pub(crate) fn builtin_kill_all_local_variables(
     // raises global `update_mode_lines` even for an offscreen buffer, ensuring
     // the menu and mode line are rebuilt if this major-mode transition is
     // immediately followed by displaying that buffer.
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+    if super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         // GNU bset_update_mode_line is SOME. The typed helper marks only
         // windows sharing this buffer's text and requests the menu rebuild.
         // Broad chrome cache dirtiness would evaluate unrelated :eval forms.
@@ -2406,7 +2406,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
 
     // GNU buffer.c:2985-2989: a real displayed-buffer conversion raises
     // windows_or_buffers_changed ALL after remapping text and overlays.
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+    if super::redisplay_policy::gnu_redisplay_hooks_enabled()
         && eval.frames.buffer_window_count(&eval.buffers, current_id) > 0
     {
         eval.gnu_mark_windows_all();
@@ -2515,7 +2515,7 @@ pub(crate) fn builtin_split_window_internal(
         combination_limit,
         sibling_resize,
     )?;
-    if crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
+    if super::redisplay_policy::gnu_redisplay_hooks_enabled()
         && let Some(window) = result.as_window_id().map(crate::window::WindowId)
         && let Some(frame) = eval.frames.find_window_frame_id(window)
     {
@@ -5633,7 +5633,7 @@ pub(crate) fn builtin_delete_overlay(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+    if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         return builtin_delete_overlay_in_buffers(&mut eval.buffers, args);
     }
     expect_args("delete-overlay", &args, 1)?;
@@ -5661,7 +5661,7 @@ pub(crate) fn builtin_delete_overlay_in_buffers(
 
 /// (overlay-put OVERLAY PROP VAL)
 pub(crate) fn builtin_overlay_put(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+    if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         return builtin_overlay_put_in_buffers(&mut eval.buffers, args);
     }
     expect_args("overlay-put", &args, 3)?;
@@ -5878,7 +5878,7 @@ pub(crate) fn builtin_move_overlay(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    if !crate::emacs_core::eval::gnu_redisplay_hooks_enabled() {
+    if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
         return builtin_move_overlay_in_buffers(&mut eval.buffers, args);
     }
     expect_min_args("move-overlay", &args, 3)?;

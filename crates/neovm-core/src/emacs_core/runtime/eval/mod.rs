@@ -7663,8 +7663,8 @@ pub(crate) mod command_loop;
 
 pub(crate) mod redisplay_hooks;
 #[cfg(any(test, feature = "redisplay-test-policy"))]
-pub use redisplay_hooks::RedisplayHookPolicyGuard;
-pub(crate) use redisplay_hooks::gnu_redisplay_hooks_enabled;
+pub use crate::emacs_core::redisplay_policy::RedisplayHookPolicyGuard;
+pub(crate) use crate::emacs_core::redisplay_policy::gnu_redisplay_hooks_enabled;
 pub use redisplay_hooks::{
     RedisplayMiniGeometryRequest, RedisplayMiniGeometrySource, RedisplayMiniPreparationFailure,
 };

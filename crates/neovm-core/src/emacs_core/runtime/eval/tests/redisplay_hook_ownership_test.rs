@@ -1,5 +1,7 @@
 use super::*;
+use crate::emacs_core::redisplay_policy::{RedisplayHookPolicy, parse_redisplay_hooks};
 use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
+use std::ffi::OsStr;
 
 #[test]
 fn explicit_policy_is_required_and_invalid_values_preserve_baseline() {

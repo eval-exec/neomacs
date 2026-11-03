@@ -113,6 +113,8 @@ pub mod mode;
 pub mod navigation;
 #[path = "editing/rect/mod.rs"]
 pub mod rect;
+#[path = "editing/redisplay_policy.rs"]
+pub(crate) mod redisplay_policy;
 #[path = "editing/undo/mod.rs"]
 pub mod undo;
 
