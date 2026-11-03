@@ -1,10 +1,10 @@
 //! Compiler-side implementation of the value layer's cold function hooks.
 use super::Baton;
 use crate::emacs_core::bytecode::Op;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
-use crate::emacs_core::eval::subr_abi::{SubrFn, SubrFn2, SubrObj};
 use crate::emacs_core::bytecode::function_slots::FunctionParamsExt as _;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
+use crate::emacs_core::eval::subr_abi::{SubrFn, SubrFn2, SubrObj};
 use crate::emacs_core::intern::{SymId, lookup_interned};
 use crate::emacs_core::symbol::FunctionEpochBump;
 use crate::tagged::gc::function_write_hooks::{

@@ -6,8 +6,8 @@
 use super::*;
 #[cfg(feature = "jit")]
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
-use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 /// The GC root that keeps an interpreted callable alive for one
 /// [`Context::apply_lambda`] call.
 #[derive(Clone, Copy)]

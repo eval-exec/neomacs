@@ -9,9 +9,7 @@ use syn::ext::IdentExt;
 use syn::visit::{self, Visit};
 use syn::{Attribute, Expr, Item, ItemMod, Lit, Meta};
 
-use super::architecture_moving_set::{
-    is_bottom_peer_name, is_g0_member, is_moving_crate,
-};
+use super::architecture_moving_set::{is_bottom_peer_name, is_g0_member, is_moving_crate};
 
 /// Whether a cfg predicate can be true with `test` disabled. Other cfg values
 /// vary across production builds, so both possibilities remain in the scan.
