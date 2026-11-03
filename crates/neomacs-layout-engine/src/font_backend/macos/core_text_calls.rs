@@ -65,6 +65,7 @@ pub(super) fn resolve_generic_family(family: &str) -> Option<String> {
 // The generated objc2 wrappers mark these results non-null, so the two Copy
 // calls are declared here and absence stays an Option, matching GNU's
 // `if (family_name)` / `if (name1)` checks in `src/macfont.m:2783` and `:3759`.
+#[allow(non_snake_case)]
 unsafe extern "C-unwind" {
     fn CTFontCopyFamilyName(font: &CTFont) -> Option<NonNull<CFString>>;
     fn CTFontCopyPostScriptName(font: &CTFont) -> Option<NonNull<CFString>>;
@@ -83,9 +84,10 @@ pub(super) fn font_postscript_name(font: &CTFont) -> Option<String> {
     Some(unsafe { CFRetained::from_raw(name) }.to_string())
 }
 
-/// GNU accepts a best-matched face when its requested family is catalogued
-/// or when CoreText resolves the request to the same family. A face whose
-/// family name is unavailable cannot prove either, so it is not accepted.
+/// GNU accepts a best-matched face when its requested family is catalogued,
+/// or when CoreText resolves the request to the same family. A NULL family
+/// name can only prove the second case, so it is accepted when the family is
+/// already catalogued and declined otherwise.
 pub(super) fn fallback_family_matches(
     requested: &str,
     is_available: bool,
