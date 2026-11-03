@@ -97,6 +97,8 @@ pub mod bookmark;
 pub mod buffer;
 #[path = "editing/buffer_vars/mod.rs"]
 pub mod buffer_vars;
+#[path = "editing/case_encoding/mod.rs"]
+pub mod case_encoding;
 #[path = "editing/dired/mod.rs"]
 pub mod dired;
 #[path = "editing/editfns/mod.rs"]

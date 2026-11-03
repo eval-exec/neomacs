@@ -5,6 +5,7 @@
 use super::casetab::{CaseMap, CaseTableOverride};
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
+use crate::emacs_core::case_encoding::CaseEncoding;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::value::ValueKind;
@@ -274,25 +275,18 @@ enum CasingWordState {
     Inside,
 }
 
-/// Buffer encoding determines whether integer characters 128..255 denote
-/// Latin-1 or raw bytes. This call-local projection contains no shared state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaseEncoding {
-    Unibyte,
-    Multibyte,
-}
-
-impl CaseEncoding {
-    pub(crate) fn for_current_buffer(ctx: &super::eval::Context) -> Self {
-        if ctx
-            .buffers
-            .current_buffer()
-            .is_some_and(|buf| !buf.get_multibyte())
-        {
-            Self::Unibyte
-        } else {
-            Self::Multibyte
-        }
+/// The current buffer's encoding projection. This reads buffer state and
+/// therefore stays with the text-side casing operations above the plain
+/// [`CaseEncoding`] data.
+pub(crate) fn case_encoding_for_current_buffer(ctx: &super::eval::Context) -> CaseEncoding {
+    if ctx
+        .buffers
+        .current_buffer()
+        .is_some_and(|buf| !buf.get_multibyte())
+    {
+        CaseEncoding::Unibyte
+    } else {
+        CaseEncoding::Multibyte
     }
 }
 
@@ -1210,7 +1204,7 @@ pub(crate) fn builtin_capitalize_in_state(
         args,
         is_word,
         &casetab,
-        CaseEncoding::for_current_buffer(eval),
+        case_encoding_for_current_buffer(eval),
     )
 }
 
@@ -1278,7 +1272,7 @@ pub(crate) fn builtin_upcase_initials_in_state(
         args,
         is_word,
         &casetab,
-        CaseEncoding::for_current_buffer(eval),
+        case_encoding_for_current_buffer(eval),
     )
 }
 

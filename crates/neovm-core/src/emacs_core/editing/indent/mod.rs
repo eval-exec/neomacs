@@ -2528,7 +2528,7 @@ fn simple_backward_column(
 fn display_table_column_advance(
     table: &Value,
     code: u32,
-    encoding: super::casefiddle::CaseEncoding,
+    encoding: super::case_encoding::CaseEncoding,
     column: DisplayColumn,
     tab_width: TabWidth,
     line_end: LineEndPolicy,
@@ -2536,7 +2536,7 @@ fn display_table_column_advance(
     let entry = super::chartable::ct_ref(table, i64::from(code));
     // GNU indent.c:283-295 counts a multibyte display vector by length;
     // :760-788 interprets TAB/newline within single-byte glyph vectors.
-    if matches!(encoding, super::casefiddle::CaseEncoding::Multibyte) && code >= 0x80 {
+    if matches!(encoding, super::case_encoding::CaseEncoding::Multibyte) && code >= 0x80 {
         entry.as_vector_data().map(|glyphs| {
             ColumnAdvance::Continue(DisplayColumn::new(
                 column.get().saturating_add(glyphs.len().min(1000)),
@@ -2637,9 +2637,9 @@ fn scan_for_column(
             TabWidth::from(buf.slots[crate::buffer::buffer::BUFFER_SLOT_TAB_WIDTH.index()]),
             line_end_policy,
             if buf.get_multibyte() {
-                super::casefiddle::CaseEncoding::Multibyte
+                super::case_encoding::CaseEncoding::Multibyte
             } else {
-                super::casefiddle::CaseEncoding::Unibyte
+                super::case_encoding::CaseEncoding::Unibyte
             },
         )
     };
@@ -2810,10 +2810,10 @@ fn scan_for_column(
                     .width()
             } else {
                 match encoding {
-                    super::casefiddle::CaseEncoding::Multibyte => character_widths
+                    super::case_encoding::CaseEncoding::Multibyte => character_widths
                         .get_or_insert_with(|| ColumnWidthMemo::from_context(ctx))
                         .width(code),
-                    super::casefiddle::CaseEncoding::Unibyte => 4,
+                    super::case_encoding::CaseEncoding::Unibyte => 4,
                 }
             };
             (code, char_len, width)

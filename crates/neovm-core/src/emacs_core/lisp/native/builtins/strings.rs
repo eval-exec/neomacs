@@ -941,7 +941,7 @@ pub(crate) fn builtin_upcase_in_state_1(
     upcase_with_override(
         &args,
         casetab,
-        super::super::casefiddle::CaseEncoding::for_current_buffer(eval),
+        super::super::casefiddle::case_encoding_for_current_buffer(eval),
         super::super::casefiddle::upcase_word_predicate(eval, &casetab),
     )
 }
@@ -949,7 +949,7 @@ pub(crate) fn builtin_upcase_in_state_1(
 fn upcase_with_override(
     args: &[Value],
     casetab: super::super::casetab::CaseTableOverride,
-    encoding: super::super::casefiddle::CaseEncoding,
+    encoding: super::super::case_encoding::CaseEncoding,
     is_word: impl Fn(u32) -> bool,
 ) -> EvalResult {
     expect_args("upcase", args, 1)?;
@@ -1129,7 +1129,7 @@ fn downcase_with_word_pred(
     args: &[Value],
     is_word: impl Fn(u32) -> bool,
     casetab: super::super::casetab::CaseTableOverride,
-    encoding: super::super::casefiddle::CaseEncoding,
+    encoding: super::super::case_encoding::CaseEncoding,
 ) -> EvalResult {
     expect_args("downcase", args, 1)?;
     match args[0].kind() {
@@ -1181,7 +1181,7 @@ pub(crate) fn builtin_downcase(args: Vec<Value>) -> EvalResult {
         &args,
         |_| false,
         super::super::casetab::CaseTableOverride::none(),
-        super::super::casefiddle::CaseEncoding::Multibyte,
+        super::super::case_encoding::CaseEncoding::Multibyte,
     )
 }
 
@@ -1210,7 +1210,7 @@ pub(crate) fn builtin_downcase_in_state_1(
         &args,
         is_word,
         casetab,
-        super::super::casefiddle::CaseEncoding::for_current_buffer(eval),
+        super::super::casefiddle::case_encoding_for_current_buffer(eval),
     )
 }
 
