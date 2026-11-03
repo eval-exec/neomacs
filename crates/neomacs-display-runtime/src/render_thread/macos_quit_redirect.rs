@@ -19,7 +19,8 @@ use neomacs_display_protocol::modifier_policy::{TransportModifierBit, TransportM
 use neovm_core::keyboard::FrontendKey;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{AnyThread, DefinedClass, define_class, msg_send, sel};
+// `AnyThread` is imported anonymously: only its `alloc` method is used.
+use objc2::{AnyThread as _, DefinedClass, define_class, msg_send, sel};
 use objc2_app_kit::{NSApplication, NSMenuItem};
 use objc2_foundation::NSObject;
 use std::cell::{Cell, RefCell};
