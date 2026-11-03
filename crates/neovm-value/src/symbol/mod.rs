@@ -801,7 +801,8 @@ impl From<FunctionEpoch> for u64 {
 /// constructor accepts only the canonical never-null descriptor read.
 #[derive(Clone, Copy)]
 #[repr(transparent)]
-pub(crate) struct DebuggerDescriptor(&'static crate::forward::LispBoolFwd);
+#[doc(hidden)]
+pub struct DebuggerDescriptor(&'static crate::forward::LispBoolFwd);
 
 impl PartialEq for DebuggerDescriptor {
     #[inline(always)]
@@ -821,19 +822,22 @@ impl std::fmt::Debug for DebuggerDescriptor {
 
 impl DebuggerDescriptor {
     #[inline(always)]
-    pub(crate) fn armed(self) -> bool {
+    #[doc(hidden)]
+    pub fn armed(self) -> bool {
         self.0.get()
     }
 
     #[inline(always)]
-    pub(crate) fn resolved(self) -> Option<&'static crate::forward::LispBoolFwd> {
+    #[doc(hidden)]
+    pub fn resolved(self) -> Option<&'static crate::forward::LispBoolFwd> {
         (!self.0.is_debug_on_next_call_stand_in()).then_some(self.0)
     }
 
     /// The descriptor of an owner's own cell
     /// (`forward::alloc_owner_debugger_cell`).
     #[inline]
-    pub(crate) fn owner(cell: &'static crate::forward::LispBoolFwd) -> Self {
+    #[doc(hidden)]
+    pub fn owner(cell: &'static crate::forward::LispBoolFwd) -> Self {
         debug_assert!(
             cell.is_owner_cell(),
             "an owner descriptor names an owner cell"
@@ -843,7 +847,8 @@ impl DebuggerDescriptor {
 
     /// Whether this names an owner's own cell rather than the canonical one.
     #[inline(always)]
-    pub(crate) fn is_owner(self) -> bool {
+    #[doc(hidden)]
+    pub fn is_owner(self) -> bool {
         self.0.is_owner_cell()
     }
 }
@@ -863,7 +868,8 @@ const _: () = {
 /// allocation's UnsafeCell root and is used only after mutable phases finish.
 #[repr(C)]
 #[derive(Debug)]
-pub(crate) struct CanonicalDispatchCells {
+#[doc(hidden)]
+pub struct CanonicalDispatchCells {
     /// Publication clock for function-binding changes. Producers hold exclusive
     /// obarray write access (including chunk growth), publish stamps/floors
     /// first, then Release-store this clock. Mutator readers Acquire-load it
@@ -908,13 +914,15 @@ impl CanonicalDispatchCells {
 
     /// Detached clock domain for the current owner's admission mirror.
     #[inline(always)]
-    pub(crate) fn admission_epoch(&self) -> FunctionEpoch {
+    #[doc(hidden)]
+    pub fn admission_epoch(&self) -> FunctionEpoch {
         FunctionEpoch(self.function_epoch.load(Ordering::Acquire))
     }
 
     /// The canonical descriptor identity, retaining its live Boolean cell.
     #[inline(always)]
-    pub(crate) fn admission_debugger(&self) -> DebuggerDescriptor {
+    #[doc(hidden)]
+    pub fn admission_debugger(&self) -> DebuggerDescriptor {
         DebuggerDescriptor(self.debug_on_next_call_cell_ref())
     }
 
