@@ -46,8 +46,8 @@ fn find_file_noselect_on_a_directory_opens_dired_like_gnu() {
                         (find-file-noselect link))
                       (equal seen
                              (abbreviate-file-name (file-truename link))))))
-               (ignore-errors (delete-file link))
-               (ignore-errors (delete-directory dir))))"#,
+               (when (file-exists-p link) (delete-file link))
+               (delete-directory dir t)))"#,
         expect_test::expect![[r#""OK (dired-mode dired-mode dired-mode dired-mode t t)""#]],
     );
 }
