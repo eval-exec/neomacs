@@ -15,10 +15,9 @@ use crate::buffer::{
     Buffer, BufferManager, CharLen, EmacsByteLen, EmacsBytePos, EmacsByteRange, LispCharPos1,
     TextChange, TextEditRange, TextExtent,
 };
-use crate::emacs_core::edit_host::EditHost;
+use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::runtime_identity::{CredentialScope, process_group_id, process_user_id};
 use crate::emacs_core::value::ValueKind;
 use crate::heap_types::LispString;
@@ -102,8 +101,8 @@ const _: () = {
 /// GNU `Fbarf_if_buffer_read_only`'s test. Inlined so a writable buffer
 /// (the common one) costs its callers one slot test and no variable view.
 #[inline(always)]
-pub(crate) fn buffer_read_only_active_in_state(
-    vars: VariableView<'_>,
+pub(crate) fn buffer_read_only_active_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buf: &Buffer,
 ) -> bool {
@@ -122,7 +121,7 @@ pub(crate) fn buffer_read_only_active_in_state(
 
 /// Whether `inhibit-read-only` lets a read-only BUF be changed.
 #[inline(never)]
-fn inhibit_read_only_in_state(vars: VariableView<'_>, buf: &Buffer) -> bool {
+fn inhibit_read_only_in_state<'a, Vars: EditVariableRead<'a>>(vars: Vars, buf: &Buffer) -> bool {
     let iro = inhibit_read_only_symbol();
     if let Some(value) = buf.get_buffer_local_by_sym_id_gated(iro, vars.obarray().is_localized(iro))
         && value.is_truthy()
@@ -132,8 +131,8 @@ fn inhibit_read_only_in_state(vars: VariableView<'_>, buf: &Buffer) -> bool {
     vars.value_or_nil(iro).is_truthy()
 }
 
-pub(crate) fn ensure_current_buffer_writable_in_state(
-    vars: VariableView<'_>,
+pub(crate) fn ensure_current_buffer_writable_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &BufferManager,
 ) -> Result<(), Flow> {
@@ -1860,20 +1859,18 @@ pub(crate) fn builtin_erase_buffer(
     if !byte_range.is_empty() {
         signal_before_text_change(ctx, change)?;
     }
-    erase_buffer_impl(
-        VariableView::new(&ctx.obarray, &ctx.owner),
-        &[],
-        &mut ctx.edit.buffers,
-        vec![],
-    )?;
+    // Edit phase: the read view and the edit runtime come from the one
+    // disjoint-borrow pair; while `edit`/`vars` live, no host call runs.
+    let (edit, vars) = ctx.edit_and_vars();
+    erase_buffer_impl(vars, &[], &mut edit.buffers, vec![])?;
     if !byte_range.is_empty() {
         signal_after_text_change(ctx, change)?;
     }
     Ok(Value::NIL)
 }
 
-pub(crate) fn erase_buffer_impl(
-    vars: VariableView<'_>,
+pub(crate) fn erase_buffer_impl<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &mut BufferManager,
     args: Vec<Value>,

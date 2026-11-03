@@ -50,6 +50,31 @@ static NO_OWNER: NoOwner = NoOwner(OwnerSlot::DORMANT);
 
 static_assertions::assert_not_impl_any!(VariableView<'static>: Send, Sync);
 
+/// The edit layer's variable-read surface (stage-3 V ruling): pure
+/// `#[inline(always)]` delegation to the inherent methods, no semantic
+/// change. Edit-owned callees name only this trait, never the view type.
+impl<'a> crate::emacs_core::edit_host::EditVariableRead<'a> for VariableView<'a> {
+    #[inline(always)]
+    fn obarray(self) -> &'a Obarray {
+        VariableView::obarray(self)
+    }
+
+    #[inline(always)]
+    fn value(self, id: SymId) -> Option<Value> {
+        VariableView::value(self, id)
+    }
+
+    #[inline(always)]
+    fn value_by_name(self, name: &str) -> Option<Value> {
+        VariableView::value_by_name(self, name)
+    }
+
+    #[inline(always)]
+    fn value_or_nil(self, id: SymId) -> Value {
+        VariableView::value_or_nil(self, id)
+    }
+}
+
 impl std::fmt::Debug for VariableView<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VariableView")

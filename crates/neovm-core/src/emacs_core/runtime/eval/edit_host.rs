@@ -15,8 +15,10 @@
 //! `SpecCount`/`RootMark`/`RootSlot` tokens are minted only here
 //! (`pub struct`, private fields, no public constructor).
 
-use super::{Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot};
-use crate::buffer::{Buffer, BufferId, LispCharPos1};
+use super::{
+    Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot, VariableView,
+};
+use crate::buffer::{Buffer, BufferId, EditRuntime, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
 use crate::emacs_core::display_metrics::{
@@ -222,6 +224,19 @@ impl EditHost for Context {
 
     fn restore_specpdl_roots(&mut self, mark: Self::RootMark) {
         Context::restore_specpdl_roots(self, mark)
+    }
+
+    type Vars<'a> = VariableView<'a>;
+
+    fn edit_and_vars(&mut self) -> (&mut EditRuntime, Self::Vars<'_>) {
+        // DISJOINT field borrows (ruling V.2): the edit runtime mutably,
+        // the view's obarray and owner slot shared. Routed through
+        // `Self::variables()` this would borrow all of `self` and the
+        // pair could never coexist.
+        (
+            &mut self.edit,
+            VariableView::new(&self.obarray, &self.owner),
+        )
     }
 
     // --- display/system queries (C4b, C5, C15) ---

@@ -23,12 +23,11 @@ use crate::buffer::{BufferId, LispCharPos1};
 use crate::emacs_core::display_metrics::{
     InvisibleRunContext, LineWrap, MotionEngine, WindowGeometry, line_number_digit_width,
 };
-use crate::emacs_core::edit_host::EditHost;
+use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
-use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::value::ValueKind;
 use crate::emacs_core::word_wrap::{WordWrapDirection, WordWrapOpportunity, WordWrapPolicy};
 use crate::heap_types::LispString;
@@ -1507,8 +1506,8 @@ fn align_to_keyword_symbol() -> Value {
     Value::symbol(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern(":align-to")))
 }
 
-pub(crate) fn dynamic_buffer_or_global_symbol_value(
-    vars: VariableView<'_>,
+pub(crate) fn dynamic_buffer_or_global_symbol_value<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
     name: &str,
@@ -1539,8 +1538,8 @@ pub(crate) fn dynamic_buffer_or_global_symbol_value(
 /// Same per-buffer-slot / buffer-local / global precedence, entirely by
 /// identity: the handle is a compile-time id and the slot and buffer-local
 /// maps are keyed by the same identity.
-pub(crate) fn dynamic_buffer_or_global_symbol_value_fixed(
-    vars: VariableView<'_>,
+pub(crate) fn dynamic_buffer_or_global_symbol_value_fixed<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     _dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
     symbol: &crate::emacs_core::intern::WellKnown,
@@ -1596,8 +1595,8 @@ pub(crate) fn current_buffer_tab_width(ctx: &crate::emacs_core::eval::Context) -
     tab_width_in_state(ctx, &[], ctx.edit.buffers.current_buffer()).get()
 }
 
-fn indent_tabs_mode_in_state(
-    vars: VariableView<'_>,
+fn indent_tabs_mode_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buf: Option<&Buffer>,
 ) -> bool {
@@ -2876,10 +2875,13 @@ fn insert_inheriting_indentation(
     )?;
     super::editfns::signal_before_text_change(ctx, change)?;
     let symbol_mode = ctx.symbol_mode();
+    // Edit phase: `symbol_mode` (Copy, captured above as before) is the only
+    // value crossing the boundary; the view never escapes it.
+    let (edit, vars) = ctx.edit_and_vars();
     super::builtins::insert_string_value_in_current_buffer(
-        VariableView::new(&ctx.obarray, &ctx.owner),
+        vars,
         &[],
-        &mut ctx.edit.buffers,
+        &mut edit.buffers,
         Value::string(indentation),
         super::builtins::InsertPieceMarkerPlacement::AfterMarkers,
         super::builtins::InsertPiecePropertyMode::InheritAdjoining,

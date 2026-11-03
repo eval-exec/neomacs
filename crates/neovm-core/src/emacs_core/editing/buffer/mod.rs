@@ -1,8 +1,8 @@
 use super::builtins::*;
+use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
-use crate::emacs_core::eval::VariableView;
 
 // ===========================================================================
 // Buffer operations (require evaluator for BufferManager access)
@@ -12,7 +12,6 @@ use crate::buffer::{
     Buffer, BufferId, BufferManager, CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos,
     EmacsByteRange, LispBytePos1, LispCharPos1, TextChange, TextEditRange, TextExtent,
 };
-use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::misc;
 use crate::emacs_core::value::{
@@ -1970,8 +1969,8 @@ pub(crate) fn builtin_constrain_to_field_5(
     Ok(Value::from_fixnum(result.0))
 }
 
-fn char_property_in_current_buffer(
-    vars: VariableView<'_>,
+fn char_property_in_current_buffer<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     pos: i64,
     property: Value,
@@ -2026,8 +2025,8 @@ fn resolve_field_position_in_buffers(
     Ok((pos, point_min, point_max))
 }
 
-fn field_property_after_char_in_buffers(
-    vars: VariableView<'_>,
+fn field_property_after_char_in_buffers<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     pos: i64,
 ) -> Result<Value, Flow> {
@@ -2042,8 +2041,8 @@ fn field_property_after_char_in_buffers(
     }
 }
 
-fn field_property_at_position_in_state(
-    vars: VariableView<'_>,
+fn field_property_at_position_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &BufferManager,
     pos: i64,
@@ -2057,8 +2056,8 @@ fn field_property_at_position_in_state(
     )
 }
 
-fn previous_field_change_in_buffers(
-    vars: VariableView<'_>,
+fn previous_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     pos: i64,
     limit: Option<i64>,
@@ -2075,8 +2074,8 @@ fn previous_field_change_in_buffers(
     )
 }
 
-fn next_field_change_in_buffers(
-    vars: VariableView<'_>,
+fn next_field_change_in_buffers<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     pos: i64,
     limit: Option<i64>,
@@ -2092,8 +2091,8 @@ fn next_field_change_in_buffers(
     )
 }
 
-pub(crate) fn find_field_bounds_in_state(
-    vars: VariableView<'_>,
+pub(crate) fn find_field_bounds_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &BufferManager,
     position_value: Option<&Value>,
@@ -2804,8 +2803,8 @@ fn insert_piece_from_char_arg(
     })
 }
 
-pub(crate) fn apply_inherited_text_properties(
-    vars: VariableView<'_>,
+pub(crate) fn apply_inherited_text_properties<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &mut BufferManager,
     current_id: BufferId,
@@ -3057,10 +3056,14 @@ fn insert_one_pending(
         insert_extent,
     )?;
     let mode = eval.symbol_mode();
+    // Edit phase: `mode` (Copy, captured above as before) and the moved
+    // `pieces` cross the boundary; the rooted source stays rooted by the
+    // specpdl mark restored below.
+    let (edit, vars) = eval.edit_and_vars();
     insert_pieces_in_state(
-        VariableView::new(&eval.obarray, &eval.owner),
+        vars,
         &[],
-        &mut eval.edit.buffers,
+        &mut edit.buffers,
         pieces,
         marker_placement,
         property_mode,
@@ -3116,8 +3119,8 @@ pub(crate) fn builtin_insert_before_markers_and_inherit(
     )
 }
 
-fn insert_pieces_in_state(
-    vars: VariableView<'_>,
+fn insert_pieces_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &mut BufferManager,
     pieces: Vec<InsertPiece>,
@@ -3198,8 +3201,8 @@ fn insert_pieces_in_state(
     Ok(Value::NIL)
 }
 
-pub(crate) fn insert_string_value_in_current_buffer(
-    vars: VariableView<'_>,
+pub(crate) fn insert_string_value_in_current_buffer<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     dynamic: &[OrderedRuntimeBindingMap],
     buffers: &mut BufferManager,
     value: Value,
@@ -3306,10 +3309,12 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
         .insert_lisp_string_into_buffer(current_id, &to_insert);
     if args.get(2).is_some_and(|value| value.is_truthy()) {
         let mode = eval.symbol_mode();
+        // Edit phase: only Copy values captured above cross it.
+        let (edit, vars) = eval.edit_and_vars();
         apply_inherited_text_properties(
-            VariableView::new(&eval.obarray, &eval.owner),
+            vars,
             &[],
-            &mut eval.edit.buffers,
+            &mut edit.buffers,
             current_id,
             insert_pos.get(),
             text_len.get(),
@@ -3410,10 +3415,12 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         .insert_lisp_string_into_buffer(current_id, &to_insert);
     if args.get(2).is_some_and(|value| value.is_truthy()) {
         let mode = eval.symbol_mode();
+        // Edit phase: only Copy values captured above cross it.
+        let (edit, vars) = eval.edit_and_vars();
         apply_inherited_text_properties(
-            VariableView::new(&eval.obarray, &eval.owner),
+            vars,
             &[],
-            &mut eval.edit.buffers,
+            &mut edit.buffers,
             current_id,
             insert_pos.get(),
             text_len.get(),

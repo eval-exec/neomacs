@@ -5,6 +5,7 @@
 
 use super::error::{EvalResult, Flow, signal};
 use super::intern::{NIL_SYM_ID, T_SYM_ID};
+use crate::emacs_core::edit_host::EditVariableRead;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_max_args, expect_min_args};
 use crate::emacs_core::symbol::CanonicalAccess;
@@ -68,9 +69,9 @@ impl TextPropertyControlVariable {
 
     /// Read this variable for one explicit buffer, falling back to its global
     /// default exactly as GNU's buffer-local value machinery does.
-    pub(crate) fn value_for_buffer(
+    pub(crate) fn value_for_buffer<'a, Vars: EditVariableRead<'a>>(
         self,
-        vars: crate::emacs_core::eval::VariableView<'_>,
+        vars: Vars,
         buf: &Buffer,
     ) -> Option<Value> {
         let obarray = vars.obarray();
@@ -271,8 +272,8 @@ pub(crate) fn default_text_property_nonsticky_alist() -> Value {
     ])
 }
 
-fn current_textprop_variable_value(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn current_textprop_variable_value<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     variable: TextPropertyControlVariable,
 ) -> Option<Value> {
@@ -509,8 +510,8 @@ pub(crate) struct CharPropertyResolver<'a> {
 }
 
 impl<'a> CharPropertyResolver<'a> {
-    pub(crate) fn snapshot(
-        vars: crate::emacs_core::eval::VariableView<'a>,
+    pub(crate) fn snapshot<Vars: EditVariableRead<'a>>(
+        vars: Vars,
         buffers: &BufferManager,
         prop: Value,
     ) -> Self {
@@ -608,8 +609,8 @@ enum CharPropertyCarrier {
 }
 static_assertions::assert_impl_all!(CharPropertyCarrier: Send, Sync);
 
-fn lookup_char_property_from_direct<F>(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn lookup_char_property_from_direct<'a, F, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     mut direct_get: F,
     prop: Value,
@@ -674,8 +675,8 @@ where
 /// (`lookup_char_property` with `textprop = true`).  Used when collecting
 /// `modification-hooks` from text-property intervals so a `category' interval
 /// contributes the category symbol's `modification-hooks' property.
-pub(crate) fn lookup_text_property_from_plist_slice(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn lookup_text_property_from_plist_slice<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     plist: &[(Value, Value)],
     prop: Value,
@@ -689,8 +690,8 @@ pub(crate) fn lookup_text_property_from_plist_slice(
     )
 }
 
-fn lookup_string_text_property(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn lookup_string_text_property<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     table: &TextPropertyTable,
     char_pos: usize,
@@ -705,8 +706,8 @@ fn lookup_string_text_property(
     )
 }
 
-fn lookup_buffer_text_property_at_char_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn lookup_buffer_text_property_at_char_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     char_pos: CharPos0,
@@ -739,8 +740,8 @@ fn lookup_buffer_text_property_at_char_pos(
     )
 }
 
-pub(crate) fn lookup_buffer_text_property(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn lookup_buffer_text_property<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     byte_pos: usize,
@@ -755,8 +756,8 @@ pub(crate) fn lookup_buffer_text_property(
     )
 }
 
-pub(crate) fn lookup_buffer_text_property_at_emacs_byte_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn lookup_buffer_text_property_at_emacs_byte_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     byte_pos: EmacsBytePos,
@@ -783,8 +784,8 @@ pub(crate) fn lookup_buffer_text_property_at_emacs_byte_pos(
     )
 }
 
-pub(crate) fn lookup_overlay_property(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn lookup_overlay_property<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     overlay_val: Value,
     prop: Value,
@@ -1298,8 +1299,8 @@ fn list_names_for_remove(list: Value) -> Vec<Value> {
 /// `read-only` property that is not silenced by either the
 /// `inhibit-read-only` interval property or the dynamic
 /// `inhibit-read-only` variable.
-pub(crate) fn verify_text_read_only_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn verify_text_read_only_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf_id: BufferId,
     byte_start: usize,
@@ -1313,8 +1314,8 @@ pub(crate) fn verify_text_read_only_in_state(
     )
 }
 
-pub(crate) fn verify_text_read_only_emacs_byte_range_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn verify_text_read_only_emacs_byte_range_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf_id: BufferId,
     byte_range: EmacsByteRange,
@@ -1454,8 +1455,8 @@ fn text_read_only_flow(read_only: Value) -> Flow {
 /// `(put-text-property ... 'read-only t)` — rear-sticky by default — forbids
 /// insertion right after it, while inserting before it stays allowed). This is
 /// what lets minibuffer input through: the prompt is `rear-nonsticky t`.
-pub(crate) fn verify_text_read_only_for_insert_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn verify_text_read_only_for_insert_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf_id: BufferId,
     byte_pos: EmacsBytePos,
@@ -1945,8 +1946,8 @@ pub(crate) fn builtin_get_text_property_3(
     builtin_get_text_property_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
-pub(crate) fn builtin_get_text_property_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_get_text_property_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -1997,8 +1998,8 @@ pub(crate) fn builtin_get_text_property_in_state(
     ))
 }
 
-pub(crate) fn buffer_overlay_property_at_byte_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn buffer_overlay_property_at_byte_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     byte_pos: usize,
@@ -2018,8 +2019,11 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
         .map(|winner| (winner.value(), winner.overlay()))
 }
 
-pub(crate) fn buffer_overlay_property_for_inserted_char_at_byte_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn buffer_overlay_property_for_inserted_char_at_byte_pos<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     byte_pos: usize,
@@ -2081,8 +2085,8 @@ impl BufferPropertyLookupDomain {
     }
 }
 
-pub(crate) fn buffer_pos_property_at_accessible_lisp_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn buffer_pos_property_at_accessible_lisp_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
     pos: i64,
@@ -2101,8 +2105,8 @@ pub(crate) fn buffer_pos_property_at_accessible_lisp_pos(
 /// GNU `get_local_map` temporarily widens before calling
 /// `Fget_pos_property`. This entry point exposes only that internal policy;
 /// ordinary Lisp property primitives retain accessible-range validation.
-pub(crate) fn buffer_pos_property_at_full_lisp_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn buffer_pos_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
     pos: LispCharPos1,
@@ -2119,8 +2123,8 @@ pub(crate) fn buffer_pos_property_at_full_lisp_pos(
     )
 }
 
-fn buffer_pos_property_in_domain(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn buffer_pos_property_in_domain<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
     pos: i64,
@@ -2163,8 +2167,8 @@ fn buffer_pos_property_in_domain(
 /// GNU's `text_property_stickiness` (src/textprop.c:1901) validates each
 /// delegated property read. The lookup domain makes the exceptional widened
 /// caller explicit instead of weakening the Lisp-visible primitive.
-fn text_property_stickiness_in_domain(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn text_property_stickiness_in_domain<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
     pos: i64,
@@ -2229,8 +2233,8 @@ fn text_property_stickiness_in_domain(
     }
 }
 
-fn get_text_property_at_validated_char_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn get_text_property_at_validated_char_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
     pos: i64,
@@ -2249,8 +2253,8 @@ fn get_text_property_at_validated_char_pos(
     ))
 }
 
-fn text_property_value_at_char_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+fn text_property_value_at_char_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &Buffer,
     pos: LispCharPos1,
@@ -2297,8 +2301,8 @@ fn eq_member(list: &Value, prop: Value) -> bool {
     false
 }
 
-pub(crate) fn builtin_get_char_property_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_get_char_property_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
@@ -2312,8 +2316,8 @@ pub(crate) fn builtin_get_char_property_in_state(
 /// `Fget_char_property` call (`src/intervals.c`).  Keeping that policy behind
 /// a named internal entry point prevents ordinary Lisp property primitives
 /// from accidentally losing their `BEGV..ZV` validation.
-pub(crate) fn buffer_char_property_at_full_lisp_pos(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn buffer_char_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     pos: LispCharPos1,
@@ -2339,8 +2343,8 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos(
     )
 }
 
-pub(crate) fn builtin_get_char_property_with_frames(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_get_char_property_with_frames<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     frames: Option<&FrameManager>,
     args: &[Value],
@@ -3098,8 +3102,8 @@ pub(crate) fn builtin_next_single_property_change_4(
     builtin_next_single_property_change_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
-pub(crate) fn builtin_next_single_property_change_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_next_single_property_change_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -3193,8 +3197,8 @@ pub(crate) enum FontificationScanAdmission {
 /// Native fontification point read with the public getter's current-buffer
 /// semantics, but no argument vector or growing char/byte position cache.
 /// No Lisp runs while the borrowed resolver and buffer are live.
-pub(crate) fn fontified_property_at_position_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn fontified_property_at_position_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
 ) -> EvalResult {
@@ -3235,8 +3239,8 @@ pub(crate) fn fontified_property_at_position_in_state(
 /// property builtin, without its char/byte round trip. END remains a fixnum
 /// LIMIT: it may be stale or outside current narrowing, exactly as for the
 /// original next-single-property-change request.
-pub(crate) fn resolved_fontified_property_boundary_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn resolved_fontified_property_boundary_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
     end: LispCharPos1,
@@ -3261,8 +3265,8 @@ pub(crate) fn resolved_fontified_property_boundary_in_state(
 /// before any clamping; the canonical caller owns unusual validation/errors.
 /// This immutable query runs no Lisp/GC and retains nothing across callbacks.
 #[inline]
-pub(crate) fn first_unfontified_position_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn first_unfontified_position_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
     end: LispCharPos1,
@@ -3304,8 +3308,8 @@ pub(crate) fn first_unfontified_position_in_state(
 /// resolver to the generic buffer walker instead of taking another snapshot.
 /// No witness is stored, shared or carried across a callback or retry.
 #[inline]
-pub(crate) fn next_fontified_property_boundary_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn next_fontified_property_boundary_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     position: LispCharPos1,
     end: LispCharPos1,
@@ -3515,8 +3519,8 @@ pub(crate) fn builtin_previous_single_property_change_4(
     builtin_previous_single_property_change_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
-pub(crate) fn builtin_previous_single_property_change_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_previous_single_property_change_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -3751,8 +3755,8 @@ pub(crate) fn builtin_text_property_any(
     builtin_text_property_any_in_state(eval.variables(), &eval.edit.buffers, args)
 }
 
-pub(crate) fn builtin_text_property_any_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_text_property_any_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -3894,8 +3898,8 @@ pub(crate) fn builtin_text_property_not_all_5(
     builtin_text_property_not_all_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
-pub(crate) fn builtin_text_property_not_all_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_text_property_not_all_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: &[Value],
 ) -> EvalResult {
@@ -3995,16 +3999,16 @@ pub(crate) fn builtin_text_property_not_all_in_state(
     Ok(first.map_or(Value::NIL, |pos| Value::fixnum(pos.to_lisp().as_i64())))
 }
 
-pub(crate) fn builtin_get_char_property_and_overlay_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_get_char_property_and_overlay_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
     builtin_get_char_property_and_overlay_with_frames(vars, buffers, None, args)
 }
 
-pub(crate) fn builtin_get_char_property_and_overlay_with_frames(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_get_char_property_and_overlay_with_frames<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     frames: Option<&FrameManager>,
     args: Vec<Value>,
@@ -4043,8 +4047,8 @@ pub(crate) fn builtin_get_display_property(
     builtin_get_display_property_in_state(eval.variables(), &eval.edit.buffers, args)
 }
 
-pub(crate) fn builtin_get_display_property_in_state(
-    vars: crate::emacs_core::eval::VariableView<'_>,
+pub(crate) fn builtin_get_display_property_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {

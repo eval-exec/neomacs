@@ -19,17 +19,44 @@
 //! correct only where no host is in scope (C7 substrate sites, C4b from
 //! host-free code) — never here.
 
-use crate::buffer::{Buffer, BufferId, LispCharPos1};
+use crate::buffer::{Buffer, BufferId, EditRuntime, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::display_metrics::{
     InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, WindowGeometry,
 };
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::intern::SymId;
+use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::Value;
 use crate::emacs_core::word_wrap::{WordWrapMode, WordWrapPolicy};
 use crate::heap_types::LispString;
 use crate::tagged::SymbolMode;
+
+/// The variable reads one owner's edit phase may perform: the read
+/// surface of the evaluator's variable view by pure `#[inline(always)]`
+/// delegation, with no semantic change (PEER-RULING-STAGE3 addendum
+/// 22:1xZ V.2). Only methods edit call sites use exist; writes stay on
+/// the host (`set_variable` / `reset_variable_on_error`).
+///
+/// `Copy`, and `!Send`/`!Sync` (the evaluator's view asserts this), so a
+/// view is re-created per edit phase and never outlives it: a stale view
+/// cannot exist.
+pub trait EditVariableRead<'a>: Copy {
+    /// The symbol table the view reads. Edit needs it for symbol
+    /// queries that are reads, not variable reads (`is_localized`,
+    /// localization-era symbol inspection on the read-only paths).
+    fn obarray(self) -> &'a Obarray;
+
+    /// GNU `Vfoo`: the variable's value without a buffer, `None` when
+    /// void.
+    fn value(self, id: SymId) -> Option<Value>;
+
+    /// [`Self::value`] by name.
+    fn value_by_name(self, name: &str) -> Option<Value>;
+
+    /// [`Self::value`], nil when void.
+    fn value_or_nil(self, id: SymId) -> Value;
+}
 
 pub trait EditHost {
     // -------------------------------------------------------------------------
@@ -171,6 +198,24 @@ pub trait EditHost {
     /// Remove only the GcRoot entries above `mark` (error unwinds pop
     /// roots together with the frame).
     fn restore_specpdl_roots(&mut self, mark: Self::RootMark);
+
+    // --- edit phases: the split borrow (stage-3 V ruling). A `&mut H`
+    // cannot yield `(&mut H, &mut EditRuntime)` at once, so an edit
+    // phase opens this pair instead; while either return lives, NO host
+    // method is callable. Mixed bodies PHASE: host phase (calls above),
+    // edit phase (this), alternating, with the original statement order
+    // kept exactly. ---
+
+    /// The owner's variable-read view for one edit phase
+    /// (see [`EditVariableRead`]).
+    type Vars<'a>: EditVariableRead<'a> + Copy
+    where
+        Self: 'a;
+
+    /// The edit phase: the edit runtime and its variable-read view, from
+    /// DISJOINT field borrows. Open in the narrowest scope the body
+    /// allows.
+    fn edit_and_vars(&mut self) -> (&mut EditRuntime, Self::Vars<'_>);
 
     // -------------------------------------------------------------------------
     // display/system queries (stage-3 display-seam lane: C4b, C5, C15)

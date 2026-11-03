@@ -1,10 +1,10 @@
 use super::*;
 use crate::buffer::text_props::PropertyPlistApplication;
 use crate::buffer::{CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, LispCharPos1};
+use crate::emacs_core::edit_host::EditVariableRead;
 use crate::emacs_core::error::{
     expect_args, expect_args_range, expect_fixnum, expect_max_args, expect_min_args,
 };
-use crate::emacs_core::eval::VariableView;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::textprop::{StickinessProperty, TextPropertyControlVariable};
 use crate::tagged::value::SymbolMode;
@@ -36,8 +36,8 @@ pub(crate) fn builtin_get_pos_property_3(
     )
 }
 
-pub(crate) fn builtin_get_pos_property_impl(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_get_pos_property_impl<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     _dynamic: &[OrderedRuntimeBindingMap],
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
@@ -414,8 +414,11 @@ fn previous_char_property_change_for_buffer(
     Ok(temp)
 }
 
-pub(crate) fn builtin_next_single_char_property_change_in_buffers(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_next_single_char_property_change_in_buffers<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
     args: &[Value],
@@ -429,8 +432,11 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers(
     )
 }
 
-pub(crate) fn builtin_next_single_char_property_change_in_buffers_with_symbols(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_next_single_char_property_change_in_buffers_with_symbols<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
     args: &[Value],
@@ -524,8 +530,11 @@ pub(crate) fn builtin_previous_single_char_property_change(
     )
 }
 
-pub(crate) fn builtin_previous_single_char_property_change_in_buffers(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_previous_single_char_property_change_in_buffers<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -539,8 +548,11 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers(
     )
 }
 
-pub(crate) fn builtin_previous_single_char_property_change_in_buffers_with_symbols(
-    vars: VariableView<'_>,
+pub(crate) fn builtin_previous_single_char_property_change_in_buffers_with_symbols<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
     frames: Option<&crate::window::FrameManager>,
     buffers: &crate::buffer::BufferManager,
     args: Vec<Value>,
@@ -880,16 +892,19 @@ pub(crate) fn builtin_compare_buffer_substrings(
     crate::emacs_core::buffer::compare_buffer_substrings_with_canon(&eval.edit.buffers, args, canon)
 }
 
-pub(super) fn dynamic_or_global_symbol_value_in_state(
-    vars: VariableView<'_>,
+pub(super) fn dynamic_or_global_symbol_value_in_state<'a, Vars: EditVariableRead<'a>>(
+    vars: Vars,
     _dynamic: &[OrderedRuntimeBindingMap],
     name: &str,
 ) -> Option<Value> {
     vars.value_by_name(name)
 }
 
-pub(crate) fn inherited_text_properties_for_inserted_range_in_state(
-    vars: VariableView<'_>,
+pub(crate) fn inherited_text_properties_for_inserted_range_in_state<
+    'a,
+    Vars: EditVariableRead<'a>,
+>(
+    vars: Vars,
     _dynamic: &[OrderedRuntimeBindingMap],
     buffers: &crate::buffer::BufferManager,
     buf: &crate::buffer::Buffer,
