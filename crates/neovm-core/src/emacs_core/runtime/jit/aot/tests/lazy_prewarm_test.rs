@@ -23,7 +23,8 @@ struct Member {
 impl Member {
     fn function(&self) -> ByteCodeFunction {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![SymId(1)],
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            required: vec![unsafe { SymId::from_raw(1) }],
             optional: Vec::new(),
             rest: None,
         });

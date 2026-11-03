@@ -1251,8 +1251,10 @@ pub unsafe extern "C" fn neovm_jit_named_builtin(
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let mut vm = Vm::from_context(ctx);
         let result = match variant {
-            0 => vm.callbuiltin_for_jit(SymId(sym as u32), args),
-            _ => vm.callbuiltinsym_for_jit(SymId(sym as u32), args),
+            // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+            0 => vm.callbuiltin_for_jit(unsafe { SymId::from_raw(sym as u32) }, args),
+            // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+            _ => vm.callbuiltinsym_for_jit(unsafe { SymId::from_raw(sym as u32) }, args),
         };
         let status = match result {
             Ok(value) => {
@@ -2115,7 +2117,10 @@ pub(crate) fn subr_spec_armed_reference(
     // NEOVM_JIT_FORCE_SLOW_SPEC pretends the armed epoch is stale so every
     // call exercises the re-validate/re-arm branch.
     (!jit_force_slow_spec() && slot_epoch == epoch) || {
-        let cur = ctx.obarray.symbol_function_id(SymId(sym as u32));
+        // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+        let cur = ctx
+            .obarray
+            .symbol_function_id(unsafe { SymId::from_raw(sym as u32) });
         if cur.is_some_and(|v| v.bits() as i64 == expected) {
             slot.epoch.store(epoch, Ordering::Relaxed);
             // Drop the screened-entry cache
@@ -2406,7 +2411,8 @@ pub unsafe extern "C" fn neovm_jit_leaf_signal_frame(
         // shim returns; the frame is popped below before that.
         unsafe {
             ctx.push_backtrace_frame_from_native_args(
-                Value::from_sym_id(SymId(sym as u32)),
+                // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+                Value::from_sym_id(unsafe { SymId::from_raw(sym as u32) }),
                 args_ptr,
                 nargs as usize,
             )
@@ -2495,7 +2501,8 @@ pub unsafe extern "C" fn neovm_jit_call_subr_spec(
         {
             #[cfg(debug_assertions)]
             SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-            let sym_id = SymId(sym as u32);
+            // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+            let sym_id = unsafe { SymId::from_raw(sym as u32) };
             // The slot's screened-entry cache
             // (`SpecSlot::cache_screened_subr_entry`): a hit means the epoch
             // equals the one the entry was screened under, so the tag,
@@ -2588,7 +2595,15 @@ fn subr_spec_call_reference(
     // a debugger armed) takes the stack path below, the reference protocol.
     if !ctx.debug_on_next_call_is_armed()
         && let Some(res) =
-            call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, slot, args_ptr, nargs)
+            // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+            call_fixed_builtin_from_native(
+                ctx,
+                unsafe { SymId::from_raw(sym as u32) },
+                target,
+                slot,
+                args_ptr,
+                nargs,
+            )
     {
         return match res {
             Ok(value) => {
@@ -2602,7 +2617,15 @@ fn subr_spec_call_reference(
             }
         };
     }
-    call_stack_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs, out)
+    // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+    call_stack_builtin_from_native(
+        ctx,
+        unsafe { SymId::from_raw(sym as u32) },
+        target,
+        args_ptr,
+        nargs,
+        out,
+    )
 }
 
 /// Stack-argument fallback for an armed native subr call. Keep its argument
@@ -3190,7 +3213,8 @@ pub unsafe extern "C" fn neovm_jit_cbsym_spec(
         let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        let sym_id = SymId(sym as u32);
+        // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+        let sym_id = unsafe { SymId::from_raw(sym as u32) };
         // Advice/fset/override-immune: NO epoch guard. Re-read the live static entry
         // (in-place-rewrite safe). Not a plain builtin now → bounce so the general
         // shim reproduces void/invalid-function exactly. FORCE_CBSYM_GENERIC forces
@@ -3319,7 +3343,8 @@ pub unsafe extern "C" fn neovm_jit_cbsym_read(
     // or the harness forces it. Decided once, for both paths below.
     if force_cbsym_generic()
         || nargs as usize != cbsym_read_expected_nargs(which)
-        || !crate::emacs_core::eval::global_subr_is_builtin(SymId(sym as u32))
+        // SAFETY: round-trip of interned ids stored in dispatch descriptors (peer seal N8).
+        || !crate::emacs_core::eval::global_subr_is_builtin(unsafe { SymId::from_raw(sym as u32) })
     {
         #[cfg(debug_assertions)]
         CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);

@@ -238,9 +238,12 @@ fn note_patched_prefix_is_monotone_and_reports_stale_leaf() {
 fn call_feedback_packs_and_unpacks() {
     for fb in [
         CallFeedback::Uninit,
-        CallFeedback::Monomorphic(SymId(0)),
-        CallFeedback::Monomorphic(SymId(1)),
-        CallFeedback::Monomorphic(SymId(u32::MAX)),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(0) }),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(1) }),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(u32::MAX) }),
         CallFeedback::Megamorphic,
     ] {
         assert_eq!(CallFeedback::unpack(fb.pack()), fb);
@@ -248,7 +251,8 @@ fn call_feedback_packs_and_unpacks() {
     // Uninit and Monomorphic(0) must be distinct despite the zero SymId.
     assert_ne!(
         CallFeedback::Uninit.pack(),
-        CallFeedback::Monomorphic(SymId(0)).pack()
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(0) }).pack()
     );
 }
 
@@ -260,28 +264,50 @@ fn feedback_lattice_uninit_mono_mega() {
     assert_eq!(rt.call_feedback(pc), CallFeedback::Uninit);
 
     // First observation -> Monomorphic.
-    rt.record_call(pc, ops_len, SymId(42));
-    assert_eq!(rt.call_feedback(pc), CallFeedback::Monomorphic(SymId(42)));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(pc, ops_len, unsafe { SymId::from_raw(42) });
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        rt.call_feedback(pc),
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(42) })
+    );
 
     // Same target -> still Monomorphic.
-    rt.record_call(pc, ops_len, SymId(42));
-    assert_eq!(rt.call_feedback(pc), CallFeedback::Monomorphic(SymId(42)));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(pc, ops_len, unsafe { SymId::from_raw(42) });
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        rt.call_feedback(pc),
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(42) })
+    );
 
     // Different target -> Megamorphic, and it sticks.
-    rt.record_call(pc, ops_len, SymId(7));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(pc, ops_len, unsafe { SymId::from_raw(7) });
     assert_eq!(rt.call_feedback(pc), CallFeedback::Megamorphic);
-    rt.record_call(pc, ops_len, SymId(7));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(pc, ops_len, unsafe { SymId::from_raw(7) });
     assert_eq!(rt.call_feedback(pc), CallFeedback::Megamorphic);
 }
 
 #[test]
 fn feedback_is_per_site() {
     let rt = Runtime::new();
-    rt.record_call(1, 8, SymId(10));
-    rt.record_call(5, 8, SymId(20));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(1, 8, unsafe { SymId::from_raw(10) });
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(5, 8, unsafe { SymId::from_raw(20) });
     assert_eq!(rt.call_feedback(0), CallFeedback::Uninit);
-    assert_eq!(rt.call_feedback(1), CallFeedback::Monomorphic(SymId(10)));
-    assert_eq!(rt.call_feedback(5), CallFeedback::Monomorphic(SymId(20)));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        rt.call_feedback(1),
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(10) })
+    );
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        rt.call_feedback(5),
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(20) })
+    );
     // Out-of-range pc is Uninit, never a panic.
     assert_eq!(rt.call_feedback(99), CallFeedback::Uninit);
 }
@@ -289,7 +315,8 @@ fn feedback_is_per_site() {
 #[test]
 fn out_of_range_record_is_ignored() {
     let rt = Runtime::new();
-    rt.record_call(100, 8, SymId(1)); // pc >= ops_len: no-op, no panic
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(100, 8, unsafe { SymId::from_raw(1) }); // pc >= ops_len: no-op, no panic
     assert_eq!(rt.call_feedback(100), CallFeedback::Uninit);
 }
 
@@ -298,14 +325,21 @@ fn out_of_range_record_is_ignored() {
 #[test]
 fn clone_shares_feedback() {
     let rt = Runtime::new();
-    rt.record_call(2, 8, SymId(5));
-    assert_eq!(rt.call_feedback(2), CallFeedback::Monomorphic(SymId(5)));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    rt.record_call(2, 8, unsafe { SymId::from_raw(5) });
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        rt.call_feedback(2),
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(5) })
+    );
     let instance = rt.clone();
     assert_eq!(
         instance.call_feedback(2),
-        CallFeedback::Monomorphic(SymId(5))
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        CallFeedback::Monomorphic(unsafe { SymId::from_raw(5) })
     );
-    instance.record_call(2, 8, SymId(6));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    instance.record_call(2, 8, unsafe { SymId::from_raw(6) });
     assert_eq!(
         rt.call_feedback(2),
         CallFeedback::Megamorphic,

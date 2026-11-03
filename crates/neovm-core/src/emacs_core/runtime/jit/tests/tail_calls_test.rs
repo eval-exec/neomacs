@@ -21,7 +21,8 @@ fn tail_calls_unrooted() -> usize {
 /// baseline tier and hoists its root window (two rooting sites).
 fn two_calls(tail: bool) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

@@ -378,7 +378,8 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
     // (defun jit-report-add (x) (+ (identity x) 1)): the Add follows a call,
     // so its guard is a precise deopt at pc 4.
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

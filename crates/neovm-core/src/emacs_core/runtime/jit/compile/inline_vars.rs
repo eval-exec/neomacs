@@ -247,7 +247,8 @@ pub(crate) struct VarSite {
 
 fn classify(sym: u32) -> Option<VarSite> {
     with_env(|obarray, mask| {
-        let id = SymId(sym);
+        // SAFETY: round-trip of interned ids stored in inline-var sites (peer seal N8).
+        let id = unsafe { SymId::from_raw(sym) };
         let cell = obarray.jit_symbol_cell_addr(id)?;
         let shape = match obarray.get_by_id(id) {
             Some(symbol) => match symbol.value_cell() {
@@ -1171,7 +1172,12 @@ pub(crate) fn emit_varref_fast(
             let val = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
             let bound = ne_imm(fb, val, Value::UNBOUND.bits() as i64);
             let mut conds: SmallVec<[ClifValue; 3]> = smallvec::smallvec![plain, bound];
-            if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(SymId(site.sym)).is_some() {
+            // SAFETY: round-trip of interned ids stored in inline-var sites (peer seal N8).
+            if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(unsafe {
+                SymId::from_raw(site.sym)
+            })
+            .is_some()
+            {
                 conds.push(ne_imm(fb, val, Value::NIL.bits() as i64));
             }
             (all(fb, &conds), val)

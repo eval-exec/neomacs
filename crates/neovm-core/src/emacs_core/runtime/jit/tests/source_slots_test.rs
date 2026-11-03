@@ -14,7 +14,10 @@ use crate::emacs_core::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs).map(SymId).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=nargs)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });
@@ -393,8 +396,10 @@ fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
     // (lambda (x &optional y) x): the site passes one argument.
     let proto = {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![SymId(1)],
-            optional: vec![SymId(2)],
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            required: vec![unsafe { SymId::from_raw(1) }],
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            optional: vec![unsafe { SymId::from_raw(2) }],
             rest: None,
         });
         f.lexical = true;

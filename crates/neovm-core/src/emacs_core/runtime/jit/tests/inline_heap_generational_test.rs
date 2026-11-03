@@ -72,8 +72,10 @@ fn minor(context: &mut Context) {
 fn store_function(op: Op) -> ByteCodeFunction {
     let mut function = ByteCodeFunction::new(LambdaParams {
         required: vec![
-            crate::emacs_core::intern::SymId(1),
-            crate::emacs_core::intern::SymId(2),
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(1) },
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(2) },
         ],
         optional: Vec::new(),
         rest: None,

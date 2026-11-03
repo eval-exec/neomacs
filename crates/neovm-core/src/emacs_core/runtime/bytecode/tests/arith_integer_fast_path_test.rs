@@ -175,8 +175,10 @@ fn arithmetic_opcodes_answer_integer_operands_directly() {
         let want = rooted(&mut eval, want);
         let mut f = ByteCodeFunction::new(crate::emacs_core::value::LambdaParams {
             required: vec![
-                crate::emacs_core::intern::SymId(1),
-                crate::emacs_core::intern::SymId(2),
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                unsafe { crate::emacs_core::intern::SymId::from_raw(1) },
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                unsafe { crate::emacs_core::intern::SymId::from_raw(2) },
             ],
             optional: Vec::new(),
             rest: None,
@@ -219,8 +221,10 @@ fn division_opcode_preserves_fixnum_boundaries_and_slow_conditions() {
     ];
     let mut f = ByteCodeFunction::new(crate::emacs_core::value::LambdaParams {
         required: vec![
-            crate::emacs_core::intern::SymId(1),
-            crate::emacs_core::intern::SymId(2),
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(1) },
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(2) },
         ],
         optional: Vec::new(),
         rest: None,

@@ -424,7 +424,8 @@ fn emits_value_fixups_for_raw_slots_that_need_runtime_remap() {
     // dump-local id, not the raw id.
     assert_eq!(
         read_usize(&heap.bytes, slots.offset as usize),
-        TaggedValue::from_sym_id(crate::emacs_core::intern::SymId(42)).bits()
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        TaggedValue::from_sym_id(unsafe { crate::emacs_core::intern::SymId::from_raw(42) }).bits()
     );
 }
 

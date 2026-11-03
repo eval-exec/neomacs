@@ -175,7 +175,9 @@ pub(crate) fn callee_is_symbol_const(
 ) -> bool {
     use cranelift_codegen::ir::immediates::Offset32;
     use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef};
-    let expected_bits = Value::from_sym_id(crate::emacs_core::intern::SymId(sym)).bits();
+    // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+    let expected_bits =
+        Value::from_sym_id(unsafe { crate::emacs_core::intern::SymId::from_raw(sym) }).bits();
     let ValueDef::Result(inst, _) = fb.func.dfg.value_def(v) else {
         return false;
     };
@@ -1445,7 +1447,8 @@ fn emit_inline_cbsym_read(
         _ => return None,
     };
     let Some((bits_addr, bits_mask)) =
-        crate::emacs_core::eval::builtin_sym_bit_probe(crate::emacs_core::intern::SymId(sym))
+        // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+        crate::emacs_core::eval::builtin_sym_bit_probe(unsafe { crate::emacs_core::intern::SymId::from_raw(sym) })
     else {
         return None;
     };
@@ -3224,7 +3227,8 @@ pub(super) fn lower_mir_with_plan(
                 .map(|s| {
                     (
                         s.slot,
-                        crate::emacs_core::intern::SymId(s.sym),
+                        // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+                        unsafe { crate::emacs_core::intern::SymId::from_raw(s.sym) },
                         s.expected_bits,
                     )
                 }),
@@ -7627,7 +7631,8 @@ fn lower_simple_op_arms(
                 super::inline_vars::emit_varref_fast(fb, rt, &site, res, slow, cont);
             } else {
                 let refuse_nil = crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(
-                    crate::emacs_core::intern::SymId(sym),
+                    // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+                    unsafe { crate::emacs_core::intern::SymId::from_raw(sym) },
                 )
                 .is_some();
                 let val = super::intrinsics::emit_symbol_cell_read(fb, rt, sym_v, refuse_nil, slow);
@@ -7813,7 +7818,8 @@ fn lower_simple_op_arms(
                 && let Some((sym, _, _, _, SpecCalleeKind::ArithIntrinsic { op })) = spec
                 && arith_op_inlines(op)
                 && intrinsic_fast_path_is_call_free(crate::emacs_core::intern::resolve_sym(
-                    crate::emacs_core::intern::SymId(sym),
+                    // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+                    unsafe { crate::emacs_core::intern::SymId::from_raw(sym) },
                 ))
                 && super::call_site_inlinable_at(pc)
             {
@@ -8011,7 +8017,11 @@ fn lower_simple_op_arms(
             // stores: a mismatch enters the generic-fallback block below.
             let guard_generic: Option<Block> = guarded_sym
                 .map(|sym| {
-                    let bits = Value::from_sym_id(crate::emacs_core::intern::SymId(sym)).bits();
+                    // SAFETY: round-trip of interned ids stored in JIT lowering descriptors (peer seal N8).
+                    let bits = Value::from_sym_id(unsafe {
+                        crate::emacs_core::intern::SymId::from_raw(sym)
+                    })
+                    .bits();
                     #[cfg(test)]
                     let bits = if FORCE_SPEC_GUARD_MISS.with(|c| c.get()) {
                         !bits

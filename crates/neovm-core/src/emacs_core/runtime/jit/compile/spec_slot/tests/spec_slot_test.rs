@@ -73,7 +73,11 @@ fn a_subr_general_or_fboundp_slot_carries_its_binding_and_the_others_are_empty()
     .bits() as u64;
     let bound = SpecSlot::for_site(SpecCalleeKind::SubrGeneral, 7, 42, expected);
     assert!(bound.holds_subr_binding());
-    assert_eq!(bound.subr_binding(), (SymId(42), expected));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        bound.subr_binding(),
+        (unsafe { SymId::from_raw(42) }, expected)
+    );
     assert_eq!(word_at(&bound, SPEC_SLOT_EPOCH_OFFSET), 7);
     assert!(bound.direct_entry().is_null());
     // `PredFboundp` binds too: its dedicated 4-argument shim recovers the
@@ -82,7 +86,11 @@ fn a_subr_general_or_fboundp_slot_carries_its_binding_and_the_others_are_empty()
     // move (`SpecSlot::for_site`'s doc).
     let fboundp = SpecSlot::for_site(SpecCalleeKind::PredFboundp, 8, 43, expected);
     assert!(fboundp.holds_subr_binding());
-    assert_eq!(fboundp.subr_binding(), (SymId(43), expected));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    assert_eq!(
+        fboundp.subr_binding(),
+        (unsafe { SymId::from_raw(43) }, expected)
+    );
     assert_eq!(word_at(&fboundp, SPEC_SLOT_EPOCH_OFFSET), 8);
     assert!(fboundp.direct_entry().is_null());
     for kind in [

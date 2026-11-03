@@ -91,7 +91,9 @@ pub(crate) mod vm_profile {
     }
     fn site_key_name(key: u64) -> String {
         if key & 7 == 1 {
-            crate::emacs_core::intern::resolve_sym(SymId((key >> 3) as u32)).to_string()
+            // SAFETY: round-trip of an interned id stored in a packed site/var-read stats key (peer seal N8).
+            crate::emacs_core::intern::resolve_sym(unsafe { SymId::from_raw((key >> 3) as u32) })
+                .to_string()
         } else {
             match key {
                 SITE_KEY_CLOSURE_VAL => "#<closure-val>".to_string(),
@@ -443,7 +445,8 @@ pub(crate) mod vm_profile {
             "symbol", "reads", "%", "plain", "pl-nil", "nil-blv", "localizd", "forward", "slow"
         );
         for (sym, classes, total) in sym_rows.iter().take(40) {
-            let name = crate::emacs_core::intern::resolve_sym(SymId(*sym));
+            // SAFETY: round-trip of an interned id stored in a packed site/var-read stats key (peer seal N8).
+            let name = crate::emacs_core::intern::resolve_sym(unsafe { SymId::from_raw(*sym) });
             let pct = 100.0 * *total as f64 / vr_total.max(1) as f64;
             let _ = writeln!(
                 out,

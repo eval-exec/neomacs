@@ -4005,7 +4005,8 @@ fn lower_leaf_body_with_plan(
             |s| {
                 (
                     s.slot,
-                    crate::emacs_core::intern::SymId(s.sym),
+                    // SAFETY: round-trip of an interned id stored in the spec-site descriptor (peer seal N8).
+                    unsafe { crate::emacs_core::intern::SymId::from_raw(s.sym) },
                     s.expected_bits,
                 )
             },

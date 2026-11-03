@@ -41,7 +41,8 @@ pub(super) fn capture(
         {
             continue;
         }
-        let sym = crate::emacs_core::intern::SymId(site.sym);
+        // SAFETY: round-trip of an interned id stored in the snapshot site (peer seal N8).
+        let sym = unsafe { crate::emacs_core::intern::SymId::from_raw(site.sym) };
         let Some(binding) = obarray.symbol_function_id(sym) else {
             continue;
         };

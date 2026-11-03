@@ -1226,7 +1226,8 @@ pub unsafe extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64)
         use crate::emacs_core::intern::SymId;
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        let sym_id = SymId(sym as u32);
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        let sym_id = unsafe { SymId::from_raw(sym as u32) };
         // The interpreter's `fast_path_var_ref` first branch, without a Vm:
         // a plain, bound, non-nil value is the answer (28K reads per org
         // font-lock op paid a Vm construction and two frames for it). nil
@@ -1287,8 +1288,10 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
             // A plain cell: one store, no safe point, so no scratch roots and
             // no `Vm` (see `Context::try_set_plain_variable`); likewise a
             // cached buffer-local or forwarded store (P1.4 A2).
-            if ctx.try_set_plain_variable(SymId(sym as u32), value)
-                || ctx.try_set_var_cached_compiled(SymId(sym as u32), value)
+            // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+            if ctx.try_set_plain_variable(unsafe { SymId::from_raw(sym as u32) }, value)
+                // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+                || ctx.try_set_var_cached_compiled(unsafe { SymId::from_raw(sym as u32) }, value)
             {
                 return STATUS_OK;
             }
@@ -1298,7 +1301,8 @@ pub unsafe extern "C" fn neovm_jit_varset_collection(ctx: *mut u8, sym: i64, val
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let mut vm = Vm::from_context(ctx);
-        let status = match vm.varset_for_jit(SymId(sym as u32), value) {
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        let status = match vm.varset_for_jit(unsafe { SymId::from_raw(sym as u32) }, value) {
             Ok(()) => STATUS_OK,
             Err(flow) => {
                 stash_pending_flow(flow);
@@ -1330,8 +1334,10 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
             // A plain cell: one store, no safe point, so no scratch roots and
             // no `Vm` (see `Context::try_set_plain_variable`); likewise a
             // cached buffer-local or forwarded store (P1.4 A2).
-            if ctx.try_set_plain_variable(SymId(sym as u32), value)
-                || ctx.try_set_var_cached(SymId(sym as u32), value)
+            // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+            if ctx.try_set_plain_variable(unsafe { SymId::from_raw(sym as u32) }, value)
+                // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+                || ctx.try_set_var_cached(unsafe { SymId::from_raw(sym as u32) }, value)
             {
                 return STATUS_OK;
             }
@@ -1341,7 +1347,8 @@ pub unsafe extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
         let mut vm = Vm::from_context(ctx);
-        let status = match vm.varset_for_jit(SymId(sym as u32), value) {
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        let status = match vm.varset_for_jit(unsafe { SymId::from_raw(sym as u32) }, value) {
             Ok(()) => STATUS_OK,
             Err(flow) => {
                 stash_pending_flow(flow);
@@ -1374,8 +1381,10 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
         // general `try_specbind` cost more than the bind itself on a source
         // load, where nearly every `let` is of a plain global.
         // Likewise a cached buffer-local or forwarded bind (P1.4 A3).
-        if ctx.specbind_plain_untrapped_fast(SymId(sym as u32), value)
-            || ctx.specbind_cached_compiled(SymId(sym as u32), value)
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        if ctx.specbind_plain_untrapped_fast(unsafe { SymId::from_raw(sym as u32) }, value)
+            // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+            || ctx.specbind_cached_compiled(unsafe { SymId::from_raw(sym as u32) }, value)
         {
             ctx.jit_bind_stack.push(bind_depth);
             return STATUS_OK;
@@ -1383,7 +1392,8 @@ pub unsafe extern "C" fn neovm_jit_varbind_collection(ctx: *mut u8, sym: i64, va
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(value);
         // Both tiers refused: the general `specbind`, without retrying them.
-        let status = match ctx.specbind_uncached(SymId(sym as u32), value) {
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        let status = match ctx.specbind_uncached(unsafe { SymId::from_raw(sym as u32) }, value) {
             Ok(()) => {
                 ctx.jit_bind_stack.push(bind_depth);
                 STATUS_OK
@@ -1421,8 +1431,10 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
         // general `try_specbind` cost more than the bind itself on a source
         // load, where nearly every `let` is of a plain global.
         // Likewise a cached buffer-local or forwarded bind (P1.4 A3).
-        if ctx.specbind_plain_untrapped_fast(SymId(sym as u32), value)
-            || ctx.specbind_cached(SymId(sym as u32), value)
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        if ctx.specbind_plain_untrapped_fast(unsafe { SymId::from_raw(sym as u32) }, value)
+            // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+            || ctx.specbind_cached(unsafe { SymId::from_raw(sym as u32) }, value)
         {
             ctx.jit_bind_stack.push(bind_depth);
             return STATUS_OK;
@@ -1430,7 +1442,8 @@ pub unsafe extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> 
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(value);
         // Both tiers refused: the general `specbind`, without retrying them.
-        let status = match ctx.specbind_uncached(SymId(sym as u32), value) {
+        // SAFETY: round-trip of interned ids stored in shim descriptors (peer seal N8).
+        let status = match ctx.specbind_uncached(unsafe { SymId::from_raw(sym as u32) }, value) {
             Ok(()) => {
                 ctx.jit_bind_stack.push(bind_depth);
                 STATUS_OK

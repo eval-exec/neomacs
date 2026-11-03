@@ -34,7 +34,10 @@ use crate::emacs_core::value::{LambdaParams, Value, ValueKind};
 
 fn bc(required: u32, ops: Vec<Op>, constants: Vec<Value>, hot: bool) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=required).map(SymId).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=required)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });

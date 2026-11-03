@@ -310,7 +310,8 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
     let mut eval = Context::new_minimal_vm_harness();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (0..nargs)
-            .map(|i| crate::emacs_core::intern::SymId(1 + i as u32))
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            .map(|i| unsafe { crate::emacs_core::intern::SymId::from_raw(1 + i as u32) })
             .collect(),
         optional: Vec::new(),
         rest: None,
@@ -763,7 +764,8 @@ fn aot_reloc_const_is_gc_rooted_via_compiled_walk() {
     test_support::inject_unit(content_hash, unit);
 
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![crate::emacs_core::intern::SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { crate::emacs_core::intern::SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -873,7 +875,8 @@ fn aot_hit_serves_without_jitting_through_cache() {
     test_support::inject_unit(content_hash, unit);
 
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![crate::emacs_core::intern::SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { crate::emacs_core::intern::SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -920,7 +923,8 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
 
     // Candidate A: (lambda (a) (+ a 5)) — pure arith, required-only → D0 AOT.
     let mut a = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -935,8 +939,10 @@ fn r2_enumerate_loadup_leaves_finds_d0_candidates() {
     // Non-candidate B: an &OPTIONAL fn — rejected by the required-only filter
     // (matches the MIR pure-tier arity shape).
     let mut b = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
-        optional: vec![SymId(2)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        optional: vec![unsafe { SymId::from_raw(2) }],
         rest: None,
     });
     b.lexical = true;
@@ -1049,7 +1055,8 @@ fn r2_prepopulate_native_from_call_1_and_survives_gc() {
     let constants = vec![Value::make_int(5)];
     let _arity = 1usize;
     let mut a = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -1142,7 +1149,8 @@ fn r2_prepopulate_skips_on_preload_miss() {
 
     let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
     let mut a = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -1205,7 +1213,8 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
 
     let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
     let mut a = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -1282,7 +1291,8 @@ fn r2_prepopulate_never_overwrites_existing_jit_leaf() {
         sym,
         Value::make_bytecode({
             let mut b = ByteCodeFunction::new(LambdaParams {
-                required: vec![SymId(1)],
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                required: vec![unsafe { SymId::from_raw(1) }],
                 optional: Vec::new(),
                 rest: None,
             });
@@ -1434,7 +1444,8 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         (
             "prod-pf-member-add5",
             mk(
-                vec![SymId(1)],
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                vec![unsafe { SymId::from_raw(1) }],
                 vec![],
                 member_ops.clone(),
                 member_consts.clone(),
@@ -1443,7 +1454,8 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         (
             "prod-pf-nonmember-throw",
             mk(
-                vec![SymId(1)],
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                vec![unsafe { SymId::from_raw(1) }],
                 vec![],
                 throw_ops.clone(),
                 throw_consts.clone(),
@@ -1453,7 +1465,8 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
             "prod-pf-optional",
             mk(
                 vec![],
-                vec![SymId(1)],
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                vec![unsafe { SymId::from_raw(1) }],
                 member_ops.clone(),
                 member_consts.clone(),
             ),
@@ -1461,7 +1474,8 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
         (
             "prod-pf-glue",
             mk(
-                vec![SymId(1)],
+                // SAFETY: test placeholder id, never resolved (peer seal N8).
+                vec![unsafe { SymId::from_raw(1) }],
                 vec![],
                 glue_ops.clone(),
                 glue_consts.clone(),
@@ -1543,7 +1557,8 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
     let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
     let mk = |ops: Vec<Op>, consts: Vec<Value>| {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![SymId(1)],
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            required: vec![unsafe { SymId::from_raw(1) }],
             optional: Vec::new(),
             rest: None,
         });
@@ -1685,7 +1700,8 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
     let ops = vec![Op::Constant(0), Op::Add, Op::Return];
     let consts = vec![Value::make_int(5)];
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -1758,7 +1774,8 @@ fn pgo_pred_body(callee: &str) -> crate::emacs_core::bytecode::ByteCodeFunction 
     use crate::emacs_core::intern::{SymId, intern};
     use crate::emacs_core::value::LambdaParams;
     let mut f = crate::emacs_core::bytecode::ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

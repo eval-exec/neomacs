@@ -26,7 +26,8 @@ fn float_fn(
 ) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (0..arity)
-            .map(|i| crate::emacs_core::intern::SymId(i as u32 + 1))
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            .map(|i| unsafe { crate::emacs_core::intern::SymId::from_raw(i as u32 + 1) })
             .collect(),
         optional: Vec::new(),
         rest: None,
@@ -852,7 +853,8 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
     let mut ev = Context::new();
     // (lambda (x) x), spliced into the caller.
     let mut callee = ByteCodeFunction::new(LambdaParams {
-        required: vec![crate::emacs_core::intern::SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { crate::emacs_core::intern::SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

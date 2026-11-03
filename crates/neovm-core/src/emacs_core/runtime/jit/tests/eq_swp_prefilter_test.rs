@@ -24,7 +24,10 @@ enum Shape {
 }
 
 fn body(ops: Vec<Op>, constants: Vec<Value>, arity: usize, shape: Shape) -> ByteCodeFunction {
-    let params: Vec<SymId> = (0..arity).map(|i| SymId(i as u32 + 1)).collect();
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let params: Vec<SymId> = (0..arity)
+        .map(|i| unsafe { SymId::from_raw(i as u32 + 1) })
+        .collect();
     let (required, optional) = match shape {
         Shape::RequiredOnly => (params, Vec::new()),
         Shape::WithOptional => (params[..1].to_vec(), params[1..].to_vec()),

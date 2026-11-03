@@ -144,7 +144,8 @@ fn reinstalling_a_different_leaf_clears_the_jit_cache() {
     let mut ctx = Context::new();
     // `(lambda (a) (+ a 1))`, hot, so one call compiles and caches it.
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

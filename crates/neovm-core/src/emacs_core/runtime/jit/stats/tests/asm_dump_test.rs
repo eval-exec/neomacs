@@ -30,7 +30,8 @@ fn jit_asm_dump_appends_every_compiled_leaf() {
     });
     // (lambda (x) (+ x 1)) through the cache, so it is labelled with its id.
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

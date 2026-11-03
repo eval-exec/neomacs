@@ -55,7 +55,8 @@ impl NativeTables {
                 .iter()
                 .enumerate()
                 .filter(|(_, entry)| entry.is_some())
-                .map(|(index, _)| SymId(index as u32)),
+                // SAFETY: round-trip of an interned bootstrap id (peer seal N8).
+                .map(|(index, _)| unsafe { SymId::from_raw(index as u32) }),
         );
         let native = Self {
             subrs,

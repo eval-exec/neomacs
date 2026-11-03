@@ -85,7 +85,8 @@ impl Context {
             while word != 0 {
                 let bit = word.trailing_zeros() as usize;
                 word &= word - 1;
-                let id = SymId((word_index * 64 + bit) as u32);
+                // SAFETY: round-trip of an interned id stored in the owner mirror (peer seal N8).
+                let id = unsafe { SymId::from_raw((word_index * 64 + bit) as u32) };
                 let visible = match self.find_symbol_value_by_id(id) {
                     Ok(SymbolValueLookup::Bound(value)) => value,
                     _ => Value::NIL,

@@ -44,7 +44,8 @@ impl Default for FormHeadCache {
         Self {
             slots: std::array::from_fn(|_| FormHeadSlot {
                 epoch: Cell::new(EMPTY_EPOCH),
-                sym: Cell::new(SymId(0)),
+                // SAFETY: round-trip of an interned id cached for the form head (peer seal N8).
+                sym: Cell::new(unsafe { SymId::from_raw(0) }),
                 head: Cell::new(FormHead::EMPTY),
             }),
         }

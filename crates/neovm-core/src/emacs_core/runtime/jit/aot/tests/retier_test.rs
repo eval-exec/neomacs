@@ -51,7 +51,8 @@ fn link_call_glue_in_unit_host(object: &[u8], path: &std::path::Path) {
 
 fn unary(ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -355,7 +356,8 @@ fn cached_symbol_calls_reach_request(t2: bool) {
         .named()
         .expect("named fixture parameters")
         .clone();
-    params.optional.push(SymId(2));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    params.optional.push(unsafe { SymId::from_raw(2) });
     caller.params = params.into();
     let caller = Value::make_bytecode(caller);
     f.ctx
@@ -500,7 +502,8 @@ fn aot_retier_call_glue_preserves_native_admission_with_the_profit_gate_on() {
                 .named()
                 .expect("named fixture parameters")
                 .clone();
-            params.optional.push(SymId(2));
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            params.optional.push(unsafe { SymId::from_raw(2) });
             callee.params = params.into();
             let callee = Value::make_bytecode(callee);
             ctx.obarray.set_symbol_function_id(callee_name, callee);

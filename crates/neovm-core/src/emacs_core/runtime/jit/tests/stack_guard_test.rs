@@ -209,7 +209,8 @@ fn only_bodies_that_can_reenter_lisp_are_guarded() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     let function = |ops: Vec<Op>, constants: Vec<Value>| {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![crate::emacs_core::intern::SymId(1)],
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            required: vec![unsafe { crate::emacs_core::intern::SymId::from_raw(1) }],
             optional: Vec::new(),
             rest: None,
         });

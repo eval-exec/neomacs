@@ -2296,8 +2296,10 @@ fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) 
     ev.eval_str("(setq aot-rebuild-count 0) (fset 'aot-rebuild-effect (lambda () (setq aot-rebuild-count (1+ aot-rebuild-count))))").unwrap();
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
-            crate::emacs_core::intern::SymId(1),
-            crate::emacs_core::intern::SymId(2),
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(1) },
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(2) },
         ],
         optional: Vec::new(),
         rest: None,
@@ -2431,7 +2433,10 @@ pub fn testkit_call_bearing_selftest(dir: &std::path::Path) -> Result<(), String
 
     let mk_fn = |ops: Vec<Op>, constants: Vec<Value>, required: usize| {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: (0..required).map(|i| SymId(1 + i as u32)).collect(),
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: (0..required)
+                .map(|i| unsafe { SymId::from_raw(1 + i as u32) })
+                .collect(),
             optional: Vec::new(),
             rest: None,
         });
@@ -2606,7 +2611,10 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
 
     let mk_fn = |required: usize| {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: (0..required).map(|i| SymId(1 + i as u32)).collect(),
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: (0..required)
+                .map(|i| unsafe { SymId::from_raw(1 + i as u32) })
+                .collect(),
             optional: Vec::new(),
             rest: None,
         });
@@ -2753,7 +2761,8 @@ pub fn testkit_baseline_deep_rawslot_deopt_selftest(dir: &std::path::Path) -> Re
 
     let mk_fn = || {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![SymId(1), SymId(2)],
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
             optional: Vec::new(),
             rest: None,
         });
@@ -2900,7 +2909,8 @@ pub fn testkit_callbuiltinsym_aot_selftest(dir: &std::path::Path) -> Result<(), 
 
     let mk_fn = || {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![SymId(1)],
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: vec![unsafe { SymId::from_raw(1) }],
             optional: Vec::new(),
             rest: None,
         });
@@ -3018,7 +3028,10 @@ fn cbsym_aot_serve_and_check(
 
     let mk = || {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: (1..=arity as u32).map(SymId).collect(),
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: (1..=arity as u32)
+                .map(|id| unsafe { SymId::from_raw(id) })
+                .collect(),
             optional: Vec::new(),
             rest: None,
         });
@@ -3298,7 +3311,10 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
     for b in &bodies {
         let mk_fn = || {
             let mut f = ByteCodeFunction::new(LambdaParams {
-                required: (0..b.arity).map(|i| SymId(1 + i as u32)).collect(),
+                // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+                required: (0..b.arity)
+                    .map(|i| unsafe { SymId::from_raw(1 + i as u32) })
+                    .collect(),
                 optional: Vec::new(),
                 rest: None,
             });
@@ -3465,7 +3481,10 @@ pub fn testkit_spec_aot_selftest(dir: &std::path::Path) -> Result<(), String> {
         ops.push(Op::Call(pushes.len() as u16));
         ops.push(Op::Return);
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: (0..arity).map(|i| SymId(1 + i as u32)).collect(),
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: (0..arity)
+                .map(|i| unsafe { SymId::from_raw(1 + i as u32) })
+                .collect(),
             optional: Vec::new(),
             rest: None,
         });
@@ -3831,7 +3850,10 @@ pub fn testkit_pgo_roundtrip_selftest(dir: &std::path::Path) -> Result<(), Strin
         ops.push(Op::Call(pushes.len() as u16));
         ops.push(Op::Return);
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: (0..arity).map(|i| SymId(1 + i as u32)).collect(),
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: (0..arity)
+                .map(|i| unsafe { SymId::from_raw(1 + i as u32) })
+                .collect(),
             optional: Vec::new(),
             rest: None,
         });
@@ -3951,7 +3973,8 @@ pub fn testkit_pgo_drain_selftest(dir: &std::path::Path) -> Result<(), String> {
     };
     let mk_fn = |callee: &str| -> ByteCodeFunction {
         let mut f = ByteCodeFunction::new(LambdaParams {
-            required: vec![SymId(1)],
+            // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+            required: vec![unsafe { SymId::from_raw(1) }],
             optional: Vec::new(),
             rest: None,
         });
@@ -4101,7 +4124,8 @@ fn ev_alias_and_build(
         .ok_or("builtin 'recordp' unbound")?;
     c.obarray.set_symbol_function("pgo-off-callee", cell);
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: round-trip of interned ids stored in AOT descriptors (testkit uses placeholders) (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

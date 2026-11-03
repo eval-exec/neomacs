@@ -16,7 +16,10 @@ use crate::emacs_core::value::LambdaParams;
 
 fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs).map(SymId).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=nargs)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });

@@ -16,7 +16,10 @@ use crate::emacs_core::value::LambdaParams;
 /// test's lifetime, hot (tiered up at its first call) when HOT.
 fn lambda(nargs: usize, hot: bool, ops: Vec<Op>, constants: Vec<Value>) -> Value {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs).map(|i| SymId(i as u32)).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=nargs)
+            .map(|i| unsafe { SymId::from_raw(i as u32) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });
@@ -395,7 +398,10 @@ fn subr_spec_armed_before_the_split(
     }
     let epoch = ctx.obarray.function_epoch();
     (!jit_force_slow_spec() && slot_epoch == epoch) || {
-        let cur = ctx.obarray.symbol_function_id(SymId(sym as u32));
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        let cur = ctx
+            .obarray
+            .symbol_function_id(unsafe { SymId::from_raw(sym as u32) });
         if cur.is_some_and(|v| v.bits() as i64 == expected) {
             slot.epoch.store(epoch, Ordering::Relaxed);
             true
@@ -485,7 +491,8 @@ fn a_subr_spec_site_under_compiler_overrides_takes_the_generic_call() {
     let ctx = &mut ev as *mut Context as *mut u8;
     // (lambda (x) (symbol-name x))
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

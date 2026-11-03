@@ -67,7 +67,10 @@ const POOL: &[&str] = &[
 
 fn params(n: usize) -> LambdaParams {
     LambdaParams {
-        required: (1..=n as u32).map(SymId).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=n as u32)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     }

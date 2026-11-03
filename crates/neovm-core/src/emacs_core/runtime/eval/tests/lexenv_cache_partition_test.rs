@@ -15,7 +15,8 @@ use crate::emacs_core::{Context, Value};
 fn constant_slots_are_reserved_from_every_dynamic_symbol() {
     let lexenv_bits = 0x1234_5678_9abc_usize;
     for id in 0..256u32 {
-        let sym = SymId(id);
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        let sym = unsafe { SymId::from_raw(id) };
         let slot = lexenv_assq_slot(lexenv_bits, sym);
         match LexenvConstant::from_sym_id(sym) {
             Some(constant) => {

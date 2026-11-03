@@ -34,9 +34,16 @@ fn bc_with(
 ) -> ByteCodeFunction {
     let nonrest = required + optional;
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=required).map(SymId).collect(),
-        optional: (required + 1..=nonrest).map(SymId).collect(),
-        rest: rest.then_some(SymId(nonrest + 1)),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=required)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        optional: (required + 1..=nonrest)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        rest: rest.then_some(unsafe { SymId::from_raw(nonrest + 1) }),
     });
     f.lexical = true;
     f.ops = ops;

@@ -46,7 +46,10 @@ fn finish_pending(ev: &mut Context, f: &ByteCodeFunction, result: Value) {
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (0..arity).map(|i| SymId(i as u32 + 1)).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (0..arity)
+            .map(|i| unsafe { SymId::from_raw(i as u32 + 1) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });

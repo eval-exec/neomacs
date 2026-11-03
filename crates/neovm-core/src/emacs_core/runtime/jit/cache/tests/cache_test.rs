@@ -487,8 +487,10 @@ fn runs_with_args_and_rejects_arity_mismatch() {
     // (lambda (a b) (+ a b)), lexical so params are on the stack.
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
-            crate::emacs_core::intern::SymId(1),
-            crate::emacs_core::intern::SymId(2),
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(1) },
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            unsafe { crate::emacs_core::intern::SymId::from_raw(2) },
         ],
         optional: Vec::new(),
         rest: None,
@@ -523,7 +525,8 @@ fn runs_with_args_and_rejects_arity_mismatch() {
 fn unary_add_one() -> ByteCodeFunction {
     // (lambda (x) (+ x 1))
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });
@@ -832,7 +835,8 @@ fn spec_callee_kind_disc_round_trips() {
 fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (0..arity)
-            .map(|i| crate::emacs_core::intern::SymId(i as u32 + 1))
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            .map(|i| unsafe { crate::emacs_core::intern::SymId::from_raw(i as u32 + 1) })
             .collect(),
         optional: Vec::new(),
         rest: None,

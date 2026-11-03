@@ -19,7 +19,10 @@ mod pending_tests;
 
 fn function(nargs: usize, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs).map(|i| SymId(i as u32)).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=nargs)
+            .map(|i| unsafe { SymId::from_raw(i as u32) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });

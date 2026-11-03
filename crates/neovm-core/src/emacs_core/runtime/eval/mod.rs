@@ -3803,7 +3803,8 @@ impl GcSettingSyms {
 
     #[inline]
     fn threshold(self) -> SymId {
-        SymId(self.threshold.get())
+        // SAFETY: round-trip: NonZero niche of an interned symbol id (peer seal N8).
+        unsafe { SymId::from_raw(self.threshold.get()) }
     }
 
     fn all(&self) -> [SymId; 4] {

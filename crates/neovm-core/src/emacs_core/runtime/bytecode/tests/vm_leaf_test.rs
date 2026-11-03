@@ -13,7 +13,10 @@ use crate::emacs_core::value::LambdaParams;
 /// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
 fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (1..=nargs as u32).map(SymId).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=nargs as u32)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });
@@ -271,7 +274,8 @@ fn a_leaf_signal_runs_under_the_builtins_frame() {
 fn a_leaf_signal_is_caught_in_the_calling_body() {
     let mut ev = Context::new();
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1), SymId(2)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
         optional: Vec::new(),
         rest: None,
     });

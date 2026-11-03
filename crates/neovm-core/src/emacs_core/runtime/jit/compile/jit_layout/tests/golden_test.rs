@@ -361,7 +361,8 @@ fn binding_record_images_preserve_unbound_values_and_optional_buffers() {
         for old_value in [Value::NIL, Value::UNBOUND, Value::fixnum(-71)] {
             for buffer in [None, Some(BufferId(1)), Some(BufferId(u64::MAX))] {
                 let entry = SpecBinding::LetDefault {
-                    sym_id: crate::emacs_core::intern::SymId(sym_id),
+                    // SAFETY: test placeholder id, never resolved (peer seal N8).
+                    sym_id: unsafe { crate::emacs_core::intern::SymId::from_raw(sym_id) },
                     old_value: crate::emacs_core::eval::SavedBindingValue::from_plain(old_value),
                     buffer_id: crate::emacs_core::eval::SavedBufferId::from_option(buffer),
                 };
@@ -510,7 +511,8 @@ fn variable_words_are_where_compiled_code_reads_them() {
     );
     assert!(
         ev.obarray
-            .jit_symbol_cell_addr(crate::emacs_core::intern::SymId(u32::MAX))
+            // SAFETY: test placeholder id, never resolved (peer seal N8).
+            .jit_symbol_cell_addr(unsafe { crate::emacs_core::intern::SymId::from_raw(u32::MAX) })
             .is_none()
     );
     // The loaded BLV cache (read above, so loaded for this buffer).

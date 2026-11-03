@@ -1804,7 +1804,13 @@ impl MappedHeapBuilder {
                 // 127K-entry symbol fixup walk is skipped wholesale; the
                 // fallback (non-fresh registry: bootstrap cache-miss reload,
                 // in-process test loads) untags, remaps, and re-tags.
-                Some(TaggedValue::from_sym_id(crate::emacs_core::intern::SymId(id.0)).bits())
+                // SAFETY: dump-local id under the baked format-v12 identity remap (peer seal N8).
+                Some(
+                    TaggedValue::from_sym_id(unsafe {
+                        crate::emacs_core::intern::SymId::from_raw(id.0)
+                    })
+                    .bits(),
+                )
             }
             _ => {
                 let (target_offset, tag) = mapped_heap_ref_target(value, heap)?;

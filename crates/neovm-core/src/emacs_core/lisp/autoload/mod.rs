@@ -31,7 +31,8 @@ static AUTOLOAD_SYMBOL_ID: AtomicU32 = AtomicU32::new(UNSET_AUTOLOAD_SYMBOL_ID);
 fn autoload_symbol_id() -> SymId {
     let cached = AUTOLOAD_SYMBOL_ID.load(Ordering::Relaxed);
     if cached != UNSET_AUTOLOAD_SYMBOL_ID {
-        return SymId(cached);
+        // SAFETY: round-trip of an interned id stored in the autoload table (peer seal N8).
+        return unsafe { SymId::from_raw(cached) };
     }
     let id = intern("autoload");
     AUTOLOAD_SYMBOL_ID.store(id.0, Ordering::Relaxed);

@@ -7272,9 +7272,12 @@ fn interactive_heap_specs_track_the_heap_valued_specs() {
     };
 
     let mut registry = InteractiveRegistry::new();
-    let heap = SymId(101);
-    let plain = SymId(102);
-    let flipped = SymId(103);
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let heap = unsafe { SymId::from_raw(101) };
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let plain = unsafe { SymId::from_raw(102) };
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    let flipped = unsafe { SymId::from_raw(103) };
 
     registry.register_interactive(heap, InteractiveSpec::new("p"));
     registry.register_interactive(plain, InteractiveSpec { spec: Value::NIL });

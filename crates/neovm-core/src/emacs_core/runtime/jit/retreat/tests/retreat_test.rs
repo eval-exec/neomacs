@@ -108,7 +108,8 @@ fn a_precise_deopt_counts_in_the_history_and_outlives_the_leaf() {
     // (lambda (x) (+ x 1)), held to the baseline, whose `+` deopts
     // precisely on a float.
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }],
         optional: Vec::new(),
         rest: None,
     });

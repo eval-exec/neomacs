@@ -548,7 +548,8 @@ impl CallSiteFeedback {
         let state = self.state.load(Ordering::Relaxed);
         let n = match state & TAG_BITS {
             _ if state == STATE_UNINIT => return CallTarget::Uninit,
-            TAG_SYM => return CallTarget::Sym(SymId((state >> 3) as u32)),
+            // SAFETY: round-trip of an interned id stored in the feedback site (peer seal N8).
+            TAG_SYM => return CallTarget::Sym(unsafe { SymId::from_raw((state >> 3) as u32) }),
             TAG_SOURCE => 1,
             TAG_POLY => (state >> 3) as usize,
             _ => return CallTarget::Mega,

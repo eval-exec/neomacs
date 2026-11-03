@@ -11,7 +11,10 @@ use crate::emacs_core::value::LambdaParams;
 
 pub(crate) fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
-        required: (0..arity).map(|i| SymId(i as u32 + 1)).collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (0..arity)
+            .map(|i| unsafe { SymId::from_raw(i as u32 + 1) })
+            .collect(),
         optional: Vec::new(),
         rest: None,
     });
@@ -764,7 +767,8 @@ fn optional_add1() -> ByteCodeFunction {
         1,
     );
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.optional = vec![SymId(9)];
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    params.optional = vec![unsafe { SymId::from_raw(9) }];
     f.params = params.into();
     f
 }
@@ -818,7 +822,8 @@ fn jit_pipeline_leaf_records_its_mir_verdict() {
         .named()
         .expect("named fixture parameters")
         .clone();
-    params.rest = Some(SymId(10));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    params.rest = Some(unsafe { SymId::from_raw(10) });
     rest.params = params.into();
     assert_eq!(
         verdict(&rest),

@@ -2738,9 +2738,12 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
     let mut ids = Vec::with_capacity(n_ids);
     for chunk in bytes[header_len..ids_end].chunks_exact(4) {
         // ALREADY-RUNTIME ids: no remap survives to first call, by design.
-        ids.push(crate::emacs_core::intern::SymId(u32::from_le_bytes([
-            chunk[0], chunk[1], chunk[2], chunk[3],
-        ])));
+        // SAFETY: image remap validated by the loader (ALREADY-RUNTIME ids) (peer seal N8).
+        ids.push(unsafe {
+            crate::emacs_core::intern::SymId::from_raw(u32::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3],
+            ]))
+        });
     }
     let optional = ids.split_off(header.n_required as usize);
     // SAFETY: stub finalization checked the tag, depth and fixed-up arglist
@@ -2752,7 +2755,10 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
                 required: ids,
                 optional,
                 rest: (flags & BC_FLAG_HAS_REST != 0)
-                    .then_some(crate::emacs_core::intern::SymId(header.rest_sym)),
+                    // SAFETY: image remap validated by the loader (ALREADY-RUNTIME ids) (peer seal N8).
+                    .then_some(unsafe {
+                        crate::emacs_core::intern::SymId::from_raw(header.rest_sym)
+                    }),
             })
         });
 

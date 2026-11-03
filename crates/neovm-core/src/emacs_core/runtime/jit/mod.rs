@@ -300,7 +300,9 @@ impl CallFeedback {
     const fn pack(self) -> u64 {
         match self {
             CallFeedback::Uninit => 0b00,
-            CallFeedback::Monomorphic(SymId(n)) => ((n as u64) << 2) | 0b01,
+            // Pattern read of the packed word: bind the symbol and read
+            // its id via `to_raw` (peer seal N8) instead of binding the field.
+            CallFeedback::Monomorphic(sym) => ((sym.to_raw() as u64) << 2) | 0b01,
             CallFeedback::Megamorphic => 0b10,
         }
     }
@@ -309,7 +311,8 @@ impl CallFeedback {
     fn unpack(bits: u64) -> Self {
         match bits & 0b11 {
             0b00 => CallFeedback::Uninit,
-            0b01 => CallFeedback::Monomorphic(SymId((bits >> 2) as u32)),
+            // SAFETY: round-trip of an interned id stored in the site descriptor (peer seal N8).
+            0b01 => CallFeedback::Monomorphic(unsafe { SymId::from_raw((bits >> 2) as u32) }),
             0b10 => CallFeedback::Megamorphic,
             // The mask yields only 0..=3 and 0b11 is a reserved (unused) tag;
             // treat it as the safe over-approximation rather than panicking.

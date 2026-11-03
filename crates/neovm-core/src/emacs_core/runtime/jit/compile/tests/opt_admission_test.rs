@@ -93,10 +93,12 @@ fn opt_admits_optional_and_rest_with_gnu_argument_seeding() {
     params.required.truncate(1);
     f.params = params.into();
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.optional = vec![SymId(2)];
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    params.optional = vec![unsafe { SymId::from_raw(2) }];
     f.params = params.into();
     let mut params = f.params.named().expect("named fixture parameters").clone();
-    params.rest = Some(SymId(3));
+    // SAFETY: test placeholder id, never resolved (peer seal N8).
+    params.rest = Some(unsafe { SymId::from_raw(3) });
     f.params = params.into();
     let leaf = compile(&ctx, &f);
     assert_eq!(leaf.required, 1);

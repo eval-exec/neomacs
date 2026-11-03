@@ -19,9 +19,16 @@ fn lister(required: u32, optional: u32, rest: bool, hot: bool) -> ByteCodeFuncti
     let nonrest = required + optional;
     let n = nonrest + u32::from(rest);
     let mut function = ByteCodeFunction::new(LambdaParams {
-        required: (1..=required).map(SymId).collect(),
-        optional: (required + 1..=nonrest).map(SymId).collect(),
-        rest: rest.then_some(SymId(nonrest + 1)),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: (1..=required)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        optional: (required + 1..=nonrest)
+            .map(|id| unsafe { SymId::from_raw(id) })
+            .collect(),
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        rest: rest.then_some(unsafe { SymId::from_raw(nonrest + 1) }),
     });
     function.lexical = true;
     function.ops = (0..n).map(|_| Op::StackRef((n - 1) as u16)).collect();
@@ -118,7 +125,8 @@ fn apply2_bytecode_unwinds_frame_and_caller_roots_on_signal() {
     let mut eval = Context::new();
     let roots = eval.save_vm_roots();
     let mut function = ByteCodeFunction::new(LambdaParams {
-        required: vec![SymId(1), SymId(2)],
+        // SAFETY: test placeholder id, never resolved (peer seal N8).
+        required: vec![unsafe { SymId::from_raw(1) }, unsafe { SymId::from_raw(2) }],
         optional: Vec::new(),
         rest: None,
     });

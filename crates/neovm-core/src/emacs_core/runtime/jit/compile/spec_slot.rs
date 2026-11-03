@@ -332,7 +332,8 @@ impl SpecSlot {
     #[inline(always)]
     pub(crate) fn subr_binding(&self) -> (SymId, u64) {
         (
-            SymId(self.direct_consts.load(Ordering::Relaxed) as u32),
+            // SAFETY: round-trip of an interned id stored in the spec slot (peer seal N8).
+            unsafe { SymId::from_raw(self.direct_consts.load(Ordering::Relaxed) as u32) },
             self.leaf.load(Ordering::Relaxed),
         )
     }
