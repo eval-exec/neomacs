@@ -853,12 +853,14 @@ impl ThreadChildren {
 }
 
 impl MutexPayload {
+    /// A new mutex is always unlocked: the payload owns no lock state until
+    /// the mutator that acquires it records ownership.
     #[doc(hidden)]
-    pub fn new(id: MutexId, name: Option<LispString>, ownership: MutexOwnership) -> Self {
+    pub fn new(id: MutexId, name: Option<LispString>) -> Self {
         Self {
             id,
             name,
-            ownership,
+            ownership: MutexOwnership::Unlocked,
         }
     }
 }

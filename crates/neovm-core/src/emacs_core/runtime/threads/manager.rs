@@ -556,9 +556,7 @@ impl ThreadManager {
 
     pub(crate) fn create_mutex(&mut self, name: Option<LispString>) -> Result<MutexHandle, Flow> {
         let id = self.ids.issue_mutex().map_err(identity_exhausted)?;
-        let value = with_tagged_heap(|heap| {
-            heap.alloc_mutex(MutexPayload::new(id, name, MutexOwnership::Unlocked))
-        });
+        let value = with_tagged_heap(|heap| heap.alloc_mutex(MutexPayload::new(id, name)));
         Ok(MutexHandle { value, id })
     }
 

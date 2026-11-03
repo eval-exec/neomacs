@@ -5642,14 +5642,31 @@ impl PropertyInterval {
 impl PropertyInterval {
     #[doc(hidden)]
     pub fn from_parts(
-        start: usize,
-        end: usize,
+        range: CharRange,
         properties: HashMap<Value, Value>,
         key_order: Vec<Value>,
     ) -> Self {
+        debug_assert_eq!(
+            key_order.len(),
+            properties.len(),
+            "key_order must cover every property key exactly once"
+        );
+        debug_assert!(
+            key_order
+                .iter()
+                .all(|key| properties.keys().any(|candidate| eq_value(candidate, key))),
+            "key_order must be a permutation of the property keys"
+        );
+        debug_assert!(
+            !key_order
+                .iter()
+                .enumerate()
+                .any(|(index, key)| key_order[..index].iter().any(|seen| eq_value(seen, key))),
+            "key_order must not repeat a property key"
+        );
         Self {
-            start,
-            end,
+            start: range.start().get(),
+            end: range.end().get(),
             properties,
             key_order,
         }

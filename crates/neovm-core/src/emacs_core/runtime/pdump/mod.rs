@@ -811,7 +811,7 @@ fn reconstruct_evaluator_after_symbol_table_with_decoder_and_value_fixups(
         crate::buffer::buffer::OwnedBufferStorageParts::try_from(load_buffer_manager(
             &mut decoder,
             &state.buffers,
-        ))
+        )?)
         .map_err(|error| DumpError::DeserializationError(error.to_string()))?,
         load_autoload_manager(&mut decoder, &state.autoloads),
         load_custom_manager(&state.custom),

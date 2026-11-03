@@ -3375,12 +3375,13 @@ fn remap_text_property_table(
             let start = char_map(interval.start);
             let end = char_map(interval.end);
             let key_order = interval.key_order().clone();
-            (start < end).then_some(crate::buffer::text_props::PropertyInterval::from_parts(
-                start,
-                end,
-                interval.properties,
-                key_order,
-            ))
+            (start < end).then(|| {
+                crate::buffer::text_props::PropertyInterval::from_parts(
+                    CharRange::new(CharPos0::new(start), CharPos0::new(end)),
+                    interval.properties,
+                    key_order,
+                )
+            })
         })
         .collect();
     crate::buffer::text_props::TextPropertyTable::from_dump(intervals)

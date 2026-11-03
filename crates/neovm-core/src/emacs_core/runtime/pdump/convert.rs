@@ -23,7 +23,7 @@ use crate::buffer::overlay::{Overlay, OverlayList};
 use crate::buffer::shared::{SavedPointBeforeCommand, SharedUndoState};
 use crate::buffer::text::{BufferTextBytesSnapshot, ImplementedBufferTextBackendKind};
 use crate::buffer::text_props::{PropertyInterval, TextPropertyTable};
-use crate::buffer::{CharPos0, EmacsBytePos, LispCharPos1, TextPositionAnchor};
+use crate::buffer::{CharLen, CharPos0, CharRange, EmacsBytePos, LispCharPos1, TextPositionAnchor};
 // Undo state is now stored directly as a Lisp Value in buffer-local properties.
 use crate::emacs_core::abbrev::{Abbrev, AbbrevManager, AbbrevTable};
 use crate::emacs_core::advice::{VariableWatcher, VariableWatcherList};
@@ -5685,7 +5685,7 @@ pub(crate) fn load_obarray(
 fn load_property_interval(
     decoder: &mut LoadDecoder,
     pi: &DumpPropertyInterval,
-) -> PropertyInterval {
+) -> Result<PropertyInterval, DumpError> {
     let properties: std::collections::HashMap<
         crate::emacs_core::value::Value,
         crate::emacs_core::value::Value,
@@ -5699,7 +5699,17 @@ fn load_property_interval(
         .iter()
         .map(|(k, _)| decoder.load_value(k))
         .collect();
-    PropertyInterval::from_parts(pi.start, pi.end, properties, key_order)
+    // The dump carries raw endpoints. Refuse an inverted interval instead of
+    // clamping or panicking: deriving the length first rejects start > end,
+    // and `CharRange::from_start_len` then holds start <= end by construction.
+    let len = pi.end.checked_sub(pi.start).ok_or_else(|| {
+        DumpError::ImageFormatError(format!(
+            "text property interval start {} exceeds end {}",
+            pi.start, pi.end
+        ))
+    })?;
+    let range = CharRange::from_start_len(CharPos0::new(pi.start), CharLen::new(len));
+    Ok(PropertyInterval::from_parts(range, properties, key_order))
 }
 
 // load_undo_record removed — undo state is loaded from buffer-local properties.
@@ -5723,7 +5733,7 @@ fn load_buffer(
     decoder: &mut LoadDecoder,
     db: &DumpBuffer,
     saved_point_before_command: SavedPointBeforeCommand,
-) -> Buffer {
+) -> Result<Buffer, DumpError> {
     let text = BufferText::from_snapshot_with_backend_kind(
         BufferTextBytesSnapshot::new(db.text.text.clone(), db.multibyte),
         load_buffer_text_backend_kind(db.text.backend_kind),
@@ -5920,7 +5930,7 @@ fn load_buffer(
             .intervals
             .iter()
             .map(|interval| load_property_interval(decoder, interval))
-            .collect(),
+            .collect::<Result<Vec<_>, DumpError>>()?,
     );
     text.text_props_replace(text_props);
 
@@ -5965,7 +5975,7 @@ fn load_buffer(
         Value::NIL
     };
 
-    Buffer::from_dump_parts(BufferDumpParts {
+    Ok(Buffer::from_dump_parts(BufferDumpParts {
         id: BufferId(db.id.0),
         name,
         last_name,
@@ -6074,13 +6084,13 @@ fn load_buffer(
         overlay_modified_tick: 1,
         undo_state: SharedUndoState::from_parts(undo_list, false, false),
         saved_point_before_command,
-    })
+    }))
 }
 
 pub(crate) fn load_buffer_manager(
     decoder: &mut LoadDecoder,
     dbm: &DumpBufferManager,
-) -> BufferManager {
+) -> Result<BufferManager, DumpError> {
     // GNU's `point_before_last_command_or_undo` pair are plain statics: they
     // start over on each startup and no command has run yet.  Mint the one
     // cell here and hand every restored buffer a clone of it.
@@ -6089,12 +6099,12 @@ pub(crate) fn load_buffer_manager(
         .buffers
         .iter()
         .map(|(id, buf)| {
-            (
+            Ok((
                 BufferId(id.0),
-                load_buffer(decoder, buf, saved_point_before_command.clone()),
-            )
+                load_buffer(decoder, buf, saved_point_before_command.clone())?,
+            ))
         })
-        .collect();
+        .collect::<Result<_, DumpError>>()?;
     // New in the current dump format: `buffer_defaults` ride through
     // pdump so runtime `setq-default` writes survive. Older dumps
     // (no `buffer_defaults` field) deserialize as an empty Vec via
@@ -6116,7 +6126,7 @@ pub(crate) fn load_buffer_manager(
     } else {
         Some(order_values.as_slice())
     };
-    BufferManager::from_dump(
+    Ok(BufferManager::from_dump(
         buffers,
         dbm.current.map(|id| BufferId(id.0)),
         dbm.next_id,
@@ -6124,7 +6134,7 @@ pub(crate) fn load_buffer_manager(
         dumped_defaults,
         load_buffer_text_backend_kind(dbm.default_text_backend_kind),
         saved_point_before_command,
-    )
+    ))
 }
 
 // --- Sub-managers ---

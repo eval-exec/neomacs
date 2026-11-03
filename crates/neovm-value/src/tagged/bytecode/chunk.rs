@@ -103,7 +103,9 @@ impl LazyGnuCode {
     ///
     /// # Safety
     /// the returned StackProof is the verifier's result for exactly the
-    /// returned ops.
+    /// returned ops, and `DecodedGnuCode::stack_verified` may be true only
+    /// when that same proof is the verifier's result for exactly these ops:
+    /// once the payload is published, the VM trusts the flag.
     #[doc(hidden)]
     pub unsafe fn decoded_or_init_with(
         &self,

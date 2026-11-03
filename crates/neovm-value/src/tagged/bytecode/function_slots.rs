@@ -342,6 +342,9 @@ impl StackParamShape {
 impl StackParamShape {
     #[doc(hidden)]
     pub fn new(required: usize, nonrest: usize, rest: RestSlot) -> Self {
+        // Installation proves the required count fits inside the non-rest
+        // prefix; below it, `accepts` would wrap past the interval's width.
+        debug_assert!(required <= nonrest);
         Self {
             required,
             nonrest,
