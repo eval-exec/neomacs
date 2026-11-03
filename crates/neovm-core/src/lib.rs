@@ -34,6 +34,10 @@ pub use emacs_core::error::{EvalError, Flow, FlowKind, FlowRef, FlowResultExt};
 pub use emacs_core::eval::Context;
 pub use emacs_core::value::{Value, ValueKind};
 
+// Preserve canonical value-layer paths in unchanged relocated test bodies.
+#[cfg(test)]
+pub(crate) use emacs_core::{error, value};
+
 pub const CORE_BACKEND: &str = "rust";
 
 // GNU seeds emacs-version from configure.ac's PACKAGE_VERSION; version.el

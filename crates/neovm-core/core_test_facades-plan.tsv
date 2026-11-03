@@ -43,3 +43,4 @@ tagged::gc::symbol_barrier_tests	tagged/gc.rs	crates/neovm-core/core_tests/tagge
 tagged::gc::mark_sweep::weak_key_gc_tests	tagged/gc/mark_sweep.rs	crates/neovm-core/core_tests/tagged/gc/tests/weak_key_gc_test.rs	../../../core_tests/tagged/gc/tests/weak_key_gc_test.rs
 tagged::value::gc_tls_ownership_tests	tagged/value.rs	crates/neovm-core/core_tests/tagged/value/tests/gc_tls_ownership_test.rs	../../core_tests/tagged/value/tests/gc_tls_ownership_test.rs
 heap_types::marker_test	heap_types.rs	crates/neovm-core/core_tests/tests/heap_types_marker_test.rs	../core_tests/tests/heap_types_marker_test.rs
+emacs_core::errors::tests	emacs_core/errors.rs	crates/neovm-core/core_tests/emacs_core/runtime/errors/tests/errors_test.rs	../../core_tests/emacs_core/runtime/errors/tests/errors_test.rs
