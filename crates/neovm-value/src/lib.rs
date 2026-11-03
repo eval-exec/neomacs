@@ -16,3 +16,7 @@ pub mod tls_scope;
 /// item's visibility changes under this feature.
 #[cfg(feature = "test-support")]
 pub mod test_support;
+
+/// Upper-free test helpers shared with core's test build (peer-signed R7c).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_utils;

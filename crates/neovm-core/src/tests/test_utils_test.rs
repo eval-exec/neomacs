@@ -17,19 +17,13 @@ use crate::emacs_core::load::{
     create_runtime_startup_evaluator_cached, find_file_in_load_path, get_load_path, load_file,
 };
 use crate::emacs_core::value::Value;
-use crate::emacs_core::{Context, format_eval_result};
+use crate::emacs_core::{format_eval_result, Context};
 use crate::heap_types::LispString;
 use std::path::PathBuf;
 
-/// Initialize the tracing subscriber for test output.
-///
-/// Thin wrapper around [`crate::logging::init_for_tests`] kept for the
-/// many existing call sites in this crate's test files. Tests never
-/// write to a log file regardless of `NEOMACS_LOG_TO_FILE` — output is
-/// always routed through the test harness's writer.
-pub fn init_test_tracing() {
-    crate::logging::init_for_tests();
-}
+pub use neovm_value::test_utils::{
+    cargo_workspace_root, init_test_tracing, nextest_workspace_root, workspace_root,
+};
 
 /// The abbreviation the platform's own `gmtime_r` reports for UTC.
 ///
@@ -82,26 +76,6 @@ pub fn signal_data_bytes(flow: crate::emacs_core::error::Flow) -> (String, Vec<V
         ),
         other => panic!("expected a signal, got {other:?}"),
     }
-}
-
-/// The workspace root baked in at compile time — the **build** machine's
-/// path, wrong for archive-shipped binaries on every other runner.  Only
-/// [`workspace_root`] reads it.
-pub fn cargo_workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
-}
-
-/// The workspace root nextest exports at runtime: the live workspace on
-/// the running machine.  `None` outside nextest.
-pub fn nextest_workspace_root() -> Option<PathBuf> {
-    std::env::var_os("NEXTEST_WORKSPACE_ROOT").map(PathBuf::from)
-}
-
-/// The workspace root of the machine *running* the test: nextest's runtime
-/// value when present, the compile-time constant otherwise.  The fallback
-/// order lives here once, so no call site can get it wrong.
-pub fn workspace_root() -> PathBuf {
-    nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
 }
 
 /// Find a GNU Lisp file on `load_path`, naming the workspace root and which
@@ -582,7 +556,7 @@ pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
 ///
 /// Re-exported so unit tests write `crate::test_utils::gnu_oracle()` rather
 /// than each carrying its own environment/default-path discovery.
-pub use neomacs_test_oracle::gnu::{GnuOracle, gnu_oracle};
+pub use neomacs_test_oracle::gnu::{gnu_oracle, GnuOracle};
 
 /// The canonical environment for GNU oracles spawned by in-crate unit tests.
 ///
@@ -889,5 +863,5 @@ mod tests {
 pub mod mock_redisplay;
 
 pub(crate) use crate::emacs_core::eval::subr_abi::{
-    SubrValueExt, builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
+    builtin_hof_entry_for_test, leaked_subr_metadata_for_test, SubrValueExt,
 };

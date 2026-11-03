@@ -4351,7 +4351,6 @@ dependencies = [
  "tl",
  "toml",
  "tracing",
- "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
  "tracing-test",
