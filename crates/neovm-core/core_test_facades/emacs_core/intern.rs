@@ -10,3 +10,7 @@ pub use neovm_value::intern::*;
 
 #[path = "intern/well_known.rs"]
 pub mod well_known;
+
+#[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/intern/tests/intern_test.rs"]
+mod tests;
