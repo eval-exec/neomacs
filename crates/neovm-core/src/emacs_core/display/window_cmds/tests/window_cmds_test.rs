@@ -8044,6 +8044,57 @@ fn delete_parent_frame_cascades_to_gui_child_overlays() {
 }
 
 #[test]
+fn x_create_frame_applies_early_init_default_frame_alist_bars() {
+    // #600: an early-init file setting these in `default-frame-alist' must
+    // reach the opening frame. `make-frame' merges `default-frame-alist' into
+    // the parameter list it hands to `frame-creation-function', which is the
+    // `x-create-frame' call modeled here.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    ev.frames.create_frame("F1", 800, 600, buf);
+    ev.set_display_host(Box::new(RecordingDisplayHost::new()));
+
+    let out = ev.eval_str_each(
+        r#"(let ((default-frame-alist '((menu-bar-lines . 0)
+                                        (tool-bar-lines . 0)
+                                        (vertical-scroll-bars))))
+             (x-create-frame default-frame-alist))"#,
+    );
+    let frame_value = out[0].as_ref().expect("x-create-frame should succeed");
+    let fid = crate::window::FrameId(
+        frame_value
+            .as_frame_id()
+            .expect("x-create-frame returns a frame"),
+    );
+    let frame = ev.frames.get(fid).expect("created frame");
+
+    assert_eq!(
+        frame.parameter("menu-bar-lines"),
+        Some(Value::fixnum(0)),
+        "menu-bar-lines from default-frame-alist must reach the frame"
+    );
+    assert_eq!(
+        frame.parameter("tool-bar-lines"),
+        Some(Value::fixnum(0)),
+        "tool-bar-lines from default-frame-alist must reach the frame"
+    );
+    let scroll_bars = frame.parameter("vertical-scroll-bars");
+    assert!(
+        scroll_bars.is_none_or(|value| value.is_nil()),
+        "the bare (vertical-scroll-bars) entry means nil, got {scroll_bars:?}"
+    );
+    assert_eq!(frame.menu_bar_height, 0);
+    assert_eq!(frame.tool_bar_height, 0);
+    assert_eq!(
+        frame.root_window().bounds().y,
+        0.0,
+        "with both bars disabled the root window starts at the top"
+    );
+}
+
+#[test]
 fn x_create_frame_reserves_tab_bar_space_above_root_window() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
