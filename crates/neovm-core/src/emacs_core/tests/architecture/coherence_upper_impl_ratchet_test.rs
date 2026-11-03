@@ -486,6 +486,40 @@ fn coherence_ratchet_reddens_on_a_synthetic_moved_type() {
     );
 }
 
+/// Positive fixture for the T1 shape: an upper-local extension trait
+/// (`ByteCodeFunctionExt`, the trait jitcall adds) implemented for a lowered
+/// type is legal after the move because the trait is local to the implementing
+/// crate. The moving-file `Clone` impl is equally legal. Neither may be
+/// reported; only upper inhabits/foreign traits on the moved type count.
+#[test]
+fn coherence_ratchet_accepts_an_upper_local_trait_impl_on_a_moved_type() {
+    let parsed = vec![
+        (
+            "tagged/bytecode/chunk.rs".to_string(),
+            syn::parse_file(
+                "pub struct ByteCodeFunction;\n\
+                 impl Clone for ByteCodeFunction { fn clone(&self) -> Self { ByteCodeFunction } }",
+            )
+            .expect("moved source"),
+        ),
+        (
+            "emacs_core/runtime/bytecode/chunk.rs".to_string(),
+            syn::parse_file(
+                "pub trait ByteCodeFunctionExt { fn inspect(&self); }\n\
+                 impl ByteCodeFunctionExt for ByteCodeFunction { fn inspect(&self) {} }",
+            )
+            .expect("upper source"),
+        ),
+    ];
+    let (violations, _) = scan_sources(&parsed);
+    assert_eq!(
+        violations.len(),
+        0,
+        "an upper-local trait impl on a moved type is legal:\n{}",
+        render_violations(&violations)
+    );
+}
+
 /// Legal forms stay uncounted: an impl written in the moving file itself, an
 /// upper-local trait for a moved type, and a foreign trait with an upper type
 /// argument (the RFC 2451 covered rule).
