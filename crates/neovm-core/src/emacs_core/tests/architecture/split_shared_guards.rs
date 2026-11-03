@@ -11,11 +11,13 @@
 //!    list `(type, method, protected caller)`.  No workspace crate other than
 //!    neovm-core and neovm-value may call a listed method.
 //! 3. **PC2 hook installers**: rows in `pc2_hook_seams.tsv` list
-//!    `(installer, seam file:function, seam file:function)`; calls to the
-//!    installer are allowed only at those two seams.
+//!    `(kind, installer, adapter, seam file:function, seam file:function)`;
+//!    production installers and adapters form exact two-seam chains, while
+//!    test-only installers are restricted to their named test adapter.
 //! 4. **TA2 authority fence**: `test_support::authority` may be named only
 //!    from `crates/neovm-core/core_tests/**`, never from `src/**`, including
-//!    aliases and glob imports.
+//!    aliases and glob imports, across every workspace member and target.
+//!    Only the actual value-layer authority definition is exempt.
 //!
 //! All scans are fail-closed: unparseable sources, missing tables, malformed
 //! rows and any occurrence not accounted for by an allowed site fail.
@@ -23,6 +25,7 @@
 use proc_macro2::Span;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use syn::{Expr, Item, UseTree};
 
@@ -200,13 +203,6 @@ fn cleaned_code(text: &str) -> String {
 
 fn line_of(span: Span) -> usize {
     span.start().line
-}
-
-fn rs_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let mut files = BTreeSet::new();
-    guard_walk_sources(root, &mut BTreeSet::new(), &mut files)
-        .unwrap_or_else(|error| panic!("{error}"));
-    out.extend(files);
 }
 
 fn parse_file(path: &Path) -> Result<(String, syn::File), String> {
@@ -1819,7 +1815,10 @@ fn parse_pc2_table(text: &str) -> Result<Vec<Pc2Row>, String> {
                 }
             }
             "test_only" => {
-                if fields[2].is_empty() || !matches!(fields[3], "" | "-") || !matches!(fields[4], "" | "-") {
+                if fields[2].is_empty()
+                    || !matches!(fields[3], "" | "-")
+                    || !matches!(fields[4], "" | "-")
+                {
                     return Err("PC2_TABLE: test_only needs a named adapter and empty seams".into());
                 }
                 Pc2Kind::TestOnly {
@@ -2776,53 +2775,725 @@ fn architecture_pc2_guard_self_test() {
 }
 
 // ---------------------------------------------------------------------------
-// TA2: authority fence is core_tests-only.
+// TA2: workspace-wide authority references, with defining-module resolution.
 // ---------------------------------------------------------------------------
 
-fn compact_whitespace(text: &str) -> String {
-    text.chars().filter(|c| !c.is_whitespace()).collect()
+#[derive(Default)]
+struct Ta2Definitions {
+    authority_files: BTreeSet<PathBuf>,
+    // Only this declaration is exempt in its parent, never the parent file.
+    declaration: Option<(PathBuf, usize)>,
 }
 
-pub(crate) fn scan_authority_fence(core_root: &Path) -> Result<(), Vec<String>> {
-    let src = core_root.join("src");
-    let mut files = Vec::new();
-    rs_files(&src, &mut files);
-    let mut violations = Vec::new();
-    for path in files {
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) => {
-                violations.push(format!("{}: {error}", path.display()));
-                continue;
+fn ta2_error(path: &Path, line: usize, code: &str, detail: &str) -> String {
+    format!("{}:{line}: {code}: {detail}", path.display())
+}
+
+fn ta2_manifest(root: &Path) -> Result<toml::Value, String> {
+    let path = root.join("Cargo.toml");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| ta2_error(&path, 0, "TA2_MANIFEST", &e.to_string()))?;
+    text.parse::<toml::Value>()
+        .map_err(|e| ta2_error(&path, 0, "TA2_MANIFEST", &e.to_string()))
+}
+
+fn ta2_external_module(
+    declaration: &syn::ItemMod,
+    declaration_file: &Path,
+    module_dir: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    let mut explicit = None;
+    for attr in &declaration.attrs {
+        if attr.path().is_ident("path") {
+            let syn::Meta::NameValue(value) = &attr.meta else {
+                return Err(ta2_error(
+                    declaration_file,
+                    line_of(attr.span()),
+                    "TA2_MODULE_UNRESOLVED",
+                    "invalid #[path]",
+                ));
+            };
+            let Expr::Lit(value) = &value.value else {
+                return Err(ta2_error(
+                    declaration_file,
+                    line_of(attr.span()),
+                    "TA2_MODULE_UNRESOLVED",
+                    "nonliteral #[path]",
+                ));
+            };
+            let syn::Lit::Str(value) = &value.lit else {
+                return Err(ta2_error(
+                    declaration_file,
+                    line_of(attr.span()),
+                    "TA2_MODULE_UNRESOLVED",
+                    "nonstring #[path]",
+                ));
+            };
+            if explicit.replace(value.value()).is_some() {
+                return Err(ta2_error(
+                    declaration_file,
+                    line_of(attr.span()),
+                    "TA2_MODULE_UNRESOLVED",
+                    "multiple #[path] attributes",
+                ));
             }
-        };
-        let cleaned = cleaned_code(&text);
-        let compact = compact_whitespace(&cleaned);
-        if compact.contains("test_support::authority") {
-            violations.push(format!(
-                "{}: names test_support::authority from core src (fence is core_tests/** only)",
-                path.display()
-            ));
         }
-        if compact.contains("test_support::*") {
-            violations.push(format!(
-                "{}: glob-imports test_support (can reach authority)",
-                path.display()
-            ));
-        }
-        if let Some(rest) = compact.split("test_supportas").nth(1) {
-            let alias: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            if !alias.is_empty() && compact.contains(&format!("{alias}::authority")) {
-                violations.push(format!(
-                    "{}: aliases test_support as {alias} and names {alias}::authority",
-                    path.display()
+        if attr.path().is_ident("cfg_attr") {
+            let text = attr
+                .meta
+                .require_list()
+                .map_err(|e| e.to_string())?
+                .tokens
+                .to_string();
+            if text
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .any(|s| s == "path")
+            {
+                return Err(ta2_error(
+                    declaration_file,
+                    line_of(attr.span()),
+                    "TA2_MODULE_UNRESOLVED",
+                    "conditional #[path] requires review",
                 ));
             }
         }
     }
+    let path = if let Some(explicit) = explicit {
+        module_dir.join(explicit)
+    } else {
+        let name = declaration.ident.to_string();
+        let flat = module_dir.join(format!("{name}.rs"));
+        let nested = module_dir.join(&name).join("mod.rs");
+        match (flat.try_exists(), nested.try_exists()) {
+            (Ok(true), Ok(false)) => flat,
+            (Ok(false), Ok(true)) => nested,
+            (Ok(a), Ok(b)) => {
+                return Err(ta2_error(
+                    declaration_file,
+                    line_of(declaration.ident.span()),
+                    "TA2_MODULE_UNRESOLVED",
+                    &format!("module {name}: flat={a}, nested={b}"),
+                ));
+            }
+            (a, b) => {
+                return Err(ta2_error(
+                    declaration_file,
+                    0,
+                    "TA2_MODULE_UNRESOLVED",
+                    &format!("{a:?}; {b:?}"),
+                ));
+            }
+        }
+    };
+    let path = path
+        .canonicalize()
+        .map_err(|e| ta2_error(&path, 0, "TA2_MODULE_UNRESOLVED", &e.to_string()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("TA2_MODULE_UNRESOLVED: {} has no parent", path.display()))?;
+    let child_dir = if path.file_name().is_some_and(|s| s == "mod.rs") {
+        parent.to_path_buf()
+    } else {
+        parent.join(
+            path.file_stem()
+                .ok_or_else(|| format!("TA2_MODULE_UNRESOLVED: {} has no stem", path.display()))?,
+        )
+    };
+    Ok((path, child_dir))
+}
+
+fn ta2_authority_submodules(
+    items: &[Item],
+    file: &Path,
+    module_dir: &Path,
+    definitions: &mut Ta2Definitions,
+    active: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    for item in items {
+        let Item::Mod(module) = item else { continue };
+        if let Some((_, items)) = &module.content {
+            ta2_authority_submodules(
+                items,
+                file,
+                &module_dir.join(module.ident.to_string()),
+                definitions,
+                active,
+            )?;
+        } else {
+            let (child, child_dir) = ta2_external_module(module, file, module_dir)?;
+            if !active.insert(child.clone()) {
+                return Err(ta2_error(
+                    &child,
+                    0,
+                    "TA2_MODULE_UNRESOLVED",
+                    "cyclic authority module graph",
+                ));
+            }
+            definitions.authority_files.insert(child.clone());
+            let (_, parsed) = parse_file(&child)?;
+            ta2_authority_submodules(&parsed.items, &child, &child_dir, definitions, active)?;
+            active.remove(&child);
+        }
+    }
+    Ok(())
+}
+
+fn ta2_definitions(sources: &[GuardSource]) -> Result<Ta2Definitions, String> {
+    let roots: BTreeSet<_> = sources
+        .iter()
+        .filter(|s| s.package == "neovm-value")
+        .map(|s| s.member_root.clone())
+        .collect();
+    if roots.len() != 1 {
+        return Err(format!(
+            "TA2_MODULE_UNRESOLVED: expected one neovm-value member, found {}",
+            roots.len()
+        ));
+    }
+    let root = roots
+        .iter()
+        .next()
+        .ok_or_else(|| "TA2_MODULE_UNRESOLVED: absent neovm-value".to_string())?;
+    let manifest = ta2_manifest(root)?;
+    let lib = manifest
+        .get("lib")
+        .and_then(|v| v.get("path"))
+        .and_then(toml::Value::as_str)
+        .unwrap_or("src/lib.rs");
+    let lib = root
+        .join(lib)
+        .canonicalize()
+        .map_err(|e| format!("TA2_MODULE_UNRESOLVED: value lib: {e}"))?;
+    let (_, parsed) = parse_file(&lib)?;
+    let support: Vec<_> = parsed
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Mod(m) if m.ident == "test_support" => Some(m),
+            _ => None,
+        })
+        .collect();
+    if support.len() != 1 {
+        return Err(ta2_error(
+            &lib,
+            0,
+            "TA2_MODULE_UNRESOLVED",
+            "expected exactly one test_support declaration",
+        ));
+    }
+    let support = support[0];
+    let lib_dir = lib
+        .parent()
+        .ok_or_else(|| "TA2_MODULE_UNRESOLVED: lib parent".to_string())?;
+    let (file, module_dir, items) = if let Some((_, items)) = &support.content {
+        (lib.clone(), lib_dir.join("test_support"), items.clone())
+    } else {
+        let (file, dir) = ta2_external_module(support, &lib, lib_dir)?;
+        let (_, parsed) = parse_file(&file)?;
+        (file, dir, parsed.items)
+    };
+    let authority: Vec<_> = items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Mod(m) if m.ident == "authority" => Some(m),
+            _ => None,
+        })
+        .collect();
+    let mut definitions = Ta2Definitions::default();
+    match authority.as_slice() {
+        [] => {} // Before the signed authority surface is installed there is no exemption.
+        [authority] => {
+            definitions.declaration = Some((file.clone(), line_of(authority.ident.span())));
+            if let Some((_, items)) = &authority.content {
+                ta2_authority_submodules(
+                    items,
+                    &file,
+                    &module_dir.join("authority"),
+                    &mut definitions,
+                    &mut BTreeSet::new(),
+                )?;
+            } else {
+                let (path, dir) = ta2_external_module(authority, &file, &module_dir)?;
+                definitions.authority_files.insert(path.clone());
+                let (_, parsed) = parse_file(&path)?;
+                let mut active = BTreeSet::from([path.clone()]);
+                ta2_authority_submodules(
+                    &parsed.items,
+                    &path,
+                    &dir,
+                    &mut definitions,
+                    &mut active,
+                )?;
+            }
+        }
+        _ => {
+            return Err(ta2_error(
+                &file,
+                0,
+                "TA2_MODULE_UNRESOLVED",
+                "multiple authority declarations",
+            ));
+        }
+    }
+    Ok(definitions)
+}
+
+fn ta2_value_aliases(workspace: &Path, member: &Path) -> Result<BTreeSet<String>, String> {
+    let manifest = ta2_manifest(member)?;
+    let workspace_manifest = ta2_manifest(workspace)?;
+    let inherited = workspace_manifest
+        .get("workspace")
+        .and_then(|v| v.get("dependencies"))
+        .and_then(toml::Value::as_table);
+    let mut names = BTreeSet::from(["neovm_value".to_string()]);
+    fn table(
+        table: &toml::map::Map<String, toml::Value>,
+        inherited: Option<&toml::map::Map<String, toml::Value>>,
+        names: &mut BTreeSet<String>,
+    ) -> Result<(), String> {
+        for (alias, dependency) in table {
+            let dependency =
+                if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                    inherited
+                        .and_then(|table| table.get(alias))
+                        .ok_or_else(|| {
+                            format!("TA2_MANIFEST: unresolved inherited dependency {alias}")
+                        })?
+                } else {
+                    dependency
+                };
+            let package = dependency
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(alias);
+            if package == "neovm-value" {
+                names.insert(alias.replace('-', "_"));
+            }
+        }
+        Ok(())
+    }
+    for kind in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(dependencies) = manifest.get(kind).and_then(toml::Value::as_table) {
+            table(dependencies, inherited, &mut names)?;
+        }
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            for target in targets.values() {
+                if let Some(dependencies) = target.get(kind).and_then(toml::Value::as_table) {
+                    table(dependencies, inherited, &mut names)?;
+                }
+            }
+        }
+    }
+    if manifest
+        .get("package")
+        .and_then(|v| v.get("name"))
+        .and_then(toml::Value::as_str)
+        == Some("neovm-value")
+    {
+        names.insert("crate".to_string());
+    }
+    Ok(names)
+}
+
+struct Ta2Visitor<'a> {
+    file: &'a Path,
+    roots: BTreeSet<String>,
+    definition_line: Option<usize>,
+    violations: Vec<String>,
+    value_scopes: Vec<BTreeSet<String>>,
+}
+
+fn ta2_pattern_bindings(pattern: &syn::Pat) -> BTreeSet<String> {
+    struct Bindings(BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Bindings {
+        fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
+            self.0.insert(pattern.ident.to_string());
+            visit::visit_pat_ident(self, pattern);
+        }
+    }
+    let mut bindings = Bindings(BTreeSet::new());
+    bindings.visit_pat(pattern);
+    bindings.0
+}
+
+fn ta2_condition_bindings(expr: &Expr) -> BTreeSet<String> {
+    match expr {
+        Expr::Let(expr) => ta2_pattern_bindings(&expr.pat),
+        Expr::Binary(expr) if matches!(expr.op, syn::BinOp::And(_)) => {
+            let mut names = ta2_condition_bindings(&expr.left);
+            names.extend(ta2_condition_bindings(&expr.right));
+            names
+        }
+        Expr::Paren(expr) => ta2_condition_bindings(&expr.expr),
+        Expr::Group(expr) => ta2_condition_bindings(&expr.expr),
+        _ => BTreeSet::new(),
+    }
+}
+
+impl Ta2Visitor<'_> {
+    fn bound_value(&self, name: &str) -> bool {
+        self.value_scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains(name))
+    }
+
+    fn argument_bindings(
+        inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::Token![,]>,
+    ) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        for input in inputs {
+            if let syn::FnArg::Typed(argument) = input {
+                names.extend(ta2_pattern_bindings(&argument.pat));
+            }
+        }
+        names
+    }
+
+    fn reject(&mut self, span: Span, code: &str, detail: &str) {
+        self.violations
+            .push(ta2_error(self.file, line_of(span), code, detail));
+    }
+
+    fn check_path(&mut self, names: &[String], span: Span) {
+        if let Some(index) = names.iter().position(|s| s == "test_support") {
+            if names[index + 1..].iter().any(|s| s == "authority") {
+                self.reject(span, "TA2_AUTHORITY_REFERENCE", "authority references are restricted to core_tests and the resolved defining module");
+            }
+        } else if names.iter().any(|s| s == "authority") {
+            self.reject(
+                span,
+                "TA2_UNRESOLVED_REFERENCE",
+                "authority path has no resolved test_support owner",
+            );
+        }
+    }
+
+    fn use_tree(&mut self, tree: &UseTree, prefix: &mut Vec<String>) {
+        match tree {
+            UseTree::Path(path) => {
+                prefix.push(path.ident.to_string());
+                self.use_tree(&path.tree, prefix);
+                prefix.pop();
+            }
+            UseTree::Name(name) => {
+                if name.ident != "self" {
+                    prefix.push(name.ident.to_string());
+                }
+                self.check_path(prefix, name.ident.span());
+                if name.ident != "self" {
+                    prefix.pop();
+                }
+            }
+            UseTree::Rename(rename) => {
+                if rename.ident != "self" {
+                    prefix.push(rename.ident.to_string());
+                }
+                self.check_path(prefix, rename.ident.span());
+                if prefix.last().is_some_and(|s| s == "test_support") {
+                    self.reject(rename.rename.span(), "TA2_TEST_SUPPORT_RENAME", "any test_support rename is fenced, including unused aliases and self aliases");
+                } else if prefix.len() == 1
+                    && prefix.first().is_some_and(|name| self.roots.contains(name))
+                {
+                    self.roots.insert(rename.rename.to_string());
+                }
+                if rename.ident != "self" {
+                    prefix.pop();
+                }
+            }
+            UseTree::Group(group) => {
+                for item in &group.items {
+                    self.use_tree(item, prefix);
+                }
+            }
+            UseTree::Glob(glob) => {
+                if prefix.iter().any(|s| s == "test_support")
+                    || (prefix.len() == 1
+                        && prefix.first().is_some_and(|name| self.roots.contains(name)))
+                {
+                    self.reject(
+                        glob.star_token.span,
+                        "TA2_ANCESTOR_GLOB",
+                        "glob can import test_support or authority",
+                    );
+                }
+            }
+        }
+    }
+
+    fn tokens(&mut self, stream: proc_macro2::TokenStream) {
+        use proc_macro2::TokenTree;
+        if let Ok(file) = syn::parse2::<syn::File>(stream.clone()) {
+            if !file.items.is_empty() {
+                self.visit_file(&file);
+                return;
+            }
+        }
+        let wrapped: proc_macro2::TokenStream = std::iter::once(TokenTree::Group(
+            proc_macro2::Group::new(proc_macro2::Delimiter::Brace, stream.clone()),
+        ))
+        .collect();
+        if let Ok(block) = syn::parse2::<syn::Block>(wrapped) {
+            self.visit_block(&block);
+            return;
+        }
+        let tokens: Vec<_> = stream.into_iter().collect();
+        let mut index = 0;
+        while index < tokens.len() {
+            // Recover complete use trees even inside cfg_select!/macro_rules! bodies.
+            if matches!(&tokens[index], TokenTree::Ident(id) if id == "use") {
+                if let Some(end) = tokens[index..]
+                    .iter()
+                    .position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';'))
+                {
+                    let use_tokens: proc_macro2::TokenStream =
+                        tokens[index..=index + end].iter().cloned().collect();
+                    match syn::parse2::<syn::ItemUse>(use_tokens) {
+                        Ok(item) => self.use_tree(&item.tree, &mut Vec::new()),
+                        Err(error) => self.reject(
+                            tokens[index].span(),
+                            "TA2_UNRESOLVED_REFERENCE",
+                            &format!("macro use tree: {error}"),
+                        ),
+                    }
+                    index += end + 1;
+                    continue;
+                }
+                self.reject(
+                    tokens[index].span(),
+                    "TA2_UNRESOLVED_REFERENCE",
+                    "unterminated macro use tree",
+                );
+            }
+            match &tokens[index] {
+                TokenTree::Group(group) => self.tokens(group.stream()),
+                TokenTree::Ident(first) => {
+                    let mut names = vec![first.to_string()];
+                    let mut next = index + 1;
+                    while next + 2 < tokens.len()
+                        && matches!(&tokens[next], TokenTree::Punct(p) if p.as_char() == ':')
+                        && matches!(&tokens[next + 1], TokenTree::Punct(p) if p.as_char() == ':')
+                    {
+                        if let TokenTree::Ident(id) = &tokens[next + 2] {
+                            names.push(id.to_string());
+                            next += 3;
+                        } else {
+                            break;
+                        }
+                    }
+                    let bare_bound_value = names.len() == 1 && self.bound_value(&names[0]);
+                    let field_member = names.len() == 1
+                        && index > 0
+                        && matches!(&tokens[index - 1], TokenTree::Punct(p) if p.as_char() == '.');
+                    // Neither a proven lexical value nor a `.field` member is
+                    // a module path. Qualified names still receive the fence.
+                    if !bare_bound_value && !field_member {
+                        self.check_path(&names, first.span());
+                    }
+                    index = next;
+                    continue;
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Ta2Visitor<'_> {
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        let previous = std::mem::take(&mut self.value_scopes);
+        self.value_scopes
+            .push(Self::argument_bindings(&item.sig.inputs));
+        visit::visit_item_fn(self, item);
+        self.value_scopes = previous;
+    }
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        let previous = std::mem::take(&mut self.value_scopes);
+        self.value_scopes
+            .push(Self::argument_bindings(&item.sig.inputs));
+        visit::visit_impl_item_fn(self, item);
+        self.value_scopes = previous;
+    }
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.value_scopes.push(BTreeSet::new());
+        visit::visit_block(self, block);
+        self.value_scopes.pop();
+    }
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        visit::visit_local(self, local);
+        if let Some(scope) = self.value_scopes.last_mut() {
+            scope.extend(ta2_pattern_bindings(&local.pat));
+        }
+    }
+    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
+        let proven_value = expr.qself.is_none()
+            && expr.path.leading_colon.is_none()
+            && expr.path.segments.len() == 1
+            && expr
+                .path
+                .segments
+                .first()
+                .is_some_and(|segment| self.bound_value(&segment.ident.to_string()));
+        if let Some(qself) = &expr.qself {
+            self.visit_type(&qself.ty);
+        }
+        if proven_value {
+            visit::visit_path(self, &expr.path);
+        } else {
+            self.visit_path(&expr.path);
+        }
+    }
+    fn visit_expr_closure(&mut self, expr: &'ast syn::ExprClosure) {
+        let names = expr.inputs.iter().flat_map(ta2_pattern_bindings).collect();
+        self.value_scopes.push(names);
+        visit::visit_expr_closure(self, expr);
+        self.value_scopes.pop();
+    }
+    fn visit_expr_for_loop(&mut self, expr: &'ast syn::ExprForLoop) {
+        self.visit_pat(&expr.pat);
+        self.visit_expr(&expr.expr);
+        self.value_scopes.push(ta2_pattern_bindings(&expr.pat));
+        self.visit_block(&expr.body);
+        self.value_scopes.pop();
+    }
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        self.value_scopes.push(ta2_pattern_bindings(&arm.pat));
+        visit::visit_arm(self, arm);
+        self.value_scopes.pop();
+    }
+    fn visit_expr_binary(&mut self, expr: &'ast syn::ExprBinary) {
+        if matches!(expr.op, syn::BinOp::And(_)) {
+            self.visit_expr(&expr.left);
+            self.value_scopes.push(ta2_condition_bindings(&expr.left));
+            self.visit_expr(&expr.right);
+            self.value_scopes.pop();
+        } else {
+            visit::visit_expr_binary(self, expr);
+        }
+    }
+    fn visit_expr_if(&mut self, expr: &'ast syn::ExprIf) {
+        self.visit_expr(&expr.cond);
+        self.value_scopes.push(ta2_condition_bindings(&expr.cond));
+        self.visit_block(&expr.then_branch);
+        self.value_scopes.pop();
+        if let Some((_, branch)) = &expr.else_branch {
+            self.visit_expr(branch);
+        }
+    }
+    fn visit_expr_while(&mut self, expr: &'ast syn::ExprWhile) {
+        self.visit_expr(&expr.cond);
+        self.value_scopes.push(ta2_condition_bindings(&expr.cond));
+        self.visit_block(&expr.body);
+        self.value_scopes.pop();
+    }
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.use_tree(&item.tree, &mut Vec::new());
+    }
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        self.check_path(
+            &path_names(path),
+            path.segments
+                .first()
+                .map(|s| s.ident.span())
+                .unwrap_or_else(Span::call_site),
+        );
+        visit::visit_path(self, path);
+    }
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        if module.ident == "authority" && self.definition_line == Some(line_of(module.ident.span()))
+        {
+            return; // One actual declaration, including the inline defining body if present.
+        }
+        visit::visit_item_mod(self, module);
+    }
+    fn visit_item_extern_crate(&mut self, item: &'ast syn::ItemExternCrate) {
+        if self.roots.contains(&item.ident.to_string()) {
+            if let Some((_, alias)) = &item.rename {
+                self.roots.insert(alias.to_string());
+            }
+        }
+    }
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.tokens(mac.tokens.clone());
+        visit::visit_path(self, &mac.path);
+    }
+}
+
+pub(crate) fn scan_authority_workspace(workspace: &Path) -> Result<(), Vec<String>> {
+    let sources = discover_sources(workspace).map_err(|error| vec![error])?;
+    let definitions = ta2_definitions(&sources).map_err(|error| vec![error])?;
+    let mut violations = Vec::new();
+    for source in &sources {
+        let path = match source.path.canonicalize() {
+            Ok(path) => path,
+            Err(error) => {
+                violations.push(ta2_error(&source.path, 0, "TA2_SOURCE", &error.to_string()));
+                continue;
+            }
+        };
+        let (_, parsed) = match parse_file(&path) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                violations.push(error);
+                continue;
+            }
+        };
+        let allowed_core = if source.package == "neovm-core" {
+            let expected = source.member_root.join("core_tests");
+            match expected.try_exists() {
+                Ok(true) => match expected.canonicalize() {
+                    Ok(root) => path.starts_with(root),
+                    Err(error) => {
+                        violations.push(ta2_error(&expected, 0, "TA2_SOURCE", &error.to_string()));
+                        false
+                    }
+                },
+                Ok(false) => false,
+                Err(error) => {
+                    violations.push(ta2_error(&expected, 0, "TA2_SOURCE", &error.to_string()));
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        if allowed_core
+            || (source.package == "neovm-value" && definitions.authority_files.contains(&path))
+        {
+            continue;
+        }
+        let roots = match ta2_value_aliases(workspace, &source.member_root) {
+            Ok(roots) => roots,
+            Err(error) => {
+                violations.push(error);
+                continue;
+            }
+        };
+        let definition_line = definitions.declaration.as_ref().and_then(|(file, line)| {
+            (file == &path && source.package == "neovm-value").then_some(*line)
+        });
+        let mut visitor = Ta2Visitor {
+            file: &path,
+            roots,
+            definition_line,
+            violations: Vec::new(),
+            value_scopes: Vec::new(),
+        };
+        // Resolve crate aliases before visiting references, regardless of declaration order.
+        loop {
+            let before = visitor.roots.len();
+            visitor.visit_file(&parsed);
+            if visitor.roots.len() == before {
+                break;
+            }
+        }
+        visitor.violations.clear();
+        visitor.visit_file(&parsed);
+        violations.extend(visitor.violations);
+    }
+    violations.sort();
+    violations.dedup();
     if violations.is_empty() {
         Ok(())
     } else {
@@ -2832,53 +3503,138 @@ pub(crate) fn scan_authority_fence(core_root: &Path) -> Result<(), Vec<String>> 
 
 #[test]
 fn architecture_test_support_authority_is_named_only_from_core_tests() {
-    if let Err(violations) = scan_authority_fence(&workspace_root().join("crates/neovm-core")) {
+    if let Err(violations) = scan_authority_workspace(&workspace_root()) {
         panic!(
             "{} TA2 authority-fence violations:\n{}",
             violations.len(),
-            violations
-                .iter()
-                .take(80)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
+            violations.join("\n")
         );
     }
 }
 
+fn ta2_fixture(root: &Path) {
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"core\", \"value\", \"other\"]\n",
+    )
+    .unwrap();
+    for (dir, package) in [
+        ("core", "neovm-core"),
+        ("value", "neovm-value"),
+        ("other", "other"),
+    ] {
+        std::fs::create_dir_all(root.join(dir).join("src")).unwrap();
+        std::fs::write(
+            root.join(dir).join("Cargo.toml"),
+            format!("[package]\nname = \"{package}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n"),
+        )
+        .unwrap();
+        std::fs::write(root.join(dir).join("src/lib.rs"), "").unwrap();
+    }
+    std::fs::write(
+        root.join("value/src/lib.rs"),
+        "#[cfg(feature = \"test-support\")] pub mod test_support;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("value/src/test_support.rs"),
+        "pub mod authority; pub fn query() {}\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("value/src/test_support")).unwrap();
+    std::fs::write(
+        root.join("value/src/test_support/authority.rs"),
+        "pub fn forged() {}\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("core/core_tests")).unwrap();
+}
+
 #[test]
 fn architecture_ta2_guard_self_test() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let core = dir.path().join("crates/neovm-core");
-    std::fs::create_dir_all(core.join("src")).unwrap();
-    std::fs::create_dir_all(core.join("core_tests")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    ta2_fixture(dir.path());
+    let root = dir.path();
+    let forbidden = root.join("core/src/bad.rs");
+    std::fs::write(root.join("core/src/lib.rs"), "fn query() { neovm_value::test_support::query(); } fn local(authority: &Path) { consume(authority); assert!(authority.exists()); let authority = authority; consume(authority); } fn scoped() { let authority = value(); consume(authority); if let Some(authority) = option() { consume(authority); } match option() { Some(authority) => consume(authority), _ => () } }\n").unwrap();
+    assert!(scan_authority_workspace(root).is_ok());
+    for (witness, source) in [
+        ("grouped", "use neovm_value::test_support::{authority};"),
+        (
+            "grouped_rename",
+            "use neovm_value::test_support::{authority as a};",
+        ),
+        (
+            "self_rename",
+            "use neovm_value::test_support::{self as ts};",
+        ),
+        ("unused_rename", "use neovm_value::test_support as unused;"),
+        ("glob", "use neovm_value::*;"),
+        (
+            "macro",
+            "macro_rules! m { () => { use neovm_value::test_support::{authority}; }; }",
+        ),
+        (
+            "qualified_despite_local",
+            "fn local(authority: T) { authority::forge(); }",
+        ),
+        (
+            "macro_qualified_despite_local",
+            "fn local(authority: T) { probe!(authority::forge()); }",
+        ),
+    ] {
+        std::fs::write(&forbidden, source).unwrap();
+        let red = scan_authority_workspace(root);
+        assert!(red.is_err(), "TA2_MUTATION_{witness}: {red:?}");
+        std::fs::remove_file(&forbidden).unwrap();
+        assert!(
+            scan_authority_workspace(root).is_ok(),
+            "TA2_RESTORED_{witness}"
+        );
+    }
     std::fs::write(
-        core.join("src/clean.rs"),
-        "pub fn f() { neovm_value::test_support::some_query(); }\n",
+        root.join("core/core_tests/allowed.rs"),
+        "use neovm_value::test_support::authority;\n",
     )
     .unwrap();
-    let green = scan_authority_fence(&core);
-    assert!(green.is_ok(), "false positive: {green:?}");
+    assert!(scan_authority_workspace(root).is_ok());
+    // This path is deliberately outside the conventional tests/ root.
+    std::fs::create_dir_all(root.join("other/external")).unwrap();
     std::fs::write(
-        core.join("src/bad.rs"),
-        "pub fn g() { neovm_value::test_support::authority::forge(); }\n",
+        root.join("other/external/probe.rs"),
+        "use neovm_value::test_support::{authority as a};\n",
     )
     .unwrap();
-    let red = scan_authority_fence(&core);
-    assert!(red.is_err(), "mutation not detected");
-    std::fs::remove_file(core.join("src/bad.rs")).unwrap();
+    let manifest = root.join("other/Cargo.toml");
+    let original = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(
-        core.join("core_tests/allowed.rs"),
-        "pub fn h() { neovm_value::test_support::authority::forge(); }\n",
+        &manifest,
+        format!("{original}\n[[test]]\nname = \"probe\"\npath = \"external/probe.rs\"\n"),
     )
     .unwrap();
-    let allowed = scan_authority_fence(&core);
-    assert!(allowed.is_ok(), "core_tests must be allowed: {allowed:?}");
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_OTHER_CRATE_EXPLICIT_TEST"
+    );
+    std::fs::write(&manifest, original).unwrap();
+    std::fs::remove_file(root.join("other/external/probe.rs")).unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESTORED_OTHER_CRATE_EXPLICIT_TEST"
+    );
+    // Defining-directory siblings are not exempt merely by physical adjacency.
     std::fs::write(
-        core.join("src/alias.rs"),
-        "use neovm_value::test_support as ts;\npub fn i() { ts::authority::forge(); }\n",
+        root.join("value/src/test_support/unrelated.rs"),
+        "use crate::test_support::authority;\n",
     )
     .unwrap();
-    let alias = scan_authority_fence(&core);
-    assert!(alias.is_err(), "alias mutation not detected");
+    assert!(
+        scan_authority_workspace(root).is_err(),
+        "TA2_MUTATION_DEFINITION_SIBLING"
+    );
+    std::fs::remove_file(root.join("value/src/test_support/unrelated.rs")).unwrap();
+    assert!(
+        scan_authority_workspace(root).is_ok(),
+        "TA2_RESTORED_DEFINITION_SIBLING"
+    );
 }
