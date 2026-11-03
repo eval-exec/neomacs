@@ -4545,7 +4545,7 @@ impl FormalBindings for LexicalFormalBindings<'_> {
 
     fn bind(&mut self, symbol: SymId, argument: Value) -> Result<(), Flow> {
         self.lexenv = Value::make_cons(
-            Value::make_cons(lexenv_binding_symbol_value(symbol), argument),
+            Value::make_cons(Value::from_sym_id(symbol), argument),
             self.lexenv,
         );
         Ok(())

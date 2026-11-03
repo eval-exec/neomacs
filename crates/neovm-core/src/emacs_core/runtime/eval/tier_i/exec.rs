@@ -178,8 +178,7 @@ impl Context {
                 return None;
             }
             let cell = cursor.cons_car();
-            if !cell.is_cons() || cell.cons_car().bits() != lexenv_binding_symbol_value(*sym).bits()
-            {
+            if !cell.is_cons() || cell.cons_car().bits() != Value::from_sym_id(*sym).bits() {
                 return None;
             }
             self.tier_i.slots[base + index] = cell;
@@ -1385,7 +1384,7 @@ impl Context {
         }
         let mut new_lexenv = lexenv_at_entry;
         for (sym_id, val, slot) in &lexical_bindings {
-            let binding_pair = Value::make_cons(lexenv_binding_symbol_value(*sym_id), *val);
+            let binding_pair = Value::make_cons(Value::from_sym_id(*sym_id), *val);
             new_lexenv = Value::make_cons(binding_pair, new_lexenv);
             if let Some(slot) = slot {
                 context.tier_i.slots[act.base + usize::from(*slot)] = binding_pair;
@@ -1537,7 +1536,7 @@ impl Context {
             }
             if use_lexical && !self.obarray.is_special_id(id) && !self.ti_declared_special(act, id)
             {
-                let binding = Value::make_cons(lexenv_binding_symbol_value(id), value);
+                let binding = Value::make_cons(Value::from_sym_id(id), value);
                 self.lexenv = Value::make_cons(binding, self.lexenv);
                 if let Some(slot) = slot {
                     self.tier_i.slots[act.base + usize::from(slot)] = binding;

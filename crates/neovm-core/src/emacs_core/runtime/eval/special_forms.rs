@@ -464,10 +464,7 @@ impl Context {
         // above), and `context.lexenv` roots it from the install on.
         let mut new_lexenv = lexenv_at_entry;
         for (sym_id, val) in &lexical_bindings {
-            let binding_pair = Value::make_cons(
-                crate::emacs_core::eval::lexenv_binding_symbol_value(*sym_id),
-                *val,
-            );
+            let binding_pair = Value::make_cons(Value::from_sym_id(*sym_id), *val);
             new_lexenv = Value::make_cons(binding_pair, new_lexenv);
         }
         // Install the new lexenv atomically.
@@ -583,7 +580,7 @@ impl Context {
                     // Direct cons onto Vinternal_interpreter_environment.
                     // The LexicalEnv entry at specpdl_count saves the pre-let*
                     // state; unbind_to restores it.
-                    let binding = Value::make_cons(lexenv_binding_symbol_value(id), value);
+                    let binding = Value::make_cons(Value::from_sym_id(id), value);
                     context.lexenv = Value::make_cons(binding, context.lexenv);
                 } else {
                     context.try_specbind(id, value)?;
@@ -1233,7 +1230,7 @@ impl Context {
                     if use_lexical_binding {
                         let old_lexenv = self.lexenv;
                         self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
-                        let binding = Value::make_cons(lexenv_binding_symbol_value(var_id), value);
+                        let binding = Value::make_cons(Value::from_sym_id(var_id), value);
                         self.lexenv = Value::make_cons(binding, self.lexenv);
                     } else if bind_var && let Err(flow) = self.try_specbind(var_id, value) {
                         return self.unbind_to_with_result(specpdl_count, Err(flow));
@@ -1271,8 +1268,7 @@ impl Context {
                         // binding directly.
                         let old_lexenv = self.lexenv;
                         self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
-                        let binding =
-                            Value::make_cons(lexenv_binding_symbol_value(var_id), binding_value);
+                        let binding = Value::make_cons(Value::from_sym_id(var_id), binding_value);
                         self.lexenv = Value::make_cons(binding, self.lexenv);
                     } else if bind_var && let Err(flow) = self.try_specbind(var_id, binding_value) {
                         return self.unbind_to_with_result(specpdl_count, Err(flow));

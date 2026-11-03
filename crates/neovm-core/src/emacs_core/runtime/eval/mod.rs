@@ -4142,7 +4142,7 @@ fn bind_lexical_value_rooted_in_specpdl(
     value: Value,
 ) {
     specpdl.push(SpecBinding::GcRoot { value });
-    let binding = Value::make_cons(lexenv_binding_symbol_value(sym), value);
+    let binding = Value::make_cons(Value::from_sym_id(sym), value);
     match specpdl.last_mut() {
         Some(SpecBinding::GcRoot { value }) => *value = binding,
         other => panic!("expected temporary specpdl gc root entry, got {other:?}"),
