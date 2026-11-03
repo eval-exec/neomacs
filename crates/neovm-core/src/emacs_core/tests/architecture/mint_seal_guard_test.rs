@@ -178,11 +178,18 @@ fn n13_carried_world_state_pairs_are_referenced_only_from_carried() {
             };
             let code = code_only(&source);
             let gated = test_gated_ranges(&code);
+            // A carried name is defined either by its own `fn name(` decl or
+            // by a renaming import (`world_state_placeholder as <name>`) in
+            // its module — the three named pairs (selection, property
+            // revision, display) re-export the shared helpers under module-
+            // specific names.
             let declaration = format!("fn {name}(");
-            if find_all(&code, &declaration)
+            let alias = format!(" as {name}");
+            let defined = find_all(&code, &declaration)
                 .into_iter()
-                .any(|offset| !gated.iter().any(|&(s, e)| s <= offset && offset <= e))
-            {
+                .chain(code.match_indices(&alias).map(|(offset, _)| offset))
+                .any(|offset| !gated.iter().any(|&(s, e)| s <= offset && offset <= e));
+            if defined {
                 definers.push(path.clone());
             }
         }
@@ -191,11 +198,48 @@ fn n13_carried_world_state_pairs_are_referenced_only_from_carried() {
             "N13 seal: carried name {name} has no production definition"
         );
         for site in production_sites(name) {
-            let file = site.rsplit_once(':').expect("path:line").0;
+            let (file, line) = site.rsplit_once(':').expect("path:line");
+            // A renaming import binds the name; it is not a reference. The
+            // plain pair members appear as the source of the three named
+            // aliases (window, selection, property revision).
+            let use_binding = std::fs::read_to_string(file)
+                .ok()
+                .is_some_and(|source| {
+                    // Line numbers in `site` count the comment-stripped
+                    // text, so walk the same text.
+                    let stripped = code_only(&source);
+                    let lines: Vec<&str> = stripped.lines().collect();
+                    let mut index = match line
+                        .parse::<usize>()
+                        .expect("line number")
+                        .checked_sub(1)
+                    {
+                        Some(zero_based) if zero_based < lines.len() => zero_based,
+                        _ => return false,
+                    };
+                    // Walk back at most a use-tree's worth of lines: if we
+                    // find a `use` opener before any statement-ending `;`,
+                    // this mention is an import binding (possibly the source
+                    // side of a rename), not a reference.
+                    let mut walked = 0;
+                    loop {
+                        let text = lines[index].trim_start();
+                        // `use`, `pub use`, `pub(crate) use`, …: any use
+                        // statement opener with a visibility prefix.
+                        if text.starts_with("use ") || text.contains(" use ") {
+                            return true;
+                        }
+                        if lines[index].contains(';') || index == 0 || walked == 12 {
+                            return false;
+                        }
+                        index -= 1;
+                        walked += 1;
+                    }
+                });
             let defining_file = definers
                 .iter()
                 .any(|definer| file == definer.display().to_string());
-            if !defining_file && !file.ends_with(CARRIED) {
+            if !defining_file && !use_binding && !file.ends_with(CARRIED) {
                 violations.push(format!("{name} at {site}"));
             }
         }
