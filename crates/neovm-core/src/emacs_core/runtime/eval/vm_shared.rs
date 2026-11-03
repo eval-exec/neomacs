@@ -107,7 +107,7 @@ impl Context {
     }
 
     pub(super) fn apfp_char_property(&mut self, pos: i64, prop: Value) -> Result<Value, Flow> {
-        super::super::textprop::builtin_get_char_property(
+        super::super::textprop_entries::builtin_get_char_property(
             self,
             vec![Value::fixnum(pos), prop, Value::NIL],
         )

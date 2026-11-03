@@ -37,6 +37,8 @@ pub mod minibuffer;
 pub(crate) mod prefix;
 #[path = "commands/register/mod.rs"]
 pub mod register;
+#[path = "commands/textprop_entries/mod.rs"]
+pub mod textprop_entries;
 
 // Display model, redisplay, and graphical/terminal surfaces.
 #[path = "display/chrome_dirty/mod.rs"]

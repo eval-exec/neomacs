@@ -1633,7 +1633,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         const {
             crate::emacs_core::subr::world_subr!(SubrSpec::fixed3(
                 "get-char-property",
-                crate::emacs_core::textprop::builtin_get_char_property_3,
+                crate::emacs_core::textprop_entries::builtin_get_char_property_3,
                 FixedMin3::Two,
             ))
             .leaf(&leaves::GET_CHAR_PROPERTY)
@@ -6204,7 +6204,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "get-char-property-and-overlay",
-        NativeFn::ContextVec(crate::emacs_core::textprop::builtin_get_char_property_and_overlay),
+        NativeFn::ContextVec(
+            crate::emacs_core::textprop_entries::builtin_get_char_property_and_overlay
+        ),
         SubrArity::new(2, Some(3)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::fixed4(

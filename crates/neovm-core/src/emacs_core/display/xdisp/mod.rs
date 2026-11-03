@@ -5655,14 +5655,16 @@ pub(crate) fn invisible_status_for_value(
     pos_or_prop: Value,
 ) -> Result<Invisibility, Flow> {
     let prop = match pos_or_prop.kind() {
-        ValueKind::Fixnum(v) if v >= 0 => super::textprop::builtin_get_char_property(
+        ValueKind::Fixnum(v) if v >= 0 => super::textprop_entries::builtin_get_char_property(
             eval,
             vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
         )?,
-        _ if super::marker::is_marker(&pos_or_prop) => super::textprop::builtin_get_char_property(
-            eval,
-            vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
-        )?,
+        _ if super::marker::is_marker(&pos_or_prop) => {
+            super::textprop_entries::builtin_get_char_property(
+                eval,
+                vec![pos_or_prop, invisible_prop_symbol(), Value::NIL],
+            )?
+        }
         _ => pos_or_prop,
     };
     let invisibility_spec = eval.eval_symbol_by_id(buffer_invisibility_spec_sym_id())?;

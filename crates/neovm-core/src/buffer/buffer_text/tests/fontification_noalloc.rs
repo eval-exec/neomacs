@@ -2,6 +2,7 @@ use super::*;
 use crate::buffer::{BufferTextBackendKind, LispCharPos1};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::textprop;
+use crate::emacs_core::textprop_entries;
 
 fn anchor_storage(text: &BufferText) -> (usize, usize) {
     let storage = text.storage.borrow();
@@ -108,7 +109,7 @@ fn fontification_no_alloc_point_and_resolved_boundary_match_public_queries() {
                 LispCharPos1::new(position),
             );
             assert_eq!(current_anchor_storage(&ctx), before);
-            let public = textprop::builtin_get_char_property_3(
+            let public = textprop_entries::builtin_get_char_property_3(
                 &mut ctx,
                 Value::fixnum(position),
                 Value::symbol("fontified"),

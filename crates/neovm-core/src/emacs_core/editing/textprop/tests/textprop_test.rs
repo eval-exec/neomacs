@@ -13,6 +13,9 @@ use crate::emacs_core::builtins::{
     builtin_previous_char_property_change, builtin_previous_property_change,
 };
 use crate::emacs_core::error::{FlowKind, FlowResultExt as _};
+use crate::emacs_core::textprop_entries::{
+    builtin_get_char_property, builtin_get_char_property_and_overlay,
+};
 use malachite::Integer;
 
 /// Helper: create an evaluator with a buffer containing the given text.

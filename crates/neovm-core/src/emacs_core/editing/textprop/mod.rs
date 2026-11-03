@@ -2297,34 +2297,6 @@ fn eq_member(list: &Value, prop: Value) -> bool {
     false
 }
 
-/// (get-char-property POS PROP &optional OBJECT)
-/// For strings, same as get-text-property (no overlays).
-pub(crate) fn builtin_get_char_property(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    crate::emacs_core::error::expect_args_range("get-char-property", &args, 2, 3)?;
-    let arg = |i: usize| args.get(i).copied().unwrap_or(Value::NIL);
-    builtin_get_char_property_3(eval, arg(0), arg(1), arg(2))
-}
-/// `get-char-property` as registered: fixed arity 3, called straight off the bytecode
-/// stack like GNU `funcall_subr`'s `a3` case (absent optionals arrive as nil).
-/// The `Vec` entry point above serves Rust callers.
-pub(crate) fn builtin_get_char_property_3(
-    eval: &mut super::eval::Context,
-    position: Value,
-    prop: Value,
-    object: Value,
-) -> EvalResult {
-    let args: [Value; 3] = [position, prop, object];
-    builtin_get_char_property_with_frames(
-        eval.variables(),
-        &eval.edit.buffers,
-        Some(&eval.frames),
-        &args,
-    )
-}
-
 pub(crate) fn builtin_get_char_property_in_state(
     vars: crate::emacs_core::eval::VariableView<'_>,
     buffers: &BufferManager,
@@ -4023,19 +3995,6 @@ pub(crate) fn builtin_text_property_not_all_in_state(
     Ok(first.map_or(Value::NIL, |pos| Value::fixnum(pos.to_lisp().as_i64())))
 }
 
-/// (get-char-property-and-overlay POS PROP &optional OBJECT)
-pub(crate) fn builtin_get_char_property_and_overlay(
-    eval: &mut super::eval::Context,
-    args: Vec<Value>,
-) -> EvalResult {
-    builtin_get_char_property_and_overlay_with_frames(
-        eval.variables(),
-        &eval.edit.buffers,
-        Some(&eval.frames),
-        args,
-    )
-}
-
 pub(crate) fn builtin_get_char_property_and_overlay_in_state(
     vars: crate::emacs_core::eval::VariableView<'_>,
     buffers: &BufferManager,
@@ -4044,7 +4003,7 @@ pub(crate) fn builtin_get_char_property_and_overlay_in_state(
     builtin_get_char_property_and_overlay_with_frames(vars, buffers, None, args)
 }
 
-fn builtin_get_char_property_and_overlay_with_frames(
+pub(crate) fn builtin_get_char_property_and_overlay_with_frames(
     vars: crate::emacs_core::eval::VariableView<'_>,
     buffers: &BufferManager,
     frames: Option<&FrameManager>,
