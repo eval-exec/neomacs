@@ -27,8 +27,8 @@ fn manifests(root: &Path) -> Vec<(String, toml::Value)> {
     let root_manifest = root.join("Cargo.toml");
     let text = std::fs::read_to_string(&root_manifest)
         .unwrap_or_else(|e| panic!("read {}: {e}", root_manifest.display()));
-    let doc: toml::Value = toml::from_str(&text)
-        .unwrap_or_else(|e| panic!("parse {}: {e}", root_manifest.display()));
+    let doc: toml::Value =
+        toml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", root_manifest.display()));
     out.push(("Cargo.toml".to_string(), doc));
     let crates = root.join("crates");
     let mut dirs: Vec<_> = std::fs::read_dir(&crates)
@@ -49,8 +49,8 @@ fn manifests(root: &Path) -> Vec<(String, toml::Value)> {
             .into_owned();
         let text = std::fs::read_to_string(&manifest)
             .unwrap_or_else(|e| panic!("read {}: {e}", manifest.display()));
-        let doc: toml::Value = toml::from_str(&text)
-            .unwrap_or_else(|e| panic!("parse {}: {e}", manifest.display()));
+        let doc: toml::Value =
+            toml::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", manifest.display()));
         out.push((rel, doc));
     }
     out
@@ -61,11 +61,7 @@ fn dependency_tables(doc: &toml::Value) -> Vec<(String, &toml::Table)> {
     let Some(root) = doc.as_table() else {
         return out;
     };
-    for key in [
-        "dependencies",
-        "dev-dependencies",
-        "build-dependencies",
-    ] {
+    for key in ["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(table) = root.get(key).and_then(toml::Value::as_table) {
             out.push((key.to_string(), table));
         }
@@ -83,11 +79,7 @@ fn dependency_tables(doc: &toml::Value) -> Vec<(String, &toml::Table)> {
             let Some(target) = value.as_table() else {
                 continue;
             };
-            for key in [
-                "dependencies",
-                "dev-dependencies",
-                "build-dependencies",
-            ] {
+            for key in ["dependencies", "dev-dependencies", "build-dependencies"] {
                 if let Some(table) = target.get(key).and_then(toml::Value::as_table) {
                     out.push((format!("target.{target}.{key}"), table));
                 }

@@ -584,7 +584,13 @@ pub struct RegistrySites {
 /// registry site imports it through that crate's library name.
 pub const REGISTRY_SITES: RegistrySites = RegistrySites {
     opcode: RegistrySite::Lowered {
-        definition: CrateSource::scanned("src/tagged/bytecode/opcode.rs"),
+        definition: CrateSource {
+            owner: SourceCrate::Workspace {
+                library: "neovm_value",
+                manifest: "crates/neovm-value",
+            },
+            path: "src/tagged/bytecode/opcode.rs",
+        },
         registry: "src/emacs_core/runtime/bytecode/opcode.rs",
     },
     tier_i: RegistrySite::Colocated("src/emacs_core/runtime/eval/tier_i/compile.rs"),

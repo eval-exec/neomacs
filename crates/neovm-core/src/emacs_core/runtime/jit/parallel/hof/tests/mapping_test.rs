@@ -391,7 +391,7 @@ fn nmjit_n4_hof_scope_source_guard_test() {
     let source = include_str!("../../hof.rs");
     let leaf = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/src/tagged/gc/mutator_registration/execution/hof.rs"
+        "/../neovm-value/src/tagged/gc/mutator_registration/execution/hof.rs"
     ));
     for forbidden in [
         "Context",

@@ -1,22 +1,21 @@
 //! Lower NeoVM runtime utilities shared with `neovm-core`.
 //!
-//! This crate is the extraction target for the value runtime. It must never
-//! depend on `neovm-core` or on a UI/display crate; it starts with the
-//! thread-local restoration guard that lower value code and upper consumers
-//! both use.
+//! This crate is the value layer extracted from the core runtime.  Core
+//! keeps the upper evaluator and re-exports these modules through its
+//! facades.
 
-pub mod logging;
+pub mod alloc;
+pub mod boolvec;
+pub mod emacs_char;
+pub mod error;
+pub mod errors;
+pub mod forward;
+pub mod gc_trace;
+pub mod hashtab;
+pub mod heap_types;
+pub mod intern;
+pub mod symbol;
+pub mod tagged;
+pub mod tls_fingerprint;
 pub mod tls_scope;
-
-/// Test-only read surface for core-owned tests of the moved modules.
-///
-/// The contents are written by the owning lanes from the peer-signed item
-/// table; this skeleton declares the module and the feature so the manifest
-/// and profile gates exist before the items land.  Additive only: no product
-/// item's visibility changes under this feature.
-#[cfg(feature = "test-support")]
-pub mod test_support;
-
-/// Upper-free test helpers shared with core's test build (peer-signed R7c).
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_utils;
+pub mod value;

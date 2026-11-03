@@ -255,7 +255,9 @@ fn nmjit_n4_native_descriptor_large_slot_is_a_total_miss() {
 #[test]
 fn nmjit_n4_native_descriptor_source_guard_test() {
     let native = include_str!("../native.rs");
-    let execution = include_str!("../../../../../tagged/gc/mutator_registration/execution.rs");
+    let execution = include_str!(
+        "../../../../../../../neovm-value/src/tagged/gc/mutator_registration/execution.rs"
+    );
     assert_eq!(native.matches(".atomic_load(").count(), 1);
     assert!(native.contains("activation.publication()"));
     assert!(execution.contains("pub(crate) fn publication(&self) -> PublicationView<'_>"));

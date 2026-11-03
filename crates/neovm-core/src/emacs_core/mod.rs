@@ -219,8 +219,7 @@ pub mod subr_docs;
 pub mod var_docs;
 
 // Evaluator runtime, object model, VM, and persistence.
-#[path = "runtime/alloc/mod.rs"]
-pub mod alloc;
+pub use neovm_value::alloc;
 #[path = "runtime/bytecode/mod.rs"]
 pub mod bytecode;
 #[path = "runtime/data/mod.rs"]
@@ -233,20 +232,15 @@ pub mod debug_on_call;
 pub mod defvar_bool;
 #[path = "runtime/defvar_object/mod.rs"]
 pub mod defvar_object;
-#[path = "runtime/error/mod.rs"]
-pub mod error;
-#[path = "runtime/errors/mod.rs"]
-pub mod errors;
+pub use neovm_value::error;
+pub use neovm_value::errors;
 #[path = "runtime/eval/mod.rs"]
 pub mod eval;
-#[path = "runtime/forward/mod.rs"]
-pub mod forward;
+pub use neovm_value::forward;
 #[path = "runtime/gc_stats/mod.rs"]
 pub mod gc_stats;
-#[path = "runtime/hashtab/mod.rs"]
-pub mod hashtab;
-#[path = "runtime/intern/mod.rs"]
-pub mod intern;
+pub use neovm_value::hashtab;
+pub use neovm_value::intern;
 #[path = "runtime/jit/mod.rs"]
 pub mod jit;
 #[path = "runtime/owned_roots/mod.rs"]
@@ -259,12 +253,10 @@ pub mod plist;
 pub(crate) mod position;
 #[path = "runtime/runtime_identity/mod.rs"]
 pub(crate) mod runtime_identity;
-#[path = "runtime/symbol/mod.rs"]
-pub mod symbol;
+pub use neovm_value::symbol;
 #[path = "runtime/threads/mod.rs"]
 pub mod threads;
-#[path = "runtime/value/mod.rs"]
-pub mod value;
+pub use neovm_value::value;
 #[path = "runtime/value_reader/mod.rs"]
 pub mod value_reader;
 
@@ -323,8 +315,7 @@ pub(crate) mod w32;
 pub(crate) mod wait;
 
 // Character representation, coding, syntax, search, and structured text.
-#[path = "text/boolvec/mod.rs"]
-pub mod boolvec;
+pub use neovm_value::boolvec;
 #[path = "text/casefiddle/mod.rs"]
 pub mod casefiddle;
 #[path = "text/casetab/mod.rs"]
@@ -343,8 +334,7 @@ pub mod chartable;
 pub mod coding;
 #[path = "text/composite/mod.rs"]
 pub mod composite;
-#[path = "text/emacs_char/mod.rs"]
-pub mod emacs_char;
+pub use neovm_value::emacs_char;
 #[path = "text/format/mod.rs"]
 pub mod format;
 #[path = "runtime/heap_registry/mod.rs"]
@@ -421,17 +411,11 @@ mod split_test_support_manifest_test;
 #[path = "lisp/load/tests/stale_bytecode_test.rs"]
 mod stale_bytecode_test;
 #[cfg(test)]
-#[path = "runtime/symbol/tests/function_regression_test.rs"]
-mod symbol_function_regression_test;
 #[cfg(test)]
 #[path = "tests/architecture/symbol_id_guard_test.rs"]
 mod symbol_id_guard_test;
 #[cfg(test)]
-#[path = "runtime/symbol/tests/plist_regression_test.rs"]
-mod symbol_plist_regression_test;
 #[cfg(test)]
-#[path = "runtime/symbol/tests/redirect_regression_test.rs"]
-mod symbol_redirect_regression_test;
 #[cfg(test)]
 #[path = "text/syntax/tests/category_property_test.rs"]
 mod syntax_category_property_test;

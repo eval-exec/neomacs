@@ -206,7 +206,7 @@ mod tests {
     fn nmjit_n4_function_write_hooks_source_guard_test() {
         let lower = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/tagged/gc/function_write_hooks.rs"
+            "/../neovm-value/src/tagged/gc/function_write_hooks.rs"
         ));
         assert!(!lower.contains("crate::emacs_core"));
         assert!(!lower.contains("type Symbol:"));
@@ -228,13 +228,13 @@ mod tests {
         );
         let keeper = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/tagged/gc/mutator_registration/keeper.rs"
+            "/../neovm-value/src/tagged/gc/mutator_registration/keeper.rs"
         ));
         assert!(keeper.contains("FunctionWriteHooks"));
 
         let writer = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/src/tagged/gc/mutator_registration/symbol_authority/functions/write.rs"
+            "/../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/write.rs"
         ));
         for upward in [
             "crate::emacs_core::bytecode",

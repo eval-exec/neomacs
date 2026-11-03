@@ -98,9 +98,12 @@ fn nmjit_n4_native_fboundp_matches_gnu_plain_and_projected() {
 
 #[test]
 fn nmjit_n4_fboundp_sealed_query_source_guard_test() {
-    let bridge = include_str!("../../../../../tagged/gc/mutator_registration/execution/read.rs");
-    let authority =
-        include_str!("../../../../../tagged/gc/mutator_registration/symbol_authority/functions.rs");
+    let bridge = include_str!(
+        "../../../../../../../neovm-value/src/tagged/gc/mutator_registration/execution/read.rs"
+    );
+    let authority = include_str!(
+        "../../../../../../../neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions.rs"
+    );
     assert!(bridge.contains(".sym_fboundp_into("));
     assert!(authority.contains("index: OwnerRootIndex"));
     assert!(authority.contains("FunctionRead::Definition"));

@@ -23,7 +23,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "editing/dired/mod.rs",
         "display/display/mod.rs",
         "editing/editfns/mod.rs",
-        "runtime/errors/mod.rs",
+        "../../../neovm-value/src/errors/mod.rs",
         "system/fileio/mod.rs",
         "system/filelock/mod.rs",
         "lisp/native/fns/mod.rs",

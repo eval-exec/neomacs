@@ -8,20 +8,20 @@ mod frontend_events;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz_support;
-pub mod gc_trace;
-pub mod heap_types;
+pub use neovm_value::gc_trace;
+pub use neovm_value::heap_types;
 pub mod host_effect;
 pub mod host_input;
 mod image_identity;
 pub mod keyboard;
 mod keyboard_input;
 pub use neovm_value::logging;
-pub mod tagged;
+pub use neovm_value::tagged;
 #[cfg(test)]
 #[path = "tests/test_utils_test.rs"]
 pub mod test_utils;
 #[cfg(debug_assertions)]
-pub(crate) mod tls_fingerprint;
+pub(crate) use neovm_value::tls_fingerprint;
 // The thread-local restoration guard lives in the lower value crate. The
 // re-export keeps the historical `crate::tls_scope` path for every core user.
 pub(crate) use neovm_value::tls_scope;

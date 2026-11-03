@@ -17,7 +17,7 @@ use crate::emacs_core::load::{
     create_runtime_startup_evaluator_cached, find_file_in_load_path, get_load_path, load_file,
 };
 use crate::emacs_core::value::Value;
-use crate::emacs_core::{format_eval_result, Context};
+use crate::emacs_core::{Context, format_eval_result};
 use crate::heap_types::LispString;
 use std::path::PathBuf;
 
@@ -556,7 +556,7 @@ pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
 ///
 /// Re-exported so unit tests write `crate::test_utils::gnu_oracle()` rather
 /// than each carrying its own environment/default-path discovery.
-pub use neomacs_test_oracle::gnu::{gnu_oracle, GnuOracle};
+pub use neomacs_test_oracle::gnu::{GnuOracle, gnu_oracle};
 
 /// The canonical environment for GNU oracles spawned by in-crate unit tests.
 ///
@@ -863,5 +863,5 @@ mod tests {
 pub mod mock_redisplay;
 
 pub(crate) use crate::emacs_core::eval::subr_abi::{
-    builtin_hof_entry_for_test, leaked_subr_metadata_for_test, SubrValueExt,
+    SubrValueExt, builtin_hof_entry_for_test, leaked_subr_metadata_for_test,
 };

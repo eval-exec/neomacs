@@ -104,14 +104,22 @@ fn skip_char_or_lifetime(bytes: &[u8], i: usize) -> usize {
         while j < bytes.len() && bytes[j] != b'\'' && bytes[j] != b'\n' {
             j += 1;
         }
-        return if j < bytes.len() && bytes[j] == b'\'' { j + 1 } else { i + 1 };
+        return if j < bytes.len() && bytes[j] == b'\'' {
+            j + 1
+        } else {
+            i + 1
+        };
     }
     // One UTF-8 scalar value: skip continuation bytes, then expect `'`.
     j += 1;
     while j < bytes.len() && (bytes[j] & 0b1100_0000) == 0b1000_0000 {
         j += 1;
     }
-    if j < bytes.len() && bytes[j] == b'\'' { j + 1 } else { i + 1 }
+    if j < bytes.len() && bytes[j] == b'\'' {
+        j + 1
+    } else {
+        i + 1
+    }
 }
 
 fn cleaned_code(text: &str) -> String {
@@ -187,7 +195,11 @@ fn cleaned_code(text: &str) -> String {
 // ---------------------------------------------------------------------------
 
 fn line_of(code: &str, idx: usize) -> usize {
-    code.as_bytes()[..idx].iter().filter(|b| **b == b'\n').count() + 1
+    code.as_bytes()[..idx]
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count()
+        + 1
 }
 
 fn skip_literal(bytes: &[u8], i: usize) -> usize {
@@ -535,9 +547,7 @@ fn scan_file(name: &str, text: &str, out: &mut Vec<Violation>) {
         if b == b'"'
             || b == b'\''
             || b == b'r'
-            || ((b == b'b' || b == b'c')
-                && i + 1 < bytes.len()
-                && bytes[i + 1] == b'r')
+            || ((b == b'b' || b == b'c') && i + 1 < bytes.len() && bytes[i + 1] == b'r')
         {
             // Literals are opaque: `"#[cfg(test)]"` inside a string is data.
             i = skip_literal(bytes, i);
@@ -581,7 +591,8 @@ fn scan_file(name: &str, text: &str, out: &mut Vec<Violation>) {
         }
         // cfg!(...) macro expression.
         if bytes[i..].starts_with(b"cfg") {
-            let before_ok = i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+            let before_ok =
+                i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
             let mut j = i + 3;
             if before_ok {
                 j = skip_ws(bytes, j);

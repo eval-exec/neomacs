@@ -6,7 +6,7 @@
 
 crate::emacs_core::subr::world_registry!(Op);
 
-pub use crate::tagged::bytecode::opcode::Op;
+pub use neovm_value::tagged::bytecode::opcode::Op;
 
 // Branch classification serves only JIT compilation and its tests.
 #[cfg(any(test, feature = "jit"))]
