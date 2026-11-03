@@ -202,40 +202,34 @@ fn n13_carried_world_state_pairs_are_referenced_only_from_carried() {
             // A renaming import binds the name; it is not a reference. The
             // plain pair members appear as the source of the three named
             // aliases (window, selection, property revision).
-            let use_binding = std::fs::read_to_string(file)
-                .ok()
-                .is_some_and(|source| {
-                    // Line numbers in `site` count the comment-stripped
-                    // text, so walk the same text.
-                    let stripped = code_only(&source);
-                    let lines: Vec<&str> = stripped.lines().collect();
-                    let mut index = match line
-                        .parse::<usize>()
-                        .expect("line number")
-                        .checked_sub(1)
-                    {
-                        Some(zero_based) if zero_based < lines.len() => zero_based,
-                        _ => return false,
-                    };
-                    // Walk back at most a use-tree's worth of lines: if we
-                    // find a `use` opener before any statement-ending `;`,
-                    // this mention is an import binding (possibly the source
-                    // side of a rename), not a reference.
-                    let mut walked = 0;
-                    loop {
-                        let text = lines[index].trim_start();
-                        // `use`, `pub use`, `pub(crate) use`, …: any use
-                        // statement opener with a visibility prefix.
-                        if text.starts_with("use ") || text.contains(" use ") {
-                            return true;
-                        }
-                        if lines[index].contains(';') || index == 0 || walked == 12 {
-                            return false;
-                        }
-                        index -= 1;
-                        walked += 1;
+            let use_binding = std::fs::read_to_string(file).ok().is_some_and(|source| {
+                // Line numbers in `site` count the comment-stripped
+                // text, so walk the same text.
+                let stripped = code_only(&source);
+                let lines: Vec<&str> = stripped.lines().collect();
+                let mut index = match line.parse::<usize>().expect("line number").checked_sub(1) {
+                    Some(zero_based) if zero_based < lines.len() => zero_based,
+                    _ => return false,
+                };
+                // Walk back at most a use-tree's worth of lines: if we
+                // find a `use` opener before any statement-ending `;`,
+                // this mention is an import binding (possibly the source
+                // side of a rename), not a reference.
+                let mut walked = 0;
+                loop {
+                    let text = lines[index].trim_start();
+                    // `use`, `pub use`, `pub(crate) use`, …: any use
+                    // statement opener with a visibility prefix.
+                    if text.starts_with("use ") || text.contains(" use ") {
+                        return true;
                     }
-                });
+                    if lines[index].contains(';') || index == 0 || walked == 12 {
+                        return false;
+                    }
+                    index -= 1;
+                    walked += 1;
+                }
+            });
             let defining_file = definers
                 .iter()
                 .any(|definer| file == definer.display().to_string());
