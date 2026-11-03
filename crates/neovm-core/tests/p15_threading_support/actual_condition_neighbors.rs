@@ -18,6 +18,7 @@ pub(crate) mod emacs_core {
     }
     pub(crate) mod value {
         pub use neovm_core::emacs_core::value::Value;
+        pub(crate) use crate::actual_payload::emacs_core::value::buffer_vocab;
     }
     pub(crate) mod threads {
         use super::error::Flow;

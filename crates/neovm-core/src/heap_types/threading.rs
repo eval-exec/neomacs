@@ -5,7 +5,7 @@
 //! these collectible owners.
 
 use super::LispString;
-use crate::buffer::BufferId;
+use crate::emacs_core::value::buffer_vocab::BufferId;
 use crate::tagged::gc::{HeapIdentity, TaggedHeap};
 use crate::tagged::header::MutexObj;
 use crate::tagged::transport::{SharedRoot, SharedRootError};

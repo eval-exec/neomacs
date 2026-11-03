@@ -2,7 +2,7 @@
 mod actual_payload;
 
 // The included production source names the crate-root vocabulary.
-use actual_payload::{buffer, tagged, threading};
+use actual_payload::{emacs_core, tagged, threading};
 use threading::{
     CondVarId, MutexId, RunState, StoredThreadEvent, ThreadChildren, ThreadId, ThreadIds,
     ThreadName, ThreadNativeState, ThreadOutcome, ThreadPayload, ThreadPhase,

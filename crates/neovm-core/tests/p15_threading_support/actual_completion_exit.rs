@@ -11,6 +11,7 @@ use std::rc::Rc;
 use std::sync::MutexGuard;
 
 pub(crate) mod emacs_core {
+    pub(crate) use crate::actual_payload::emacs_core::value;
     pub(crate) mod threads {
         pub(crate) use crate::actual_completion::completion::RetiredCompletion;
     }

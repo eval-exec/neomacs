@@ -2448,7 +2448,7 @@ pub(crate) fn concurrent_hash_mutation_active() -> bool {
 /// already checked `concurrent_mark_active()`.
 pub(crate) fn note_string_interval_preimage(
     string_addr: usize,
-    table: &crate::buffer::text_props::TextPropertyTable,
+    table: &crate::emacs_core::value::text_props::TextPropertyTable,
 ) {
     with_tagged_heap(|heap| {
         if !heap

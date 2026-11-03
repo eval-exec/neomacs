@@ -1503,11 +1503,18 @@ impl TaggedHeap {
         self.live_bytes
     }
 
-    pub fn buffer_value(&self, id: crate::buffer::BufferId) -> Option<TaggedValue> {
+    pub fn buffer_value(
+        &self,
+        id: crate::emacs_core::value::buffer_vocab::BufferId,
+    ) -> Option<TaggedValue> {
         self.buffer_registry.get(id.0 as usize).copied().flatten()
     }
 
-    pub fn register_buffer_value(&mut self, id: crate::buffer::BufferId, value: TaggedValue) {
+    pub fn register_buffer_value(
+        &mut self,
+        id: crate::emacs_core::value::buffer_vocab::BufferId,
+        value: TaggedValue,
+    ) {
         let idx = id.0 as usize;
         if self.buffer_registry.len() <= idx {
             self.buffer_registry.resize(idx + 1, None);

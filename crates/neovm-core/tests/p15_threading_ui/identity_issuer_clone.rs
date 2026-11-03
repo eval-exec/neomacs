@@ -1,6 +1,6 @@
 #[path = "../p15_threading_support/actual_payload.rs"]
 mod actual_payload;
-use actual_payload::{buffer, tagged, threading};
+use actual_payload::{emacs_core, tagged, threading};
 
 fn duplicate(ids: threading::ThreadIds) {
     let _copy = ids.clone();

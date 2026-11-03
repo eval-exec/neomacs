@@ -42,7 +42,6 @@ frontend_events value 2
 fuzz_support emacs_char 1
 fuzz_support regex_emacs 1
 fuzz_support syntax 1
-heap_types top:buffer 1
 image_identity value 1
 keyboard (root) 1
 keyboard autoload 2
@@ -68,7 +67,6 @@ keyboard wait 1
 keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
-tagged top:buffer 6
 window category 2
 window chartable 1
 window display_spec 3

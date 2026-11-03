@@ -388,7 +388,10 @@ impl TaggedHeap {
     }
 
     /// Allocate a buffer reference.
-    pub fn alloc_buffer(&mut self, id: crate::buffer::BufferId) -> TaggedValue {
+    pub fn alloc_buffer(
+        &mut self,
+        id: crate::emacs_core::value::buffer_vocab::BufferId,
+    ) -> TaggedValue {
         let obj = Box::new(BufferObj {
             header: VecLikeHeader::new(VecLikeType::Buffer),
             id,

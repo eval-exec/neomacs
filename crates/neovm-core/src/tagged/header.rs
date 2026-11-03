@@ -2035,7 +2035,7 @@ pub struct MarkerObj {
 #[repr(C)]
 pub struct BufferObj {
     pub header: VecLikeHeader,
-    pub id: crate::buffer::BufferId,
+    pub id: crate::emacs_core::value::buffer_vocab::BufferId,
 }
 
 /// Heap-allocated window reference (wraps a u64 id).

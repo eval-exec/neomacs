@@ -3,8 +3,8 @@
 //! These functions apply generational and concurrent write barriers in the
 //! tagged runtime.
 
-use crate::buffer::text_props::TextPropertyTable;
 use crate::emacs_core::value::LispHashTable;
+use crate::emacs_core::value::text_props::TextPropertyTable;
 use crate::heap_types::{LispMarker, LispString, OverlayData};
 #[cfg(test)]
 use crate::tagged::bytecode::chunk::ByteCodeFunction;
