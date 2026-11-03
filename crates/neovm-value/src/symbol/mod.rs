@@ -39,7 +39,8 @@ mod projection;
 mod property_revision;
 mod roots;
 pub use canonical_access::CanonicalAccess;
-pub(crate) use property_revision::{
+#[doc(hidden)]
+pub use property_revision::{
     swap_world_state as swap_property_revision_world_state,
     world_state_placeholder as property_revision_world_state_placeholder,
 };
