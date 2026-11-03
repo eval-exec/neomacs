@@ -7,3 +7,12 @@
 
 pub mod logging;
 pub mod tls_scope;
+
+/// Test-only read surface for core-owned tests of the moved modules.
+///
+/// The contents are written by the owning lanes from the peer-signed item
+/// table; this skeleton declares the module and the feature so the manifest
+/// and profile gates exist before the items land.  Additive only: no product
+/// item's visibility changes under this feature.
+#[cfg(feature = "test-support")]
+pub mod test_support;

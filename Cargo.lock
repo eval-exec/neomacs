@@ -4349,6 +4349,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tl",
+ "toml",
  "tracing",
  "tracing-appender",
  "tracing-log",

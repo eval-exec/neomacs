@@ -41,3 +41,8 @@ gc-memory-telemetry = ["dep:serde_json"]
 jit = []
 perf-probes = []
 sqlite = []
+# Test-only read surface for core-owned tests of moved modules.  Additive by
+# peer ruling A1: no product item changes visibility under it.  Only
+# neovm-core's [dev-dependencies] may enable it (peer ruling A2 and the
+# manifest architecture guard); it is off in every product profile.
+test-support = []

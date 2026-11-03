@@ -412,6 +412,12 @@ mod runtime_string_guard_test;
 #[path = "display/shader_surface/tests/runtime_test.rs"]
 mod shader_surface_test;
 #[cfg(test)]
+#[path = "tests/architecture/split_cfg_test_guard_test.rs"]
+mod split_cfg_test_guard_test;
+#[cfg(test)]
+#[path = "tests/architecture/split_test_support_manifest_test.rs"]
+mod split_test_support_manifest_test;
+#[cfg(test)]
 #[path = "lisp/load/tests/stale_bytecode_test.rs"]
 mod stale_bytecode_test;
 #[cfg(test)]
