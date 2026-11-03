@@ -53,6 +53,8 @@ pub mod display_spec;
 pub mod display_when;
 #[path = "display/dispnew/mod.rs"]
 pub mod dispnew;
+#[path = "editing/host/mod.rs"]
+pub mod edit_host;
 #[path = "display/effect_profile/mod.rs"]
 pub mod effect_profile;
 #[path = "display/font/mod.rs"]
@@ -466,6 +468,7 @@ pub(crate) struct MenuBarPopupAnchor {
 // Re-export the main public API
 pub use bytecode::{ByteCodeFunction, Vm as ByteVm};
 pub use display_host::{DisplayHost, GraphicalFaceAttribute, SelectionOwner};
+pub use edit_host::EditHost;
 pub use error::EvalError;
 pub use eval::{
     Context, GuiFrameHostRequest, MenuBarRebuildGeneration, PopupMenuEntry, PopupMenuRequest,

@@ -224,12 +224,14 @@ pub(crate) fn text_change_for_unchanged_extent_in_manager(
 // ---------------------------------------------------------------------------
 
 /// Visible (buffer-local aware) value of a hook variable is non-nil.
-fn hook_symbol_value_truthy(
-    ctx: &crate::emacs_core::eval::Context,
+/// The first C13 EditHost conversion: pure hook reads, no evaluator
+/// handle, monomorphized at `H = Context` (PEER-RULING-STAGE3 R0).
+fn hook_symbol_value_truthy<H: crate::emacs_core::edit_host::EditHost>(
+    host: &H,
     sym: crate::emacs_core::intern::SymId,
 ) -> bool {
-    let sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(ctx, sym);
-    crate::emacs_core::hook_runtime::hook_value_by_id(ctx, sym).is_some_and(|v| v.is_truthy())
+    let sym = host.hook_symbol_by_id(sym);
+    host.hook_value_by_id(sym).is_some_and(|v| v.is_truthy())
 }
 
 /// Check whether `inhibit-modification-hooks` is non-nil.
@@ -318,20 +320,19 @@ fn run_named_hook_reset_on_error(
     }
 }
 
-fn run_named_hook_without_reset(
-    ctx: &mut crate::emacs_core::eval::Context,
+/// C13 EditHost conversion: this body needs hooks alone, so it never
+/// names the evaluator (`H = Context` at every call site today).
+fn run_named_hook_without_reset<H: crate::emacs_core::edit_host::EditHost>(
+    host: &mut H,
     hook_name: crate::emacs_core::intern::SymId,
     hook_args: &[Value],
 ) -> Result<(), Flow> {
-    let hook_sym = crate::emacs_core::hook_runtime::hook_symbol_by_id(ctx, hook_name);
-    let hook_value =
-        crate::emacs_core::hook_runtime::hook_value_by_id(ctx, hook_sym).unwrap_or(Value::NIL);
+    let hook_sym = host.hook_symbol_by_id(hook_name);
+    let hook_value = host.hook_value_by_id(hook_sym).unwrap_or(Value::NIL);
     if hook_value.is_nil() {
         return Ok(());
     }
-    let _ = crate::emacs_core::hook_runtime::run_hook_value(
-        ctx, hook_sym, hook_value, hook_args, true,
-    )?;
+    let _ = host.run_hook_value(hook_sym, hook_value, hook_args, true)?;
     Ok(())
 }
 

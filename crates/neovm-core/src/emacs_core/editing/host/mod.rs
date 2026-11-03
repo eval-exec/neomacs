@@ -1,0 +1,67 @@
+//! The edit layer's host interface (stage-3 R0).
+//!
+//! Edit code must not name `eval::Context`: after the crate split the
+//! edit crate cannot reach the evaluator's types at all. Edit functions
+//! that need eval, display or system services take `H: EditHost`,
+//! monomorphized at `H = Context`; dispatch is static, nothing is
+//! installed, and there is no "uninstalled" state. The trait is never
+//! `dyn`, and there is exactly one production impl, in `runtime/eval`.
+//! Precedent: `emacs_core::lisp::hook_runtime::HookRuntime` and
+//! `emacs_core::display_host::DisplayHost`.
+//!
+//! Functions that need only edit state take `&mut EditRuntime` (or
+//! `&mut BufferManager`) and stay monomorphic — prefer that form.
+//!
+//! The method surface has two owner sections (STAGE3-ASSIGN UPDATE):
+//! **eval services** (this lane) and **display/system queries** (the
+//! display-seam lane). Each method is one future `EDIT-HOST` ledger row,
+//! named in the READY that lands it. An installed `&'static` fn table is
+//! correct only where no host is in scope (C7 substrate sites, C4b from
+//! host-free code) — never here.
+
+use crate::emacs_core::error::EvalResult;
+use crate::emacs_core::intern::SymId;
+use crate::emacs_core::value::Value;
+
+pub trait EditHost {
+    // -------------------------------------------------------------------------
+    // eval services (stage-3 gapsurvey series: C13 hooks, C2 variables,
+    // C3 funcall/apply/mode/lexical + the opaque specpdl-root API)
+    // -------------------------------------------------------------------------
+
+    /// Resolve a hook variable's alias chain to the final hook symbol
+    /// (GNU `FindHook`); edit reads a hook's value through the result.
+    fn hook_symbol_by_id(&self, hook_sym: SymId) -> SymId;
+
+    /// `hook_symbol_by_id` starting from the hook's name.
+    fn hook_symbol_by_name(&self, hook_name: &str) -> SymId;
+
+    /// The resolved hook symbol's visible value, `None` when unbound.
+    fn hook_value_by_id(&self, hook_sym: SymId) -> Option<Value>;
+
+    /// Run a hook value (GNU `run_hook_with_args`); `inherit_global`
+    /// merges the buffer-local and global portions.
+    fn run_hook_value(
+        &mut self,
+        hook_sym: SymId,
+        hook_value: Value,
+        hook_args: &[Value],
+        inherit_global: bool,
+    ) -> EvalResult;
+
+    /// `run_hook_value` stopping at the first nil result
+    /// (GNU `run-hook-with-args-until-failure`).
+    fn run_hook_value_until_failure(
+        &mut self,
+        hook_sym: SymId,
+        hook_value: Value,
+        hook_args: &[Value],
+        inherit_global: bool,
+    ) -> EvalResult;
+
+    // -------------------------------------------------------------------------
+    // display/system queries (stage-3 display-seam lane: C4b, C5, C15)
+    // -------------------------------------------------------------------------
+    // Empty until that series lands; nothing here may name display or
+    // system types that edit does not already own.
+}

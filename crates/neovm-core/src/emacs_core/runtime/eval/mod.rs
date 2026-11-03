@@ -65,6 +65,7 @@ use subr_abi::{SubrFn, SubrObj, SubrValueExt};
 
 mod callback;
 mod command_error;
+mod edit_host;
 mod lexenv_cache;
 mod lexical_symbols;
 pub(crate) use self::lexenv_cache::LexenvAssqCache;
