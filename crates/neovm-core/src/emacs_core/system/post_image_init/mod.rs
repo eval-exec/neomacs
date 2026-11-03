@@ -426,11 +426,23 @@ impl PostImageInit {
                 call_line: 2020,
                 body: "src/sysdep.c:2225-2249",
                 guard: CallGuard::Unconditional,
-                establishes: Establishes::NoLispVisibleState(
-                    "seeds the PRNG from getrandom().  Two startups are MEANT to \
-                     disagree, so `(random)' is not a fact that can be compared \
-                     between editors at all.",
-                ),
+                // Two startups are MEANT to disagree, and that disagreement is
+                // itself the Lisp-visible fact: with no seed, every session
+                // drew the same `(random)' sequence and the same
+                // `server-generate-key'.
+                establishes: Establishes::Facts {
+                    constants: &[],
+                    derived: &[Derived::Elsewhere {
+                        what: "seeds the `random' generator from the OS entropy \
+                               source (the PID and the time only when that fails), \
+                               so every session draws its own sequence",
+                        gnu: "src/sysdep.c:2225-2249",
+                        by: "builtins::arithmetic's SeededGenerator, which seeds an \
+                             unseeded generator the same way before its first draw \
+                             -- on every startup path, since no image carries \
+                             generator state",
+                    }],
+                },
             },
             Self::Xfaces => PostImageInitSite {
                 c_name: "init_xfaces",

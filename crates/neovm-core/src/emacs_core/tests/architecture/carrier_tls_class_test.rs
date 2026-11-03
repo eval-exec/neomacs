@@ -189,7 +189,6 @@ const TLS_CLASSIFICATION: &[(&str, TlsClass)] = &[
     ("PROCESS_NAME_REGISTRY", TlsClass::CarrierIntrinsic),
     ("PROFILER", TlsClass::CarrierIntrinsic),
     ("QUIT_REQUESTED_TLS", TlsClass::OwnerCarried),
-    ("RANDOM_STATE", TlsClass::SourceOnly),
     ("RECENT_CLEARED_CELLS", TlsClass::SourceOnly),
     ("RECENT_CLEARED_MASKS", TlsClass::SourceOnly),
     ("RECENT_READS", TlsClass::MustReset),
