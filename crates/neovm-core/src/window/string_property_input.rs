@@ -3,7 +3,7 @@
 use super::pixel_input::SpaceInput;
 use crate::buffer::{CharPos0, text_props::TextPropertiesRef};
 use crate::emacs_core::{
-    display_spec::{DisplayPropertySpecs, display_spec_when_parts},
+    display_spec::{DisplayEval, DisplayPropertySpecs, display_spec_when_parts},
     image_catalog::ImageSpecIdentity,
     plist::plist_get,
     value::Value,
@@ -42,7 +42,7 @@ pub(super) struct StringDisplayInputs(Arc<[DisplayRun]>);
 struct DisplayRun {
     start: CharPos0,
     end: CharPos0,
-    eval_enabled: bool,
+    eval: DisplayEval,
     specs: Box<[SpecInput]>,
 }
 
@@ -96,7 +96,7 @@ impl StringDisplayInputs {
                 runs.push(DisplayRun {
                     start,
                     end,
-                    eval_enabled: decoded.eval_enabled,
+                    eval: decoded.eval,
                     specs: specs.into(),
                 });
             }

@@ -232,7 +232,7 @@ fn same_buffer_fontifier_name_unintern_child() {
     }];
     // Warm native metadata and normal WHEN bindings before the evidence
     // interval, so the callback need not load or define a function later.
-    eval.evaluate_display_when_sites(live, None, &sites, |spec| spec.is_string())
+    eval.evaluate_display_when_sites(live, None, &sites, |spec, _| spec.is_string())
         .expect("warm WHEN machinery");
     eval.window_layout_attempt_freshness(frame, window, live)
         .unwrap();
@@ -320,7 +320,7 @@ fn same_buffer_fontifier_name_unintern_child() {
 
     // The Lisp name is still usable through the fresh symbol, and installing
     // the saved hook there does not retroactively change what C read.
-    eval.evaluate_display_when_sites(live, None, &sites, |spec| spec.is_string())
+    eval.evaluate_display_when_sites(live, None, &sites, |spec, _| spec.is_string())
         .expect("install exactly the saved F under fresh T through normal WHEN");
     assert!(
         eval.eval_str(

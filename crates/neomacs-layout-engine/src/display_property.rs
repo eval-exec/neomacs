@@ -9,8 +9,8 @@ use crate::display_spec::{
 use crate::display_when::{DisplayWhenConditions, DisplayWhenLookup};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::display_spec::{
-    DisplayMarginLocation, DisplayMediaSpecKind, DisplayPropertySpecs, DisplaySpecKind,
-    display_margin_spec, display_spec_kind, display_spec_when_parts,
+    DisplayEval, DisplayMarginLocation, DisplayMediaSpecKind, DisplayPropertySpecs,
+    DisplaySpecKind, display_margin_spec, display_spec_kind, display_spec_when_parts,
 };
 use neovm_core::emacs_core::emacs_char::EmacsChar;
 use neovm_core::emacs_core::value::list_to_vec;
@@ -293,8 +293,7 @@ pub(crate) fn classify_display_property_at(
     let mut result = DisplayPropertyClassification::default();
     let specs = DisplayPropertySpecs::of(value);
     specs.for_each(|spec| {
-        let element =
-            classify_single_display_spec(spec, value, conditions, specs.eval_enabled, target, at);
+        let element = classify_single_display_spec(spec, value, conditions, specs.eval, target, at);
         if result.replacement.is_none() && element.replacement.is_some() {
             result.replacement = element.replacement;
             result.replacement_spec = element.replacement_spec;
@@ -347,8 +346,7 @@ pub(crate) fn classify_display_property_modifiers_only(
     specs.for_each(|spec| {
         merge_modifiers(
             &mut modifiers,
-            classify_single_display_spec(spec, value, conditions, specs.eval_enabled, target, at)
-                .modifiers,
+            classify_single_display_spec(spec, value, conditions, specs.eval, target, at).modifiers,
         );
         ControlFlow::Continue(())
     });
@@ -363,21 +361,22 @@ pub(crate) fn classify_display_property_modifiers_only(
 ///
 /// `property` is the whole `display` value VALUE belongs to: a clause the
 /// walk takes by the structural rule is recorded with it, so the site can be
-/// evaluated after the walk with every earlier clause in view.
+/// evaluated after the walk with every earlier clause in view. `eval` is that
+/// value's policy (GNU's `enable_eval_p`).
 pub(crate) fn classify_single_display_spec(
     value: Value,
     property: Value,
     conditions: &DisplayWhenConditions,
-    eval_enabled: bool,
+    eval: DisplayEval,
     target: DisplayPropertyTarget,
     at: DisplayWhenLookup,
 ) -> DisplayPropertyClassification {
     // GNU unwraps WHEN exactly once (xdisp.c:6130-6164), then proceeds
     // to the ordinary spec arms. A nested WHEN is not another clause.
-    let value = if matches!(display_spec_kind(value), DisplaySpecKind::When) {
+    let value = if matches!(display_spec_kind(value, eval), DisplaySpecKind::When) {
         match display_spec_when_parts(value) {
             Some((form, spec))
-                if (eval_enabled || form.is_bare_symbol_named("t"))
+                if (eval == DisplayEval::Enabled || form.is_t())
                     && conditions.holds(form, at, property) =>
             {
                 spec
@@ -387,18 +386,23 @@ pub(crate) fn classify_single_display_spec(
     } else {
         value
     };
-    classify_resolved_display_spec(value, target)
+    classify_resolved_display_spec(value, eval, target)
 }
 
 /// Classify a spec after its optional WHEN has already been consumed.
 /// The evaluator uses this entry point so it cannot unwrap a second WHEN.
+///
+/// `eval` decides whether the neomacs media heads are display specs at all
+/// (see [`DisplayEval`]): every media replacement the resolver later opens
+/// comes out of this classification, including a `((margin …) …)` content.
 pub(crate) fn classify_resolved_display_spec(
     value: Value,
+    eval: DisplayEval,
     target: DisplayPropertyTarget,
 ) -> DisplayPropertyClassification {
-    let kind = display_spec_kind(value);
+    let kind = display_spec_kind(value, eval);
     if matches!(kind, DisplaySpecKind::Margin) {
-        return classify_margin_display_spec(value, target);
+        return classify_margin_display_spec(value, eval, target);
     }
 
     // An unsupported graphical replacement is not a failed image load: it
@@ -501,6 +505,7 @@ pub(crate) fn classify_resolved_display_spec(
 
 fn classify_margin_display_spec(
     value: Value,
+    eval: DisplayEval,
     target: DisplayPropertyTarget,
 ) -> DisplayPropertyClassification {
     let Some(spec) = display_margin_spec(value) else {
@@ -509,7 +514,7 @@ fn classify_margin_display_spec(
     // GNU strips one margin prefix, then only accepts ordinary replacement
     // content (xdisp.c:6473-6515). It does not re-enter WHEN or margin parsing.
     if !matches!(
-        display_spec_kind(spec.content()),
+        display_spec_kind(spec.content(), eval),
         DisplaySpecKind::Text
             | DisplaySpecKind::Space
             | DisplaySpecKind::Image
@@ -518,7 +523,7 @@ fn classify_margin_display_spec(
     ) {
         return DisplayPropertyClassification::default();
     }
-    let inner = classify_resolved_display_spec(spec.content(), target);
+    let inner = classify_resolved_display_spec(spec.content(), eval, target);
 
     // GNU's `((margin nil) CONTENT)` selects TEXT_AREA and is otherwise the
     // ordinary CONTENT replacement.  Preserve the inner classification rather

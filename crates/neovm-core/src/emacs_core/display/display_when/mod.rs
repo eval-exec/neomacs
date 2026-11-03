@@ -13,7 +13,7 @@
 
 use super::eval::Context;
 use crate::buffer::BufferId;
-use crate::emacs_core::display_spec::{DisplayPropertySpecs, display_spec_when_parts};
+use crate::emacs_core::display_spec::{DisplayEval, DisplayPropertySpecs, display_spec_when_parts};
 use crate::emacs_core::error::{Flow, FlowKind, FlowResultExt as _};
 use crate::emacs_core::intern::WellKnown;
 use crate::emacs_core::value::Value;
@@ -90,8 +90,9 @@ impl Context {
 
     /// Evaluate every reachable, enabled FORM occurrence with its own
     /// bindings, as GNU does at each site it meets. The caller supplies its
-    /// single-spec replacement classifier so string evaluation and rendering
-    /// stop on the same winning clause.
+    /// single-spec replacement classifier, called with the spec's property
+    /// policy, so string evaluation and rendering stop on the same winning
+    /// clause.
     ///
     /// Snapshot and root every property's elements before running Lisp. A
     /// FORM can mutate the list/vector or remove a later site's property and
@@ -102,7 +103,7 @@ impl Context {
         buf_id: BufferId,
         window_id: Option<WindowId>,
         sites: &[DisplayWhenSite],
-        mut replaces_text: impl FnMut(Value) -> bool,
+        mut replaces_text: impl FnMut(Value, DisplayEval) -> bool,
     ) -> Result<FxHashMap<DisplayWhenSiteKey, bool>, Flow> {
         let symbol_mode = self.symbol_mode();
         let root_scope = self.save_specpdl_roots();
@@ -122,7 +123,7 @@ impl Context {
                     self.push_specpdl_root(value);
                 }
             }
-            properties.push((property.eval_enabled, specs));
+            properties.push((property.eval, specs));
         }
         let evaluated = self.with_display_buffer_current(buf_id, |ctx| {
             let mut results: FxHashMap<DisplayWhenSiteKey, bool> = FxHashMap::default();
@@ -154,7 +155,7 @@ impl Context {
                 Some(saved)
             });
             let outcome = ctx.with_unwind_scope(|ctx| {
-                for (site, (eval_enabled, specs)) in sites.iter().zip(properties) {
+                for (site, (eval, specs)) in sites.iter().zip(properties) {
                     for spec in specs {
                         let resolved = if let Some((form, inner)) = display_spec_when_parts(spec) {
                             // Earlier clauses may have installed this pair
@@ -169,10 +170,10 @@ impl Context {
                             if form.is_nil() {
                                 continue;
                             }
-                            if !form.is_symbol_named("t", symbol_mode) {
+                            if !symbol_mode.unwrap(form).is_t() {
                                 // Disabled sites have no cached answer: the policy
                                 // belongs to this property, not every equal FORM.
-                                if !eval_enabled {
+                                if eval == DisplayEval::Disabled {
                                     continue;
                                 }
                                 let key = DisplayWhenSiteKey::at(form, site);
@@ -196,7 +197,7 @@ impl Context {
                         } else {
                             spec
                         };
-                        if site.object.is_string() && replaces_text(resolved) {
+                        if site.object.is_string() && replaces_text(resolved, eval) {
                             break;
                         }
                     }
@@ -245,7 +246,7 @@ impl Context {
         if form.is_nil() {
             return Ok(false);
         }
-        if form.is_symbol_named("t", symbol_mode) {
+        if symbol_mode.unwrap(form).is_t() {
             return Ok(true);
         }
         let count = self.specpdl.len();

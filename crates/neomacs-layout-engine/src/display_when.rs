@@ -330,7 +330,7 @@ impl DisplayWhenConditions {
         if form.is_nil() {
             return DisplayWhenVerdict::Fails;
         }
-        if form.is_bare_symbol_named("t") {
+        if form.is_t() {
             return DisplayWhenVerdict::Holds;
         }
         let Self::Evaluated(answers) = self else {
@@ -583,22 +583,26 @@ fn evaluate_recorded_display_when_visits(
     ledger: &mut DisplayWhenReplayLedger,
 ) -> DisplayWhenSettlement {
     let sites = std::mem::take(&mut *answers.visits.sites.borrow_mut());
-    let evaluated =
-        match evaluator.evaluate_display_when_sites(buf_id, Some(window_id), &sites, |spec| {
-            crate::display_property::classify_resolved_display_spec(spec, target)
+    let evaluated = match evaluator.evaluate_display_when_sites(
+        buf_id,
+        Some(window_id),
+        &sites,
+        |spec, eval| {
+            crate::display_property::classify_resolved_display_spec(spec, eval, target)
                 .replacement()
                 .is_some()
-        }) {
-            Ok(evaluated) => evaluated,
-            Err(flow) => {
-                tracing::warn!(
-                    ?flow,
-                    "display `when' forms met by the walk could not be evaluated; \
+        },
+    ) {
+        Ok(evaluated) => evaluated,
+        Err(flow) => {
+            tracing::warn!(
+                ?flow,
+                "display `when' forms met by the walk could not be evaluated; \
                  its rows stay unverified"
-                );
-                return DisplayWhenSettlement::Settled(DisplayWhenRecord::Unknown);
-            }
-        };
+            );
+            return DisplayWhenSettlement::Settled(DisplayWhenRecord::Unknown);
+        }
+    };
     // The walk drew every one of these clauses as holding.
     if evaluated.values().all(|holds| *holds) {
         return DisplayWhenSettlement::Settled(DisplayWhenRecord::Known);
@@ -701,8 +705,8 @@ pub(crate) fn evaluate_window_display_when_forms_at_end(
         buf_id,
         window_id.map(neovm_core::window::WindowId),
         &sites,
-        |spec| {
-            crate::display_property::classify_resolved_display_spec(spec, target)
+        |spec, eval| {
+            crate::display_property::classify_resolved_display_spec(spec, eval, target)
                 .replacement()
                 .is_some()
         },
@@ -936,7 +940,7 @@ fn collect_when_forms(
     specs.for_each(|spec| {
         if let Some((form, _)) = display_spec_when_parts(spec)
             && !form.is_nil()
-            && !form.is_bare_symbol_named("t")
+            && !form.is_t()
         {
             sites.push(DisplayWhenRunSite {
                 site: DisplayWhenSite {

@@ -7406,6 +7406,96 @@ fn display_prop_replacing_p_matches_gnu_taxonomy() {
     }
 }
 
+/// Point adjustment must agree with redisplay on `(disable-eval …)` values:
+/// inside that wrapper the neomacs media heads are not display specs (H1), so
+/// a media spec that redisplay will not draw does not make its text
+/// intangible either, while GNU's own replacing specs still do.
+#[test]
+fn display_prop_replacing_p_does_not_take_media_heads_under_disable_eval() {
+    let sym = Value::symbol;
+    let disable_eval = |spec: Value| Value::list(vec![sym("disable-eval"), spec]);
+    for name in ["video", "webkit", "surface"] {
+        let margin_nil = Value::list(vec![
+            Value::list(vec![sym("margin"), Value::NIL]),
+            Value::list(vec![sym(name), Value::keyword("id"), Value::fixnum(1)]),
+        ]);
+        let when_t = Value::list(vec![sym("when"), Value::T, sym(name)]);
+        for spec in [margin_nil, when_t] {
+            assert!(
+                display_prop_replacing_p(spec, true),
+                "a plain {spec:?} replaces on a GUI frame"
+            );
+            assert!(
+                !display_prop_replacing_p(disable_eval(spec), true),
+                "({name} …) must not replace under disable-eval"
+            );
+        }
+    }
+    // GNU heads keep replacing under the wrapper.
+    assert!(display_prop_replacing_p(
+        disable_eval(Value::list(vec![sym("image"), Value::keyword("file")])),
+        true,
+    ));
+    assert!(display_prop_replacing_p(
+        disable_eval(Value::list(vec![sym("space"), Value::keyword("width")])),
+        false,
+    ));
+}
+
+/// GNU's `display_prop_intangible_p` runs `handle_display_spec` with IT NULL,
+/// and under `(disable-eval …)` `handle_single_display_spec` takes any `when`
+/// FORM but `t` as nil without evaluating it (src/xdisp.c): such a clause
+/// replaces nothing, so it cannot make its text intangible either. A plain
+/// value keeps the structural reading (a non-nil FORM holds).
+#[test]
+fn display_prop_replacing_p_takes_only_a_literal_t_when_form_under_disable_eval() {
+    let sym = Value::symbol;
+    let disable_eval = |spec: Value| Value::list(vec![sym("disable-eval"), spec]);
+    // `(when FORM . "x")`.
+    let when_string = |form: Value| Value::cons(sym("when"), Value::cons(form, Value::string("x")));
+    let form = Value::list(vec![sym("ignore")]);
+    for frame_window_p in [false, true] {
+        let shapes: [fn(Value) -> Value; 3] = [
+            |spec| spec,
+            |spec| Value::vector(vec![spec]),
+            |spec| Value::list(vec![spec]),
+        ];
+        for shape in shapes {
+            assert!(
+                display_prop_replacing_p(shape(when_string(form)), frame_window_p),
+                "a plain non-nil FORM holds structurally"
+            );
+            assert!(
+                !display_prop_replacing_p(disable_eval(shape(when_string(form))), frame_window_p),
+                "under disable-eval a FORM other than t is nil"
+            );
+            assert!(
+                display_prop_replacing_p(
+                    disable_eval(shape(when_string(Value::T))),
+                    frame_window_p
+                ),
+                "under disable-eval a literal t still holds"
+            );
+            assert!(
+                !display_prop_replacing_p(
+                    disable_eval(shape(when_string(Value::from_sym_id(
+                        crate::emacs_core::intern::intern_uninterned("t")
+                    )))),
+                    frame_window_p
+                ),
+                "under disable-eval an uninterned t is not t"
+            );
+            assert!(
+                !display_prop_replacing_p(
+                    disable_eval(shape(when_string(Value::NIL))),
+                    frame_window_p
+                ),
+                "a nil FORM never holds"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // neomacs--frame-snapshot
 // ---------------------------------------------------------------------------

@@ -827,6 +827,114 @@ fn disable_eval_classifies_the_wrapped_spec() {
     assert_eq!(classified.replacement_spec().as_utf8_str(), Some("INNER"));
 }
 
+/// Under `(disable-eval …)' GNU keeps a `when' clause only when FORM is `t'
+/// itself (`EQ (form, Qt)', src/xdisp.c:6143): an uninterned symbol named
+/// `t' is a FORM like any other, so its clause is nil, without evaluation.
+#[test]
+fn disable_eval_keeps_a_when_clause_only_for_t_itself() {
+    let mut eval = Context::new();
+    let classify = |value: Value| {
+        classify_display_property(
+            value,
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer,
+            crate::display_property::DisplayPropertyTarget::Graphical,
+        )
+    };
+    let literal_t = eval
+        .eval_str("'(disable-eval (when t . \"X\"))")
+        .expect("literal t");
+    assert_eq!(
+        classify(literal_t).replacement_spec().as_utf8_str(),
+        Some("X")
+    );
+    for src in [
+        "(list 'disable-eval (cons 'when (cons (make-symbol \"t\") \"X\")))",
+        "(list 'disable-eval (vector (cons 'when (cons (make-symbol \"t\") \"X\"))))",
+    ] {
+        let uninterned_t = eval.eval_str(src).expect("uninterned t");
+        let classified = classify(uninterned_t);
+        assert!(
+            classified.replacement().is_none(),
+            "{src}: #:t is not t, got {:?}",
+            classified.replacement()
+        );
+    }
+}
+
+#[test]
+fn disable_eval_classifies_no_neomacs_media_spec_in_any_shape() {
+    // H1: `(disable-eval SPEC)' is how enriched.el (and Gnus, for a
+    // `text/enriched' part) hands untrusted display properties to redisplay.
+    // Inside it the neomacs media heads are not display specs, whatever shape
+    // carries them, so the classifier hands the media resolver nothing to
+    // open; GNU's own `image' spec still replaces the text.
+    let mut eval = Context::new();
+    let classify = |value: Value| {
+        classify_display_property(
+            value,
+            &crate::display_when::DisplayWhenConditions::structural(),
+            DisplayPropertyObject::Buffer,
+            crate::display_property::DisplayPropertyTarget::Graphical,
+        )
+    };
+    let names_media = |classified: &DisplayPropertyClassification| match classified.replacement() {
+        Some(DisplayReplacementProperty::Media(_)) => true,
+        Some(DisplayReplacementProperty::Margin(margin)) => {
+            matches!(margin.content(), DisplayMarginContent::Media { .. })
+        }
+        _ => false,
+    };
+    for spec in [
+        "(video :uri \"http://127.0.0.1:9/v.mp4\" :autoplay t)",
+        "[(webkit :uri \"http://127.0.0.1:9/page.html\")]",
+        "((margin nil) (surface :shader \"fn mainImage() {}\"))",
+        "((margin left-margin) (video :file \"/tmp/v.mp4\"))",
+        "(when t surface :glsl \"void mainImage() {}\" :channel0 (video :uri \"http://127.0.0.1:9/c.mp4\"))",
+        "((raise 0.2) (video :file \"/tmp/v.mp4\"))",
+        "(surface :id 3)",
+    ] {
+        let plain = eval.eval_str(&format!("'{spec}")).expect("plain spec");
+        let wrapped = eval
+            .eval_str(&format!("'(disable-eval {spec})"))
+            .expect("wrapped spec");
+        assert!(
+            names_media(&classify(plain)),
+            "a plain {spec} is a media replacement"
+        );
+        assert!(
+            !names_media(&classify(wrapped)),
+            "(disable-eval {spec}) must not be a media replacement"
+        );
+    }
+
+    // GNU reads `(video :uri URL …)' as a LIST of specs: the URL string is the
+    // only element that displays.
+    let wrapped_video = classify(
+        eval.eval_str("'(disable-eval (video :uri \"http://127.0.0.1:9/v.mp4\"))")
+            .expect("wrapped video"),
+    );
+    assert_eq!(
+        wrapped_video.replacement().cloned(),
+        Some(DisplayReplacementProperty::String)
+    );
+    assert_eq!(
+        wrapped_video.replacement_spec().as_utf8_str(),
+        Some("http://127.0.0.1:9/v.mp4")
+    );
+
+    let wrapped_image = classify(
+        eval.eval_str("'(disable-eval (image :type png :file \"/tmp/i.png\"))")
+            .expect("wrapped image"),
+    );
+    assert_eq!(
+        wrapped_image.replacement().cloned(),
+        Some(DisplayReplacementProperty::Media(
+            DisplayMediaReplacementProperty::Image
+        ))
+    );
+}
+
 #[test]
 fn an_evaluated_when_form_that_did_not_hold_disables_its_spec() {
     // GNU evaluates FORM (xdisp.c:6130-6160) and skips the spec on nil.  With

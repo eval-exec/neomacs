@@ -20,6 +20,11 @@
 //! payload of each spec stays with the consumer: the layout engine parses image
 //! plists, space geometry and fringe layouts, and the interpreter only needs to
 //! know whether the spec replaces text.
+//!
+//! The head table is read under the value's [`DisplayEval`] policy, so a
+//! `(disable-eval …)` value cannot name a neomacs media spec through any
+//! consumer: the policy is an argument of the one function every consumer
+//! classifies with.
 
 use super::value::Value;
 use std::ops::ControlFlow;
@@ -95,8 +100,9 @@ pub enum DisplaySpecKind {
     Xwidget,
     /// `(video ...)`, `(webkit ...)`, `(surface ...)` — neomacs media
     /// extensions, classified like [`Self::Image`]. GNU has no such heads, so a
-    /// GNU build iterates them as a list of unrecognized specs and displays
-    /// nothing; that is a deliberate neomacs superset, kept in ONE place.
+    /// GNU build reads such a cons as a LIST of specs; that is a deliberate
+    /// neomacs superset, kept in ONE place, and recognized only under
+    /// [`DisplayEval::Enabled`] — see [`DisplayEval`].
     Media(DisplayMediaSpecKind),
     /// A keyword-headed list such as `(:raise 0.2 :height 1.4)` — a neomacs
     /// convenience form parsed as one spec whose modifiers come from the whole
@@ -118,6 +124,46 @@ pub enum DisplayMediaSpecKind {
     Video,
     Webkit,
     Surface,
+}
+
+/// GNU's `enable_eval_p` (`handle_display_spec`, src/xdisp.c): whether a
+/// `display` value is trusted to do more than draw.
+///
+/// `(disable-eval SPEC)` marks a value an external agent produced: enriched.el
+/// wraps every `display` property it decodes from an `<x-display>` annotation
+/// in it (`enriched-decode-display-prop`), and Gnus decodes a `text/enriched`
+/// MIME part with that same decoder (`mm-inline-text`). GNU's contract
+/// (lispref, "display property, unsafe evaluation") is that no Lisp in SPEC is
+/// evaluated, "while still supporting all the other display property
+/// features". Suppressing `when` FORMs and `height` functions is enough for
+/// GNU because none of its other specs runs code or fetches anything remote:
+/// `image` decodes a local file or inline `:data`, and `xwidget` needs a live
+/// xwidget object, which `read` cannot produce.
+///
+/// The neomacs media heads do: resolving `(video …)`, `(webkit …)` or
+/// `(surface …)` opens an attacker-chosen URL or file in native demuxers and
+/// decoders, loads a web page, or compiles a GPU shader and runs it every
+/// frame. Under [`Self::Disabled`], [`display_spec_kind`] therefore does not
+/// recognize them, and the value's shape decodes as in GNU, which has no such
+/// heads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisplayEval {
+    /// A plain `display` value: `when` FORMs and `height` functions are
+    /// evaluated, and the neomacs media heads are display specs.
+    Enabled,
+    /// The SPEC of a `(disable-eval SPEC)` wrapper.
+    Disabled,
+}
+
+impl DisplayEval {
+    /// The kind of a neomacs media head under this policy: GNU's reading,
+    /// [`DisplaySpecKind::Other`], when evaluation is disabled.
+    fn media(self, kind: DisplayMediaSpecKind) -> DisplaySpecKind {
+        match self {
+            Self::Enabled => DisplaySpecKind::Media(kind),
+            Self::Disabled => DisplaySpecKind::Other,
+        }
+    }
 }
 
 /// Typed destination from GNU's `(margin LOCATION)` display prefix.
@@ -176,9 +222,10 @@ impl DisplaySpecKind {
     }
 }
 
-/// Classify ONE display spec by its head. This is the only place the spec-head
-/// table exists.
-pub fn display_spec_kind(spec: Value) -> DisplaySpecKind {
+/// Classify ONE display spec by its head, under the [`DisplayEval`] policy of the
+/// `display` value it belongs to. This is the only place the spec-head table
+/// exists.
+pub fn display_spec_kind(spec: Value, eval: DisplayEval) -> DisplaySpecKind {
     if spec.is_string() {
         return DisplaySpecKind::Text;
     }
@@ -211,9 +258,9 @@ pub fn display_spec_kind(spec: Value) -> DisplaySpecKind {
         "space" => DisplaySpecKind::Space,
         "image" => DisplaySpecKind::Image,
         "xwidget" => DisplaySpecKind::Xwidget,
-        "video" => DisplaySpecKind::Media(DisplayMediaSpecKind::Video),
-        "webkit" => DisplaySpecKind::Media(DisplayMediaSpecKind::Webkit),
-        "surface" => DisplaySpecKind::Media(DisplayMediaSpecKind::Surface),
+        "video" => eval.media(DisplayMediaSpecKind::Video),
+        "webkit" => eval.media(DisplayMediaSpecKind::Webkit),
+        "surface" => eval.media(DisplayMediaSpecKind::Surface),
         _ if name.starts_with(':') => DisplaySpecKind::KeywordPlist,
         _ => DisplaySpecKind::Other,
     }
@@ -246,7 +293,12 @@ fn display_margin_location(head_cdr: Value) -> Option<DisplayMarginLocation> {
 /// (GNU's own `single_display_spec_string_p` shortcut) takes a non-nil FORM
 /// as holding.
 pub fn display_spec_when_parts(spec: Value) -> Option<(Value, Value)> {
-    if !matches!(display_spec_kind(spec), DisplaySpecKind::When) {
+    // `when` is a GNU head, the same under either policy; the restrictive one
+    // keeps this structural helper from ever seeing a media head.
+    if !matches!(
+        display_spec_kind(spec, DisplayEval::Disabled),
+        DisplaySpecKind::When
+    ) {
         return None;
     }
     let rest = spec.cons_cdr();
@@ -261,7 +313,11 @@ pub fn display_spec_when_parts(spec: Value) -> Option<(Value, Value)> {
 /// whole cons for validity, which no cons of this shape passes, so nothing is
 /// displayed.
 pub fn display_margin_spec(spec: Value) -> Option<DisplayMarginSpec> {
-    if !matches!(display_spec_kind(spec), DisplaySpecKind::Margin) {
+    // As in `display_spec_when_parts`: `margin` is policy-independent.
+    if !matches!(
+        display_spec_kind(spec, DisplayEval::Disabled),
+        DisplaySpecKind::Margin
+    ) {
         return None;
     }
     let location = display_margin_location(spec.cons_car().cons_cdr())?;
@@ -284,9 +340,11 @@ pub fn display_spec_margin_value(spec: Value) -> Option<Value> {
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayPropertySpecs {
     value: Value,
-    /// False when the value was wrapped in `(disable-eval SPEC)` (enriched.el):
-    /// GNU then refuses to evaluate `when` forms and `height` functions inside.
-    pub eval_enabled: bool,
+    /// [`DisplayEval::Disabled`] when the value was wrapped in
+    /// `(disable-eval SPEC)` (enriched.el): GNU then refuses to evaluate `when`
+    /// forms and `height` functions inside, and the neomacs media heads are not
+    /// display specs. Consumers classify every spec of this value under it.
+    pub eval: DisplayEval,
 }
 
 impl DisplayPropertySpecs {
@@ -301,12 +359,12 @@ impl DisplayPropertySpecs {
                 } else {
                     Value::NIL
                 },
-                eval_enabled: false,
+                eval: DisplayEval::Disabled,
             };
         }
         Self {
             value,
-            eval_enabled: true,
+            eval: DisplayEval::Enabled,
         }
     }
 
@@ -316,7 +374,10 @@ impl DisplayPropertySpecs {
     pub fn is_spec_list(&self) -> bool {
         self.value.is_cons()
             && !self.value.cons_car().is_nil()
-            && matches!(display_spec_kind(self.value), DisplaySpecKind::Other)
+            && matches!(
+                display_spec_kind(self.value, self.eval),
+                DisplaySpecKind::Other
+            )
     }
 
     /// Visit each single spec in GNU order. A vector is iterated element by

@@ -106,7 +106,7 @@ fn display_spec_kind_classifies_every_gnu_head() {
     ];
     for (spec, expected) in cases {
         assert_eq!(
-            display_spec_kind(spec),
+            display_spec_kind(spec, DisplayEval::Enabled),
             expected,
             "spec {spec:?} classified wrongly"
         );
@@ -122,7 +122,10 @@ fn a_margin_head_stays_a_single_spec_even_with_an_area_gnu_rejects() {
         list(vec![symbol("margin"), symbol("bogus-area")]),
         string("m"),
     ]);
-    assert_eq!(display_spec_kind(spec), DisplaySpecKind::Margin);
+    assert_eq!(
+        display_spec_kind(spec, DisplayEval::Enabled),
+        DisplaySpecKind::Margin
+    );
     assert!(!DisplayPropertySpecs::of(spec).is_spec_list());
     assert_eq!(display_spec_margin_value(spec), None);
 
@@ -158,8 +161,14 @@ fn a_vector_display_value_iterates_its_elements_like_gnu() {
     ]);
     let seen = collect(value);
     assert_eq!(seen.len(), 2);
-    assert_eq!(display_spec_kind(seen[0]), DisplaySpecKind::Raise);
-    assert_eq!(display_spec_kind(seen[1]), DisplaySpecKind::Text);
+    assert_eq!(
+        display_spec_kind(seen[0], DisplayEval::Enabled),
+        DisplaySpecKind::Raise
+    );
+    assert_eq!(
+        display_spec_kind(seen[1], DisplayEval::Enabled),
+        DisplaySpecKind::Text
+    );
 }
 
 #[test]
@@ -169,7 +178,10 @@ fn a_list_of_specs_iterates_but_a_single_spec_does_not() {
     assert!(DisplayPropertySpecs::of(spec_list).is_spec_list());
     let seen = collect(spec_list);
     assert_eq!(seen.len(), 1);
-    assert_eq!(display_spec_kind(seen[0]), DisplaySpecKind::Text);
+    assert_eq!(
+        display_spec_kind(seen[0], DisplayEval::Enabled),
+        DisplaySpecKind::Text
+    );
 
     // `(space :width 2)' — a recognized head, so ONE spec, not three.
     let single = list(vec![
@@ -186,12 +198,118 @@ fn disable_eval_unwraps_to_the_inner_spec_and_forbids_eval() {
     // `(disable-eval SPEC)' from enriched.el.
     let value = list(vec![symbol("disable-eval"), string("INNER")]);
     let specs = DisplayPropertySpecs::of(value);
-    assert!(!specs.eval_enabled);
+    assert_eq!(specs.eval, DisplayEval::Disabled);
     let seen = collect(value);
     assert_eq!(seen.len(), 1);
-    assert_eq!(display_spec_kind(seen[0]), DisplaySpecKind::Text);
+    assert_eq!(
+        display_spec_kind(seen[0], specs.eval),
+        DisplaySpecKind::Text
+    );
 
-    assert!(DisplayPropertySpecs::of(string("plain")).eval_enabled);
+    assert_eq!(
+        DisplayPropertySpecs::of(string("plain")).eval,
+        DisplayEval::Enabled
+    );
+}
+
+#[test]
+fn disable_eval_keeps_every_gnu_head_but_not_the_neomacs_media_heads() {
+    // GNU's `(disable-eval SPEC)' only stops Lisp evaluation and keeps "all the
+    // other display property features" (lispref, "display property, unsafe
+    // evaluation"): every GNU head classifies the same under either policy.
+    let gnu_heads: Vec<(Value, DisplaySpecKind)> = vec![
+        (
+            list(vec![symbol("when"), symbol("t"), string("x")]),
+            DisplaySpecKind::When,
+        ),
+        (
+            list(vec![symbol("height"), Value::fixnum(2)]),
+            DisplaySpecKind::Height,
+        ),
+        (
+            list(vec![symbol("raise"), Value::fixnum(1)]),
+            DisplaySpecKind::Raise,
+        ),
+        (
+            list(vec![symbol("space"), Value::keyword("width")]),
+            DisplaySpecKind::Space,
+        ),
+        (
+            list(vec![symbol("image"), Value::keyword("file")]),
+            DisplaySpecKind::Image,
+        ),
+        (
+            list(vec![symbol("xwidget"), Value::keyword("xwidget")]),
+            DisplaySpecKind::Xwidget,
+        ),
+        (
+            list(vec![symbol("left-fringe"), symbol("question-mark")]),
+            DisplaySpecKind::LeftFringe,
+        ),
+        (
+            list(vec![
+                list(vec![symbol("margin"), symbol("left-margin")]),
+                string("m"),
+            ]),
+            DisplaySpecKind::Margin,
+        ),
+        (string("replacement"), DisplaySpecKind::Text),
+    ];
+    for (spec, expected) in gnu_heads {
+        assert_eq!(display_spec_kind(spec, DisplayEval::Enabled), expected);
+        assert_eq!(
+            display_spec_kind(spec, DisplayEval::Disabled),
+            expected,
+            "GNU head {spec:?} must survive disable-eval"
+        );
+    }
+
+    // The neomacs media heads open URLs and files in native decoders, load web
+    // pages and run GPU shaders. Inside `(disable-eval …)' they are not heads
+    // at all, so the value reads exactly as GNU reads it.
+    for head in ["video", "webkit", "surface"] {
+        let spec = list(vec![
+            symbol(head),
+            Value::keyword("uri"),
+            string("http://127.0.0.1:9/x"),
+        ]);
+        assert!(matches!(
+            display_spec_kind(spec, DisplayEval::Enabled),
+            DisplaySpecKind::Media(_)
+        ));
+        assert_eq!(
+            display_spec_kind(spec, DisplayEval::Disabled),
+            DisplaySpecKind::Other,
+            "({head} …) must not be a media spec under disable-eval"
+        );
+    }
+}
+
+#[test]
+fn a_media_spec_under_disable_eval_is_the_list_of_specs_gnu_sees() {
+    // GNU has no `video' head, so `(disable-eval (video :uri URL))' is a LIST
+    // of specs (src/xdisp.c, handle_display_spec) whose elements are `video',
+    // `:uri' and the URL string -- and only the string can display anything.
+    let url = string("http://127.0.0.1:9/beacon.mp4");
+    let media = list(vec![symbol("video"), Value::keyword("uri"), url]);
+    assert!(!DisplayPropertySpecs::of(media).is_spec_list());
+    assert_eq!(collect(media), vec![media]);
+
+    let wrapped = list(vec![symbol("disable-eval"), media]);
+    let specs = DisplayPropertySpecs::of(wrapped);
+    assert!(specs.is_spec_list());
+    let seen = collect(wrapped);
+    assert_eq!(seen, vec![symbol("video"), Value::keyword("uri"), url]);
+    assert_eq!(
+        seen.iter()
+            .map(|spec| display_spec_kind(*spec, specs.eval))
+            .collect::<Vec<_>>(),
+        vec![
+            DisplaySpecKind::Other,
+            DisplaySpecKind::Other,
+            DisplaySpecKind::Text
+        ]
+    );
 }
 
 #[test]
