@@ -9169,6 +9169,11 @@ fn modify_frame_parameters_font_refreshes_geometry_when_the_host_rejects_resize(
     );
 
     let frame = ev.frames.get(fid).expect("frame");
+    assert_eq!(
+        (frame.width, frame.height),
+        (800, 600),
+        "a rejected resize must keep the frame's pixel allocation"
+    );
     assert_eq!(frame.char_width, 13.0);
     assert_eq!(frame.char_height, 31.0);
     assert_eq!(
