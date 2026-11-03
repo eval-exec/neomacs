@@ -1219,11 +1219,21 @@ pub(crate) fn format_eval_error(error: &EvalError, f: &mut Formatter<'_>) -> fmt
 
 /// Install the evaluator's EvalError formatter beside the other one-time hooks.
 pub(crate) fn install_eval_error_format_hook() {
-    crate::emacs_core::error::format_hook::install_eval_error_formatter(
-        crate::emacs_core::error::format_hook::EvalErrorFormatter {
-            fmt: format_eval_error,
-        },
-    );
+    static FORMATTER: neovm_value::EvalErrorFormatter =
+        neovm_value::EvalErrorFormatter::new(format_eval_error);
+    // SAFETY: only Context::new_inner and Context::from_dump call this
+    // adapter, before exposing the constructed or restored Context. Both
+    // seams publish the same process-lifetime descriptor, which delegates
+    // to the existing signal/throw formatting algorithm above.
+    match unsafe { neovm_value::install_eval_error_formatter(&FORMATTER) } {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(neovm_value::HookInstallError::DifferentTable) => {
+            panic!("Context construction or restore: conflicting EvalError formatter table")
+        }
+    }
 }
 
 /// Convert internal flow to public EvalError.

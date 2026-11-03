@@ -48,7 +48,7 @@ EmacsByteDelta	struct	pub(crate)	crates/neovm-value/src/heap_types/byte_position
 EndpointKind	enum	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:44	heap_types::overlay_storage	bulk
 EqualKind	enum	pub(crate)	crates/neovm-value/src/value/mod.rs:4554	emacs_core::value	bulk
 EqualSeenPair	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:4560	emacs_core::value	bulk
-EvalErrorFormatter	struct	pub(crate)	crates/neovm-value/src/error/format_hook.rs:16	emacs_core::error::format_hook	bulk
+EvalErrorFormatter	struct	pub(crate)	crates/neovm-value/src/error/format_hook.rs:18	emacs_core::error::format_hook	pc2 inert descriptor; private callback field; root-only export from private format_hook module
 EvalResult	type	pub(crate)	crates/neovm-value/src/error/mod.rs:839	emacs_core::error	bulk
 FLOAT_SLOT_BYTES	const	pub(crate)	crates/neovm-value/src/tagged/gc/jit_state.rs:94	tagged::gc	bulk
 FLOAT_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/header.rs:844	tagged::header	bulk
@@ -177,6 +177,7 @@ ThreadObj	struct	pub(crate)	crates/neovm-value/src/tagged/header.rs:2207	tagged:
 ThreadOutcome	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:212	heap_types::threading	bulk
 ThreadPayload	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:313	heap_types::threading	bulk
 ThreadPhase	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:219	heap_types::threading	bulk
+UserCondition	struct	pub(crate)	crates/neovm-value/src/error/mod.rs:974	emacs_core::error	pc1-d DATA: signed error-errors audit; private SymId field retained
 ValueCell	enum	pub(crate)	crates/neovm-value/src/symbol/cell.rs:329	emacs_core::symbol	bulk
 WriteProjection	enum	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:728	tagged::collection_reads	bulk
 apply_signed_delta	fn	pub(crate)	crates/neovm-value/src/heap_types/byte_positions.rs:148	heap_types::byte_positions	bulk
@@ -188,6 +189,8 @@ bool_vector_length	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:263	emac
 bool_vector_ref_value	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:264	emacs_core::boolvec	bulk
 buffer_overflow	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:91	emacs_core::alloc	bulk
 build_signal_flow	fn	pub(crate)	crates/neovm-value/src/errors/mod.rs:687	emacs_core::errors	bulk
+build_signal_flow_id	fn	pub(crate)	crates/neovm-value/src/errors/mod.rs:704	emacs_core::errors	pc1-d DATA: signed error-errors audit; body and pinning unchanged
+build_signal_flow_id_suppressed	fn	pub(crate)	crates/neovm-value/src/errors/mod.rs:696	emacs_core::errors	pc1-d DATA: signed error-errors audit; body and pinning unchanged
 builtin_hash_table_rehash_size	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:668	emacs_core::hashtab	bulk
 builtin_hash_table_rehash_threshold	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:683	emacs_core::hashtab	bulk
 builtin_hash_table_size	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:653	emacs_core::hashtab	bulk
@@ -233,6 +236,7 @@ has_collection_observations	fn	pub(crate)	crates/neovm-value/src/tagged/gc/colle
 hash_key_to_visible_value	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:101	emacs_core::hashtab	bulk
 hash_test_parity_enabled	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:50	emacs_core::hashtab	bulk
 hoist_reads	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:74	tagged::collection_reads	bulk
+install_eval_error_formatter	fn	pub(crate)	crates/neovm-value/src/error/format_hook.rs:45	emacs_core::error	pc2 unsafe root-only export; private descriptor fields and OnceLocks; canonical shared refusal; sole printer adapter at construction/restore seams
 intern_call_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2186	emacs_core::intern	bulk
 intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2181	emacs_core::intern	bulk
 is_active	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:92	tagged::collection_reads	bulk
@@ -271,6 +275,7 @@ record_overlay_shift_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/
 record_overlays_at_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:18	heap_types::overlay_storage::instrumentation	bulk
 record_projected_write_in_store	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:748	tagged::collection_reads	bulk
 reduce_emacs_uint_to_hash_hash	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:362	emacs_core::hashtab	bulk
+register_dbus_error	fn	pub(crate)	crates/neovm-value/src/errors/mod.rs:675	emacs_core::errors	pc1-d DATA N14: signed peer ruling; mutable Obarray setup unchanged
 reserve_projection_scope	fn	pub(crate)	crates/neovm-value/src/symbol/projection.rs:74	emacs_core::symbol	bulk
 reserved_values	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:93	emacs_core::alloc	bulk
 reset_bytecode_data_access_count	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:338	emacs_core::value	bulk

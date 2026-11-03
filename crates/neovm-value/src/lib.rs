@@ -21,6 +21,7 @@ pub mod tls_scope;
 pub mod value;
 
 // PC2 sealed hook installers (exact-chain; see architecture PC2 table)
+pub use error::format_hook::{EvalErrorFormatter, install_eval_error_formatter};
 pub use symbol::function_cell_observer::{
     FunctionCellObserver, FunctionEpochMoveSink, install_function_cell_observer,
     install_function_epoch_move_sink,

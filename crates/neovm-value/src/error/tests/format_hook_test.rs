@@ -43,7 +43,7 @@ fn uninstalled_fallback_is_the_signed_placeholder() {
 #[test]
 fn installed_table_receives_the_error_and_formatter() {
     let error = EvalError::signal(intern("error"), Vec::new(), None);
-    let table = EvalErrorFormatter { fmt: hooked };
+    let table = EvalErrorFormatter::new(hooked);
     assert_eq!(
         format!(
             "{}",

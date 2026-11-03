@@ -671,7 +671,8 @@ pub fn init_standard_errors(obarray: &mut Obarray) {
 /// Helper: register a single error with explicit parents.
 /// The parents must already be registered in the obarray (their
 /// `error-conditions` are read to build the transitive closure).
-pub(crate) fn register_dbus_error(obarray: &mut Obarray) {
+#[doc(hidden)]
+pub fn register_dbus_error(obarray: &mut Obarray) {
     register_simple(obarray, "dbus-error", "D-Bus error", &["error"]);
 }
 
@@ -691,14 +692,16 @@ pub fn build_signal_flow(symbol_name: &str, data: Value) -> Flow {
 }
 
 /// Identity-preserving, signal-hook-suppressed variant of `build_signal_flow`.
-pub(crate) fn build_signal_flow_id_suppressed(symbol: SymId, data: Value) -> Flow {
+#[doc(hidden)]
+pub fn build_signal_flow_id_suppressed(symbol: SymId, data: Value) -> Flow {
     use crate::error::signal_internal_id;
     let normalized = list_to_vec(&data).unwrap_or_else(|| vec![data]);
     signal_internal_id(symbol, normalized, Some(data), true)
 }
 
 /// Identity-preserving variant of `build_signal_flow`.
-pub(crate) fn build_signal_flow_id(symbol: SymId, data: Value) -> Flow {
+#[doc(hidden)]
+pub fn build_signal_flow_id(symbol: SymId, data: Value) -> Flow {
     signal_with_data_id(symbol, data)
 }
 

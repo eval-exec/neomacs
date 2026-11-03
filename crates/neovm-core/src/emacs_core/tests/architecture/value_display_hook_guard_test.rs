@@ -28,6 +28,25 @@ struct Installer {
 
 const INSTALLERS: &[Installer] = &[
     Installer {
+        name: "install_eval_error_formatter",
+        definition: ("error/format_hook.rs", "install_eval_error_formatter"),
+        callers: &[(
+            "emacs_core/lisp/print/error_format.rs",
+            "install_eval_error_format_hook",
+        )],
+    },
+    Installer {
+        name: "install_eval_error_format_hook",
+        definition: (
+            "emacs_core/lisp/print/error_format.rs",
+            "install_eval_error_format_hook",
+        ),
+        callers: &[
+            ("emacs_core/runtime/eval/construct.rs", "new_inner"),
+            ("emacs_core/runtime/eval/pdump_reconstruct.rs", "from_dump"),
+        ],
+    },
+    Installer {
         name: "install_value_display_formatter",
         definition: (
             "emacs_core/runtime/value/mod.rs",

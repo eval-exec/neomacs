@@ -8,6 +8,7 @@
 //! pointer.
 
 use super::EvalError;
+use crate::value::hook_publication::{self, HookInstallError, HookInstallStatus};
 use std::fmt::{self, Formatter};
 use std::sync::OnceLock;
 
@@ -15,15 +16,40 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy)]
 #[doc(hidden)]
 pub struct EvalErrorFormatter {
-    pub fmt: fn(&EvalError, &mut Formatter<'_>) -> fmt::Result,
+    fmt: fn(&EvalError, &mut Formatter<'_>) -> fmt::Result,
+}
+
+impl EvalErrorFormatter {
+    /// Describe inert formatting metadata; only the unsafe installer publishes it.
+    pub const fn new(fmt: fn(&EvalError, &mut Formatter<'_>) -> fmt::Result) -> Self {
+        Self { fmt }
+    }
 }
 
 static EVAL_ERROR_FORMATTER: OnceLock<EvalErrorFormatter> = OnceLock::new();
+static EVAL_ERROR_FORMATTER_IDENTITY: OnceLock<&'static EvalErrorFormatter> = OnceLock::new();
 
-/// Install the evaluator's formatter. Idempotent like the other one-time hooks:
-/// every `Context` construction and the pdump reconstruction call it.
-pub(crate) fn install_eval_error_formatter(formatter: EvalErrorFormatter) {
-    let _ = EVAL_ERROR_FORMATTER.set(formatter);
+/// Publish the canonical formatter, accepting repeated installation of that
+/// exact descriptor and refusing a different descriptor without replacement.
+///
+/// # Safety
+/// Only the core printer's `install_eval_error_format_hook` adapter may call
+/// this function, with its process-lifetime canonical formatting descriptor.
+/// Only `Context::new_inner` and `Context::from_dump` may call the adapter,
+/// before exposing the constructed or restored evaluator. Its callback must
+/// preserve the existing signal/throw formatting algorithm. Publication
+/// refusal must be surfaced at that construction or image-restore seam.
+#[must_use = "handle a conflicting EvalError formatter publication"]
+#[cold]
+#[inline(never)]
+pub unsafe fn install_eval_error_formatter(
+    formatter: &'static EvalErrorFormatter,
+) -> Result<HookInstallStatus, HookInstallError> {
+    hook_publication::publish(
+        &EVAL_ERROR_FORMATTER,
+        &EVAL_ERROR_FORMATTER_IDENTITY,
+        formatter,
+    )
 }
 
 /// Whether the formatter hook has been installed (test-only observation).

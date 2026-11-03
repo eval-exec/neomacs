@@ -970,7 +970,8 @@ impl IntoConditionSym for LispCondition {
 
 /// A Lisp condition selected dynamically; retains the actual symbol identity.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct UserCondition(SymId);
+#[doc(hidden)]
+pub struct UserCondition(SymId);
 
 impl From<SymId> for UserCondition {
     fn from(symbol: SymId) -> Self {
