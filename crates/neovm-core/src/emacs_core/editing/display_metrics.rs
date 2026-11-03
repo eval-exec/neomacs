@@ -7,9 +7,21 @@
 //! layer reads it downward. Live display state (frames, windows, retained
 //! glyph rows) is reached only through the `EditHost` display queries.
 
-use crate::buffer::{Buffer, EmacsBytePos, LispCharPos1};
+use crate::buffer::{Buffer, BufferId, EmacsBytePos, LispCharPos1};
 use crate::emacs_core::emacs_char::EmacsChar;
 use crate::emacs_core::value::{Value, ValueKind};
+
+// ---------------------------------------------------------------------------
+// Window identity
+// ---------------------------------------------------------------------------
+
+/// Opaque window identifier.
+///
+/// Plain data: an id owns no display state. It lives here so the edit layer can
+/// name a window designator without reaching into the display crate; the window
+/// module re-exports it under its historical public path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WindowId(pub u64);
 
 // ---------------------------------------------------------------------------
 // Line layout vocabulary
@@ -250,6 +262,22 @@ pub fn display_glyph_character(value: Value) -> Option<EmacsChar> {
         }
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Line-number display target
+// ---------------------------------------------------------------------------
+
+/// The selected window's line-number measurement, resolved by the display layer.
+///
+/// The edit layer owns the gutter metric but cannot inspect frames or window
+/// geometry; a host query supplies the selected window's buffer and the frame
+/// metrics the metric needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineNumberDisplayTarget {
+    pub buffer: BufferId,
+    pub char_width: i64,
+    pub visible_lines: i64,
 }
 
 // ---------------------------------------------------------------------------

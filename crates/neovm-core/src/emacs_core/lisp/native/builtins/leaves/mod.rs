@@ -109,10 +109,10 @@ pub(crate) fn get_char_property(
     object: Value,
 ) -> LeafResult {
     Ok(
-        crate::emacs_core::textprop::builtin_get_char_property_with_frames(
+        crate::emacs_core::textprop::builtin_get_char_property_with_window_lookup(
             ctx.variables(),
             &ctx.edit.buffers,
-            Some(&ctx.frames),
+            crate::window::char_property_window_lookup(Some(&ctx.frames)),
             &[position, prop, object],
         )?,
     )

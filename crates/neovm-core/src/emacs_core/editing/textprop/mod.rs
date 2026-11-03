@@ -21,8 +21,8 @@ use crate::buffer::{
     LispCharPos1,
 };
 use crate::emacs_core::SymId;
+use crate::emacs_core::display_metrics::WindowId;
 use crate::emacs_core::intern::WellKnown;
-use crate::window::{FrameManager, WindowId};
 use strum::IntoStaticStr;
 
 mod raw_plist_lookup;
@@ -1068,8 +1068,26 @@ fn resolve_text_property_buffer_id_in_buffers(
     }
 }
 
-fn resolve_char_property_target_in_state(
-    frames: Option<&FrameManager>,
+/// How the caller resolves a WINDOW-designated char-property OBJECT.
+///
+/// The edit layer owns no display state. A core caller that owns the frame
+/// manager supplies a lookup through this caller-provided closure; edit-only
+/// callers answer `NotAvailable`. The two failure answers preserve GNU's error
+/// split: a WINDOW object is a wrong-type object when the caller has no display
+/// state, while a caller with frames reports a dead or unknown window as
+/// `window-live-p`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowBufferLookup {
+    /// The caller has no display state: every WINDOW object is wrong-type.
+    NotAvailable,
+    /// The caller has display state but the id names no live window.
+    Missing,
+    /// The live window's buffer.
+    Buffer(BufferId),
+}
+
+fn resolve_char_property_target_in_state<F: Fn(WindowId) -> WindowBufferLookup>(
+    window_lookup: F,
     buffers: &BufferManager,
     object: Option<&Value>,
 ) -> Result<(BufferId, Option<WindowId>), Flow> {
@@ -1087,26 +1105,18 @@ fn resolve_char_property_target_in_state(
             .map(|id| (id, None))
             .ok_or_else(|| signal("error", vec![Value::string("Invalid buffer")])),
         Some(v) if v.is_window() => {
-            let Some(frames) = frames else {
-                return Err(signal(
+            let wid = WindowId(v.as_window_id().expect("window value has an id"));
+            match window_lookup(wid) {
+                WindowBufferLookup::NotAvailable => Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("buffer-or-string-p"), *v],
-                ));
-            };
-            let wid = WindowId(v.as_window_id().expect("window value has an id"));
-            let window = frames.lookup_window(wid).ok_or_else(|| {
-                signal(
+                )),
+                WindowBufferLookup::Missing => Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("window-live-p"), *v],
-                )
-            })?;
-            let buffer_id = window.buffer_id().ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("window-live-p"), *v],
-                )
-            })?;
-            Ok((buffer_id, Some(wid)))
+                )),
+                WindowBufferLookup::Buffer(buffer_id) => Ok((buffer_id, Some(wid))),
+            }
         }
         Some(other) => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1117,16 +1127,17 @@ fn resolve_char_property_target_in_state(
 
 /// Resolve a char-property OBJECT argument (None/nil/buffer/window) to a
 /// `BufferId`, matching GNU `get_char_property_and_overlay`'s window handling:
-/// a WINDOW object resolves to its buffer (requires `frames` to be `Some`).
-/// The window-specific overlay matching is dropped here; callers that need the
-/// `WindowId` for overlay matching use `resolve_char_property_target_in_state`
-/// directly.
-pub(crate) fn resolve_char_property_buffer_id_with_frames(
-    frames: Option<&FrameManager>,
+/// a WINDOW object resolves through the caller's lookup. The window-specific
+/// overlay matching is dropped here; callers that need the `WindowId` for
+/// overlay matching use `resolve_char_property_target_in_state` directly.
+pub(crate) fn resolve_char_property_buffer_id_with_window_lookup<
+    F: Fn(WindowId) -> WindowBufferLookup,
+>(
+    window_lookup: F,
     buffers: &BufferManager,
     object: Option<&Value>,
 ) -> Result<BufferId, Flow> {
-    resolve_char_property_target_in_state(frames, buffers, object).map(|(id, _wid)| id)
+    resolve_char_property_target_in_state(window_lookup, buffers, object).map(|(id, _wid)| id)
 }
 
 /// Property names the text-property builtins look up on every call, interned
@@ -2306,7 +2317,12 @@ pub(crate) fn builtin_get_char_property_in_state<'a, Vars: EditVariableRead<'a>>
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_char_property_with_frames(vars, buffers, None, &args)
+    builtin_get_char_property_with_window_lookup(
+        vars,
+        buffers,
+        |_| WindowBufferLookup::NotAvailable,
+        &args,
+    )
 }
 
 /// Read a character property at a position already proven to be in the
@@ -2343,10 +2359,14 @@ pub(crate) fn buffer_char_property_at_full_lisp_pos<'a, Vars: EditVariableRead<'
     )
 }
 
-pub(crate) fn builtin_get_char_property_with_frames<'a, Vars: EditVariableRead<'a>>(
+pub(crate) fn builtin_get_char_property_with_window_lookup<
+    'a,
+    Vars: EditVariableRead<'a>,
+    F: Fn(WindowId) -> WindowBufferLookup,
+>(
     vars: Vars,
     buffers: &BufferManager,
-    frames: Option<&FrameManager>,
+    window_lookup: F,
     args: &[Value],
 ) -> EvalResult {
     expect_min_args("get-char-property", args, 2)?;
@@ -2358,7 +2378,8 @@ pub(crate) fn builtin_get_char_property_with_frames<'a, Vars: EditVariableRead<'
         return builtin_get_text_property_in_state(vars, buffers, args);
     }
 
-    let (buf_id, window_id) = resolve_char_property_target_in_state(frames, buffers, args.get(2))?;
+    let (buf_id, window_id) =
+        resolve_char_property_target_in_state(window_lookup, buffers, args.get(2))?;
     let buf = buffers
         .get(buf_id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
@@ -4004,13 +4025,22 @@ pub(crate) fn builtin_get_char_property_and_overlay_in_state<'a, Vars: EditVaria
     buffers: &BufferManager,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_char_property_and_overlay_with_frames(vars, buffers, None, args)
+    builtin_get_char_property_and_overlay_with_window_lookup(
+        vars,
+        buffers,
+        |_| WindowBufferLookup::NotAvailable,
+        args,
+    )
 }
 
-pub(crate) fn builtin_get_char_property_and_overlay_with_frames<'a, Vars: EditVariableRead<'a>>(
+pub(crate) fn builtin_get_char_property_and_overlay_with_window_lookup<
+    'a,
+    Vars: EditVariableRead<'a>,
+    F: Fn(WindowId) -> WindowBufferLookup,
+>(
     vars: Vars,
     buffers: &BufferManager,
-    frames: Option<&FrameManager>,
+    window_lookup: F,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_min_args("get-char-property-and-overlay", &args, 2)?;
@@ -4024,7 +4054,8 @@ pub(crate) fn builtin_get_char_property_and_overlay_with_frames<'a, Vars: EditVa
         return Ok(Value::cons(value, Value::NIL));
     }
 
-    let (buf_id, window_id) = resolve_char_property_target_in_state(frames, buffers, args.get(2))?;
+    let (buf_id, window_id) =
+        resolve_char_property_target_in_state(window_lookup, buffers, args.get(2))?;
 
     if let Some(buf) = buffers.get(buf_id) {
         let byte_pos = validate_buffer_point_emacs_byte_pos_raw(buf, pos, args[0])?;

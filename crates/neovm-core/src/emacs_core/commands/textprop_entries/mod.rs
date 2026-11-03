@@ -6,7 +6,8 @@
 
 use crate::emacs_core::error::EvalResult;
 use crate::emacs_core::textprop::{
-    builtin_get_char_property_and_overlay_with_frames, builtin_get_char_property_with_frames,
+    builtin_get_char_property_and_overlay_with_window_lookup,
+    builtin_get_char_property_with_window_lookup,
 };
 use crate::emacs_core::value::Value;
 
@@ -31,10 +32,10 @@ pub(crate) fn builtin_get_char_property_3(
     object: Value,
 ) -> EvalResult {
     let args: [Value; 3] = [position, prop, object];
-    builtin_get_char_property_with_frames(
+    builtin_get_char_property_with_window_lookup(
         eval.variables(),
         &eval.edit.buffers,
-        Some(&eval.frames),
+        crate::window::char_property_window_lookup(Some(&eval.frames)),
         &args,
     )
 }
@@ -44,10 +45,10 @@ pub(crate) fn builtin_get_char_property_and_overlay(
     eval: &mut crate::emacs_core::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_char_property_and_overlay_with_frames(
+    builtin_get_char_property_and_overlay_with_window_lookup(
         eval.variables(),
         &eval.edit.buffers,
-        Some(&eval.frames),
+        crate::window::char_property_window_lookup(Some(&eval.frames)),
         args,
     )
 }

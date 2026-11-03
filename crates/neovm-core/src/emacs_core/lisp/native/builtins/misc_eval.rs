@@ -64,8 +64,11 @@ pub(crate) fn builtin_get_pos_property_impl<'a, Vars: EditVariableRead<'a>>(
 
     // GNU editfns.c `get-pos-property`: a WINDOW object resolves to its buffer
     // (XWINDOW(object)->contents), a buffer/nil resolves as usual.
-    let buf_id =
-        super::textprop::resolve_char_property_buffer_id_with_frames(frames, buffers, args.get(2))?;
+    let buf_id = super::textprop::resolve_char_property_buffer_id_with_window_lookup(
+        crate::window::char_property_window_lookup(frames),
+        buffers,
+        args.get(2),
+    )?;
 
     let buf = buffers
         .get(buf_id)
@@ -358,7 +361,11 @@ fn char_property_buffer_id_for_object(
     // GNU textprop.c `next/previous-single-char-property-change` defer object
     // resolution to `Fget_char_property`, which resolves a WINDOW object to its
     // buffer. Mirror that here so a window OBJECT works.
-    super::textprop::resolve_char_property_buffer_id_with_frames(frames, buffers, object)
+    super::textprop::resolve_char_property_buffer_id_with_window_lookup(
+        crate::window::char_property_window_lookup(frames),
+        buffers,
+        object,
+    )
 }
 
 fn next_char_property_change_for_buffer(
@@ -476,8 +483,12 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers_with_symbols<
     if let Some(object) = object {
         get_args.push(*object);
     }
-    let initial_value =
-        super::textprop::builtin_get_char_property_with_frames(vars, buffers, frames, &get_args)?;
+    let initial_value = super::textprop::builtin_get_char_property_with_window_lookup(
+        vars,
+        buffers,
+        crate::window::char_property_window_lookup(frames),
+        &get_args,
+    )?;
     let limit = match args.get(3) {
         Some(v) if !v.is_nil() => {
             crate::emacs_core::buffer::expect_integer_or_marker_in_buffers(buffers, v)?
@@ -500,10 +511,10 @@ pub(crate) fn builtin_next_single_char_property_change_in_buffers_with_symbols<
         if let Some(object) = object {
             value_args.push(*object);
         }
-        let value = super::textprop::builtin_get_char_property_with_frames(
+        let value = super::textprop::builtin_get_char_property_with_window_lookup(
             vars,
             buffers,
-            frames,
+            crate::window::char_property_window_lookup(frames),
             &value_args,
         )?;
         if !eq_value_swp(
@@ -604,8 +615,12 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers_with_symbo
     if let Some(object) = object {
         get_args.push(*object);
     }
-    let initial_value =
-        super::textprop::builtin_get_char_property_with_frames(vars, buffers, frames, &get_args)?;
+    let initial_value = super::textprop::builtin_get_char_property_with_window_lookup(
+        vars,
+        buffers,
+        crate::window::char_property_window_lookup(frames),
+        &get_args,
+    )?;
 
     let mut cursor = position;
     loop {
@@ -621,10 +636,10 @@ pub(crate) fn builtin_previous_single_char_property_change_in_buffers_with_symbo
         if let Some(object) = object {
             value_args.push(*object);
         }
-        let value = super::textprop::builtin_get_char_property_with_frames(
+        let value = super::textprop::builtin_get_char_property_with_window_lookup(
             vars,
             buffers,
-            frames,
+            crate::window::char_property_window_lookup(frames),
             &value_args,
         )?;
         if !eq_value_swp(

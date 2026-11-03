@@ -39,11 +39,11 @@ use super::undo;
 #[cfg(test)]
 use super::visited_file_modtime::BaseVisitedFileModtime;
 use super::visited_file_modtime::{FirstChangeModtime, VisitedFileModtime, VisitedFileModtimeSlot};
+use crate::emacs_core::display_metrics::WindowId;
 use crate::emacs_core::intern::{SymId, WellKnown, intern};
 use crate::emacs_core::symbol::SetInternalAlist;
 use crate::emacs_core::value::{RuntimeBindingValue, Value, ValueKind, eq_value};
 use crate::gc_trace::GcTrace;
-use crate::window::WindowId;
 use neovm_value::cold_retained::ColdWorldLease;
 use rustc_hash::FxHashMap;
 

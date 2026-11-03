@@ -31,7 +31,6 @@ use crate::emacs_core::error::{
 use crate::emacs_core::value::ValueKind;
 use crate::emacs_core::word_wrap::{WordWrapDirection, WordWrapOpportunity, WordWrapPolicy};
 use crate::heap_types::LispString;
-use crate::window::Window;
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
@@ -3471,17 +3470,10 @@ pub(crate) fn line_number_display_width(
     args: &[Value],
 ) -> EvalResult {
     expect_args_range("line-number-display-width", &args, 0, 1)?;
-    let Some(frame) = eval.frames.selected_frame() else {
+    let Some(target) = eval.line_number_display_target() else {
         return Ok(Value::fixnum(0));
     };
-    let wid = frame.selected_window;
-    let Some(window) = frame.find_window(wid) else {
-        return Ok(Value::fixnum(0));
-    };
-    let Some(buffer_id) = window.buffer_id() else {
-        return Ok(Value::fixnum(0));
-    };
-    let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
+    let Some(buffer) = eval.edit.buffers.get(target.buffer) else {
         return Ok(Value::fixnum(0));
     };
     let enabled = buffer
@@ -3491,22 +3483,16 @@ pub(crate) fn line_number_display_width(
         return Ok(Value::fixnum(0));
     }
 
-    let char_width = frame.char_width.max(1.0).round() as i64;
-    let char_height = frame.char_height.max(1.0).round() as i64;
-    let visible_lines = match window {
-        Window::Leaf { bounds, .. } => {
-            ((bounds.height / char_height.max(1) as f32).floor() as i64).max(1)
-        }
-        Window::Internal { .. } => 1,
-    };
-    let digit_width = line_number_digit_width(buffer, visible_lines);
+    let digit_width = line_number_digit_width(buffer, target.visible_lines);
     let displayed_columns = digit_width + 2;
 
     match args.first() {
         Some(value) if value == &Value::symbol(crate::emacs_core::intern::WellKnown::Columns) => {
             Ok(Value::make_float(displayed_columns as f64))
         }
-        Some(value) if value.is_truthy() => Ok(Value::fixnum(displayed_columns * char_width)),
+        Some(value) if value.is_truthy() => {
+            Ok(Value::fixnum(displayed_columns * target.char_width))
+        }
         _ => Ok(Value::fixnum(digit_width)),
     }
 }

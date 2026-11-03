@@ -22,7 +22,8 @@ use crate::buffer::{Buffer, BufferId, EditRuntime, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
 use crate::emacs_core::display_metrics::{
-    InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, WindowGeometry,
+    InvisibleRunContext, LineNumberDisplayTarget, LineWrap, MeasuredMotion, MotionEngine,
+    WindowGeometry,
 };
 use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::{EvalResult, Flow};
@@ -356,5 +357,23 @@ impl EditHost for Context {
         } else {
             crate::emacs_core::word_wrap::WordWrapMode::Whitespace
         }
+    }
+    fn line_number_display_target(&self) -> Option<LineNumberDisplayTarget> {
+        let frame = self.frames.selected_frame()?;
+        let window = frame.find_window(frame.selected_window)?;
+        let buffer = window.buffer_id()?;
+        let char_width = frame.char_width.max(1.0).round() as i64;
+        let char_height = frame.char_height.max(1.0).round() as i64;
+        let visible_lines = match window {
+            crate::window::Window::Leaf { bounds, .. } => {
+                ((bounds.height / char_height.max(1) as f32).floor() as i64).max(1)
+            }
+            crate::window::Window::Internal { .. } => 1,
+        };
+        Some(LineNumberDisplayTarget {
+            buffer,
+            char_width,
+            visible_lines,
+        })
     }
 }

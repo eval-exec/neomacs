@@ -17,10 +17,10 @@ fn assert_raw(ctx: &Context, from: i64, end: i64) {
     // The reference asks the public effective getter for each character; it
     // does not reuse the optimized interval cursor or raw-property predicate.
     let expected = (from..end).find(|pos| {
-        builtin_get_char_property_with_frames(
+        builtin_get_char_property_with_window_lookup(
             ctx.variables(),
             ctx.buffer_manager(),
-            None,
+            |_| WindowBufferLookup::NotAvailable,
             &[Value::fixnum(*pos), Value::symbol("fontified")],
         )
         .expect("validated effective reference")

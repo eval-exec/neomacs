@@ -98,9 +98,32 @@ pub use scroll_bar::{
 // IDs
 // ---------------------------------------------------------------------------
 
-/// Opaque window identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64);
+pub use crate::emacs_core::display_metrics::WindowId;
+
+/// Resolve a char-property WINDOW designator to its buffer for the edit layer.
+///
+/// GNU resolves a WINDOW object through `XWINDOW(object)->contents` and reports
+/// a dead or unknown window as `window-live-p`. The edit layer owns no display
+/// state, so its caller supplies this lookup.
+pub(crate) fn char_property_window_buffer(
+    frames: &FrameManager,
+    window: WindowId,
+) -> crate::emacs_core::textprop::WindowBufferLookup {
+    match frames.lookup_window(window).and_then(Window::buffer_id) {
+        Some(buffer) => crate::emacs_core::textprop::WindowBufferLookup::Buffer(buffer),
+        None => crate::emacs_core::textprop::WindowBufferLookup::Missing,
+    }
+}
+
+/// The edit layer's char-property WINDOW lookup for a caller that owns frames.
+pub(crate) fn char_property_window_lookup(
+    frames: Option<&FrameManager>,
+) -> impl Fn(WindowId) -> crate::emacs_core::textprop::WindowBufferLookup + '_ {
+    move |window| match frames {
+        Some(frames) => char_property_window_buffer(frames, window),
+        None => crate::emacs_core::textprop::WindowBufferLookup::NotAvailable,
+    }
+}
 
 const FIRST_WINDOW_ID: WindowId = WindowId(1);
 

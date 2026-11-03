@@ -22,7 +22,8 @@
 use crate::buffer::{Buffer, BufferId, EditRuntime, LispCharPos1};
 use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::display_metrics::{
-    InvisibleRunContext, LineWrap, MeasuredMotion, MotionEngine, WindowGeometry,
+    InvisibleRunContext, LineNumberDisplayTarget, LineWrap, MeasuredMotion, MotionEngine,
+    WindowGeometry,
 };
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::intern::SymId;
@@ -299,4 +300,9 @@ pub trait EditHost {
     /// `init_iterator` consults the buffer's `word-wrap-by-category` flag
     /// before it can produce `WORD_WRAP` rows. C5.
     fn word_wrap_mode(&self, buffer: &Buffer) -> WordWrapMode;
+
+    /// The selected window's line-number measurement: its buffer, the frame's
+    /// character cell width, and its visible row count, or `None` when no live
+    /// window has a buffer. C5.
+    fn line_number_display_target(&self) -> Option<LineNumberDisplayTarget>;
 }
