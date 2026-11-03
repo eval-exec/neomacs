@@ -59,6 +59,10 @@ pub enum FunctionSourceIdentity {
 }
 
 pub mod buffer_vocab;
+pub(crate) mod bytecode_semantics;
+pub(crate) mod hook_publication;
+
+pub(crate) use bytecode_semantics::bytecode_semantics;
 pub mod flow_vocab;
 pub(crate) mod jit_runtime;
 pub mod positions;
@@ -2422,44 +2426,6 @@ impl ByteCodeKeyPart {
     }
 }
 
-/// The byte-code layer's structural semantics, installed once at startup.
-///
-/// `equal` and `equal`-table keys must walk a byte-code function's structure
-/// (GNU compares and hashes a closure like the pseudovector it is), but the
-/// representation (`ByteCodeFunction`, `Op`, `ByteCodeStructuralPart`) lives
-/// in the byte-code module above this layer. Every entry is used only on a
-/// byte-code value's arm; the ordinary value paths never load these pointers.
-#[doc(hidden)]
-pub struct BytecodeSemantics {
-    pub(crate) to_equal_key: fn(Value, usize, &mut Vec<usize>, bool) -> HashKey,
-    pub(crate) equal:
-        fn(&Value, &Value, usize, &mut Option<HashSet<EqualSeenPair>>, bool, EqualKind) -> bool,
-    pub(crate) try_equal: fn(
-        &Value,
-        &Value,
-        usize,
-        &mut Option<HashSet<EqualSeenPair>>,
-        bool,
-        EqualKind,
-    ) -> Result<bool, Flow>,
-    pub(crate) sxhash: fn(&Value, usize, crate::tagged::SymbolMode) -> Option<u64>,
-}
-
-static BYTECODE_SEMANTICS: OnceLock<BytecodeSemantics> = OnceLock::new();
-
-/// Install the byte-code module's structural semantics. Idempotent: the
-/// byte-code constructors and `Context::new` both call it, and whichever runs
-/// first wins with the same function table.
-pub(crate) fn install_bytecode_semantics(semantics: BytecodeSemantics) {
-    let _ = BYTECODE_SEMANTICS.set(semantics);
-}
-
-pub(crate) fn bytecode_semantics() -> &'static BytecodeSemantics {
-    BYTECODE_SEMANTICS
-        .get()
-        .expect("bytecode semantics are installed before any byte-code value exists")
-}
-
 impl LispHashTable {
     pub fn new(test: HashTableTest) -> Self {
         Self::new_with_options(test, 0, None, 1.5, 0.8125)
@@ -4366,7 +4332,7 @@ impl TaggedValue {
                     return HashKey::Cycle(index as u32);
                 }
                 seen.push(ptr);
-                let key = (bytecode_semantics().to_equal_key)(
+                let key = bytecode_semantics().to_equal_key(
                     self,
                     depth + 1,
                     seen,
@@ -4835,7 +4801,7 @@ pub fn equal_value_inner(
         }
         VecLikeType::HashTable => false,
         VecLikeType::ByteCode => {
-            (bytecode_semantics().equal)(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
+            bytecode_semantics().equal(&left, &right, depth, seen, symbols_with_pos_enabled, kind)
         }
         VecLikeType::Lambda => {
             if depth > 10 {
@@ -5148,7 +5114,7 @@ pub fn try_equal_value_inner(
             Ok(true)
         }
         VecLikeType::HashTable => Ok(false),
-        VecLikeType::ByteCode => (bytecode_semantics().try_equal)(
+        VecLikeType::ByteCode => bytecode_semantics().try_equal(
             &left,
             &right,
             depth,

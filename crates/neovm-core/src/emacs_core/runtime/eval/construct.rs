@@ -7,6 +7,29 @@ use super::*;
 use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::symbol::CanonicalAccess;
 
+/// The immutable scratch-stack descriptor shared by both Context seams.
+static CANONICAL_SCRATCH_ROOT_HOOKS: neovm_value::ScratchRootHooks =
+    neovm_value::ScratchRootHooks::new(
+        super::save_scratch_gc_roots,
+        super::push_scratch_gc_root,
+        super::restore_scratch_gc_roots,
+    );
+
+pub(super) fn install_scratch_root_hooks() {
+    // SAFETY: only Context::new_inner and Context::from_dump call this adapter,
+    // before allocating through text-property storage. The canonical callbacks
+    // retain each pushed Value on this mutator's scratch stack until restore.
+    match unsafe { neovm_value::install_scratch_root_hooks(&CANONICAL_SCRATCH_ROOT_HOOKS) } {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(neovm_value::HookInstallError::DifferentTable) => {
+            panic!("a different scratch-root table is already installed")
+        }
+    }
+}
+
 /// Select raw constructor storage BEFORE the World is sealed or callable.
 /// There is no safe replacement of an admitted manager beneath a continuation.
 #[derive(Clone, Copy, Debug)]
@@ -2350,22 +2373,7 @@ impl Context {
         // The text-property storage in the value layer roots its intermediate
         // conses through the evaluator's scratch-root stack; hand it the
         // stack operations here, at the same one-time hooks.
-        // SAFETY: seam install (peer seal N9). The table routes the value
-        // layer's conses to this evaluator's scratch-root stack, and this is
-        // `Context` construction, one of the two pinned seams.
-        let installed = unsafe {
-            crate::emacs_core::value::scratch_bridge::install_scratch_root_hooks(
-                crate::emacs_core::value::scratch_bridge::ScratchRootHooks {
-                    save: super::save_scratch_gc_roots,
-                    push: super::push_scratch_gc_root,
-                    restore: super::restore_scratch_gc_roots,
-                },
-            )
-        };
-        debug_assert!(
-            installed.is_ok(),
-            "a different scratch-root hook table is already installed"
-        );
+        super::construct::install_scratch_root_hooks();
         // The string position cache lives above heap_types, but heap payload
         // mutations must invalidate it. Publish the cache's stamp at the same
         // one-time seam; the cache refuses to fill until it is installed.

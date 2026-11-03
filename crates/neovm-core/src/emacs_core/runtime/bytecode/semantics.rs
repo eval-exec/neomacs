@@ -5,7 +5,7 @@
 //! slots (`src/fns.c` `internal_equal_1` / `sxhash_obj`), so these walks must
 //! read [`ByteCodeFunction::structural_parts`]. They live with the byte-code
 //! representation; the value and hash-table layers reach them through the
-//! cold [`BytecodeSemantics`] registry (byte-code values only), which keeps
+//! cold [`neovm_value::BytecodeSemantics`] registry (byte-code values only), which keeps
 //! ordinary `equal`/sxhash paths free of the dispatch.
 
 use super::{ByteCodeFunction, ByteCodeStructuralPart, Op};
@@ -16,8 +16,8 @@ use crate::emacs_core::hashtab::{
     emacs_sxhash_obj_with_fallback, sxhash_combine,
 };
 use crate::emacs_core::value::{
-    ByteCodeKeyPart, BytecodeSemantics, EqualKind, EqualSeenPair, HashKey, Value,
-    equal_value_inner, install_bytecode_semantics, try_equal_value_inner,
+    ByteCodeKeyPart, EqualKind, EqualSeenPair, HashKey, Value, equal_value_inner,
+    try_equal_value_inner,
 };
 use crate::heap_types::LispString;
 use crate::tagged::SymbolMode;
@@ -25,13 +25,28 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+/// The immutable structural descriptor shared by both Context install seams.
+static CANONICAL_BYTECODE_SEMANTICS: neovm_value::BytecodeSemantics =
+    neovm_value::BytecodeSemantics::new(
+        bytecode_to_equal_key,
+        bytecode_equal,
+        try_bytecode_equal,
+        emacs_sxhash_bytecode,
+    );
+
 pub(crate) fn install() {
-    install_bytecode_semantics(BytecodeSemantics {
-        to_equal_key: bytecode_to_equal_key,
-        equal: bytecode_equal,
-        try_equal: try_bytecode_equal,
-        sxhash: emacs_sxhash_bytecode,
-    });
+    // SAFETY: only Context::new_inner and Context::from_dump call this adapter,
+    // before exposing byte-code values to structural operations. Both seams
+    // offer this same process-lifetime descriptor of the canonical callbacks.
+    match unsafe { neovm_value::install_bytecode_semantics(&CANONICAL_BYTECODE_SEMANTICS) } {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(neovm_value::HookInstallError::DifferentTable) => {
+            panic!("a different byte-code semantics table is already installed")
+        }
+    }
 }
 
 /// One tag per [`Op`] variant. `#[repr(u8)]` plus the implicit sequential

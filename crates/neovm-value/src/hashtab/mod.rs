@@ -307,7 +307,7 @@ fn emacs_sxhash_obj(value: &Value, depth: usize, symbol_mode: SymbolMode) -> Opt
             emacs_sxhash_structural_pseudovector(value, depth, symbol_mode)
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => {
-            (crate::value::bytecode_semantics().sxhash)(value, depth, symbol_mode)
+            crate::value::bytecode_semantics().sxhash(value, depth, symbol_mode)
         }
         ValueKind::Veclike(VecLikeType::Bignum) => sxhash_bignum(value),
         ValueKind::Veclike(VecLikeType::BoolVector) => sxhash_bool_vector(value),

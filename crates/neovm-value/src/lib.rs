@@ -19,3 +19,8 @@ pub mod tagged;
 pub mod tls_fingerprint;
 pub mod tls_scope;
 pub mod value;
+
+// PC2 sealed hook installers (exact-chain; see architecture PC2 table)
+pub use value::bytecode_semantics::{BytecodeSemantics, install_bytecode_semantics};
+pub use value::hook_publication::{HookInstallError, HookInstallStatus};
+pub use value::scratch_bridge::{ScratchRootHooks, install_scratch_root_hooks};

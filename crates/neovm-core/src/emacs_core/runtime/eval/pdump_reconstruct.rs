@@ -52,22 +52,7 @@ impl Context {
         // The text-property storage in the value layer roots its intermediate
         // conses through the evaluator's scratch-root stack; hand it the
         // stack operations here, at the same one-time hooks.
-        // SAFETY: seam install (peer seal N9). The table routes the value
-        // layer's conses to this evaluator's scratch-root stack, and this is
-        // image restore, one of the two pinned seams.
-        let installed = unsafe {
-            crate::emacs_core::value::scratch_bridge::install_scratch_root_hooks(
-                crate::emacs_core::value::scratch_bridge::ScratchRootHooks {
-                    save: super::save_scratch_gc_roots,
-                    push: super::push_scratch_gc_root,
-                    restore: super::restore_scratch_gc_roots,
-                },
-            )
-        };
-        debug_assert!(
-            installed.is_ok(),
-            "a different scratch-root hook table is already installed"
-        );
+        super::construct::install_scratch_root_hooks();
         // The string position cache lives above heap_types; publish its
         // byte-mutation stamp at the same one-time seam. A restored image can
         // reach conversions before any Context constructor ran.
