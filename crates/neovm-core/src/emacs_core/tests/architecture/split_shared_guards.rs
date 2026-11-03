@@ -4,8 +4,8 @@
 //!
 //! 1. **N13 carried pairs**: every `(placeholder, swap)` pair named by
 //!    `CARRIERS` may be referenced only from `eval/green/carried.rs`, its own
-//!    definition line, a `use` re-export line, or an internal qualified call
-//!    to a child module that defines its own same-named function.  The pair
+//!    definition line, a resolved `use` re-export, or a same-named defining
+//!    function's qualified delegation into its actual child module.  The pair
 //!    list is derived from the table, so a later pair joins automatically.
 //! 2. **PC1 fenced hot-path methods**: rows in `pc1_hot_path_methods.tsv`
 //!    list `(type, method, protected caller)`.  No workspace crate other than
@@ -203,17 +203,10 @@ fn line_of(span: Span) -> usize {
 }
 
 fn rs_files(root: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rs_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
+    let mut files = BTreeSet::new();
+    guard_walk_sources(root, &mut BTreeSet::new(), &mut files)
+        .unwrap_or_else(|error| panic!("{error}"));
+    out.extend(files);
 }
 
 fn parse_file(path: &Path) -> Result<(String, syn::File), String> {
@@ -223,346 +216,1117 @@ fn parse_file(path: &Path) -> Result<(String, syn::File), String> {
     Ok((text, file))
 }
 
+// One workspace/target discovery path shared by every split source fence.
+#[derive(Clone, Debug)]
+struct GuardSource {
+    package: String,
+    member_root: PathBuf,
+    path: PathBuf,
+}
+
+fn guard_read_manifest(path: &Path) -> Result<toml::Value, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("SPLIT_DISCOVERY_READ {}: {error}", path.display()))?;
+    toml::from_str(&text)
+        .map_err(|error| format!("SPLIT_DISCOVERY_PARSE {}: {error}", path.display()))
+}
+
+fn guard_optional_metadata(path: &Path) -> Result<Option<std::fs::Metadata>, String> {
+    match std::fs::metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!(
+            "SPLIT_DISCOVERY_METADATA {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn guard_walk_sources(
+    path: &Path,
+    ancestors: &mut BTreeSet<PathBuf>,
+    files: &mut BTreeSet<PathBuf>,
+) -> Result<(), String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("SPLIT_DISCOVERY_METADATA {}: {error}", path.display()))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("SPLIT_DISCOVERY_CANONICAL {}: {error}", path.display()))?;
+    if metadata.is_dir() {
+        if !ancestors.insert(canonical.clone()) {
+            return Err(format!(
+                "SPLIT_DISCOVERY_DIRECTORY_CYCLE {}",
+                path.display()
+            ));
+        }
+        let entries = std::fs::read_dir(path)
+            .map_err(|error| format!("SPLIT_DISCOVERY_DIRECTORY {}: {error}", path.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                format!("SPLIT_DISCOVERY_DIRECTORY {}: {error}", path.display())
+            })?;
+            guard_walk_sources(&entry.path(), ancestors, files)?;
+        }
+        ancestors.remove(&canonical);
+    } else if metadata.is_file() {
+        if path.extension().is_some_and(|extension| extension == "rs") {
+            files.insert(canonical);
+        }
+    } else {
+        return Err(format!("SPLIT_DISCOVERY_SOURCE_KIND {}", path.display()));
+    }
+    Ok(())
+}
+
+fn discover_sources(workspace: &Path) -> Result<Vec<GuardSource>, String> {
+    let root = guard_read_manifest(&workspace.join("Cargo.toml"))?;
+    let members = root
+        .get("workspace")
+        .and_then(|table| table.get("members"))
+        .and_then(toml::Value::as_array)
+        .ok_or_else(|| "SPLIT_DISCOVERY_MEMBERS: missing workspace member array".to_owned())?;
+    if members.is_empty() {
+        return Err("SPLIT_DISCOVERY_MEMBERS: empty workspace".to_owned());
+    }
+    let mut packages = BTreeSet::new();
+    let mut result = Vec::new();
+    for member in members {
+        let member = member
+            .as_str()
+            .ok_or_else(|| "SPLIT_DISCOVERY_MEMBERS: member is not a string".to_owned())?;
+        if member.is_empty() || member.chars().any(|c| matches!(c, '*' | '?' | '[' | ']')) {
+            return Err(format!("SPLIT_DISCOVERY_UNKNOWN_MEMBER_PATTERN {member:?}"));
+        }
+        let member_root = workspace
+            .join(member)
+            .canonicalize()
+            .map_err(|error| format!("SPLIT_DISCOVERY_MEMBER {member}: {error}"))?;
+        let manifest = guard_read_manifest(&member_root.join("Cargo.toml"))?;
+        let package = manifest
+            .get("package")
+            .and_then(|table| table.get("name"))
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| format!("SPLIT_DISCOVERY_PACKAGE {member}"))?
+            .to_owned();
+        if !packages.insert(package.clone()) {
+            return Err(format!("SPLIT_DISCOVERY_DUPLICATE_PACKAGE {package}"));
+        }
+        let mut files = BTreeSet::new();
+        for directory in ["src", "tests", "benches", "examples"] {
+            let path = member_root.join(directory);
+            if guard_optional_metadata(&path)?.is_some() {
+                guard_walk_sources(&path, &mut BTreeSet::new(), &mut files)?;
+            }
+        }
+        // Prep D owns these sources even though declarations stay at their
+        // old module paths. They cannot disappear from N13/TA2 discovery.
+        if package == "neovm-core" {
+            for directory in ["core_tests", "core_test_facades"] {
+                let path = member_root.join(directory);
+                if guard_optional_metadata(&path)?.is_some() {
+                    guard_walk_sources(&path, &mut BTreeSet::new(), &mut files)?;
+                }
+            }
+        }
+        let build = member_root.join("build.rs");
+        if guard_optional_metadata(&build)?.is_some() {
+            guard_walk_sources(&build, &mut BTreeSet::new(), &mut files)?;
+        }
+        let mut explicit = Vec::new();
+        if let Some(lib) = manifest.get("lib") {
+            explicit
+                .push(lib.as_table().ok_or_else(|| {
+                    format!("SPLIT_DISCOVERY_TARGET {package}: lib is not table")
+                })?);
+        }
+        for kind in ["bin", "test", "bench", "example"] {
+            if let Some(targets) = manifest.get(kind) {
+                let targets = targets.as_array().ok_or_else(|| {
+                    format!("SPLIT_DISCOVERY_TARGET {package}: {kind} is not array")
+                })?;
+                for target in targets {
+                    explicit.push(target.as_table().ok_or_else(|| {
+                        format!("SPLIT_DISCOVERY_TARGET {package}: {kind} is not table")
+                    })?);
+                }
+            }
+        }
+        for target in explicit {
+            if let Some(path) = target.get("path") {
+                let path = path
+                    .as_str()
+                    .ok_or_else(|| format!("SPLIT_DISCOVERY_TARGET {package}: non-string path"))?;
+                guard_walk_sources(&member_root.join(path), &mut BTreeSet::new(), &mut files)?;
+            }
+        }
+        if let Some(path) = manifest.get("package").and_then(|p| p.get("build")) {
+            match path {
+                toml::Value::String(path) => {
+                    guard_walk_sources(&member_root.join(path), &mut BTreeSet::new(), &mut files)?
+                }
+                toml::Value::Boolean(_) => {}
+                _ => return Err(format!("SPLIT_DISCOVERY_BUILD_PATH {package}")),
+            }
+        }
+        if matches!(package.as_str(), "neovm-core" | "neovm-value") {
+            let src = member_root
+                .join("src")
+                .canonicalize()
+                .map_err(|error| format!("SPLIT_DISCOVERY_SANITY {package}: {error}"))?;
+            if !files.iter().any(|file| file.starts_with(&src)) {
+                return Err(format!("SPLIT_DISCOVERY_EMPTY_SOURCE {package}"));
+            }
+        }
+        for path in files {
+            result.push(GuardSource {
+                package: package.clone(),
+                member_root: member_root.clone(),
+                path,
+            });
+        }
+    }
+    if !packages.contains("neovm-core") || !packages.contains("neovm-value") {
+        return Err("SPLIT_DISCOVERY_SANITY: core/value missing".to_owned());
+    }
+    result.sort_by(|a, b| (&a.package, &a.path).cmp(&(&b.package, &b.path)));
+    Ok(result)
+}
+
+// Mutation fixture setup, never a second source-discovery implementation.
+fn guard_fixture_workspace(root: &Path, members: &[&str]) {
+    let entries = members
+        .iter()
+        .map(|name| format!("\"crates/{name}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        format!("[workspace]\nmembers=[{entries}]\n"),
+    )
+    .expect("workspace fixture");
+    for name in members {
+        let member = root.join("crates").join(name);
+        std::fs::create_dir_all(member.join("src")).expect("fixture source directory");
+        std::fs::write(
+            member.join("Cargo.toml"),
+            format!("[package]\nname=\"{name}\"\nversion=\"0.0.0\"\n"),
+        )
+        .expect("member fixture");
+        if !member.join("src/lib.rs").exists() {
+            std::fs::write(member.join("src/lib.rs"), "").expect("fixture lib");
+        }
+    }
+}
+
+#[test]
+fn architecture_split_discovery_missing_member_red_then_restored() {
+    let dir = tempfile::tempdir().expect("fixture");
+    guard_fixture_workspace(dir.path(), &["neovm-core", "neovm-value"]);
+    let green = discover_sources(dir.path()).expect("positive discovery");
+    assert!(!green.is_empty());
+    let member = dir.path().join("crates/neovm-value/Cargo.toml");
+    let saved = std::fs::read(&member).expect("save manifest");
+    std::fs::remove_file(&member).expect("mutation");
+    assert!(
+        discover_sources(dir.path())
+            .expect_err("missing member must fail")
+            .contains("SPLIT_DISCOVERY_READ")
+    );
+    std::fs::write(member, saved).expect("restore");
+    assert_eq!(
+        discover_sources(dir.path()).expect("restored").len(),
+        green.len()
+    );
+}
+
+#[test]
+fn architecture_split_discovery_includes_explicit_target_and_core_tests() {
+    let dir = tempfile::tempdir().expect("fixture");
+    guard_fixture_workspace(dir.path(), &["neovm-core", "neovm-value"]);
+    let core = dir.path().join("crates/neovm-core");
+    std::fs::create_dir_all(core.join("core_tests")).expect("fixture core tests");
+    std::fs::write(core.join("core_tests/moved.rs"), "fn moved() {} ").expect("moved test");
+    std::fs::write(core.join("custom.rs"), "fn outside_autodiscovery() {} ").expect("target");
+    let manifest = core.join("Cargo.toml");
+    let mut text = std::fs::read_to_string(&manifest).expect("manifest");
+    text.push_str("\n[[test]]\nname='custom'\npath='custom.rs'\n");
+    std::fs::write(&manifest, text).expect("target declaration");
+    let files = discover_sources(dir.path()).expect("discovery");
+    assert!(files.iter().any(|file| file.path.ends_with("custom.rs")));
+    assert!(
+        files
+            .iter()
+            .any(|file| file.path.ends_with("core_tests/moved.rs"))
+    );
+    std::fs::remove_file(core.join("custom.rs")).expect("mutation");
+    assert!(
+        discover_sources(dir.path())
+            .expect_err("declared target missing must fail")
+            .contains("SPLIT_DISCOVERY_METADATA")
+    );
+    std::fs::write(core.join("custom.rs"), "fn outside_autodiscovery() {} ").expect("restore");
+    assert!(discover_sources(dir.path()).is_ok());
+}
+
 // ---------------------------------------------------------------------------
-// N13: CARRIERS-derived reference guard.
+// N13: source-resolved CARRIERS-derived reference guard (tests included).
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct CarriedPair {
-    names: Vec<String>,
-    modules: BTreeSet<String>,
+    members: [(Vec<String>, String); 2],
 }
 
-fn path_ident(expr: &Expr) -> Option<&syn::Path> {
-    match expr {
-        Expr::Path(path) => Some(&path.path),
-        Expr::Paren(paren) => path_ident(&paren.expr),
-        Expr::Reference(reference) => path_ident(&reference.expr),
-        _ => None,
-    }
+type N13ModuleKey = Vec<String>;
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct N13FunctionIdentity {
+    module: N13ModuleKey,
+    name: String,
+}
+
+#[derive(Clone)]
+struct N13Use {
+    path: Vec<String>,
+    alias: Option<String>, // None means a glob, never an authority grant.
+}
+
+#[derive(Default)]
+struct N13Module {
+    imports: Vec<N13Use>,
+    children: BTreeSet<String>,
+    functions: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct N13Modules {
+    modules: BTreeMap<N13ModuleKey, N13Module>,
+    files: BTreeMap<PathBuf, BTreeSet<N13ModuleKey>>,
 }
 
 fn path_names(path: &syn::Path) -> Vec<String> {
-    path.segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
+    path.segments.iter().map(|s| s.ident.to_string()).collect()
+}
+
+fn n13_use_leaves(tree: &UseTree, prefix: &[String], out: &mut Vec<N13Use>) {
+    match tree {
+        UseTree::Path(p) => {
+            let mut next = prefix.to_vec();
+            next.push(p.ident.to_string());
+            n13_use_leaves(&p.tree, &next, out);
+        }
+        UseTree::Name(n) => {
+            let mut path = prefix.to_vec();
+            if n.ident != "self" {
+                path.push(n.ident.to_string());
+            }
+            let alias = path.last().cloned();
+            out.push(N13Use { path, alias });
+        }
+        UseTree::Rename(n) => {
+            let mut path = prefix.to_vec();
+            if n.ident != "self" {
+                path.push(n.ident.to_string());
+            }
+            out.push(N13Use {
+                path,
+                alias: Some(n.rename.to_string()),
+            });
+        }
+        UseTree::Group(g) => {
+            for item in &g.items {
+                n13_use_leaves(item, prefix, out);
+            }
+        }
+        UseTree::Glob(_) => out.push(N13Use {
+            path: prefix.to_vec(),
+            alias: None,
+        }),
+    }
+}
+
+fn n13_macro_items(stream: proc_macro2::TokenStream) -> Vec<Item> {
+    // cfg_select! branches are groups containing ordinary Rust items. Only
+    // source-defined declarations are indexed; arbitrary macro expansion is
+    // never guessed. Unmapped relevant references fail later with UNRESOLVED.
+    if let Ok(file) = syn::parse2::<syn::File>(stream.clone()) {
+        return file.items;
+    }
+    stream
+        .into_iter()
+        .flat_map(|token| match token {
+            proc_macro2::TokenTree::Group(g) => n13_macro_items(g.stream()),
+            _ => Vec::new(),
+        })
         .collect()
 }
 
-fn carried_pairs(carried_path: &Path) -> Result<Vec<CarriedPair>, String> {
-    let (_, file) = parse_file(carried_path)?;
-    let mut pairs = Vec::new();
-    for item in &file.items {
-        let Item::Const(item) = item else {
-            continue;
-        };
-        if item.ident != "CARRIERS" {
-            continue;
+impl N13Modules {
+    fn add_file(&mut self, key: N13ModuleKey, path: &Path) -> Result<(), String> {
+        let path = path
+            .canonicalize()
+            .map_err(|e| format!("N13_UNRESOLVED {}: {e}", path.display()))?;
+        if !self
+            .files
+            .entry(path.clone())
+            .or_default()
+            .insert(key.clone())
+        {
+            return Ok(());
         }
-        let Expr::Reference(reference) = &*item.expr else {
-            return Err(format!(
-                "{}: CARRIERS is not a reference",
-                carried_path.display()
-            ));
+        let (_, file) = parse_file(&path)?;
+        let dir = if key.len() == 1
+            || matches!(
+                path.file_name().and_then(|s| s.to_str()),
+                Some("lib.rs" | "main.rs" | "mod.rs")
+            ) {
+            path.parent()
+                .ok_or("N13_UNRESOLVED module parent")?
+                .to_path_buf()
+        } else {
+            path.with_extension("")
         };
-        let Expr::Array(array) = &*reference.expr else {
-            return Err(format!(
-                "{}: CARRIERS is not an array",
-                carried_path.display()
-            ));
-        };
-        for elem in &array.elems {
-            let Expr::Tuple(tuple) = elem else {
-                return Err(format!(
-                    "{}: CARRIERS entry is not a tuple",
-                    carried_path.display()
-                ));
-            };
-            let mut names = Vec::new();
-            let mut modules = BTreeSet::new();
-            for expr in &tuple.elems {
-                let Some(path) = path_ident(expr) else {
-                    return Err(format!(
-                        "{}: CARRIERS entry member is not a path",
-                        carried_path.display()
-                    ));
-                };
-                let segments = path_names(path);
-                let Some(name) = segments.last() else {
-                    return Err(format!("{}: empty CARRIERS path", carried_path.display()));
-                };
-                if let Some(module) = segments.iter().rev().nth(1) {
-                    modules.insert(module.clone());
+        self.add_items(
+            key,
+            &path,
+            &dir,
+            path.parent().ok_or("N13_UNRESOLVED source parent")?,
+            &file.items,
+        )
+    }
+
+    fn add_items(
+        &mut self,
+        key: N13ModuleKey,
+        path: &Path,
+        dir: &Path,
+        path_base: &Path,
+        items: &[Item],
+    ) -> Result<(), String> {
+        self.modules.entry(key.clone()).or_default();
+        for item in items {
+            match item {
+                Item::Fn(f) => {
+                    self.modules
+                        .entry(key.clone())
+                        .or_default()
+                        .functions
+                        .insert(f.sig.ident.to_string());
                 }
-                names.push(name.clone());
+                Item::Use(u) => {
+                    let mut leaves = Vec::new();
+                    n13_use_leaves(&u.tree, &[], &mut leaves);
+                    self.modules
+                        .entry(key.clone())
+                        .or_default()
+                        .imports
+                        .extend(leaves);
+                }
+                Item::Mod(m) => {
+                    let name = m.ident.to_string();
+                    self.modules
+                        .entry(key.clone())
+                        .or_default()
+                        .children
+                        .insert(name.clone());
+                    let mut child = key.clone();
+                    child.push(name.clone());
+                    if let Some((_, nested)) = &m.content {
+                        self.add_items(child, path, &dir.join(&name), &dir.join(&name), nested)?;
+                    } else {
+                        let mut explicit = Vec::new();
+                        for attr in &m.attrs {
+                            if attr.path().is_ident("cfg_attr") {
+                                let args = attr.parse_args_with(syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated)
+                                    .map_err(|e| format!("N13_UNRESOLVED cfg_attr: {e}"))?;
+                                if args.iter().skip(1).any(|meta| {
+                                    meta.path().is_ident("path") || meta.path().is_ident("cfg_attr")
+                                }) {
+                                    return Err(format!(
+                                        "N13_UNRESOLVED conditional module path in {}::{name}",
+                                        key.join("::")
+                                    ));
+                                }
+                            }
+                            if attr.path().is_ident("path") {
+                                let syn::Meta::NameValue(value) = &attr.meta else {
+                                    return Err("N13_UNRESOLVED malformed #[path]".into());
+                                };
+                                let Expr::Lit(lit) = &value.value else {
+                                    return Err("N13_UNRESOLVED nonliteral #[path]".into());
+                                };
+                                let syn::Lit::Str(s) = &lit.lit else {
+                                    return Err("N13_UNRESOLVED nonstring #[path]".into());
+                                };
+                                explicit.push(s.value());
+                            }
+                        }
+                        if explicit.len() > 1 {
+                            return Err(format!("N13_AMBIGUOUS_MODULE {}::{name}", key.join("::")));
+                        }
+                        let candidates = if let Some(explicit) = explicit.first() {
+                            // #[path] in a file module is relative to its source
+                            // directory; in inline modules it is relative to the
+                            // inline module directory.
+                            vec![path_base.join(explicit)]
+                        } else {
+                            [
+                                dir.join(format!("{name}.rs")),
+                                dir.join(&name).join("mod.rs"),
+                            ]
+                            .into_iter()
+                            .filter(|p| p.is_file())
+                            .collect()
+                        };
+                        if candidates.len() != 1 || !candidates[0].is_file() {
+                            return Err(format!(
+                                "N13_UNRESOLVED module {}::{name} declared in {}",
+                                key.join("::"),
+                                path.display()
+                            ));
+                        }
+                        self.add_file(child, &candidates[0])?;
+                    }
+                }
+                Item::Macro(m) => self.add_items(
+                    key.clone(),
+                    path,
+                    dir,
+                    path_base,
+                    &n13_macro_items(m.mac.tokens.clone()),
+                )?,
+                _ => {}
             }
-            if names.len() != 2 {
-                return Err(format!(
-                    "{}: CARRIERS entry has {} members, expected 2",
-                    carried_path.display(),
-                    names.len()
-                ));
+        }
+        Ok(())
+    }
+
+    fn anchored(&self, module: &[String], path: &[String]) -> Vec<N13ModuleKey> {
+        let Some(first) = path.first() else {
+            return vec![module.to_vec()];
+        };
+        match first.as_str() {
+            "crate" => {
+                let mut key = module[..1].to_vec();
+                key.extend_from_slice(&path[1..]);
+                vec![key]
             }
-            pairs.push(CarriedPair { names, modules });
+            "self" => {
+                let mut key = module.to_vec();
+                key.extend_from_slice(&path[1..]);
+                vec![key]
+            }
+            "super" => {
+                let supers = path.iter().take_while(|s| s.as_str() == "super").count();
+                if supers >= module.len() {
+                    return Vec::new();
+                }
+                let mut key = module[..module.len() - supers].to_vec();
+                key.extend_from_slice(&path[supers..]);
+                vec![key]
+            }
+            _ => {
+                let mut local = module.to_vec();
+                local.extend_from_slice(path);
+                let mut keys = vec![local];
+                if self.modules.contains_key(&vec![first.clone()]) {
+                    keys.push(path.to_vec());
+                }
+                keys
+            }
         }
     }
+
+    fn resolve_absolute(
+        &self,
+        path: &[String],
+        seen: &mut BTreeSet<N13ModuleKey>,
+    ) -> BTreeSet<N13ModuleKey> {
+        if !seen.insert(path.to_vec()) {
+            return BTreeSet::new();
+        }
+        let mut result = BTreeSet::new();
+        if self.modules.contains_key(path) {
+            result.insert(path.to_vec());
+        }
+        for split in (1..path.len()).rev() {
+            let prefix = &path[..split];
+            let Some(module) = self.modules.get(prefix) else {
+                continue;
+            };
+            for import in &module.imports {
+                let tail = match &import.alias {
+                    Some(alias) if alias == &path[split] => &path[split + 1..],
+                    Some(_) => continue,
+                    None => &path[split..],
+                };
+                for mut target in self.anchored(prefix, &import.path) {
+                    target.extend_from_slice(tail);
+                    result.extend(self.resolve_absolute(&target, &mut seen.clone()));
+                }
+            }
+        }
+        result
+    }
+
+    fn member_identities(
+        &self,
+        module: &[String],
+        name: &str,
+        seen: &mut BTreeSet<(N13ModuleKey, String)>,
+    ) -> BTreeSet<N13FunctionIdentity> {
+        if !seen.insert((module.to_vec(), name.to_string())) {
+            return BTreeSet::new();
+        }
+        let Some(info) = self.modules.get(module) else {
+            return BTreeSet::new();
+        };
+        let mut identities = BTreeSet::new();
+        if info.functions.contains(name) {
+            identities.insert(N13FunctionIdentity {
+                module: module.to_vec(),
+                name: name.to_string(),
+            });
+        }
+        for import in &info.imports {
+            let (prefix, original) = match &import.alias {
+                Some(alias) if alias == name => {
+                    let Some(original) = import.path.last() else {
+                        continue;
+                    };
+                    (&import.path[..import.path.len() - 1], original.as_str())
+                }
+                Some(_) => continue,
+                None => (import.path.as_slice(), name),
+            };
+            for anchored in self.anchored(module, prefix) {
+                for target in self.resolve_absolute(&anchored, &mut BTreeSet::new()) {
+                    identities.extend(self.member_identities(&target, original, &mut seen.clone()));
+                }
+            }
+        }
+        identities
+    }
+
+    fn function_identities(
+        &self,
+        module: &[String],
+        path: &[String],
+        name: &str,
+    ) -> BTreeSet<N13FunctionIdentity> {
+        let mut identities = BTreeSet::new();
+        for anchored in self.anchored(module, path) {
+            for target in self.resolve_absolute(&anchored, &mut BTreeSet::new()) {
+                identities.extend(self.member_identities(&target, name, &mut BTreeSet::new()));
+            }
+        }
+        identities
+    }
+
+    fn resolve_function_identity(
+        &self,
+        module: &[String],
+        path: &[String],
+        name: &str,
+    ) -> Result<N13FunctionIdentity, String> {
+        let identities = self.function_identities(module, path, name);
+        match identities.len() {
+            1 => identities
+                .into_iter()
+                .next()
+                .ok_or_else(|| "N13_UNRESOLVED empty function identity".into()),
+            0 => Err(format!(
+                "N13_UNRESOLVED {}::{name} from {}",
+                path.join("::"),
+                module.join("::")
+            )),
+            _ => Err(format!(
+                "N13_AMBIGUOUS_RECEIVER {}::{name} from {}: {identities:?}",
+                path.join("::"),
+                module.join("::")
+            )),
+        }
+    }
+
+    // Keep the shared PC2 API: N13 additionally needs the declaration's actual
+    // member spelling so a renamed facade cannot lose its original identity.
+    fn resolve_function(
+        &self,
+        module: &[String],
+        path: &[String],
+        name: &str,
+    ) -> Result<N13ModuleKey, String> {
+        self.resolve_function_identity(module, path, name)
+            .map(|identity| identity.module)
+    }
+
+    fn resolve(&self, module: &[String], path: &[String]) -> Result<N13ModuleKey, String> {
+        let mut result = BTreeSet::new();
+        for candidate in self.anchored(module, path) {
+            result.extend(self.resolve_absolute(&candidate, &mut BTreeSet::new()));
+        }
+        match result.len() {
+            1 => result
+                .into_iter()
+                .next()
+                .ok_or_else(|| "N13_UNRESOLVED empty result".into()),
+            0 => Err(format!(
+                "N13_UNRESOLVED {} from {}",
+                path.join("::"),
+                module.join("::")
+            )),
+            _ => Err(format!(
+                "N13_AMBIGUOUS_RECEIVER {} from {}: {result:?}",
+                path.join("::"),
+                module.join("::")
+            )),
+        }
+    }
+}
+
+fn n13_module_catalog(sources: &[GuardSource]) -> Result<N13Modules, String> {
+    let mut catalog = N13Modules::default();
+    let mut members = BTreeMap::new();
+    for source in sources {
+        members.insert(source.package.clone(), source.member_root.clone());
+    }
+    for (package, root) in members {
+        let manifest = root.join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest)
+            .map_err(|e| format!("N13_UNRESOLVED {}: {e}", manifest.display()))?;
+        let manifest: toml::Value =
+            toml::from_str(&text).map_err(|e| format!("N13_UNRESOLVED manifest: {e}"))?;
+        let name = manifest
+            .get("lib")
+            .and_then(|v| v.get("name"))
+            .and_then(toml::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| package.replace('-', "_"));
+        let lib = manifest
+            .get("lib")
+            .and_then(|v| v.get("path"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or("src/lib.rs");
+        if root.join(lib).is_file() {
+            catalog.add_file(vec![name.clone()], &root.join(lib))?;
+        }
+        let main = root.join("src/main.rs");
+        if main.is_file() {
+            catalog.add_file(vec![format!("{name}@main")], &main)?;
+        }
+        if root.join("build.rs").is_file() {
+            catalog.add_file(vec![format!("{name}@build")], &root.join("build.rs"))?;
+        }
+        for kind in ["bin", "test", "bench", "example"] {
+            if let Some(targets) = manifest.get(kind).and_then(toml::Value::as_array) {
+                for target in targets {
+                    if let Some(path) = target.get("path").and_then(toml::Value::as_str) {
+                        catalog
+                            .add_file(vec![format!("{name}@{kind}:{path}")], &root.join(path))?;
+                    }
+                }
+            }
+        }
+        // Autodiscovered test/bin/example/bench roots not listed explicitly.
+        for source in sources.iter().filter(|s| s.package == package) {
+            let Ok(relative) = source.path.strip_prefix(&root) else {
+                continue;
+            };
+            let parent = relative.parent().and_then(Path::to_str);
+            if matches!(parent, Some("tests" | "benches" | "examples" | "src/bin")) {
+                let canonical = source.path.canonicalize().map_err(|e| e.to_string())?;
+                if !catalog.files.contains_key(&canonical) {
+                    catalog.add_file(
+                        vec![format!("{name}@target:{}", relative.display())],
+                        &canonical,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(catalog)
+}
+
+fn carried_pairs(path: &Path) -> Result<Vec<CarriedPair>, String> {
+    let (_, file) = parse_file(path)?;
+    let tables: Vec<_> = file
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Const(c) if c.ident == "CARRIERS" => Some(c),
+            _ => None,
+        })
+        .collect();
+    if tables.len() != 1 {
+        return Err("N13_UNRESOLVED expected exactly one CARRIERS table".into());
+    }
+    let Expr::Reference(reference) = &*tables[0].expr else {
+        return Err("N13_UNRESOLVED CARRIERS reference".into());
+    };
+    let Expr::Array(array) = &*reference.expr else {
+        return Err("N13_UNRESOLVED CARRIERS array".into());
+    };
+    let mut pairs = Vec::new();
+    for element in &array.elems {
+        let Expr::Tuple(tuple) = element else {
+            return Err("N13_UNRESOLVED CARRIERS tuple".into());
+        };
+        if tuple.elems.len() != 2 {
+            return Err("N13_UNRESOLVED CARRIERS pair arity".into());
+        }
+        let mut members = Vec::new();
+        for expr in &tuple.elems {
+            let Expr::Path(p) = expr else {
+                return Err("N13_UNRESOLVED CARRIERS member path".into());
+            };
+            let mut path = path_names(&p.path);
+            let name = path.pop().ok_or("N13_UNRESOLVED empty CARRIERS member")?;
+            if path.is_empty() {
+                return Err("N13_UNRESOLVED unqualified CARRIERS member".into());
+            }
+            members.push((path, name));
+        }
+        let members = members
+            .try_into()
+            .map_err(|_| "N13_UNRESOLVED CARRIERS pair arity")?;
+        pairs.push(CarriedPair { members });
+    }
     if pairs.is_empty() {
-        return Err(format!(
-            "{}: no CARRIERS entries found",
-            carried_path.display()
-        ));
+        return Err("N13_UNRESOLVED empty CARRIERS table".into());
     }
     Ok(pairs)
 }
 
-struct OccurrenceVisitor<'a, 'ast> {
+struct N13Visitor<'a> {
     names: &'a BTreeSet<String>,
-    defining_modules: &'a BTreeMap<String, BTreeSet<String>>,
+    defining: &'a BTreeMap<String, BTreeSet<N13ModuleKey>>,
+    catalog: &'a N13Modules,
+    module: N13ModuleKey,
+    fn_stack: Vec<String>,
     aliases: BTreeSet<String>,
-    local_fns: BTreeSet<String>,
     allowed: BTreeMap<(usize, String), usize>,
-    _marker: std::marker::PhantomData<&'ast ()>,
+    errors: Vec<String>,
 }
 
-impl<'a, 'ast> OccurrenceVisitor<'a, 'ast> {
-    fn new(
-        names: &'a BTreeSet<String>,
-        defining_modules: &'a BTreeMap<String, BTreeSet<String>>,
-    ) -> Self {
-        Self {
-            names,
-            defining_modules,
-            aliases: BTreeSet::new(),
-            local_fns: BTreeSet::new(),
-            allowed: BTreeMap::new(),
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    fn allow_ident(&mut self, ident: &syn::Ident) {
-        let name = ident.to_string();
+impl N13Visitor<'_> {
+    fn allow(&mut self, ident: &syn::Ident) {
         *self
             .allowed
-            .entry((line_of(ident.span()), name))
-            .or_insert(0) += 1;
+            .entry((line_of(ident.span()), ident.to_string()))
+            .or_default() += 1;
     }
 
-    /// One identifier inside a macro token stream: allow only a qualified
-    /// call to a sibling module's same-named function (dbusbind's
-    /// `connection::world_state_placeholder` inside `std::cfg_select!`).
-    fn allow_macro_ident(&mut self, tokens: &[proc_macro2::TokenTree], index: usize) {
-        let proc_macro2::TokenTree::Ident(ident) = &tokens[index] else {
-            return;
+    fn delegation(&self, path: &[String], name: &str) -> Result<bool, String> {
+        if self.fn_stack.len() != 1
+            || self.fn_stack.first().map(String::as_str) != Some(name)
+            || !self
+                .defining
+                .get(name)
+                .is_some_and(|modules| modules.contains(&self.module))
+        {
+            return Ok(false);
+        }
+        if path.len() != 2 {
+            return Ok(false);
+        }
+        let Some(module) = self.catalog.modules.get(&self.module) else {
+            return Err("N13_UNRESOLVED current module".into());
         };
-        let name = ident.to_string();
-        if !self.names.contains(&name) {
-            return;
+        if !module.children.contains(&path[0]) {
+            return Err(format!(
+                "N13_UNRESOLVED undeclared child {} of {}",
+                path[0],
+                self.module.join("::")
+            ));
         }
-        let qualified_internal = index >= 3
-            && matches!(&tokens[index - 1], proc_macro2::TokenTree::Punct(p) if p.as_char() == ':')
-            && matches!(&tokens[index - 2], proc_macro2::TokenTree::Punct(p) if p.as_char() == ':')
-            && match &tokens[index - 3] {
-                proc_macro2::TokenTree::Ident(qualifier) => {
-                    let qualifier = qualifier.to_string();
-                    !self
-                        .defining_modules
-                        .get(&name)
-                        .is_some_and(|modules| modules.contains(&qualifier))
-                }
-                _ => false,
-            };
-        if qualified_internal && self.local_fns.contains(&name) {
-            self.allow_ident(ident);
-        }
+        let _child = self.catalog.resolve(&self.module, &path[..1])?;
+        Ok(true)
     }
 
-    fn scan_tokens(&mut self, stream: proc_macro2::TokenStream) {
-        let tokens: Vec<proc_macro2::TokenTree> = stream.into_iter().collect();
+    fn macro_tokens(&mut self, stream: proc_macro2::TokenStream) {
+        if let Ok(file) = syn::parse2::<syn::File>(stream.clone()) {
+            if !file.items.is_empty() {
+                self.visit_file(&file);
+                return;
+            }
+        }
+        let tokens: Vec<_> = stream.into_iter().collect();
         for (index, token) in tokens.iter().enumerate() {
             match token {
-                proc_macro2::TokenTree::Group(group) => self.scan_tokens(group.stream()),
-                proc_macro2::TokenTree::Ident(_) => self.allow_macro_ident(&tokens, index),
+                proc_macro2::TokenTree::Group(g) => self.macro_tokens(g.stream()),
+                proc_macro2::TokenTree::Ident(ident) if self.names.contains(&ident.to_string()) => {
+                    let name = ident.to_string();
+                    let mut path = vec![name.clone()];
+                    let mut cursor = index;
+                    while cursor >= 3
+                        && matches!(&tokens[cursor - 1], proc_macro2::TokenTree::Punct(p) if p.as_char() == ':')
+                        && matches!(&tokens[cursor - 2], proc_macro2::TokenTree::Punct(p) if p.as_char() == ':')
+                    {
+                        let proc_macro2::TokenTree::Ident(prefix) = &tokens[cursor - 3] else {
+                            break;
+                        };
+                        path.insert(0, prefix.to_string());
+                        cursor -= 3;
+                    }
+                    let is_call = matches!(tokens.get(index + 1), Some(proc_macro2::TokenTree::Group(g)) if g.delimiter() == proc_macro2::Delimiter::Parenthesis);
+                    if is_call {
+                        match self.delegation(&path, &name) {
+                            Ok(true) => self.allow(ident),
+                            Ok(false) => {}
+                            Err(e) => self.errors.push(e),
+                        }
+                    }
+                }
                 _ => {}
             }
         }
     }
 }
 
-impl<'a, 'ast> Visit<'ast> for OccurrenceVisitor<'a, 'ast> {
+impl<'ast> Visit<'ast> for N13Visitor<'_> {
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
-        let name = item.sig.ident.to_string();
-        if self.names.contains(&name) {
-            self.allow_ident(&item.sig.ident);
+        if self.names.contains(&item.sig.ident.to_string()) {
+            self.allow(&item.sig.ident);
         }
-        self.local_fns.insert(name);
+        self.fn_stack.push(item.sig.ident.to_string());
         visit::visit_item_fn(self, item);
+        self.fn_stack.pop();
     }
-
-    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        let mut occurrences = Vec::new();
-        collect_use_occurrences(&item.tree, self.names, &mut self.aliases, &mut occurrences);
-        for (name, span) in occurrences {
-            *self.allowed.entry((line_of(span), name)).or_insert(0) += 1;
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if let Some((_, items)) = &item.content {
+            self.module.push(item.ident.to_string());
+            for item in items {
+                self.visit_item(item);
+            }
+            self.module.pop();
         }
-        visit::visit_item_use(self, item);
     }
-
-    fn visit_expr_path(&mut self, expr: &'ast syn::ExprPath) {
-        let segments = path_names(&expr.path);
-        if let Some(last) = expr.path.segments.last() {
-            let name = last.ident.to_string();
-            if self.names.contains(&name) {
-                let defining = self.defining_modules.get(&name);
-                let qualifier = segments.iter().rev().nth(1);
-                let qualifier_is_defining = qualifier
-                    .zip(defining)
-                    .is_some_and(|(module, modules)| modules.contains(module));
-                if segments.len() >= 2 && !qualifier_is_defining && self.local_fns.contains(&name) {
-                    self.allow_ident(&last.ident);
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let mut leaves = Vec::new();
+        n13_use_leaves(&item.tree, &[], &mut leaves);
+        let mut relevant = false;
+        for leaf in leaves {
+            if let Some(name) = leaf.path.last().filter(|s| self.names.contains(*s)) {
+                relevant = true;
+                match self.catalog.resolve_function(
+                    &self.module,
+                    &leaf.path[..leaf.path.len() - 1],
+                    name,
+                ) {
+                    Ok(_) => {}
+                    Err(error) => self.errors.push(error),
+                }
+                if let Some(alias) = leaf.alias {
+                    if alias != *name {
+                        self.aliases.insert(alias);
+                    }
                 }
             }
         }
-        visit::visit_expr_path(self, expr);
+        if relevant {
+            // Use trees are accounted token-for-token; later alias uses remain
+            // prohibited. Resolve before allowing the declaration, never grant
+            // authority from a matching leaf spelling alone.
+            fn account(visitor: &mut N13Visitor<'_>, tree: &UseTree) {
+                match tree {
+                    UseTree::Path(p) => {
+                        if visitor.names.contains(&p.ident.to_string()) {
+                            visitor.allow(&p.ident);
+                        }
+                        account(visitor, &p.tree);
+                    }
+                    UseTree::Name(n) => {
+                        if visitor.names.contains(&n.ident.to_string()) {
+                            visitor.allow(&n.ident);
+                        }
+                    }
+                    UseTree::Rename(n) => {
+                        if visitor.names.contains(&n.ident.to_string()) {
+                            visitor.allow(&n.ident);
+                            visitor.allow(&n.rename);
+                        }
+                    }
+                    UseTree::Group(g) => {
+                        for item in &g.items {
+                            account(visitor, item);
+                        }
+                    }
+                    UseTree::Glob(_) => {}
+                }
+            }
+            account(self, &item.tree);
+        }
     }
-
+    fn visit_expr_call(&mut self, item: &'ast syn::ExprCall) {
+        if let Expr::Path(path) = &*item.func {
+            if let Some(last) = path.path.segments.last() {
+                let name = last.ident.to_string();
+                if self.names.contains(&name) {
+                    match self.delegation(&path_names(&path.path), &name) {
+                        Ok(true) => self.allow(&last.ident),
+                        Ok(false) => {}
+                        Err(e) => self.errors.push(e),
+                    }
+                }
+            }
+        }
+        visit::visit_expr_call(self, item);
+    }
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        self.scan_tokens(item.mac.tokens.clone());
-        visit::visit_item_macro(self, item);
+        self.macro_tokens(item.mac.tokens.clone());
     }
-
-    fn visit_expr_macro(&mut self, expr: &'ast syn::ExprMacro) {
-        self.scan_tokens(expr.mac.tokens.clone());
-        visit::visit_expr_macro(self, expr);
+    fn visit_expr_macro(&mut self, item: &'ast syn::ExprMacro) {
+        self.macro_tokens(item.mac.tokens.clone());
     }
-
-    fn visit_stmt_macro(&mut self, stmt: &'ast syn::StmtMacro) {
-        self.scan_tokens(stmt.mac.tokens.clone());
-        visit::visit_stmt_macro(self, stmt);
-    }
-}
-
-fn collect_use_occurrences(
-    tree: &UseTree,
-    names: &BTreeSet<String>,
-    aliases: &mut BTreeSet<String>,
-    out: &mut Vec<(String, Span)>,
-) {
-    match tree {
-        UseTree::Path(path) => collect_use_occurrences(&path.tree, names, aliases, out),
-        UseTree::Name(name) => {
-            let ident = name.ident.to_string();
-            if names.contains(&ident) {
-                out.push((ident, name.ident.span()));
-            }
-        }
-        UseTree::Rename(rename) => {
-            let ident = rename.ident.to_string();
-            if names.contains(&ident) {
-                out.push((ident, rename.ident.span()));
-                let alias = rename.rename.to_string();
-                out.push((alias.clone(), rename.rename.span()));
-                aliases.insert(alias);
-            }
-        }
-        UseTree::Group(group) => {
-            for item in &group.items {
-                collect_use_occurrences(item, names, aliases, out);
-            }
-        }
-        UseTree::Glob(_) => {}
+    fn visit_stmt_macro(&mut self, item: &'ast syn::StmtMacro) {
+        self.macro_tokens(item.mac.tokens.clone());
     }
 }
 
 fn count_occurrences(cleaned: &str, names: &BTreeSet<String>) -> BTreeMap<(usize, String), usize> {
-    let mut out: BTreeMap<(usize, String), usize> = BTreeMap::new();
-    let bytes = cleaned.as_bytes();
-    let mut line = 1usize;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\n' {
+    let mut out = BTreeMap::new();
+    let mut line = 1;
+    let mut current = String::new();
+    for c in cleaned.chars().chain(std::iter::once(' ')) {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            current.push(c);
+            continue;
+        }
+        if names.contains(&current) {
+            *out.entry((line, current.clone())).or_default() += 1;
+        }
+        current.clear();
+        if c == '\n' {
             line += 1;
-            i += 1;
-            continue;
         }
-        if b.is_ascii_alphabetic() || b == b'_' {
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let word = &cleaned[start..i];
-            if names.contains(word) {
-                *out.entry((line, word.to_string())).or_insert(0) += 1;
-            }
-            continue;
-        }
-        i += 1;
     }
     out
 }
 
-fn carried_references_in_file(
-    path: &Path,
-    names: &BTreeSet<String>,
-    defining_modules: &BTreeMap<String, BTreeSet<String>>,
-) -> Result<Vec<String>, String> {
-    let (text, file) = parse_file(path)?;
-    let mut visitor = OccurrenceVisitor::new(names, defining_modules);
-    visitor.visit_file(&file);
-    let mut all_names = names.clone();
-    all_names.extend(visitor.aliases.iter().cloned());
-    let mut counts = count_occurrences(&cleaned_code(&text), &all_names);
-    for ((line, name), allowed) in &visitor.allowed {
-        if let Some(slot) = counts.get_mut(&(*line, name.clone())) {
-            *slot = slot.saturating_sub(*allowed);
+pub(crate) fn scan_carried_workspace(workspace: &Path) -> Result<(), Vec<String>> {
+    let sources = discover_sources(workspace).map_err(|e| vec![e])?;
+    let catalog = n13_module_catalog(&sources).map_err(|e| vec![e])?;
+    let mut candidates = Vec::new();
+    for (file, modules) in &catalog.files {
+        for module in modules {
+            if module.first().is_some_and(|s| s == "neovm_core")
+                && module.ends_with(&["eval".into(), "green".into(), "carried".into()])
+            {
+                candidates.push((file.clone(), module.clone()));
+            }
         }
     }
-    let mut violations = Vec::new();
-    for ((line, name), remaining) in counts {
-        if remaining > 0 {
-            violations.push(format!(
-                "{}:{}: carried-state pair reference {name:?} x{remaining}",
-                path.display(),
-                line
-            ));
-        }
+    if candidates.len() != 1 {
+        return Err(vec![format!(
+            "N13_UNRESOLVED expected one upper eval::green::carried, got {candidates:?}"
+        )]);
     }
-    Ok(violations)
-}
-
-pub(crate) fn scan_carried_references(
-    core_src: &Path,
-    value_src: &Path,
-) -> Result<(), Vec<String>> {
-    let carried = core_src.join("emacs_core/runtime/eval/green/carried.rs");
-    let pairs = match carried_pairs(&carried) {
-        Ok(pairs) => pairs,
-        Err(error) => return Err(vec![error]),
-    };
+    let (carried, carried_module) = &candidates[0];
+    let pairs = carried_pairs(carried).map_err(|e| vec![e])?;
     let mut names = BTreeSet::new();
-    let mut defining_modules: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for pair in &pairs {
-        for name in &pair.names {
-            names.insert(name.clone());
-            defining_modules
-                .entry(name.clone())
+    let mut defining: BTreeMap<String, BTreeSet<N13ModuleKey>> = BTreeMap::new();
+    let mut identities = BTreeSet::new();
+    for pair in pairs {
+        for (path, name) in pair.members {
+            let identity = catalog
+                .resolve_function_identity(carried_module, &path, &name)
+                .map_err(|e| vec![e])?;
+            names.insert(name);
+            names.insert(identity.name.clone());
+            defining
+                .entry(identity.name.clone())
                 .or_default()
-                .extend(pair.modules.iter().cloned());
+                .insert(identity.module.clone());
+            identities.insert(identity);
         }
     }
-    let mut files = Vec::new();
-    rs_files(core_src, &mut files);
-    if value_src.exists() {
-        rs_files(value_src, &mut files);
-    }
     let mut violations = Vec::new();
-    for path in files {
-        if path == carried {
+    // All module-level aliases of a carried declaration join the global fence,
+    // including aliases NOT used by CARRIERS. Otherwise a new reexport in one
+    // file could be called under its new spelling from another file. Resolution
+    // follows the complete alias chain, not a name-only alias allowlist.
+    for (module, info) in &catalog.modules {
+        for import in &info.imports {
+            let Some(alias) = &import.alias else {
+                continue;
+            };
+            let Some(original) = import.path.last() else {
+                continue;
+            };
+            let prefix = &import.path[..import.path.len() - 1];
+            let targets = catalog.function_identities(module, prefix, original);
+            if targets.iter().any(|target| identities.contains(target)) {
+                names.insert(alias.clone());
+                if targets.len() != 1 {
+                    violations.push(format!(
+                        "N13_AMBIGUOUS_RECEIVER carried alias {}::{alias}: {targets:?}",
+                        module.join("::")
+                    ));
+                }
+            }
+        }
+    }
+    let mut scan_paths: BTreeSet<PathBuf> = catalog.files.keys().cloned().collect();
+    for source in sources {
+        scan_paths.insert(
+            source
+                .path
+                .canonicalize()
+                .map_err(|e| vec![e.to_string()])?,
+        );
+    }
+    for path in scan_paths {
+        if path == *carried {
             continue;
         }
-        match carried_references_in_file(&path, &names, &defining_modules) {
-            Ok(mut found) => violations.append(&mut found),
-            Err(error) => violations.push(error),
+        let (text, file) = parse_file(&path).map_err(|e| vec![e])?;
+        let mut counts = count_occurrences(&cleaned_code(&text), &names);
+        if counts.is_empty() {
+            continue;
+        }
+        let modules = catalog.files.get(&path);
+        let Some(module) = modules
+            .filter(|set| set.len() == 1)
+            .and_then(|set| set.iter().next())
+        else {
+            violations.push(format!(
+                "N13_UNRESOLVED {}: relevant file has unknown/ambiguous module {modules:?}",
+                path.display()
+            ));
+            continue;
+        };
+        let mut visitor = N13Visitor {
+            names: &names,
+            defining: &defining,
+            catalog: &catalog,
+            module: module.clone(),
+            fn_stack: Vec::new(),
+            aliases: BTreeSet::new(),
+            allowed: BTreeMap::new(),
+            errors: Vec::new(),
+        };
+        visitor.visit_file(&file);
+        let mut all_names = names.clone();
+        all_names.extend(visitor.aliases);
+        counts = count_occurrences(&cleaned_code(&text), &all_names);
+        for (key, allowed) in visitor.allowed {
+            if let Some(count) = counts.get_mut(&key) {
+                *count = count.saturating_sub(allowed);
+            }
+        }
+        violations.extend(
+            visitor
+                .errors
+                .into_iter()
+                .map(|e| format!("{}: {e}", path.display())),
+        );
+        for ((line, name), count) in counts {
+            if count > 0 {
+                violations.push(format!(
+                    "{}:{line}: N13_FORBIDDEN_REFERENCE {name} x{count}",
+                    path.display()
+                ));
+            }
         }
     }
     if violations.is_empty() {
@@ -574,20 +1338,11 @@ pub(crate) fn scan_carried_references(
 
 #[test]
 fn architecture_n13_carried_pairs_have_one_reference_site() {
-    let root = workspace_root();
-    if let Err(violations) = scan_carried_references(
-        &root.join("crates/neovm-core/src"),
-        &root.join("crates/neovm-value/src"),
-    ) {
+    if let Err(violations) = scan_carried_workspace(&workspace_root()) {
         panic!(
-            "{} carried-state reference violations (only eval/green/carried.rs may swap World state):\n{}",
+            "{} carried-state reference violations:\n{}",
             violations.len(),
-            violations
-                .iter()
-                .take(80)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
+            violations.join("\n")
         );
     }
 }
@@ -595,34 +1350,124 @@ fn architecture_n13_carried_pairs_have_one_reference_site() {
 #[test]
 fn architecture_n13_guard_self_test() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let core = dir.path().join("crates/neovm-core/src");
-    let value = dir.path().join("crates/neovm-value/src");
-    std::fs::create_dir_all(core.join("emacs_core/runtime/eval/green")).unwrap();
-    std::fs::create_dir_all(core.join("tagged")).unwrap();
-    std::fs::create_dir_all(&value).unwrap();
+    let root = dir.path();
+    for package in ["neovm-core", "neovm-value"] {
+        std::fs::create_dir_all(root.join(format!("crates/{package}/src"))).unwrap();
+        std::fs::write(
+            root.join(format!("crates/{package}/Cargo.toml")),
+            format!("[package]\nname = {package:?}\nversion = \"0.0.0\"\n"),
+        )
+        .unwrap();
+    }
     std::fs::write(
-        core.join("emacs_core/runtime/eval/green/carried.rs"),
-        "const CARRIERS: &[(P, S)] = &[(\n    crate::tagged::pair::placeholder,\n    crate::tagged::pair::swap,\n)];\n",
+        root.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/neovm-core\", \"crates/neovm-value\"]\n",
+    )
+    .unwrap();
+    let src = root.join("crates/neovm-core/src");
+    std::fs::create_dir_all(src.join("eval/green")).unwrap();
+    std::fs::write(
+        src.join("lib.rs"),
+        "mod pair; mod aliases; mod external; mod eval { pub mod green { pub mod carried; } }\n",
     )
     .unwrap();
     std::fs::write(
-        core.join("tagged/pair.rs"),
-        "pub fn placeholder() {}\npub fn swap() {}\npub fn outer() {\n    child::swap();\n}\n",
+        root.join("crates/neovm-value/src/lib.rs"),
+        "pub struct Lower;\n",
     )
     .unwrap();
-    std::fs::write(core.join("tagged/child.rs"), "pub fn swap() {}\n").unwrap();
-    let green = scan_carried_references(&core, &value);
+    std::fs::write(src.join("eval/green/carried.rs"), "const CARRIERS: &[(P, S)] = &[(crate::aliases::carried_placeholder, crate::aliases::carried_swap)];\n").unwrap();
+    let aliases =
+        "pub use crate::pair::{placeholder as carried_placeholder, swap as carried_swap};\n";
+    std::fs::write(src.join("aliases.rs"), aliases).unwrap();
+    let positive = "mod child { pub fn swap() {} }\npub fn placeholder() {}\npub fn swap() { child::swap(); }\n";
+    std::fs::write(src.join("pair.rs"), positive).unwrap();
+    std::fs::write(src.join("external.rs"), "fn unrelated() {}\n").unwrap();
+    let green = scan_carried_workspace(root);
     assert!(green.is_ok(), "false positive: {green:?}");
     std::fs::write(
-        core.join("tagged/external.rs"),
-        "pub fn violate() {\n    crate::tagged::pair::swap();\n}\n",
+        src.join("external.rs"),
+        "fn violate() { crate::pair::swap(); }\n",
     )
     .unwrap();
-    let red = scan_carried_references(&core, &value);
-    assert!(red.is_err(), "mutation not detected");
+    let red = scan_carried_workspace(root);
+    assert!(red.is_err(), "external mutation not detected");
     assert!(
         format!("{red:?}").contains("external.rs"),
-        "wrong violation site: {red:?}"
+        "wrong violation: {red:?}"
+    );
+    std::fs::write(src.join("external.rs"), "fn unrelated() {}\n").unwrap();
+    assert!(
+        scan_carried_workspace(root).is_ok(),
+        "external restoration not green"
+    );
+    // The original outer() fixture is now the exact negative control: merely
+    // sharing a file with the definition does not authorize delegation.
+    std::fs::write(
+        src.join("pair.rs"),
+        format!("{positive}\nfn outer() {{ child::swap(); }}\n"),
+    )
+    .unwrap();
+    let red = scan_carried_workspace(root);
+    assert!(
+        red.is_err(),
+        "same-file wrong-function mutation not detected"
+    );
+    assert!(
+        format!("{red:?}").contains("pair.rs"),
+        "wrong violation: {red:?}"
+    );
+    std::fs::write(src.join("pair.rs"), positive).unwrap();
+    assert!(
+        scan_carried_workspace(root).is_ok(),
+        "delegation restoration not green"
+    );
+    std::fs::write(src.join("pair.rs"), "mod child { pub fn swap() {} }\npub fn placeholder() {}\npub fn swap() { std::cfg_select! { any() => { child::swap(); } _ => {} } }\n").unwrap();
+    assert!(
+        scan_carried_workspace(root).is_ok(),
+        "cfg_select delegation false positive"
+    );
+    std::fs::write(src.join("pair.rs"), "mod child { pub fn swap() {} }\npub fn placeholder() {}\npub fn swap() {}\npub fn outer() { std::cfg_select! { any() => { child::swap(); } _ => {} } }\n").unwrap();
+    assert!(
+        scan_carried_workspace(root).is_err(),
+        "cfg_select wrong-function mutation not detected"
+    );
+    std::fs::write(src.join("pair.rs"), positive).unwrap();
+    assert!(
+        scan_carried_workspace(root).is_ok(),
+        "macro restoration not green"
+    );
+    // A forged alias absent from CARRIERS must still fence calls from another
+    // file. Its source-resolved identity, not the spelling, connects it.
+    std::fs::write(
+        src.join("aliases.rs"),
+        format!("{aliases}pub use crate::pair::swap as forged_swap;\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("external.rs"),
+        "fn violate() { crate::aliases::forged_swap(); }\n",
+    )
+    .unwrap();
+    let red = scan_carried_workspace(root);
+    assert!(
+        red.is_err(),
+        "cross-file forged alias mutation not detected"
+    );
+    let message = format!("{red:?}");
+    assert!(
+        message.contains("external.rs") && message.contains("forged_swap"),
+        "wrong alias violation: {message}"
+    );
+    std::fs::write(src.join("external.rs"), "fn unrelated() {}\n").unwrap();
+    assert!(
+        scan_carried_workspace(root).is_ok(),
+        "unused alias declaration must not cause a false positive"
+    );
+    std::fs::write(src.join("aliases.rs"), aliases).unwrap();
+    assert!(
+        scan_carried_workspace(root).is_ok(),
+        "alias restoration not green"
     );
 }
 
