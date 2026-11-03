@@ -1,6 +1,7 @@
 //! P0.12 §11 ownership and one-word carrier representation tests.
 //! Register this as a child of error/mod.rs so private registry fields are visible.
 
+use super::registry_support::{RegistryState, registry_state};
 use super::{
     EvalError, EvalResult, Flow, FlowKind, FlowRef, InFlightRegistryHandle, InFlightRootPin,
     LispCondition, SignalData, ThreadBlockedData, ThrowData, current_in_flight_registry_handle,
@@ -10,7 +11,6 @@ use crate::emacs_core::eval::{Context, ResumeTarget, ShutdownRequest};
 use crate::emacs_core::print::map_flow;
 use crate::intern::intern;
 use crate::value::Value;
-use std::collections::BTreeSet;
 use std::mem::size_of;
 
 // A unique inferred marker exists only if Flow does NOT implement the trait.
@@ -32,34 +32,6 @@ macro_rules! assert_not_impl {
 }
 assert_not_impl!(Flow, Send);
 assert_not_impl!(Flow, Sync);
-
-#[derive(Debug)]
-struct RegistryState {
-    live: usize,
-    total: usize,
-    free: usize,
-}
-
-fn registry_state(registry: &InFlightRegistryHandle) -> RegistryState {
-    let table = registry.lock();
-    let free: BTreeSet<usize> = table.free.iter().copied().collect();
-    assert_eq!(free.len(), table.free.len(), "a slot was released twice");
-    for &slot in &free {
-        assert!(slot < table.slots.len(), "free slot outside its registry");
-        assert!(table.slots[slot].is_none(), "live slot on the free list");
-    }
-    let live = table.slots.iter().filter(|slot| slot.is_some()).count();
-    assert_eq!(
-        live + free.len(),
-        table.slots.len(),
-        "an unowned slot leaked"
-    );
-    RegistryState {
-        live,
-        total: table.slots.len(),
-        free: free.len(),
-    }
-}
 
 fn owning_pin(flow: &Flow) -> &InFlightRootPin {
     let roots = match flow.kind() {

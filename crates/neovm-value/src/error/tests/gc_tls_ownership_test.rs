@@ -100,34 +100,12 @@ fn gc_tls_ownership_in_flight_signal_roots_survive_same_heap_gc() {
     );
 }
 
-/// Identifies an existing pinned slot; the originating error stays live until
-/// the worker acknowledges that it claimed its own local pin from this slot.
-#[derive(Clone, Copy)]
-struct InFlightSlotId(usize);
+use super::registry_support::{
+    InFlightSlotId, claim_existing_registry_slot_for_test as claim_registry_slot,
+    existing_pin_registry_slot_for_test as pinned_slot,
+};
 
 static_assertions::assert_impl_all!(InFlightSlotId: Send, Sync, Copy);
-
-fn pinned_slot(error: &EvalError) -> (InFlightRegistryHandle, InFlightSlotId) {
-    let EvalError::Signal { pin, .. } = error else {
-        panic!("expected a pinned signal");
-    };
-    let pin = pin
-        .in_flight_roots()
-        .pin
-        .as_ref()
-        .expect("signal has traceable payload");
-    (pin.registry.clone(), InFlightSlotId(pin.slot))
-}
-
-fn claim_registry_slot(registry: InFlightRegistryHandle, slot: InFlightSlotId) -> InFlightRoots {
-    // The source error remains alive until the receiver claims this pin.
-    // Copy only the mutex-protected root words; no Lisp object is dereferenced.
-    let values = registry.lock().slots[slot.0]
-        .as_ref()
-        .expect("acknowledgement keeps the source slot live")
-        .clone();
-    InFlightRoots::claim(registry, values)
-}
 
 #[test]
 fn gc_tls_ownership_in_flight_shared_registry_pin_outlives_owner_local_error() {

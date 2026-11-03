@@ -646,6 +646,9 @@ impl PinnedWord {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) mod registry_support;
+
 static_assertions::assert_impl_all!(InFlightRegistryHandle: Send, Sync);
 
 /// Heap-identified registry storage for one Context's in-flight roots.

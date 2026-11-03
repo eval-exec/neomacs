@@ -214,6 +214,13 @@ fn expected_sites() -> Vec<RegistrySite> {
             "neovm-value/src/error/mod.rs",
             "InFlightRoots::pin",
         ),
+        // S4 retains the checked getter's original lazy point and exports
+        // only copied observations through the separately owned surface.
+        (
+            RegistryEntry::CheckedGetter,
+            "neovm-value/src/error/registry_support.rs",
+            "current_in_flight_registry_observer_for_test",
+        ),
         (
             RegistryEntry::CheckedGetter,
             "neovm-core/src/emacs_core/runtime/eval/construct.rs",
