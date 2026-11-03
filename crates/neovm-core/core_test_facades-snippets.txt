@@ -1,0 +1,61 @@
+# src/emacs_core/mod.rs
+#[cfg(not(test))]
+pub use neovm_value::alloc;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/alloc.rs"]
+pub mod alloc;
+
+#[cfg(not(test))]
+pub use neovm_value::boolvec;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/boolvec.rs"]
+pub mod boolvec;
+
+#[cfg(not(test))]
+pub use neovm_value::error;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/error.rs"]
+pub mod error;
+
+#[cfg(not(test))]
+pub use neovm_value::forward;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/forward.rs"]
+pub mod forward;
+
+#[cfg(not(test))]
+pub use neovm_value::hashtab;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/hashtab.rs"]
+pub mod hashtab;
+
+#[cfg(not(test))]
+pub use neovm_value::intern;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/intern.rs"]
+pub mod intern;
+
+#[cfg(not(test))]
+pub use neovm_value::symbol;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/symbol.rs"]
+pub mod symbol;
+
+#[cfg(not(test))]
+pub use neovm_value::value;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/value.rs"]
+pub mod value;
+
+# src/lib.rs
+#[cfg(not(test))]
+pub use neovm_value::heap_types;
+#[cfg(test)]
+#[path = "../core_test_facades/heap_types.rs"]
+pub mod heap_types;
+
+#[cfg(not(test))]
+pub use neovm_value::tagged;
+#[cfg(test)]
+#[path = "../core_test_facades/tagged.rs"]
+pub mod tagged;
