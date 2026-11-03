@@ -22,7 +22,8 @@ thread_local! {
 /// entry, a binding push or a function-binding change -- a place the leaf
 /// contract says no leaf can reach.
 #[track_caller]
-pub(crate) fn assert_no_leaf_active(site: &'static str) {
+#[doc(hidden)]
+pub fn assert_no_leaf_active(site: &'static str) {
     let active = LEAF_ACTIVE.with(Cell::get);
     assert!(
         active == 0,
@@ -41,7 +42,8 @@ pub struct LeafActiveScope {
 }
 
 impl LeafActiveScope {
-    pub(crate) fn enter() -> Self {
+    #[doc(hidden)]
+    pub fn enter() -> Self {
         Self {
             previous: LEAF_ACTIVE.with(|depth| depth.replace(depth.get().saturating_add(1))),
         }

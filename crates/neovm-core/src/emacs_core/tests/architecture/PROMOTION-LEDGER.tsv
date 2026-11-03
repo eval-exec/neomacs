@@ -124,7 +124,7 @@ LISP_SYMBOL_INTERNED_GLOBAL_OFFSET	const	pub(crate)	crates/neovm-value/src/symbo
 LISP_SYMBOL_SIZE	const	pub(crate)	crates/neovm-value/src/symbol/cell.rs:497	emacs_core::symbol	bulk
 LISP_SYMBOL_VAL_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/cell.rs:502	emacs_core::symbol	bulk
 LISP_SYMBOL_WRITE_WINDOW_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1149	emacs_core::symbol	bulk
-LeafActiveScope	struct	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:38	emacs_core::symbol::leaf_activity	bulk
+LeafActiveScope	struct	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:38	emacs_core::symbol::leaf_activity	pc1-d DATA: signed leaf addendum; private previous field; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:513,536; existing guard only raises debug leaf depth
 LispCondition	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:847	emacs_core::error	bulk
 LispStringStorageKind	enum	pub(crate)	crates/neovm-value/src/heap_types.rs:139	heap_types	bulk
 LocalizedForwarderKind	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:108	emacs_core::symbol	bulk
@@ -381,3 +381,6 @@ resolve_name_lisp_string	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1818
 symbol_name_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1798	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:50
 OBARRAY_FUNCTION_EPOCH_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1140	emacs_core::symbol	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:224:41
 LispVisibleSymbolName::text	method	pub(crate)	crates/neovm-value/src/intern/mod.rs:848	emacs_core::intern	pc1-d DATA: reviewed ledger emacs_core::intern::LispVisibleSymbolName::text; upper crates/neovm-core/src/emacs_core/lisp/native/builtins/from_value.rs:236; unchanged reborrow body
+leaf_activity	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:34	emacs_core::symbol	module-gate: signed leaf addendum; debug-only; already-pub LeafActiveScope signed pc1-d private field; no hook/installer; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:424,513,536
+LeafActiveScope::enter	method	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:46	emacs_core::symbol::leaf_activity	pc1-d DATA: signed leaf addendum; original body only raises leaf depth; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:536 cfg(debug_assertions)
+assert_no_leaf_active	fn	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:26	emacs_core::symbol::leaf_activity	pc1-d DATA: reviewed assertion helper; unchanged track_caller/body; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:424 cfg(debug_assertions)
