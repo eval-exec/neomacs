@@ -20,6 +20,16 @@ pub mod tls_fingerprint;
 pub mod tls_scope;
 pub mod value;
 
+pub mod logging;
+
+/// Test-only read surface for core-owned tests of the moved modules.
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
+/// Upper-free test helpers shared with core's test build (peer-signed R7c).
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_utils;
+
 // PC2 sealed hook installers (exact-chain; see architecture PC2 table)
 pub use error::format_hook::{EvalErrorFormatter, install_eval_error_formatter};
 pub use symbol::function_cell_observer::{
