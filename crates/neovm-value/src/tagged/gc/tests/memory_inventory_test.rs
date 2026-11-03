@@ -1,5 +1,5 @@
 use super::*;
-use crate::buffer::{CharPos0, CharRange};
+use crate::value::positions::{CharPos0, CharRange};
 use crate::heap_types::LispString;
 use crate::tagged::header::ImageResident;
 use crate::value::Value;

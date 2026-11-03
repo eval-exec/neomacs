@@ -1,7 +1,7 @@
 //! Worker-local P-all and symbol handoff, including bounded early-stop exits.
 
 use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
