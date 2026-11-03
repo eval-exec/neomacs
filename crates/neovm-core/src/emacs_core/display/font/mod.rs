@@ -835,6 +835,12 @@ pub(crate) fn sync_live_frame_font_state(
             frame_id.0,
             err
         );
+        // The host rejected the resize, so no acknowledgement will arrive.
+        // The frame keeps its pixel allocation, but the window tree still
+        // has to adopt the new character metrics locally.
+        if let Some(frame) = eval.frames.get_mut(frame_id) {
+            frame.refresh_geometry_for_changed_font(&eval.buffers);
+        }
     }
     Ok(())
 }

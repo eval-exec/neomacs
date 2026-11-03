@@ -344,6 +344,7 @@ struct RecordingDisplayHost {
     geometry_hints:
         Rc<RefCell<Vec<(crate::window::FrameId, crate::window::GuiFrameGeometryHints)>>>,
     primary_size: Option<GuiFrameHostSize>,
+    fail_resize: Rc<Cell<bool>>,
     resolved_frame_font: Option<ResolvedFrameFont>,
     font_requests: Rc<
         RefCell<
@@ -460,6 +461,9 @@ impl DisplayHost for RecordingDisplayHost {
 
     fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String> {
         self.resized.borrow_mut().push(request);
+        if self.fail_resize.get() {
+            return Err("resize rejected".into());
+        }
         Ok(())
     }
 
@@ -9116,6 +9120,66 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
         default_face.height,
         Some(crate::face::FaceHeight::Absolute(160)),
         "the default face must carry the opened font's height"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_refreshes_geometry_when_the_host_rejects_resize() {
+    // A rejected implied resize leaves no acknowledgement to recompute the
+    // window tree; the new character metrics must still be adopted locally
+    // at the frame's current pixel allocation.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
+        "Noto Sans Mono",
+        "NotoSansMono-Regular",
+        160,
+        FontPxProbeResult {
+            pixel_size: 22,
+            height: 31,
+            ascent: 23,
+            descent: 8,
+            max_width: 13,
+            space_width: 13,
+            average_width: 13,
+        },
+    ));
+    let resized = host.resized.clone();
+    host.fail_resize.set(true);
+    ev.set_display_host(Box::new(host));
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    {
+        let frame = ev.frames.get_mut(fid).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+        frame.font_pixel_size = 11.0;
+    }
+    let before = *ev.frames.get(fid).expect("frame").root_window().bounds();
+
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-16")))"#,
+    );
+    assert!(
+        out[0].is_ok(),
+        "a rejected implied resize must not signal: {:?}",
+        out[0]
+    );
+
+    let frame = ev.frames.get(fid).expect("frame");
+    assert_eq!(frame.char_width, 13.0);
+    assert_eq!(frame.char_height, 31.0);
+    assert_eq!(
+        resized.borrow().len(),
+        1,
+        "the implied resize must have been attempted"
+    );
+    assert_ne!(
+        *frame.root_window().bounds(),
+        before,
+        "the window tree must adopt the new metrics at the kept allocation"
     );
 }
 
