@@ -38,6 +38,8 @@ if [[ "$(uname -s)" != Darwin ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=./scripts/lib/macos-tarball.sh
+source "$repo_root/scripts/lib/macos-tarball.sh"
 mkdir -p "$repo_root/tmp"
 work_dir="$(mktemp -d "$repo_root/tmp/macos-release-test.XXXXXX")"
 active_mount=
@@ -252,6 +254,7 @@ for artifact in "$@"; do
       payload_root="$extract_root"
       ;;
     *.tar.gz)
+      neomacs_audit_macos_tarball "$artifact"
       tar -C "$extract_root" -xzf "$artifact"
       payload_root="$extract_root"
       ;;

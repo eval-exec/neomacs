@@ -190,12 +190,22 @@ git: $(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 built: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION
 
+# Every member is recorded as owned by root (0/0), not by the account that
+# staged it -- on the release runner an unprivileged uid/gid (1001).  Root
+# unpacking the tarball (install.sh --prefix, or a manual `tar -x` into
+# /usr/local or /opt) restores the recorded owner, which would hand the
+# installed binary, dump and Lisp tree to whichever local account holds that
+# number.  Numeric, so no name lookup on the unpacking host can remap it.
+# Root restores the recorded modes too, so nothing is left writable by group
+# or others, as GNU's make-dist does (--mode=go-w; GNU tar only, hence chmod).
+chmod -R go-w "$package_dir"
+tar --owner=0 --group=0 --numeric-owner -C "$dist_dir" -czf "$archive" "$package_name"
+
 if ((smoke)); then
   smoke_base="${TMPDIR:-$repo_root/tmp}"
   mkdir -p "$smoke_base"
   smoke_dir="$(mktemp -d "$smoke_base/neomacs-release-smoke.XXXXXX")"
   trap 'rm -rf "$smoke_dir"' EXIT
-  tar -C "$dist_dir" -czf "$archive" "$package_name"
   tar -C "$smoke_dir" -xzf "$archive"
   # Check the EXTRACTED tree, not the staging directory: the archive round
   # trip is where a dropped directory or a lost mode would show up, and the
@@ -209,8 +219,6 @@ if ((smoke)); then
   NEOMACS_RUNTIME_ROOT="$smoke_dir/$package_name/share/neomacs" \
     timeout 30s "$smoke_dir/$package_name/bin/neomacs$binary_ext" \
       --batch --eval "(kill-emacs 0)"
-else
-  tar -C "$dist_dir" -czf "$archive" "$package_name"
 fi
 
 echo "wrote $archive"

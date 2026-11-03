@@ -245,7 +245,13 @@ fi
 
 extract_dir="$tmp_dir/extract"
 mkdir -p "$extract_dir"
-tar -C "$extract_dir" -xzf "$archive" || die "could not extract $asset"
+# --no-same-owner: tar run as root restores the owner recorded in the archive,
+# and release tarballs that --tag can still fetch record the unprivileged CI
+# account that built them (uid/gid 1001 in v0.0.20's).  Everything below copies
+# the extracted tree with `cp -a' or moves it into place, so that uid would
+# own the installed dump and Lisp tree.  Without root this is tar's default.
+tar --no-same-owner -C "$extract_dir" -xzf "$archive" \
+  || die "could not extract $asset"
 pkg_dir="$extract_dir/neomacs-${version}-${triple}"
 [ -d "$pkg_dir" ] || die "archive did not contain neomacs-${version}-${triple}/"
 
