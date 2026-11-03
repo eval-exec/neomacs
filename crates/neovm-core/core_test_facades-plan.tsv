@@ -46,3 +46,6 @@ heap_types::marker_test	heap_types.rs	crates/neovm-core/core_tests/tests/heap_ty
 emacs_core::errors::tests	emacs_core/errors.rs	crates/neovm-core/core_tests/emacs_core/runtime/errors/tests/errors_test.rs	../../core_tests/emacs_core/runtime/errors/tests/errors_test.rs
 emacs_core::hashtab::symbol_mode_sxhash_tests	emacs_core/hashtab.rs	crates/neovm-core/core_tests/emacs_core/runtime/hashtab/tests/symbol_mode_sxhash_test.rs	../../core_tests/emacs_core/runtime/hashtab/tests/symbol_mode_sxhash_test.rs
 emacs_core::intern::tests	emacs_core/intern.rs	crates/neovm-core/core_tests/emacs_core/runtime/intern/tests/intern_test.rs	../../core_tests/emacs_core/runtime/intern/tests/intern_test.rs
+emacs_core::value::tests	emacs_core/value.rs	crates/neovm-core/core_tests/emacs_core/runtime/value/tests/value_test.rs	../../core_tests/emacs_core/runtime/value/tests/value_test.rs
+emacs_core::value::tests::hash_probe	../core_tests/emacs_core/runtime/value/tests/value_test.rs	crates/neovm-core/core_tests/emacs_core/runtime/value/tests/hash_probe_test.rs	hash_probe_test.rs
+emacs_core::value::text_props::bounded_absent_property_test	emacs_core/value/text_props.rs	crates/neovm-core/core_tests/emacs_core/runtime/value/text_props/tests/bounded_absent_property_test.rs	../../../core_tests/emacs_core/runtime/value/text_props/tests/bounded_absent_property_test.rs

@@ -36,7 +36,7 @@ pub use emacs_core::value::{Value, ValueKind};
 
 // Preserve canonical value-layer paths in unchanged relocated test bodies.
 #[cfg(test)]
-pub(crate) use emacs_core::{error, value};
+pub(crate) use emacs_core::{error, intern, value};
 
 pub const CORE_BACKEND: &str = "rust";
 

@@ -17,3 +17,10 @@ mod heap_mut_closure_guard;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/value/tests/metadata_capture_test.rs"]
 mod metadata_capture_tests;
+
+#[path = "value/text_props.rs"]
+pub mod text_props;
+
+#[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/value/tests/value_test.rs"]
+mod tests;
