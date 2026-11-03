@@ -1,5 +1,5 @@
 use super::*;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn signed_system_time_round_trip_is_normalized() {

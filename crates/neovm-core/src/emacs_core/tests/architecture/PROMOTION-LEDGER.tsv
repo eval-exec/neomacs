@@ -1148,3 +1148,36 @@ char_table_has_subtype_named_with_symbols	fn	pub(crate)	crates/neovm-value/src/c
 assq_cell_eq	fn	private	crates/neovm-value/src/chartab.rs:1600	chartab	stage-3 C7a: assq cell search; core unicode-property subrs import it back
 decode_uniprop_run_length	fn	private	crates/neovm-value/src/chartab.rs:1619	chartab	stage-3 C7a: run-length decoder; core unicode-property subrs import it back
 copy_sequence_with_symbols	fn	private	crates/neovm-value/src/sequence_copy.rs:26	sequence_copy	stage-3 C12: copy-sequence dispatch core (list/string/vector/char-table/record/bool-vector); subr wrappers resolve symbol policy above the split
+TimeConvertForm	enum	private	crates/neovm-value/src/time_core.rs:21	time_core	stage-3 C16: time-convert output selector; the format %N and fileio readers share the conversion core
+LispTimeOutput	enum	pub(crate)	crates/neovm-value/src/time_core.rs:35	time_core	stage-3 C16: current-time-list output form; the selector stays core-side, the encoders moved
+TimeMicros	struct	private	crates/neovm-value/src/time_core.rs:55	time_core	stage-3 C16: (SEC USEC PSEC) display view; dired file-attribute timestamps and the subrs read it
+TimeInputForm	enum	private	crates/neovm-value/src/time_core.rs:235	time_core	stage-3 C16: decoded input classification; the decode grammar's dispatch moved with it
+TicksHz	struct	private	crates/neovm-value/src/time_core.rs:261	time_core	stage-3 C16: exact (TICKS . HZ) pair; time-convert subrs read ticks/hz through decode_lisp_time
+DecodedLispTime	struct	private	crates/neovm-value/src/time_core.rs:271	time_core	stage-3 C16: decode_lisp_time result carrier; staying subrs read .th for the default-hz conversion
+trillion_int	fn	private	crates/neovm-value/src/time_core.rs:276	time_core	stage-3 C16: 10^12 Integer constant; moved with the exact-ticks family it scales
+million_int	fn	private	crates/neovm-value/src/time_core.rs:280	time_core	stage-3 C16: 10^6 Integer constant; moved with the exact-ticks family it scales
+value_to_integer	fn	private	crates/neovm-value/src/time_core.rs:286	time_core	stage-3 C16: Value->Integer extraction; decode inputs feed it below the evaluator
+time_spec_invalid	fn	private	crates/neovm-value/src/time_core.rs:296	time_core	stage-3 C16: invalid-time-specification signal helper; moved decoders raise it
+time_error_overflow	fn	pub(crate)	crates/neovm-value/src/time_core.rs:300	time_core	stage-3 C16: overflow error helper; moved arithmetic raises it
+ParsedTime	struct	private	crates/neovm-value/src/time_core.rs:308	time_core	stage-3 C16: parse_time_detailed result; the staying default-hz converter reads its fields
+parse_time	fn	private	crates/neovm-value/src/time_core.rs:326	time_core	stage-3 C16: current-time-string input parse; staying subrs call it directly
+time_value_seconds_and_nanos	fn	pub(crate)	crates/neovm-value/src/time_core.rs:336	time_core	stage-3 C16: seconds/nanos projection; idle-limit readers share it
+parse_time_detailed	fn	private	crates/neovm-value/src/time_core.rs:351	time_core	stage-3 C16: full input grammar; decode_lisp_time drives it
+float_to_exact_ticks_hz	fn	private	crates/neovm-value/src/time_core.rs:488	time_core	stage-3 C16: float->exact ticks; decode's float arm moved with it
+integer_div_floor	fn	private	crates/neovm-value/src/time_core.rs:518	time_core	stage-3 C16: floor division; exact-ticks normalization moved with it
+integer_fdiv_qr	fn	private	crates/neovm-value/src/time_core.rs:529	time_core	stage-3 C16: floored divmod; exact-ticks normalization moved with it
+integer_gcd	fn	private	crates/neovm-value/src/time_core.rs:535	time_core	stage-3 C16: Integer gcd; ticks/hz reduction moved with it
+decode_float_time	fn	private	crates/neovm-value/src/time_core.rs:550	time_core	stage-3 C16: float decode; the exact family shares it
+decode_time_components	fn	private	crates/neovm-value/src/time_core.rs:559	time_core	stage-3 C16: list-form decode; decode_lisp_time drives it
+decode_lisp_time	fn	private	crates/neovm-value/src/time_core.rs:604	time_core	stage-3 C16: full decode entry; staying subrs convert through it
+frac_to_double	fn	private	crates/neovm-value/src/time_core.rs:706	time_core	stage-3 C16: exact fraction->f64; float encoders moved with it
+ticks_hz_list4	fn	private	crates/neovm-value/src/time_core.rs:716	time_core	stage-3 C16: (HIGH LOW USEC PSEC) list encode; legacy output encoders moved with it
+trillion_factor	fn	private	crates/neovm-value/src/time_core.rs:738	time_core	stage-3 C16: trillion scaling table; moved with the exact-ticks family
+ticks_hz_seconds	fn	private	crates/neovm-value/src/time_core.rs:744	time_core	stage-3 C16: ticks->seconds projection; moved with the exact-ticks family
+ticks_hz_hz_ticks	fn	private	crates/neovm-value/src/time_core.rs:751	time_core	stage-3 C16: hz/ticks projection; moved with the exact-ticks family
+time_arith	fn	private	crates/neovm-value/src/time_core.rs:766	time_core	stage-3 C16: time-add/time-subtract core; staying subrs call it directly
+time_arith_to_lisp	fn	private	crates/neovm-value/src/time_core.rs:821	time_core	stage-3 C16: arithmetic result encoder; moved with time_arith
+time_cmp	fn	private	crates/neovm-value/src/time_core.rs:841	time_core	stage-3 C16: time-less-p core; moved with the comparison family
+time_convert_default_hz	fn	private	crates/neovm-value/src/time_core.rs:849	time_core	stage-3 C16: default-hz conversion; the staying subr keeps driving it
+current_time_value	fn	private	crates/neovm-value/src/time_core.rs:872	time_core	stage-3 C16: current-time core; the subr wrapper stays above
+make_lisp_time	fn	pub(crate)	crates/neovm-value/src/time_core.rs:878	time_core	stage-3 C16: output encoder; dired file-attribute timestamps call it

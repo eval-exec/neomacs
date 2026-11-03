@@ -40,6 +40,10 @@ pub(crate) use neovm_value::strings_core;
 // split (C12) once the char-table copy landed in chartab (C7a): the subr
 // wrappers and Context-routed entries resolve the symbol policy first.
 pub(crate) use neovm_value::sequence_copy;
+// The exact (TICKS . HZ) time-conversion core (GNU timefns.c) moved with
+// the stage-3 split (C16): format's %N, fileio, buffer idle limits, dired,
+// and the dynamic-module bridge read time values below the lisp layer.
+pub(crate) use neovm_value::time_core;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The

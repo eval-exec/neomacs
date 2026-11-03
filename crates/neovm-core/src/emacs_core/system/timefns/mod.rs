@@ -1,10 +1,39 @@
-//! Time and date builtins for the Elisp interpreter.
+//! Time functions (GNU `timefns.c`).
 //!
-//! Implements `current-time`, `float-time`, `time-add`, `time-subtract`,
-//! `time-less-p`, `time-equal-p`, `current-time-string`, `current-time-zone`,
-//! `encode-time`, `decode-time`, `time-convert`, and `set-time-zone-rule`.
-//!
-//! Uses `std::time::SystemTime`/`UNIX_EPOCH` for time operations.
+//! The exact `(TICKS . HZ)` conversion core — decode, arithmetic,
+//! comparisons, the TimeMicros display view, and the current-time-list
+//! output encoders — moved below the evaluator with the stage-3 split
+//! (C16): `neovm_value::time_core`. This module keeps the evaluator-bound
+//! layer: the subrs, the calendar and zone machinery (encode-time,
+//! decode-time, current-time-zone), the world-state swap for tests, and
+//! the `current-time-list` selector (`lisp_time_output_from_context`),
+//! and re-exports the core's public surface so every historical
+//! `timefns::` path is unchanged.
+
+// ---------------------------------------------------------------------------
+// Conversion-core facade (stage-3 C16): the moved substrate's public surface
+// ---------------------------------------------------------------------------
+
+pub(crate) use neovm_value::time_core::{
+    LispTimeOutput, TimeConvertForm, TimeMicros, current_time_value, decode_lisp_time,
+    frac_to_double, integer_fdiv_qr, make_lisp_time, parse_time, parse_time_detailed,
+    ticks_hz_hz_ticks, ticks_hz_list4, ticks_hz_seconds, time_arith, time_cmp, time_error_overflow,
+    time_spec_invalid, time_value_seconds_and_nanos, value_to_integer,
+};
+
+/// `current-time-list` selects the timestamp representation (GNU
+/// `timefns.c`): the selector reads a dynamically bound variable through
+/// the evaluator, so it stays above the split as a free function.
+pub(crate) fn lisp_time_output_from_context(eval: &Context) -> Result<LispTimeOutput, Flow> {
+    eval.eval_symbol_by_id(intern("current-time-list"))
+        .map(|value| {
+            if value.is_truthy() {
+                LispTimeOutput::LegacyList
+            } else {
+                LispTimeOutput::TicksHz
+            }
+        })
+}
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
@@ -13,14 +42,10 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
-use malachite::base::num::conversion::traits::RoundingFrom;
-use malachite::base::rounding_modes::RoundingMode;
 use malachite::integer::Integer;
 use std::cell::RefCell;
 use std::ffi::{CStr, OsString};
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
-
 mod calendar;
 use calendar::{CalendarFieldOverflow, CalendarTime};
 #[cfg(unix)]
@@ -29,7 +54,6 @@ mod time_zone_spec;
 use time_zone_spec::TimeZoneSpec;
 mod unix_timestamp;
 pub(crate) use unix_timestamp::{TimestampError, UnixTimestamp};
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeConvertSymbolForm {
     #[strum(serialize = "integer")]
@@ -37,53 +61,11 @@ enum TimeConvertSymbolForm {
     #[strum(serialize = "list")]
     List,
 }
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum TimeConvertForm {
-    Integer,
-    List,
-    InputHz,
-    ExplicitHz(Integer),
-}
-
-/// Output representation selected by the dynamically bound
-/// `current-time-list`.
-///
-/// Keep this as a semantic enum rather than passing a boolean between modules:
-/// callers cannot accidentally invert what `true` means, and all producers of
-/// Lisp timestamps share the same GNU-compatible constructor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LispTimeOutput {
-    LegacyList,
-    TicksHz,
-}
-
-impl LispTimeOutput {
-    pub(crate) fn from_context(eval: &Context) -> Result<Self, Flow> {
-        eval.eval_symbol_by_id(intern("current-time-list"))
-            .map(|value| {
-                if value.is_truthy() {
-                    Self::LegacyList
-                } else {
-                    Self::TicksHz
-                }
-            })
-    }
-
-    fn encode(self, time: TimeMicros) -> Value {
-        match self {
-            Self::LegacyList => time.to_list(),
-            Self::TicksHz => time.to_ticks_hz(1_000_000_000),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString, strum::IntoStaticStr)]
 enum TimeZoneSymbol {
     #[strum(serialize = "wall")]
     Wall,
 }
-
 impl TimeZoneSymbol {
     fn from_value(value: &Value) -> Option<Self> {
         value.as_bare_symbol_name()?.parse().ok()
@@ -94,7 +76,6 @@ impl TimeZoneSymbol {
         self.into()
     }
 }
-
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -109,809 +90,6 @@ fn expect_min_max_args(name: &str, args: &[Value], min: usize, max: usize) -> Re
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Internal time representation
-// ---------------------------------------------------------------------------
-
-/// Internal microsecond-precision time (seconds + microseconds since epoch).
-/// Allows negative values for times before the epoch.
-#[derive(Clone, Copy, Debug)]
-struct TimeMicros {
-    /// Total seconds (may be negative).
-    secs: i64,
-    /// Microseconds within the current second, always in [0, 999_999].
-    usecs: i64,
-    /// Picoseconds within the current microsecond, always in [0, 999_999].
-    psecs: i64,
-}
-
-impl TimeMicros {
-    fn from_timespec(secs: i64, nanos: i64) -> Self {
-        let secs = secs + nanos.div_euclid(1_000_000_000);
-        let nanos = nanos.rem_euclid(1_000_000_000);
-        Self {
-            secs,
-            usecs: nanos / 1_000,
-            psecs: (nanos % 1_000) * 1_000,
-        }
-    }
-
-    fn now() -> Self {
-        // GNU `current_timespec` has nanosecond resolution; `Ftime_convert`
-        // projects it as USEC = ns / 1000 and PSEC = (ns % 1000) * 1000
-        // (`src/timefns.c` timespec_to_lisp / decode_lisp_time). Keeping the
-        // nanosecond remainder matters observably: timer vectors built by
-        // `run-at-time` carry a nonzero PSEC field in GNU.
-        match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(dur) => {
-                let nanos = dur.subsec_nanos() as i64;
-                TimeMicros {
-                    secs: dur.as_secs() as i64,
-                    usecs: nanos / 1_000,
-                    psecs: (nanos % 1_000) * 1_000,
-                }
-            }
-            Err(e) => {
-                let dur = e.duration();
-                let nanos = dur.subsec_nanos() as i64;
-                TimeMicros {
-                    secs: -(dur.as_secs() as i64),
-                    usecs: -(nanos / 1_000),
-                    psecs: -((nanos % 1_000) * 1_000),
-                }
-            }
-        }
-    }
-
-    fn to_list(self) -> Value {
-        let high = self.secs >> 16;
-        let low = self.secs & 0xFFFF;
-        Value::list(vec![
-            Value::fixnum(high),
-            Value::fixnum(low),
-            Value::fixnum(self.usecs),
-            Value::fixnum(self.psecs),
-        ])
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn to_float(self) -> f64 {
-        self.secs as f64 + self.usecs as f64 / 1_000_000.0
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn add(self, other: TimeMicros) -> TimeMicros {
-        let mut psecs = self.psecs + other.psecs;
-        let mut usecs = self.usecs + other.usecs;
-        let mut secs = self.secs + other.secs;
-        if psecs >= 1_000_000 {
-            psecs -= 1_000_000;
-            usecs += 1;
-        } else if psecs < 0 {
-            psecs += 1_000_000;
-            usecs -= 1;
-        }
-        if usecs >= 1_000_000 {
-            usecs -= 1_000_000;
-            secs += 1;
-        } else if usecs < 0 {
-            usecs += 1_000_000;
-            secs -= 1;
-        }
-        TimeMicros { secs, usecs, psecs }
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn sub(self, other: TimeMicros) -> TimeMicros {
-        let mut psecs = self.psecs - other.psecs;
-        let mut usecs = self.usecs - other.usecs;
-        let mut secs = self.secs - other.secs;
-        if psecs < 0 {
-            psecs += 1_000_000;
-            usecs -= 1;
-        } else if psecs >= 1_000_000 {
-            psecs -= 1_000_000;
-            usecs += 1;
-        }
-        if usecs < 0 {
-            usecs += 1_000_000;
-            secs -= 1;
-        } else if usecs >= 1_000_000 {
-            usecs -= 1_000_000;
-            secs += 1;
-        }
-        TimeMicros { secs, usecs, psecs }
-    }
-
-    fn from_ticks_hz(ticks: i64, hz: i64) -> Result<TimeMicros, Flow> {
-        if hz <= 0 {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid time specification")],
-            ));
-        }
-
-        let secs = ticks.div_euclid(hz);
-        let rem = ticks.rem_euclid(hz) as i128;
-        let hz = hz as i128;
-        let micros_total = rem * 1_000_000;
-        let usecs = (micros_total / hz) as i64;
-        let psecs = (((micros_total % hz) * 1_000_000) / hz) as i64;
-        Ok(TimeMicros { secs, usecs, psecs })
-    }
-
-    fn from_exact_ticks_hz(ticks: &Integer, hz: &Integer) -> Result<TimeMicros, Flow> {
-        if hz <= &Integer::from(0) {
-            return Err(signal(
-                "error",
-                vec![Value::string("Invalid time specification")],
-            ));
-        }
-
-        let trillion = Integer::from(1_000_000_000_000i64);
-        let million = Integer::from(1_000_000i64);
-        let total_psecs = integer_div_floor(&(ticks * &trillion), hz);
-        let secs = integer_div_floor(&total_psecs, &trillion);
-        let rem_psecs = &total_psecs - &secs * &trillion;
-        let usecs = &rem_psecs / &million;
-        let psecs = &rem_psecs - &usecs * &million;
-
-        let secs = i64::try_from(&secs)
-            .map_err(|_| signal("error", vec![Value::string("Time value out of range")]))?;
-        let usecs = i64::try_from(&usecs)
-            .map_err(|_| signal("error", vec![Value::string("Time value out of range")]))?;
-        let psecs = i64::try_from(&psecs)
-            .map_err(|_| signal("error", vec![Value::string("Time value out of range")]))?;
-
-        Ok(TimeMicros { secs, usecs, psecs })
-    }
-
-    fn to_ticks_hz(self, hz: i64) -> Value {
-        self.to_ticks_hz_integer(&Integer::from(hz))
-    }
-
-    fn to_ticks_hz_integer(self, hz: &Integer) -> Value {
-        let trillion = Integer::from(1_000_000_000_000i64);
-        let total_psecs = Integer::from(self.secs) * &trillion
-            + Integer::from(self.usecs) * Integer::from(1_000_000i64)
-            + Integer::from(self.psecs);
-        let ticks = integer_div_floor(&(total_psecs * hz), &trillion);
-        Value::cons(Value::make_integer(ticks), Value::make_integer(hz.clone()))
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn less_than(self, other: TimeMicros) -> bool {
-        if self.secs != other.secs {
-            self.secs < other.secs
-        } else if self.usecs != other.usecs {
-            self.usecs < other.usecs
-        } else {
-            self.psecs < other.psecs
-        }
-    }
-
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    fn equal(self, other: TimeMicros) -> bool {
-        self.secs == other.secs && self.usecs == other.usecs && self.psecs == other.psecs
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TimeInputForm {
-    Scalar,
-    List,
-    TicksHz,
-}
-
-// ---------------------------------------------------------------------------
-// Exact rational time core, mirroring GNU `src/timefns.c`.
-//
-// GNU represents every decoded timestamp as an exact rational `(TICKS . HZ)`
-// (a `struct ticks_hz`, `src/timefns.c:516`) and performs all arithmetic,
-// comparison, and float conversion on that exact pair so that arbitrary
-// frequencies (HZ) — including the power-of-two HZ produced by decoding a
-// float, or a caller-supplied `(TICKS . HZ)` whose HZ is neither 1, 10**6,
-// nor 10**12 — round-trip without loss. The previous Neomacs code reduced
-// every value to microsecond/picosecond `TimeMicros` first, which silently
-// discarded precision (e.g. `(time-add 0.5 '(1 . 3))` could not be 5/6) and
-// could not read back bignum TICKS at all. This module reproduces the exact
-// path. `TimeMicros` survives only as a derived display view (used by
-// `decode-time` / `current-time-string` / `%N`), computed from the exact
-// pair.
-// ---------------------------------------------------------------------------
-
-/// An exact Lisp timestamp `(TICKS . HZ)`, where `ticks / hz` is the number of
-/// seconds since the epoch and `hz > 0`. Mirrors GNU `struct ticks_hz`.
-#[derive(Clone, Debug)]
-struct TicksHz {
-    ticks: Integer,
-    hz: Integer,
-}
-
-/// A decoded Lisp time: the exact `(TICKS . HZ)` value plus the syntactic form
-/// of the input, which GNU's `time_arith` consults when choosing the result
-/// representation (`src/timefns.c:1211`). Named distinctly from the calendar
-/// `DecodedTime` (broken-down sec/min/hour/...) used by `decode-time`.
-#[derive(Clone, Debug)]
-struct DecodedLispTime {
-    th: TicksHz,
-    form: TimeInputForm,
-}
-
-fn trillion_int() -> Integer {
-    Integer::from(1_000_000_000_000i64)
-}
-
-fn million_int() -> Integer {
-    Integer::from(1_000_000i64)
-}
-
-/// Extract a malachite `Integer` from any Lisp integer (fixnum or bignum).
-/// Returns `None` for non-integers, mirroring GNU `INTEGERP`.
-fn value_to_integer(val: &Value) -> Option<Integer> {
-    if let Some(n) = val.as_fixnum() {
-        Some(Integer::from(n))
-    } else {
-        val.as_bignum().cloned()
-    }
-}
-
-/// GNU `time_spec_invalid` (`src/timefns.c`): an ill-formed time value signals
-/// `(error "Invalid time specification")`, NOT a `wrong-type-argument`.
-fn time_spec_invalid() -> Flow {
-    signal("error", vec![Value::string("Invalid time specification")])
-}
-
-pub(crate) fn time_error_overflow() -> Flow {
-    signal(
-        LispCondition::Error,
-        vec![Value::string("Specified time is not representable")],
-    )
-}
-
-#[derive(Clone, Debug)]
-struct ParsedTime {
-    time: TimeMicros,
-    hz: i64,
-    #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-    form: TimeInputForm,
-    exact_ticks_hz: Option<(Integer, Integer)>,
-}
-
-/// Parse a time value from a Lisp argument.
-///
-/// Accepts:
-///   - nil            -> current time
-///   - integer        -> seconds since epoch
-///   - float          -> seconds since epoch (with fractional part)
-///   - (TICKS . HZ)   -> modern GNU timestamp cons
-///   - (HIGH LOW)     -> high*65536 + low seconds, 0 usecs
-///   - (HIGH LOW USEC)       -> with microseconds
-///   - (HIGH LOW USEC PSEC)  -> with picoseconds
-fn parse_time(val: &Value) -> Result<TimeMicros, Flow> {
-    Ok(parse_time_detailed(val)?.time)
-}
-
-/// Decode a Lisp time value into whole `(seconds, nanoseconds)`, using the same
-/// full parser as the other time functions so every accepted form ((TICKS .
-/// HZ), (HIGH LOW USEC PSEC), integer, float, nil) is handled identically.
-/// `nanoseconds` is the subsecond fraction in `[0, 999_999_999]`, matching the
-/// `int ns = t.tv_nsec` that GNU's `format_time_string` passes to nstrftime
-/// (`src/timefns.c:1391`). This is what the `%N` directive consumes.
-pub(crate) fn time_value_seconds_and_nanos(val: &Value) -> Result<(i64, i64), Flow> {
-    // Decode exactly, then floor-divide into whole seconds + nanoseconds the
-    // same way GNU `ticks_hz_to_timespec` does (`src/timefns.c:529`): the
-    // nanosecond count is floor((ticks * 10**9) / hz) reduced mod 10**9. Doing
-    // this on the exact pair (rather than a microsecond-rounded intermediate)
-    // keeps `%N`/`%3N`/`%6N` byte-exact for arbitrary HZ.
-    let th = decode_lisp_time(val)?.th;
-    let timespec_hz = Integer::from(1_000_000_000i64);
-    let total_nanos = integer_div_floor(&(&th.ticks * &timespec_hz), &th.hz);
-    let (secs, nanos) = integer_fdiv_qr(&total_nanos, &timespec_hz);
-    let secs = i64::try_from(&secs).map_err(|_| time_error_overflow())?;
-    let nanos = i64::try_from(&nanos).unwrap_or(0);
-    Ok((secs, nanos))
-}
-
-fn parse_time_detailed(val: &Value) -> Result<ParsedTime, Flow> {
-    // Bignum seconds-since-epoch values get truncated to i64;
-    // Emacs's GNU encoding of large times uses (HIGH LOW) cons
-    // pairs anyway, so a bignum here usually only occurs for
-    // tests that compute (1+ most-positive-fixnum) etc.
-    if let ValueKind::Veclike(VecLikeType::Bignum) = val.kind() {
-        let f = f64::rounding_from(val.as_bignum().unwrap(), RoundingMode::Nearest).0;
-        return Ok(ParsedTime {
-            time: TimeMicros {
-                secs: f as i64,
-                usecs: 0,
-                psecs: 0,
-            },
-            hz: 1,
-            form: TimeInputForm::Scalar,
-            exact_ticks_hz: None,
-        });
-    }
-    match val.kind() {
-        ValueKind::Nil => Ok(ParsedTime {
-            time: TimeMicros::now(),
-            hz: 1_000_000_000_000,
-            form: TimeInputForm::List,
-            exact_ticks_hz: None,
-        }),
-        ValueKind::Fixnum(n) => Ok(ParsedTime {
-            time: TimeMicros {
-                secs: n,
-                usecs: 0,
-                psecs: 0,
-            },
-            hz: 1,
-            form: TimeInputForm::Scalar,
-            exact_ticks_hz: Some((Integer::from(n), Integer::from(1))),
-        }),
-        ValueKind::Float => {
-            let f = val.xfloat();
-            if !f.is_finite() {
-                // GNU `decode_lisp_time` (`src/timefns.c:1037`) routes a non-finite
-                // float through `time_error (isnan ? EDOM : EOVERFLOW)`: NaN ->
-                // "Invalid time specification", ±inf -> "Specified time is not
-                // representable".
-                return Err(if f.is_nan() {
-                    time_spec_invalid()
-                } else {
-                    time_error_overflow()
-                });
-            }
-            let (ticks, hz) = float_to_exact_ticks_hz(f)?;
-            let hz_i64 = i64::try_from(&hz)
-                .map_err(|_| signal("error", vec![Value::string("Time value out of range")]))?;
-            Ok(ParsedTime {
-                time: TimeMicros::from_exact_ticks_hz(&ticks, &hz)?,
-                hz: hz_i64,
-                form: TimeInputForm::List,
-                exact_ticks_hz: Some((ticks, hz)),
-            })
-        }
-        ValueKind::Cons => {
-            let high = val.cons_car();
-            let low_or_tail = val.cons_cdr();
-            if !low_or_tail.is_cons() {
-                let ticks = high.as_int().ok_or_else(|| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("integerp"), high],
-                    )
-                })?;
-                let hz = low_or_tail.as_int().ok_or_else(|| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("integerp"), low_or_tail],
-                    )
-                })?;
-                return Ok(ParsedTime {
-                    time: TimeMicros::from_ticks_hz(ticks, hz)?,
-                    hz,
-                    form: TimeInputForm::TicksHz,
-                    exact_ticks_hz: Some((Integer::from(ticks), Integer::from(hz))),
-                });
-            }
-
-            let items = list_to_vec(val).ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), *val],
-                )
-            })?;
-            if items.len() < 2 {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("listp"), *val],
-                ));
-            }
-            let high = items[0].as_int().ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("integerp"), items[0]],
-                )
-            })?;
-            let low = items[1].as_int().ok_or_else(|| {
-                signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("integerp"), items[1]],
-                )
-            })?;
-            let usec = if items.len() > 2 {
-                items[2].as_int().unwrap_or(0)
-            } else {
-                0
-            };
-            let psec = if items.len() > 3 {
-                items[3].as_int().unwrap_or(0)
-            } else {
-                0
-            };
-            let secs = i64::try_from(i128::from(high) * 65536 + i128::from(low))
-                .map_err(|_| time_error_overflow())?;
-            Ok(ParsedTime {
-                time: TimeMicros {
-                    secs,
-                    usecs: usec,
-                    psecs: psec,
-                },
-                hz: time_convert_default_hz(val),
-                form: TimeInputForm::List,
-                exact_ticks_hz: None,
-            })
-        }
-        // GNU `decode_lisp_time` (`src/timefns.c:1041`) signals
-        // `time_spec_invalid` ("Invalid time specification") for any TIME value
-        // that is not nil/cons/integer/float (e.g. a string), NOT a
-        // `wrong-type-argument numberp`.
-        _ => Err(time_spec_invalid()),
-    }
-}
-
-fn float_to_exact_ticks_hz(f: f64) -> Result<(Integer, Integer), Flow> {
-    if f == 0.0 {
-        return Ok((Integer::from(0), Integer::from(1)));
-    }
-
-    let bits = f.to_bits();
-    let sign = if bits >> 63 == 0 { 1i128 } else { -1i128 };
-    let exponent_bits = ((bits >> 52) & 0x7ff) as i32;
-    let fraction = bits & ((1u64 << 52) - 1);
-    let (mantissa, unbiased_exponent) = if exponent_bits == 0 {
-        (Integer::from(fraction), -1022)
-    } else {
-        (Integer::from((1u64 << 52) | fraction), exponent_bits - 1023)
-    };
-    let scale = (52 - unbiased_exponent).max(0);
-
-    let mut ticks = if unbiased_exponent >= 52 {
-        let shift = (unbiased_exponent - 52) as u32;
-        mantissa << shift
-    } else {
-        mantissa
-    };
-    if sign < 0 {
-        ticks = -ticks;
-    }
-
-    let hz = Integer::from(1) << (scale as u32);
-    Ok((ticks, hz))
-}
-
-fn integer_div_floor(n: &Integer, d: &Integer) -> Integer {
-    let q = n / d;
-    let r = n - &q * d;
-    if r != 0 && n < &Integer::from(0) {
-        q - Integer::from(1)
-    } else {
-        q
-    }
-}
-
-/// Floor-divide `n` by `d` (d > 0), also returning the non-negative remainder.
-fn integer_fdiv_qr(n: &Integer, d: &Integer) -> (Integer, Integer) {
-    let q = integer_div_floor(n, d);
-    let r = n - &q * d;
-    (q, r)
-}
-
-fn integer_gcd(a: &Integer, b: &Integer) -> Integer {
-    use malachite::base::num::arithmetic::traits::Gcd;
-    // GCD is defined on the magnitudes; `unsigned_abs_ref` borrows the
-    // underlying `Natural` without copying.
-    Integer::from(a.unsigned_abs_ref().gcd(b.unsigned_abs_ref()))
-}
-
-// ---------------------------------------------------------------------------
-// Exact (TICKS . HZ) decoding — GNU `decode_lisp_time` and friends.
-// ---------------------------------------------------------------------------
-
-/// GNU `decode_float_time` (`src/timefns.c:612`): convert a finite double into
-/// the exact `(TICKS . HZ)` pair whose value equals it, with HZ the float's
-/// frequency (a power of two) or 1, whichever is greater. Reuses the existing
-/// bit-exact `float_to_exact_ticks_hz` decomposition.
-fn decode_float_time(t: f64) -> Result<TicksHz, Flow> {
-    let (ticks, hz) = float_to_exact_ticks_hz(t)?;
-    Ok(TicksHz { ticks, hz })
-}
-
-/// GNU `decode_time_components` (`src/timefns.c:855`): combine the HIGH, LOW,
-/// USEC and PSEC components at resolution HZ (1, 10**6 or 10**12) into an exact
-/// `(TICKS . HZ)`. USEC/PSEC out-of-range values carry into higher-order
-/// components exactly as GNU does.
-fn decode_time_components(
-    high: &Integer,
-    low: &Integer,
-    usec: &Integer,
-    psec: &Integer,
-    hz: &Integer,
-) -> TicksHz {
-    let million = million_int();
-    let trillion = trillion_int();
-
-    // us += ps / 1000000 (floor); ps, us reduced to [0, 1000000).
-    let (ps_carry, ps_norm) = integer_fdiv_qr(psec, &million);
-    let us_adj = usec + ps_carry;
-    let (s_from_us_ps, us_norm) = integer_fdiv_qr(&us_adj, &million);
-
-    // seconds = high * 2**16 + low + s_from_us_ps.
-    let lo_time_bits = Integer::from(1i64 << 16);
-    let s = high * &lo_time_bits + low + &s_from_us_ps;
-
-    let ticks = if *hz == trillion {
-        &s * &trillion + &us_norm * &million + &ps_norm
-    } else if *hz == million {
-        &s * &million + &us_norm
-    } else {
-        // hz == 1 (the (A B) / (A B . C-as-list) forms): drop sub-second.
-        s
-    };
-
-    TicksHz {
-        ticks,
-        hz: hz.clone(),
-    }
-}
-
-/// GNU `decode_lisp_time` (`src/timefns.c:959`), returning the exact
-/// `(TICKS . HZ)` and the syntactic form. Accepts the same four canonical and
-/// three compatibility forms GNU does:
-///   nil                -> current time
-///   integer            -> SEC . 1
-///   float              -> exact power-of-two pair
-///   (TICKS . HZ)       -> as-is (TICKS/HZ may be bignums)
-///   (HIGH LOW)         -> hz 1
-///   (HIGH LOW . USEC)  -> hz 10**6
-///   (HIGH LOW USEC)    -> hz 10**6
-///   (HIGH LOW USEC PSEC) -> hz 10**12
-fn decode_lisp_time(val: &Value) -> Result<DecodedLispTime, Flow> {
-    match val.kind() {
-        ValueKind::Nil => {
-            let now = TimeMicros::now();
-            // current_time uses a 10**9 (nanosecond) clock; mirror GNU's
-            // timespec-derived (TICKS . timespec_hz) for the current time.
-            // `psecs` holds the sub-microsecond part as (ns % 1000) * 1000, so
-            // its nanosecond contribution is psecs / 1000 — dropping it made
-            // `(time-add nil N)` (and thus timer.el's timer vectors) lose the
-            // PSEC field GNU carries.
-            let hz = Integer::from(1_000_000_000i64);
-            let ticks = Integer::from(now.secs) * &hz
-                + Integer::from(now.usecs) * Integer::from(1000i64)
-                + Integer::from(now.psecs / 1000);
-            Ok(DecodedLispTime {
-                th: TicksHz { ticks, hz },
-                form: TimeInputForm::List,
-            })
-        }
-        ValueKind::Fixnum(n) => Ok(DecodedLispTime {
-            th: TicksHz {
-                ticks: Integer::from(n),
-                hz: Integer::from(1),
-            },
-            form: TimeInputForm::Scalar,
-        }),
-        ValueKind::Veclike(VecLikeType::Bignum) => Ok(DecodedLispTime {
-            th: TicksHz {
-                ticks: val.as_bignum().expect("bignum payload").clone(),
-                hz: Integer::from(1),
-            },
-            form: TimeInputForm::Scalar,
-        }),
-        ValueKind::Float => {
-            let f = val.xfloat();
-            if !f.is_finite() {
-                // GNU `decode_lisp_time` (`src/timefns.c:1037`):
-                // `time_error (isnan (d) ? EDOM : EOVERFLOW)`. EDOM (NaN) maps to
-                // `time_spec_invalid` ("Invalid time specification"); EOVERFLOW
-                // (±inf) maps to `time_overflow` ("Specified time is not
-                // representable").
-                return Err(if f.is_nan() {
-                    time_spec_invalid()
-                } else {
-                    time_error_overflow()
-                });
-            }
-            Ok(DecodedLispTime {
-                th: decode_float_time(f)?,
-                form: TimeInputForm::List,
-            })
-        }
-        ValueKind::Cons => {
-            let high = val.cons_car();
-            let low = val.cons_cdr();
-            if low.is_cons() {
-                // (HIGH LOW ...) old-format list.
-                let mut usec = Integer::from(0);
-                let mut psec = Integer::from(0);
-                let mut hz = Integer::from(1);
-                let low_car = low.cons_car();
-                let low_tail = low.cons_cdr();
-                if low_tail.is_cons() {
-                    usec = value_to_integer(&low_tail.cons_car()).ok_or_else(time_spec_invalid)?;
-                    let tail2 = low_tail.cons_cdr();
-                    if tail2.is_cons() {
-                        psec = value_to_integer(&tail2.cons_car()).ok_or_else(time_spec_invalid)?;
-                        hz = trillion_int();
-                    } else {
-                        hz = million_int();
-                    }
-                } else if !low_tail.is_nil() {
-                    // (HIGH LOW . USEC) dotted form.
-                    usec = value_to_integer(&low_tail).ok_or_else(time_spec_invalid)?;
-                    hz = million_int();
-                }
-                let high_i = value_to_integer(&high).ok_or_else(time_spec_invalid)?;
-                let low_i = value_to_integer(&low_car).ok_or_else(time_spec_invalid)?;
-                Ok(DecodedLispTime {
-                    th: decode_time_components(&high_i, &low_i, &usec, &psec, &hz),
-                    form: TimeInputForm::List,
-                })
-            } else {
-                // (TICKS . HZ): TICKS integer, HZ positive integer.
-                let ticks = value_to_integer(&high).ok_or_else(time_spec_invalid)?;
-                let hz = value_to_integer(&low).ok_or_else(time_spec_invalid)?;
-                if hz <= 0 {
-                    return Err(time_spec_invalid());
-                }
-                Ok(DecodedLispTime {
-                    th: TicksHz { ticks, hz },
-                    form: TimeInputForm::TicksHz,
-                })
-            }
-        }
-        _ => Err(time_spec_invalid()),
-    }
-}
-
-/// GNU `frac_to_double` (`src/timefns.c:408`): convert the exact rational
-/// `numerator / denominator` to the nearest double (round to even). malachite's
-/// `Rational` -> `f64` rounding-from gives the correctly-rounded result.
-fn frac_to_double(numerator: &Integer, denominator: &Integer) -> f64 {
-    use malachite::base::num::conversion::traits::RoundingFrom;
-    use malachite::rational::Rational;
-    let q = Rational::from_integers(numerator.clone(), denominator.clone());
-    f64::rounding_from(&q, RoundingMode::Nearest).0
-}
-
-/// GNU `ticks_hz_list4` (`src/timefns.c:664`): render an exact `(TICKS . HZ)`
-/// as the backward-compatible `(HI LO US PS)` list, dropping any excess
-/// precision below 10**-12 s (floor).
-fn ticks_hz_list4(ticks: &Integer, hz: &Integer) -> Value {
-    let trillion = trillion_int();
-    let million = million_int();
-    // floor((ticks * trillion) / hz).
-    let scaled = integer_div_floor(&(ticks * &trillion), hz);
-    // Split into seconds and the 12-digit sub-second remainder.
-    let (secs, rem) = integer_fdiv_qr(&scaled, &trillion);
-    let us = &rem / &million;
-    let ps = &rem - &us * &million;
-    // Split seconds into HI/LO at 16 bits (LO non-negative).
-    let lo_time_bits = Integer::from(1i64 << 16);
-    let (hi, lo) = integer_fdiv_qr(&secs, &lo_time_bits);
-    Value::list(vec![
-        Value::make_integer(hi),
-        Value::make_integer(lo),
-        Value::make_integer(us),
-        Value::make_integer(ps),
-    ])
-}
-
-/// True if the positive integer HZ divides evenly into a trillion
-/// (GNU `trillion_factor`, `src/timefns.c:98`).
-fn trillion_factor(hz: &Integer) -> bool {
-    &trillion_int() % hz == 0
-}
-
-/// GNU `ticks_hz_seconds` (`src/timefns.c:800`): floor(ticks / hz) — the whole
-/// seconds of an exact `(TICKS . HZ)` value.
-fn ticks_hz_seconds(t: &TicksHz) -> Integer {
-    integer_div_floor(&t.ticks, &t.hz)
-}
-
-/// GNU `ticks_hz_hz_ticks` (`src/timefns.c:747`): convert T to a count of
-/// `hz_out` ticks, taking the floor — floor((t.ticks * hz_out) / t.hz). HZ_OUT
-/// must be a positive integer.
-fn ticks_hz_hz_ticks(t: &TicksHz, hz_out: &Integer) -> Result<Integer, Flow> {
-    if hz_out <= &Integer::from(0) {
-        return Err(signal(
-            "error",
-            vec![Value::string("Invalid time frequency")],
-        ));
-    }
-    if t.hz == *hz_out {
-        return Ok(t.ticks.clone());
-    }
-    Ok(integer_div_floor(&(&t.ticks * hz_out), &t.hz))
-}
-
-/// GNU `time_arith` (`src/timefns.c:1127`): add (or subtract) two Lisp time
-/// values exactly and choose the GNU result representation.
-fn time_arith(a: &Value, b: &Value, subtract: bool) -> Result<Value, Flow> {
-    let da = decode_lisp_time(a)?;
-    let db = decode_lisp_time(b)?;
-
-    let (ticks, hz) = if da.th.hz == db.th.hz {
-        let ticks = if subtract {
-            &da.th.ticks - &db.th.ticks
-        } else {
-            &da.th.ticks + &db.th.ticks
-        };
-        (ticks, da.th.hz.clone())
-    } else {
-        // Compute (na*(db/g) OP nb*(da/g)) / lcm(da,db), then normalize by the
-        // gcd of numerator and denominator, rescaling up so the denominator is
-        // never coarser than the finer of the two inputs (GNU hzmin rule).
-        let g = integer_gcd(&da.th.hz, &db.th.hz);
-        let fa = &da.th.hz / &g; // da/g
-        let fb = &db.th.hz / &g; // db/g
-        let mut ihz = &fa * &db.th.hz; // lcm(da, db)
-        let mut iticks = &fb * &da.th.ticks;
-        if subtract {
-            iticks -= &fa * &db.th.ticks;
-        } else {
-            iticks += &fa * &db.th.ticks;
-        }
-
-        let ig = integer_gcd(&iticks, &ihz);
-        if ig > 1 {
-            iticks /= &ig;
-            ihz /= &ig;
-            let hzmin = if da.th.hz < db.th.hz {
-                &da.th.hz
-            } else {
-                &db.th.hz
-            };
-            if ihz < *hzmin {
-                // rescale = ceil(hzmin / ihz).
-                let rescale = {
-                    let (q, r) = integer_fdiv_qr(hzmin, &ihz);
-                    if r == 0 { q } else { q + Integer::from(1) }
-                };
-                iticks *= &rescale;
-                ihz *= &rescale;
-            }
-        }
-        (iticks, ihz)
-    };
-
-    Ok(time_arith_to_lisp(ticks, hz, &da, &db))
-}
-
-/// Select the result form, mirroring the final `return` of GNU `time_arith`
-/// (`src/timefns.c:1211`). `current-time-list` defaults to t in Neomacs, so an
-/// integer HZ != 1 yields the list form unless an input used `(TICKS . HZ)` or
-/// HZ does not divide a trillion.
-fn time_arith_to_lisp(
-    ticks: Integer,
-    hz: Integer,
-    da: &DecodedLispTime,
-    db: &DecodedLispTime,
-) -> Value {
-    if hz == 1 {
-        return Value::make_integer(ticks);
-    }
-    let a_is_ticks_hz = da.form == TimeInputForm::TicksHz;
-    let b_is_ticks_hz = db.form == TimeInputForm::TicksHz;
-    if a_is_ticks_hz || b_is_ticks_hz || !trillion_factor(&hz) {
-        Value::cons(Value::make_integer(ticks), Value::make_integer(hz))
-    } else {
-        ticks_hz_list4(&ticks, &hz)
-    }
-}
-
-/// GNU `time_cmp` (`src/timefns.c:1250`): compare two exact time values by
-/// cross-multiplying ATICKS*BHZ vs BTICKS*AHZ.
-fn time_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, Flow> {
-    let da = decode_lisp_time(a)?;
-    let db = decode_lisp_time(b)?;
-    let lhs = &da.th.ticks * &db.th.hz;
-    let rhs = &db.th.ticks * &da.th.hz;
-    Ok(lhs.cmp(&rhs))
-}
-
 // ---------------------------------------------------------------------------
 // Date/time breakdown helpers (UTC only, no chrono)
 // ---------------------------------------------------------------------------
@@ -919,12 +97,10 @@ fn time_cmp(a: &Value, b: &Value) -> Result<std::cmp::Ordering, Flow> {
 /// Offset between a calendar year and glibc's `struct tm` `tm_year` field
 /// (GNU `TM_YEAR_BASE`): `tm_year = year - 1900`.
 const TM_YEAR_BASE: i64 = 1900;
-
 #[cfg(test)]
 fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
-
 /// Decoded time in UTC: (sec min hour day month year dow dst utcoff).
 struct DecodedTime {
     sec: i64,
@@ -935,13 +111,11 @@ struct DecodedTime {
     year: i64,
     dow: i64, // 0=Sunday, 1=Monday, ..., 6=Saturday
 }
-
 struct ZonedDecodedTime {
     time: DecodedTime,
     dst: Value,
     utcoff: i64,
 }
-
 /// Convert a count of days since the Unix epoch (1970-01-01) into a proleptic
 /// Gregorian `(year, month, day)`, in O(1). This is Howard Hinnant's
 /// `civil_from_days` algorithm <http://howardhinnant.github.io/date_algorithms.html>,
@@ -964,7 +138,6 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let year = if month <= 2 { y + 1 } else { y };
     (year, month, day)
 }
-
 /// Break epoch seconds into UTC date/time components.
 ///
 /// Returns an error (GNU `time_overflow`, "Specified time is not
@@ -1004,7 +177,6 @@ fn decode_epoch_secs(total_secs: i64) -> Result<DecodedTime, Flow> {
         dow,
     })
 }
-
 #[cfg(test)]
 fn encode_to_epoch_secs(sec: i64, min: i64, hour: i64, day: i64, month: i64, year: i64) -> i64 {
     CalendarTime::try_from([sec, min, hour, day, month, year])
@@ -1012,7 +184,6 @@ fn encode_to_epoch_secs(sec: i64, min: i64, hour: i64, day: i64, month: i64, yea
         .epoch_seconds()
         .unwrap()
 }
-
 // ---------------------------------------------------------------------------
 // Day/month name tables
 // ---------------------------------------------------------------------------
@@ -1021,7 +192,6 @@ const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_NAMES: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
-
 #[derive(Clone, Debug)]
 enum ZoneRule {
     Local,
@@ -1030,11 +200,9 @@ enum ZoneRule {
     FixedNamedOffset(i64, String),
     TzString(String),
 }
-
 thread_local! {
     static TIME_ZONE_RULE: RefCell<ZoneRule> = const { RefCell::new(ZoneRule::Local) };
 }
-
 /// Round 3w (plan-3w.md section 7, C2): the time-zone rule is one value for
 /// the World (GNU's TZ is process-wide; a process runs one World). It lives
 /// in this thread-local while the Baton holder runs and in the World while
@@ -1044,7 +212,6 @@ thread_local! {
 pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
     Box::new(ZoneRule::Local)
 }
-
 #[cold]
 pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot
@@ -1052,24 +219,20 @@ pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
         .expect("carried World state");
     TIME_ZONE_RULE.with(|rule| std::mem::swap(&mut *rule.borrow_mut(), slot));
 }
-
 /// Reset timezone rule to default (called from Context::new).
 pub(crate) fn reset_timefns_thread_locals() {
     TIME_ZONE_RULE.with(|slot| *slot.borrow_mut() = ZoneRule::Local);
 }
-
 fn tz_env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
-
 fn invalid_time_zone_spec(spec: &Value) -> Flow {
     signal(
         "error",
         vec![Value::string("Invalid time zone specification"), *spec],
     )
 }
-
 fn format_fixed_offset_name(offset_secs: i64) -> String {
     if offset_secs == 0 {
         return "GMT".to_string();
@@ -1096,7 +259,6 @@ fn format_fixed_offset_name(offset_secs: i64) -> String {
         )
     }
 }
-
 /// GNU's numeric-zone abbreviation, synthesized when libc reports an empty
 /// zone name (`Fcurrent_time_zone`, `src/timefns.c:1937`). Unlike
 /// `format_fixed_offset_name`, an offset of 0 yields the numeric `"+00"` rather
@@ -1118,7 +280,6 @@ fn numeric_zone_abbrev(offset: i64) -> String {
     }
     buf
 }
-
 /// Build the POSIX TZ string GNU's `tzlookup` hands to libc `tzalloc` for an
 /// explicit integer ZONE (`src/timefns.c:277`). The bracketed part is the
 /// numeric abbreviation `<+HH[MM[SS]]>`; the body is always `HH:MM:SS`. Note the
@@ -1155,7 +316,6 @@ fn tz_string_for_fixed_offset(offset: i64) -> String {
         width = prec + 1,
     )
 }
-
 /// Build GNU's POSIX TZ string for an explicit `(OFFSET NAME)` ZONE
 /// (`src/timefns.c:292`): `<NAME>` followed by the signed `HH:MM:SS` body. The
 /// body sign is inverted relative to the Emacs offset, exactly as for the
@@ -1169,7 +329,6 @@ fn tz_string_for_named_offset(offset: i64, name: &str) -> String {
     let body_sign = if offset < 0 { "" } else { "-" };
     format!("<{}>{}{}:{:02}:{:02}", name, body_sign, hour, min, sec)
 }
-
 /// Resolve an explicit numeric/named ZONE through libc exactly as GNU does:
 /// build the POSIX TZ string GNU's `tzlookup` would, then read back the
 /// clamped `tm_gmtoff` and validated `tm_zone`. libc clamps the offset to
@@ -1201,7 +360,6 @@ fn fixed_zone_offset_name(tz_string: &str, epoch_secs: i64) -> (i64, String) {
     };
     (offset, name)
 }
-
 #[cfg(unix)]
 fn local_offset_name_at_epoch(epoch_secs: i64) -> (i64, String) {
     let mut time_val: libc::time_t = epoch_secs as libc::time_t;
@@ -1220,12 +378,10 @@ fn local_offset_name_at_epoch(epoch_secs: i64) -> (i64, String) {
     };
     (offset, name)
 }
-
 #[cfg(not(unix))]
 fn local_offset_name_at_epoch(_epoch_secs: i64) -> (i64, String) {
     (0, "UTC".to_string())
 }
-
 #[cfg(unix)]
 fn local_decoded_time_at_epoch(epoch_secs: i64) -> Result<ZonedDecodedTime, Flow> {
     let mut time_val: libc::time_t = epoch_secs as libc::time_t;
@@ -1258,7 +414,6 @@ fn local_decoded_time_at_epoch(epoch_secs: i64) -> Result<ZonedDecodedTime, Flow
         dst,
     })
 }
-
 #[cfg(not(unix))]
 fn local_decoded_time_at_epoch(epoch_secs: i64) -> Result<ZonedDecodedTime, Flow> {
     let time = decode_epoch_secs(epoch_secs)?;
@@ -1268,7 +423,6 @@ fn local_decoded_time_at_epoch(epoch_secs: i64) -> Result<ZonedDecodedTime, Flow
         utcoff: 0,
     })
 }
-
 #[cfg(unix)]
 fn refresh_tz_env() {
     unsafe extern "C" {
@@ -1280,10 +434,8 @@ fn refresh_tz_env() {
         tzset();
     }
 }
-
 #[cfg(not(unix))]
 fn refresh_tz_env() {}
-
 /// Serializes local libc timezone reads with temporary timezone writers.
 /// This lock-only guard preserves the process TZ and stays on its mutator thread.
 #[cfg(unix)]
@@ -1293,10 +445,8 @@ struct LocalTzReadGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
-
 #[cfg(unix)]
 static_assertions::assert_not_impl_any!(LocalTzReadGuard: Send, Sync);
-
 #[cfg(unix)]
 impl LocalTzReadGuard {
     fn new() -> Self {
@@ -1308,7 +458,6 @@ impl LocalTzReadGuard {
         }
     }
 }
-
 /// Restores the process timezone while retaining the serialization lock.
 /// The owned lock and thread marker keep the guard confined to its creating thread.
 #[must_use = "dropping the guard restores the previous timezone"]
@@ -1318,9 +467,7 @@ struct ScopedTzEnv {
     _lock: std::sync::MutexGuard<'static, ()>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
-
 static_assertions::assert_not_impl_any!(ScopedTzEnv: Send, Sync);
-
 impl ScopedTzEnv {
     fn new(spec: Option<TimeZoneSpec<'_>>) -> Self {
         let lock = tz_env_lock()
@@ -1342,7 +489,6 @@ impl ScopedTzEnv {
         }
     }
 }
-
 impl Drop for ScopedTzEnv {
     fn drop(&mut self) {
         match &self.previous {
@@ -1355,12 +501,10 @@ impl Drop for ScopedTzEnv {
         refresh_tz_env();
     }
 }
-
 fn with_tz_env<T>(spec: Option<&str>, f: impl FnOnce() -> T) -> T {
     let _guard = ScopedTzEnv::new(spec.map(TimeZoneSpec::from));
     f()
 }
-
 fn parse_zone_rule(zone: &Value) -> Result<ZoneRule, Flow> {
     match zone.kind() {
         ValueKind::Nil => Ok(ZoneRule::Local),
@@ -1401,7 +545,6 @@ fn parse_zone_rule(zone: &Value) -> Result<ZoneRule, Flow> {
         _ => Err(invalid_time_zone_spec(zone)),
     }
 }
-
 fn effective_zone_rule(zone: Option<&Value>) -> Result<ZoneRule, Flow> {
     match zone {
         None => TIME_ZONE_RULE.with(|slot| Ok(slot.borrow().clone())),
@@ -1409,7 +552,6 @@ fn effective_zone_rule(zone: Option<&Value>) -> Result<ZoneRule, Flow> {
         Some(value) => parse_zone_rule(value),
     }
 }
-
 /// GNU's UTC zone has no `timezone_t`: `tzlookup` returns `utc_tz`, which is
 /// NULL, so `emacs_localtime_rz` falls through to `gmtime_r`
 /// (`src/timefns.c:198-199`, :249-254, :206-218).  The abbreviation is
@@ -1433,7 +575,6 @@ fn utc_zone_abbreviation(epoch_secs: i64) -> String {
         name
     }
 }
-
 #[cfg(unix)]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
@@ -1456,7 +597,6 @@ fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
         }
     }
 }
-
 /// Clamp a fixed zone offset (in seconds) to +/-24h. GNU routes an explicit
 /// numeric/named ZONE through libc `tzalloc`, which enforces this bound; the
 /// non-Unix fallback (which does not call libc) applies it directly.
@@ -1464,7 +604,6 @@ fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
 fn fixed_offset_clamped(offset: i64) -> i64 {
     offset.clamp(-86_400, 86_400)
 }
-
 #[cfg(not(unix))]
 fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
     match rule {
@@ -1488,7 +627,6 @@ fn zone_rule_to_offset_name(rule: &ZoneRule, epoch_secs: i64) -> (i64, String) {
         }
     }
 }
-
 pub(crate) fn zone_offset_name_for_time(
     zone: Option<&Value>,
     epoch_secs: i64,
@@ -1496,7 +634,6 @@ pub(crate) fn zone_offset_name_for_time(
     let rule = effective_zone_rule(zone)?;
     Ok(zone_rule_to_offset_name(&rule, epoch_secs))
 }
-
 fn decode_time_for_zone(rule: &ZoneRule, epoch_secs: i64) -> Result<ZonedDecodedTime, Flow> {
     match rule {
         ZoneRule::Local => {
@@ -1525,7 +662,6 @@ fn decode_time_for_zone(rule: &ZoneRule, epoch_secs: i64) -> Result<ZonedDecoded
         }
     }
 }
-
 /// Decode a time at an explicit numeric/named ZONE, honoring libc's clamping
 /// and short-name fallback. On Unix this defers to libc (`localtime_r` under
 /// the GNU-style TZ string); elsewhere it applies the clamp directly.
@@ -1537,7 +673,6 @@ fn decode_time_for_fixed_zone(
 ) -> Result<ZonedDecodedTime, Flow> {
     with_tz_env(Some(tz_string), || local_decoded_time_at_epoch(epoch_secs))
 }
-
 #[cfg(not(unix))]
 fn decode_time_for_fixed_zone(
     _tz_string: &str,
@@ -1551,30 +686,6 @@ fn decode_time_for_fixed_zone(
         utcoff: clamped,
     })
 }
-
-fn time_convert_default_hz(value: &Value) -> i64 {
-    match value.kind() {
-        ValueKind::Fixnum(_) => 1,
-        ValueKind::Float => 1_000_000,
-        ValueKind::Cons => {
-            let tail = value.cons_cdr();
-            if !tail.is_cons() {
-                return tail.as_int().filter(|hz| *hz > 0).unwrap_or(1);
-            }
-            if let Some(items) = list_to_vec(value) {
-                match items.len() {
-                    0..=2 => 1,
-                    3 => 1_000_000,
-                    _ => 1_000_000_000_000,
-                }
-            } else {
-                1
-            }
-        }
-        _ => 1,
-    }
-}
-
 /// Extract a time component as a fixnum, mirroring GNU `encode-time`'s
 /// `CHECK_FIXNUM`: nil, non-numbers, AND bignums all signal
 /// `wrong-type-argument fixnump VALUE`. Verified against GNU 31.0.50 — both
@@ -1589,7 +700,6 @@ fn require_fixnum_component(value: &Value) -> Result<i64, Flow> {
         )
     })
 }
-
 /// Decode `encode-time`'s SECOND field, which (unlike the other components)
 /// accepts any Lisp time value, mirroring GNU `Fencode_time` /
 /// `decode_lisp_time (secarg, CFORM_TICKS_HZ)` (`src/timefns.c:1659`).
@@ -1642,7 +752,6 @@ fn decode_encode_time_second(value: &Value) -> Result<(i64, i64, i64), Flow> {
     }
     Ok((sec, subsec_ticks.rem_euclid(hz), hz))
 }
-
 /// GNU `Fencode_time`'s broken-down-time daylight-saving flag (the input
 /// `tm.tm_isdst` it hands to `mktime_z`, `src/timefns.c:1696`/`1718`/`1761`):
 /// `-1` auto-detects DST from the wall clock, `0` forces standard time, and `1`
@@ -1654,7 +763,6 @@ enum TmIsDst {
     Standard,
     Daylight,
 }
-
 impl TmIsDst {
     fn to_c(self) -> libc::c_int {
         match self {
@@ -1664,7 +772,6 @@ impl TmIsDst {
         }
     }
 }
-
 /// Compute the epoch seconds for a broken-down local time in a DST-aware zone
 /// (`Local`/`TzString`) honoring the forced `isdst` flag, mirroring GNU's
 /// `mktime_z` (`src/timefns.c:1761`). Unlike `localtime_r`, libc `mktime`
@@ -1685,12 +792,10 @@ fn mktime_with_isdst(calendar: CalendarTime, isdst: TmIsDst) -> Result<i64, Flow
         Err(mktime::MktimeError::Invalid) => Err(time_spec_invalid()),
     }
 }
-
 #[cfg(not(unix))]
 fn mktime_with_isdst(calendar: CalendarTime, _isdst: TmIsDst) -> Result<i64, Flow> {
     calendar.epoch_seconds()
 }
-
 #[cfg(unix)]
 fn encode_calendar_in_fixed_zone(
     calendar: CalendarTime,
@@ -1699,7 +804,6 @@ fn encode_calendar_in_fixed_zone(
 ) -> Result<i64, Flow> {
     with_tz_env(Some(spec), || mktime_with_isdst(calendar, TmIsDst::Auto))
 }
-
 #[cfg(not(unix))]
 fn encode_calendar_in_fixed_zone(
     calendar: CalendarTime,
@@ -1712,19 +816,16 @@ fn encode_calendar_in_fixed_zone(
         .ok_or_else(time_error_overflow)?;
     Ok(seconds)
 }
-
 /// An offset that POSIX timezone parsing leaves unchanged. The private field
 /// permits direct calendar arithmetic without bypassing GNU's offset clamping.
 /// This immutable scalar contains no mutator state and is Send + Sync.
 #[derive(Clone, Copy, Debug)]
 struct DirectZoneOffset(i32);
-
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 enum OffsetNormalization {
     #[error("Offset requires timezone normalization")]
     Required,
 }
-
 impl TryFrom<i64> for DirectZoneOffset {
     type Error = OffsetNormalization;
 
@@ -1737,15 +838,12 @@ impl TryFrom<i64> for DirectZoneOffset {
         ))
     }
 }
-
 impl From<DirectZoneOffset> for i64 {
     fn from(offset: DirectZoneOffset) -> Self {
         i64::from(offset.0)
     }
 }
-
 static_assertions::assert_impl_all!(DirectZoneOffset: Send, Sync);
-
 impl CalendarTime {
     fn at_offset(self, offset: DirectZoneOffset) -> Result<i64, Flow> {
         let seconds = self
@@ -1757,7 +855,6 @@ impl CalendarTime {
         Ok(seconds)
     }
 }
-
 fn encode_calendar_numeric_zone(calendar: CalendarTime, offset: i64) -> Result<i64, Flow> {
     match DirectZoneOffset::try_from(offset) {
         Ok(offset) => calendar.at_offset(offset),
@@ -1766,7 +863,6 @@ fn encode_calendar_numeric_zone(calendar: CalendarTime, offset: i64) -> Result<i
         }
     }
 }
-
 fn encode_calendar_named_zone(
     calendar: CalendarTime,
     offset: i64,
@@ -1780,7 +876,6 @@ fn encode_calendar_named_zone(
     }
     encode_calendar_in_fixed_zone(calendar, &tz_string_for_named_offset(offset, name), offset)
 }
-
 /// Encode a broken-down local time to epoch seconds honoring the zone's DST
 /// rules and the forced `isdst` flag, mirroring GNU `Fencode_time` +
 /// `mktime_z`. For zones without DST transitions (`Utc`/fixed offsets) the flag
@@ -1802,7 +897,6 @@ fn encode_time_to_epoch(calendar: CalendarTime, zone: &Value, isdst: TmIsDst) ->
         }
     }
 }
-
 // ---------------------------------------------------------------------------
 // Pure builtins
 // ---------------------------------------------------------------------------
@@ -1812,7 +906,6 @@ fn encode_time_to_epoch(calendar: CalendarTime, zone: &Value, isdst: TmIsDst) ->
 fn invalid_time_frequency_error(hz: &Value) -> Flow {
     signal("error", vec![Value::string("Invalid time frequency"), *hz])
 }
-
 fn parse_time_convert_form(
     form: &Value,
     default_output: LispTimeOutput,
@@ -1844,28 +937,15 @@ fn parse_time_convert_form(
         _ => Err(invalid_time_frequency_error(form)),
     }
 }
-
-fn current_time_value(output: LispTimeOutput) -> Value {
-    output.encode(TimeMicros::now())
-}
-
-/// Convert a system `(seconds, nanoseconds)` timestamp to the representation
-/// selected by `current-time-list`, matching GNU `timefns.c:make_lisp_time`.
-pub(crate) fn make_lisp_time(secs: i64, nanos: i64, output: LispTimeOutput) -> Value {
-    output.encode(TimeMicros::from_timespec(secs, nanos))
-}
-
 /// `(current-time)` -> `(HIGH LOW USEC PSEC)` or `(TICKS . HZ)`.
 pub(crate) fn builtin_current_time(args: Vec<Value>) -> EvalResult {
     expect_args("current-time", &args, 0)?;
     Ok(current_time_value(LispTimeOutput::LegacyList))
 }
-
 pub(crate) fn builtin_current_time_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_args("current-time", &args, 0)?;
-    Ok(current_time_value(LispTimeOutput::from_context(eval)?))
+    Ok(current_time_value(lisp_time_output_from_context(eval)?))
 }
-
 /// `(float-time &optional TIME)` -> float seconds since epoch.
 ///
 /// GNU `Ffloat_time` returns the float argument unchanged when given a float,
@@ -1882,13 +962,11 @@ pub(crate) fn builtin_float_time(args: Vec<Value>) -> EvalResult {
     let th = decode_lisp_time(&arg)?.th;
     Ok(Value::make_float(frac_to_double(&th.ticks, &th.hz)))
 }
-
 /// `(time-add A B)` -> integer seconds, `(HI LO US PS)`, or `(TICKS . HZ)`.
 pub(crate) fn builtin_time_add(args: Vec<Value>) -> EvalResult {
     expect_args("time-add", &args, 2)?;
     time_arith(&args[0], &args[1], false)
 }
-
 /// `(time-subtract A B)` -> integer seconds, `(HI LO US PS)`, or `(TICKS . HZ)`.
 pub(crate) fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
     expect_args("time-subtract", &args, 2)?;
@@ -1905,7 +983,6 @@ pub(crate) fn builtin_time_subtract(args: Vec<Value>) -> EvalResult {
     }
     time_arith(&args[0], &args[1], true)
 }
-
 /// `(time-less-p A B)` -> t or nil
 pub(crate) fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
     expect_args("time-less-p", &args, 2)?;
@@ -1918,7 +995,6 @@ pub(crate) fn builtin_time_less_p(args: Vec<Value>) -> EvalResult {
         time_cmp(&args[0], &args[1])? == std::cmp::Ordering::Less,
     ))
 }
-
 /// `(time-equal-p A B)` -> t or nil
 pub(crate) fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
     expect_args("time-equal-p", &args, 2)?;
@@ -1937,7 +1013,6 @@ pub(crate) fn builtin_time_equal_p(args: Vec<Value>) -> EvalResult {
         time_cmp(&args[0], &args[1])? == std::cmp::Ordering::Equal,
     ))
 }
-
 /// `(current-time-string &optional TIME ZONE)` -> human-readable string.
 ///
 /// Returns a string like `"Mon Jan  2 15:04:05 2006"`.
@@ -1965,7 +1040,6 @@ pub(crate) fn builtin_current_time_string(args: Vec<Value>) -> EvalResult {
     );
     Ok(Value::string(s))
 }
-
 /// `(current-time-zone &optional TIME ZONE)` -> `(OFFSET NAME)`.
 pub(crate) fn builtin_current_time_zone(args: Vec<Value>) -> EvalResult {
     expect_min_max_args("current-time-zone", &args, 0, 2)?;
@@ -1992,7 +1066,6 @@ pub(crate) fn builtin_current_time_zone(args: Vec<Value>) -> EvalResult {
         Value::string(name),
     ]))
 }
-
 /// GNU `CHECK_CONS`: signal `(wrong-type-argument consp OBJ)` unless OBJ is a
 /// cons cell. Returns `(car, cdr)` for a valid cons.
 fn check_cons(obj: &Value) -> Result<(Value, Value), Flow> {
@@ -2005,7 +1078,6 @@ fn check_cons(obj: &Value) -> Result<(Value, Value), Flow> {
         ))
     }
 }
-
 /// `(encode-time TIME &rest OBSOLESCENT-ARGUMENTS)` -> `(HIGH LOW)`
 pub(crate) fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
     // The SECOND field accepts any Lisp time value (GNU decodes it via
@@ -2112,7 +1184,6 @@ pub(crate) fn builtin_encode_time(args: Vec<Value>) -> EvalResult {
         Value::make_integer(Integer::from(hz)),
     ))
 }
-
 /// `(decode-time &optional TIME ZONE FORM)`
 /// -> `(SECONDS MINUTES HOURS DAY MONTH YEAR DOW DST UTCOFF)`
 pub(crate) fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
@@ -2165,7 +1236,6 @@ pub(crate) fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
         Value::fixnum(decoded.utcoff),
     ]))
 }
-
 /// `(time-convert TIME &optional FORM)`
 ///
 /// FORM controls the output format:
@@ -2177,12 +1247,10 @@ pub(crate) fn builtin_decode_time(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_time_convert(args: Vec<Value>) -> EvalResult {
     builtin_time_convert_with_default_output(args, LispTimeOutput::LegacyList)
 }
-
 pub(crate) fn builtin_time_convert_in_context(eval: &mut Context, args: Vec<Value>) -> EvalResult {
-    let default_output = LispTimeOutput::from_context(eval)?;
+    let default_output = lisp_time_output_from_context(eval)?;
     builtin_time_convert_with_default_output(args, default_output)
 }
-
 fn builtin_time_convert_with_default_output(
     args: Vec<Value>,
     default_output: LispTimeOutput,
@@ -2239,7 +1307,6 @@ fn builtin_time_convert_with_default_output(
         }
     }
 }
-
 /// `(set-time-zone-rule ZONE)` -> nil.
 pub(crate) fn builtin_set_time_zone_rule(args: Vec<Value>) -> EvalResult {
     expect_args("set-time-zone-rule", &args, 1)?;
@@ -2247,7 +1314,6 @@ pub(crate) fn builtin_set_time_zone_rule(args: Vec<Value>) -> EvalResult {
     TIME_ZONE_RULE.with(|slot| *slot.borrow_mut() = rule);
     Ok(Value::NIL)
 }
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

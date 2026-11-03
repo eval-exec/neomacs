@@ -497,7 +497,7 @@ pub(crate) fn builtin_directory_files_and_attributes(
             expect_lisp_string("directory-files-and-attributes", &expanded_filename)?
         }
     };
-    let time_output = LispTimeOutput::from_context(eval)?;
+    let time_output = super::timefns::lisp_time_output_from_context(eval)?;
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     directory_files_and_attributes_with_dir(
         eval,
@@ -1508,7 +1508,7 @@ pub(crate) fn builtin_file_attributes(eval: &mut Context, args: Vec<Value>) -> E
 
     // GNU Emacs: return string names unless ID-FORMAT is nil or 'integer.
     let id_format = FileIdFormat::from_id_format_arg(args.get(1));
-    let time_output = LispTimeOutput::from_context(eval)?;
+    let time_output = super::timefns::lisp_time_output_from_context(eval)?;
 
     Ok(
         build_file_attributes(&filename_lisp, id_format, time_output, &filename_lisp)?

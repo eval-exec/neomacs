@@ -23,6 +23,7 @@ pub mod string_pos_cache;
 pub mod strings_core;
 pub mod symbol;
 pub mod tagged;
+pub mod time_core;
 pub mod tls_fingerprint;
 pub mod tls_scope;
 pub mod value;
