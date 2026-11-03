@@ -43,7 +43,7 @@ frontend_events value 2
 fuzz_support emacs_char 1
 fuzz_support regex_emacs 1
 fuzz_support syntax 1
-heap_types top:buffer 5
+heap_types top:buffer 1
 image_identity value 1
 keyboard (root) 1
 keyboard autoload 2
@@ -51,7 +51,7 @@ keyboard builtins 12
 keyboard dbusbind 3
 keyboard display_host 9
 keyboard emacs_char 5
-keyboard error 52
+keyboard error 51
 keyboard eval 17
 keyboard forward 2
 keyboard hook_runtime 8
@@ -69,9 +69,7 @@ keyboard wait 1
 keyboard window_edge_drag 2
 keyboard_input coding 2
 keyboard_input emacs_char 2
-tagged bytecode 7
 tagged eval 12
-tagged process 5
 tagged top:buffer 6
 tagged top:tls_scope 2
 tagged extern:neomacs_display_protocol 7
