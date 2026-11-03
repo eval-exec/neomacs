@@ -177,7 +177,8 @@ pub fn format_symbol_name_for_diagnostic(symbol: SymId) -> String {
 /// Whether an unescaped symbol spelling would be read as something other than
 /// that symbol. Shared by the Lisp printer and UTF-8 diagnostic renderer so
 /// their escaping rules cannot drift.
-pub(crate) fn symbol_name_confusing(bytes: &[u8]) -> bool {
+#[doc(hidden)]
+pub fn symbol_name_confusing(bytes: &[u8]) -> bool {
     let Some(&first) = bytes.first() else {
         return false;
     };
@@ -883,16 +884,36 @@ struct SymbolSlot {
     name_origin: SymbolNameOrigin,
 }
 
-pub(crate) struct DumpedSymbolTable {
-    pub names: Vec<LispString>,
-    pub symbol_names: Vec<u32>,
-    pub canonical: Vec<bool>,
+#[doc(hidden)]
+pub struct DumpedSymbolTable {
+    names: Vec<LispString>,
+    symbol_names: Vec<u32>,
+    canonical: Vec<bool>,
+}
+
+impl DumpedSymbolTable {
+    /// Transfer the existing dump data without exposing mutable fields.
+    #[inline]
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Vec<LispString>, Vec<u32>, Vec<bool>) {
+        (self.names, self.symbol_names, self.canonical)
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct RestoredDumpSymbolTable {
-    pub names: Vec<NameId>,
-    pub symbols: Vec<SymId>,
+#[doc(hidden)]
+pub struct RestoredDumpSymbolTable {
+    names: Vec<NameId>,
+    symbols: Vec<SymId>,
+}
+
+impl RestoredDumpSymbolTable {
+    /// Transfer the validated restore maps as owned data.
+    #[inline]
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Vec<NameId>, Vec<SymId>) {
+        (self.names, self.symbols)
+    }
 }
 
 /// Process-global append-only registry of Lisp symbols.
@@ -1520,7 +1541,8 @@ fn symbol_registry_epoch() -> &'static AtomicU64 {
     &SYMBOL_REGISTRY_EPOCH
 }
 
-pub(crate) fn dump_runtime_interner() -> DumpedSymbolTable {
+#[doc(hidden)]
+pub fn dump_runtime_interner() -> DumpedSymbolTable {
     let registry = global_symbol_registry().read();
     registry.dump_symbol_table()
 }
@@ -1565,12 +1587,14 @@ pub fn intern(s: &str) -> SymId {
 /// Threading: this borrows immutable token bytes and owns no Lisp state. It
 /// cannot represent a raw-byte or supplied-count symbol-name query.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ValidatedAsciiName<'a>(&'a str);
+#[doc(hidden)]
+pub struct ValidatedAsciiName<'a>(&'a str);
 
 /// The ordinary ASCII reader path does not accept non-ASCII spellings.
 #[derive(Debug, thiserror::Error)]
 #[error("reader symbol spelling is not ASCII")]
-pub(crate) struct NonAsciiReaderName;
+#[doc(hidden)]
+pub struct NonAsciiReaderName;
 
 impl<'a> TryFrom<&'a str> for ValidatedAsciiName<'a> {
     type Error = NonAsciiReaderName;
@@ -1595,7 +1619,8 @@ impl<'a> TryFrom<&'a str> for ValidatedAsciiName<'a> {
 /// operation. The closure borrows its token; it does not construct a name on
 /// either a positive-cache hit or an uncached canonical hit.
 #[inline]
-pub(crate) fn intern_ascii_reader_name<F>(name: ValidatedAsciiName<'_>, make_name: F) -> SymId
+#[doc(hidden)]
+pub fn intern_ascii_reader_name<F>(name: ValidatedAsciiName<'_>, make_name: F) -> SymId
 where
     F: FnOnce() -> LispString,
 {
@@ -1686,14 +1711,16 @@ pub fn intern_lisp_value(name_value: TaggedValue) -> SymId {
 /// Intern a private, property-free reader spelling without eagerly allocating
 /// a tagged-heap name. GNU's first spelling/encoding remains observable through
 /// symbol-name; strings passed to Lisp intern/make-symbol use the object APIs.
-pub(crate) fn intern_reader_name(name: LispString) -> SymId {
+#[doc(hidden)]
+pub fn intern_reader_name(name: LispString) -> SymId {
     global_symbol_registry()
         .write()
         .intern_reader_name(name, ReaderSymbolKind::Canonical)
 }
 
 /// The reader's #: token likewise has no caller-owned string to adopt.
-pub(crate) fn make_uninterned_reader_symbol(name: LispString) -> SymId {
+#[doc(hidden)]
+pub fn make_uninterned_reader_symbol(name: LispString) -> SymId {
     global_symbol_registry()
         .write()
         .intern_reader_name(name, ReaderSymbolKind::Uninterned)
@@ -2075,7 +2102,8 @@ pub fn resolve_sym_name_value(id: SymId) -> Option<TaggedValue> {
     registry.resolve_name_value(id)
 }
 
-pub(crate) fn collect_symbol_name_gc_roots(roots: &mut Vec<TaggedValue>, heap_id: usize) {
+#[doc(hidden)]
+pub fn collect_symbol_name_gc_roots(roots: &mut Vec<TaggedValue>, heap_id: usize) {
     let registry = global_symbol_registry().read();
     registry.collect_name_value_roots(roots, heap_id);
 }

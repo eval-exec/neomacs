@@ -744,7 +744,8 @@ impl LispSymbol {
     Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::EnumIter, strum::IntoStaticStr,
 )]
 #[strum(serialize_all = "kebab-case")]
-pub(crate) enum FunctionEpochBump {
+#[doc(hidden)]
+pub enum FunctionEpochBump {
     /// `fset` (`builtin_fset_2`; GNU `Ffset`, data.c).
     Fset,
     /// `defalias` (`builtin_defalias`, `Context::defalias_value`; GNU

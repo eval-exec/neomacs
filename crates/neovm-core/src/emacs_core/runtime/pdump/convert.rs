@@ -3385,13 +3385,12 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
 // --- Dump-wide symbol table ---
 
 pub(crate) fn dump_symbol_table() -> DumpSymbolTable {
-    let dumped = intern::dump_runtime_interner();
+    let (names, symbol_names, canonical) = intern::dump_runtime_interner().into_parts();
     DumpSymbolTable {
-        names: dumped.names,
-        symbols: dumped
-            .symbol_names
+        names,
+        symbols: symbol_names
             .into_iter()
-            .zip(dumped.canonical)
+            .zip(canonical)
             .map(|(name, canonical)| DumpSymbolEntry {
                 name: DumpNameId(name),
                 canonical,
@@ -5235,7 +5234,7 @@ pub(crate) fn load_symbol_table_parts(
 ) -> Result<(), DumpError> {
     let remap = intern::restore_runtime_interner(names, symbol_names, Some(canonical))
         .map_err(DumpError::DeserializationError)?;
-    let intern::RestoredDumpSymbolTable { names, symbols } = remap;
+    let (names, symbols) = remap.into_parts();
     PDUMP_LOAD_NAME_REMAP.with(|slot| {
         let mut slot = slot.borrow_mut();
         assert!(
