@@ -2702,7 +2702,8 @@ use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[path = "gc/tests/shutdown_tests.rs"]
 mod shutdown_tests;
 #[doc(hidden)]
-pub use concurrent::{concurrent_hash_snapshot, prepare_concurrent_hash_write};
+pub use concurrent::concurrent_hash_snapshot;
+pub(crate) use concurrent::prepare_concurrent_hash_write;
 pub(crate) mod concurrent_hash;
 
 mod rows_observation;
@@ -2724,14 +2725,16 @@ use card_table::{CardSlots, CardTable, ChunkCards};
 mod cons_block_trailer;
 use cons_block_trailer::*;
 mod collection_observed;
-#[doc(hidden)]
-pub use collection_observed::{
+pub(crate) use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
-    collection_observation_epoch, collection_observed, collection_observed_metadata,
-    cons_collection_observed_word, has_collection_observations, mark_collection_observed,
+    collection_observed, collection_observed_metadata, mark_collection_observed,
 };
 use collection_observed::{
     clear_cons_observed_block, clear_cons_observed_dead, has_noncons_collection_observations,
+};
+#[doc(hidden)]
+pub use collection_observed::{
+    collection_observation_epoch, cons_collection_observed_word, has_collection_observations,
 };
 mod cons_allocator;
 mod cons_storage;
@@ -2771,6 +2774,8 @@ pub use barrier_window::neovm_jit_unobserved_collection_owner;
 pub use barrier_window::{
     BarrierWindow, CompiledObservationGate, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO,
     HEAP_JIT_SINGLE_CONS, HEAP_JIT_SLOT_BARRIER_LEN, HEAP_JIT_SLOT_BARRIER_LO,
+};
+pub(crate) use barrier_window::{
     current_collection_dump_window, publish_collection_observation_window,
 };
 
