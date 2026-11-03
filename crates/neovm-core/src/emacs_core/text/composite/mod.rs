@@ -19,6 +19,30 @@ use crate::emacs_core::value::ValueKind;
 use neomacs_display_protocol::glyph_matrix::{TerminalComposition, TerminalCompositionCell};
 use unicode_general_category::GeneralCategory;
 
+pub use crate::buffer::composition::{
+    AutomaticCompositionSpan, BYTES_SCANNED, MAX_AUTO_COMPOSITION_LOOKBACK, fast_path,
+};
+
+/// Install the substrate's static composition seams (stage-3 C7).  Idempotent;
+/// called at evaluator construction and by the text-side entry points so tests
+/// that scan buffers without a live evaluator still get the queries.
+pub(crate) fn install_substrate_seams() {
+    // Fast path: these entry points run once per window scan (and the width
+    // query once per indentation run), so avoid two `OnceLock::set` RMWs per
+    // call.  The lock contents are still read through `OnceLock::get`, which
+    // synchronizes with the setters on its own.
+    static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    crate::buffer::composition::install(crate::buffer::composition::CompositionSeams {
+        spans: automatic_composition_spans_in_with_symbols,
+        ascii_no_rules: ascii_has_no_composition_rules_with_symbols,
+    });
+    crate::emacs_core::indent::install_composition_width_seam(composition_width_at);
+    INSTALLED.store(true, std::sync::atomic::Ordering::Release);
+}
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -458,6 +482,7 @@ pub(crate) fn composition_width_at(
     ctx: &super::eval::Context,
     charpos1: i64,
 ) -> Option<(i64, i64)> {
+    install_substrate_seams();
     let prop = super::textprop::builtin_get_text_property_in_state(
         ctx.variables(),
         &ctx.buffers,
@@ -808,33 +833,6 @@ enum LocatedComposition {
     },
 }
 
-/// A half-open character range selected by GNU's automatic-composition rule
-/// table.
-///
-/// This is deliberately distinct from a Unicode grapheme range: the Lisp
-/// `composition-function-table` may compose spacing characters, look behind
-/// the trigger character, or leave zero-width characters uncomposed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AutomaticCompositionSpan {
-    range: CharRange,
-}
-
-impl AutomaticCompositionSpan {
-    pub const fn new(start: usize, end: usize) -> Self {
-        Self {
-            range: CharRange::new(CharPos0::new(start), CharPos0::new(end)),
-        }
-    }
-
-    pub const fn start(self) -> usize {
-        self.range.start().get()
-    }
-
-    pub const fn end(self) -> usize {
-        self.range.end().get()
-    }
-}
-
 /// Select the non-overlapping automatic-composition spans in `text` from the
 /// live Lisp rule table.
 ///
@@ -843,12 +841,6 @@ impl AutomaticCompositionSpan {
 /// explicit lookback, and are tried in list order.  Once a rule matches, the
 /// next search begins after the complete match so a later rule cannot form the
 /// partially overlapping composition GNU rejects.
-/// Bytes of buffer text this process has actually scanned for automatic
-/// compositions. Bumped only when the memo misses, so it reports work DONE
-/// rather than work asked for. Read once per accepted frame into
-/// `LayoutStats::composition_bytes_scanned`.
-pub static BYTES_SCANNED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 /// Take and reset [`BYTES_SCANNED`].
 pub fn take_bytes_scanned() -> usize {
     BYTES_SCANNED.swap(0, std::sync::atomic::Ordering::Relaxed)
@@ -859,52 +851,8 @@ pub fn automatic_composition_spans(
     composition_function_table: Value,
     text: &str,
 ) -> Vec<AutomaticCompositionSpan> {
+    install_substrate_seams();
     automatic_composition_spans_in(buffer, composition_function_table, text, 0)
-}
-
-/// GNU's look-back bound for automatic compositions (composite.c:156).
-///
-/// A rule may claim up to this many characters BEFORE the one that triggered
-/// it, so a scan that wants every composition starting in a range must begin
-/// this far ahead of it. GNU calls the same number "a limitation imposed by
-/// composition rules in composition-function-table" (composite.c:1597).
-pub const MAX_AUTO_COMPOSITION_LOOKBACK: usize = 3;
-
-/// `NEOMACS_COMPOSITION_FASTPATH` (P3.5 F): the visible scan returns at once
-/// for pure-ASCII text when no ASCII character has a rule, and otherwise is
-/// memoized per buffer. Read once per process; default on.
-/// Explicit off, empty and unknown settings keep the full scan.
-pub mod fast_path {
-    use std::cell::Cell;
-    use std::sync::OnceLock;
-
-    thread_local! {
-        static OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
-    }
-
-    /// Force the fast path on or off on this thread; `None` returns to the
-    /// knob. For tests, including other crates' (the layout engine).
-    pub fn set_override(enabled: Option<bool>) {
-        OVERRIDE.with(|cell| cell.set(enabled));
-    }
-
-    /// Whether the fast path is on.
-    #[inline]
-    pub fn enabled() -> bool {
-        if let Some(enabled) = OVERRIDE.with(|cell| cell.get()) {
-            return enabled;
-        }
-        static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            matches!(
-                std::env::var("NEOMACS_COMPOSITION_FASTPATH")
-                    .ok()
-                    .map(|value| value.trim().to_ascii_lowercase())
-                    .as_deref(),
-                None | Some("on" | "1" | "true" | "yes")
-            )
-        })
-    }
 }
 
 /// Whether no ASCII character has an automatic-composition rule in TABLE, so
@@ -915,6 +863,7 @@ pub mod fast_path {
 /// composes nothing either. This is the scan's own ASCII row
 /// (`select_automatic_composition_spans`), read the same way.
 pub fn ascii_has_no_composition_rules(table: Value) -> bool {
+    install_substrate_seams();
     ascii_has_no_composition_rules_with_symbols(table, crate::tagged::SymbolMode::Bare)
 }
 
@@ -922,6 +871,7 @@ pub fn ascii_has_no_composition_rules_with_symbols(
     table: Value,
     mode: crate::tagged::SymbolMode,
 ) -> bool {
+    install_substrate_seams();
     if !super::chartable::is_char_table(&table) {
         return true;
     }
@@ -1018,6 +968,7 @@ pub fn automatic_composition_spans_in_with_symbols(
     char_offset: usize,
     mode: crate::tagged::SymbolMode,
 ) -> Vec<AutomaticCompositionSpan> {
+    install_substrate_seams();
     AutomaticCompositionRules::new_with_symbols(buffer, composition_function_table, mode)
         .map(|rules| rules.spans_in(text, char_offset))
         .unwrap_or_default()

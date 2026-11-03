@@ -2449,14 +2449,14 @@ pub struct Buffer {
     pub(crate) automatic_composition_cache: std::cell::RefCell<
         Option<(
             AutomaticCompositionKey,
-            std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>>,
+            std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>>,
         )>,
     >,
     /// Memo of the visible-range scan (`NEOMACS_COMPOSITION_FASTPATH`).
     pub(crate) automatic_composition_visible_cache: std::cell::RefCell<
         Option<(
             AutomaticCompositionVisibleKey,
-            std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>>,
+            std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>>,
         )>,
     >,
     /// Shared undo owner for this text.
@@ -4678,7 +4678,7 @@ impl Buffer {
     pub fn automatic_composition_spans(
         &self,
         composition_function_table: Value,
-    ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
+    ) -> std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>> {
         self.automatic_composition_spans_with_symbols(
             composition_function_table,
             crate::tagged::SymbolMode::Bare,
@@ -4690,7 +4690,7 @@ impl Buffer {
         &self,
         composition_function_table: Value,
         symbol_mode: crate::tagged::SymbolMode,
-    ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
+    ) -> std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>> {
         let key = AutomaticCompositionKey {
             chars_tick: self.chars_modified_tick(),
             props_tick: self.props_modified_tick(),
@@ -4710,21 +4710,19 @@ impl Buffer {
             buffer_head = ?text.chars().take(24).collect::<Vec<_>>(),
             "automatic composition spans: scan start"
         );
-        crate::emacs_core::composite::BYTES_SCANNED
+        super::composition::BYTES_SCANNED
             .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
         // Absolute char coordinates, like the visible-bounded scan next door.
         // `buffer_string` yields the ACCESSIBLE portion, so a narrowed buffer
         // starts at point-min, not zero -- and a caller that then added the
         // offset itself would count it twice.
-        let spans = std::rc::Rc::new(
-            crate::emacs_core::composite::automatic_composition_spans_in_with_symbols(
-                self,
-                composition_function_table,
-                &text,
-                self.point_min_char_pos().get(),
-                symbol_mode,
-            ),
-        );
+        let spans = std::rc::Rc::new(super::composition::seams().spans(
+            self,
+            composition_function_table,
+            &text,
+            self.point_min_char_pos().get(),
+            symbol_mode,
+        ));
         if symbol_mode == crate::tagged::SymbolMode::Bare {
             *self.automatic_composition_cache.borrow_mut() =
                 Some((key, std::rc::Rc::clone(&spans)));
@@ -4754,7 +4752,7 @@ impl Buffer {
         composition_function_table: Value,
         first_char: usize,
         budget: usize,
-    ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
+    ) -> std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>> {
         self.automatic_composition_spans_visible_with_symbols(
             composition_function_table,
             first_char,
@@ -4770,8 +4768,8 @@ impl Buffer {
         first_char: usize,
         budget: usize,
         symbol_mode: crate::tagged::SymbolMode,
-    ) -> std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>> {
-        use crate::emacs_core::composite::MAX_AUTO_COMPOSITION_LOOKBACK;
+    ) -> std::rc::Rc<Vec<super::composition::AutomaticCompositionSpan>> {
+        use super::composition::MAX_AUTO_COMPOSITION_LOOKBACK;
         let accessible_start = self.point_min_char_pos().get();
         let accessible_end = self.point_max_char_pos().get();
         let start = first_char
@@ -4788,7 +4786,7 @@ impl Buffer {
             self.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(start)),
             self.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(end)),
         );
-        let fast = crate::emacs_core::composite::fast_path::enabled();
+        let fast = super::composition::fast_path::enabled();
         let key = (fast && symbol_mode == crate::tagged::SymbolMode::Bare).then(|| {
             AutomaticCompositionVisibleKey {
                 chars_tick: self.chars_modified_tick(),
@@ -4811,10 +4809,8 @@ impl Buffer {
             // Pure ASCII with no ASCII rule composes nothing: skip the copy
             // and the per-character walk (see the predicate's doc).
             if self.text.emacs_byte_range_is_ascii(byte_range)
-                && crate::emacs_core::composite::ascii_has_no_composition_rules_with_symbols(
-                    composition_function_table,
-                    symbol_mode,
-                )
+                && super::composition::seams()
+                    .ascii_no_rules(composition_function_table, symbol_mode)
             {
                 let spans = std::rc::Rc::new(Vec::new());
                 *self.automatic_composition_visible_cache.borrow_mut() =
@@ -4823,17 +4819,15 @@ impl Buffer {
             }
         }
         let text = self.buffer_substring_range(byte_range);
-        crate::emacs_core::composite::BYTES_SCANNED
+        super::composition::BYTES_SCANNED
             .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
-        let spans = std::rc::Rc::new(
-            crate::emacs_core::composite::automatic_composition_spans_in_with_symbols(
-                self,
-                composition_function_table,
-                &text,
-                start,
-                symbol_mode,
-            ),
-        );
+        let spans = std::rc::Rc::new(super::composition::seams().spans(
+            self,
+            composition_function_table,
+            &text,
+            start,
+            symbol_mode,
+        ));
         if let Some(key) = key {
             *self.automatic_composition_visible_cache.borrow_mut() =
                 Some((key, std::rc::Rc::clone(&spans)));

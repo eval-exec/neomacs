@@ -3877,6 +3877,10 @@ fn changed_char_range_tracks_replacements() {
 #[test]
 fn automatic_composition_memo_recomputes_when_any_input_it_reads_changes() {
     crate::test_utils::init_test_tracing();
+    // A bare Buffer outside a Context has no evaluator construction to
+    // publish the text-layer composition scans (stage-3 C7), so install them
+    // here explicitly; inside an editor the constructor already did.
+    crate::emacs_core::composite::install_substrate_seams();
     let mut buf = Buffer::new(
         BufferId(1),
         Value::string("compose"),

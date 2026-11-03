@@ -2404,6 +2404,12 @@ impl Context {
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
         super::cconv_memo::install_function_epoch_move_sink();
+        // The buffer substrate owns the automatic-composition span data; the
+        // live rule-table scans and width queries stay in the text layer and
+        // are published here as static fn pointers (stage-3 C7).  Buffer
+        // entry points install lazily as well, so a Buffer used outside a
+        // Context needs no Context.
+        crate::emacs_core::composite::install_substrate_seams();
         // Create the heap and set thread-locals so tagged constructors work
         // during evaluator initialization. The owner carries the allocation's
         // provenance root; installation and every later access derive from it.
