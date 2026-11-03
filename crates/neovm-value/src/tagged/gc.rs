@@ -2951,7 +2951,6 @@ mod generational_pacing_tests;
 #[path = "gc/tests/major_symbol_preimage_test.rs"]
 mod major_symbol_preimage_tests;
 
-
 #[cfg(test)]
 #[path = "gc/tests/satb_gc_stress_test.rs"]
 mod satb_gc_stress_tests;

@@ -1268,7 +1268,6 @@ mod gc_tls_ownership_tests;
 #[path = "tests/flow_word_test.rs"]
 mod flow_word_tests;
 
-
 /// Carrier park: forget the owner's in-flight root registry handle. The
 /// handle points into a Context-owned root table, not into the heap, but the
 /// next owner installs its own handle, so the parked carrier keeps nothing.

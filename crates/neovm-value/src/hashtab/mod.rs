@@ -978,7 +978,6 @@ pub fn maphash_entry_at_slot(table: Value, slot: usize) -> Option<(Value, Value)
     Some((entry.key, entry.value))
 }
 
-
 #[cfg(test)]
 #[path = "tests/symbol_mode_sxhash_test.rs"]
 mod symbol_mode_sxhash_tests;

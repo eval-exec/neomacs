@@ -385,8 +385,6 @@ fn include(bounds: &mut (usize, usize), address: usize) {
 #[path = "tests/observed_reclamation.rs"]
 mod tests;
 
-
-
 #[cfg(test)]
 #[path = "tests/observed_disjoint_refinement.rs"]
 mod disjoint_refinement_tests;

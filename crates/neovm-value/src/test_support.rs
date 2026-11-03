@@ -54,7 +54,11 @@ pub unsafe fn heap_types__LispString__from_borrowed_bytes(
 ) -> LispString {
     unsafe {
         crate::heap_types::__test_support::lisp_string_from_borrowed_bytes(
-            ptr, len, size, size_byte, static_rodata,
+            ptr,
+            len,
+            size,
+            size_byte,
+            static_rodata,
         )
     }
 }

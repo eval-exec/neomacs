@@ -5897,8 +5897,6 @@ use hash_index::{HashIndex, fx_hash_key, stored_hash};
 #[path = "tests/value_test.rs"]
 mod tests;
 
-
-
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while
 /// it is parked; the Green runtime moves it at each park and resume, so
@@ -5918,7 +5916,6 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
         .expect("carried World state");
     THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| *slot = counts.replace(*slot));
 }
-
 
 #[cfg(test)]
 #[path = "tests/p2ht_authority_test.rs"]

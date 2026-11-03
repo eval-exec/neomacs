@@ -2199,7 +2199,6 @@ impl TaggedHeap {
     }
 }
 
-
 /// The header's generation byte, collection-scope predicate and first-partition promotion.
 #[cfg(test)]
 #[path = "tests/generation_test.rs"]

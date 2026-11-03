@@ -1604,17 +1604,13 @@ impl<'de> Deserialize<'de> for LispString {
     }
 }
 
-
 #[cfg(test)]
 #[path = "heap_types/tests/declared_character_count.rs"]
 mod declared_character_count_tests;
 
-
-
 #[cfg(test)]
 #[path = "heap_types/tests/clear_string_in_place_test.rs"]
 mod clear_string_in_place_tests;
-
 
 /// Creation-order identity of one overlay, used only for the final
 /// precedence tie-break in GNU `compare_overlays` (`src/buffer.c:3256-3282`).
@@ -2017,7 +2013,6 @@ const _: () = {
     assert!(std::mem::size_of::<crate::tagged::header::MarkerObj>() <= 56);
     assert!(std::mem::align_of::<crate::tagged::header::MarkerObj>() >= 8);
 };
-
 
 #[cfg(test)]
 #[path = "heap_types/tests/signed_string_positions.rs"]

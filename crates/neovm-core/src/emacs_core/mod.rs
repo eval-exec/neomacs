@@ -429,12 +429,12 @@ mod split_test_support_manifest_test;
 #[path = "lisp/load/tests/stale_bytecode_test.rs"]
 mod stale_bytecode_test;
 #[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/function_regression_test.rs"]
+mod symbol_function_regression_test;
+#[cfg(test)]
 #[cfg(test)]
 #[path = "tests/architecture/symbol_id_guard_test.rs"]
 mod symbol_id_guard_test;
-#[cfg(test)]
-#[path = "../../core_tests/emacs_core/runtime/symbol/tests/function_regression_test.rs"]
-mod symbol_function_regression_test;
 #[cfg(test)]
 #[path = "../../core_tests/emacs_core/runtime/symbol/tests/plist_regression_test.rs"]
 mod symbol_plist_regression_test;

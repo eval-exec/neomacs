@@ -308,7 +308,6 @@ pub use data::nreverse_bool_vector;
 #[doc(hidden)]
 pub use data::reverse_bool_vector;
 
-
 #[cfg(test)]
 #[path = "tests/zeroed_storage_test.rs"]
 mod zeroed_storage_tests;

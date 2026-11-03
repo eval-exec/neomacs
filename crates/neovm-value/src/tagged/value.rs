@@ -1474,7 +1474,6 @@ impl fmt::Debug for TaggedValue {
     }
 }
 
-
 #[cfg(test)]
 #[path = "value/tests/fixnum_boundary.rs"]
 mod fixnum_boundary_tests;
