@@ -2,6 +2,7 @@
 //! No production factory permits the direct capture access used by this child.
 
 use super::*;
+use crate::emacs_core::eval::world::ParallelHeapEraWorldCollectExt;
 use crate::emacs_core::eval::{
     ThreadingMode, push_scratch_gc_roots, restore_scratch_gc_roots, save_scratch_gc_roots,
 };

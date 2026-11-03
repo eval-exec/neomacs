@@ -24,6 +24,8 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 mod era;
+#[cfg(test)]
+pub(crate) use era::ParallelHeapEraWorldCollectExt;
 pub(crate) use era::ParallelHeapEraWorldExt;
 pub use era::WorldEra;
 #[cfg(test)]

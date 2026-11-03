@@ -129,13 +129,29 @@ impl<'heap> WorldProofEraExt<'heap> for gc::GenericProofEra<'heap, Baton> {
     }
 }
 
+/// World-collection entry points for the production multi-mutator era.
+///
+/// The era type is value-layer data and each entry invokes this World's
+/// canonical `Baton` walker, so the two entry points stay upper as an
+/// extension trait on the moved type.
+pub(crate) trait ParallelHeapEraWorldCollectExt {
+    fn collect_stopped(
+        &self,
+        stopped: &mut gc::AllStopped<'_>,
+    ) -> Result<gc::CollectionReport, gc::CollectionError>;
+    fn collect_stopped_minor(
+        &self,
+        stopped: &mut gc::AllStopped<'_>,
+    ) -> Result<gc::CollectionReport, gc::MinorCollectionError>;
+}
+
 // Each concrete entry invokes the EXISTING canonical World walker. No second
 // child schema, cached census, stored callback or virtual dispatch is added.
 macro_rules! world_collection {
     ($era:ident) => {
-        impl $era<'_> {
+        impl<'heap> ParallelHeapEraWorldCollectExt for $era<'heap> {
             #[cold]
-            pub(crate) fn collect_stopped(
+            fn collect_stopped(
                 &self,
                 stopped: &mut gc::AllStopped<'_>,
             ) -> Result<gc::CollectionReport, gc::CollectionError> {
@@ -144,7 +160,7 @@ macro_rules! world_collection {
                 unsafe { self.collect_stopped_with(stopped, Baton::collect_parallel_world_roots) }
             }
             #[cold]
-            pub(crate) fn collect_stopped_minor(
+            fn collect_stopped_minor(
                 &self,
                 stopped: &mut gc::AllStopped<'_>,
             ) -> Result<gc::CollectionReport, gc::MinorCollectionError> {

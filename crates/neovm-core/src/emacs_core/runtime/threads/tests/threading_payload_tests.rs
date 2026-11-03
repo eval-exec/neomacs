@@ -2,6 +2,7 @@
 //! Children have no SharedRoot or private-owner root that could hide an edge.
 use crate::buffer::CharRange;
 use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::world::ParallelHeapEraWorldCollectExt;
 use crate::emacs_core::threads::ThreadName;
 use crate::heap_types::LispString;
 use crate::heap_types::threading::ThreadName as PayloadThreadName;
