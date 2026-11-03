@@ -32,30 +32,11 @@ pub(crate) use strings::upcase_char_code_emacs_compat;
 // Transitional string character iteration
 // ---------------------------------------------------------------------------
 
-/// Iterate Emacs character codes from a `LispString`.
-///
-/// For **multibyte** strings each character is decoded straight from the
-/// Emacs-internal bytes via `string_char_unchecked`: standard UTF-8 code points
-/// (including real Private-Use-Area glyphs such as nerd-font icons) and the
-/// extended `0x3FFF00+byte` sequences for eight-bit raw bytes. There is no
-/// in-Unicode "sentinel" remapping — that conflated real PUA characters with
-/// raw bytes and corrupted them (issue #131). For **unibyte** strings each byte
-/// maps to its value directly (0..255).
-pub(crate) fn lisp_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u32> {
-    let bytes = string.as_bytes();
-    if !string.is_multibyte() {
-        return bytes.iter().map(|&b| b as u32).collect();
-    }
-    let mut out = Vec::with_capacity(string.schars());
-    let mut pos = 0;
-    for _ in 0..string.schars() {
-        let tail = bytes.get(pos..).unwrap_or_default();
-        let (cp, len) = crate::heap_types::decode_declared_multibyte_char(tail);
-        out.push(cp.code());
-        pos += len;
-    }
-    out
-}
+// Moved below the evaluator with the stage-3 split (C7a prep): the
+// char-table container's uniprop decoder reads compressed strings through
+// this helper. The historical `builtins::lisp_string_char_codes` path keeps
+// working through this facade.
+pub(crate) use crate::strings_core::lisp_string_char_codes;
 
 /// Return the character code at character index `idx` in `string`, or
 /// `None` if `idx` is out of range. Unlike `lisp_string_char_codes`, this

@@ -27,6 +27,32 @@ use crate::value::{
     set_string_text_properties_table_for_value,
 };
 
+/// Iterate Emacs character codes from a `LispString`.
+///
+/// For **multibyte** strings each character is decoded straight from the
+/// Emacs-internal bytes via `string_char_unchecked`: standard UTF-8 code points
+/// (including real Private-Use-Area glyphs such as nerd-font icons) and the
+/// extended `0x3FFF00+byte` sequences for eight-bit raw bytes. There is no
+/// in-Unicode "sentinel" remapping — that conflated real PUA characters with
+/// raw bytes and corrupted them (issue #131). For **unibyte** strings each byte
+/// maps to its value directly (0..255).
+#[doc(hidden)]
+pub fn lisp_string_char_codes(string: &crate::heap_types::LispString) -> Vec<u32> {
+    let bytes = string.as_bytes();
+    if !string.is_multibyte() {
+        return bytes.iter().map(|&b| b as u32).collect();
+    }
+    let mut out = Vec::with_capacity(string.schars());
+    let mut pos = 0;
+    for _ in 0..string.schars() {
+        let tail = bytes.get(pos..).unwrap_or_default();
+        let (cp, len) = crate::heap_types::decode_declared_multibyte_char(tail);
+        out.push(cp.code());
+        pos += len;
+    }
+    out
+}
+
 /// Extract an integer, signaling wrong-type-argument if not.
 fn expect_int(value: &Value) -> Result<i64, Flow> {
     match value.kind() {
