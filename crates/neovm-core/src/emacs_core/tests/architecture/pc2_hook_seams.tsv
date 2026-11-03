@@ -1,0 +1,4 @@
+# PC2 sealed hook installers (peer PC2/PC10): exactly two install seams,
+# evaluator construction and image restore.
+# Columns: installer<TAB>seam1 file:function<TAB>seam2 file:function
+installer	seam1	seam2

@@ -1,0 +1,6 @@
+# PC1(a) fenced hot-path methods (peer PC1 AMENDED, 2026-11-03).
+# Columns: type<TAB>method<TAB>protected caller evidence.
+# Rows are contributed by pentry, lbstamp and gapsurvey; the guard scans every
+# workspace crate except neovm-core and neovm-value for `.method(` / `::method(`.
+# The rustdoc-JSON public-API diff of neovm-core must equal exactly this table.
+type	method	protected_caller

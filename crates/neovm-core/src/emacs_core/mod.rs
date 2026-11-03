@@ -405,6 +405,9 @@ mod shader_surface_test;
 #[path = "tests/architecture/split_cfg_test_guard_test.rs"]
 mod split_cfg_test_guard_test;
 #[cfg(test)]
+#[path = "tests/architecture/split_shared_guards.rs"]
+mod split_shared_guards;
+#[cfg(test)]
 #[path = "tests/architecture/split_test_support_manifest_test.rs"]
 mod split_test_support_manifest_test;
 #[cfg(test)]
