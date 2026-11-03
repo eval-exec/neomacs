@@ -14,15 +14,23 @@
 //! seam and decrements the number in the same commit. A new illegal impl
 //! fails immediately; a stale allowlist row fails as a mismatch too.
 //!
-//! The moving file set is pinned in `coherence_moving_files.list` (the
-//! design's move manifest plus `tls_fingerprint.rs`). Type resolution works
-//! on the crate's own source tree: a name defined only inside moving files
-//! is a moved type; a name defined in a non-moving file is an upper type
-//! (same-name collisions make the name ambiguous and are not counted, except
-//! the pinned identities below). Traits defined in non-moving files are
-//! upper-local (legal); a foreign trait whose type arguments name an upper
-//! type is the legal orphan-rule case. The scan parses every source file and
-//! walks nested modules, so test modules in the same crate are included.
+//! The moving set is **derived mechanically from the tree under test**: a file
+//! is moving when its path lies under one of [`MOVING_FILE_PATHS`] or is one
+//! of [`MOVING_ROOT_FILES`]. It is deliberately not a type list taken from
+//! main: a split cut can move a type into a moving path (T1-storage moves
+//! `ByteCodeFunction` into `tagged/bytecode/chunk.rs`), and any upper impl on
+//! it must start counting on that candidate tree without editing the guard.
+//! The layering ratchet cannot see calls that resolve to an upper inherent
+//! method from lower code; this guard catches that class by flagging the impl
+//! itself.
+//!
+//! Type resolution works on the crate's own source tree: a name defined only
+//! inside moving files is a moved type; a name defined in a non-moving file is
+//! an upper type (same-name collisions make the name ambiguous and are not
+//! counted, except the pinned identities below). Traits defined in non-moving
+//! files are upper-local (legal); a foreign trait whose type arguments name an
+//! upper type is the legal orphan-rule case. The scan parses every source file
+//! and walks nested modules, so test modules in the same crate are included.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -49,7 +57,34 @@ const AMBIGUOUS_MOVED_IMPLS: &[(&str, &str, Option<&str>)] = &[];
 /// the alias resolves, so they count exactly like unambiguous definitions.
 const PINNED_MOVED_NAMES: &[&str] = &["OpenedFontMetrics", "GenericProofEra", "WorldProofEra"];
 
-const MOVING_FILES: &str = include_str!("coherence_moving_files.list");
+/// Directories whose complete contents move into neovm-value, relative to
+/// `crates/neovm-core/src`. Derived from the split design's module list, never
+/// from a branch's type inventory.
+const MOVING_FILE_PATHS: &[&str] = &[
+    "emacs_core/runtime/value/",
+    "emacs_core/runtime/symbol/",
+    "emacs_core/runtime/intern/",
+    "emacs_core/runtime/error/",
+    "emacs_core/runtime/errors/",
+    "emacs_core/runtime/forward/",
+    "emacs_core/runtime/alloc/",
+    "emacs_core/runtime/hashtab/",
+    "emacs_core/text/emacs_char/",
+    "emacs_core/text/boolvec/",
+    "tagged/",
+];
+
+/// Single-file moving modules at the crate root.
+const MOVING_ROOT_FILES: &[&str] = &["heap_types.rs", "gc_trace.rs", "tls_fingerprint.rs"];
+
+/// Mechanical moving-set membership for a source path relative to
+/// `crates/neovm-core/src` (forward slashes).
+fn is_moving_path(relative: &str) -> bool {
+    MOVING_ROOT_FILES.contains(&relative)
+        || MOVING_FILE_PATHS
+            .iter()
+            .any(|prefix| relative.starts_with(prefix))
+}
 
 fn source_files(directory: &Path, files: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(directory).expect("read source directory") {
@@ -204,6 +239,7 @@ fn collect_defs(
     }
 }
 
+#[derive(Debug)]
 struct Violation {
     file: String,
     line: usize,
@@ -302,54 +338,16 @@ fn collect_impls(
     }
 }
 
-#[test]
-fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
-    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let moving_files: BTreeSet<&str> = MOVING_FILES
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    assert!(
-        moving_files.len() > 400,
-        "the pinned moving list has only {} files",
-        moving_files.len()
-    );
-    assert!(
-        moving_files.contains("tls_fingerprint.rs"),
-        "the bottom-peer fingerprint module is part of the move"
-    );
-
-    let mut files = Vec::new();
-    source_files(&crate_root.join("src"), &mut files);
-    files.sort();
-    assert!(
-        files.len() > 500,
-        "the scan found only {} source files; check the crate root",
-        files.len()
-    );
-
-    let mut parsed = Vec::new();
-    for file in &files {
-        let relative = file
-            .strip_prefix(crate_root.join("src"))
-            .expect("source file is inside src")
-            .to_string_lossy()
-            .replace('\\', "/");
-        let source = std::fs::read_to_string(file)
-            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
-        let syntax =
-            syn::parse_file(&source).unwrap_or_else(|error| panic!("parse {relative}: {error}"));
-        parsed.push((relative, syntax));
-    }
-
+/// Scan parsed source files, classifying each file's moving membership from
+/// its path. Returns the illegal upper impls and the pinned rows that matched.
+fn scan_sources(parsed: &[(String, syn::File)]) -> (Vec<Violation>, BTreeSet<usize>) {
     let mut moving_defs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut upper_defs: BTreeSet<String> = BTreeSet::new();
     let mut upper_traits: BTreeSet<String> = BTreeSet::new();
-    for (relative, syntax) in &parsed {
+    for (relative, syntax) in parsed {
         collect_defs(
             &syntax.items,
-            moving_files.contains(relative.as_str()),
+            is_moving_path(relative),
             relative,
             &mut moving_defs,
             &mut upper_defs,
@@ -359,11 +357,11 @@ fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
 
     let mut pinned = BTreeSet::new();
     let mut violations = Vec::new();
-    for (relative, syntax) in &parsed {
+    for (relative, syntax) in parsed {
         collect_impls(
             &syntax.items,
             relative,
-            moving_files.contains(relative.as_str()),
+            is_moving_path(relative),
             &moving_defs,
             &upper_defs,
             &upper_traits,
@@ -371,13 +369,11 @@ fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
             &mut violations,
         );
     }
+    (violations, pinned)
+}
 
-    assert_eq!(
-        pinned.len(),
-        AMBIGUOUS_MOVED_IMPLS.len(),
-        "a pinned ambiguous moved-type impl is stale: remove its row"
-    );
-    let rendered: Vec<String> = violations
+fn render_violations(violations: &[Violation]) -> String {
+    violations
         .iter()
         .map(|violation| {
             format!(
@@ -388,13 +384,158 @@ fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
                 violation.self_type,
             )
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn coherence_upper_impl_ratchet_equals_remaining_allowed() {
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source_root = crate_root.join("src");
+    let mut files = Vec::new();
+    source_files(&source_root, &mut files);
+    files.sort();
+    assert!(
+        files.len() > 500,
+        "the scan found only {} source files; check the crate root",
+        files.len()
+    );
+
+    let mut parsed = Vec::new();
+    for file in &files {
+        let relative = file
+            .strip_prefix(&source_root)
+            .expect("source file is inside src")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = std::fs::read_to_string(file)
+            .unwrap_or_else(|error| panic!("read {}: {error}", file.display()));
+        let syntax =
+            syn::parse_file(&source).unwrap_or_else(|error| panic!("parse {relative}: {error}"));
+        parsed.push((relative, syntax));
+    }
+
+    let moving = parsed
+        .iter()
+        .filter(|(relative, _)| is_moving_path(relative))
+        .count();
+    assert!(
+        moving > 400,
+        "the derived moving set has only {moving} files; check the module paths"
+    );
+    assert!(
+        parsed
+            .iter()
+            .any(|(relative, _)| relative == "tls_fingerprint.rs" && is_moving_path(relative)),
+        "the bottom-peer fingerprint module is part of the move"
+    );
+
+    let (violations, pinned) = scan_sources(&parsed);
+    assert_eq!(
+        pinned.len(),
+        AMBIGUOUS_MOVED_IMPLS.len(),
+        "a pinned ambiguous moved-type impl is stale: remove its row"
+    );
     assert_eq!(
         violations.len(),
         REMAINING_ALLOWED,
         "coherence ratchet: found {} illegal upper impls, allowed {}:\n{}",
         violations.len(),
         REMAINING_ALLOWED,
-        rendered.join("\n"),
+        render_violations(&violations),
     );
+}
+
+/// The guard must redden when a type lands in a moving path and an upper file
+/// impls it — the T1-storage case (`ByteCodeFunction` into
+/// `tagged/bytecode/chunk.rs`) without waiting for T1 to land.
+#[test]
+fn coherence_ratchet_reddens_on_a_synthetic_moved_type() {
+    let parsed = vec![
+        (
+            "tagged/bytecode/chunk.rs".to_string(),
+            syn::parse_file("pub struct ByteCodeFunction;").expect("moved source"),
+        ),
+        (
+            "emacs_core/runtime/eval/upper_consumer.rs".to_string(),
+            syn::parse_file(
+                "impl ByteCodeFunction { fn inspect(&self) {} }\n\
+                 impl Clone for ByteCodeFunction { fn clone(&self) -> Self { ByteCodeFunction } }",
+            )
+            .expect("upper source"),
+        ),
+    ];
+    let (violations, _) = scan_sources(&parsed);
+    let rendered = render_violations(&violations);
+    assert_eq!(
+        violations.len(),
+        2,
+        "the synthetic T1-style move must count both upper impls:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "emacs_core/runtime/eval/upper_consumer.rs:1: impl (inherent) for ByteCodeFunction"
+        ),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "emacs_core/runtime/eval/upper_consumer.rs:2: impl Clone for ByteCodeFunction"
+        ),
+        "{rendered}"
+    );
+}
+
+/// Legal forms stay uncounted: an impl written in the moving file itself, an
+/// upper-local trait for a moved type, and a foreign trait with an upper type
+/// argument (the RFC 2451 covered rule).
+#[test]
+fn coherence_ratchet_ignores_legal_moving_and_local_forms() {
+    let parsed = vec![
+        (
+            "tagged/bytecode/chunk.rs".to_string(),
+            syn::parse_file(
+                "pub struct ByteCodeFunction;\n\
+                 impl ByteCodeFunction { fn own(&self) {} }",
+            )
+            .expect("moved source"),
+        ),
+        (
+            "emacs_core/runtime/eval/upper_consumer.rs".to_string(),
+            syn::parse_file(
+                "pub trait UpperExt { fn f(&self); }\n\
+                 impl UpperExt for ByteCodeFunction { fn f(&self) {} }\n\
+                 pub struct UpperKey;\n\
+                 impl From<UpperKey> for ByteCodeFunction { fn from(_: UpperKey) -> Self { ByteCodeFunction } }",
+            )
+            .expect("upper source"),
+        ),
+    ];
+    let (violations, _) = scan_sources(&parsed);
+    assert_eq!(
+        violations.len(),
+        0,
+        "legal forms must not count:\n{}",
+        render_violations(&violations)
+    );
+}
+
+/// Membership is structural: the T1 destination path is moving even though no
+/// such file exists on this tree, and upper runtime modules are not.
+#[test]
+fn coherence_moving_set_is_derived_from_module_paths() {
+    assert!(is_moving_path("tagged/bytecode/chunk.rs"));
+    assert!(is_moving_path("tagged/header/sqlite_finalizer.rs"));
+    assert!(is_moving_path("emacs_core/runtime/value/new_module.rs"));
+    assert!(is_moving_path(
+        "emacs_core/runtime/symbol/tests/new_test.rs"
+    ));
+    assert!(is_moving_path("emacs_core/text/emacs_char/new_module.rs"));
+    assert!(is_moving_path("heap_types.rs"));
+    assert!(is_moving_path("gc_trace.rs"));
+    assert!(is_moving_path("tls_fingerprint.rs"));
+    assert!(!is_moving_path("emacs_core/runtime/bytecode/chunk.rs"));
+    assert!(!is_moving_path("emacs_core/runtime/eval/mod.rs"));
+    assert!(!is_moving_path("emacs_core/display/font/mod.rs"));
+    assert!(!is_moving_path("emacs_core/system/sqlite/mod.rs"));
 }
