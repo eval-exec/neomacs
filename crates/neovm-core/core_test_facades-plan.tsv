@@ -53,3 +53,4 @@ emacs_core::value::bytecode_capture_tests	emacs_core/value.rs	crates/neovm-core/
 tagged::gc::bytecode_parameter_roots_tests	tagged/gc.rs	crates/neovm-core/core_tests/tagged/gc/tests/bytecode_parameter_roots.rs	../../core_tests/tagged/gc/tests/bytecode_parameter_roots.rs
 tagged::gc::mutator_registration::nmjit_n1	tagged/gc/mutator_registration.rs	crates/neovm-core/core_tests/tagged/gc/mutator_registration/nmjit_n1.rs	../../../core_tests/tagged/gc/mutator_registration/nmjit_n1.rs
 heap_types::clear_string_in_place_tests	heap_types.rs	crates/neovm-core/core_tests/heap_types/tests/clear_string_in_place_test.rs	../core_tests/heap_types/tests/clear_string_in_place_test.rs
+tagged::tests	tagged.rs	crates/neovm-core/core_tests/tagged/tests/tagged_test.rs	../core_tests/tagged/tests/tagged_test.rs

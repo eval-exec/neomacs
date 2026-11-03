@@ -16,3 +16,7 @@ pub mod gc;
 pub mod mutate;
 #[path = "tagged/value.rs"]
 pub mod value;
+
+#[cfg(test)]
+#[path = "../core_tests/tagged/tests/tagged_test.rs"]
+mod tests;
