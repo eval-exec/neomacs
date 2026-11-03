@@ -729,7 +729,8 @@ use crate::tagged::header::{
 /// wrapper as absent (GNU's `SYMBOLP` plus the unbound check the obarray paths
 /// share). Lives here so the bottom layer's own users -- error-condition
 /// matching included -- need no obarray builtins for it.
-pub(crate) fn symbol_id(value: &Value, mode: crate::tagged::SymbolMode) -> Option<SymId> {
+#[doc(hidden)]
+pub fn symbol_id(value: &Value, mode: crate::tagged::SymbolMode) -> Option<SymId> {
     value.as_symbol_id(mode).filter(|_| !value.is_unbound())
 }
 
@@ -2632,7 +2633,8 @@ pub trait IntoSymbol {
 /// heap object and retains no canonical-membership proof: conversion checks
 /// registry epoch/membership at each use. Not a name-to-ID cache.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ProducerSymbolName {
+#[doc(hidden)]
+pub struct ProducerSymbolName {
     symbol: SymId,
     spelling: &'static str,
     characters: usize,
@@ -2641,7 +2643,8 @@ pub(crate) struct ProducerSymbolName {
 static_assertions::assert_impl_all!(ProducerSymbolName: Send, Sync);
 
 impl ProducerSymbolName {
-    pub(crate) fn from_value(value: Value) -> Option<Self> {
+    #[doc(hidden)]
+    pub fn from_value(value: Value) -> Option<Self> {
         let symbol = value.as_bare_symbol_id()?;
         let atom = crate::intern::resolve_sym_lisp_string(symbol);
         Some(Self {
@@ -2651,7 +2654,8 @@ impl ProducerSymbolName {
         })
     }
 
-    pub(crate) fn spelling(&self) -> &'static str {
+    #[doc(hidden)]
+    pub fn spelling(&self) -> &'static str {
         self.spelling
     }
 }
