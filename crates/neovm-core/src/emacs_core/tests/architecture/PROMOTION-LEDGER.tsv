@@ -65,6 +65,7 @@ FunctionCellSnapshot	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1026	e
 FunctionEpoch	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:772	emacs_core::symbol	bulk
 FunctionSourceIdentity	enum	pub(crate)	crates/neovm-value/src/value/mod.rs:56	emacs_core::value	bulk
 GC_HEADER_TENURED_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/header.rs:626	tagged::header	bulk
+GNU_DEFAULT_WIDE_RANGES	use	pub(crate)	crates/neovm-value/src/emacs_char/mod.rs:1596	emacs_core::emacs_char	bulk
 GnuDeclaredCharacterCount	struct	pub(crate)	crates/neovm-value/src/heap_types.rs:246	heap_types	bulk
 GnuDeclaredCharacterCountError	enum	pub(crate)	crates/neovm-value/src/heap_types.rs:250	heap_types	bulk
 GnuStringCharPos	struct	pub(crate)	crates/neovm-value/src/heap_types.rs:285	heap_types	bulk
@@ -180,6 +181,7 @@ ThreadPhase	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:219	h
 UserCondition	struct	pub(crate)	crates/neovm-value/src/error/mod.rs:974	emacs_core::error	pc1-d DATA: signed error-errors audit; private SymId field retained
 ValueCell	enum	pub(crate)	crates/neovm-value/src/symbol/cell.rs:329	emacs_core::symbol	bulk
 WriteProjection	enum	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:728	tagged::collection_reads	bulk
+ZERO_WIDTH_RANGES	use	pub(crate)	crates/neovm-value/src/emacs_char/mod.rs:1596	emacs_core::emacs_char	bulk
 apply_signed_delta	fn	pub(crate)	crates/neovm-value/src/heap_types/byte_positions.rs:148	heap_types::byte_positions	bulk
 blv_alist_epoch	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:445	emacs_core::symbol	bulk
 blv_alist_epoch_addr	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:453	emacs_core::symbol	bulk

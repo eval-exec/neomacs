@@ -1593,7 +1593,8 @@ pub fn utf8_to_emacs(s: &str) -> Vec<u8> {
 
 mod char_width;
 pub use char_width::char_width;
-pub(crate) use data::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
+#[doc(hidden)]
+pub use char_width::{GNU_DEFAULT_WIDE_RANGES, ZERO_WIDTH_RANGES};
 
 #[cfg(test)]
 #[path = "tests/emacs_char_test.rs"]
