@@ -64,7 +64,8 @@ pub(crate) mod hook_publication;
 
 pub(crate) use bytecode_semantics::bytecode_semantics;
 pub mod flow_vocab;
-pub(crate) mod jit_runtime;
+#[doc(hidden)]
+pub mod jit_runtime;
 pub mod positions;
 pub(crate) mod scratch_bridge;
 pub mod text_props;
