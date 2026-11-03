@@ -1652,7 +1652,8 @@ impl std::fmt::Display for DrainKinds {
 /// diagnostics-only and intentionally separates the always-resident 64 KiB
 /// page backing from payload allocations owned by live objects.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ArenaLayoutStats {
+#[doc(hidden)]
+pub struct ArenaLayoutStats {
     pub class: &'static str,
     pub pages: usize,
     pub page_bytes: usize,
@@ -1835,7 +1836,8 @@ pub(crate) type RootGroup = (&'static str, u64, usize);
 /// Per-group decomposition of one `seed_all_context_roots` call (one root
 /// handshake's context-root seeding). Built fresh each call by the evaluator.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct RootSeedBreakdown {
+#[doc(hidden)]
+pub struct RootSeedBreakdown {
     /// Whole-call wall time (all groups + thread-local + marker heads).
     pub total_us: u64,
     /// Ordered per-group `(name, µs, values visited)` records.

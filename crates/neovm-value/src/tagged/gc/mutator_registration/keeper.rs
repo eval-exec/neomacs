@@ -6,7 +6,8 @@ use crate::tagged::value::TaggedValue;
 /// The census either excludes every suspended legacy activation or cannot
 /// authorize function-cell replacement during the era.
 #[derive(Clone, Copy)]
-pub(crate) enum FrozenFunctionRoots {
+#[doc(hidden)]
+pub enum FrozenFunctionRoots {
     Quiescent,
     MayBeActive,
 }
@@ -14,7 +15,8 @@ pub(crate) enum FrozenFunctionRoots {
 /// Census of the original Context, whose execution is suspended for the era.
 /// These words never cross an owner thread or confer running access.
 #[derive(Debug)]
-pub(crate) struct FrozenLegacyRoots {
+#[doc(hidden)]
+pub struct FrozenLegacyRoots {
     heap: HeapIdentity,
     words: Vec<TaggedValue>,
     functions_quiescent: bool,

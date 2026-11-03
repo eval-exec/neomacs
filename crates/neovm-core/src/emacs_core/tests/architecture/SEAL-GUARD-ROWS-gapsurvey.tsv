@@ -1,0 +1,8 @@
+item	callers	seal
+RootSeedBreakdown	runtime/eval/gc_generational.rs:26; runtime/eval/command_loop.rs:2735,2854	TOKEN arena_pages; fields private; no ctor promoted
+ExecutionActivation	runtime/jit/parallel/hof.rs:3; runtime/jit/parallel/cell.rs:9; runtime/jit/parallel/native.rs:315	TOKEN execution; fields private; no ctor promoted
+FrozenFunctionRoots	runtime/eval/world/parallel_roots.rs:18	TOKEN keeper; enum repr unchanged
+FrozenLegacyRoots	runtime/eval/world/parallel_roots.rs:19; runtime/eval/world/era.rs:45,64	TOKEN keeper; fields private; no ctor promoted
+PreparedHofBuiltin	runtime/jit/parallel.rs:11	TOKEN symbol_authority functions/hof; fields private; ctor stays pub(crate)
+PreparedUnaryFunction	runtime/jit/parallel.rs:11	TOKEN symbol_authority functions/unary; fields private; ctor stays pub(crate)
+SymbolWriteToken	runtime/eval/world/function_write_hooks.rs:14	TOKEN symbol_authority globals; fields private; ctor stays pub(crate)

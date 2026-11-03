@@ -6,12 +6,14 @@
 //!
 //! This matches GNU Emacs's `Lisp_Object` design exactly.
 
-pub(crate) mod bytecode;
+#[doc(hidden)]
+pub mod bytecode;
 pub mod collection_reads;
 pub mod gc;
 pub mod header;
 pub mod mutate;
-pub(crate) mod pdump_image;
+#[doc(hidden)]
+pub mod pdump_image;
 pub mod symbol_marks;
 pub mod transport;
 pub mod value;

@@ -2761,7 +2761,8 @@ mod test_heap;
 pub use test_heap::{SyntheticConcurrentBarrier, TestHeap};
 
 mod arena_pages;
-pub(crate) use arena_pages::*;
+#[doc(hidden)]
+pub use arena_pages::*;
 
 mod gc_thread;
 pub use gc_thread::*;
@@ -2826,7 +2827,8 @@ pub(crate) use mutator_registration::{EraCoreHofExt, RunAccessHofExt, RunAccessU
 
 #[cfg(test)]
 pub(crate) use crate::emacs_core::eval::world::WorldProofEra as ProofEra;
-pub(crate) use mutator_registration::facade::*;
+#[doc(hidden)]
+pub use mutator_registration::facade::*;
 
 mod alloc_region;
 #[cfg(test)]

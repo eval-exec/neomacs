@@ -9,7 +9,8 @@ use crate::tagged::gc::mutator_registration::RunAccessHofExt;
 use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HofError {
+#[doc(hidden)]
+pub enum HofError {
     Authority(RegistrationError),
     Function(FunctionError),
     AliasedOperand,
@@ -38,7 +39,8 @@ enum SingletonState {
 /// list or accepts a mutable graph as an inline callback source. These homes
 /// remain resident until the owner's normal root-frame cleanup.
 #[must_use = "retain the singleton's matching owner homes until mapping returns"]
-pub(crate) struct HofSingleton<'era> {
+#[doc(hidden)]
+pub struct HofSingleton<'era> {
     state: SingletonState,
     list: OwnerRootSlot<'era>,
     argument: OwnerRootSlot<'era>,
@@ -71,7 +73,8 @@ impl<'era> HofSingleton<'era> {
 /// Independent private homes retain the selected definition and temporary
 /// answer. A failed allocation cannot overwrite the caller's result home.
 #[must_use = "retain the scratch homes for the matching owner and generation"]
-pub(crate) struct HofScratch<'era> {
+#[doc(hidden)]
+pub struct HofScratch<'era> {
     selected: FunctionActivation<'era>,
     answer: OwnerRootSlot<'era>,
     temporary: OwnerRootSlot<'era>,

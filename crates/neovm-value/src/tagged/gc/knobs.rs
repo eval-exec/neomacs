@@ -168,7 +168,8 @@ pub(crate) fn concurrent_hash_scan_policy() -> super::concurrent_hash::HashTable
 /// default: on a branchless four-instruction mark the tag test costs about
 /// what it saves and only avoids false-dirty cards. Read at compile time.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) fn card_tag_filter_on() -> bool {
+#[doc(hidden)]
+pub fn card_tag_filter_on() -> bool {
     #[cfg(test)]
     if let Some(on) = CARD_TAG_FILTER_OVERRIDE.with(|c| c.get()) {
         return on;

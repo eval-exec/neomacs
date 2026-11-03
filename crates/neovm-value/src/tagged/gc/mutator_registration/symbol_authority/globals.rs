@@ -27,7 +27,8 @@ pub(crate) struct SymbolReadToken<'lease> {
 
 /// Only a live writer operation can construct this token. Shared cell stores
 /// use it instead of the serial TLS mark gate; the era excludes the marker.
-pub(crate) struct SymbolWriteToken<'lease> {
+#[doc(hidden)]
+pub struct SymbolWriteToken<'lease> {
     _word: &'lease AtomicU64,
     _thread: PhantomData<Rc<()>>,
 }

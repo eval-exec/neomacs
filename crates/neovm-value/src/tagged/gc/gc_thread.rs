@@ -359,7 +359,8 @@ const _: () = {
 /// process with one heap looks as it did with the single process collector,
 /// and measurement tools keep matching it. The heap identity lives in the
 /// registry and in the `neovm::gc` trace events.
-pub(crate) const COLLECTOR_THREAD_NAME: &str = "neovm-gc";
+#[doc(hidden)]
+pub const COLLECTOR_THREAD_NAME: &str = "neovm-gc";
 
 /// One heap's collector: the request channel of its thread and the thread
 /// itself. Each collector serves one heap in FIFO order, so a concurrent job
@@ -555,7 +556,8 @@ pub(super) fn retire_collector(heap: HeapIdentity) -> Option<RetiredCollector> {
 
 /// Whether `heap` has a live collector.
 #[cfg(test)]
-pub(crate) fn collector_is_registered(heap: HeapIdentity) -> bool {
+#[doc(hidden)]
+pub fn collector_is_registered(heap: HeapIdentity) -> bool {
     matches!(collectors().get(&heap), Some(CollectorHandle::Thread(_)))
 }
 
@@ -1643,7 +1645,8 @@ fn run_concurrent_mark_impl<const MAJOR: bool, const SYMBOLS: bool, E: ClaimExte
 ///
 /// All production installers use this form. Root-owning test fixtures use it
 /// too; the legacy borrow installer is restricted to test builds.
-pub(crate) fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
+#[doc(hidden)]
+pub fn set_tagged_heap_root(root: std::ptr::NonNull<TaggedHeap>) {
     // SAFETY: the caller supplies the live allocation's root pointer.
     if !tagged_heap_is_current(unsafe { root.as_ref() }) {
         super::super::collection_reads::reset_recent_reads_for_heap_installation();
@@ -1725,7 +1728,8 @@ unsafe fn sync_heap_tls_mirrors(root: *mut TaggedHeap) {
 /// installs the heap again, and the debug assertion at job start proves the
 /// slot was empty, so a read before that install faults deterministically
 /// instead of following a stale but plausible pointer.
-pub(crate) fn clear_carrier_heap_tls() {
+#[doc(hidden)]
+pub fn clear_carrier_heap_tls() {
     TAGGED_HEAP.with(|slot| slot.set(std::ptr::null_mut()));
     TAGGED_HEAP_ID.with(|slot| slot.set(None));
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|slot| slot.set(WriteTrackingMode::Disabled));
@@ -1751,7 +1755,8 @@ pub(crate) fn clear_carrier_heap_tls() {
 /// release build (the macro compiles its expression there and only folds the
 /// check away).
 #[inline(always)]
-pub(crate) fn carrier_heap_is_acceptable_for_job_start() -> bool {
+#[doc(hidden)]
+pub fn carrier_heap_is_acceptable_for_job_start() -> bool {
     let ptr = TAGGED_HEAP.with(|slot| slot.get());
     if ptr.is_null() {
         return true;
@@ -1793,7 +1798,8 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
 /// may hold an exclusive collector loan while clearing its root-derived TLS
 /// alias; even a shared reference from that root would invalidate the loan.
 /// This compares pointers and resets TLS mirrors, never dereferencing `root`.
-pub(crate) fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
+#[doc(hidden)]
+pub fn clear_tagged_heap_root_if_installed(root: std::ptr::NonNull<TaggedHeap>) {
     let owned = root.as_ptr();
     let _ = TAGGED_HEAP.try_with(|h| {
         if h.get() == owned {
@@ -1884,7 +1890,8 @@ pub fn tagged_heap_is_installed() -> bool {
 /// Check the allocation view without reading the installed heap. A Context
 /// moved to another thread may have left an inactive raw pointer here.
 #[inline(always)]
-pub(crate) fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
+#[doc(hidden)]
+pub fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
     TAGGED_HEAP.with(|h| std::ptr::eq(h.get(), heap))
         && TAGGED_HEAP_ID.with(|identity| identity.get() == Some(heap.identity()))
 }
@@ -1895,7 +1902,8 @@ pub(crate) fn tagged_heap_is_current(heap: &TaggedHeap) -> bool {
 /// objects from a different evaluator heap. GNU keeps those object references
 /// inside ordinary GC-managed structures; the heap identity preserves that
 /// ownership boundary for Neomacs side tables.
-pub(crate) fn current_tagged_heap_identity() -> Option<usize> {
+#[doc(hidden)]
+pub fn current_tagged_heap_identity() -> Option<usize> {
     TAGGED_HEAP_ID.with(Cell::get)
 }
 
@@ -1903,7 +1911,8 @@ pub(crate) fn current_tagged_heap_identity() -> Option<usize> {
 /// Heapless lowering preserves the legacy shape. Heap-store leaves must be
 /// compiled on their intended heap; cached runtime leaves already obey this
 /// identity contract, as do BLV leaves with baked cell addresses.
-pub(crate) fn current_heap_generational_enabled() -> bool {
+#[doc(hidden)]
+pub fn current_heap_generational_enabled() -> bool {
     #[cfg(all(test, debug_assertions, feature = "jit"))]
     HEAP_GENERATIONAL_MODE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     TAGGED_HEAP.with(|slot| {
@@ -1978,9 +1987,8 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
 /// scalar fields at fixed offsets. A null installation is supported by native
 /// symbol stores and admission tests; its outlined path never installs a heap.
 #[inline(always)]
-pub(crate) fn with_store_state<R>(
-    f: impl FnOnce(&super::super::collection_reads::StoreState) -> R,
-) -> R {
+#[doc(hidden)]
+pub fn with_store_state<R>(f: impl FnOnce(&super::super::collection_reads::StoreState) -> R) -> R {
     let heap = TAGGED_HEAP.with(Cell::get);
     if heap.is_null() {
         return store_without_heap(f);
@@ -2380,7 +2388,8 @@ pub(super) fn barrier_needs_heap(
 /// [`TaggedHeap::feed_satb_roots`]). No-op (one thread-local load) when no
 /// concurrent mark is running.
 #[inline]
-pub(crate) fn feed_concurrent_roots(values: &[TaggedValue]) {
+#[doc(hidden)]
+pub fn feed_concurrent_roots(values: &[TaggedValue]) {
     if values.is_empty() || !TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get()) {
         return;
     }
@@ -2388,7 +2397,8 @@ pub(crate) fn feed_concurrent_roots(values: &[TaggedValue]) {
 }
 
 #[inline]
-pub(crate) fn note_root_overwrite(pre_image: TaggedValue) {
+#[doc(hidden)]
+pub fn note_root_overwrite(pre_image: TaggedValue) {
     if !pre_image.is_heap_object()
         && !matches!(
             pre_image.gc_kind(),
@@ -2424,14 +2434,16 @@ pub(crate) fn note_root_overwrite_while_marking(pre_image: TaggedValue) {
 /// while the GC thread might be scanning the obarray. A thread-local load;
 /// false (zero cost) off the concurrent path.
 #[inline]
-pub(crate) fn concurrent_mark_active() -> bool {
+#[doc(hidden)]
+pub fn concurrent_mark_active() -> bool {
     TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get())
 }
 
 /// The installed mutator has an active Tier-H snapshot. Claims-OFF and
 /// stopped-world mutations reject with one TLS load, without touching a heap.
 #[inline(always)]
-pub(crate) fn concurrent_hash_mutation_active() -> bool {
+#[doc(hidden)]
+pub fn concurrent_hash_mutation_active() -> bool {
     TAGGED_HEAP_CONCURRENT_HASH_ACTIVE.with(|active| active.get())
 }
 
@@ -2612,14 +2624,16 @@ mod worker_symbol_classification_tests {
 }
 
 /// Carrier park: reset the GC's per-thread helper state (cold path).
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     cold_gc::reset_carrier_tls();
 }
 
 /// Debug-only carrier TLS fingerprint: the heap slot and its mirrors, then
 /// the cold-GC helper state.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, TAGGED_HEAP.with(|slot| slot.get() as usize as u64));
     crate::tls_fingerprint::mix(h, TAGGED_HEAP_ID.with(|slot| slot.get().is_some() as u64));
     crate::tls_fingerprint::mix(

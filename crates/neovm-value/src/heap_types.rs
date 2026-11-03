@@ -6,7 +6,8 @@
 
 pub(crate) mod byte_positions;
 pub(crate) mod overlay_storage;
-pub(crate) mod threading;
+#[doc(hidden)]
+pub mod threading;
 
 use self::byte_positions::EmacsBytePos;
 use crate::emacs_char;
@@ -1532,7 +1533,8 @@ impl std::fmt::Debug for LispString {
 
 // Preserve the existing heap accessor seam; raw decoding belongs to the
 // character module, which establishes the EmacsChar invariant.
-pub(crate) use crate::emacs_char::decode_declared_multibyte_char;
+#[doc(hidden)]
+pub use crate::emacs_char::decode_declared_multibyte_char;
 
 impl PartialEq for LispString {
     fn eq(&self, other: &Self) -> bool {

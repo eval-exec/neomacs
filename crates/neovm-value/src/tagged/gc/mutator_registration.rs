@@ -25,7 +25,8 @@ pub(crate) use symbol_authority::{
 };
 pub(super) mod facade;
 pub use execution::ParallelExecutionAdmission;
-pub(crate) use execution::{
+#[doc(hidden)]
+pub use execution::{
     CellRead, CellReadError, ExecutionActivation, HofError, HofScratch, HofSingleton,
     ImmediateResult, ImmediateResultError,
 };
@@ -49,7 +50,9 @@ pub(crate) use wrappers::{
     ProofEra as GenericProofEra, ProofEraFinishFailure as GenericProofEraFinishFailure,
 };
 mod keeper;
-pub(crate) use keeper::{EraKeeper, FrozenFunctionRoots, FrozenLegacyRoots};
+pub(crate) use keeper::EraKeeper;
+#[doc(hidden)]
+pub use keeper::{FrozenFunctionRoots, FrozenLegacyRoots};
 mod gate;
 mod image;
 mod native_extent;
@@ -75,12 +78,14 @@ mod symbol_globals;
 mod symbol_intern;
 #[cfg(test)]
 pub use symbol_authority::FunctionOpKind;
+pub(crate) use symbol_authority::SymbolReadToken;
+#[doc(hidden)]
+pub use symbol_authority::SymbolWriteToken;
 pub use symbol_authority::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
     GlobalError, InitialInternError, KeeperSymbols, PlainSymbolBacking, SymbolHandle, SymbolMut,
     SymbolRef,
 };
-pub(crate) use symbol_authority::{SymbolReadToken, SymbolWriteToken};
 mod token;
 // The extent API ships ahead of its first production call site (the Green
 // mutex/condition release points); the re-export is for that integration.

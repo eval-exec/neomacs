@@ -14,7 +14,11 @@
 pub(crate) use crate::intern::SymId;
 pub(crate) use crate::value::{LambdaParams, Value, jit_runtime::Runtime};
 
-pub(crate) mod chunk;
-pub(crate) mod decode_data;
-pub(crate) mod function_slots;
-pub(crate) mod opcode;
+#[doc(hidden)]
+pub mod chunk;
+#[doc(hidden)]
+pub mod decode_data;
+#[doc(hidden)]
+pub mod function_slots;
+#[doc(hidden)]
+pub mod opcode;

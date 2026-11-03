@@ -9,7 +9,8 @@ use crate::tagged::gc::function_write_hooks::{
 /// It owns no chunk, managed value, function pointer or executable entry.
 #[must_use = "retain this receipt for the matching era and mapper operation"]
 #[derive(Clone, Copy)]
-pub(crate) struct PreparedHofBuiltin {
+#[doc(hidden)]
+pub struct PreparedHofBuiltin {
     operation: HofOperation,
     key: SymbolHandle,
     identity: StaticSubrIdentity,

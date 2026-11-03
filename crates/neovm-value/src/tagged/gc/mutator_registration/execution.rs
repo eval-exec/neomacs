@@ -11,18 +11,22 @@ use super::*;
 use crate::tagged::gc::mark_word::MarkWord;
 use crate::tagged::gc::symbol_table::publication::{PublicationView, TableView};
 use crate::tagged::value::{Fixnum, TaggedValue};
-pub(crate) use hof::{HofError, HofScratch, HofSingleton};
-pub(crate) use read::{CellRead, CellReadError};
+#[doc(hidden)]
+pub use hof::{HofError, HofScratch, HofSingleton};
+#[doc(hidden)]
+pub use read::{CellRead, CellReadError};
 
 /// A checked immediate, never a managed pointer smuggled through native ABI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ImmediateResult {
+#[doc(hidden)]
+pub enum ImmediateResult {
     Nil,
     True,
     Fixnum(Fixnum),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ImmediateResultError {
+#[doc(hidden)]
+pub enum ImmediateResultError {
     NotImmediate,
 }
 impl ImmediateResult {
@@ -59,7 +63,8 @@ pub struct ParallelExecutionAdmission<'era> {
 /// keeps its original IN_SLICE admission until the callback and native stack
 /// have returned; neither root-bank mutation nor native handoff is exposed.
 #[must_use = "the wrapper retains the activation until its borrowed callback returns"]
-pub(crate) struct ExecutionActivation<'activation, 'owner, 'era> {
+#[doc(hidden)]
+pub struct ExecutionActivation<'activation, 'owner, 'era> {
     registry: &'era Registry,
     run: &'activation mut RunAccess<'owner, 'era>,
     result: OwnerRootSlot<'era>,

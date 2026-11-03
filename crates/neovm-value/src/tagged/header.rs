@@ -627,7 +627,8 @@ const _: () = assert!(std::mem::offset_of!(GcHeader, next) == 8);
 pub const GC_HEADER_TENURED_OFFSET: usize = std::mem::offset_of!(GcHeader, tenured);
 /// The sticky collection observation byte used by compiled string stores.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const GC_HEADER_COLLECTION_OBSERVED_OFFSET: usize =
+#[doc(hidden)]
+pub const GC_HEADER_COLLECTION_OBSERVED_OFFSET: usize =
     std::mem::offset_of!(GcHeader, collection_observed);
 const _: () = assert!(std::mem::offset_of!(GcHeader, remembered) == GC_HEADER_TENURED_OFFSET + 1);
 const _: () = assert!(std::mem::size_of::<GcHeader>() == 16);

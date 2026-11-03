@@ -13,7 +13,9 @@ pub(super) use globals::check_home as check_symbol_home;
 mod intern;
 mod roots;
 pub use globals::GlobalError;
-pub(crate) use globals::{SymbolReadToken, SymbolWriteToken};
+pub(crate) use globals::SymbolReadToken;
+#[doc(hidden)]
+pub use globals::SymbolWriteToken;
 pub use intern::InitialInternError;
 mod functions;
 #[cfg(test)]
@@ -24,7 +26,8 @@ pub(crate) use functions::{EraCoreHofExt, EraCoreUnaryExt, RunAccessHofExt, RunA
 pub use functions::{
     FunctionActivation, FunctionCallCache, FunctionError, FunctionSelection, FunctionStep,
 };
-pub(crate) use functions::{PreparedHofBuiltin, PreparedUnaryFunction};
+#[doc(hidden)]
+pub use functions::{PreparedHofBuiltin, PreparedUnaryFunction};
 #[cfg(all(test, not(feature = "gc-memory-telemetry")))]
 mod closed_graph;
 mod word;

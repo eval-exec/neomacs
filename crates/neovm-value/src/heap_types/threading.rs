@@ -15,7 +15,8 @@ use std::num::{NonZeroU32, NonZeroU64};
 macro_rules! native_id {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        pub(crate) struct $name {
+        #[doc(hidden)]
+        pub struct $name {
             heap: HeapIdentity,
             ordinal: u64,
         }
@@ -56,7 +57,8 @@ pub enum NativeIdExhausted {
 /// The last word retains the legacy thread-creation counter's scalar layout.
 #[repr(C)]
 #[derive(Debug)]
-pub(crate) struct ThreadIds {
+#[doc(hidden)]
+pub struct ThreadIds {
     heap: HeapIdentity,
     next_mutex: Option<NonZeroU64>,
     next_condvar: Option<NonZeroU64>,

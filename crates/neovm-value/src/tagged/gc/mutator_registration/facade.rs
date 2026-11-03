@@ -1,11 +1,15 @@
 //! Crate-local registration vocabulary, reexported by the heap facade.
 //! Keep this list with its domain so new bounded operations do not expand gc.rs.
-pub(crate) use super::symbol_authority::{PreparedHofBuiltin, PreparedUnaryFunction};
+#[doc(hidden)]
+pub use super::symbol_authority::{PreparedHofBuiltin, PreparedUnaryFunction};
+#[doc(hidden)]
+pub use super::{
+    CellRead, CellReadError, ExecutionActivation, FrozenFunctionRoots, FrozenLegacyRoots, HofError,
+    HofScratch, HofSingleton, ImmediateResult, ImmediateResultError, SymbolWriteToken,
+};
 pub(crate) use super::{
-    CellRead, CellReadError, EraAdmissionFailure, EraFinishFailure, EraKeeper, ExecutionActivation,
-    FrozenFunctionRoots, FrozenLegacyRoots, HofError, HofScratch, HofSingleton, ImmediateResult,
-    ImmediateResultError, OwnerRootAdmission, StoppedRootAdmission, SymbolReadToken,
-    SymbolWriteToken,
+    EraAdmissionFailure, EraFinishFailure, EraKeeper, OwnerRootAdmission, StoppedRootAdmission,
+    SymbolReadToken,
 };
 
 #[cfg(test)]

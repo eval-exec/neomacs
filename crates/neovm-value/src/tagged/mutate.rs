@@ -184,7 +184,8 @@ pub(crate) fn set_cons_cdr_in_store(
 /// `cell` must name a live, exclusively mutated ConsCell. No safe point or
 /// callback may intervene between validating that owner and this operation.
 #[inline(always)]
-pub(crate) unsafe fn finish_cons_store_in_store(
+#[doc(hidden)]
+pub unsafe fn finish_cons_store_in_store(
     store: &StoreState,
     cell: TaggedValue,
     value: TaggedValue,
@@ -214,7 +215,8 @@ pub(crate) unsafe fn finish_cons_store_in_store(
 /// `data` must be this live owner's slot backing and `index` must be in range.
 /// The caller owns mutation and retains no payload reference across this call.
 #[inline(always)]
-pub(crate) unsafe fn finish_slot_store_in_store(
+#[doc(hidden)]
+pub unsafe fn finish_slot_store_in_store(
     store: &StoreState,
     owner: TaggedValue,
     kind: HeapWriteKind,
@@ -300,7 +302,8 @@ pub fn with_vector_data_mut<R>(
 /// The closure must not collect, replace/reallocate the backing, or retain the
 /// pointer after returning. It may only access slots within the supplied length.
 #[inline]
-pub(crate) unsafe fn with_vector_slots_mut<R>(
+#[doc(hidden)]
+pub unsafe fn with_vector_slots_mut<R>(
     value: TaggedValue,
     f: impl FnOnce(*mut TaggedValue, usize) -> R,
 ) -> Option<R> {

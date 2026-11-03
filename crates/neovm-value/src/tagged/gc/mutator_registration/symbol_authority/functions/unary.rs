@@ -6,7 +6,8 @@ use crate::tagged::gc::function_write_hooks::CallbackParameterKind;
 /// nullary call or authorize a generic callback/source graph.
 #[must_use = "retain the prepared unary capability for its matching era"]
 #[derive(Clone, Copy)]
-pub(crate) struct PreparedUnaryFunction {
+#[doc(hidden)]
+pub struct PreparedUnaryFunction {
     key: SymbolHandle,
     parameter: constant::UnaryParameter,
 }

@@ -132,14 +132,18 @@ pub const TAG_CONS: usize = 0b011;
 pub const TAG_STRING: usize = 0b100;
 #[doc(hidden)]
 pub const TAG_VECLIKE: usize = 0b101;
-pub(crate) const TAG_FLOAT: usize = 0b111;
+#[doc(hidden)]
+pub const TAG_FLOAT: usize = 0b111;
 
 // Fixnum uses two tags: 010 and 110. Both have (v & 3) == 2.
 // pub(crate) so the JIT backend (emacs_core::jit) lowers fixnum ops against the
 // same single source of truth instead of hardcoding the layout.
-pub(crate) const FIXNUM_CHECK_MASK: usize = 0b11;
-pub(crate) const FIXNUM_CHECK_VALUE: usize = 0b10;
-pub(crate) const FIXNUM_SHIFT: u32 = 2; // integer stored in bits 2..63
+#[doc(hidden)]
+pub const FIXNUM_CHECK_MASK: usize = 0b11;
+#[doc(hidden)]
+pub const FIXNUM_CHECK_VALUE: usize = 0b10;
+#[doc(hidden)]
+pub const FIXNUM_SHIFT: u32 = 2; // integer stored in bits 2..63
 
 thread_local! {
     static STATIC_SUBR_OBJECTS: RefCell<Vec<Option<TaggedValue>>> = const { RefCell::new(Vec::new()) };
@@ -349,7 +353,8 @@ pub fn snapshot_static_subr_objects() -> Vec<Option<TaggedValue>> {
 }
 
 /// Install OBJECTS as this thread's canonical subr objects.
-pub(crate) fn install_static_subr_objects(objects: Vec<Option<TaggedValue>>) {
+#[doc(hidden)]
+pub fn install_static_subr_objects(objects: Vec<Option<TaggedValue>>) {
     STATIC_SUBR_OBJECTS.with(|table| *table.borrow_mut() = objects);
 }
 

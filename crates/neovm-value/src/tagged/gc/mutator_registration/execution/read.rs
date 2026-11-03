@@ -9,7 +9,8 @@ use crate::tagged::gc::symbol_table::SymbolSlotIndex;
 
 /// Separate domains require an explicit choice; no bool selects an operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CellRead {
+#[doc(hidden)]
+pub enum CellRead {
     GlobalValue,
     GlobalBoundp,
     Function,
@@ -17,7 +18,8 @@ pub(crate) enum CellRead {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CellReadError {
+#[doc(hidden)]
+pub enum CellReadError {
     Global(GlobalError),
     Function(FunctionError),
 }
