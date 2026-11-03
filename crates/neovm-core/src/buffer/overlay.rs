@@ -29,6 +29,15 @@ use super::overlay_index::{
 use super::position::{CharPos0, EmacsByteLen, EmacsBytePos, EmacsByteRange};
 use super::text::{TextEditRange, TextInsertion, TextReplacement};
 
+/// One GNU `last_overlay_modification_hooks` entry (`buffer.c`): the running
+/// hook list and the overlay that triggered it, recorded by the before-change
+/// scan and replayed by the after-change scan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OverlayModificationHook {
+    pub(crate) hook_list: Value,
+    pub(crate) overlay: Value,
+}
+
 pub type Overlay = OverlayData;
 
 /// A conversion snapshot owned by the buffer's exclusive mutator.

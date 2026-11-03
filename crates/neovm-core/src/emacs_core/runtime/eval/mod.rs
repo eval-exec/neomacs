@@ -2765,12 +2765,6 @@ pub struct PopupMenuRequest {
     pub selected: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct OverlayModificationHook {
-    pub(crate) hook_list: Value,
-    pub(crate) overlay: Value,
-}
-
 /// How a `(throw 'exit VALUE)` unwinds a recursive command loop.
 ///
 /// GNU's `recursive_edit_1` (keyboard.c:749-758) dispatches on the thrown
@@ -2994,7 +2988,6 @@ static CLEAR_MESSAGE_FUNCTION: WellKnown = WellKnown::ClearMessageFunction;
 /// `WorldSlot`) moves no other field. `context_layout_test` pins the offsets.
 #[repr(C)]
 pub struct Context {
-    pub(crate) combine_after_change_buffer: Option<crate::buffer::BufferId>,
     /// Global keymap selected by `use-global-map`.
     ///
     /// GNU stores this separately from the dynamically bindable Lisp variable
@@ -3089,18 +3082,6 @@ pub struct Context {
     /// The `source` Values are kept alive by a `push_specpdl_root` at push time,
     /// not by this Vec (which GC does not trace).
     pub(crate) load_read_cursors: Vec<LoadReadCursor>,
-    /// GNU `last_overlay_modification_hooks`: hook-list/overlay pairs recorded
-    /// by the before-change overlay scan and replayed by the after-change scan.
-    pub(crate) last_overlay_modification_hooks: Vec<OverlayModificationHook>,
-    /// Deferred after-change records, mirroring GNU Emacs's
-    /// `combine_after_change_list` (insdel.c). When
-    /// `combine-after-change-calls` is non-nil and no incompatible
-    /// before-change-functions or overlays are installed,
-    /// `signal_after_change` records the change here instead of running
-    /// `after-change-functions` immediately. Each entry is the GNU triple
-    /// `(charpos - BEG, Z - (charpos - lendel + lenins), lenins - lendel)`
-    /// in 1-based character coordinates.
-    pub(crate) combine_after_change_list: Vec<(i64, i64, i64)>,
     /// Bookmark manager — persistent named positions.
     pub(crate) bookmarks: WorldSlot<BookmarkManager>,
     /// Rectangle state — stores the last killed rectangle for yank-rectangle.
@@ -3311,14 +3292,6 @@ pub struct Context {
     /// `throw-on-input` poll to bridge host input, so suppress that extra poll
     /// during cleanup to preserve GNU's unwind semantics.
     unwind_cleanup_depth: usize,
-    /// GNU `interval_insert_behind_hooks`: text-property hook list recorded
-    /// by `verify_interval_modification` before an insertion and replayed by
-    /// `report_interval_modification` after the inserted text exists.
-    pub(crate) interval_insert_behind_hooks: Value,
-    /// GNU `interval_insert_in_front_hooks`: text-property hook list recorded
-    /// by `verify_interval_modification` before an insertion and replayed by
-    /// `report_interval_modification` after the inserted text exists.
-    pub(crate) interval_insert_in_front_hooks: Value,
     /// Canonical Lisp object returned by `standard-syntax-table`.
     ///
     /// GNU Emacs stores this in `Vstandard_syntax_table`; NeoVM keeps the

@@ -375,15 +375,15 @@ impl Context {
                 visit(arg);
             }
         }
-        for hook in &self.last_overlay_modification_hooks {
+        for hook in &self.edit.last_overlay_modification_hooks {
             visit(hook.hook_list);
             visit(hook.overlay);
         }
-        if !self.interval_insert_behind_hooks.is_nil() {
-            visit(self.interval_insert_behind_hooks);
+        if !self.edit.interval_insert_behind_hooks.is_nil() {
+            visit(self.edit.interval_insert_behind_hooks);
         }
-        if !self.interval_insert_in_front_hooks.is_nil() {
-            visit(self.interval_insert_in_front_hooks);
+        if !self.edit.interval_insert_in_front_hooks.is_nil() {
+            visit(self.edit.interval_insert_in_front_hooks);
         }
         if !self.current_local_map.is_nil() {
             visit(self.current_local_map);

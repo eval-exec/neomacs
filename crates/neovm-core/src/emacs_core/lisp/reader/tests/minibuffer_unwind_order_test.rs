@@ -21,7 +21,7 @@ fn trace_minibuffer_unwind_layout() {
     tracing::info!(target: "d5::mini_unwind_layout", field = "context.jit_stack_limit", offset = std::mem::offset_of!(Context, jit_stack_limit), "mini unwind layout metric");
     tracing::info!(target: "d5::mini_unwind_layout", field = "context.jit_stack_scratch", offset = std::mem::offset_of!(Context, jit_stack_scratch), "mini unwind layout metric");
     tracing::info!(target: "d5::mini_unwind_layout", field = "context.attention", offset = crate::emacs_core::eval::runtime_projection::CONTEXT_ATTENTION_OFFSET, "mini unwind layout metric");
-    tracing::info!(target: "d5::mini_unwind_layout", field = "context.buffers", offset = std::mem::offset_of!(Context, buffers), "mini unwind layout metric");
+    tracing::info!(target: "d5::mini_unwind_layout", field = "context.buffers", offset = std::mem::offset_of!(Context, edit.buffers), "mini unwind layout metric");
     tracing::info!(target: "d5::mini_unwind_layout", field = "context.tagged_heap", offset = std::mem::offset_of!(Context, tagged_heap), "mini unwind layout metric");
     tracing::info!(target: "d5::mini_unwind_layout",
         spec_size = std::mem::size_of::<SpecBinding>(),
