@@ -385,13 +385,7 @@ fn include(bounds: &mut (usize, usize), address: usize) {
 #[path = "tests/observed_reclamation.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "tests/observed_native_geometry.rs"]
-mod native_geometry_tests;
 
-#[cfg(test)]
-#[path = "tests/observed_refinement.rs"]
-mod refinement_tests;
 
 #[cfg(test)]
 #[path = "tests/observed_disjoint_refinement.rs"]

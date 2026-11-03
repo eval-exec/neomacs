@@ -1,6 +1,7 @@
 //! GNU's chosen catch policy survives rooted loader/public error boundaries.
 use super::{Flow, collect_in_flight_flow_gc_roots, flow_from_eval_error};
 use crate::emacs_core::bytecode::ByteCodeFunctionExt;
+use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
 use crate::emacs_core::print::map_flow;
 use crate::emacs_core::{Context, Value, print::print_value};
 use crate::tagged::SymbolMode;

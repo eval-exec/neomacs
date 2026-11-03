@@ -951,10 +951,6 @@ mod collection_scalar_tests;
 #[cfg(test)]
 mod cons_allocation_tests;
 #[cfg(test)]
-mod cons_micro_tests;
-#[cfg(test)]
-mod cons_tails_tests;
-#[cfg(test)]
 mod root_slot_tests;
 
 #[cfg(test)]
@@ -964,8 +960,6 @@ mod slice_tests;
 mod a8_latency;
 #[cfg(test)]
 mod a8_probes;
-#[cfg(test)]
-mod native_extent_tests;
 #[cfg(test)]
 mod restricted_lisp;
 

@@ -172,7 +172,3 @@ impl SymbolRefHofExt for SymbolRef<'_, '_, '_> {
 }
 
 static_assertions::assert_impl_all!(PreparedHofBuiltin: Send, Sync, Copy);
-
-#[cfg(test)]
-#[path = "hof/tests.rs"]
-mod tests;

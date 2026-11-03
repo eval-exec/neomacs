@@ -128,9 +128,7 @@ fn hash_table_invalid_weakness_precedes_capacity_failure() {
     let form = r#"(condition-case e
       (make-hash-table :size most-positive-fixnum :weakness 'tsb-invalid-weakness)
       (error e))"#;
-    let expected = include_str!(
-        "boundary_numbers/hash_table_invalid_weakness_precedes_capacity_failure.expect"
-    );
+    let expected = include_str!("boundary_numbers/hash_table_invalid_weakness_precedes_capacity_failure.expect");
     assert_eq!(
         runtime_startup_eval_one(form),
         format!("OK {}", expected.trim_end())

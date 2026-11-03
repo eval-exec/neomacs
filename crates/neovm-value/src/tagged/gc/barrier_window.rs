@@ -669,7 +669,3 @@ pub(crate) fn published_barrier_window() -> BarrierWindow {
 pub(crate) fn published_cons_barrier_window() -> BarrierWindow {
     TAGGED_HEAP_CONS_BARRIER_WINDOW.with(|w| w.get())
 }
-
-#[cfg(all(test, target_pointer_width = "64"))]
-#[path = "tests/barrier_window_layout.rs"]
-mod layout_tests;

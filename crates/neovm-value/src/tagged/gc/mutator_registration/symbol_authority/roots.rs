@@ -59,6 +59,3 @@ impl KeeperSymbols<'_> {
         }
     }
 }
-
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
-mod tests;

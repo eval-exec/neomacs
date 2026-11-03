@@ -61,7 +61,3 @@ pub fn gc_threshold_integer_fallback(value: Value) -> Option<i64> {
         None
     }
 }
-
-#[cfg(test)]
-#[path = "tests/user_test_guard_test.rs"]
-mod tests;

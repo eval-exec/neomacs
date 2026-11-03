@@ -2950,13 +2950,7 @@ mod generational_pacing_tests;
 #[cfg(test)]
 #[path = "gc/tests/major_symbol_preimage_test.rs"]
 mod major_symbol_preimage_tests;
-#[cfg(test)]
-#[path = "gc/tests/symbol_barrier_test.rs"]
-mod symbol_barrier_tests;
 
-#[cfg(test)]
-#[path = "gc/tests/chartable_contract_test.rs"]
-mod chartable_contract_tests;
 
 #[cfg(test)]
 #[path = "gc/tests/satb_gc_stress_test.rs"]

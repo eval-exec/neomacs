@@ -1474,9 +1474,6 @@ impl fmt::Debug for TaggedValue {
     }
 }
 
-#[cfg(test)]
-#[path = "value/tests/gc_tls_ownership_test.rs"]
-mod gc_tls_ownership_tests;
 
 #[cfg(test)]
 #[path = "value/tests/fixnum_boundary.rs"]

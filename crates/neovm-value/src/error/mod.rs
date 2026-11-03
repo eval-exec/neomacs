@@ -1170,14 +1170,8 @@ pub fn memory_signal_from_binding_value(value: Value, symbol_mode: SymbolMode) -
 }
 
 #[cfg(test)]
-#[path = "tests/flow_kind_test.rs"]
-mod flow_kind_tests;
-#[cfg(test)]
 #[path = "tests/format_hook_test.rs"]
 mod format_hook_tests;
-#[cfg(test)]
-#[path = "tests/error_test.rs"]
-mod tests;
 
 /// Signal wrong-number-of-arguments unless `args` has exactly `n` items.
 /// The shared cold arm of the four `expect_*_args` checks below. Each check
@@ -1274,17 +1268,6 @@ mod gc_tls_ownership_tests;
 #[path = "tests/flow_word_test.rs"]
 mod flow_word_tests;
 
-#[cfg(test)]
-#[path = "tests/flow_word_gc_test.rs"]
-mod flow_word_gc_tests;
-
-#[cfg(test)]
-#[path = "tests/memory_signal_policy_test.rs"]
-mod memory_signal_policy_tests;
-
-#[cfg(test)]
-#[path = "tests/issue554_throw_roundtrip.rs"]
-mod issue554_throw_roundtrip_tests;
 
 /// Carrier park: forget the owner's in-flight root registry handle. The
 /// handle points into a Context-owned root table, not into the heap, but the

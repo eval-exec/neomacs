@@ -449,7 +449,3 @@ well_known_table! {
     UndoAutoThisCommandAmalgamating = "undo-auto--this-command-amalgamating",
     VisibleCursor = "visible-cursor",
 }
-
-#[cfg(test)]
-#[path = "tests/well_known_test.rs"]
-mod tests;

@@ -76,7 +76,3 @@ impl<'era> ExecutionActivation<'_, '_, 'era> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "read/tests/cell_test.rs"]
-mod tests;

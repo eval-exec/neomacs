@@ -978,12 +978,6 @@ pub fn maphash_entry_at_slot(table: Value, slot: usize) -> Option<(Value, Value)
     Some((entry.key, entry.value))
 }
 
-#[cfg(test)]
-#[path = "tests/bignum_sxhash_test.rs"]
-mod bignum_sxhash_tests;
-#[cfg(test)]
-#[path = "tests/hashtab_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/symbol_mode_sxhash_test.rs"]

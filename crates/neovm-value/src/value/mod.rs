@@ -5897,13 +5897,7 @@ use hash_index::{HashIndex, fx_hash_key, stored_hash};
 #[path = "tests/value_test.rs"]
 mod tests;
 
-#[cfg(test)]
-#[path = "tests/metadata_capture_test.rs"]
-mod metadata_capture_tests;
 
-#[cfg(test)]
-#[path = "tests/heap_mut_closure_guard_test.rs"]
-mod heap_mut_closure_guard;
 
 /// Round 3w (plan-3w.md section 7, C1): this World state lives in a
 /// thread-local while its World's Baton holder runs, and in the World while
@@ -5925,9 +5919,6 @@ pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     THREAD_LOCAL_ALLOCATION_COUNTS.with(|counts| *slot = counts.replace(*slot));
 }
 
-#[cfg(test)]
-#[path = "tests/gc_generational_hydration_test.rs"]
-mod gc_generational_hydration;
 
 #[cfg(test)]
 #[path = "tests/p2ht_authority_test.rs"]

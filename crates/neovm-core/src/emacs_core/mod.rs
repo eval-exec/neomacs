@@ -433,6 +433,15 @@ mod stale_bytecode_test;
 #[path = "tests/architecture/symbol_id_guard_test.rs"]
 mod symbol_id_guard_test;
 #[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/function_regression_test.rs"]
+mod symbol_function_regression_test;
+#[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/plist_regression_test.rs"]
+mod symbol_plist_regression_test;
+#[cfg(test)]
+#[path = "../../core_tests/emacs_core/runtime/symbol/tests/redirect_regression_test.rs"]
+mod symbol_redirect_regression_test;
+#[cfg(test)]
 #[cfg(test)]
 #[cfg(test)]
 #[path = "text/syntax/tests/category_property_test.rs"]

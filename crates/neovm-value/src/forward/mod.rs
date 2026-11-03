@@ -1344,18 +1344,8 @@ pub fn alloc_intfwd(initial: LispInteger) -> &'static LispIntFwd {
 
 mod thread_projection;
 
-#[cfg(test)]
-#[path = "tests/forward_test.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "tests/forward_module_test.rs"]
-mod gnu_parity_tests;
 
 #[cfg(test)]
 #[path = "tests/atomic_forward_test.rs"]
 mod atomic_tests;
-
-#[cfg(test)]
-#[path = "tests/thread_projection_test.rs"]
-mod thread_projection_tests;

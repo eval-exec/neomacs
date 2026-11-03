@@ -5137,9 +5137,6 @@ impl ObarraySymbolCellSkipGuard {
     }
 }
 
-#[cfg(test)]
-#[path = "tests/symbol_test.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "tests/jit_layout_test.rs"]
@@ -5150,17 +5147,11 @@ mod jit_layout_tests;
 mod fn_stamps_tests;
 
 /// Ledger 196: the buffer-local-read class ledger 191 named, pinned per site.
-#[cfg(test)]
-#[path = "tests/buffer_local_global_read_test.rs"]
-mod buffer_local_global_read_tests;
 
 #[cfg(test)]
 #[path = "tests/copied_value_test.rs"]
 mod copied_value_tests;
 
-#[cfg(test)]
-#[path = "tests/canonical_dispatch_test.rs"]
-mod canonical_dispatch_tests;
 
 #[cfg(test)]
 #[path = "tests/plist_epoch_test.rs"]
@@ -5241,18 +5232,6 @@ pub fn carrier_tls_fingerprint(h: &mut u64) {
         SEED_SKIP_OBARRAY_SYMBOL_CELLS.with(|slot| slot.get() as u64),
     );
 }
-
-#[cfg(test)]
-#[path = "tests/function_regression_test.rs"]
-mod symbol_function_regression_test;
-
-#[cfg(test)]
-#[path = "tests/plist_regression_test.rs"]
-mod symbol_plist_regression_test;
-
-#[cfg(test)]
-#[path = "tests/redirect_regression_test.rs"]
-mod symbol_redirect_regression_test;
 
 impl BlvCacheHit {
     #[inline]

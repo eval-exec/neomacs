@@ -136,7 +136,3 @@ impl<'era> RunAccessUnaryExt<'era> for RunAccess<'_, 'era> {
 }
 
 static_assertions::assert_impl_all!(PreparedUnaryFunction: Send, Sync, Copy);
-
-#[cfg(test)]
-#[path = "unary/tests.rs"]
-mod tests;

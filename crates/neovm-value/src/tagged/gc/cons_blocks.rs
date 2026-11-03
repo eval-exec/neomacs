@@ -310,7 +310,3 @@ impl Drop for ConsBlock {
         unsafe { alloc::dealloc(self.storage, Self::layout()) };
     }
 }
-
-#[cfg(test)]
-#[path = "tests/cons_minor_test.rs"]
-mod cons_minor_tests;

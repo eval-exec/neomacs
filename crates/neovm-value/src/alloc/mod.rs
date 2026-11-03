@@ -107,9 +107,5 @@ pub use data::memory_exhausted;
 pub use data::reserved_values;
 
 #[cfg(test)]
-#[path = "tests/alloc_test.rs"]
-mod tests;
-
-#[cfg(test)]
 #[path = "tests/validated_lengths.rs"]
 mod validated_lengths;

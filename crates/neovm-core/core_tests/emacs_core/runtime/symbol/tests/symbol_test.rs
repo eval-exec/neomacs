@@ -1,5 +1,6 @@
 use super::super::intern::intern;
 use super::*;
+use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::intern::resolve_sym;
 
 #[test]

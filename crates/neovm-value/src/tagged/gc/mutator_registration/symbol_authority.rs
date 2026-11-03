@@ -28,8 +28,6 @@ pub use functions::{
 };
 #[doc(hidden)]
 pub use functions::{PreparedHofBuiltin, PreparedUnaryFunction};
-#[cfg(all(test, not(feature = "gc-memory-telemetry")))]
-mod closed_graph;
 mod word;
 use super::*;
 use crate::intern::SymId;
