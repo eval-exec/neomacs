@@ -46,7 +46,13 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(crate) mod function_write_hooks;
-pub(crate) mod symbol_table;
+#[doc(hidden)]
+pub use function_write_hooks::{
+    CanonicalHofSeed, CompilerActivity, FunctionWriteHooks, HofOperation, HofPreparationError,
+    HofRegistrationClock, HofRegistrationEpoch, InitialDefinition,
+};
+#[doc(hidden)]
+pub mod symbol_table;
 
 mod cache_root_scan;
 #[doc(hidden)]
@@ -2696,7 +2702,8 @@ pub(crate) mod mapped_veclike_scan;
 #[cfg(test)]
 #[path = "gc/tests/mutator_registry_test.rs"]
 mod mutator_registry_tests;
-pub(crate) mod scan_contract;
+#[doc(hidden)]
+pub mod scan_contract;
 use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
@@ -2788,7 +2795,8 @@ use mutator_gc::MutatorGcState;
 
 mod knobs;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
-pub(crate) use knobs::card_tag_filter_on;
+#[doc(hidden)]
+pub use knobs::card_tag_filter_on;
 #[cfg(test)]
 pub(crate) use knobs::with_card_tag_filter_for_test;
 

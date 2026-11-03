@@ -31,7 +31,8 @@ impl<'h> SingleMutatorWorld<'h> {
     /// The matching obarray has that same exclusive writer. Until this mark
     /// finishes or is abandoned, writes use SATB, vector retirement and symbol
     /// seqlock publication; storage is retained through the marker's last read.
-    pub(crate) unsafe fn from_heap(heap: &'h mut TaggedHeap) -> Self {
+    #[doc(hidden)]
+    pub unsafe fn from_heap(heap: &'h mut TaggedHeap) -> Self {
         Self {
             heap,
             _thread: PhantomData,

@@ -1,4 +1,6 @@
 item	kind	old_vis	file:line	module	reason
+AddressStride	type	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:20	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:372
+AddressStride::get	const fn	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:21	tagged::gc::symbol_table::abi	pc1-d read-only accessor; caller jit/parallel/native.rs:372
 AdmissionPlanCell	enum	pub(crate)	crates/neovm-value/src/symbol/projection.rs:234	emacs_core::symbol	bulk
 AliasableBox	struct	pub(crate)	crates/neovm-value/src/tagged/gc/aliasable.rs:44	tagged::gc	bulk
 AllocLen	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:80	emacs_core::alloc	bulk
@@ -47,6 +49,8 @@ CondVarObj	struct	pub(crate)	crates/neovm-value/src/tagged/header.rs:2247	tagged
 CondVarPayload	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:519	heap_types::threading	bulk
 ConsAge	enum	pub(crate)	crates/neovm-value/src/tagged/gc/cons_block_trailer.rs:46	tagged::gc	bulk
 DecodedGnuCode	struct	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:28	tagged::bytecode::chunk	bulk
+DescriptorOffset	type	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:10	tagged::gc::symbol_table::abi	seal: TOKEN privacy row; field private; callers jit/parallel/native.rs:364-370
+DescriptorOffset::get	const fn	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:11	tagged::gc::symbol_table::abi	seal producer (safe read, body unchanged); caller jit/parallel/native.rs:365
 DumpedCell	enum	pub(crate)	crates/neovm-value/src/symbol/cell.rs:582	emacs_core::symbol	bulk
 DumpedSymbolFlags	struct	pub(crate)	crates/neovm-value/src/symbol/cell.rs:570	emacs_core::symbol	bulk
 EmacsByteDelta	struct	pub(crate)	crates/neovm-value/src/heap_types/byte_positions.rs:18	heap_types::byte_positions	bulk
@@ -116,17 +120,24 @@ IterativeArgRange	struct	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk
 JitHeapState	struct	pub(crate)	crates/neovm-value/src/tagged/gc/jit_state.rs:36	tagged::gc	bulk
 JoinObservation	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:227	heap_types::threading	bulk
 KeeperWorldDesignator	use	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:5	emacs_core::symbol::parallel	seal retained-World TOKEN: private fields, retained borrow, owner-thread marker; unsafe exact mint only; upper crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:139,154
+KeeperWorldDesignator::new	method	pub(crate)	crates/neovm-value/src/symbol/parallel/keeper.rs:27	emacs_core::symbol::parallel	seal MINT: unchanged retained keeper borrow/thread/identity Safety contract; exact sole upper crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:154 Baton::keeper_designator
 KeyboardBindingOwner	struct	pub(crate)	crates/neovm-value/src/forward/mod.rs:974	emacs_core::forward	bulk
+LISP_BOOL_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:756	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1529:37
 LISP_INT_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:698	emacs_core::forward	bulk
+LISP_KBOARD_OBJ_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:997	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/jit_layout.rs:223:60
 LISP_OBJ_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:827	emacs_core::forward	bulk
 LISP_SYMBOL_FLAGS_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/cell.rs:499	emacs_core::symbol	bulk
 LISP_SYMBOL_INTERNED_GLOBAL_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/cell.rs:507	emacs_core::symbol	bulk
 LISP_SYMBOL_SIZE	const	pub(crate)	crates/neovm-value/src/symbol/cell.rs:497	emacs_core::symbol	bulk
 LISP_SYMBOL_VAL_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/cell.rs:502	emacs_core::symbol	bulk
 LISP_SYMBOL_WRITE_WINDOW_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1149	emacs_core::symbol	bulk
+LazyGnuCode	type	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:46	tagged::bytecode::chunk	pc1-d: DATA ledger-supplement:194; caller runtime/bytecode/chunk.rs:20; OnceLock fields stay pub(crate)
 LeafActiveScope	struct	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:38	emacs_core::symbol::leaf_activity	pc1-d DATA: signed leaf addendum; private previous field; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:513,536; existing guard only raises debug leaf depth
+LeafActiveScope::enter	method	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:46	emacs_core::symbol::leaf_activity	pc1-d DATA: signed leaf addendum; original body only raises leaf depth; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:536 cfg(debug_assertions)
 LispCondition	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:847	emacs_core::error	bulk
 LispStringStorageKind	enum	pub(crate)	crates/neovm-value/src/heap_types.rs:139	heap_types	bulk
+LispVisibleSymbolName	enum	pub(crate)	crates/neovm-value/src/intern/mod.rs:828	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1979:38
+LispVisibleSymbolName::text	method	pub(crate)	crates/neovm-value/src/intern/mod.rs:848	emacs_core::intern	pc1-d DATA: reviewed ledger emacs_core::intern::LispVisibleSymbolName::text; upper crates/neovm-core/src/emacs_core/lisp/native/builtins/from_value.rs:236; unchanged reborrow body
 LocalizedForwarderKind	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:108	emacs_core::symbol	bulk
 MarkPhase	enum	pub(crate)	crates/neovm-value/src/tagged/gc/concurrent.rs:15	tagged::gc	bulk
 MemoryUseCountSlot	enum	pub(crate)	crates/neovm-value/src/tagged/gc.rs:123	tagged::gc	bulk
@@ -142,6 +153,7 @@ OBARRAY_CHUNK_BITS	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1140	em
 OBARRAY_CHUNK_SLOTS	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1142	emacs_core::symbol	bulk
 OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1134	emacs_core::symbol	bulk
 OBARRAY_DISPATCH_CELLS_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1118	emacs_core::symbol	bulk
+OBARRAY_FUNCTION_EPOCH_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1140	emacs_core::symbol	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:224:41
 OBARRAY_JIT_LEN_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1137	emacs_core::symbol	bulk
 OBARRAY_JIT_SPINE_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1115	emacs_core::symbol	bulk
 ObarrayBits	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:86	emacs_core::alloc	bulk
@@ -152,13 +164,18 @@ OverlayPositionHandle	struct	pub(crate)	crates/neovm-value/src/heap_types/overla
 POLY	const	pub(crate)	crates/neovm-value/src/value/jit_runtime/feedback.rs:24	emacs_core::value::jit_runtime::feedback	bulk
 PreparedHofBuiltin	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/hof.rs:13	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller jit/parallel.rs
 PreparedUnaryFunction	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/functions/unary.rs:10	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller jit/parallel.rs
+ProducerSymbolName	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:2637	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName; upper caller crates/neovm-core/src/face.rs:15,2374; existing checks/bodies/fields unchanged
+ProducerSymbolName::from_value	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:2647	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::from_value; upper caller crates/neovm-core/src/face.rs:2374,2446; existing checks/bodies/fields unchanged
+ProducerSymbolName::spelling	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:2658	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::spelling; upper caller crates/neovm-core/src/face.rs:2394; existing checks/bodies/fields unchanged
 PropertyPlistApplication	enum	pub(crate)	crates/neovm-value/src/value/text_props.rs:2412	emacs_core::value::text_props	bulk
+PublicationView	type	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/publication.rs:349	tagged::gc::symbol_table::publication	pc1-d: DATA privacy row; callers jit/parallel.rs:7,61; load() stays pub(crate)
 RecordLen	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:87	emacs_core::alloc	bulk
 RecursionDepth	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:420	heap_types::threading	bulk
 RepeatCount	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:88	emacs_core::alloc	bulk
 RepeatCountError	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:89	emacs_core::alloc	bulk
 RetainedLispValue	struct	pub(crate)	crates/neovm-value/src/error/mod.rs:702	emacs_core::error	bulk
 RetreatBit	enum	pub(crate)	crates/neovm-value/src/value/jit_runtime/retreat.rs:12	emacs_core::value::jit_runtime::retreat	bulk
+RootGroup	type	pub(crate)	crates/neovm-value/src/tagged/gc/arena_pages.rs:1835	tagged::gc::arena_pages	seal: TOKEN privacy row; type alias, no fields/ctor; callers eval/thread_local_roots.rs:17,22 eval/command_loop.rs:2741
 RootSeedBreakdown	struct	pub(crate)	crates/neovm-value/src/tagged/gc/arena_pages.rs:1840	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; callers eval/gc_generational.rs command_loop.rs
 RowsOwnedDomain	struct	pub(crate)	crates/neovm-value/src/tagged/gc/rows_observation.rs:7	tagged::gc	bulk
 RunState	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:204	heap_types::threading	bulk
@@ -175,17 +192,25 @@ SetInternalAlist	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:584	emac
 ShiftedTextPropertySource	struct	pub(crate)	crates/neovm-value/src/value/text_props.rs:2430	emacs_core::value::text_props	bulk
 SignalDelivery	enum	pub(crate)	crates/neovm-value/src/error/mod.rs:482	emacs_core::error	bulk
 SingleMutatorWorld	struct	pub(crate)	crates/neovm-value/src/tagged/gc/scan_contract.rs:16	tagged::gc::scan_contract	bulk
+SingleMutatorWorld::from_heap	unsafe fn	pub(crate)	crates/neovm-value/src/tagged/gc/scan_contract.rs:35	tagged::gc::scan_contract	seal mint: original # Safety unchanged; caller eval/command_loop.rs:2908
 SiteShape	enum	pub(crate)	crates/neovm-value/src/value/jit_runtime/feedback.rs:35	emacs_core::value::jit_runtime::feedback	bulk
 SqliteObjFinalizer	struct	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:14	tagged::header::sqlite_finalizer	bulk
 StackProof	struct	pub(crate)	crates/neovm-value/src/tagged/bytecode/decode_data.rs:23	tagged::bytecode::decode_data	bulk
 StoredThreadEvent	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:235	heap_types::threading	bulk
 StringByteLen	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:90	emacs_core::alloc	bulk
 StringCharacterCountKind	enum	pub(crate)	crates/neovm-value/src/heap_types.rs:156	heap_types	bulk
+SymbolBacking	struct	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:42	emacs_core::symbol::parallel	seal retained backing: private manager pointers; world/generation remain value-private pub(crate), not exposed; upper crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:110
+SymbolBacking::new	method	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:111	emacs_core::symbol::parallel	seal MINT: unchanged retained-original-World Safety contract; exact sole upper crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:115 Baton::parallel_symbol_backing
 SymbolNameQuery	struct	pub(crate)	crates/neovm-value/src/intern/mod.rs:421	emacs_core::intern	bulk
 SymbolPlistSnapshot	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1039	emacs_core::symbol	bulk
 SymbolSlotIndex	struct	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table.rs:24	tagged::gc::symbol_table	bulk
 SymbolWriteToken	struct	pub(crate)	crates/neovm-value/src/tagged/gc/mutator_registration/symbol_authority/globals.rs:31	tagged::gc	seal-type: TOKEN privacy ledger 17f6ac250b; fields private, no new ctor; guard rows in SEAL-GUARD-ROWS-gapsurvey.tsv; caller world/function_write_hooks.rs
 SyntheticConcurrentBarrier	struct	pub(crate)	crates/neovm-value/src/tagged/gc/tests/test_heap.rs:14	tagged::gc	bulk
+TABLE_ADDRESSES_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:40	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
+TABLE_ADDRESS_STRIDE	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:44	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
+TABLE_CHUNK_COUNT_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:32	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
+TABLE_CHUNK_SLOTS_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:36	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
+TABLE_SLOT_COUNT_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table/abi.rs:29	tagged::gc::symbol_table::abi	pc1-d: DATA privacy row; caller jit/parallel/native.rs:367-372
 TAG_BITS	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:117	tagged::value	bulk
 TAG_CONS	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:123	tagged::value	bulk
 TAG_FLOAT	const	pub(crate)	crates/neovm-value/src/tagged/value.rs:136	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; callers bytecode/vm.rs jit/compile.rs
@@ -207,7 +232,10 @@ UserCondition	struct	pub(crate)	crates/neovm-value/src/error/mod.rs:974	emacs_co
 ValueCell	enum	pub(crate)	crates/neovm-value/src/symbol/cell.rs:329	emacs_core::symbol	bulk
 WriteProjection	enum	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:728	tagged::collection_reads	bulk
 ZERO_WIDTH_RANGES	use	pub(crate)	crates/neovm-value/src/emacs_char/mod.rs:1596	emacs_core::emacs_char	bulk
+abi	mod	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table.rs:8	tagged::gc::symbol_table	module-gate: pub items after this batch are exactly the signed set below
+alloc_owner_debugger_cell	fn	pub(crate)	crates/neovm-value/src/forward/mod.rs:1286	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:414:46
 apply_signed_delta	fn	pub(crate)	crates/neovm-value/src/heap_types/byte_positions.rs:148	heap_types::byte_positions	bulk
+assert_no_leaf_active	fn	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:26	emacs_core::symbol::leaf_activity	pc1-d DATA: reviewed assertion helper; unchanged track_caller/body; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:424 cfg(debug_assertions)
 blv_alist_epoch	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:445	emacs_core::symbol	bulk
 blv_alist_epoch_addr	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:453	emacs_core::symbol	bulk
 bool_vector_from_bits	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:260	emacs_core::boolvec	bulk
@@ -231,8 +259,11 @@ builtin_sxhash_eql_with_mode	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs
 builtin_sxhash_equal_including_properties_with_mode	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:820	emacs_core::hashtab	bulk
 builtin_sxhash_equal_with_mode	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:805	emacs_core::hashtab	bulk
 bump_char_table_write_tick	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:109	emacs_core::value	bulk
+byte_positions	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:8	heap_types	module-gate: signed DATA module row (prepc ledger.tsv:266); contents plain + supplement-DATA; no PC2 tables
 bytecode_data_access_count	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:350	emacs_core::value	bulk
+canonical_symbol_for_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1821	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:7080:56
 card_tag_filter_on	fn	pub(crate)	crates/neovm-value/src/tagged/gc/knobs.rs:172	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/compile/heap_inline.rs
+card_tag_filter_on::gc_reexport	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2799	tagged::gc	pc1-d use-line: origin knobs.rs row (card_tag_filter_on); caller jit/compile/heap_inline.rs:312
 carrier_heap_is_acceptable_for_job_start	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:1754	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:2622	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 case_fold_match_len	use	pub(crate)	crates/neovm-value/src/emacs_char/mod.rs:1391	emacs_core::emacs_char	bulk
@@ -271,27 +302,36 @@ feed_concurrent_roots	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.r
 finish_cons_store_in_store	unsafe fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:188	tagged::mutate	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/compile/dispatch.rs
 finish_slot_store_in_store	unsafe fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:219	tagged::mutate	pc1-d: DATA seal privacy ledger 17f6ac250b; caller jit/compile/dispatch.rs
 flow_from_eval_error	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:137	emacs_core::error	bulk
+format_symbol_name_for_diagnostic	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:162	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/lisp/load/mod.rs:5:21
+fresh_bytecode_source_id	fn	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:241	tagged::bytecode::chunk	pc1-d: DATA ledger-supplement:202; caller runtime/bytecode/chunk.rs:20
 function_cell_lookup_count	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:183	emacs_core::symbol	bulk
+function_write_hooks	reexport	pub(crate)	crates/neovm-value/src/tagged/gc.rs:50	tagged::gc	module-facade: privacy module row FACADE REQUIRED; 8 named re-exports (all pre-move pub, vis unchanged); core paths updated callback.rs:3 world/function_write_hooks.rs:10 parallel/hof.rs:4
 has_collection_observations	fn	pub(crate)	crates/neovm-value/src/tagged/gc/collection_observed.rs:80	tagged::gc	bulk
 hash_key_to_visible_value	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:101	emacs_core::hashtab	bulk
 hash_test_parity_enabled	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:50	emacs_core::hashtab	bulk
 heap_types::threading	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:10	heap_types	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 hoist_reads	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:74	tagged::collection_reads	bulk
+inhibited_user_test_since_gc	fn	pub(crate)	crates/neovm-value/src/hashtab/user_test_guard.rs:11	emacs_core::hashtab	pc3 signed unsafe raw consumer; sole production caller crates/neovm-core/src/emacs_core/lisp/native/builtins/stubs.rs::builtin_garbage_collect_maybe; active pinned exclusive Context accounting entry valid through synchronous callback; body unchanged
 install_eval_error_formatter	fn	pub(crate)	crates/neovm-value/src/error/format_hook.rs:45	emacs_core::error	pc2 unsafe root-only export; private descriptor fields and OnceLocks; canonical shared refusal; sole printer adapter at construction/restore seams
 install_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:357	tagged::value	pc1-d: DATA seal privacy ledger 17f6ac250b; caller eval/green/bootstrap.rs
 intern_call_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2186	emacs_core::intern	bulk
 intern_calls	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2181	emacs_core::intern	bulk
 is_active	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:92	tagged::collection_reads	bulk
 is_bool_vector	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:279	emacs_core::boolvec	bulk
+is_keyword_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1751	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:22
 is_observed	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads/compiled_journal.rs:56	tagged::collection_reads	bulk
+jit_runtime	mod	pub(crate)	crates/neovm-value/src/value/mod.rs:68	emacs_core::value	module-gate signed CORE-RESIDUAL B; T1 A1-A4/B recursive pub inventory17 declarations; core runtime/jit/mod.rs:260,cache.rs:3144; no hook descendant; child/item/field visibility unchanged
 knuth_hash_index	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:377	emacs_core::hashtab	bulk
+leaf_activity	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:34	emacs_core::symbol	module-gate: signed leaf addendum; debug-only; already-pub LeafActiveScope signed pc1-d private field; no hook/installer; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:424,513,536
 leave_projection_scope	fn	pub(crate)	crates/neovm-value/src/symbol/projection.rs:106	emacs_core::symbol	bulk
 make_bool_vector	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:280	emacs_core::boolvec	bulk
 make_signal_binding_value	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1077	emacs_core::error	bulk
+map_lisp_visible_symbol_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2054	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:2270:32
 maphash_entry_at_slot	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:956	emacs_core::hashtab	bulk
 maphash_slot_len	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:949	emacs_core::hashtab	bulk
 marker_equal_hash_key_value	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:86	emacs_core::value	bulk
 marker_equal_logical_fields	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:75	emacs_core::value	bulk
+materialize_symbol_name_value	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2007	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1929:44
 memory_exhausted	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:92	emacs_core::alloc	bulk
 memory_exhausted_error	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:993	emacs_core::error	bulk
 memory_signal_from_binding_value	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1106	emacs_core::error	bulk
@@ -304,10 +344,14 @@ note_root_overwrite	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:
 overlay_full_enumeration_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:108	heap_types::overlay_storage::instrumentation	bulk
 overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:32	heap_types::overlay_storage::instrumentation	bulk
 overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:51	heap_types::overlay_storage::instrumentation	bulk
+overlay_storage	mod	pub(crate)	crates/neovm-value/src/heap_types.rs:10	heap_types	module-gate: signed DATA module row (ledger.tsv:271); 8 pub types all supplement-DATA; ordered+instrumentation stay pub(crate)
 overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:13	heap_types::overlay_storage::instrumentation	bulk
+parallel	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:36	emacs_core::symbol	module-gate: signed core residual; existing public PlainSymbolBacking plain B1 enum and sealed KeeperWorldDesignator; no hook table/installer; upper eval/world/era.rs:20 and world/green_owner.rs:110
 park_carrier_tls	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1252	emacs_core::error	bulk
 plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:173	emacs_core::symbol	bulk
 prepare_thread_symbol_caches	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2237	emacs_core::intern	bulk
+property_revision_world_state_placeholder	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:44	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:72; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
+publication	mod	pub(crate)	crates/neovm-value/src/tagged/gc/symbol_table.rs:10	tagged::gc::symbol_table	module-gate: only pub item is PublicationView (pc1-d below)
 reads_need_observation	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:83	tagged::collection_reads	bulk
 record_endpoint_search_node_visit	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:75	heap_types::overlay_storage::instrumentation	bulk
 record_endpoint_search_summary_shift	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:94	heap_types::overlay_storage::instrumentation	bulk
@@ -332,7 +376,13 @@ reset_overlay_iterator_frame_push_count	fn	pub(crate)	crates/neovm-value/src/hea
 reset_overlay_shift_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:46	heap_types::overlay_storage::instrumentation	bulk
 reset_overlays_at_node_visit_count	fn	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/tests/instrumentation.rs:8	heap_types::overlay_storage::instrumentation	bulk
 reset_plain_value_slot_visits	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:168	emacs_core::symbol	bulk
+reset_plist_get_walks	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:50	emacs_core::symbol::plist_core	bulk
+reset_symbol_with_pos_plist_comparisons	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:35	emacs_core::symbol::plist_core	bulk
+resolve_lisp_visible_symbol_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1920	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1966:40
+resolve_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1810	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:5104:64
+resolve_name_lisp_string	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1818	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/stats.rs:1045:52
 restore_runtime_interner	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1523	emacs_core::intern	bulk
+scan_contract	mod	pub(crate)	crates/neovm-value/src/tagged/gc.rs:2706	tagged::gc	module-gate: privacy module row; SingleMutatorWorld TOKEN already pub; from_heap seal mint below
 set_compiled_cons_cdr	fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:238	tagged::mutate	bulk
 set_tagged_heap_root	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:1646	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 signal	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:986	emacs_core::error	bulk
@@ -342,10 +392,16 @@ signal_with_data	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:1037	emacs_co
 snapshot_static_subr_objects	fn	pub(crate)	crates/neovm-value/src/tagged/value.rs:335	tagged::value	bulk
 sqlite_obj_finalizer_installed	fn	pub(crate)	crates/neovm-value/src/tagged/header/sqlite_finalizer.rs:27	tagged::header::sqlite_finalizer	bulk
 string_bytes_changed_hook_installed	fn	pub(crate)	crates/neovm-value/src/heap_types.rs:66	heap_types	bulk
+swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:43	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
 swap_world_state	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1073	tagged::collection_reads	bulk
+swap_world_state	fn	pub(crate)	crates/neovm-value/src/symbol/property_revision.rs:57	emacs_core::symbol::property_revision	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
 sxhash_combine	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:108	emacs_core::hashtab	bulk
 symbol::parallel	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:35	symbol	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
+symbol_id	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:733	emacs_core::value	pc1-d DATA: approved351 symbol_id; upper caller crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:41; existing checks/bodies/fields unchanged
+symbol_name_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1798	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:50
 symbol_registry_epoch_value	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1509	emacs_core::intern	bulk
+symbol_table	mod	pub(crate)	crates/neovm-value/src/tagged/gc.rs:55	tagged::gc	module-gate: privacy module row; only pub item SymbolSlotIndex (row 186)
+symbol_with_pos_plist_comparisons	fn	pub(crate)	crates/neovm-value/src/symbol/plist_core.rs:40	emacs_core::symbol::plist_core	bulk
 symcell_inline_write_value	fn	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1167	emacs_core::symbol	bulk
 tagged::bytecode	mod	pub(crate)	crates/neovm-value/src/tagged/mod.rs:10	tagged	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
 tagged::bytecode::chunk	mod	pub(crate)	crates/neovm-value/src/tagged/bytecode/mod.rs:18	tagged::bytecode	module-gate per PEER-RULING-CORE-RESIDUAL B; pub-item receipt in notify-gapsurvey-core-batch2.md
@@ -362,38 +418,7 @@ with_static_subr_entry_write	fn	pub(crate)	crates/neovm-value/src/tagged/value/s
 with_store_state	fn	pub(crate)	crates/neovm-value/src/tagged/gc/gc_thread.rs:1981	tagged::gc	pc1-d: DATA seal privacy ledger 17f6ac250b; widened by pc11 generator glob-fix pass, re-cited to its DATA seal
 with_vector_slots_mut	unsafe fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:306	tagged::mutate	pc1-d: DATA seal privacy ledger 17f6ac250b; caller lisp/native/builtins/higher_order/sort.rs
 world_state_placeholder	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:1068	tagged::collection_reads	bulk
-LISP_BOOL_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:756	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/lowering.rs:1529:37
-LISP_KBOARD_OBJ_FWD_VALUE_OFFSET	const	pub(crate)	crates/neovm-value/src/forward/mod.rs:997	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/compile/jit_layout.rs:223:60
-alloc_owner_debugger_cell	fn	pub(crate)	crates/neovm-value/src/forward/mod.rs:1286	emacs_core::forward	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/admission.rs:414:46
-LispVisibleSymbolName	enum	pub(crate)	crates/neovm-value/src/intern/mod.rs:828	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1979:38
-canonical_symbol_for_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1821	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:7080:56
-format_symbol_name_for_diagnostic	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:162	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/lisp/load/mod.rs:5:21
-is_keyword_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1751	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:22
-map_lisp_visible_symbol_names	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2054	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:2270:32
-materialize_symbol_name_value	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:2007	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1929:44
-resolve_lisp_visible_symbol_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1920	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/commands/minibuffer/mod.rs:1966:40
-resolve_name	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1810	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:5104:64
-resolve_name_lisp_string	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1818	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/stats.rs:1045:52
-symbol_name_id	fn	pub(crate)	crates/neovm-value/src/intern/mod.rs:1798	emacs_core::intern	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:35:50
-OBARRAY_FUNCTION_EPOCH_OFFSET	const	pub(crate)	crates/neovm-value/src/symbol/mod.rs:1140	emacs_core::symbol	pc1-d DATA: accepted pentry held-out row; upper crates/neovm-core/src/emacs_core/runtime/jit/aot.rs:224:41
-LispVisibleSymbolName::text	method	pub(crate)	crates/neovm-value/src/intern/mod.rs:848	emacs_core::intern	pc1-d DATA: reviewed ledger emacs_core::intern::LispVisibleSymbolName::text; upper crates/neovm-core/src/emacs_core/lisp/native/builtins/from_value.rs:236; unchanged reborrow body
-leaf_activity	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:34	emacs_core::symbol	module-gate: signed leaf addendum; debug-only; already-pub LeafActiveScope signed pc1-d private field; no hook/installer; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:424,513,536
-LeafActiveScope::enter	method	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:46	emacs_core::symbol::leaf_activity	pc1-d DATA: signed leaf addendum; original body only raises leaf depth; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:536 cfg(debug_assertions)
-assert_no_leaf_active	fn	pub(crate)	crates/neovm-value/src/symbol/leaf_activity.rs:26	emacs_core::symbol::leaf_activity	pc1-d DATA: reviewed assertion helper; unchanged track_caller/body; upper crates/neovm-core/src/emacs_core/lisp/native/subr/leaf.rs:424 cfg(debug_assertions)
-property_revision_world_state_placeholder	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:44	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:72; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
 world_state_placeholder	fn	pub(crate)	crates/neovm-value/src/symbol/property_revision.rs:51	emacs_core::symbol::property_revision	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:72; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
-swap_property_revision_world_state	use	pub(crate)	crates/neovm-value/src/symbol/mod.rs:43	emacs_core::symbol	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
-swap_world_state	fn	pub(crate)	crates/neovm-value/src/symbol/property_revision.rs:57	emacs_core::symbol::property_revision	n13 carried DATA: signed N13/PC10; sole upper crates/neovm-core/src/emacs_core/runtime/eval/green/carried.rs:73; unchanged paired TLS swap/placeholder body; guard=CARRIERS-derived carried.rs-only
-parallel	mod	pub(crate)	crates/neovm-value/src/symbol/mod.rs:36	emacs_core::symbol	module-gate: signed core residual; existing public PlainSymbolBacking plain B1 enum and sealed KeeperWorldDesignator; no hook table/installer; upper eval/world/era.rs:20 and world/green_owner.rs:110
-SymbolBacking	struct	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:42	emacs_core::symbol::parallel	seal retained backing: private manager pointers; world/generation remain value-private pub(crate), not exposed; upper crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:110
-SymbolBacking::new	method	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:111	emacs_core::symbol::parallel	seal MINT: unchanged retained-original-World Safety contract; exact sole upper crates/neovm-core/src/emacs_core/runtime/eval/world/green_owner.rs:115 Baton::parallel_symbol_backing
-KeeperWorldDesignator::new	method	pub(crate)	crates/neovm-value/src/symbol/parallel/keeper.rs:27	emacs_core::symbol::parallel	seal MINT: unchanged retained keeper borrow/thread/identity Safety contract; exact sole upper crates/neovm-core/src/emacs_core/runtime/eval/world/parallel_roots.rs:154 Baton::keeper_designator
-symbol_id	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:733	emacs_core::value	pc1-d DATA: approved351 symbol_id; upper caller crates/neovm-core/src/emacs_core/lisp/native/builtins/symbols.rs:41; existing checks/bodies/fields unchanged
-ProducerSymbolName	struct	pub(crate)	crates/neovm-value/src/value/mod.rs:2637	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName; upper caller crates/neovm-core/src/face.rs:15,2374; existing checks/bodies/fields unchanged
-ProducerSymbolName::from_value	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:2647	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::from_value; upper caller crates/neovm-core/src/face.rs:2374,2446; existing checks/bodies/fields unchanged
-ProducerSymbolName::spelling	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:2658	emacs_core::value	pc1-d DATA: approved351 ProducerSymbolName::spelling; upper caller crates/neovm-core/src/face.rs:2394; existing checks/bodies/fields unchanged
-jit_runtime	mod	pub(crate)	crates/neovm-value/src/value/mod.rs:68	emacs_core::value	module-gate signed CORE-RESIDUAL B; T1 A1-A4/B recursive pub inventory17 declarations; core runtime/jit/mod.rs:260,cache.rs:3144; no hook descendant; child/item/field visibility unchanged
-inhibited_user_test_since_gc	fn	pub(crate)	crates/neovm-value/src/hashtab/user_test_guard.rs:11	emacs_core::hashtab	pc3 signed unsafe raw consumer; sole production caller crates/neovm-core/src/emacs_core/lisp/native/builtins/stubs.rs::builtin_garbage_collect_maybe; active pinned exclusive Context accounting entry valid through synchronous callback; body unchanged
 CanonicalDispatchCells	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:872	emacs_core::symbol	pc1-d DATA: accepted private-field canonical dispatch container; upper crates/neovm-core/src/emacs_core/runtime/eval/world.rs:13,285,287; constructor/fields remain private
 DebuggerDescriptor	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:805	emacs_core::symbol	seal safe descriptor TOKEN: private static-reference tuple, existing safe producers only; upper crates/neovm-core/src/emacs_core/runtime/eval/world.rs:13,266,538
 CanonicalDispatchCells::admission_epoch	method	pub(crate)	crates/neovm-value/src/symbol/mod.rs:918	emacs_core::symbol	pc1-d DATA: signed dispatch addendum; read-only existing epoch observation; upper crates/neovm-core/src/emacs_core/runtime/eval/world.rs:287,302,314

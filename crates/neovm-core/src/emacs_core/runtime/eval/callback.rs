@@ -1,6 +1,6 @@
 //! Activation-local native callback dispatch using the legacy funcall protocol.
 use super::*;
-use crate::tagged::gc::function_write_hooks::{HofRegistrationClock, HofRegistrationEpoch};
+use crate::tagged::gc::{HofRegistrationClock, HofRegistrationEpoch};
 #[cfg(not(feature = "vm-profile"))]
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};

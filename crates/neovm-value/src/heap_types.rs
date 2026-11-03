@@ -4,8 +4,10 @@
 //! dump/load code share the same payload structs without reviving old heap
 //! module boundaries.
 
-pub(crate) mod byte_positions;
-pub(crate) mod overlay_storage;
+#[doc(hidden)]
+pub mod byte_positions;
+#[doc(hidden)]
+pub mod overlay_storage;
 #[doc(hidden)]
 pub mod threading;
 

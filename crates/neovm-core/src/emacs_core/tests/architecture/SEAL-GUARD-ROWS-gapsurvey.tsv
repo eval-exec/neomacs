@@ -6,3 +6,7 @@ FrozenLegacyRoots	runtime/eval/world/parallel_roots.rs:19; runtime/eval/world/er
 PreparedHofBuiltin	runtime/jit/parallel.rs:11	TOKEN symbol_authority functions/hof; fields private; ctor stays pub(crate)
 PreparedUnaryFunction	runtime/jit/parallel.rs:11	TOKEN symbol_authority functions/unary; fields private; ctor stays pub(crate)
 SymbolWriteToken	runtime/eval/world/function_write_hooks.rs:14	TOKEN symbol_authority globals; fields private; ctor stays pub(crate)
+RootGroup	runtime/eval/thread_local_roots.rs:17,22; runtime/eval/command_loop.rs:2741	TOKEN arena_pages; type alias (no fields, no ctor); carried by gc.rs pub use arena_pages::*
+DescriptorOffset	runtime/jit/parallel/native.rs:364,367-370	TOKEN symbol_table::abi; field private; no ctor promoted
+DescriptorOffset::get	runtime/jit/parallel/native.rs:365	seal producer; safe const read, body unchanged
+SingleMutatorWorld::from_heap	runtime/eval/command_loop.rs:2908	seal mint; pub unsafe fn, original # Safety text unchanged; type stays TOKEN with private fields

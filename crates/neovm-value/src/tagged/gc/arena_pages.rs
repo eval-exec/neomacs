@@ -1831,7 +1831,8 @@ pub(crate) struct SweepStats {
 /// The count is the enumeration volume (every value fed to the seeding sink,
 /// BEFORE the non-heap-object / mapped-root filters), which is what the walk's
 /// O() actually scales with.
-pub(crate) type RootGroup = (&'static str, u64, usize);
+#[doc(hidden)]
+pub type RootGroup = (&'static str, u64, usize);
 
 /// Per-group decomposition of one `seed_all_context_roots` call (one root
 /// handshake's context-root seeding). Built fresh each call by the evaluator.

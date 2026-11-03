@@ -1,7 +1,7 @@
 //! Distinct bounded mapping entry; no generic or serial callback fallback.
 use super::*;
 use crate::tagged::gc::ExecutionActivation;
-use crate::tagged::gc::function_write_hooks::HofOperation;
+use crate::tagged::gc::HofOperation;
 
 #[repr(C)]
 pub(super) struct HofInput {

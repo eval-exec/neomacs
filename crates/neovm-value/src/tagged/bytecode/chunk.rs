@@ -42,7 +42,8 @@ pub struct DecodedGnuCode {
 /// and allocates the synchronization state only for GNU-backed functions.
 #[derive(Debug)]
 #[repr(C)]
-pub(crate) struct LazyGnuCode {
+#[doc(hidden)]
+pub struct LazyGnuCode {
     // Keep this first, with DecodedGnuCode's original payload unchanged:
     // run_loop inlines its projections, and their layout affects regalloc.
     pub(crate) decoded: OnceLock<DecodedGnuCode>,
@@ -236,7 +237,8 @@ pub(crate) fn bytecode_function_clone_count_for_test() -> usize {
 
 static NEXT_SOURCE_ID: AtomicU64 = AtomicU64::new(1);
 
-pub(crate) fn fresh_bytecode_source_id() -> u64 {
+#[doc(hidden)]
+pub fn fresh_bytecode_source_id() -> u64 {
     NEXT_SOURCE_ID.fetch_add(1, AtomicOrdering::Relaxed)
 }
 

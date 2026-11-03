@@ -345,7 +345,8 @@ impl PublishedSymbolTables {
 /// escapes. Generated consumers must use an Acquire-or-stronger atomic load.
 #[repr(transparent)]
 #[must_use = "retain this borrow until every descriptor use returns"]
-pub(crate) struct PublicationView<'owner> {
+#[doc(hidden)]
+pub struct PublicationView<'owner> {
     slot: &'owner AtomicPtr<PublishedSymbolTable>,
     owner: PhantomData<std::rc::Rc<()>>,
 }

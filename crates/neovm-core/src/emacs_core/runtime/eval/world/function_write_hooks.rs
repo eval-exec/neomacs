@@ -7,7 +7,7 @@ use crate::emacs_core::eval::subr_abi::SubrValueExt;
 use crate::emacs_core::eval::subr_abi::{SubrFn, SubrFn2, SubrObj};
 use crate::emacs_core::intern::{SymId, lookup_interned};
 use crate::emacs_core::symbol::FunctionEpochBump;
-use crate::tagged::gc::function_write_hooks::{
+use crate::tagged::gc::{
     CanonicalHofSeed, CompilerActivity, FunctionWriteHooks, HofOperation, HofPreparationError,
     HofRegistrationEpoch, InitialDefinition,
 };
