@@ -6,9 +6,22 @@ use std::ptr::NonNull;
 /// Thus garbage-collect-maybe sees a signed, usually negative `since_gc`.
 /// Threshold changes during the callback adjust GNU's countdown by the same
 /// amount; they do not change this difference, so keep the starting threshold.
+///
+/// # Safety
+///
+/// When `pointer` is `Some`, it must come from the currently active Context's
+/// accounting slot. It must point to the initialized accounting entry in that
+/// activation's pinned `UnsafeCell`, valid for reads and writes for this entire
+/// call, including `entry_threshold`. The calling mutator must have exclusive
+/// access to the activation. The callback must not end, replace or unpublish
+/// that activation, or otherwise invalidate the pointer.
+///
+/// Production calls are restricted to `stubs::builtin_garbage_collect_maybe`,
+/// which obtains the pointer from its exclusively borrowed active Context.
+/// `None` carries no pointer validity obligation.
 #[cold]
 #[inline(never)]
-pub(crate) fn inhibited_user_test_since_gc(
+pub unsafe fn inhibited_user_test_since_gc(
     pointer: Option<NonNull<HashTestGcInhibitAccounting>>,
     bytes_since_gc: usize,
     entry_threshold: impl FnOnce(&HashTestGcInhibitAccounting) -> usize,
