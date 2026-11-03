@@ -2265,24 +2265,6 @@ fn display_table_glyph_width(dt: &Value, code: u32) -> Option<usize> {
     Some(total)
 }
 
-type CompositionWidthFn = fn(&super::eval::Context, i64) -> Option<(i64, i64)>;
-
-/// Text-layer composition-width query installed once by the composite module
-/// (stage-3 C7).  A plain fn pointer keeps the indent path static; there is no
-/// dynamic dispatch and no new TLS.
-static COMPOSITION_WIDTH: std::sync::OnceLock<CompositionWidthFn> = std::sync::OnceLock::new();
-
-pub(crate) fn install_composition_width_seam(f: CompositionWidthFn) {
-    let _ = COMPOSITION_WIDTH.set(f);
-}
-
-#[inline]
-fn composition_width_at(ctx: &super::eval::Context, charpos1: i64) -> Option<(i64, i64)> {
-    COMPOSITION_WIDTH
-        .get()
-        .expect("composition width seam is installed at evaluator construction")(ctx, charpos1)
-}
-
 /// If a `composition` property begins at buffer byte `byte`, return
 /// `(composed_width, run_end_byte)` — the composed glyphs' display width and the
 /// byte position just past the composed characters. Returns None otherwise.
@@ -2294,7 +2276,7 @@ fn composition_run_at(
     let buf = ctx.buffers.get(buffer_id)?;
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte));
     let charpos1 = charpos0.get() as i64 + 1;
-    let (width, length) = composition_width_at(ctx, charpos1)?;
+    let (width, length) = super::composite::composition_width_at(ctx, charpos1)?;
     let end_charpos0 = charpos0.get() + length.max(0) as usize;
     let end_byte = buf
         .char_pos_to_emacs_byte_pos_clamped(CharPos0::new(end_charpos0))

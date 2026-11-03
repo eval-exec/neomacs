@@ -27,10 +27,9 @@ pub use crate::buffer::composition::{
 /// called at evaluator construction and by the text-side entry points so tests
 /// that scan buffers without a live evaluator still get the queries.
 pub(crate) fn install_substrate_seams() {
-    // Fast path: these entry points run once per window scan (and the width
-    // query once per indentation run), so avoid two `OnceLock::set` RMWs per
-    // call.  The lock contents are still read through `OnceLock::get`, which
-    // synchronizes with the setters on its own.
+    // Fast path: these entry points run once per window scan, so avoid a
+    // `OnceLock::set` RMW per call.  The lock contents are still read through
+    // `OnceLock::get`, which synchronizes with the setter on its own.
     static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if INSTALLED.load(std::sync::atomic::Ordering::Acquire) {
         return;
@@ -39,7 +38,6 @@ pub(crate) fn install_substrate_seams() {
         spans: automatic_composition_spans_in_with_symbols,
         ascii_no_rules: ascii_has_no_composition_rules_with_symbols,
     });
-    crate::emacs_core::indent::install_composition_width_seam(composition_width_at);
     INSTALLED.store(true, std::sync::atomic::Ordering::Release);
 }
 
