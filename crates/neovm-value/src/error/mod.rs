@@ -255,13 +255,17 @@ impl<T> FlowResultExt<T> for Result<T, Flow> {
 // These private result views inspect the borrowed carrier before consuming
 // a signal payload. Callers keep the carrier opaque and evaluate each result
 // once. The macros introduce no state or threading assumptions.
+#[doc(hidden)]
+#[macro_export]
 macro_rules! is_signal_result {
     ($result:expr) => {
         matches!(&$result, Err(flow) if flow.is_signal())
     };
 }
-pub(crate) use is_signal_result;
+pub use is_signal_result;
 
+#[doc(hidden)]
+#[macro_export]
 macro_rules! with_signal_result {
     ($result:expr, $signal:ident => $body:expr) => {
         match $result {
@@ -275,7 +279,7 @@ macro_rules! with_signal_result {
         }
     };
 }
-pub(crate) use with_signal_result;
+pub use with_signal_result;
 
 impl Flow {
     /// Keep GNU's throw-time EQ policy while dynamic bindings unwind.
@@ -638,7 +642,8 @@ static_assertions::assert_impl_all!(InFlightRegistryHandle: Send, Sync);
 /// registry metadata concurrently. Context and public EvalError stay on their
 /// owner threads; sharing registry storage does not transfer either owner.
 #[derive(Clone)]
-pub(crate) struct InFlightRegistryHandle {
+#[doc(hidden)]
+pub struct InFlightRegistryHandle {
     heap_identity: Option<usize>,
     table: std::sync::Arc<std::sync::Mutex<InFlightRootTable>>,
 }
@@ -658,7 +663,8 @@ impl InFlightRegistryHandle {
     }
 }
 
-pub(crate) fn current_in_flight_registry_handle() -> InFlightRegistryHandle {
+#[doc(hidden)]
+pub fn current_in_flight_registry_handle() -> InFlightRegistryHandle {
     let heap_identity = crate::tagged::gc::current_tagged_heap_identity();
     IN_FLIGHT_ROOTS.with(|active| {
         let mut active = active.borrow_mut();
@@ -675,7 +681,8 @@ pub(crate) fn current_in_flight_registry_handle() -> InFlightRegistryHandle {
     })
 }
 
-pub(crate) fn install_in_flight_registry_handle(registry: &InFlightRegistryHandle) {
+#[doc(hidden)]
+pub fn install_in_flight_registry_handle(registry: &InFlightRegistryHandle) {
     IN_FLIGHT_ROOTS.with(|active| *active.borrow_mut() = Some(registry.clone()));
 }
 
@@ -1082,7 +1089,8 @@ fn signal_with_data_internal(
 }
 
 /// Identity-preserving signal flow with a raw cdr payload.
-pub(crate) fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
+#[doc(hidden)]
+pub fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
     let normalized = crate::value::list_to_vec(&data).unwrap_or_else(|| vec![data]);
     signal_internal_id(symbol, normalized, Some(data), false)
 }
@@ -1104,7 +1112,8 @@ pub fn make_signal_binding_value(sig: &SignalData) -> Value {
 }
 
 /// Reconstruct a signal flow from a condition-case/thread error binding form.
-pub(crate) fn signal_from_binding_value(value: Value) -> Option<Flow> {
+#[doc(hidden)]
+pub fn signal_from_binding_value(value: Value) -> Option<Flow> {
     if !value.is_cons() {
         return None;
     };
