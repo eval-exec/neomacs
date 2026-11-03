@@ -5,4 +5,5 @@
 //! thread-local restoration guard that lower value code and upper consumers
 //! both use.
 
+pub mod logging;
 pub mod tls_scope;

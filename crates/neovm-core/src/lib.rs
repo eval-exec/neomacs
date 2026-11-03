@@ -15,7 +15,7 @@ pub mod host_input;
 mod image_identity;
 pub mod keyboard;
 mod keyboard_input;
-pub mod logging;
+pub use neovm_value::logging;
 pub mod tagged;
 #[cfg(test)]
 #[path = "tests/test_utils_test.rs"]

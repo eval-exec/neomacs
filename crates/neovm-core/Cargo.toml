@@ -47,7 +47,6 @@ strum.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-log.workspace = true
-tracing-appender.workspace = true
 stacker.workspace = true
 dns-lookup.workspace = true
 hostname.workspace = true

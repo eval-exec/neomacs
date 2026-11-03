@@ -4350,7 +4350,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tl",
  "tracing",
- "tracing-appender",
  "tracing-log",
  "tracing-subscriber",
  "tracing-test",
@@ -4402,6 +4401,8 @@ name = "neovm-value"
 version = "0.0.20"
 dependencies = [
  "static_assertions",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]
