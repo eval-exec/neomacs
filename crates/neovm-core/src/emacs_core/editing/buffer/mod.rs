@@ -4178,7 +4178,7 @@ pub(crate) fn generate_new_buffer_name_value_in_state(
     let suffix = generated
         .strip_prefix(&base_text)
         .expect("BufferManager must generate a name by appending to its base");
-    super::builtins::strings::builtin_concat_slice(&[base, Value::string(suffix)])
+    crate::strings_core::concat_impl(&[base, Value::string(suffix)])
 }
 
 /// (bufferp OBJECT) → t or nil

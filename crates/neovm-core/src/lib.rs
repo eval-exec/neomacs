@@ -32,6 +32,10 @@ pub(crate) use neovm_value::random;
 // with the stage-3 split (C12): edit-layer text-property casing and the lisp
 // subrs share the same scans below the evaluator.
 pub(crate) use neovm_value::list_scan;
+// The string-construction cores (GNU fns.c substring/concat) moved with the
+// stage-3 split (C12): the subr wrappers keep the perf_trace probes in the
+// lisp layer, while the buffer substrate reaches the cores directly.
+pub(crate) use neovm_value::strings_core;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The

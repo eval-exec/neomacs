@@ -260,11 +260,15 @@ pub(crate) fn builtin_replace_region_contents(
         let replacement = if run.b_start == run.b_end {
             Value::string("")
         } else {
-            crate::emacs_core::builtins::strings::builtin_substring(vec![
-                source_value,
-                Value::fixnum(run.b_start as i64),
-                Value::fixnum(run.b_end as i64),
-            ])?
+            crate::strings_core::substring_impl(
+                "substring",
+                &[
+                    source_value,
+                    Value::fixnum(run.b_start as i64),
+                    Value::fixnum(run.b_end as i64),
+                ],
+                true,
+            )?
         };
         let replacement =
             buffer_insert_piece_from_string(replacement, target_multibyte)?.into_replacement_text();

@@ -1097,3 +1097,6 @@ string_char_to_byte	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:191
 string_byte_to_gnu_char	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:227	string_pos_cache	stage-3 C12: regex/syntax callers keep the historical path
 reset_carrier_tls	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:267	string_pos_cache	stage-3 C12: green carrier reset step keeps its path
 carrier_tls_fingerprint	fn	pub(crate)	crates/neovm-value/src/string_pos_cache.rs:275	string_pos_cache	stage-3 C12: green carrier fingerprint keeps its path
+string_char_range	fn	private	crates/neovm-value/src/strings_core.rs:54	strings_core	stage-3 C12: substring core helper; the format/replace-decoding string subrs import it back from the value layer
+substring_impl	fn	private	crates/neovm-value/src/strings_core.rs:62	strings_core	stage-3 C12: probe-free substring core; the subr wrappers keep the perf_trace probes in the lisp layer
+concat_impl	fn	(new fn)	crates/neovm-value/src/strings_core.rs:430	strings_core	stage-3 C12: concat core extracted from builtin_concat_slice's probe closure; buffer name generation reaches it below edit

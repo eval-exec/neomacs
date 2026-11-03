@@ -18,6 +18,7 @@ pub mod list_scan;
 pub mod plist;
 pub mod random;
 pub mod string_pos_cache;
+pub mod strings_core;
 pub mod symbol;
 pub mod tagged;
 pub mod tls_fingerprint;
