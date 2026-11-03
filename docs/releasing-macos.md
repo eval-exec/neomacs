@@ -21,6 +21,10 @@ properties on the exact files uploaded to GitHub Releases:
    closure, verifies each signature, starts every app in batch mode, and
    requires all three apps to have the same code-directory hash.
 
+The release workflow does not meet item 4 yet: no workflow runs
+`scripts/test-macos-release-artifact.sh`. Until one does, run it by hand on a
+clean machine against the exact files before publishing (see below).
+
 ## Artifact formats
 
 The release publishes three binary containers made from one signed,
@@ -48,14 +52,18 @@ The workflow supports two explicit distribution-trust modes:
 - **Developer ID:** when all signing/notary secrets are present, CI additionally
   applies a Developer ID Application signature with hardened runtime and a
   secure timestamp. It notarizes and staples the app before creating the public
-  archives, then signs, notarizes, and staples the DMG. The clean runner
-  verifies Gatekeeper policy for every extracted app and the DMG itself.
+  archives, then signs, notarizes, and staples the DMG.
+  `scripts/test-macos-release-artifact.sh` verifies Gatekeeper policy for every
+  extracted app and the DMG itself.
 
 The release workflow is the orchestration boundary: it constructs the artifacts
-through `scripts/package-macos-app.sh`, then verifies every exact container
-through `scripts/test-macos-release-artifact.sh` on a clean runner. Keep app
-construction behind the package script so local packaging and CI cannot
-silently acquire different behavior.
+through `scripts/package-macos-app.sh`, which also checks that every member of
+the tarball is recorded as root's (`0/0`) and none is writable by every
+account. `scripts/test-macos-release-artifact.sh` verifies every exact
+container (signatures, Gatekeeper, launch, and the same tarball check), but no
+workflow runs it at present: run it by hand on a clean machine before
+publishing. Keep app construction behind the package script so local packaging
+and CI cannot silently acquire different behavior.
 
 ## Optional Developer ID upgrade
 

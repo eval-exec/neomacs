@@ -190,6 +190,15 @@ Alma and Fedora 43+ — a package built on Ubuntu cannot, because `rpmbuild`
 records the build host's ncurses and glibc symbol versions as requirements. See
 [releasing-linux.md](docs/releasing-linux.md).
 
+The `.deb` and the Linux tarball of v0.0.20 and earlier recorded the build
+account's uid as the owner of their files, so installing them as root (`dpkg -i`,
+a manual `tar -x` into `/usr/local`, or `install.sh --prefix` before this was
+fixed) left the dump and the Lisp tree (and, for the `.deb`,
+`/usr/bin/neomacs`) owned by that uid, rewritable by any local account holding
+it. A fixed `.deb` refuses to install over such an installation until it is
+repaired; to repair it, see
+[releasing-linux.md](docs/releasing-linux.md#repairing-an-installation-from-v0020-or-earlier).
+
 <details>
 <summary><b>Build from source</b></summary>
 

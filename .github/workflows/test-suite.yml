@@ -569,7 +569,12 @@ jobs:
               cp target/release/neomacs.pdump "$pkg/bin/neomacs.pdump"
             fi
             cp -r lisp etc "$pkg/share/neomacs/"
+            # Members owned by uid/gid 1001, what the v0.0.20 release tarball
+            # recorded (the release runner's account), whatever account this
+            # runner happens to use: the root install below has to prove
+            # install.sh never carries an archive's owner into the tree.
             tar czf "$staged/neomacs-$version-$triple.tar.gz" \
+              --owner=1001 --group=1001 --numeric-owner \
               -C "$pkg_parent" "neomacs-$version-$triple"
             ( cd "$staged" && sha256sum "neomacs-$version-$triple.tar.gz" > SHA256SUMS )
             local prefix="$stage_root/prefix"
@@ -595,6 +600,24 @@ jobs:
             test -d "$ver_dir/share/neomacs/lisp"
             env -u NEOMACS_RUNTIME_ROOT \
               "$prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
+
+            # The same archive installed by root into a system prefix.  Root's
+            # tar restores the archive's owner (1001, above) unless told not
+            # to, and `cp -a' carries it on, so a uid-1001 account could then
+            # rewrite the dump and the Lisp tree.  Everything installed must be
+            # root's, and still runnable by an ordinary user.
+            local root_prefix foreign
+            root_prefix="$(mktemp -d /tmp/neomacs-root-install.XXXXXX)"
+            sudo env NEOMACS_DOWNLOAD_BASE="file://$stage_root" \
+              sh install.sh --tag "v$version" --prefix "$root_prefix" --skip-smoke
+            foreign="$(sudo find "$root_prefix" -mindepth 1 \( ! -user 0 -o ! -group 0 \) -print)"
+            if [ -n "$foreign" ]; then
+              printf 'not owned by root:root after a root install:\n%s\n' "$foreign" >&2
+              exit 1
+            fi
+            env -u NEOMACS_RUNTIME_ROOT \
+              "$root_prefix/bin/neomacs" --batch --eval '(princ (emacs-version))'
+            sudo rm -rf "$root_prefix"
           }
 
           stage_release citest archlib
