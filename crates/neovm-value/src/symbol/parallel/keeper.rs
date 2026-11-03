@@ -8,6 +8,7 @@ use std::rc::Rc;
 /// Identity only: this proof grants no manager reference or running access.
 /// Its borrow retains the keeper, and it cannot cross an owner thread.
 #[derive(Clone, Copy)]
+#[doc(hidden)]
 pub struct KeeperWorldDesignator<'b> {
     heap: HeapIdentity,
     obarray: NonNull<Obarray>,
@@ -23,7 +24,7 @@ impl<'b> KeeperWorldDesignator<'b> {
     /// longer than that retained Baton borrow, on the keeper's owner thread.
     /// Only eval/world may mint this proof; consumers compare identities before
     /// obtaining any separate stopped-authority storage loan.
-    pub(crate) unsafe fn new(
+    pub unsafe fn new(
         heap: HeapIdentity,
         obarray: NonNull<Obarray>,
         projections: NonNull<RefCell<ThreadProjectionTable>>,

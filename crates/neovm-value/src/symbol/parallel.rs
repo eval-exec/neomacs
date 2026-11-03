@@ -38,7 +38,8 @@ pub(crate) enum InitialMembership {
 
 /// Original World allocation roots, never references derived from a Context
 /// view. The era retains the World's Baton even on abandoned/poisoned teardown.
-pub(crate) struct SymbolBacking {
+#[doc(hidden)]
+pub struct SymbolBacking {
     obarray: NonNull<Obarray>,
     projections: NonNull<RefCell<ThreadProjectionTable>>,
     pub(crate) world: usize,
@@ -107,7 +108,7 @@ impl SymbolBacking {
     /// Roots belong to the same live World, all ordinary views are escrowed,
     /// and the keeper retains that World until all era access ends. All calls
     /// to classify must hold the symbol writer or matching stop-all authority.
-    pub(crate) unsafe fn new(
+    pub unsafe fn new(
         obarray: NonNull<Obarray>,
         projections: NonNull<RefCell<ThreadProjectionTable>>,
         world: usize,
