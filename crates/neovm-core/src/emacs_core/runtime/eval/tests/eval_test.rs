@@ -28734,3 +28734,29 @@ fn issue554_formal_watchers_change_policy_before_the_next_formal() {
         "OK (7 invalid-function)"
     );
 }
+
+/// GNU has no C `DEFVAR` for `read-file-name-completion-ignore-case`; its
+/// `defcustom` (`lisp/minibuffer.el:3117`) supplies the platform default,
+/// which is t on darwin/windows-nt/ms-dos/cygwin. Pre-seeding the name in
+/// the Rust bootstrap shadowed that initializer, so macOS completed file
+/// names case-sensitively (#667).
+#[test]
+fn read_file_name_completion_ignore_case_is_left_to_the_lisp_defcustom() {
+    let mut ctx = Context::new();
+    assert!(
+        ctx.obarray()
+            .symbol_value_copied("read-file-name-completion-ignore-case")
+            .is_none(),
+        "the Rust bootstrap must not bind a name GNU leaves to minibuffer.el"
+    );
+
+    let value = ctx
+        .eval_str(
+            r#"(let ((system-type 'darwin))
+                 (defvar read-file-name-completion-ignore-case
+                   (if (memq system-type '(ms-dos windows-nt darwin cygwin)) t nil))
+                 read-file-name-completion-ignore-case)"#,
+        )
+        .expect("the defcustom initializer should evaluate");
+    assert!(value.is_t(), "darwin must get the defcustom default t");
+}

@@ -115,6 +115,9 @@ mod oracle_pixel_measurement;
 #[path = "oracle_prefix_help.rs"]
 mod oracle_prefix_help;
 
+#[path = "oracle_read_file_name_completion_ignore_case.rs"]
+mod oracle_read_file_name_completion_ignore_case;
+
 #[path = "oracle_shift_selection.rs"]
 mod oracle_shift_selection;
 
