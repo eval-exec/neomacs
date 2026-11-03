@@ -31,7 +31,7 @@ fn mk(heap: &mut TaggedHeap, id: u64) -> TaggedValue {
     heap.alloc_marker(LispMarker::new(
         crate::heap_types::MarkerBuffer::DETACHED,
         crate::value::positions::CharPos0::new(id as usize),
-        crate::buffer::EmacsBytePos::new(id as usize),
+        crate::heap_types::byte_positions::EmacsBytePos::new(id as usize),
         false,
         true,
     ))

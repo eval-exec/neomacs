@@ -1,8 +1,8 @@
 use super::*;
-use crate::value::positions::{CharPos0, CharRange};
 use crate::heap_types::LispString;
 use crate::tagged::header::ImageResident;
 use crate::value::Value;
+use crate::value::positions::{CharPos0, CharRange};
 
 fn heap(on: bool) -> TaggedHeap {
     let mut heap = TaggedHeap::new();

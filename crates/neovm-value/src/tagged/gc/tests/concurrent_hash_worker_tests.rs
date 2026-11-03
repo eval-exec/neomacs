@@ -1,8 +1,8 @@
 //! The actual worker must finish every child of a freshly claimed Tier-H owner.
 
 use super::*;
-use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::intern::intern_uninterned;
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::{HashKey, HashTableTest, HashTableWeakness, LambdaParams, LispHashTable};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

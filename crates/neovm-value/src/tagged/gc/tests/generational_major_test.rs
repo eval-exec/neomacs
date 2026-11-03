@@ -1,11 +1,12 @@
 //! True majors, ordinary old reclamation, and P-all promotion.
 
 use super::*;
-use crate::emacs_core::bytecode::{ByteCodeFunction, Op};
 use crate::emacs_core::eval::{
     push_scratch_gc_root_slot, restore_scratch_gc_roots, save_scratch_gc_roots, set_scratch_gc_root,
 };
 use crate::heap_types::{LispMarker, LispString};
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
+use crate::tagged::bytecode::opcode::Op;
 use crate::tagged::header::LispByteVec;
 use crate::value::{HashTableTest, LambdaParams, LispHashTable};
 
@@ -241,7 +242,7 @@ fn major_unchains_an_unrooted_old_marker() {
     let marker = heap.alloc_marker(LispMarker::new(
         crate::heap_types::MarkerBuffer::DETACHED,
         crate::value::positions::CharPos0::new(0),
-        crate::buffer::EmacsBytePos::new(0),
+        crate::heap_types::byte_positions::EmacsBytePos::new(0),
         false,
         false,
     ));

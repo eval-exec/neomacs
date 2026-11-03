@@ -8,8 +8,8 @@
 use super::fake_image::FakeImage;
 use super::knobs::set_chunk_map_for_test;
 use super::*;
-use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::heap_types::LispMarker;
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::{HashTableTest, LambdaParams, LispHashTable};
 
 /// A heap with the chunk map on, installed on this thread.

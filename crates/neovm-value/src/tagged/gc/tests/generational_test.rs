@@ -465,7 +465,7 @@ fn minor_unchains_young_dead_marker_and_keeps_old_chain_node() {
         LispMarker::new(
             crate::heap_types::MarkerBuffer::DETACHED,
             crate::value::positions::CharPos0::new(0),
-            crate::buffer::EmacsBytePos::new(0),
+            crate::heap_types::byte_positions::EmacsBytePos::new(0),
             false,
             false,
         )

@@ -2,11 +2,11 @@
 //! These isolate mutator logging; the coordinator owns real-cycle P-all tests.
 
 use super::*;
-use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
 use crate::heap_types::{LispMarker, LispString};
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::value::{HashTableTest, LambdaParams, LispHashTable};
 use std::ops::{Deref, DerefMut};
 
