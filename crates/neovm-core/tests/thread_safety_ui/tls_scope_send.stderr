@@ -4,10 +4,10 @@ error[E0599]: the associated function or constant `transfer` exists for struct `
 16 |     ThreadTransfer::<tls_scope::TlsScope<u32, Cell<u32>>>::transfer(scope);
    |                                                            ^^^^^^^^ associated function or constant cannot be called on `ThreadTransfer<TlsScope<u32, Cell<u32>>>` due to unsatisfied trait bounds
    |
-  ::: tests/thread_safety_ui/../../src/tls_scope.rs
+  ::: tests/thread_safety_ui/../../../neovm-value/src/tls_scope.rs
    |
-   | pub(crate) struct TlsScope<T: 'static, Slot: TlsSlot<T> + 'static> {
-   | ------------------------------------------------------------------ doesn't satisfy `TlsScope<u32, Cell<u32>>: Send`
+   | pub struct TlsScope<T: 'static, Slot: TlsSlot<T> + 'static> {
+   | ----------------------------------------------------------- doesn't satisfy `TlsScope<u32, Cell<u32>>: Send`
    |
   ::: tests/thread_safety_ui/support/thread_bounds.rs
    |

@@ -1,4 +1,4 @@
-#[path = "../../src/tls_scope.rs"]
+#[path = "../../../neovm-value/src/tls_scope.rs"]
 mod tls_scope;
 
 use std::cell::Cell;
