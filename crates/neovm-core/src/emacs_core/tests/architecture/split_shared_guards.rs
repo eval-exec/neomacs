@@ -1483,92 +1483,143 @@ struct Pc1Row {
 }
 
 fn parse_pc1_table(text: &str) -> Result<Vec<Pc1Row>, String> {
+    let mut lines = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty() && !line.starts_with('#'));
+    let Some((_, header)) = lines.next() else {
+        return Err("PC1_TABLE_MISSING_HEADER".into());
+    };
+    if header != "type\tmethod\tprotected_caller" {
+        return Err("PC1_TABLE_UNKNOWN_SCHEMA".into());
+    }
     let mut rows = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.starts_with('#') || line.starts_with("type\t") || line.is_empty() {
-            continue;
+    let mut keys = BTreeSet::new();
+    for (index, line) in lines {
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.len() != 3 || fields.iter().any(|field| field.trim().is_empty()) {
+            return Err(format!(
+                "PC1_TABLE_ROW {}: expected three nonempty fields",
+                index + 1
+            ));
         }
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() != 3 {
-            return Err(format!("pc1 table line {}: expected 3 columns", index + 1));
+        syn::parse_str::<syn::Path>(fields[0])
+            .map_err(|error| format!("PC1_UNKNOWN_OWNER {}: {error}", fields[0]))?;
+        syn::parse_str::<syn::Ident>(fields[1])
+            .map_err(|error| format!("PC1_UNKNOWN_METHOD {}: {error}", fields[1]))?;
+        if !keys.insert((fields[0], fields[1])) {
+            return Err(format!("PC1_DUPLICATE_ROW {}::{}", fields[0], fields[1]));
         }
         rows.push(Pc1Row {
-            type_name: fields[0].to_string(),
-            method: fields[1].to_string(),
-            protected_caller: fields[2].to_string(),
+            type_name: fields[0].into(),
+            method: fields[1].into(),
+            protected_caller: fields[2].into(),
         });
     }
+    // Header-only is the signed pre-promotion base state. The separate API
+    // projector must still prove that its actual exception set is empty.
     Ok(rows)
 }
 
-fn line_calls_method(line: &str, method: &str) -> bool {
-    let bytes = line.as_bytes();
-    let needle = method.as_bytes();
-    let mut i = 0;
-    while i + needle.len() <= bytes.len() {
-        if &bytes[i..i + needle.len()] == needle {
-            let qualifies = match i.checked_sub(1).and_then(|j| bytes.get(j)) {
-                Some(b'.') => true,
-                Some(b':') => i >= 2 && bytes[i - 2] == b':',
-                _ => false,
-            };
-            if qualifies {
-                let mut j = i + needle.len();
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
+#[derive(Clone, Copy, Debug)]
+enum Pc1Refusal {
+    AmbiguousReceiver,
+    UnresolvedReference,
+}
+
+impl Pc1Refusal {
+    fn code(self) -> &'static str {
+        match self {
+            Self::AmbiguousReceiver => "PC1_AMBIGUOUS_RECEIVER",
+            Self::UnresolvedReference => "PC1_UNRESOLVED_REFERENCE",
+        }
+    }
+}
+
+struct Pc1References<'a> {
+    rows: &'a [Pc1Row],
+    file: &'a Path,
+    violations: Vec<String>,
+}
+
+impl Pc1References<'_> {
+    fn refuse(&mut self, ident: &syn::Ident, kind: Pc1Refusal) {
+        for row in self.rows.iter().filter(|row| ident == row.method.as_str()) {
+            self.violations.push(format!(
+                "{} {}:{}: {}::{}; protected caller {}",
+                kind.code(),
+                self.file.display(),
+                line_of(ident.span()),
+                row.type_name,
+                row.method,
+                row.protected_caller
+            ));
+        }
+    }
+
+    fn tokens(&mut self, stream: proc_macro2::TokenStream) {
+        let tokens: Vec<_> = stream.into_iter().collect();
+        for token in &tokens {
+            match token {
+                proc_macro2::TokenTree::Group(group) => self.tokens(group.stream()),
+                proc_macro2::TokenTree::Ident(ident)
+                    if self.rows.iter().any(|row| ident == row.method.as_str()) =>
+                {
+                    self.refuse(ident, Pc1Refusal::UnresolvedReference);
                 }
-                if j < bytes.len() && bytes[j] == b'(' {
-                    return true;
-                }
+                _ => {}
             }
         }
-        i += 1;
     }
-    false
+}
+
+impl<'ast> Visit<'ast> for Pc1References<'_> {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        // syn cannot prove Rust receiver types. A matching method spelling
+        // outside the permitted crates is a reviewable ambiguity, never an
+        // implicit exemption or a guessed type identity.
+        self.refuse(&call.method, Pc1Refusal::AmbiguousReceiver);
+        visit::visit_expr_method_call(self, call);
+    }
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        if let Some(segment) = path.segments.last() {
+            self.refuse(&segment.ident, Pc1Refusal::UnresolvedReference);
+        }
+        visit::visit_path(self, path);
+    }
+    fn visit_use_tree(&mut self, tree: &'ast UseTree) {
+        match tree {
+            UseTree::Name(name) => self.refuse(&name.ident, Pc1Refusal::UnresolvedReference),
+            UseTree::Rename(rename) => self.refuse(&rename.ident, Pc1Refusal::UnresolvedReference),
+            _ => {}
+        }
+        visit::visit_use_tree(self, tree);
+    }
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.tokens(mac.tokens.clone());
+        visit::visit_macro(self, mac);
+    }
 }
 
 pub(crate) fn scan_pc1_table(workspace: &Path, text: &str) -> Result<Vec<String>, String> {
     let rows = parse_pc1_table(text)?;
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-    let crates_dir = workspace.join("crates");
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(&crates_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name == "neovm-core" || name == "neovm-value" {
-            continue;
-        }
-        let src = entry.path().join("src");
-        if src.is_dir() {
-            rs_files(&src, &mut files);
-        }
-    }
+    let sources = discover_sources(workspace)?;
     let mut violations = Vec::new();
-    for row in &rows {
-        for file in &files {
-            let Ok(text) = std::fs::read_to_string(file) else {
-                violations.push(format!("{}: unreadable", file.display()));
-                continue;
-            };
-            for (index, line) in cleaned_code(&text).lines().enumerate() {
-                if line_calls_method(line, &row.method) {
-                    violations.push(format!(
-                        "{}:{}: calls fenced hot-path method {}.{} (protected caller: {})",
-                        file.display(),
-                        index + 1,
-                        row.type_name,
-                        row.method,
-                        row.protected_caller
-                    ));
-                }
-            }
+    for source in sources {
+        let (_, syntax) = parse_file(&source.path)?;
+        if matches!(source.package.as_str(), "neovm-core" | "neovm-value") {
+            continue;
         }
+        let mut visitor = Pc1References {
+            rows: &rows,
+            file: &source.path,
+            violations: Vec::new(),
+        };
+        visitor.visit_file(&syntax);
+        violations.extend(visitor.violations);
     }
+    violations.sort();
+    violations.dedup();
     Ok(violations)
 }
 
@@ -1576,43 +1627,95 @@ pub(crate) fn scan_pc1_table(workspace: &Path, text: &str) -> Result<Vec<String>
 fn architecture_pc1_fenced_hot_path_methods_are_called_only_from_core_or_value() {
     match scan_pc1_table(&workspace_root(), PC1_TABLE) {
         Ok(violations) if violations.is_empty() => {}
-        Ok(violations) => panic!(
-            "{} PC1 hot-path fence violations:\n{}",
-            violations.len(),
-            violations
-                .iter()
-                .take(80)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("\n")
-        ),
-        Err(error) => panic!("PC1 table: {error}"),
+        Ok(violations) => panic!("PC1 fence violations:\n{}", violations.join("\n")),
+        Err(error) => panic!("PC1 input: {error}"),
     }
 }
 
 #[test]
 fn architecture_pc1_guard_self_test() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let crates = dir.path().join("crates");
-    for name in ["neovm-core", "neovm-value", "neomacs-other"] {
-        std::fs::create_dir_all(crates.join(name).join("src")).unwrap();
-    }
-    let table = "type\tmethod\tprotected_caller\nValue\tfenced_raw_read\trun_loop\n";
+    let dir = tempfile::tempdir().expect("fixture");
+    guard_fixture_workspace(dir.path(), &["neovm-core", "neovm-value", "neomacs-other"]);
+    let table = "type\tmethod\tprotected_caller\nValue\tfenced_raw_read\tsrc/vm.rs:Vm::run_loop\n";
+    let allowed = dir.path().join("crates/neovm-value/src/lib.rs");
+    std::fs::write(allowed, "fn f(v: V) { v.fenced_raw_read(); }").expect("allowed fixture");
+    assert!(
+        scan_pc1_table(dir.path(), table)
+            .expect("positive")
+            .is_empty()
+    );
+    let foreign = dir.path().join("crates/neomacs-other/src/lib.rs");
+    let clean = std::fs::read(&foreign).expect("save");
+    std::fs::write(&foreign, "fn g(v: V) { v.fenced_raw_read(); }").expect("mutation");
+    let red = scan_pc1_table(dir.path(), table).expect("mutated inputs parse");
+    assert!(
+        red.iter().any(
+            |error| error.contains("PC1_AMBIGUOUS_RECEIVER") && error.contains("neomacs-other")
+        ),
+        "{red:?}"
+    );
+    std::fs::write(&foreign, &clean).expect("restore");
+    assert!(
+        scan_pc1_table(dir.path(), table)
+            .expect("restored")
+            .is_empty()
+    );
     std::fs::write(
-        crates.join("neovm-value/src/ok.rs"),
-        "fn f(v: V) { v.fenced_raw_read(); }\n",
+        &foreign,
+        "use neovm_core::Value::fenced_raw_read as renamed; fn g() { renamed(); }",
     )
-    .unwrap();
-    let green = scan_pc1_table(dir.path(), table).unwrap();
-    assert!(green.is_empty(), "false positive: {green:?}");
+    .expect("function-item mutation");
+    let red = scan_pc1_table(dir.path(), table).expect("alias syntax");
+    assert!(
+        red.iter()
+            .any(|error| error.contains("PC1_UNRESOLVED_REFERENCE")),
+        "{red:?}"
+    );
+    std::fs::write(&foreign, clean).expect("restore alias");
+    assert!(
+        scan_pc1_table(dir.path(), table)
+            .expect("restored alias")
+            .is_empty()
+    );
+}
+
+#[test]
+fn architecture_pc1_explicit_test_target_and_macro_references_are_fenced() {
+    let dir = tempfile::tempdir().expect("fixture");
+    guard_fixture_workspace(dir.path(), &["neovm-core", "neovm-value", "neomacs-other"]);
+    let other = dir.path().join("crates/neomacs-other");
+    let manifest = other.join("Cargo.toml");
+    let mut text = std::fs::read_to_string(&manifest).expect("manifest");
+    text.push_str("\n[[test]]\nname='custom'\npath='custom.rs'\n");
+    std::fs::write(manifest, text).expect("declare test");
+    let target = other.join("custom.rs");
+    std::fs::write(&target, "fn clean() {}").expect("positive target");
+    let table = "type\tmethod\tprotected_caller\nValue\tfenced_raw_read\tsrc/vm.rs:Vm::run_loop\n";
+    assert!(
+        scan_pc1_table(dir.path(), table)
+            .expect("positive")
+            .is_empty()
+    );
     std::fs::write(
-        crates.join("neomacs-other/src/bad.rs"),
-        "fn g(v: V) { v.fenced_raw_read(); }\n",
+        &target,
+        "macro_rules! violate { () => { Value::fenced_raw_read() }; }",
     )
-    .unwrap();
-    let red = scan_pc1_table(dir.path(), table).unwrap();
-    assert!(!red.is_empty(), "mutation not detected");
-    assert!(red[0].contains("neomacs-other"), "wrong site: {red:?}");
+    .expect("macro mutation");
+    let red = scan_pc1_table(dir.path(), table).expect("macro source");
+    assert!(
+        red.iter()
+            .any(|error| error.contains("custom.rs") && error.contains("PC1_UNRESOLVED_REFERENCE")),
+        "{red:?}"
+    );
+    std::fs::write(target, "fn clean() {}").expect("restore");
+    assert!(
+        scan_pc1_table(dir.path(), table)
+            .expect("restored")
+            .is_empty()
+    );
+    assert!(parse_pc1_table("").is_err());
+    assert!(parse_pc1_table("unknown\theader\n").is_err());
+    assert!(parse_pc1_table("type\tmethod\tprotected_caller\nValue\tf\t\n").is_err());
 }
 
 // ---------------------------------------------------------------------------
