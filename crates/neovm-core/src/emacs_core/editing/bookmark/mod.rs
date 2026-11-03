@@ -13,6 +13,7 @@
 //! - `bookmark-save` -- serialize bookmarks to a string
 //! - `bookmark-load` -- deserialize bookmarks from a string
 
+use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::LispCondition;
 #[cfg(test)]
 use crate::emacs_core::error::expect_args;
@@ -478,7 +479,7 @@ pub(crate) fn builtin_bookmark_set(
         annotation: None,
         handler: None,
     };
-    eval.bookmarks.set(name, bm);
+    EditHost::bookmarks(eval).set(name, bm);
     Ok(Value::NIL)
 }
 
@@ -515,7 +516,7 @@ pub(crate) fn builtin_bookmark_jump(
         _ => return Ok(Value::NIL),
     };
 
-    match eval.bookmarks.get(&name) {
+    match EditHost::bookmarks(eval).get(&name) {
         Some(bm) => {
             let filename_val = match &bm.filename {
                 Some(f) => Value::heap_string(f.clone()),
@@ -566,7 +567,7 @@ pub(crate) fn builtin_bookmark_delete(
             .as_lisp_string()
             .expect("ValueKind::String must carry LispString payload")
             .clone();
-        let _ = eval.bookmarks.delete(&name);
+        let _ = EditHost::bookmarks(eval).delete(&name);
     }
     Ok(Value::NIL)
 }
@@ -603,7 +604,7 @@ pub(crate) fn builtin_bookmark_rename(
             .as_lisp_string()
             .expect("ValueKind::String must carry LispString payload")
             .clone();
-        if eval.bookmarks.get(&old_name).is_none() {
+        if EditHost::bookmarks(eval).get(&old_name).is_none() {
             return Err(signal(
                 "error",
                 vec![Value::string(format!(
@@ -629,7 +630,7 @@ pub(crate) fn builtin_bookmark_rename(
             }
         };
 
-        if eval.bookmarks.rename(&old_name, target) {
+        if EditHost::bookmarks(eval).rename(&old_name, target) {
             return Ok(Value::NIL);
         }
         return Err(signal(
@@ -766,9 +767,9 @@ pub(crate) fn builtin_bookmark_set_annotation(
         Some(expect_lisp_string(&args[1])?)
     };
 
-    if let Some(mut bm) = eval.bookmarks.get(&name).cloned() {
+    if let Some(mut bm) = EditHost::bookmarks(eval).get(&name).cloned() {
         bm.annotation = annotation.clone();
-        eval.bookmarks.set(name, bm);
+        EditHost::bookmarks(eval).set(name, bm);
         if let Some(value) = annotation {
             Ok(Value::heap_string(value))
         } else {
@@ -860,7 +861,7 @@ pub(crate) fn builtin_bookmark_save(
     // eagerly load the default file if it exists.
     let configured_default = active_bookmark_default_file(eval);
     if bookmark_timestamp_file(eval).is_none()
-        && eval.bookmarks.all_names().is_empty()
+        && EditHost::bookmarks(eval).all_names().is_empty()
         && super::file_name::lisp_file_name_to_path_buf(&configured_default).is_file()
     {
         let _ = builtin_bookmark_load(
@@ -888,13 +889,13 @@ pub(crate) fn builtin_bookmark_save(
         bookmark_timestamp_file(eval).unwrap_or(configured_default)
     };
 
-    let data = eval.bookmarks.save_to_string();
+    let data = EditHost::bookmarks(eval).save_to_string();
     let os_path = super::file_name::lisp_file_name_to_path_buf(&path);
     if let Some(parent) = os_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
     let _ = fs::write(&os_path, data);
-    eval.bookmarks.mark_saved();
+    EditHost::bookmarks(eval).mark_saved();
 
     if make_default {
         set_bookmark_timestamp(eval, &path);
@@ -951,7 +952,7 @@ pub(crate) fn builtin_bookmark_load(
         }
     };
 
-    eval.bookmarks.load_from_string(&data);
+    EditHost::bookmarks(eval).load_from_string(&data);
 
     let current_default =
         bookmark_timestamp_file(eval).unwrap_or_else(|| active_bookmark_default_file(eval));

@@ -20,6 +20,7 @@
 //! host-free code) — never here.
 
 use crate::buffer::Buffer;
+use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::error::{EvalResult, Flow};
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::value::Value;
@@ -94,6 +95,13 @@ pub trait EditHost {
     /// reads the `DEFVAR_BOOL` flag in one load; the fast paths over
     /// the forwarding live on the host, where the symbol table is. C2.
     fn inhibit_modification_hooks(&self) -> bool;
+
+    /// The session's bookmark set (bookmark.el globals). The state is
+    /// `WorldSlot`-owned on the host and does NOT move with the edit
+    /// crate (STAGE3-ASSIGN WorldSlot rule, coordinated with jitcall
+    /// C1); edit reaches it only through this accessor. The rectangle
+    /// `WorldSlot` needs no accessor: only core code touches it.
+    fn bookmarks(&mut self) -> &mut BookmarkManager;
 
     /// GNU `apply`: call a function value on already-evaluated
     /// arguments. C3.

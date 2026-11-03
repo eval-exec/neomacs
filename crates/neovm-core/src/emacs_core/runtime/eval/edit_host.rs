@@ -17,6 +17,7 @@
 
 use super::{Context, LispArgVec, SpecpdlCount, SpecpdlRootScopeState, SpecpdlRootSlot};
 use crate::buffer::Buffer;
+use crate::emacs_core::bookmark::BookmarkManager;
 use crate::emacs_core::builtins::symbols::builtin_set_2;
 use crate::emacs_core::edit_host::EditHost;
 use crate::emacs_core::error::{EvalResult, Flow};
@@ -91,6 +92,10 @@ impl EditHost for Context {
         // A failed store simply leaves the old binding: GNU's C store
         // cannot fail, and the reset is best-effort error recovery.
         let _ = Context::try_set_runtime_binding_by_id(self, sym, value);
+    }
+
+    fn bookmarks(&mut self) -> &mut BookmarkManager {
+        &mut *self.bookmarks
     }
 
     fn inhibit_modification_hooks(&self) -> bool {
