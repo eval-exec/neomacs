@@ -1101,3 +1101,49 @@ string_char_range	fn	private	crates/neovm-value/src/strings_core.rs:54	strings_c
 substring_impl	fn	private	crates/neovm-value/src/strings_core.rs:62	strings_core	stage-3 C12: probe-free substring core; the subr wrappers keep the perf_trace probes in the lisp layer
 concat_impl	fn	(new fn)	crates/neovm-value/src/strings_core.rs:430	strings_core	stage-3 C12: concat core extracted from builtin_concat_slice's probe closure; buffer name generation reaches it below edit
 lisp_string_char_codes	fn	pub(crate)	crates/neovm-value/src/strings_core.rs:40	strings_core	stage-3 C7a prep: the char-table container's uniprop decoder reads compressed strings below the lisp layer; builtins re-exports for its 49 historical callers
+is_char_table	fn	pub	crates/neovm-value/src/chartab.rs:43	chartab	stage-3 C7a: char-table predicate; core subrs and facades share the container
+char_table_default	fn	pub(crate)	crates/neovm-value/src/chartab.rs:52	chartab	stage-3 C7a: GNU XCHAR_TABLE defalt read; core subrs share the container
+char_table_length	fn	pub(crate)	crates/neovm-value/src/chartab.rs:59	chartab	stage-3 C7a: logical sequence length; core subrs share the container
+set_char_table_ascii	fn	private	crates/neovm-value/src/chartab.rs:125	chartab	stage-3 C7a: ASCII cache write; uniprop machinery inside the container
+set_char_table_contents	fn	private	crates/neovm-value/src/chartab.rs:130	chartab	stage-3 C7a: contents slot write; widened for the chartable tests' use super::* through the facade
+char_table_set_char_direct	fn	private	crates/neovm-value/src/chartab.rs:165	chartab	stage-3 C7a: direct single-char write; core range subr drives it
+char_table_set_range_direct	fn	private	crates/neovm-value/src/chartab.rs:229	chartab	stage-3 C7a: direct range write; core range subr drives it
+wrong_type	fn	private	crates/neovm-value/src/chartab.rs:293	chartab	stage-3 C7a: wrong-type-argument signal helper; staying argument extractors import it back
+prepare_uniprop_ascii_cache	fn	private	crates/neovm-value/src/chartab.rs:300	chartab	stage-3 C7a: uniprop ASCII cache refresh; core lookup path imports it back
+SubCharTableReadError	enum	pub(crate)	crates/neovm-value/src/chartab.rs:308	chartab	stage-3 C7a: sub-char-table read diagnostics; returned by the container's external-slot reader
+make_sub_char_table_from_external_slots	fn	pub(crate)	crates/neovm-value/src/chartab.rs:341	chartab	stage-3 C7a: external-slot reader; pdump/load path imports it back
+char_table_extra_slot_value	fn	private	crates/neovm-value/src/chartab.rs:367	chartab	stage-3 C7a: extra-slot read; core extra-slot subr imports it back
+set_char_table_extra_slot	fn	private	crates/neovm-value/src/chartab.rs:373	chartab	stage-3 C7a: extra-slot write; core extra-slot subr imports it back
+inline_vector_tag_shape	fn	pub(crate)	crates/neovm-value/src/chartab.rs:391	chartab	stage-3 C7a: inline vector shape probe; pdump/load path imports it back
+is_char_code_property_table	fn	private	crates/neovm-value/src/chartab.rs:399	chartab	stage-3 C7a: uniprop table predicate; core unicode-property subrs import it back
+make_char_table_from_external_slots	fn	pub(crate)	crates/neovm-value/src/chartab.rs:512	chartab	stage-3 C7a: external-slot reader; pdump/load path imports it back
+make_char_table_from_external_slots_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:516	chartab	stage-3 C7a: external-slot reader with symbol mode; pdump/load path imports it back
+copy_char_table_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:563	chartab	stage-3 C7a: char-table copy; core copy_char_table test shim and fns.c copy-sequence import it back
+make_char_table_value	fn	pub	crates/neovm-value/src/chartab.rs:589	chartab	stage-3 C7a: char-table construction; core subrs share the container
+make_char_table_with_extra_slots	fn	pub	crates/neovm-value/src/chartab.rs:594	chartab	stage-3 C7a: char-table construction with extra slots; core subrs share the container
+ct_ref	fn	pub	crates/neovm-value/src/chartab.rs:605	chartab	stage-3 C7a: char-table entry read; the layout engine (display layer) reads entries below the lisp layer, facade keeps pub
+ct_ref_with_symbols	fn	pub	crates/neovm-value/src/chartab.rs:609	chartab	stage-3 C7a: char-table entry read with explicit symbol mode; core subrs share the container
+ct_set_single	fn	pub	crates/neovm-value/src/chartab.rs:618	chartab	stage-3 C7a: single-char write; the layout engine (display layer) writes entries below the lisp layer, facade keeps pub
+ct_set_single_with_symbols	fn	pub	crates/neovm-value/src/chartab.rs:622	chartab	stage-3 C7a: single-char write with explicit symbol mode; unicode-property subrs share the container
+ct_lookup	fn	pub(crate)	crates/neovm-value/src/chartab.rs:683	chartab	stage-3 C7a: bare char-table lookup; core translate_char shim imports it back
+ct_lookup_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:687	chartab	stage-3 C7a: symbol-mode char-table lookup; core lookup subr imports it back
+translate_char_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:717	chartab	stage-3 C7a: translation with symbol mode; core translate_char shim imports it back
+ct_lookup_and_range	fn	private	crates/neovm-value/src/chartab.rs:800	chartab	stage-3 C7a: lookup with contiguous range; core range subrs import it back
+char_table_ref_and_range_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:920	chartab	stage-3 C7a: ref-and-range; core range subr imports it back
+char_table_atomic_runs_in_range	fn	pub(crate)	crates/neovm-value/src/chartab.rs:952	chartab	stage-3 C7a: atomic runs scan; core range/display paths import it back
+char_table_local_entries	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1003	chartab	stage-3 C7a: local entry list; core map-char-table drives it
+char_table_local_entries_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1007	chartab	stage-3 C7a: local entry list with symbol mode; core map-char-table drives it
+for_each_char_table_mapping_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1020	chartab	stage-3 C7a: mapping walker; core map-char-table and test shim drive it
+ct_resolved_entries	fn	private	crates/neovm-value/src/chartab.rs:1067	chartab	stage-3 C7a: resolved entry list; widened for the chartable tests' use super::* through the facade
+OptimizeCharTableTest	enum	pub(crate)	crates/neovm-value/src/chartab.rs:1283	chartab	stage-3 C7a: optimization test selector enum; core optimize_char_table test shim imports it back
+display_dependency_children	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1302	chartab	stage-3 C7a: display dependency scan; core window-notifier path imports it back
+optimize_char_table_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1396	chartab	stage-3 C7a: table compaction; core optimize_char_table test shim imports it back
+char_table_may_hold_value_from	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1485	chartab	stage-3 C7a: value-origin predicate; core display dependency path imports it back
+char_table_may_hold_value_from_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1493	chartab	stage-3 C7a: value-origin predicate with symbol mode; core display dependency path imports it back
+for_each_non_nil_char_table_run	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1546	chartab	stage-3 C7a: non-nil run walker; core map-char-table drives it
+for_each_non_nil_char_table_run_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1553	chartab	stage-3 C7a: non-nil run walker with symbol mode; core map-char-table drives it
+sub_char_table_external_slots	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1569	chartab	stage-3 C7a: external slot lister; pdump/load path imports it back
+char_table_external_slots	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1578	chartab	stage-3 C7a: external slot lister; pdump/load path imports it back
+char_table_has_subtype_named_with_symbols	fn	pub(crate)	crates/neovm-value/src/chartab.rs:1590	chartab	stage-3 C7a: subtype check; core subtype subr imports it back
+assq_cell_eq	fn	private	crates/neovm-value/src/chartab.rs:1600	chartab	stage-3 C7a: assq cell search; core unicode-property subrs import it back
+decode_uniprop_run_length	fn	private	crates/neovm-value/src/chartab.rs:1619	chartab	stage-3 C7a: run-length decoder; core unicode-property subrs import it back
