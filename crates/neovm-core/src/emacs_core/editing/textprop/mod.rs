@@ -222,7 +222,7 @@ fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn expect_integer_or_marker_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
-    super::position::fix_position_eval(eval, value)
+    super::position::fix_position_eval(&eval.buffers, value)
 }
 
 pub(crate) fn expect_integer_or_marker_in_buffers(

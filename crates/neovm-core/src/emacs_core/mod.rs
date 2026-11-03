@@ -254,7 +254,7 @@ pub mod owned_roots;
 #[path = "runtime/pdump/mod.rs"]
 pub mod pdump;
 pub use neovm_value::plist;
-#[path = "runtime/position/mod.rs"]
+#[path = "editing/position/mod.rs"]
 pub(crate) mod position;
 #[path = "runtime/runtime_identity/mod.rs"]
 pub(crate) mod runtime_identity;

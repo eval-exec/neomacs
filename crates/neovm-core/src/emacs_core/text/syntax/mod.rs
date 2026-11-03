@@ -7795,8 +7795,8 @@ pub(crate) fn builtin_parse_partial_sexp_6(
         ));
     }
 
-    let from = super::position::fix_position_eval(eval, &args[0])?;
-    let to = super::position::fix_position_eval(eval, &args[1])?;
+    let from = super::position::fix_position_eval(&eval.buffers, &args[0])?;
+    let to = super::position::fix_position_eval(&eval.buffers, &args[1])?;
 
     if to < from {
         return Err(signal(

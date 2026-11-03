@@ -21,11 +21,16 @@ pub(crate) fn fix_position_with_buffers(
     }
 }
 
-pub(crate) fn fix_position_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
+/// Marker-aware position coercion for the evaluator-adjacent callers.
+///
+/// The marker read itself needs only the buffer manager, so this takes edit
+/// state directly and never names `Context` (the caller passes
+/// `&eval.buffers`).
+pub(crate) fn fix_position_eval(buffers: &BufferManager, value: &Value) -> Result<i64, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _ if super::marker::is_marker(value) => {
-            super::marker::marker_position_as_int_eval(eval, value)
+            super::marker::marker_position_as_int_with_buffers(buffers, value)
         }
         ValueKind::Veclike(VecLikeType::Bignum) => Ok(fix_position_bignum(value)),
         _ => Err(signal(
