@@ -233,7 +233,11 @@ pub mod subr_docs;
 pub mod var_docs;
 
 // Evaluator runtime, object model, VM, and persistence.
+#[cfg(not(test))]
 pub use neovm_value::alloc;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/alloc.rs"]
+pub mod alloc;
 #[path = "runtime/bytecode/mod.rs"]
 pub mod bytecode;
 #[path = "runtime/data/mod.rs"]
@@ -246,15 +250,31 @@ pub mod debug_on_call;
 pub mod defvar_bool;
 #[path = "runtime/defvar_object/mod.rs"]
 pub mod defvar_object;
+#[cfg(not(test))]
 pub use neovm_value::error;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/error.rs"]
+pub mod error;
 pub use neovm_value::errors;
 #[path = "runtime/eval/mod.rs"]
 pub mod eval;
+#[cfg(not(test))]
 pub use neovm_value::forward;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/forward.rs"]
+pub mod forward;
 #[path = "runtime/gc_stats/mod.rs"]
 pub mod gc_stats;
+#[cfg(not(test))]
 pub use neovm_value::hashtab;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/hashtab.rs"]
+pub mod hashtab;
+#[cfg(not(test))]
 pub use neovm_value::intern;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/intern.rs"]
+pub mod intern;
 #[path = "runtime/jit/mod.rs"]
 pub mod jit;
 #[path = "runtime/owned_roots/mod.rs"]
@@ -266,10 +286,18 @@ pub use neovm_value::plist;
 pub(crate) mod position;
 #[path = "runtime/runtime_identity/mod.rs"]
 pub(crate) mod runtime_identity;
+#[cfg(not(test))]
 pub use neovm_value::symbol;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/symbol.rs"]
+pub mod symbol;
 #[path = "runtime/threads/mod.rs"]
 pub mod threads;
+#[cfg(not(test))]
 pub use neovm_value::value;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/value.rs"]
+pub mod value;
 #[path = "runtime/value_reader/mod.rs"]
 pub mod value_reader;
 
@@ -328,7 +356,11 @@ pub(crate) mod w32;
 pub(crate) mod wait;
 
 // Character representation, coding, syntax, search, and structured text.
+#[cfg(not(test))]
 pub use neovm_value::boolvec;
+#[cfg(test)]
+#[path = "../../core_test_facades/emacs_core/boolvec.rs"]
+pub mod boolvec;
 #[path = "text/casefiddle/mod.rs"]
 pub mod casefiddle;
 #[path = "text/casetab/mod.rs"]

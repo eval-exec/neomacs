@@ -9,14 +9,22 @@ mod frontend_events;
 #[doc(hidden)]
 pub mod fuzz_support;
 pub use neovm_value::gc_trace;
+#[cfg(not(test))]
 pub use neovm_value::heap_types;
+#[cfg(test)]
+#[path = "../core_test_facades/heap_types.rs"]
+pub mod heap_types;
 pub mod host_effect;
 pub mod host_input;
 mod image_identity;
 pub mod keyboard;
 mod keyboard_input;
 pub use neovm_value::logging;
+#[cfg(not(test))]
 pub use neovm_value::tagged;
+#[cfg(test)]
+#[path = "../core_test_facades/tagged.rs"]
+pub mod tagged;
 #[cfg(test)]
 #[path = "tests/test_utils_test.rs"]
 pub mod test_utils;

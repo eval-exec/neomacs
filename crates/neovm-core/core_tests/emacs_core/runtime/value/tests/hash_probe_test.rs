@@ -26,7 +26,6 @@ fn gethash_puthash_remhash_match_gnu() {
     );
 }
 
-
 /// With `symbols-with-pos-enabled`, a positioned key `eq`s its bare symbol,
 /// which no bit comparison sees: the scan must decline.
 #[test]
@@ -49,7 +48,6 @@ fn small_table_scans_decline_under_symbols_with_pos() {
         );
     }
 }
-
 
 /// The probe and the stored key must still agree after the sampling change --
 /// including for keys built to defeat sampling.

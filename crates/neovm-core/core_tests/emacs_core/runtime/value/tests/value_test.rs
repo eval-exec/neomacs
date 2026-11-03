@@ -59,7 +59,6 @@ fn equal_compares_char_tables_by_gnu_pseudovector_slots() {
     );
 }
 
-
 #[test]
 fn equal_char_tables_share_hashes_and_equal_hash_table_keys() {
     crate::test_utils::init_test_tracing();
@@ -85,7 +84,6 @@ fn equal_char_tables_share_hashes_and_equal_hash_table_keys() {
         Value::list(vec![Value::T, Value::T, Value::symbol("found")])
     );
 }
-
 
 #[test]
 fn equal_on_circular_structures_matches_gnu_cycle_semantics() {
@@ -132,7 +130,6 @@ fn equal_on_circular_structures_matches_gnu_cycle_semantics() {
         assert_eq!(is_truthy, truthy, "wrong `equal` result for: {src}");
     }
 }
-
 
 /// GNU `internal_equal_1` (src/fns.c:2984-2998 in emacs-31.1, :2987-3001 on
 /// master) compares a `PVEC_CLOSURE` exactly like a vector: the size check
@@ -226,7 +223,6 @@ fn equal_compares_byte_code_functions_element_wise_like_gnu_closures() {
         ]
     );
 }
-
 
 #[path = "hash_probe_test.rs"]
 mod hash_probe;

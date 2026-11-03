@@ -1,6 +1,6 @@
+use crate::buffer::{BufferText, BufferTextBackendKind, EmacsBytePos, EmacsByteRange};
 use neovm_value::value::Value;
 use neovm_value::value::positions::CharPos0;
-use crate::buffer::{BufferText, BufferTextBackendKind, EmacsBytePos, EmacsByteRange};
 
 #[test]
 fn byte_caps_still_clamp_and_align_before_raw_absence_or_presence_queries() {
