@@ -4612,12 +4612,13 @@ fn neo_preload_binds_command_q_like_gnu_on_darwin() {
         ;; GNU's NS port installs this binding in the dump
         ;; (lisp/term/ns-win.el:141). The AppKit Quit redirect feeds s-q
         ;; into the input transport, so the darwin branch must bind it.
-        (let ((system-type 'darwin))
+        (let ((system-type 'darwin)
+              (original (lookup-key global-map [?\s-q])))
           (unwind-protect
               (progn
                 (load "term/neo-preload.el" nil t)
                 (list (eq (key-binding [?\s-q]) #'save-buffers-kill-emacs)))
-            (define-key global-map [?\s-q] nil)))
+            (define-key global-map [?\s-q] original)))
         "#,
         )
         .map(|value| print_value_with_eval(&eval, &value))

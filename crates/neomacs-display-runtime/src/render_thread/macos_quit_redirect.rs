@@ -14,7 +14,7 @@
 //! the normal kill-emacs hooks.
 
 use crate::thread_comm::InputEvent;
-use crossbeam_channel::Sender;
+use crossbeam_channel::{Sender, TrySendError};
 use neomacs_display_protocol::modifier_policy::{TransportModifierBit, TransportModifierBits};
 use neovm_core::keyboard::FrontendKey;
 use objc2::rc::Retained;
@@ -23,9 +23,59 @@ use objc2::{AnyThread, DefinedClass, define_class, msg_send, sel};
 use objc2_app_kit::{NSApplication, NSMenuItem};
 use objc2_foundation::NSObject;
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 struct QuitRedirectIvars {
     input_tx: Sender<InputEvent>,
+}
+
+/// Latched when the bounded input queue was full, so the Quit request is
+/// retried from the event loop instead of being dropped or blocking AppKit.
+static PENDING_QUIT: AtomicBool = AtomicBool::new(false);
+
+fn quit_key_event() -> InputEvent {
+    let mut modifiers = TransportModifierBits::default();
+    modifiers.set(TransportModifierBit::Super);
+    InputEvent::Key {
+        key: FrontendKey::Character('q'),
+        modifiers: modifiers.bits(),
+        pressed: true,
+        // Zero selects whichever frame is current, as for `WindowClose`
+        // events from the render thread.
+        emacs_frame_id: 0,
+    }
+}
+
+fn queue_quit(input_tx: &Sender<InputEvent>) {
+    match input_tx.try_send(quit_key_event()) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => {
+            PENDING_QUIT.store(true, Ordering::Release);
+            tracing::warn!("cmd-Q deferred: input queue is full");
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            tracing::warn!("cmd-Q dropped: input queue is disconnected");
+        }
+    }
+}
+
+/// Retry a Quit request that was deferred while the input queue was full.
+///
+/// Called from `about_to_wait`, which runs after every event batch and never
+/// blocks the AppKit main thread.
+pub(super) fn deliver_pending_quit(input_tx: &Sender<InputEvent>) {
+    if !PENDING_QUIT.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    match input_tx.try_send(quit_key_event()) {
+        Ok(()) => tracing::info!("cmd-Q delivered after the input queue drained"),
+        Err(TrySendError::Full(_)) => {
+            PENDING_QUIT.store(true, Ordering::Release);
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            tracing::warn!("cmd-Q dropped: input queue is disconnected");
+        }
+    }
 }
 
 define_class!(
@@ -38,19 +88,7 @@ define_class!(
     impl QuitRedirect {
         #[unsafe(method(neomacsQuit:))]
         fn quit(&self, _sender: Option<&NSMenuItem>) {
-            let mut modifiers = TransportModifierBits::default();
-            modifiers.set(TransportModifierBit::Super);
-            let event = InputEvent::Key {
-                key: FrontendKey::Character('q'),
-                modifiers: modifiers.bits(),
-                pressed: true,
-                // Zero selects whichever frame is current, as for
-                // `WindowClose` events from the render thread.
-                emacs_frame_id: 0,
-            };
-            if let Err(error) = self.ivars().input_tx.try_send(event) {
-                tracing::warn!("cmd-Q redirect could not queue s-q: {error:?}");
-            }
+            queue_quit(&self.ivars().input_tx);
         }
     }
 );
