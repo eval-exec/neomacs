@@ -860,6 +860,26 @@ pub(crate) fn dynamic_or_global_symbol_value(
     eval.eval_symbol_by_id(id).ok()
 }
 
+/// `(compare-buffer-substrings ...)`: resolve the case-fold policy and the
+/// current buffer's canonical table (GNU editfns.c:1769-1771) here, then run
+/// the editor-owned comparison with the table passed down.
+pub(crate) fn builtin_compare_buffer_substrings(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    let case_fold = dynamic_or_global_symbol_value(eval, "case-fold-search")
+        .map(|value| !value.is_nil())
+        .unwrap_or(true);
+    // GNU includes the standard equivalence classes (sigma/final sigma,
+    // micro sign) through the current buffer's canonical case table.
+    let canon = if case_fold {
+        Some(crate::emacs_core::casetab::current_case_canon_table(eval)?)
+    } else {
+        None
+    };
+    crate::emacs_core::buffer::compare_buffer_substrings_with_canon(&eval.buffers, args, canon)
+}
+
 pub(super) fn dynamic_or_global_symbol_value_in_state(
     vars: VariableView<'_>,
     _dynamic: &[OrderedRuntimeBindingMap],

@@ -2536,22 +2536,17 @@ pub(crate) fn builtin_split_window_internal(
 }
 
 /// `(compare-buffer-substrings BUF1 START1 END1 BUF2 START2 END2)` -> integer
-pub(crate) fn builtin_compare_buffer_substrings(
-    eval: &mut super::eval::Context,
+///
+/// The case-fold policy (the dynamic variable and the current buffer's
+/// canonical case table, GNU editfns.c:1769-1771) is computed by the upper
+/// command wrapper and passed in; this editor-layer body only compares, so it
+/// takes edit state (`BufferManager`) and stays monomorphic.
+pub(crate) fn compare_buffer_substrings_with_canon(
+    buffers: &BufferManager,
     args: Vec<Value>,
+    canon: Option<Value>,
 ) -> EvalResult {
-    let case_fold =
-        super::builtins::misc_eval::dynamic_or_global_symbol_value(eval, "case-fold-search")
-            .map(|value| !value.is_nil())
-            .unwrap_or(true);
-    // GNU editfns.c:1769-1771 uses the current buffer's canonical table,
-    // including standard equivalence classes (sigma/final sigma, micro sign).
-    let canon = if case_fold {
-        Some(super::casetab::current_case_canon_table(eval)?)
-    } else {
-        None
-    };
-    compare_buffer_substrings_with_translation(&eval.buffers, args, |code| {
+    compare_buffer_substrings_with_translation(buffers, args, |code| {
         canon
             .and_then(|table| super::chartable::ct_lookup(&table, code as i64).ok())
             .and_then(|value| value.as_fixnum())
