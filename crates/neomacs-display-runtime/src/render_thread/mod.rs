@@ -20,6 +20,8 @@ pub(crate) mod frame_windows;
 mod gpu_startup;
 mod input;
 mod lifecycle;
+#[cfg(target_os = "macos")]
+mod macos_quit_redirect;
 mod media;
 #[cfg(test)]
 #[path = "tests/modifier_policy_cooking_test.rs"]

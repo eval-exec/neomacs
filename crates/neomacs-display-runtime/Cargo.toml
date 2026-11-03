@@ -114,7 +114,14 @@ winreg.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = ["NSUserDefaults"] }
-objc2-app-kit = { workspace = true, features = ["NSColor", "NSFont", "objc2-core-foundation"] }
+objc2-app-kit = { workspace = true, features = [
+    "NSApplication",
+    "NSColor",
+    "NSFont",
+    "NSMenu",
+    "NSMenuItem",
+    "objc2-core-foundation",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 neovm-core = { workspace = true, features = ["desktop-font-settings"] }

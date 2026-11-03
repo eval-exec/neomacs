@@ -7,6 +7,9 @@
 #[path = "../src/common.rs"]
 mod common;
 
+#[path = "oracle_backend_quit_binding.rs"]
+mod oracle_backend_quit_binding;
+
 #[path = "oracle_backtrace_local_remake.rs"]
 mod oracle_backtrace_local_remake;
 

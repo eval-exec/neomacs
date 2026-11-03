@@ -107,6 +107,11 @@ impl RenderApp {
     }
 
     pub(super) fn handle_resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // winit has installed the AppKit application menu by the time
+        // surfaces are requested; route its Quit command through Emacs.
+        #[cfg(target_os = "macos")]
+        super::macos_quit_redirect::install(&self.comms.input_tx);
+
         if !self.lifecycle_flags.resumed_seen {
             tracing::info!(
                 "Render thread resumed: primary_window_exists={} size={}x{} title={:?}",
