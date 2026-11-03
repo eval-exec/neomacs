@@ -9198,6 +9198,31 @@ fn modify_frame_parameters_font_keeps_explicit_default_face_attributes() {
         font_attr, opened,
         "the Font slot must still follow the opened font"
     );
+
+    // An explicit `unspecified` override is not a concrete value; the
+    // font-derived family must be installed again.
+    crate::emacs_core::xfaces::builtin_internal_set_lisp_face_attribute(
+        &mut ev,
+        vec![
+            Value::symbol("default"),
+            Value::keyword("family"),
+            Value::symbol("unspecified"),
+            Value::make_frame(fid.0),
+        ],
+    )
+    .expect("clear the explicit family");
+    let out = ev.eval_str_each(
+        r#"(modify-frame-parameters (selected-frame) '((font . "Noto Sans Mono-17")))"#,
+    );
+    assert!(out[0].is_ok(), "second font update failed: {:?}", out[0]);
+    let table =
+        crate::emacs_core::xfaces::runtime_face_table_from_frame_lisp_faces(&ev, fid, false);
+    let default_face = table.merge_faces(&["default"]);
+    assert_eq!(
+        default_face.family,
+        Some(Value::string("Noto Sans Mono")),
+        "an explicit unspecified family must not block the font-derived value"
+    );
 }
 
 #[test]
