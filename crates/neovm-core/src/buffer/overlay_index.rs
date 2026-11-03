@@ -1116,7 +1116,7 @@ impl OverlayIndex {
         self.intervals
             .read()
             .records
-            .for_each_match(IntervalDeletionQuery(range), |record| {
+            .for_each_match(IntervalDeletionQuery::new(range), |record| {
                 starts_contract |= record.range.start() > range.start();
                 exceptions.push(record.overlay);
             });
@@ -1272,7 +1272,7 @@ impl OverlayIndex {
         let mut overlays = Vec::with_capacity(intervals.len());
         intervals
             .records
-            .for_each_match(IntervalIntersectionQuery(range), |record| {
+            .for_each_match(IntervalIntersectionQuery::new(range), |record| {
                 overlays.push(record.overlay);
             });
         overlays

@@ -143,6 +143,15 @@ impl OrderedShiftRecord for IntervalRecord {
 #[doc(hidden)]
 pub struct IntervalDeletionQuery(pub(crate) EmacsByteRange);
 
+impl IntervalDeletionQuery {
+    /// PC1-d constructor; the range field stays crate-private.
+    #[doc(hidden)]
+    #[inline]
+    pub fn new(range: EmacsByteRange) -> Self {
+        Self(range)
+    }
+}
+
 impl OrderedTreeQuery<IntervalRecord> for IntervalDeletionQuery {
     fn subtree_may_match(
         self,
@@ -169,6 +178,15 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalDeletionQuery {
 #[derive(Clone, Copy)]
 #[doc(hidden)]
 pub struct IntervalIntersectionQuery(pub(crate) EmacsByteRange);
+
+impl IntervalIntersectionQuery {
+    /// PC1-d constructor; the range field stays crate-private.
+    #[doc(hidden)]
+    #[inline]
+    pub fn new(range: EmacsByteRange) -> Self {
+        Self(range)
+    }
+}
 
 impl OrderedTreeQuery<IntervalRecord> for IntervalIntersectionQuery {
     fn subtree_may_match(
