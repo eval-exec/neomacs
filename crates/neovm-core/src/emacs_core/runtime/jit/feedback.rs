@@ -39,7 +39,7 @@ use crate::emacs_core::jit::FeedbackVecExt;
 pub(crate) mod arrays;
 
 use crate::emacs_core::bytecode::value_api::TaggedValueBytecodeExt;
-use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock, Weak};
 
 use super::{CallFeedback, FeedbackVec, NumericFeedback, Runtime, RuntimeState};
@@ -213,40 +213,37 @@ impl SourceFeedbackExt for SourceFeedback {
     /// No feedback yet (nothing allocated).
     #[inline]
     fn new() -> Self {
-        Self {
-            ops: FeedbackVec::new(),
-            calls: OnceLock::new(),
-        }
+        Self::default()
     }
 
     /// Record callee `sym` at call site `pc` (the legacy lattice).
     #[inline]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
-        self.ops.record_call(pc, ops_len, sym);
+        self.ops().record_call(pc, ops_len, sym);
     }
 
     /// The legacy call lattice at `pc`.
     #[inline]
     fn call_at(&self, pc: usize) -> CallFeedback {
-        self.ops.call_at(pc)
+        self.ops().call_at(pc)
     }
 
     /// Join `seen` into arithmetic site `pc`; whether the slot moved.
     #[inline]
     fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
-        self.ops.record_numeric(pc, ops_len, seen)
+        self.ops().record_numeric(pc, ops_len, seen)
     }
 
     /// The numeric lattice at arithmetic site `pc`.
     #[inline]
     fn numeric_at(&self, pc: usize) -> NumericFeedback {
-        self.ops.numeric_at(pc)
+        self.ops().numeric_at(pc)
     }
 
     /// The call-site table, if one was built.
     #[inline(always)]
     fn call_sites(&self) -> Option<&CallSites> {
-        self.calls.get()
+        self.calls().get()
     }
 }
 
@@ -260,7 +257,7 @@ impl RuntimeStateCallSitesExt for RuntimeState {
     /// The source's call-site table, if one was built.
     #[inline(always)]
     fn call_sites(&self) -> Option<&CallSites> {
-        self.feedback.call_sites()
+        self.feedback().call_sites()
     }
 }
 
@@ -318,7 +315,7 @@ impl RuntimeFeedbackExt for Runtime {
         callee: Value,
         arg0: Value,
     ) {
-        let Some(sites) = self.feedback.calls.get() else {
+        let Some(sites) = self.feedback().calls().get() else {
             return self.record_call_target_first(pc, func, callee, arg0);
         };
         if let Some(site) = sites.site_at(pc) {
@@ -347,12 +344,12 @@ impl RuntimeFeedbackExt for Runtime {
     /// instructions) on first use and registered with the exit census.
     fn call_sites_for(&self, ops: &[Op], constants: &[Value]) -> &CallSites {
         let mut built = false;
-        let sites = self.feedback.calls.get_or_init(|| {
+        let sites = self.feedback().calls().get_or_init(|| {
             built = true;
             CallSites::build(ops, constants)
         });
         if built {
-            census::register(&self.shared);
+            census::register(self.shared());
         }
         sites
     }
@@ -361,24 +358,14 @@ impl RuntimeFeedbackExt for Runtime {
     /// sources, as `Arc::as_ptr`).
     #[inline(always)]
     fn state_ptr(&self) -> *const RuntimeState {
-        Arc::as_ptr(&self.shared)
+        Arc::as_ptr(self.shared())
     }
 
     /// The source's `RuntimeState`, shared (a compiled leaf that bakes an
     /// address inside it keeps it alive).
     fn share_state(&self) -> Arc<RuntimeState> {
-        Arc::clone(&self.shared)
+        Arc::clone(self.shared())
     }
-}
-
-/// The identity word of the source `state` (what a byte-code object of it
-/// holds in its `runtime` field, and what a source guard compares), read
-/// through `jit_layout::runtime_identity_word`, the golden-tested reader.
-#[cfg(feature = "jit")]
-pub(crate) fn identity_word_of(state: &Arc<RuntimeState>) -> usize {
-    super::compile::jit_layout::runtime_identity_word(&Runtime {
-        shared: Arc::clone(state),
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -493,21 +480,16 @@ pub(crate) trait CallSiteFeedbackExt {
 
 impl CallSiteFeedbackExt for CallSiteFeedback {
     fn new(pc: u32, shape: SiteShape) -> Self {
-        Self {
-            state: AtomicU64::new(STATE_UNINIT),
-            sources: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
-            count: AtomicU32::new(0),
-            late: AtomicU32::new(0),
-            pc,
-            shape,
-        }
+        // SAFETY: exact sealed initialization site; source-slot exclusion
+        // remains the known post-split FEEDBACK-UAF obligation.
+        unsafe { Self::new_storage(pc, shape, STATE_UNINIT) }
     }
 
     /// The value this site records for a call of `callee` with first
     /// argument `arg0`.
     #[inline(always)]
     fn target_of(&self, callee: Value, arg0: Value) -> Value {
-        match self.shape {
+        match self.shape_value() {
             SiteShape::Callee => callee,
             SiteShape::ApplyArg | SiteShape::CallbackArg => arg0,
         }
@@ -515,22 +497,22 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
 
     /// What the site records.
     fn shape(&self) -> SiteShape {
-        self.shape
+        self.shape_value()
     }
 
     /// The site's pc.
     fn pc(&self) -> u32 {
-        self.pc
+        self.pc_value()
     }
 
     /// Counted executions.
     fn count(&self) -> u32 {
-        self.count.load(Ordering::Relaxed)
+        self.counter().load(Ordering::Relaxed)
     }
 
     /// Late transitions.
     fn late(&self) -> u32 {
-        self.late.load(Ordering::Relaxed)
+        self.late_counter().load(Ordering::Relaxed)
     }
 
     /// Join `target` into the lattice. One load and a compare unless the
@@ -538,7 +520,7 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
     #[inline(always)]
     fn observe(&self, target: Value) {
         let key = target_key(target);
-        let state = self.state.load(Ordering::Relaxed);
+        let state = self.state_word().load(Ordering::Relaxed);
         if state == key || state == STATE_MEGA {
             return;
         }
@@ -549,21 +531,22 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
     /// [`STABLE_WINDOW`] counted executions).
     #[inline(always)]
     fn window_open(&self) -> bool {
-        self.count.load(Ordering::Relaxed) < STABLE_WINDOW
+        self.counter().load(Ordering::Relaxed) < STABLE_WINDOW
     }
 
     /// Test-only: set the counted executions outright.
     #[cfg(test)]
     fn set_count_for_test(&self, count: u32) {
-        self.count.store(count, Ordering::Relaxed);
+        self.counter().store(count, Ordering::Relaxed);
     }
 
     /// Count one execution, then [`Self::observe`] (the recording call
     /// shims').
     #[inline(always)]
     fn observe_counted(&self, target: Value) {
-        let count = self.count.load(Ordering::Relaxed);
-        self.count.store(count.saturating_add(1), Ordering::Relaxed);
+        let count = self.counter().load(Ordering::Relaxed);
+        self.counter()
+            .store(count.saturating_add(1), Ordering::Relaxed);
         self.observe(target);
     }
 
@@ -601,10 +584,11 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
         if next == state {
             return;
         }
-        self.state.store(next, Ordering::Relaxed);
-        if self.count.load(Ordering::Relaxed) >= STABLE_WINDOW {
-            let late = self.late.load(Ordering::Relaxed);
-            self.late.store(late.saturating_add(1), Ordering::Relaxed);
+        self.state_word().store(next, Ordering::Relaxed);
+        if self.counter().load(Ordering::Relaxed) >= STABLE_WINDOW {
+            let late = self.late_counter().load(Ordering::Relaxed);
+            self.late_counter()
+                .store(late.saturating_add(1), Ordering::Relaxed);
         }
     }
 
@@ -625,12 +609,10 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
         let Some(runtime) = bc.runtime.as_ref() else {
             return false;
         };
-        let weak = Weak::into_raw(Arc::downgrade(&runtime.shared));
-        let old = self.sources[i].swap(weak.cast_mut(), Ordering::Relaxed);
-        if !old.is_null() {
-            // SAFETY: every non-null slot holds a `Weak::into_raw`.
-            drop(unsafe { Weak::from_raw(old) });
-        }
+        let source = Arc::downgrade(runtime.shared());
+        // SAFETY: exact sealed mutator recording site. Exclusion from borrowed
+        // compile reads remains the known post-split FEEDBACK-UAF gap.
+        unsafe { self.install_source(i, source) };
         true
     }
 
@@ -649,15 +631,14 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
         else {
             return false;
         };
-        let ptr = runtime.state_ptr();
-        self.sources[..n.min(POLY)]
-            .iter()
-            .any(|s| std::ptr::eq(s.load(Ordering::Relaxed), ptr))
+        // SAFETY: exact sealed borrowed-read site. Exclusion from source
+        // replacement remains the known post-split FEEDBACK-UAF gap.
+        unsafe { self.source_matches(n, runtime.shared()) }
     }
 
     /// The site's target as a compile reads it (see [`CallTarget`]).
     fn target(&self) -> CallTarget {
-        let state = self.state.load(Ordering::Relaxed);
+        let state = self.state_word().load(Ordering::Relaxed);
         let n = match state & TAG_BITS {
             _ if state == STATE_UNINIT => return CallTarget::Uninit,
             // SAFETY: round-trip of an interned id stored in the feedback site (peer seal N8).
@@ -666,17 +647,11 @@ impl CallSiteFeedbackExt for CallSiteFeedback {
             TAG_POLY => (state >> 3) as usize,
             _ => return CallTarget::Mega,
         };
-        let live: Vec<Arc<RuntimeState>> = self.sources[..n.min(POLY)]
-            .iter()
-            .filter_map(|s| {
-                let ptr = s.load(Ordering::Relaxed);
-                if ptr.is_null() {
-                    return None;
-                }
-                // SAFETY: a `Weak::into_raw` this site still owns; borrowed,
-                // not dropped.
-                let weak = std::mem::ManuallyDrop::new(unsafe { Weak::from_raw(ptr) });
-                weak.upgrade()
+        let live: Vec<Arc<RuntimeState>> = (0..n.min(POLY))
+            .filter_map(|i| {
+                // SAFETY: exact sealed compiler borrowed-read site. Exclusion
+                // from recording remains the known post-split FEEDBACK-UAF gap.
+                unsafe { self.upgrade_source(i) }
             })
             .collect();
         if live.is_empty() {
@@ -715,25 +690,22 @@ impl CallSitesExt for CallSites {
             sites.push(CallSiteFeedback::new(pc as u32, shape));
             index[pc] = sites.len() as u16;
         }
-        CallSites {
-            index,
-            sites: sites.into_boxed_slice(),
-        }
+        CallSites::from_parts(index, sites.into_boxed_slice())
     }
 
     /// The site at `pc`, if the call there records.
     #[inline(always)]
     fn site_at(&self, pc: usize) -> Option<&CallSiteFeedback> {
-        let at = *self.index.get(pc)?;
+        let at = *self.index().get(pc)?;
         if at == 0 {
             return None;
         }
-        self.sites.get(usize::from(at) - 1)
+        self.entries().get(usize::from(at) - 1)
     }
 
     /// Every site, in pc order.
     fn sites(&self) -> &[CallSiteFeedback] {
-        &self.sites
+        self.entries()
     }
 }
 

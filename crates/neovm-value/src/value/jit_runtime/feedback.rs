@@ -7,10 +7,11 @@
 use super::{FeedbackVec, RuntimeState};
 /// One source's feedback (see the module docs).
 use std::sync::OnceLock;
-use std::sync::Weak;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 #[derive(Debug, Default)]
-pub(crate) struct SourceFeedback {
+#[doc(hidden)]
+pub struct SourceFeedback {
     /// Per-op word: `NumericFeedback` at arithmetic pcs (the encoding the
     /// lowering's one predicate, `arith_site_takes_generic`, reads), the
     /// legacy symbol-only `CallFeedback` at call pcs.
@@ -49,7 +50,8 @@ pub enum SiteShape {
 
 /// One call site's feedback.
 #[derive(Debug)]
-pub(crate) struct CallSiteFeedback {
+#[doc(hidden)]
+pub struct CallSiteFeedback {
     /// The lattice word: `STATE_UNINIT`, a symbol (`id << 3 | TAG_SYM`),
     /// one source (its identity word `| TAG_SOURCE`), `n` sources
     /// (`n << 3 | TAG_POLY`) or `STATE_MEGA`.
@@ -90,5 +92,142 @@ impl Drop for CallSiteFeedback {
                 drop(unsafe { Weak::from_raw(ptr) });
             }
         }
+    }
+}
+
+impl SourceFeedback {
+    #[doc(hidden)]
+    #[inline]
+    pub fn ops(&self) -> &FeedbackVec {
+        &self.ops
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn calls(&self) -> &OnceLock<CallSites> {
+        &self.calls
+    }
+}
+
+impl CallSites {
+    /// Owned feedback values and scalar indices contain no forgeable raw owner.
+    #[doc(hidden)]
+    #[inline]
+    pub fn from_parts(index: Box<[u16]>, sites: Box<[CallSiteFeedback]>) -> Self {
+        Self { index, sites }
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn index(&self) -> &[u16] {
+        &self.index
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn entries(&self) -> &[CallSiteFeedback] {
+        &self.sites
+    }
+}
+
+impl CallSiteFeedback {
+    /// # Safety
+    /// No concurrent swap/release of a source slot may overlap a borrowed
+    /// load of that slot. Background compile reads vs mutator recording have
+    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
+    /// must uphold this exclusion; this extraction preserves existing bodies
+    /// and orderings and does not claim to repair the gap.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn new_storage(pc: u32, shape: SiteShape, initial_state: u64) -> Self {
+        Self {
+            state: AtomicU64::new(initial_state),
+            sources: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
+            count: AtomicU32::new(0),
+            late: AtomicU32::new(0),
+            pc,
+            shape,
+        }
+    }
+
+    /// # Safety
+    /// No concurrent swap/release of a source slot may overlap a borrowed
+    /// load of that slot. Background compile reads vs mutator recording have
+    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
+    /// must uphold this exclusion; this extraction preserves existing bodies
+    /// and orderings and does not claim to repair the gap.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn install_source(&self, i: usize, source: Weak<RuntimeState>) {
+        let weak = Weak::into_raw(source);
+        let old = self.sources[i].swap(weak.cast_mut(), Ordering::Relaxed);
+        if !old.is_null() {
+            // SAFETY: every non-null slot holds a `Weak::into_raw`.
+            drop(unsafe { Weak::from_raw(old) });
+        }
+    }
+
+    /// # Safety
+    /// No concurrent swap/release of a source slot may overlap a borrowed
+    /// load of that slot. Background compile reads vs mutator recording have
+    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
+    /// must uphold this exclusion; this extraction preserves existing bodies
+    /// and orderings and does not claim to repair the gap.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn source_matches(&self, n: usize, source: &Arc<RuntimeState>) -> bool {
+        let ptr = Arc::as_ptr(source);
+        self.sources[..n.min(POLY)]
+            .iter()
+            .any(|s| std::ptr::eq(s.load(Ordering::Relaxed), ptr))
+    }
+
+    /// # Safety
+    /// No concurrent swap/release of a source slot may overlap a borrowed
+    /// load of that slot. Background compile reads vs mutator recording have
+    /// a known pre-existing gap: see post-split item FEEDBACK-UAF. The caller
+    /// must uphold this exclusion; this extraction preserves existing bodies
+    /// and orderings and does not claim to repair the gap.
+    #[doc(hidden)]
+    #[inline]
+    pub unsafe fn upgrade_source(&self, i: usize) -> Option<Arc<RuntimeState>> {
+        let ptr = self.sources[i].load(Ordering::Relaxed);
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: a `Weak::into_raw` this site still owns; borrowed,
+        // not dropped.
+        let weak = std::mem::ManuallyDrop::new(unsafe { Weak::from_raw(ptr) });
+        weak.upgrade()
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn state_word(&self) -> &AtomicU64 {
+        &self.state
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn counter(&self) -> &AtomicU32 {
+        &self.count
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn late_counter(&self) -> &AtomicU32 {
+        &self.late
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn pc_value(&self) -> u32 {
+        self.pc
+    }
+
+    #[doc(hidden)]
+    #[inline]
+    pub fn shape_value(&self) -> SiteShape {
+        self.shape
     }
 }

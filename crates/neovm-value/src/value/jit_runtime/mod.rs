@@ -232,6 +232,12 @@ pub struct Runtime {
 }
 
 impl RuntimeState {
+    #[doc(hidden)]
+    #[inline]
+    pub fn feedback(&self) -> &feedback::SourceFeedback {
+        &self.feedback
+    }
+
     /// This source's persistent per-site retreat observations.
     #[doc(hidden)]
     #[inline]
@@ -377,6 +383,12 @@ impl Default for RuntimeState {
 }
 
 impl Runtime {
+    #[doc(hidden)]
+    #[inline]
+    pub fn shared(&self) -> &std::sync::Arc<RuntimeState> {
+        &self.shared
+    }
+
     pub const HOT_THRESHOLD: u32 = RuntimeState::HOT_THRESHOLD;
 
     /// A fresh, cold, unshared state — for a NEW source (reader, decoder,
@@ -420,4 +432,27 @@ impl RuntimeState {
     /// Lower-layer copy: the upper tiering extension and `Runtime`'s
     /// `HOT_THRESHOLD` both read this single value.
     pub const HOT_THRESHOLD: u32 = 1_000;
+}
+
+/// Copy the source guard's identity from a Runtime-origin shared handle.
+/// No Runtime is constructed or attached. The Arc allocation header word is
+/// copied, not Arc::as_ptr (which addresses the RuntimeState payload).
+#[cfg(feature = "jit")]
+#[doc(hidden)]
+pub fn runtime_shared_identity_word(state: &std::sync::Arc<RuntimeState>) -> usize {
+    use std::mem::ManuallyDrop;
+    use std::sync::Arc;
+    const _: () = assert!(std::mem::size_of::<Option<Runtime>>() == std::mem::size_of::<usize>());
+    const _: () =
+        assert!(std::mem::size_of::<Option<Arc<RuntimeState>>>() == std::mem::size_of::<usize>());
+    const _: () = assert!(std::mem::offset_of!(Runtime, shared) == 0);
+    let runtime = Arc::clone(state);
+    let held: ManuallyDrop<Option<Arc<RuntimeState>>> =
+        ManuallyDrop::new(Some(Arc::clone(&runtime)));
+    // SAFETY: the option is one whole word (asserted above). The Runtime
+    // source word is its Arc field at offset zero; retain both existing
+    // clone/release pairs while copying that exact word.
+    let word = unsafe { std::ptr::from_ref(&*held).cast::<usize>().read() };
+    drop(ManuallyDrop::into_inner(held));
+    word
 }

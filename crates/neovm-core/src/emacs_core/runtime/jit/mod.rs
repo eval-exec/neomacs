@@ -1619,26 +1619,26 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// (`ops_len` = the function's instruction count, for lazy sizing).
     #[inline]
     fn record_call(&self, pc: usize, ops_len: usize, sym: SymId) {
-        self.feedback.record_call(pc, ops_len, sym);
+        self.feedback().record_call(pc, ops_len, sym);
     }
 
     /// Call-site feedback observed at instruction `pc`.
     #[inline]
     fn call_feedback(&self, pc: usize) -> CallFeedback {
-        self.feedback.call_at(pc)
+        self.feedback().call_at(pc)
     }
 
     /// Record the operand types seen at the arithmetic site at instruction
     /// `pc` — see [`NumericFeedback`]. Returns whether the site's slot moved.
     #[inline]
     fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
-        self.feedback.record_numeric(pc, ops_len, seen)
+        self.feedback().record_numeric(pc, ops_len, seen)
     }
 
     /// Operand-type feedback observed at arithmetic site `pc`.
     #[inline]
     fn numeric_feedback(&self, pc: usize) -> NumericFeedback {
-        self.feedback.numeric_at(pc)
+        self.feedback().numeric_at(pc)
     }
 
     /// Whether this body's arithmetic sites still want their operand types
@@ -1702,7 +1702,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// the site meets). Returns whether the site's slot moved.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn widen_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
-        self.feedback.record_numeric(pc, ops_len, seen)
+        self.feedback().record_numeric(pc, ops_len, seen)
     }
 
     /// Forbid splicing, MIR-inlining or intrinsifying the call site at `pc`.

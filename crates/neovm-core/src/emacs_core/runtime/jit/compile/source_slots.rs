@@ -73,7 +73,7 @@ pub(crate) fn add_source_sites(
         let [target] = targets.as_slice() else {
             continue;
         };
-        let identity = crate::emacs_core::jit::feedback::identity_word_of(target);
+        let identity = neovm_value::value::jit_runtime::runtime_shared_identity_word(target);
         super::call_feedback::hold_for_leaf(target);
         sites.insert(
             pc,
