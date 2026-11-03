@@ -1,7 +1,11 @@
 # PC2: signed existing chains, exact source sites, and the dev-only adapter.
-# A dash is an inapplicable test_only seam, never a wildcard permission.
+# A dash is an inapplicable cell, never a wildcard permission.
+# DATA has exactly one seam; callback production rows keep exactly two.
 kind	installer	adapter	seam1	seam2
 production	neovm_core::emacs_core::value::install_bytecode_semantics	crates/neovm-core/src/emacs_core/runtime/bytecode/semantics.rs:install	crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
 production	neovm_core::emacs_core::symbol::install_function_cell_observer	crates/neovm-core/src/emacs_core/runtime/jit/mod.rs:install_function_cell_observer	crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
 production	neovm_core::emacs_core::value::scratch_bridge::install_scratch_root_hooks		crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
 test_only	neovm_core::heap_types::install_string_bytes_changed_hook	crates/neovm-core/src/emacs_core/text/string_pos_cache/mod.rs:install_notification_hook_for_test	-	-
+production	neovm_core::heap_types::install_string_bytes_changed_hook		crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
+production	neovm_core::emacs_core::symbol::function_cell_observer::install_function_epoch_move_sink		crates/neovm-core/src/emacs_core/runtime/eval/construct.rs:Context::new_inner	crates/neovm-core/src/emacs_core/runtime/eval/pdump_reconstruct.rs:Context::from_dump
+data_install	neovm_core::emacs_core::value::buffer_vocab::install_slot_meta_table	-	crates/neovm-core/src/buffer/buffer.rs:buffer_slot_sym_map	-

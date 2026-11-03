@@ -13,7 +13,8 @@
 //! 3. **PC2 hook installers**: rows in `pc2_hook_seams.tsv` list
 //!    `(kind, installer, adapter, seam file:function, seam file:function)`;
 //!    production installers and adapters form exact two-seam chains, while
-//!    test-only installers are restricted to their named test adapter.
+//!    test-only installers are restricted to their named test adapter. DATA
+//!    installation has one exact caller and never grants a callback seam.
 //! 4. **TA2 authority fence**: `test_support::authority` may be named only
 //!    from `crates/neovm-core/core_tests/**`, never from `src/**`, including
 //!    aliases and glob imports, across every workspace member and target.
@@ -1734,6 +1735,9 @@ enum Pc2Kind {
     TestOnly {
         adapter: Pc2Site,
     },
+    DataInstall {
+        seam: Pc2Site,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1823,6 +1827,14 @@ fn parse_pc2_table(text: &str) -> Result<Vec<Pc2Row>, String> {
                 }
                 Pc2Kind::TestOnly {
                     adapter: pc2_site(fields[2])?,
+                }
+            }
+            "data_install" => {
+                if !matches!(fields[2], "" | "-") || !matches!(fields[4], "" | "-") {
+                    return Err("PC2_TABLE: data_install requires one seam and no adapter".into());
+                }
+                Pc2Kind::DataInstall {
+                    seam: pc2_site(fields[3])?,
                 }
             }
             other => return Err(format!("PC2_TABLE: unknown row kind {other:?}")),
@@ -2382,7 +2394,7 @@ pub(crate) fn scan_pc2_table(workspace: &Path, text: &str) -> Result<Vec<String>
                     names.insert(name.to_string());
                 }
             }
-            Pc2Kind::Production { adapter: None, .. } => {}
+            Pc2Kind::Production { adapter: None, .. } | Pc2Kind::DataInstall { .. } => {}
         }
     }
     let mut facts = Pc2Facts::default();
@@ -2496,6 +2508,7 @@ pub(crate) fn scan_pc2_table(workspace: &Path, text: &str) -> Result<Vec<String>
                     }
                 }
                 Pc2Kind::TestOnly { adapter } => sites.push((adapter.clone(), true)),
+                Pc2Kind::DataInstall { seam } => sites.push((seam.clone(), false)),
             }
         }
     }
@@ -2511,10 +2524,14 @@ pub(crate) fn scan_pc2_table(workspace: &Path, text: &str) -> Result<Vec<String>
             }
         };
         covered.insert(installer.clone());
-        let (adapter_site, seams, test_row) = match &row.kind {
-            Pc2Kind::Production { adapter, seams } => (adapter.as_ref(), Some(seams), false),
-            Pc2Kind::TestOnly { adapter } => (Some(adapter), None, true),
-        };
+        let (adapter_site, seams, test_row): (Option<&Pc2Site>, Option<&[Pc2Site]>, bool) =
+            match &row.kind {
+                Pc2Kind::Production { adapter, seams } => {
+                    (adapter.as_ref(), Some(seams.as_slice()), false)
+                }
+                Pc2Kind::TestOnly { adapter } => (Some(adapter), None, true),
+                Pc2Kind::DataInstall { seam } => (None, Some(std::slice::from_ref(seam)), false),
+            };
         let adapter = match adapter_site
             .map(|site| pc2_unique_definition(&facts, site))
             .transpose()
@@ -2772,6 +2789,53 @@ fn architecture_pc2_guard_self_test() {
         scan_pc2_table(root, test_table).unwrap().is_empty(),
         "PC2_RESTORED_TEST_ONLY_PRODUCT_REF"
     );
+}
+
+#[test]
+fn architecture_pc2_data_install_mutation_red_then_restored() {
+    let dir = tempfile::tempdir().expect("DATA fixture");
+    let root = dir.path();
+    guard_fixture_workspace(root, &["neovm-core", "neovm-value"]);
+    let core = root.join("crates/neovm-core/src");
+    std::fs::write(core.join("lib.rs"), "mod low; mod seam; mod extra;\n").expect("modules");
+    std::fs::write(core.join("low.rs"), "use std::sync::OnceLock; static DATA: OnceLock<u8> = OnceLock::new(); pub fn install_slot_meta_table(value: u8) { let _ = DATA.set(value); }\n").expect("DATA installer");
+    std::fs::write(
+        core.join("seam.rs"),
+        "pub fn buffer_slot_sym_map() { crate::low::install_slot_meta_table(1); }\n",
+    )
+    .expect("one DATA seam");
+    let extra = core.join("extra.rs");
+    std::fs::write(&extra, "fn unrelated() {}\n").expect("clean extra");
+    let table = "kind\tinstaller\tadapter\tseam1\tseam2\ndata_install\tneovm_core::low::install_slot_meta_table\t-\tcrates/neovm-core/src/seam.rs:buffer_slot_sym_map\t-\n";
+    let green = scan_pc2_table(root, table).expect("DATA baseline scan");
+    assert!(green.is_empty(), "PC2_DATA_BASELINE: {green:?}");
+    std::fs::write(
+        &extra,
+        "fn second_caller() { crate::low::install_slot_meta_table(2); }\n",
+    )
+    .expect("second DATA caller mutation");
+    let red = scan_pc2_table(root, table).expect("DATA mutation scan");
+    assert!(
+        red.iter()
+            .any(|error| error.contains("PC2_INSTALLER_OUTSIDE_EXACT_CHAIN")
+                && error.contains("second_caller")),
+        "PC2_DATA_SECOND_CALLER: {red:?}"
+    );
+    std::fs::write(&extra, "fn unrelated() {}\n").expect("restore DATA caller");
+    let restored = scan_pc2_table(root, table).expect("DATA restored scan");
+    assert!(restored.is_empty(), "PC2_DATA_RESTORED: {restored:?}");
+    for invalid in [
+        table.replace("\t-\n", "\tcrates/neovm-core/src/extra.rs:second_caller\n"),
+        table.replace(
+            "\t-\tcrates",
+            "\tcrates/neovm-core/src/extra.rs:second_caller\tcrates",
+        ),
+    ] {
+        assert!(
+            parse_pc2_table(&invalid).is_err(),
+            "PC2_DATA_REJECTS_EXTRA_SEAM_OR_ADAPTER"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
