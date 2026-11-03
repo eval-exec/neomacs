@@ -68,7 +68,8 @@ fn projection_scopes() -> std::sync::MutexGuard<'static, Vec<ProjectionScope>> {
 
 /// Why admission could not reserve what its commit needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProjectionPlanError;
+#[doc(hidden)]
+pub struct ProjectionPlanError;
 
 /// Make room to enter one projection scope without allocating.
 #[doc(hidden)]

@@ -12,7 +12,8 @@ pub(super) struct RootSeedScratch(Rc<Cell<Vec<TaggedValue>>>);
 
 /// Owns the temporary Values independently of any borrow of TaggedHeap.
 /// Returning or unwinding clears them before publishing the capacity again.
-pub(crate) struct RootSeedLoan {
+#[doc(hidden)]
+pub struct RootSeedLoan {
     owner: Rc<Cell<Vec<TaggedValue>>>,
     roots: Vec<TaggedValue>,
 }

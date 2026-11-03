@@ -23,17 +23,17 @@ impl Context {
             Some(syms) => syms,
             None => self.resolve_user_test_gc_setting_syms(),
         };
-        HashTestGcInhibitAccounting {
-            bytes_at_start: self.tagged_heap.bytes_since_gc_exact(),
-            charged_bytes_at_start: self.tagged_heap.bytes_since_gc(),
-            collector_threshold_at_start: self.tagged_heap.gc_threshold(),
-            threshold_at_start: None,
-            entry_threshold_bytes: self.gc_runtime_settings_cache.gc_cons_threshold_bytes,
-            entry_percentage_scaled: self.gc_runtime_settings_cache.gc_cons_percentage_scaled,
-            threshold_overridden: self.tagged_heap.gc_threshold_is_overridden(),
-            memory_full: self.gc_runtime_settings_cache.memory_full.is_full(),
-            startup_ceiling: !self.variable_value_or_nil(syms.startup_ceiling).is_nil(),
-        }
+        HashTestGcInhibitAccounting::new(
+            self.tagged_heap.bytes_since_gc_exact(),
+            self.tagged_heap.bytes_since_gc(),
+            self.tagged_heap.gc_threshold(),
+            None,
+            self.gc_runtime_settings_cache.gc_cons_threshold_bytes,
+            self.gc_runtime_settings_cache.gc_cons_percentage_scaled,
+            self.tagged_heap.gc_threshold_is_overridden(),
+            self.gc_runtime_settings_cache.memory_full.is_full(),
+            !self.variable_value_or_nil(syms.startup_ceiling).is_nil(),
+        )
     }
 
     #[cold]

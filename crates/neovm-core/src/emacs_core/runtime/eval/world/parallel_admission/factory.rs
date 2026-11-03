@@ -52,14 +52,15 @@ impl AdmissionPlan for ProductionPlan {
         let admission = match Gen1Admission::check(collector) {
             Ok(admission) => admission,
             Err(failure) => {
-                let reason = match failure.reason {
+                let (gen1_reason, collector) = failure.into_parts();
+                let reason = match gen1_reason {
                     Gen1AdmissionError::GenerationalRequired => {
                         OwnedParallelError::GenerationalRequired
                     }
                 };
                 return Err(AdmissionFailure {
                     reason,
-                    collector: failure.collector,
+                    collector,
                     keeper,
                 });
             }

@@ -3026,7 +3026,8 @@ impl TaggedValue {
     }
 
     /// Allocate Lisp-supplied extra slots only after GNU count validation.
-    pub(crate) fn try_char_table(
+    #[doc(hidden)]
+    pub fn try_char_table(
         purpose: Value,
         init: Value,
         count: crate::alloc::CharTableExtras,
@@ -3108,7 +3109,8 @@ impl TaggedValue {
 
     /// Allocate a hash table after validating the Lisp capacity and reserving
     /// all of its backing storage through fallible collection APIs.
-    pub(crate) fn try_hash_table_with_options(
+    #[doc(hidden)]
+    pub fn try_hash_table_with_options(
         test: HashTableTest,
         size: crate::alloc::HashTableSize,
         weakness: Option<HashTableWeakness>,
@@ -3126,7 +3128,8 @@ impl TaggedValue {
     }
 
     /// Allocate obarray buckets after validating GNU's size-hint boundary.
-    pub(crate) fn try_obarray(size: crate::alloc::ObarrayBits) -> Result<Self, crate::error::Flow> {
+    #[doc(hidden)]
+    pub fn try_obarray(size: crate::alloc::ObarrayBits) -> Result<Self, crate::error::Flow> {
         use crate::alloc::{AllocLen, reserved_values};
         let mut buckets = reserved_values(size)?;
         buckets.resize(size.capacity(), Value::NIL);
@@ -5945,5 +5948,16 @@ impl BytecodeInteractiveProbe {
     #[doc(hidden)]
     pub fn slot_count(&self) -> usize {
         self.slot_count
+    }
+}
+
+impl BytecodeInteractiveProbe {
+    #[doc(hidden)]
+    pub fn new(slot_count: usize, interactive: Option<Value>, doc_form: Option<Value>) -> Self {
+        Self {
+            slot_count,
+            interactive,
+            doc_form,
+        }
     }
 }

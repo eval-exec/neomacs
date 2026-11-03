@@ -10,10 +10,25 @@ pub enum Gen1AdmissionError {
 }
 
 #[must_use = "recover or drop the returned exclusive collector loan"]
-pub(crate) struct Gen1AdmissionFailure<'heap> {
+#[doc(hidden)]
+pub struct Gen1AdmissionFailure<'heap> {
     pub(crate) reason: Gen1AdmissionError,
     pub(crate) collector: QuiescentCollector<'heap>,
 }
+impl<'heap> Gen1AdmissionFailure<'heap> {
+    /// SEAL: observe the refusal reason (Copy).
+    #[inline]
+    #[doc(hidden)]
+    pub fn reason(&self) -> Gen1AdmissionError {
+        self.reason
+    }
+    /// SEAL: return the exclusive collector loan the caller handed in.
+    #[doc(hidden)]
+    pub fn into_parts(self) -> (Gen1AdmissionError, QuiescentCollector<'heap>) {
+        (self.reason, self.collector)
+    }
+}
+
 impl std::fmt::Debug for Gen1AdmissionFailure<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Gen1AdmissionFailure")

@@ -1127,27 +1127,27 @@ impl<'a> LoadDecoder<'a> {
                 if extras_len > 0 {
                     unsafe { Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>()) }
                 } else {
-                    let function = ByteCodeFunction {
-                        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-                        ops: Vec::new(),
-                        ops_sealed: false,
-                        stack_verified: false,
-                        constants: Vec::new().into(),
-                        max_stack: StackDepth::ZERO,
-                        params: LambdaParams::simple(Vec::new()).into(),
-                        arglist: Value::NIL,
-                        lexical: false,
-                        env: None,
-                        gnu_byte_offset_map: None,
-                        gnu_bytecode_bytes: None,
-                        docstring: None,
-                        doc_form: None,
-                        interactive: None,
-                        closure_slot_count: 4,
-                        extra_slots: Vec::new(),
-                        #[cfg(feature = "jit")]
-                        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-                        lazy_gnu_code: None,
+                    let function = unsafe {
+                        /* SAFETY: ops_sealed may be true only for seal_ops-normalized ops and stack_verified only after verify_stack_effects proved the ops against max_stack and the entry depth */
+                        ByteCodeFunction::from_parts(
+                            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+                            Vec::new(),
+                            false,
+                            false,
+                            Vec::new().into(),
+                            StackDepth::ZERO,
+                            LambdaParams::simple(Vec::new()).into(),
+                            Value::NIL,
+                            false,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            4,
+                            Vec::new(),
+                        )
                     };
                     unsafe {
                         std::ptr::write(
@@ -1783,27 +1783,27 @@ impl<'a> LoadDecoder<'a> {
                 }
             }
             DumpHeapObject::ByteCode(_) => {
-                let function = ByteCodeFunction {
-                    source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-                    ops: Vec::new(),
-                    ops_sealed: false,
-                    stack_verified: false,
-                    constants: Vec::new().into(),
-                    max_stack: StackDepth::ZERO,
-                    params: LambdaParams::simple(Vec::new()).into(),
-                    arglist: Value::NIL,
-                    lexical: false,
-                    env: None,
-                    gnu_byte_offset_map: None,
-                    gnu_bytecode_bytes: None,
-                    docstring: None,
-                    doc_form: None,
-                    interactive: None,
-                    closure_slot_count: 4,
-                    extra_slots: Vec::new(),
-                    #[cfg(feature = "jit")]
-                    runtime: Some(crate::emacs_core::jit::Runtime::new()),
-                    lazy_gnu_code: None,
+                let function = unsafe {
+                    /* SAFETY: ops_sealed may be true only for seal_ops-normalized ops and stack_verified only after verify_stack_effects proved the ops against max_stack and the entry depth */
+                    ByteCodeFunction::from_parts(
+                        crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+                        Vec::new(),
+                        false,
+                        false,
+                        Vec::new().into(),
+                        StackDepth::ZERO,
+                        LambdaParams::simple(Vec::new()).into(),
+                        Value::NIL,
+                        false,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        4,
+                        Vec::new(),
+                    )
                 };
                 // Install into the image-reserved ByteCodeObj when the dump
                 // mapped one (same space-then-populate deal markers use);
@@ -1896,16 +1896,15 @@ impl<'a> LoadDecoder<'a> {
                 // A mapped object is written in place instead of allocated by
                 // `alloc_overlay`, so resume the World counter explicitly.
                 with_tagged_heap(|heap| heap.observe_overlay_serial(serial));
-                let data = crate::heap_types::OverlayData {
+                let data = crate::heap_types::OverlayData::new(
                     serial,
-                    plist: Value::NIL,
-                    buffer: overlay.buffer.map(|id| BufferId(id.0)),
-                    start: overlay.start,
-                    end: overlay.end,
-                    position_handle: None,
-                    front_advance: overlay.front_advance,
-                    rear_advance: overlay.rear_advance,
-                };
+                    Value::NIL,
+                    overlay.buffer.map(|id| BufferId(id.0)),
+                    overlay.start,
+                    overlay.end,
+                    overlay.front_advance,
+                    overlay.rear_advance,
+                );
                 if let Some(ptr) =
                     self.mapped_typed_object_for_object::<OverlayObj>(id, "overlay")?
                 {
@@ -2837,28 +2836,27 @@ pub(crate) unsafe fn materialize_bytecode_from_extras_at(value: Value) -> ByteCo
         )
     };
 
-    let mut function = ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-        ops: Vec::new(),
-        stack_verified: false,
-        constants,
-        max_stack: StackDepth::try_from(header.max_stack).expect("load-validated stack depth"),
-        params,
-        arglist,
-        lexical: flags & BC_FLAG_LEXICAL != 0,
-        env: (flags & BC_FLAG_HAS_ENV != 0).then(|| word_value(header.env_word)),
-        gnu_byte_offset_map: None,
-        gnu_bytecode_bytes,
-        docstring,
-        doc_form: (flags & BC_FLAG_HAS_DOC_FORM != 0).then(|| word_value(header.doc_form_word)),
-        interactive: (flags & BC_FLAG_HAS_INTERACTIVE != 0)
-            .then(|| word_value(header.interactive_word)),
-        closure_slot_count: header.closure_slot_count as usize,
-        extra_slots,
-        ops_sealed: flags & BC_FLAG_OPS_SEALED != 0,
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+    let mut function = unsafe {
+        /* SAFETY: ops_sealed may be true only for seal_ops-normalized ops and stack_verified only after verify_stack_effects proved the ops against max_stack and the entry depth */
+        ByteCodeFunction::from_parts(
+            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+            Vec::new(),
+            flags & BC_FLAG_OPS_SEALED != 0,
+            false,
+            constants,
+            StackDepth::try_from(header.max_stack).expect("load-validated stack depth"),
+            params,
+            arglist,
+            flags & BC_FLAG_LEXICAL != 0,
+            (flags & BC_FLAG_HAS_ENV != 0).then(|| word_value(header.env_word)),
+            None,
+            gnu_bytecode_bytes,
+            docstring,
+            (flags & BC_FLAG_HAS_DOC_FORM != 0).then(|| word_value(header.doc_form_word)),
+            (flags & BC_FLAG_HAS_INTERACTIVE != 0).then(|| word_value(header.interactive_word)),
+            header.closure_slot_count as usize,
+            extra_slots,
+        )
     };
     if function.gnu_bytecode_bytes.is_some() {
         function
@@ -2941,12 +2939,11 @@ pub(crate) unsafe fn stub_interactive_probe(
         /* SAFETY: dumped word */
         Value::from_bits(word as usize)
     };
-    crate::emacs_core::value::BytecodeInteractiveProbe {
-        slot_count: count,
-        interactive: (flags & BC_FLAG_HAS_INTERACTIVE != 0)
-            .then(|| word_value(header.interactive_word)),
-        doc_form: (flags & BC_FLAG_HAS_DOC_FORM != 0).then(|| word_value(header.doc_form_word)),
-    }
+    crate::emacs_core::value::BytecodeInteractiveProbe::new(
+        count,
+        (flags & BC_FLAG_HAS_INTERACTIVE != 0).then(|| word_value(header.interactive_word)),
+        (flags & BC_FLAG_HAS_DOC_FORM != 0).then(|| word_value(header.doc_form_word)),
+    )
 }
 
 /// Raw-header check: does a LAZY stub declare a required-only signature?
@@ -4979,39 +4976,38 @@ fn load_bytecode_owned(
             crate::emacs_core::builtins::lambda_params_to_value(params)
         }
     });
-    let mut function = ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-        ops,
-        stack_verified: false,
-        constants: match mapped_constants {
-            Some(mapped) => mapped,
-            None => bc
-                .constants
+    let mut function = unsafe {
+        /* SAFETY: ops_sealed may be true only for seal_ops-normalized ops and stack_verified only after verify_stack_effects proved the ops against max_stack and the entry depth */
+        ByteCodeFunction::from_parts(
+            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+            ops,
+            bc.ops_sealed,
+            false,
+            match mapped_constants {
+                Some(mapped) => mapped,
+                None => bc
+                    .constants
+                    .into_iter()
+                    .map(|value| decoder.load_value_owned(value))
+                    .collect::<Vec<_>>()
+                    .into(),
+            },
+            StackDepth::try_from(bc.max_stack).map_err(DumpError::BytecodeStackDepth)?,
+            params,
+            arglist,
+            bc.lexical,
+            decoder.load_opt_value_owned(bc.env),
+            None,
+            gnu_bytecode_bytes,
+            bc.docstring.map(load_lisp_string_owned),
+            decoder.load_opt_value_owned(bc.doc_form),
+            decoder.load_opt_value_owned(bc.interactive),
+            bc.closure_slot_count,
+            bc.extra_slots
                 .into_iter()
                 .map(|value| decoder.load_value_owned(value))
-                .collect::<Vec<_>>()
-                .into(),
-        },
-        max_stack: StackDepth::try_from(bc.max_stack).map_err(DumpError::BytecodeStackDepth)?,
-        params,
-        arglist,
-        lexical: bc.lexical,
-        env: decoder.load_opt_value_owned(bc.env),
-        gnu_byte_offset_map: None,
-        gnu_bytecode_bytes,
-        docstring: bc.docstring.map(load_lisp_string_owned),
-        doc_form: decoder.load_opt_value_owned(bc.doc_form),
-        interactive: decoder.load_opt_value_owned(bc.interactive),
-        closure_slot_count: bc.closure_slot_count,
-        ops_sealed: bc.ops_sealed,
-        extra_slots: bc
-            .extra_slots
-            .into_iter()
-            .map(|value| decoder.load_value_owned(value))
-            .collect(),
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+                .collect(),
+        )
     };
     if function.gnu_bytecode_bytes.is_some() {
         function.restore_gnu_decode_policy().map_err(|error| {
@@ -5390,11 +5386,11 @@ pub(crate) fn load_symbol_data(
 
     // The writer stores each enum in its own byte; no other flags share
     // these bytes. Reject the full code before constructing runtime flags.
-    let flags = DumpedSymbolFlags {
-        trapped_write: SymbolTrappedWrite::try_from(sd.trapped_write)?,
-        interned: SymbolInterned::try_from(sd.interned)?,
-        declared_special: sd.declared_special,
-    };
+    let flags = DumpedSymbolFlags::new(
+        SymbolTrappedWrite::try_from(sd.trapped_write)?,
+        SymbolInterned::try_from(sd.interned)?,
+        sd.declared_special,
+    );
     Ok(LispSymbol::from_dump(
         sym_id,
         flags,
@@ -5554,11 +5550,7 @@ pub(crate) fn load_obarray(
             };
             let symbol = crate::emacs_core::symbol::LispSymbol::from_dump(
                 sym_id,
-                DumpedSymbolFlags {
-                    trapped_write,
-                    interned,
-                    declared_special,
-                },
+                DumpedSymbolFlags::new(trapped_write, interned, declared_special),
                 cell,
                 unsafe {
                     /* SAFETY: dumped word */
@@ -5707,12 +5699,7 @@ fn load_property_interval(
         .iter()
         .map(|(k, _)| decoder.load_value(k))
         .collect();
-    PropertyInterval {
-        start: pi.start,
-        end: pi.end,
-        properties,
-        key_order,
-    }
+    PropertyInterval::from_parts(pi.start, pi.end, properties, key_order)
 }
 
 // load_undo_record removed — undo state is loaded from buffer-local properties.

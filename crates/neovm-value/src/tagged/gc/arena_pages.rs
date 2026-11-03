@@ -1532,7 +1532,8 @@ impl MappedStringObject {
 /// objects — the GC thread parks a value once per discovered edge, and the
 /// termination's `mark_value` dedups. Diagnostics only.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct DrainKinds {
+#[doc(hidden)]
+pub struct DrainKinds {
     pub string: usize,
     /// Vectors trace concurrently (Stage 2 Tier B scans their BACKINGS), and
     /// since task 01 the GC thread also CLAIMS owned page vectors' header
@@ -1699,7 +1700,8 @@ impl PayloadLayout {
 /// Exact ordinary-cons block occupancy. Mapped pdump conses are reported in
 /// [`MappedLayoutStats`] because they do not consume allocator-backed blocks.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ConsLayoutStats {
+#[doc(hidden)]
+pub struct ConsLayoutStats {
     pub pages: usize,
     pub page_bytes: usize,
     pub capacity_slots: usize,
@@ -1714,7 +1716,8 @@ pub(crate) struct ConsLayoutStats {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct MappedLayoutStats {
+#[doc(hidden)]
+pub struct MappedLayoutStats {
     pub conses: usize,
     pub floats: usize,
     pub strings: usize,
@@ -1727,7 +1730,8 @@ pub(crate) struct MappedLayoutStats {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct BoxedKindLayoutStats {
+#[doc(hidden)]
+pub struct BoxedKindLayoutStats {
     pub class: &'static str,
     pub objects: usize,
     pub tenured_objects: usize,
@@ -1737,7 +1741,8 @@ pub(crate) struct BoxedKindLayoutStats {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct HeapLayoutStats {
+#[doc(hidden)]
+pub struct HeapLayoutStats {
     pub allocated_objects: usize,
     pub managed_live_bytes: usize,
     pub page_backing_bytes: usize,
@@ -1754,7 +1759,8 @@ pub(crate) struct HeapLayoutStats {
 /// across the heap's life, with the eager STW sweep feeding `lifetime_sweep_us`
 /// too so the two sweep paths are comparable.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SweepStats {
+#[doc(hidden)]
+pub struct SweepStats {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub sweep_us: u64,
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1885,7 +1891,8 @@ impl RootSeedBreakdown {
 /// records the context-root breakdown and the context-side probes via
 /// `handshake_stats_mut`.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct HandshakeStats {
+#[doc(hidden)]
+pub struct HandshakeStats {
     // --- START handshake (once per concurrent cycle) ---
     /// Lifetime count of concurrent start handshakes (`concurrent_begin`).
     pub start_count: usize,

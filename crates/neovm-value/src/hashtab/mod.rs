@@ -1026,3 +1026,30 @@ impl HashTestGcInhibitAccounting {
         self.threshold_overridden
     }
 }
+
+impl HashTestGcInhibitAccounting {
+    #[doc(hidden)]
+    pub fn new(
+        bytes_at_start: usize,
+        charged_bytes_at_start: usize,
+        collector_threshold_at_start: usize,
+        threshold_at_start: Option<std::num::NonZeroUsize>,
+        entry_threshold_bytes: usize,
+        entry_percentage_scaled: Option<std::num::NonZeroU64>,
+        threshold_overridden: bool,
+        memory_full: bool,
+        startup_ceiling: bool,
+    ) -> Self {
+        Self {
+            bytes_at_start,
+            charged_bytes_at_start,
+            collector_threshold_at_start,
+            threshold_at_start,
+            entry_threshold_bytes,
+            entry_percentage_scaled,
+            threshold_overridden,
+            memory_full,
+            startup_ceiling,
+        }
+    }
+}

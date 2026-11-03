@@ -6553,42 +6553,27 @@ fn build_byte_code_function(
     };
 
     // 7. Build ByteCodeFunction
-    let mut bc = ByteCodeFunction {
-        source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
-        ops,
-        // Eager instructions came straight from the sealing decoder; the
-        // stack proof is recomputed below once every shape field
-        // (params/lexical/arglist/env/max_stack) is in place. The lazy
-        // policy's `defer_gnu_decode` resets both for its empty `ops`.
-        ops_sealed: true,
-        stack_verified: false,
-        constants: constants.into(),
-        max_stack,
-        params,
-        arglist: *arglist,
-        // GNU byte-code functions use an integer arg descriptor for lexical
-        // bytecode and a list arglist for old dynamically-bound bytecode.
-        lexical: matches!(arglist.kind(), ValueKind::Fixnum(_)),
-        env: None,
-        gnu_byte_offset_map,
-        // Preserve original GNU-format bytes so `(aref FN 1)` returns the
-        // bytecode string.  Required for `byte-compile-make-closure` which
-        // reads the bytes via aref and passes them back to `make-byte-code`
-        // when generating closure prototypes.
-        gnu_bytecode_bytes: Some(raw_bytes),
-        docstring: doc,
-        doc_form,
-        // GNU Emacs (eval.c:2301-2303): "Bytecode objects are interactive if
-        // they are long enough to have an element where the interactive spec
-        // is stored."  The mere PRESENCE of the slot (even if nil) means the
-        // function is interactive.  We mirror this: if the caller provided an
-        // interactive argument at all (even nil), store Some(value).
-        interactive: interactive.copied(),
-        closure_slot_count,
-        extra_slots: extra_slots.to_vec(),
-        #[cfg(feature = "jit")]
-        runtime: Some(crate::emacs_core::jit::Runtime::new()),
-        lazy_gnu_code: None,
+    let mut bc = unsafe {
+        /* SAFETY: ops_sealed may be true only for seal_ops-normalized ops and stack_verified only after verify_stack_effects proved the ops against max_stack and the entry depth */
+        ByteCodeFunction::from_parts(
+            crate::emacs_core::bytecode::fresh_bytecode_source_id(),
+            ops,
+            true,
+            false,
+            constants.into(),
+            max_stack,
+            params,
+            *arglist,
+            matches!(arglist.kind(), ValueKind::Fixnum(_)),
+            None,
+            gnu_byte_offset_map,
+            Some(raw_bytes),
+            doc,
+            doc_form,
+            interactive.copied(),
+            closure_slot_count,
+            extra_slots.to_vec(),
+        )
     };
     match timing {
         GnuDecodeTiming::Deferred => {

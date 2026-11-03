@@ -35,7 +35,8 @@ pub(crate) struct StoreWindows {
 /// installed, and in detached storage before installation/after retirement.
 /// Migration is cold, with no Lisp callback or outstanding store reference.
 #[repr(C)]
-pub(crate) struct StoreState {
+#[doc(hidden)]
+pub struct StoreState {
     pub(crate) mutator: MutatorStoreState,
     pub(crate) windows: StoreWindows,
     pub(crate) heap: Cell<*mut TaggedHeap>,

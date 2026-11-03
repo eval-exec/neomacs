@@ -14,18 +14,18 @@ impl ThreadManager {
             heap.alloc_thread(ThreadPayload::new(
                 main,
                 ThreadNativeState::new(ThreadPhase::Active(RunState::Running), None),
-                ThreadChildren {
-                    name: crate::heap_types::threading::ThreadName::UNNAMED,
-                    function: Value::NIL,
-                    result: Value::NIL,
-                    last_error: None,
-                    buffer_disposition: Value::NIL,
-                    event_object: Value::NIL,
-                    error_symbol: Value::NIL,
-                    error_data: Value::NIL,
-                    blocked_remaining_forms: Value::NIL,
-                    stored_events: Vec::new(),
-                },
+                ThreadChildren::new(
+                    crate::heap_types::threading::ThreadName::UNNAMED,
+                    Value::NIL,
+                    Value::NIL,
+                    None,
+                    Value::NIL,
+                    Value::NIL,
+                    Value::NIL,
+                    Value::NIL,
+                    Value::NIL,
+                    Vec::new(),
+                ),
             ))
         });
         let mut threads = HashMap::new();
@@ -51,18 +51,18 @@ impl ThreadManager {
             heap.alloc_thread(ThreadPayload::new(
                 id,
                 ThreadNativeState::new(ThreadPhase::New, None),
-                ThreadChildren {
-                    name: name.0,
+                ThreadChildren::new(
+                    name.0,
                     function,
-                    result: Value::NIL,
-                    last_error: None,
-                    buffer_disposition: Value::NIL,
-                    event_object: Value::NIL,
-                    error_symbol: Value::NIL,
-                    error_data: Value::NIL,
-                    blocked_remaining_forms: Value::NIL,
-                    stored_events: Vec::new(),
-                },
+                    Value::NIL,
+                    None,
+                    Value::NIL,
+                    Value::NIL,
+                    Value::NIL,
+                    Value::NIL,
+                    Value::NIL,
+                    Vec::new(),
+                ),
             ))
         });
         // Allocation does not collect. Publish before the next Lisp safe point.
@@ -557,11 +557,7 @@ impl ThreadManager {
     pub(crate) fn create_mutex(&mut self, name: Option<LispString>) -> Result<MutexHandle, Flow> {
         let id = self.ids.issue_mutex().map_err(identity_exhausted)?;
         let value = with_tagged_heap(|heap| {
-            heap.alloc_mutex(MutexPayload {
-                id,
-                name,
-                ownership: MutexOwnership::Unlocked,
-            })
+            heap.alloc_mutex(MutexPayload::new(id, name, MutexOwnership::Unlocked))
         });
         Ok(MutexHandle { value, id })
     }

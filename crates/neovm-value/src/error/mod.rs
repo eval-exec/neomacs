@@ -435,14 +435,16 @@ impl InFlightPinned for ThreadBlockedData {
 /// through GNU's allocation-exhaustion delivery. This copied witness is
 /// confined to its mutator; SignalData pins the object while it is in flight.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct MemorySignalBinding {
+#[doc(hidden)]
+pub struct MemorySignalBinding {
     original: Value,
     symbol: SymId,
     tail: Value,
 }
 
 #[derive(Clone, Copy, Debug, thiserror::Error)]
-pub(crate) enum MemorySignalBindingError {
+#[doc(hidden)]
+pub enum MemorySignalBindingError {
     #[error("memory-signal-data is not a cons")]
     NotCons,
     #[error("memory-signal-data has a non-symbol condition")]

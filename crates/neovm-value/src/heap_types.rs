@@ -2065,3 +2065,27 @@ impl OverlayData {
         &mut self.position_handle
     }
 }
+
+impl OverlayData {
+    #[doc(hidden)]
+    pub fn new(
+        serial: OverlaySerial,
+        plist: crate::tagged::value::TaggedValue,
+        buffer: Option<BufferId>,
+        start: usize,
+        end: usize,
+        front_advance: bool,
+        rear_advance: bool,
+    ) -> Self {
+        Self {
+            serial,
+            plist,
+            buffer,
+            start,
+            end,
+            front_advance,
+            rear_advance,
+            position_handle: None,
+        }
+    }
+}

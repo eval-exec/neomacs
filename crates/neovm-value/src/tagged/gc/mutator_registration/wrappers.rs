@@ -28,15 +28,36 @@ pub(crate) struct ProofEra<'heap, K: EraKeeper> {
 
 /// Finish refusal preserves the production admission and its exact evidence.
 #[must_use]
-pub(crate) struct EraFinishFailure<'heap, K: EraKeeper> {
+#[doc(hidden)]
+pub struct EraFinishFailure<'heap, K: EraKeeper> {
     pub(crate) reason: RegistrationError,
     pub(crate) era: ParallelHeapEra<'heap, K>,
 }
 #[cfg(test)]
 #[must_use]
-pub(crate) struct ProofEraFinishFailure<'heap, K: EraKeeper> {
+#[doc(hidden)]
+pub struct ProofEraFinishFailure<'heap, K: EraKeeper> {
     pub(crate) reason: RegistrationError,
     pub(crate) era: ProofEra<'heap, K>,
+}
+
+impl<'heap, K: EraKeeper> EraFinishFailure<'heap, K> {
+    /// SEAL: observe the finish refusal reason (Copy).
+    #[inline]
+    #[doc(hidden)]
+    pub fn reason(&self) -> RegistrationError {
+        self.reason
+    }
+}
+
+#[cfg(test)]
+impl<'heap, K: EraKeeper> ProofEraFinishFailure<'heap, K> {
+    /// SEAL: observe the finish refusal reason (Copy).
+    #[inline]
+    #[doc(hidden)]
+    pub fn reason(&self) -> RegistrationError {
+        self.reason
+    }
 }
 
 impl<'heap, K: EraKeeper> ParallelHeapEra<'heap, K> {
@@ -263,7 +284,8 @@ macro_rules! era_operations {
             /// The upper adapter must supply the complete CURRENT World root
             /// walk of the retained keeper, including stable marker head slots.
             /// No root or reference may escape its real stopped authority.
-            pub(crate) unsafe fn collect_stopped_with(
+            #[doc(hidden)]
+            pub unsafe fn collect_stopped_with(
                 &self,
                 stopped: &mut AllStopped<'_>,
                 roots: impl FnOnce(
@@ -282,7 +304,8 @@ macro_rules! era_operations {
             /// # Safety
             /// Same complete CURRENT World census as collect_stopped_with.
             /// GEN0 still refuses before invoking the supplied walk.
-            pub(crate) unsafe fn collect_stopped_minor_with(
+            #[doc(hidden)]
+            pub unsafe fn collect_stopped_minor_with(
                 &self,
                 stopped: &mut AllStopped<'_>,
                 roots: impl FnOnce(
@@ -335,9 +358,8 @@ macro_rules! era_operations {
                 self.core.rendezvous()
             }
 
-            pub(crate) fn finish(
-                self,
-            ) -> Result<(QuiescentCollector<'heap>, K), $failure<'heap, K>> {
+            #[doc(hidden)]
+            pub fn finish(self) -> Result<(QuiescentCollector<'heap>, K), $failure<'heap, K>> {
                 let Self { core, witness } = self;
                 core.finish().map_err(|failure| $failure {
                     reason: failure.reason,

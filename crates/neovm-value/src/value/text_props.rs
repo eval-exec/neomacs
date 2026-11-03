@@ -5638,3 +5638,20 @@ impl PropertyInterval {
         &self.key_order
     }
 }
+
+impl PropertyInterval {
+    #[doc(hidden)]
+    pub fn from_parts(
+        start: usize,
+        end: usize,
+        properties: HashMap<Value, Value>,
+        key_order: Vec<Value>,
+    ) -> Self {
+        Self {
+            start,
+            end,
+            properties,
+            key_order,
+        }
+    }
+}

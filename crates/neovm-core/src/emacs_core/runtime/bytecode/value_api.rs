@@ -268,11 +268,11 @@ impl TaggedValueBytecodeExt for TaggedValue {
                 crate::emacs_core::pdump::stub_interactive_probe(ptr, data.closure_slot_count)
             });
         }
-        Some(BytecodeInteractiveProbe {
-            slot_count: data.observable_closure_slot_count(),
-            interactive: data.interactive,
-            doc_form: data.doc_form,
-        })
+        Some(BytecodeInteractiveProbe::new(
+            data.observable_closure_slot_count(),
+            data.interactive,
+            data.doc_form,
+        ))
     }
 }
 

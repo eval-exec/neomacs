@@ -222,7 +222,8 @@ impl TaggedHeap {
 /// Minor admission belongs to the serialized, stopped heap owner. Residual
 /// major marking must finish before a new cycle may reset any collector state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum MinorCollectionAdmissionError {
+#[doc(hidden)]
+pub enum MinorCollectionAdmissionError {
     #[error("the heap has unfinished collector work")]
     CollectorBusy,
     #[error("minor collection requires the generational collector")]

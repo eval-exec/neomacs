@@ -255,7 +255,8 @@ pub struct OrderedShiftTree<R: OrderedShiftRecord> {
 }
 
 impl<R: OrderedShiftRecord> OrderedShiftTree<R> {
-    pub(crate) fn filter_mask(&self) -> OrderedFilterMask {
+    #[doc(hidden)]
+    pub fn filter_mask(&self) -> OrderedFilterMask {
         self.root
             .map(|root| self.summary(root).filter_mask)
             .unwrap_or(OrderedFilterMask::EMPTY)

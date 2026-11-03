@@ -856,7 +856,8 @@ impl LispSymbol {
 
     /// The target of a `Varalias` cell; `None` for every other redirect.
     #[inline(always)]
-    pub(crate) fn alias_target(&self) -> Option<SymId> {
+    #[doc(hidden)]
+    pub fn alias_target(&self) -> Option<SymId> {
         match self.flags.redirect() {
             SymbolRedirect::Varalias => Some(self.val.read_alias()),
             SymbolRedirect::Plainval | SymbolRedirect::Localized | SymbolRedirect::Forwarded => {
@@ -1410,3 +1411,18 @@ pub(super) fn read_symbol_children<const MAJOR: bool>(
 #[cfg(test)]
 #[path = "tests/cell_test.rs"]
 mod tests;
+
+impl DumpedSymbolFlags {
+    #[doc(hidden)]
+    pub fn new(
+        trapped_write: SymbolTrappedWrite,
+        interned: SymbolInterned,
+        declared_special: bool,
+    ) -> Self {
+        Self {
+            trapped_write,
+            interned,
+            declared_special,
+        }
+    }
+}

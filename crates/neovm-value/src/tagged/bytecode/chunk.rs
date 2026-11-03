@@ -77,6 +77,56 @@ impl LazyGnuCode {
     pub fn decoded_ready(&self) -> Option<&DecodedGnuCode> {
         self.decoded.get()
     }
+
+    /// SEAL read: the published decoded payload, if any.
+    #[inline]
+    #[doc(hidden)]
+    pub fn decoded(&self) -> Option<&DecodedGnuCode> {
+        self.decoded.get()
+    }
+
+    /// SEAL read: the published stack proof, if any.
+    #[inline]
+    #[doc(hidden)]
+    pub fn proof(&self) -> Option<&StackProof> {
+        self.proof.get()
+    }
+
+    /// SEAL read: the published iterative admission range, if any.
+    #[inline]
+    #[doc(hidden)]
+    pub fn iterative_admission(&self) -> Option<&Option<IterativeArgRange>> {
+        self.iterative_admission.get()
+    }
+
+    /// SEAL: publish decoded + proof together in the existing order.
+    ///
+    /// # Safety
+    /// the returned StackProof is the verifier's result for exactly the
+    /// returned ops.
+    #[doc(hidden)]
+    pub unsafe fn decoded_or_init_with(
+        &self,
+        init: impl FnOnce() -> (DecodedGnuCode, StackProof),
+    ) -> &DecodedGnuCode {
+        self.decoded.get_or_init(|| {
+            let (decoded, proof) = init();
+            let _ = self.proof.set(proof);
+            decoded
+        })
+    }
+
+    /// SEAL: set-once iterative admission proof.
+    ///
+    /// # Safety
+    /// Some(range) only when the upper admission analysis proved sealed +
+    /// verified ops, no rest param, and nonrest <= max_stack <=
+    /// ITERATIVE_FRAME_LIMIT for this source; None (refusal) is always
+    /// allowed.
+    #[doc(hidden)]
+    pub unsafe fn init_iterative_admission(&self, range: Option<IterativeArgRange>) {
+        let _ = self.iterative_admission.set(range);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -119,7 +169,8 @@ pub enum ByteCodeStructuralPart<'a> {
 }
 
 /// Allocation-free iterator over a byte-code function's structural evidence.
-pub(crate) struct ByteCodeStructuralParts<'a> {
+#[doc(hidden)]
+pub struct ByteCodeStructuralParts<'a> {
     pub(crate) fixed: std::array::IntoIter<ByteCodeStructuralPart<'a>, 8>,
     pub(crate) extras: std::slice::Iter<'a, Value>,
 }
@@ -245,8 +296,16 @@ pub fn fresh_bytecode_source_id() -> u64 {
 }
 
 impl IterativeArgRange {
+    /// PC1-D constructor for the upper admission analysis.
+    #[inline]
+    #[doc(hidden)]
+    pub const fn new(required: u16, nonrest: u16) -> Self {
+        Self { required, nonrest }
+    }
+
     #[inline(always)]
-    pub(crate) fn accepts(self, nargs: usize) -> bool {
+    #[doc(hidden)]
+    pub fn accepts(self, nargs: usize) -> bool {
         let required = usize::from(self.required);
         let nonrest = usize::from(self.nonrest);
         // Installation proved required <= nonrest <= u16::MAX.
@@ -625,18 +684,13 @@ impl ByteCodeFunction {
     pub fn lazy_gnu_code(&self) -> &Option<std::sync::Arc<LazyGnuCode>> {
         &self.lazy_gnu_code
     }
-    #[doc(hidden)]
-    pub fn install_fresh_lazy_gnu_code(&mut self, code: std::sync::Arc<LazyGnuCode>) {
-        debug_assert!(self.lazy_gnu_code.is_none());
-        self.lazy_gnu_code = Some(code);
-    }
     #[inline]
     #[doc(hidden)]
     pub fn ops_sealed(&self) -> bool {
         self.ops_sealed
     }
     /// # Safety
-    /// only immediately after seal_ops / verify_stack_effects succeeded on these exact ops.
+    /// `seal_ops` succeeded on exactly `self.ops`.
     #[doc(hidden)]
     pub unsafe fn mark_ops_sealed(&mut self) {
         self.ops_sealed = true;
@@ -674,14 +728,23 @@ impl ByteCodeFunction {
         self.stack_verified
     }
     /// # Safety
-    /// only immediately after seal_ops / verify_stack_effects succeeded on these exact ops.
+    /// `verified` may be true only when `verify_stack_effects` proved
+    /// `self.ops` at the verifier entry depth.
     #[doc(hidden)]
-    pub unsafe fn mark_stack_verified(&mut self) {
-        self.stack_verified = true;
+    pub unsafe fn set_stack_verified(&mut self, verified: bool) {
+        self.stack_verified = verified;
     }
+    /// Reset the deferred-GNU flags and install a fresh lazy cell.
     #[doc(hidden)]
-    pub fn clear_stack_verified(&mut self) {
+    pub fn reset_to_deferred_gnu(&mut self) {
+        self.ops_sealed = false;
         self.stack_verified = false;
+        self.lazy_gnu_code = Some(std::sync::Arc::new(LazyGnuCode::new()));
+    }
+    /// Clear the lazy decode cell (deferred restore).
+    #[doc(hidden)]
+    pub fn clear_lazy_gnu_code(&mut self) {
+        self.lazy_gnu_code = None;
     }
 }
 
@@ -700,5 +763,68 @@ impl DecodedGnuCode {
     #[doc(hidden)]
     pub fn stack_verified(&self) -> bool {
         self.stack_verified
+    }
+}
+
+impl ByteCodeFunction {
+    /// # Safety
+    /// ops_sealed may be true only for seal_ops-normalized ops and stack_verified only after verify_stack_effects proved the ops against max_stack and the entry depth.
+    #[doc(hidden)]
+    pub unsafe fn from_parts(
+        source_id: u64,
+        ops: Vec<Op>,
+        ops_sealed: bool,
+        stack_verified: bool,
+        constants: crate::tagged::header::LispValueVec,
+        max_stack: StackDepth,
+        params: FunctionParams,
+        arglist: Value,
+        lexical: bool,
+        env: Option<Value>,
+        gnu_byte_offset_map: Option<Vec<GnuByteOffsetMapEntry>>,
+        gnu_bytecode_bytes: Option<crate::tagged::header::LispByteVec>,
+        docstring: Option<LispString>,
+        doc_form: Option<Value>,
+        interactive: Option<Value>,
+        closure_slot_count: usize,
+        extra_slots: Vec<Value>,
+    ) -> Self {
+        Self {
+            source_id,
+            ops,
+            ops_sealed,
+            stack_verified,
+            constants,
+            max_stack,
+            params,
+            arglist,
+            lexical,
+            env,
+            gnu_byte_offset_map,
+            gnu_bytecode_bytes,
+            docstring,
+            doc_form,
+            interactive,
+            closure_slot_count,
+            extra_slots,
+            #[cfg(feature = "jit")]
+            runtime: Some(Runtime::new()),
+            lazy_gnu_code: None,
+        }
+    }
+}
+
+impl DecodedGnuCode {
+    #[doc(hidden)]
+    pub fn new(
+        ops: Vec<Op>,
+        byte_offset_map: Vec<GnuByteOffsetMapEntry>,
+        stack_verified: bool,
+    ) -> Self {
+        Self {
+            ops,
+            byte_offset_map,
+            stack_verified,
+        }
     }
 }

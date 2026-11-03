@@ -45,7 +45,7 @@ impl<'heap> OwnedParallelProjection<'heap> {
         self,
     ) -> Result<(QuiescentCollector<'heap>, super::Baton), OwnedParallelError> {
         self.era.finish().map_err(|failure| {
-            let reason = map_registration(failure.reason);
+            let reason = map_registration(failure.reason());
             drop(failure);
             reason
         })
@@ -70,7 +70,7 @@ impl<'heap> OwnedProofProjection<'heap> {
         self,
     ) -> Result<(QuiescentCollector<'heap>, super::Baton), OwnedParallelError> {
         self.era.finish().map_err(|failure| {
-            let reason = map_registration(failure.reason);
+            let reason = map_registration(failure.reason());
             drop(failure);
             reason
         })

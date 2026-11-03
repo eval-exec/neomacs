@@ -36,7 +36,8 @@ impl StackProof {
 
     /// The pre-resolved instruction index of an admitted jump-table value.
     #[inline]
-    pub(crate) fn switch_target(&self, raw: i64) -> Option<usize> {
+    #[doc(hidden)]
+    pub fn switch_target(&self, raw: i64) -> Option<usize> {
         self.switch_targets
             .binary_search_by_key(&raw, |entry| entry.0)
             .ok()
@@ -45,9 +46,34 @@ impl StackProof {
 
     /// Whether instruction `pc` is proven at operand depth `depth`.
     #[inline]
-    pub(crate) fn proves_depth(&self, pc: usize, depth: usize) -> bool {
+    #[doc(hidden)]
+    pub fn proves_depth(&self, pc: usize, depth: usize) -> bool {
         self.depths
             .get(pc)
             .is_some_and(|&proven| proven != Self::UNREACHABLE && proven as usize == depth)
+    }
+
+    /// Read-only operand depth of an admitted jump-table value.
+    #[inline]
+    #[doc(hidden)]
+    pub fn switch_depth(&self) -> Option<usize> {
+        self.switch_depth
+    }
+}
+
+impl StackProof {
+    /// # Safety
+    /// the proof must be the verifier's result for exactly these ops.
+    #[doc(hidden)]
+    pub unsafe fn from_parts(
+        switch_depth: Option<usize>,
+        switch_targets: Box<[(i64, u32)]>,
+        depths: Vec<u32>,
+    ) -> Self {
+        Self {
+            switch_depth,
+            switch_targets,
+            depths,
+        }
     }
 }

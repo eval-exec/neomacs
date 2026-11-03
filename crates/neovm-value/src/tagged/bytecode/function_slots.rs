@@ -338,3 +338,21 @@ impl StackParamShape {
         self.rest
     }
 }
+
+impl StackParamShape {
+    #[doc(hidden)]
+    pub fn new(required: usize, nonrest: usize, rest: RestSlot) -> Self {
+        Self {
+            required,
+            nonrest,
+            rest,
+        }
+    }
+}
+
+impl FormalMarkers {
+    #[doc(hidden)]
+    pub fn new(optional: SymId, rest: SymId) -> Self {
+        Self { optional, rest }
+    }
+}

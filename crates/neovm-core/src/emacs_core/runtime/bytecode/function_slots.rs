@@ -63,11 +63,11 @@ impl ArgTemplateExt for ArgTemplate {
         if !(0..COMPACT_LIMIT).contains(&self.field_0()) {
             return wide_call_shape(self, nargs);
         }
-        let shape = StackParamShape {
-            required: self.mandatory(),
-            nonrest: (self.field_0() >> 8) as usize,
-            rest: self.rest(),
-        };
+        let shape = StackParamShape::new(
+            self.mandatory(),
+            (self.field_0() >> 8) as usize,
+            self.rest(),
+        );
         if shape.required_ref() <= nargs
             && (shape.rest_ref().is_present() || nargs <= shape.nonrest_ref())
         {
@@ -81,11 +81,7 @@ impl ArgTemplateExt for ArgTemplate {
     fn stack_shape(self) -> Result<StackParamShape, ParamShapeError> {
         let nonrest = usize::try_from(self.nonrest())
             .map_err(|_| ParamShapeError::NonRest(self.nonrest()))?;
-        let shape = StackParamShape {
-            required: self.mandatory(),
-            nonrest,
-            rest: self.rest(),
-        };
+        let shape = StackParamShape::new(self.mandatory(), nonrest, self.rest());
         shape.entry_depth()?;
         Ok(shape)
     }
@@ -150,9 +146,11 @@ impl FormalMarkersExt for FormalMarkers {
     #[inline]
     fn canonical() -> Self {
         static MARKERS: std::sync::OnceLock<FormalMarkers> = std::sync::OnceLock::new();
-        *MARKERS.get_or_init(|| Self {
-            optional: crate::emacs_core::intern::intern("&optional"),
-            rest: crate::emacs_core::intern::intern("&rest"),
+        *MARKERS.get_or_init(|| {
+            Self::new(
+                crate::emacs_core::intern::intern("&optional"),
+                crate::emacs_core::intern::intern("&rest"),
+            )
         })
     }
 
@@ -308,22 +306,20 @@ impl FunctionParamsExt for FunctionParams {
     fn stack_shape(&self) -> Option<StackParamShape> {
         match self {
             Self::Stack(template) => template.stack_shape().ok(),
-            Self::Dynamic(args) if args.value().is_nil() => Some(StackParamShape {
-                required: 0,
-                nonrest: 0,
-                rest: RestSlot::Absent,
-            }),
+            Self::Dynamic(args) if args.value().is_nil() => {
+                Some(StackParamShape::new(0, 0, RestSlot::Absent))
+            }
             Self::Dynamic(_) => None,
             Self::Named(params) => {
-                let shape = StackParamShape {
-                    required: params.required.len(),
-                    nonrest: params.required.len().checked_add(params.optional.len())?,
-                    rest: if params.rest.is_some() {
+                let shape = StackParamShape::new(
+                    params.required.len(),
+                    params.required.len().checked_add(params.optional.len())?,
+                    if params.rest.is_some() {
                         RestSlot::Present
                     } else {
                         RestSlot::Absent
                     },
-                };
+                );
                 shape.entry_depth().ok()?;
                 Some(shape)
             }

@@ -522,10 +522,9 @@ pub(crate) fn verify_stack_effects_with_tables(
     };
     switch_targets.sort_unstable();
     switch_targets.dedup_by_key(|entry| entry.0);
-    Some(StackProof {
-        switch_depth,
-        switch_targets: switch_targets.into_boxed_slice(),
-        depths,
+    Some(unsafe {
+        /* SAFETY: the proof must be the verifier's result for exactly these ops */
+        StackProof::from_parts(switch_depth, switch_targets.into_boxed_slice(), depths)
     })
 }
 

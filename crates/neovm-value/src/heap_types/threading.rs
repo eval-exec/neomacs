@@ -22,12 +22,14 @@ macro_rules! native_id {
         }
 
         impl $name {
-            pub(crate) const fn heap_identity(self) -> HeapIdentity {
+            #[doc(hidden)]
+            pub const fn heap_identity(self) -> HeapIdentity {
                 self.heap
             }
 
             /// Conversion only for the existing scheduler/native-key boundary.
-            pub(crate) const fn native_key(self) -> u64 {
+            #[doc(hidden)]
+            pub const fn native_key(self) -> u64 {
                 self.ordinal
             }
         }
@@ -94,7 +96,8 @@ impl ThreadIds {
     #[doc(hidden)]
     pub const NEXT_THREAD_OFFSET: usize = std::mem::offset_of!(Self, next_thread);
 
-    pub(crate) fn new(heap: HeapIdentity) -> Self {
+    #[doc(hidden)]
+    pub fn new(heap: HeapIdentity) -> Self {
         Self {
             heap,
             next_mutex: Some(NonZeroU64::MIN),
@@ -191,7 +194,8 @@ impl ThreadIds {
 pub struct ThreadName(TaggedValue);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct InvalidThreadName;
+#[doc(hidden)]
+pub struct InvalidThreadName;
 
 impl ThreadName {
     #[doc(hidden)]
@@ -354,7 +358,8 @@ impl ThreadPayload {
         }
     }
 
-    pub(crate) const fn id(&self) -> ThreadId {
+    #[doc(hidden)]
+    pub const fn id(&self) -> ThreadId {
         self.id
     }
 
@@ -540,7 +545,8 @@ impl MutexReference {
         })
     }
 
-    pub(crate) const fn id(self) -> MutexId {
+    #[doc(hidden)]
+    pub const fn id(self) -> MutexId {
         self.id
     }
 
@@ -560,7 +566,8 @@ pub struct CondVarPayload {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("condition variable and mutex belong to different heaps")]
-pub(crate) struct ForeignMutexAssociation;
+#[doc(hidden)]
+pub struct ForeignMutexAssociation;
 
 impl CondVarPayload {
     #[doc(hidden)]
@@ -813,5 +820,45 @@ impl MutexPayload {
     #[doc(hidden)]
     pub fn id(&self) -> MutexId {
         self.id
+    }
+}
+
+impl ThreadChildren {
+    #[doc(hidden)]
+    pub fn new(
+        name: ThreadName,
+        function: TaggedValue,
+        result: TaggedValue,
+        last_error: Option<TaggedValue>,
+        buffer_disposition: TaggedValue,
+        event_object: TaggedValue,
+        error_symbol: TaggedValue,
+        error_data: TaggedValue,
+        blocked_remaining_forms: TaggedValue,
+        stored_events: Vec<StoredThreadEvent>,
+    ) -> Self {
+        Self {
+            name,
+            function,
+            result,
+            last_error,
+            buffer_disposition,
+            event_object,
+            error_symbol,
+            error_data,
+            blocked_remaining_forms,
+            stored_events,
+        }
+    }
+}
+
+impl MutexPayload {
+    #[doc(hidden)]
+    pub fn new(id: MutexId, name: Option<LispString>, ownership: MutexOwnership) -> Self {
+        Self {
+            id,
+            name,
+            ownership,
+        }
     }
 }

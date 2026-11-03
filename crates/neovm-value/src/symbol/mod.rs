@@ -127,7 +127,8 @@ pub enum LocalizedForwarderKind {
 /// The dump loader wraps this into its own deserialization error; the message
 /// text is the one the pdump layer has always reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ObarrayRestoreError {
+#[doc(hidden)]
+pub enum ObarrayRestoreError {
     GlobalMemberMissingSlot(SymId),
     FunctionUnboundMissingSlot(SymId),
 }
@@ -1450,7 +1451,8 @@ struct ObarrayScanEntry {
 
 static_assertions::assert_not_impl_any!(ObarrayScanEntry: Send, Sync);
 
-pub(crate) struct ObarrayScanSnapshot {
+#[doc(hidden)]
+pub struct ObarrayScanSnapshot {
     /// (slots-array base ptr, chunk seqlock ptr) for each chunk present at start.
     chunks: Vec<ObarrayScanEntry>,
     /// Logical live-slot count at start (so the scan covers slots [0, n_slots)).
