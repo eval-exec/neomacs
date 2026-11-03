@@ -575,6 +575,14 @@ impl RenderApp {
         if let Some(tooltip_deadline) = self.menus.tooltip_deadline() {
             deadline = Some(deadline.map_or(tooltip_deadline, |d| d.min(tooltip_deadline)));
         }
+        // A deferred Cmd-Q must not wait for an unrelated event to wake the
+        // loop: keep a bounded retry deadline until the queue has room.
+        #[cfg(target_os = "macos")]
+        if super::macos_quit_redirect::quit_is_pending() {
+            const QUIT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+            let quit_retry = std::time::Instant::now() + QUIT_RETRY_INTERVAL;
+            deadline = Some(deadline.map_or(quit_retry, |d| d.min(quit_retry)));
+        }
         match deadline {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
