@@ -196,8 +196,8 @@ pub(crate) fn builtin_make_local_variable(
     // this buffer already has). `setq-local` on flush paths calls this per
     // keystroke — the full re-localization walk was 7.6K Ir per call.
     if ctx.obarray.is_localized(resolved)
-        && let Some(buf_id) = ctx.buffers.current_buffer_id()
-        && let Some(buf) = ctx.buffers.get(buf_id)
+        && let Some(buf_id) = ctx.edit.buffers.current_buffer_id()
+        && let Some(buf) = ctx.edit.buffers.get(buf_id)
         && buf.has_buffer_local_by_sym_id(resolved)
     {
         return Ok(args[0]);
@@ -230,8 +230,8 @@ pub(crate) fn builtin_make_local_variable(
                 // the variable it projects.
                 return make_projected_variable_local(ctx, resolved, args);
             };
-            if let Some(buf_id) = ctx.buffers.current_buffer_id()
-                && let Some(buf) = ctx.buffers.get_mut(buf_id)
+            if let Some(buf_id) = ctx.edit.buffers.current_buffer_id()
+                && let Some(buf) = ctx.edit.buffers.get_mut(buf_id)
             {
                 buf.set_slot_local_flag(slot, true);
             }
@@ -258,7 +258,7 @@ pub(crate) fn builtin_make_local_variable(
         .unwrap_or(Value::UNBOUND);
     ctx.obarray.make_symbol_localized(resolved, default_value);
     ctx.mark_user_test_gc_settings_volatile_if_gc_symbol(resolved);
-    if let Some(current_id) = ctx.buffers.current_buffer_id() {
+    if let Some(current_id) = ctx.edit.buffers.current_buffer_id() {
         let current_buf = Value::make_buffer(current_id);
         // GNU `Fmake_local_variable` calls `swap_in_global_binding`
         // before consing the new `(sym . val)` alist entry when the
@@ -266,7 +266,7 @@ pub(crate) fn builtin_make_local_variable(
         // cannot expose or retarget the BLV's forwarded debugger descriptor.
         ctx.obarray
             .reset_blv_cache_for_buffer(resolved, current_buf);
-        if let Some(buf) = ctx.buffers.get_mut(current_id) {
+        if let Some(buf) = ctx.edit.buffers.get_mut(current_id) {
             // Only seed when no entry exists yet (idempotent — calling
             // make-local-variable twice doesn't double-prepend).
             if !buf.has_buffer_local_by_sym_id(resolved) {
@@ -317,9 +317,9 @@ pub(crate) fn builtin_local_variable_p(
     let resolved_id = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, sym_id)?;
     let buf = if args.len() > 1 {
         match args[1].kind() {
-            ValueKind::Nil => ctx.buffers.current_buffer(),
+            ValueKind::Nil => ctx.edit.buffers.current_buffer(),
             ValueKind::Veclike(VecLikeType::Buffer) => {
-                ctx.buffers.get(args[1].as_buffer_id().unwrap())
+                ctx.edit.buffers.get(args[1].as_buffer_id().unwrap())
             }
             _other => {
                 return Err(signal(
@@ -329,7 +329,7 @@ pub(crate) fn builtin_local_variable_p(
             }
         }
     } else {
-        ctx.buffers.current_buffer()
+        ctx.edit.buffers.current_buffer()
     };
 
     let Some(b) = buf else {
@@ -370,11 +370,13 @@ pub(crate) fn builtin_buffer_local_variables(
 
     let id = match args.first() {
         None => ctx
+            .edit
             .buffers
             .current_buffer()
             .map(|b| b.id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         Some(v) if v.is_nil() => ctx
+            .edit
             .buffers
             .current_buffer()
             .map(|b| b.id)
@@ -404,7 +406,7 @@ pub(crate) fn builtin_buffer_local_variables(
     // Returning nil would be the wrong repair.  GNU's answer is a non-empty
     // alist; nil would convert a loud divergence into a quiet one.
     let killed_buffer_defaults;
-    let buf = match ctx.buffers.get(id) {
+    let buf = match ctx.edit.buffers.get(id) {
         Some(buf) => buf,
         None => {
             // The name is not part of the answer -- `buffer-local-variables`
@@ -440,17 +442,19 @@ fn buffer_arg_or_current(
 ) -> Result<BufferId, Flow> {
     match arg {
         None => ctx
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
         Some(value) => match value.kind() {
             ValueKind::Nil => ctx
+                .edit
                 .buffers
                 .current_buffer_id()
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
             ValueKind::Veclike(VecLikeType::Buffer) => {
                 let id = value.as_buffer_id().expect("buffer value has id");
-                if ctx.buffers.get(id).is_some() {
+                if ctx.edit.buffers.get(id).is_some() {
                     Ok(id)
                 } else {
                     Err(signal(
@@ -559,7 +563,7 @@ pub(crate) fn builtin_set_buffer_local_toplevel_value(
         return Ok(Value::NIL);
     }
 
-    let saved_current = ctx.buffers.current_buffer_id();
+    let saved_current = ctx.edit.buffers.current_buffer_id();
     let switched = saved_current != Some(buffer_id);
     if switched {
         ctx.set_current_buffer_unrecorded(buffer_id)?;
@@ -633,7 +637,7 @@ pub(crate) fn builtin_kill_local_variable_impl(
     let resolved = super::builtins::resolve_variable_alias_id_in_obarray(&ctx.obarray, symbol)?;
     let resolved_name = resolve_sym(resolved);
     let mut removed = false;
-    let buffer_id = ctx.buffers.current_buffer_id();
+    let buffer_id = ctx.edit.buffers.current_buffer_id();
 
     // GNU `Fkill_local_variable` handles SYMBOL_FORWARDED BUFFER_OBJFWD
     // variables before watcher notification (`data.c:2328-2345`):
@@ -657,10 +661,10 @@ pub(crate) fn builtin_kill_local_variable_impl(
         };
         if let Some((info, slot)) = forwarded_slot {
             let offset = slot.index();
-            let default_value = ctx.buffers.buffer_defaults.get(offset).copied();
+            let default_value = ctx.edit.buffers.buffer_defaults.get(offset).copied();
             if info.local_flags_idx >= 0
                 && let Some(buffer_id) = buffer_id
-                && let Some(buf) = ctx.buffers.get_mut(buffer_id)
+                && let Some(buf) = ctx.edit.buffers.get_mut(buffer_id)
             {
                 buf.set_slot_local_flag(slot, false);
                 if let Some(default_value) = default_value {
@@ -713,11 +717,12 @@ pub(crate) fn builtin_kill_local_variable_impl(
             ctx.obarray.reset_blv_cache_to_default(resolved);
             // Walk the buffer's alist and remove any (sym . val)
             // pair. Returns whether anything was removed.
-            if let Some(buf) = ctx.buffers.get_mut(buffer_id) {
+            if let Some(buf) = ctx.edit.buffers.get_mut(buffer_id) {
                 removed = buf.kill_buffer_local_by_sym_id(resolved).is_some();
             }
         } else {
             removed = ctx
+                .edit
                 .buffers
                 .remove_buffer_local_property(buffer_id, resolved_name)
                 .flatten()

@@ -170,7 +170,8 @@ impl FormatSelection {
             .and_then(|frame| frame.selected_window())
             .and_then(Window::buffer_id)
             .and_then(|bid| {
-                eval.buffers
+                eval.edit
+                    .buffers
                     .get(bid)
                     .map(|buffer| (bid, buffer.point_emacs_byte_pos()))
             });
@@ -204,11 +205,11 @@ impl FormatSelection {
             return;
         }
         if let Some((bid, point)) = self.target_point
-            && let Some(buffer) = eval.buffers.get(bid)
+            && let Some(buffer) = eval.edit.buffers.get(bid)
         {
             let position = buffer.emacs_byte_pos_to_lisp_char_pos(point);
             let marker = crate::emacs_core::marker::make_registered_buffer_marker(
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
                 bid,
                 position,
                 false,
@@ -244,7 +245,7 @@ impl FormatSelection {
                 .and_then(|fid| eval.frames.get(fid))
                 .and_then(|frame| frame.find_window(wid))
                 .and_then(Window::buffer_id);
-            if selected != Some(wid) || eval.buffers.current_buffer_id() != window_buffer {
+            if selected != Some(wid) || eval.edit.buffers.current_buffer_id() != window_buffer {
                 let _ = super::super::window_cmds::select_window(
                     eval,
                     wid,
@@ -262,12 +263,12 @@ impl FormatSelection {
                 .as_ref()
                 .and_then(|marker| marker.as_marker_data().map(|data| data.bytepos))
                 .unwrap_or(saved_point);
-            if let Some(buffer) = eval.buffers.get_mut(bid) {
+            if let Some(buffer) = eval.edit.buffers.get_mut(bid) {
                 buffer.goto_emacs_byte_pos(point);
             }
         }
         if let Some(marker) = self.point_marker {
-            crate::emacs_core::marker::unchain_marker(&mut eval.buffers, &marker);
+            crate::emacs_core::marker::unchain_marker(&mut eval.edit.buffers, &marker);
         }
         eval.restore_specpdl_roots(self.root_scope);
     }

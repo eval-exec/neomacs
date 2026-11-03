@@ -676,11 +676,11 @@ fn record_active_minibuffer_selection(
         .note_window_selected(active.minibuffer_window_id);
     super::window_cmds::record_buffer_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         minibuf_id,
         active.minibuffer_frame.0,
     )?;
-    if !eval.buffers.buffer_hooks_inhibited(minibuf_id) {
+    if !eval.edit.buffers.buffer_hooks_inhibited(minibuf_id) {
         super::builtins::run_buffer_list_update_hook(eval)?;
     }
     Ok(Value::NIL)
@@ -705,11 +705,11 @@ fn record_restored_calling_window_selection(
         .note_window_selected(active.calling_selected_window);
     super::window_cmds::record_buffer_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         buffer_id,
         active.calling_frame.0,
     )?;
-    if !eval.buffers.buffer_hooks_inhibited(buffer_id) {
+    if !eval.edit.buffers.buffer_hooks_inhibited(buffer_id) {
         super::builtins::run_buffer_list_update_hook(eval)?;
     }
     Ok(Value::NIL)
@@ -726,7 +726,7 @@ fn activate_minibuffer_window(
     }
     activate_minibuffer_window_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &mut eval.minibuffer_selected_window,
         &mut eval.active_minibuffer_window,
         minibuf_id,
@@ -928,7 +928,10 @@ pub(crate) fn unwind_minibuffer_session(
     }
 
     let teardown_outcome = if let Some(saved) = state.active_window_state {
-        let _ = shared.buffers.switch_current_unrecorded(state.minibuf_id);
+        let _ = shared
+            .edit
+            .buffers
+            .switch_current_unrecorded(state.minibuf_id);
         if super::eval::gnu_redisplay_hooks_enabled() {
             let depth_after_pop = shared.minibuffers.depth();
             minibuffer_redisplay::teardown(shared, state.minibuf_id, depth_after_pop, saved)
@@ -936,7 +939,7 @@ pub(crate) fn unwind_minibuffer_session(
             let shared_ptr = std::ptr::NonNull::from(&mut *shared);
             teardown_minibuffer_level_in_state(
                 &mut shared.frames,
-                &mut shared.buffers,
+                &mut shared.edit.buffers,
                 &mut shared.minibuffer_selected_window,
                 &mut shared.active_minibuffer_window,
                 state.minibuf_id,
@@ -952,7 +955,7 @@ pub(crate) fn unwind_minibuffer_session(
         }
     } else {
         minibuffer_redisplay::publish_expired_buffer(shared, state.minibuf_id);
-        erase_expired_minibuffer_buffer_in_state(&mut shared.buffers, state.minibuf_id);
+        erase_expired_minibuffer_buffer_in_state(&mut shared.edit.buffers, state.minibuf_id);
         MinibufferTeardownOutcome {
             inactive_mode_result: run_minibuffer_mode_if_bound(shared, "minibuffer-inactive-mode"),
             window_restore: MinibufferWindowRestoreEffect::NoBufferRestored,
@@ -963,9 +966,9 @@ pub(crate) fn unwind_minibuffer_session(
     let inactive_mode_result = teardown_outcome.inactive_mode_result;
 
     if let Some(buffer_id) = state.saved_buffer_id
-        && shared.buffers.get(buffer_id).is_some()
+        && shared.edit.buffers.get(buffer_id).is_some()
     {
-        shared.buffers.switch_current(buffer_id);
+        shared.edit.buffers.switch_current(buffer_id);
     }
     // A sizing/inactive-mode transfer skips the remaining read_minibuf_unwind
     // statements. Separate configuration and minibuffer restoration still run.
@@ -996,7 +999,7 @@ pub(crate) fn unwind_minibuffer_session(
 
     tracing::debug!(
         "read-from-minibuffer: unwound current_buffer={:?} depth={} active_window={:?} selected_window={:?}",
-        shared.buffers.current_buffer_id(),
+        shared.edit.buffers.current_buffer_id(),
         shared.minibuffers.depth(),
         shared.active_minibuffer_window,
         shared
@@ -1084,7 +1087,7 @@ fn restore_minibuffer_window(eval: &mut super::eval::Context, saved: ActiveMinib
     }
     let effect = restore_minibuffer_window_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &mut eval.minibuffer_selected_window,
         &mut eval.active_minibuffer_window,
         saved,
@@ -1130,7 +1133,7 @@ fn signal_invalid_read_syntax_in_buffer_object(
     absolute_error_pos: EmacsBytePos,
     message: String,
 ) -> Flow {
-    let Some(buffer) = ctx.buffers.get(buffer_id) else {
+    let Some(buffer) = ctx.edit.buffers.get(buffer_id) else {
         return signal(
             LispCondition::Error,
             vec![Value::string("Buffer does not exist")],
@@ -1601,6 +1604,7 @@ pub fn builtin_read_impl(
 
             let (read_result, new_position) = {
                 let buf = ctx
+                    .edit
                     .buffers
                     .get(buf_id)
                     .ok_or_else(|| ReadSourceObject::Anonymous.end_of_file_error())?;
@@ -1641,7 +1645,7 @@ pub fn builtin_read_impl(
             };
 
             super::marker::builtin_set_marker_in_buffers(
-                &mut ctx.buffers,
+                &mut ctx.edit.buffers,
                 &[
                     stream,
                     Value::fixnum(new_position.as_i64()),
@@ -1666,7 +1670,7 @@ pub fn builtin_read_impl(
             // Restoring point on error spun that loop forever (issue #375).
             let outcome =
                 {
-                    let buf = ctx.buffers.get(buf_id).ok_or_else(|| {
+                    let buf = ctx.edit.buffers.get(buf_id).ok_or_else(|| {
                         signal("error", vec![Value::string("Buffer does not exist")])
                     })?;
 
@@ -1702,12 +1706,15 @@ pub fn builtin_read_impl(
             let (maybe_value, new_pt) = match outcome {
                 Ok(result) => result,
                 Err((error, stopped_at)) => {
-                    let _ = &mut ctx.buffers.goto_buffer_emacs_byte_pos(buf_id, stopped_at);
+                    let _ = &mut ctx
+                        .edit
+                        .buffers
+                        .goto_buffer_emacs_byte_pos(buf_id, stopped_at);
                     return Err(signal_reader_error_from_buffer(ctx, buf_id, error));
                 }
             };
 
-            let _ = &mut ctx.buffers.goto_buffer_emacs_byte_pos(buf_id, new_pt);
+            let _ = &mut ctx.edit.buffers.goto_buffer_emacs_byte_pos(buf_id, new_pt);
             let value = maybe_value.ok_or_else(|| {
                 ReadSourceObject::Buffer(Value::make_buffer(buf_id)).end_of_file_error()
             })?;
@@ -1830,7 +1837,7 @@ struct MinibufferWindowRestorationPlan {
 pub(crate) fn minibuffer_restore_windows_requested(eval: &super::eval::Context) -> bool {
     eval.variables()
         .value_in_buffer_by_name(
-            eval.buffers.current_buffer(),
+            eval.edit.buffers.current_buffer(),
             "read-minibuffer-restore-windows",
         )
         .is_some_and(|value| value.is_truthy())
@@ -2091,6 +2098,7 @@ pub(crate) fn finish_completing_read_in_eval(
     let predicate = args.get(2).copied().unwrap_or(Value::NIL);
     let require_match = args.get(3).copied().unwrap_or(Value::NIL);
     let original_buffer = eval
+        .edit
         .buffers
         .current_buffer_id()
         .map(Value::make_buffer)
@@ -2252,10 +2260,10 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     // Save state.  GNU read_minibuf saves Vcurrent_prefix_arg in
     // minibuf_save_list and restores it during read_minibuf_unwind;
     // minibuffer commands may clobber it while reading input.
-    let saved_buffer_id = shared.buffers.current_buffer().map(|b| b.id);
+    let saved_buffer_id = shared.edit.buffers.current_buffer().map(|b| b.id);
     let caller_allows_text_properties = minibuffer_text_properties_enabled_in_buffer(
         shared.variables(),
-        &shared.buffers,
+        &shared.edit.buffers,
         saved_buffer_id,
     );
     let saved_current_prefix_arg = shared.variable_value_by_name("current-prefix-arg")
@@ -2283,14 +2291,14 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
 
     // GNU `read_minibuf` captures the caller's directory before switching to
     // *Minibuf-N*, then installs it after minibuffer-mode has reset locals.
-    let ambient_directory = minibuffer_ambient_directory_in_state(&shared.buffers);
+    let ambient_directory = minibuffer_ambient_directory_in_state(&shared.edit.buffers);
 
     let minibuf_depth = entry_permit.depth();
     if super::eval::gnu_redisplay_hooks_enabled()
-        && let Some(existing) = shared.buffers.find_buffer_by_name(&format!(" *Minibuf-{minibuf_depth}*")) {
+        && let Some(existing) = shared.edit.buffers.find_buffer_by_name(&format!(" *Minibuf-{minibuf_depth}*")) {
         minibuffer_redisplay::publish_expired_buffer(shared, existing);
     }
-    let minibuf_id = find_or_create_minibuffer_buffer_in_state(&mut shared.buffers, minibuf_depth);
+    let minibuf_id = find_or_create_minibuffer_buffer_in_state(&mut shared.edit.buffers, minibuf_depth);
 
     let active_window_state = activate_minibuffer_window(shared, minibuf_id, entry_permit.level());
     if let Some(token) = buffer_unwind {
@@ -2302,7 +2310,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         }
     }
     if active_window_state.is_none() {
-        shared.buffers.switch_current(minibuf_id);
+        shared.edit.buffers.switch_current(minibuf_id);
     }
     let session_unwind = MinibufferSessionUnwind {
         minibuf_id,
@@ -2329,7 +2337,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     shared.store_variable_by_name("minibuffer-history-position", history_spec.position);
     run_minibuffer_mode_if_bound(shared, "minibuffer-mode")?;
     install_minibuffer_ambient_directory_in_state(
-        &mut shared.buffers,
+        &mut shared.edit.buffers,
         minibuf_id,
         ambient_directory,
     );
@@ -2337,17 +2345,17 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
     let prompt_properties = shared.variable_value_by_name("minibuffer-prompt-properties")
         .unwrap_or(Value::NIL);
     let mini_source_before = super::eval::gnu_redisplay_hooks_enabled().then(||
-        shared.buffers.get(minibuf_id).map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick()))
+        shared.edit.buffers.get(minibuf_id).map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick()))
     ).flatten();
     super::minibuffer::install_minibuffer_buffer_contents(
-        &mut shared.buffers,
+        &mut shared.edit.buffers,
         minibuf_id,
         &prompt,
         initial_input.as_ref(),
         prompt_properties,
     );
     if super::eval::gnu_redisplay_hooks_enabled()
-        && shared.buffers.get(minibuf_id)
+        && shared.edit.buffers.get(minibuf_id)
         .map(|buffer| (buffer.chars_modified_tick(), buffer.props_modified_tick())) != mini_source_before
     {
         shared.gnu_mark_buffer_redisplay(minibuf_id);
@@ -2356,7 +2364,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         "read-from-minibuffer: prompt={:?} minibuf_id={:?} current_buffer={:?} active_window={:?} selected_window={:?}",
         prompt_display,
         minibuf_id,
-        shared.buffers.current_buffer_id(),
+        shared.edit.buffers.current_buffer_id(),
         shared.active_minibuffer_window,
         shared
             .frames
@@ -2394,7 +2402,7 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
         shared.variable_value_by_name("minibuffer-local-map")
             .unwrap_or(Value::NIL)
     };
-    let _ = shared.buffers.set_current_local_map(minibuf_keymap);
+    let _ = shared.edit.buffers.set_current_local_map(minibuf_keymap);
     shared.store_variable_by_name("minibuffer-prompt", Value::heap_string(prompt.clone()));
     shared.store_variable_by_name("minibuffer-depth", Value::fixnum(minibuf_depth as i64));
     run_before_setup_hook(shared)?;
@@ -2413,17 +2421,17 @@ fn finish_read_from_minibuffer_in_vm_runtime_interactive(
 
     match command_outcome {
         MinibufferCommandOutcome::Accepted => {
-            let _ = shared.buffers.switch_current_unrecorded(minibuf_id);
+            let _ = shared.edit.buffers.switch_current_unrecorded(minibuf_id);
             let preserve_text_properties = caller_allows_text_properties
                 || minibuffer_text_properties_enabled_in_buffer(
                     shared.variables(),
-                    &shared.buffers,
+                    &shared.edit.buffers,
                     Some(minibuf_id),
                 );
             Ok(Value::heap_string(
                 super::minibuffer::minibuffer_contents_lisp_string_in_state(
                     shared.variables(),
-                    &shared.buffers,
+                    &shared.edit.buffers,
                     &shared.minibuffers,
                     preserve_text_properties,
                 )?,
@@ -2473,6 +2481,7 @@ pub(crate) fn finish_completing_read_in_vm_runtime(
     let predicate = args.get(2).copied().unwrap_or(Value::NIL);
     let require_match = args.get(3).copied().unwrap_or(Value::NIL);
     let original_buffer = shared
+        .edit
         .buffers
         .current_buffer_id()
         .map(Value::make_buffer)
@@ -2522,7 +2531,7 @@ fn install_completing_read_minibuffer_locals(
     original_buffer: Value,
     completion_ignore_case: Value,
 ) {
-    let Some(current_id) = eval.buffers.current_buffer_id() else {
+    let Some(current_id) = eval.edit.buffers.current_buffer_id() else {
         return;
     };
     for (name, value) in [
@@ -2852,7 +2861,7 @@ pub(crate) fn builtin_discard_input(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("discard-input", &args, 0)?;
-    let buffers = &mut ctx.buffers;
+    let buffers = &mut ctx.edit.buffers;
     let owner = ctx.owner.slab_mut();
     let specpdl = ctx.specpdl.as_slice();
     // SAFETY: this storage helper only clears a runtime variable through the

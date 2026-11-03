@@ -40,7 +40,7 @@ impl ScrollPolicy {
     pub fn capture_for_buffer(eval: &Context, buffer: BufferId) -> Self {
         Self::from_values(eval, |name| {
             eval.variables()
-                .value_in_buffer_by_name(eval.buffers.get(buffer), name)
+                .value_in_buffer_by_name(eval.edit.buffers.get(buffer), name)
                 .unwrap_or(Value::NIL)
         })
     }

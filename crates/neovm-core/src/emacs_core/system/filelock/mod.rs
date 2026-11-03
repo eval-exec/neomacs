@@ -666,8 +666,8 @@ fn current_buffer_file_lock_target(
     eval: &super::eval::Context,
     buffer_id: BufferId,
 ) -> Option<LispString> {
-    let root_id = eval.buffers.modified_state_root_id(buffer_id)?;
-    let buffer = eval.buffers.get(root_id)?;
+    let root_id = eval.edit.buffers.modified_state_root_id(buffer_id)?;
+    let buffer = eval.edit.buffers.get(root_id)?;
     let file_name = buffer.buffer_local_value("buffer-file-name")?;
     let file_truename = buffer.buffer_local_value("buffer-file-truename")?;
     match (file_name.kind(), file_truename.kind()) {
@@ -688,13 +688,14 @@ pub(crate) fn lock_current_buffer_before_change(
     eval: &mut super::eval::Context,
     before_lock: impl FnOnce(&super::eval::Context),
 ) -> Result<(), Flow> {
-    let Some(buffer_id) = eval.buffers.current_buffer_id() else {
+    let Some(buffer_id) = eval.edit.buffers.current_buffer_id() else {
         return Ok(());
     };
     let clean = eval
+        .edit
         .buffers
         .modified_state_root_id(buffer_id)
-        .and_then(|root_id| eval.buffers.get(root_id))
+        .and_then(|root_id| eval.edit.buffers.get(root_id))
         .is_some_and(|buffer| buffer.modified_state_value().is_nil());
     if !clean {
         return Ok(());
@@ -763,6 +764,7 @@ pub(crate) fn builtin_lock_buffer(eval: &mut super::eval::Context, args: Vec<Val
         }
     } else {
         let current = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -775,6 +777,7 @@ pub(crate) fn builtin_lock_buffer(eval: &mut super::eval::Context, args: Vec<Val
     };
 
     let modified = eval
+        .edit
         .buffers
         .current_buffer()
         .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
@@ -789,7 +792,7 @@ pub(crate) fn builtin_unlock_buffer(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("unlock-buffer", &args, 0)?;
-    let Some(current) = eval.buffers.current_buffer() else {
+    let Some(current) = eval.edit.buffers.current_buffer() else {
         return Ok(Value::NIL);
     };
     if current.modified_state_value().is_truthy()

@@ -1472,9 +1472,9 @@ impl Context {
 
     #[inline(never)]
     pub(crate) fn record_save_excursion(&mut self) -> Option<usize> {
-        let buffer_id = self.buffers.current_buffer_id()?;
+        let buffer_id = self.edit.buffers.current_buffer_id()?;
         let marker =
-            super::super::marker::make_registered_point_marker(&mut self.buffers, buffer_id)
+            super::super::marker::make_registered_point_marker(&mut self.edit.buffers, buffer_id)
                 .expect("the current buffer is live, so its point marker registers");
         let saved_window = super::ExcursionWindow::capture(&self.frames, buffer_id);
         let count = self.specpdl.len();
@@ -1918,7 +1918,7 @@ impl Context {
                     unsafe { self.specpdl.set_len(top_idx) };
                 }
                 SpecBinding::SaveCurrentBuffer { buffer_id }
-                    if self.buffers.current_buffer_id() == Some(*buffer_id) =>
+                    if self.edit.buffers.current_buffer_id() == Some(*buffer_id) =>
                 {
                     // GNU set_buffer_internal_1 returns immediately when this
                     // buffer is still current (buffer.c:2333-2334). There is

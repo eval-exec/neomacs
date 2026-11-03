@@ -116,10 +116,11 @@ impl super::eval::Context {
         rows: i64,
     ) -> Option<CharPos0> {
         let point_byte = self
+            .edit
             .buffers
             .get(buffer_id)
             .map(|buffer| buffer.char_pos_to_emacs_byte_pos_clamped(point))?;
-        let saved_buffer_id = self.buffers.current_buffer_id();
+        let saved_buffer_id = self.edit.buffers.current_buffer_id();
         if saved_buffer_id != Some(buffer_id)
             && let Err(flow) = self.set_current_buffer_unrecorded(buffer_id)
         {
@@ -148,7 +149,8 @@ impl super::eval::Context {
                 return None;
             }
         };
-        self.buffers
+        self.edit
+            .buffers
             .get(buffer_id)
             .map(|buffer| buffer.emacs_byte_pos_to_char_pos_clamped(start_byte))
     }
@@ -169,7 +171,8 @@ impl super::eval::Context {
         else {
             return false;
         };
-        self.buffers
+        self.edit
+            .buffers
             .get(buffer_id)
             .and_then(|buffer| buffer.buffer_local_value("window-scroll-functions"))
             .or_else(|| self.variable_value_by_name("window-scroll-functions"))
@@ -916,7 +919,7 @@ pub(crate) fn region_text_metrics_with_display(
     edge: Option<RowEdge>,
     y_limit: Option<f32>,
 ) -> RegionTextMetrics {
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return RegionTextMetrics::EMPTY;
     };
 
@@ -1527,7 +1530,7 @@ fn display_element_run(
     // GNU consults overlays and text properties (get_char_property_and_overlay).
     let (display, overlay) = super::textprop::buffer_overlay_property_at_byte_pos(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         buf,
         pos,
         *display_sym,
@@ -1537,7 +1540,7 @@ fn display_element_run(
     .or_else(|| {
         let v = super::textprop::builtin_get_text_property_in_state(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             &[Value::fixnum(charpos1), *display_sym],
         )
         .ok()?;
@@ -1579,7 +1582,7 @@ fn display_element_run(
     } else {
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             &[Value::fixnum(charpos1), *display_sym],
         )
         .ok()
@@ -1617,7 +1620,7 @@ fn invisible_measure_run(
     let mut prop = Value::NIL;
     if let Some((value, ov)) = super::textprop::buffer_overlay_property_at_byte_pos(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         buf,
         pos,
         *invisible_sym,
@@ -1630,7 +1633,7 @@ fn invisible_measure_run(
     if overlay.is_none()
         && let Ok(value) = super::textprop::builtin_get_text_property_in_state(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             &[Value::fixnum(charpos1), *invisible_sym],
         )
         && !value.is_nil()
@@ -1658,7 +1661,7 @@ fn invisible_measure_run(
     } else {
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             &[Value::fixnum(charpos1), *invisible_sym],
         )
         .ok()
@@ -1964,7 +1967,7 @@ fn string_display_element_run(
     // `get-text-property` on a string takes a 0-based char position.
     let display = super::textprop::builtin_get_text_property_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &[Value::fixnum(char_index as i64), *display_sym, string],
     )
     .ok()?;
@@ -1994,7 +1997,7 @@ fn string_display_element_run(
     let schars = string.as_lisp_string().map(|s| s.schars()).unwrap_or(0);
     let run_end_char = super::textprop::builtin_next_single_property_change_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &[Value::fixnum(char_index as i64), *display_sym, string],
     )
     .ok()
@@ -2314,12 +2317,15 @@ fn render_mode_line_target<T: mode_line_walk::WalkPolicy>(
 ) -> Result<ModeLineDisplayOutput, Flow> {
     let mut pctx = build_mode_line_percent_context(
         &eval.frames,
-        &eval.buffers,
+        &eval.edit.buffers,
         request.window,
         request.target,
     );
-    pctx.point
-        .enter_context(&mut eval.frames, &eval.buffers, request.point_selection);
+    pctx.point.enter_context(
+        &mut eval.frames,
+        &eval.edit.buffers,
+        request.point_selection,
+    );
     let mut rendered = ModeLineRendered::default();
     let _accumulator_roots = mode_line_gc::ScratchRoots::new();
     mode_line_walk::with_root_scope(eval, |eval| {
@@ -2358,7 +2364,7 @@ fn try_format_mode_line_display(
         crate::emacs_core::window_cmds::WindowDomain::Any,
     )?;
     validate_optional_buffer_designator(eval, args.get(3))?;
-    let saved_buffer = eval.buffers.current_buffer_id();
+    let saved_buffer = eval.edit.buffers.current_buffer_id();
     let mut title_selection = if !save_match_data && mode_line_flow_policy::enabled() {
         Some(mode_line_flow_policy::FormatSelection::enter(
             eval,
@@ -2419,8 +2425,8 @@ fn try_format_mode_line_display(
             crate::window::Window::Leaf { point, .. } => *point,
             _ => return None,
         };
-        let buffer_id = eval.buffers.current_buffer_id()?;
-        let buffer = eval.buffers.get_mut(buffer_id)?;
+        let buffer_id = eval.edit.buffers.current_buffer_id()?;
+        let buffer = eval.edit.buffers.get_mut(buffer_id)?;
         let saved = buffer.point_emacs_byte_pos();
         let target = buffer.char_pos_to_emacs_byte_pos_clamped(window_point.to_char_pos());
         buffer.goto_emacs_byte_pos(target);
@@ -2464,7 +2470,7 @@ fn try_format_mode_line_display(
     };
 
     if let Some((buffer_id, saved)) = saved_point
-        && let Some(buffer) = eval.buffers.get_mut(buffer_id)
+        && let Some(buffer) = eval.edit.buffers.get_mut(buffer_id)
     {
         buffer.goto_emacs_byte_pos(saved);
     }
@@ -2495,7 +2501,7 @@ pub(crate) fn finish_format_mode_line_in_eval(
     )?;
     validate_optional_buffer_designator(eval, args.get(3))?;
 
-    let saved_buffer = eval.buffers.current_buffer_id();
+    let saved_buffer = eval.edit.buffers.current_buffer_id();
     let mut selection =
         if mode_line_flow_policy::enabled() && !args[0].is_nil() && !eval.noninteractive() {
             Some(mode_line_flow_policy::FormatSelection::enter(
@@ -4328,7 +4334,7 @@ fn append_mode_line_string_in_eval_with_field_limit<T: TargetPolicy>(
         vars,
         CodingAccess::Registry(&eval.coding_systems),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         &eval.processes,
         command_loop_depth,
         pctx,
@@ -5671,7 +5677,7 @@ pub(crate) fn invisible_source_run_end_byte(
 ) -> Result<Option<usize>, Flow> {
     let byte_pos = EmacsBytePos::new(byte_pos);
     let lisp_pos = {
-        let Some(buf) = eval.buffers.get(buffer_id) else {
+        let Some(buf) = eval.edit.buffers.get(buffer_id) else {
             return Ok(None);
         };
         if byte_pos >= buf.accessible_emacs_byte_region().end() {
@@ -5690,7 +5696,7 @@ pub(crate) fn invisible_source_run_end_byte(
     let next =
         super::builtins::builtin_next_char_property_change(eval, vec![Value::fixnum(lisp_pos)])?;
     let next_byte = {
-        let Some(buf) = eval.buffers.get(buffer_id) else {
+        let Some(buf) = eval.edit.buffers.get(buffer_id) else {
             return Ok(None);
         };
         match next.as_fixnum() {
@@ -5915,7 +5921,7 @@ fn invalid_named_face_diagnostics_in_buffer_region(
     from: EmacsBytePos,
     to: EmacsBytePos,
 ) -> Vec<String> {
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return Vec::new();
     };
     let face = Value::symbol("face");
@@ -5971,7 +5977,7 @@ fn live_window_text_pixel_offset(
     y_offset: i64,
     char_height: f32,
 ) -> Option<LiveWindowTextPixelOffset> {
-    let buffer = eval.buffers.get(buffer_id)?;
+    let buffer = eval.edit.buffers.get(buffer_id)?;
     let from = buffer.emacs_byte_pos_to_lisp_char_pos(from);
     let accessible_start = buffer.point_min_lisp_char_pos();
     let accessible_end = buffer.point_max_lisp_char_pos();
@@ -6097,6 +6103,7 @@ fn window_text_pixel_offset_target(
     };
     let occupied = y_offset > 0
         && eval
+            .edit
             .buffers
             .get(buffer_id)
             .is_some_and(|buffer| target < buffer.accessible_emacs_byte_region().end());
@@ -6196,12 +6203,12 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     });
 
     let (initial_from_pos, to_pos, y_offset, max_offset_rows) = {
-        let Some(buf) = eval.buffers.get(buf_id) else {
+        let Some(buf) = eval.edit.buffers.get(buf_id) else {
             return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
         };
         let (from_pos, y_offset) =
-            window_text_pixel_size_from_pos(&eval.buffers, buf, args.get(1))?;
-        let to_pos = window_text_pixel_size_to_pos(&eval.buffers, buf, args.get(2), from_pos)?;
+            window_text_pixel_size_from_pos(&eval.edit.buffers, buf, args.get(1))?;
+        let to_pos = window_text_pixel_size_to_pos(&eval.edit.buffers, buf, args.get(2), from_pos)?;
         let accessible = buf.accessible_emacs_byte_region();
         (
             from_pos,
@@ -6227,6 +6234,7 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
         && args.get(6).is_some_and(|v| v.is_truthy())
     {
         let origin = eval
+            .edit
             .buffers
             .get(buf_id)
             .expect("resolved buffer")
@@ -6258,7 +6266,7 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
         (initial_from_pos, false)
     };
     let reported_start = {
-        let Some(buf) = eval.buffers.get(buf_id) else {
+        let Some(buf) = eval.edit.buffers.get(buf_id) else {
             return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
         };
         y_offset.map(|_| Value::fixnum(buf.emacs_byte_pos_to_lisp_char_pos(from_pos).as_i64()))
@@ -6289,7 +6297,7 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     // different branch there, moving the iterator vertically by VOFFSET and
     // leaving `start_x` at the x the offset landed on.
     let measured = {
-        let Some(buf) = eval.buffers.get(buf_id) else {
+        let Some(buf) = eval.edit.buffers.get(buf_id) else {
             return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
         };
         let line_start = if y_offset.is_some() {
@@ -6537,7 +6545,7 @@ pub(crate) fn builtin_pos_visible_in_window_p_ctx(
     if let Some(visibility) = live_position_visibility(eval, args.get(1), args.first())? {
         return Ok(visibility.into_lisp(args.get(2).is_some_and(|value| value.is_truthy())));
     }
-    pos_visible_in_window_p_impl(&mut eval.frames, &mut eval.buffers, args)
+    pos_visible_in_window_p_impl(&mut eval.frames, &mut eval.edit.buffers, args)
 }
 
 fn pos_visible_in_window_p_impl(
@@ -6631,7 +6639,7 @@ pub(crate) fn builtin_fringe_bitmaps_at_pos(
     else {
         return Ok(Value::NIL);
     };
-    let Some((begv, zv, buffer_point)) = eval.buffers.get(buffer_id).map(|buffer| {
+    let Some((begv, zv, buffer_point)) = eval.edit.buffers.get(buffer_id).map(|buffer| {
         (
             buffer.point_min_lisp_char_pos(),
             buffer.point_max_lisp_char_pos(),
@@ -6643,7 +6651,7 @@ pub(crate) fn builtin_fringe_bitmaps_at_pos(
 
     let textpos = match args.first() {
         Some(pos) if !pos.is_nil() => {
-            let raw = super::buffer::expect_integer_or_marker_in_buffers(&eval.buffers, pos)?;
+            let raw = super::buffer::expect_integer_or_marker_in_buffers(&eval.edit.buffers, pos)?;
             if raw < begv.to_one_based_usize() as i64 || raw > zv.to_one_based_usize() as i64 {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
@@ -6710,7 +6718,12 @@ pub(crate) fn builtin_window_line_height(
     args: &[Value],
 ) -> EvalResult {
     let noninteractive = eval.noninteractive();
-    window_line_height_impl(&mut eval.frames, &mut eval.buffers, noninteractive, args)
+    window_line_height_impl(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        noninteractive,
+        args,
+    )
 }
 
 fn window_line_height_impl(
@@ -6936,7 +6949,7 @@ fn bidi_buffer_var(ctx: &super::eval::Context, buf_id: BufferId, name: &str) -> 
     // `bidi-display-reordering` / `bidi-paragraph-direction` are per-buffer slot
     // variables (BUFFER_OBJFWD), so read the slot directly (like indent.rs),
     // falling back to a buffer-local binding then the global value.
-    if let Some(buf) = ctx.buffers.get(buf_id) {
+    if let Some(buf) = ctx.edit.buffers.get(buf_id) {
         if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(name) {
             return buf.slots[info.offset.index()];
         }
@@ -6967,7 +6980,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
                 vec![Value::symbol("bufferp"), *b],
             ));
         }
-        _ => match ctx.buffers.current_buffer_id() {
+        _ => match ctx.edit.buffers.current_buffer_id() {
             Some(id) => id,
             None => return Ok(ltr),
         },
@@ -6975,6 +6988,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
 
     // GNU returns left-to-right when reordering is off or the buffer is unibyte.
     let multibyte = ctx
+        .edit
         .buffers
         .get(buf_id)
         .map(|b| b.get_multibyte())
@@ -6990,7 +7004,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
 
     // Auto-detect: scan the paragraph at point for the first strong character.
     let (begv, zv, point) = {
-        let Some(buf) = ctx.buffers.get(buf_id) else {
+        let Some(buf) = ctx.edit.buffers.get(buf_id) else {
             return Ok(ltr);
         };
         let acc = buf.accessible_emacs_byte_region();
@@ -7001,7 +7015,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
         )
     };
     let para_start = {
-        let Some(buf) = ctx.buffers.get(buf_id) else {
+        let Some(buf) = ctx.edit.buffers.get(buf_id) else {
             return Ok(ltr);
         };
         bidi_paragraph_start(buf, point, begv, zv)
@@ -7014,7 +7028,7 @@ pub(crate) fn builtin_current_bidi_paragraph_direction(
     let mut at_bol = true;
     while p < zv {
         let (code, len) = {
-            let Some(buf) = ctx.buffers.get(buf_id) else {
+            let Some(buf) = ctx.edit.buffers.get(buf_id) else {
                 break;
             };
             // A blank line after the paragraph start ends the paragraph.
@@ -7154,7 +7168,7 @@ pub(crate) fn builtin_move_to_window_line(
             ));
         }
     };
-    let Some(current_id) = eval.buffers.current_buffer_id() else {
+    let Some(current_id) = eval.edit.buffers.current_buffer_id() else {
         return Err(signal("error", vec![Value::string("No current buffer")]));
     };
     // GNU: "This test is needed to make sure PT/PT_BYTE make sense in
@@ -7176,11 +7190,12 @@ pub(crate) fn builtin_move_to_window_line(
         .unwrap_or(1)
         .max(1);
 
-    let accessible = match eval.buffers.get(buf_id) {
+    let accessible = match eval.edit.buffers.get(buf_id) {
         Some(buf) => buf.accessible_emacs_byte_region(),
         None => return Err(signal("error", vec![Value::string("No buffer")])),
     };
     let start_byte = eval
+        .edit
         .buffers
         .get(buf_id)
         .map(|buf| buf.lisp_pos_to_emacs_byte_pos(window_start));
@@ -7200,11 +7215,15 @@ pub(crate) fn builtin_move_to_window_line(
     // otherwise simply start counting screen lines from `window-start'.
     match start_byte.filter(|byte| accessible.contains(*byte)) {
         Some(byte) => {
-            let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, byte);
+            let _ = eval
+                .edit
+                .buffers
+                .goto_buffer_emacs_byte_pos(current_id, byte);
         }
         None => {
             super::indent::vertical_motion(eval, &[Value::fixnum(-(lines / 2))])?;
             let point = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|buf| buf.emacs_byte_pos_to_lisp_char_pos(buf.point_emacs_byte_pos()));
@@ -7246,13 +7265,13 @@ pub(crate) fn builtin_tool_bar_height_ctx(
     let fid = match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => super::window_cmds::resolve_frame_id_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             Some(frame),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
         None => super::window_cmds::ensure_selected_frame_id_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
         ),
     };
     let frame = eval
@@ -7291,13 +7310,13 @@ pub(crate) fn builtin_tab_bar_height_ctx(
     let fid = match args.first().filter(|frame| !frame.is_nil()) {
         Some(frame) => super::window_cmds::resolve_frame_id_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             Some(frame),
             crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
         None => super::window_cmds::ensure_selected_frame_id_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
         ),
     };
     let frame = eval
@@ -7421,7 +7440,7 @@ fn validate_optional_buffer_designator(
     eval: &super::eval::Context,
     value: Option<&Value>,
 ) -> Result<(), Flow> {
-    validate_optional_buffer_designator_in_state(&eval.buffers, value)
+    validate_optional_buffer_designator_in_state(&eval.edit.buffers, value)
 }
 
 fn validate_optional_buffer_designator_in_state(
@@ -8252,7 +8271,11 @@ fn live_position_visibility(
         return Ok(Some(PositionVisibility::NotVisible));
     };
     let buffer_id = *buffer_id;
-    let buffer = eval.buffers.get(buffer_id).expect("live window buffer");
+    let buffer = eval
+        .edit
+        .buffers
+        .get(buffer_id)
+        .expect("live window buffer");
     let start = *window_start;
     let beg = buffer.point_min_lisp_char_pos();
     let end = buffer.point_max_lisp_char_pos();
@@ -8261,7 +8284,7 @@ fn live_position_visibility(
     let pos = if last_row {
         None
     } else if let Some(value) = position.filter(|value| !value.is_nil()) {
-        let raw = super::buffer::expect_integer_or_marker_in_buffers(&eval.buffers, value)?;
+        let raw = super::buffer::expect_integer_or_marker_in_buffers(&eval.edit.buffers, value)?;
         if raw < start.as_i64() || raw < beg.as_i64() || raw > end.as_i64() {
             return Ok(Some(PositionVisibility::NotVisible));
         }
@@ -8687,7 +8710,7 @@ fn resolve_exact_visible_metrics_with_layout(
     if retained_rows_valid
         && let Some(found) = resolve_exact_visible_metrics(
             &eval.frames,
-            &eval.buffers,
+            &eval.edit.buffers,
             window,
             pos,
             PositionGeometrySource::Redisplay,
@@ -8695,7 +8718,8 @@ fn resolve_exact_visible_metrics_with_layout(
     {
         return Ok(Some(found));
     }
-    let Some(pos_lisp) = resolve_live_target_position(&eval.frames, &eval.buffers, fid, wid, pos)?
+    let Some(pos_lisp) =
+        resolve_live_target_position(&eval.frames, &eval.edit.buffers, fid, wid, pos)?
     else {
         return Ok(None);
     };
@@ -8730,7 +8754,7 @@ fn resolve_exact_visible_metrics_with_layout(
     // with a recomputed one and never with silence.
     resolve_exact_visible_metrics(
         &eval.frames,
-        &eval.buffers,
+        &eval.edit.buffers,
         window,
         pos,
         PositionGeometrySource::Presented,
@@ -8795,7 +8819,7 @@ fn line_numbers_are_point_independent(
     frame_id: FrameId,
     buffer_id: crate::buffer::BufferId,
 ) -> bool {
-    let Some(buffer) = eval.buffers.get(buffer_id) else {
+    let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
         return true;
     };
     let Some(value) = eval.variable_value_in_buffer(
@@ -8866,7 +8890,7 @@ fn chrome_is_point_independent(
     window_id: WindowId,
     buffer_id: crate::buffer::BufferId,
 ) -> bool {
-    let (Some(frame), Some(buffer)) = (eval.frames.get(frame_id), eval.buffers.get(buffer_id))
+    let (Some(frame), Some(buffer)) = (eval.frames.get(frame_id), eval.edit.buffers.get(buffer_id))
     else {
         return false;
     };
@@ -9012,6 +9036,7 @@ fn next_fontified_property_change(
     // that suffix at every overlay endpoint in densely highlighted buffers.
     // The two independent stop sources still select exactly their minimum.
     let limit = ctx
+        .edit
         .buffers
         .current_buffer()
         .and_then(|buffer| {
@@ -9269,7 +9294,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     mode: FontificationBoundaryMode,
     observer: &mut O,
 ) -> Result<RedisplayFontificationOutcome, Flow> {
-    let Some((point_min, point_max)) = ctx.buffers.get(buf_id).map(|buffer| {
+    let Some((point_min, point_max)) = ctx.edit.buffers.get(buf_id).map(|buffer| {
         (
             buffer.point_min_lisp_char_pos().as_i64(),
             buffer.point_max_lisp_char_pos().as_i64(),
@@ -9285,6 +9310,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
     // The buffer interval proof does not certify effective overlay precedence.
     if O::ENABLED
         && ctx
+            .edit
             .buffers
             .get(buf_id)
             .is_some_and(|buffer| !buffer.overlays().is_empty())
@@ -9296,7 +9322,7 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
         return Ok(RedisplayFontificationOutcome::Unchanged);
     }
 
-    let saved_current = ctx.buffers.current_buffer_id();
+    let saved_current = ctx.edit.buffers.current_buffer_id();
     if saved_current != Some(buf_id) {
         ctx.set_current_buffer_unrecorded(buf_id)?;
     }
@@ -9348,10 +9374,10 @@ fn ensure_fontified_for_redisplay_inner<O: FontificationDemandObserver>(
             // decline to fontify, or remove the current buffer.
             outcome = outcome.merge(RedisplayFontificationOutcome::CallbacksUnchanged);
             call_fontification_functions_at(ctx, hook_value, pos, observer);
-            if ctx.buffers.current_buffer_id() != Some(buf_id) {
+            if ctx.edit.buffers.current_buffer_id() != Some(buf_id) {
                 ctx.restore_current_buffer_if_live(buf_id);
             }
-            if ctx.buffers.current_buffer_id() != Some(buf_id) {
+            if ctx.edit.buffers.current_buffer_id() != Some(buf_id) {
                 break;
             }
 
@@ -9510,7 +9536,7 @@ pub(crate) fn builtin_posn_at_x_y(eval: &mut super::eval::Context, args: Vec<Val
     };
     posn_at_x_y_impl(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         computed.as_ref(),
         source,
         args,
@@ -10698,7 +10724,7 @@ pub(crate) fn builtin_buffer_text_pixel_size(
         })
         .unwrap_or_else(|| (TextCellPixels::new(1.0, 1.0, 1.0), FrameId(0)));
 
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
 
     let buffer_id = if args.is_empty() {
         resolve_buffer_designator_allow_nil_current_in_manager(buffers, &Value::NIL)?

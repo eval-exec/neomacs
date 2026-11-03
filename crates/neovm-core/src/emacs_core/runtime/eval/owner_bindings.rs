@@ -971,7 +971,7 @@ impl Context {
             self.publish_owner_binding(resolved);
             return Ok(());
         }
-        let (kind, channel) = binding_shape(&self.buffers, resolved, projection);
+        let (kind, channel) = binding_shape(&self.edit.buffers, resolved, projection);
         // A buffer's own per-buffer slot binds in place (design §1.3b).
         if let (
             BindingKind::LetLocal,
@@ -1010,7 +1010,7 @@ impl Context {
             None => value,
             Some(_) => super::check_forwarded_store_at(
                 &self.obarray,
-                &self.buffers,
+                &self.edit.buffers,
                 &self.specpdl,
                 resolved,
                 value,
@@ -1025,7 +1025,7 @@ impl Context {
                 .obarray
                 .thread_projection_of(resolved)
                 .is_some_and(|now| std::ptr::eq(now, projection))
-                && access_channel(&self.buffers, resolved, projection) == channel)
+                && access_channel(&self.edit.buffers, resolved, projection) == channel)
         {
             return self.set_internal_after_watchers(resolved, value, SetInternalBind::Bind);
         }
@@ -1058,6 +1058,7 @@ impl Context {
             .expect("a per-buffer forwarder names a slot");
         let off = slot.index();
         let old_value = self
+            .edit
             .buffers
             .get(buffer)
             .map_or(Value::NIL, |buf| buf.slots[off]);
@@ -1071,7 +1072,7 @@ impl Context {
             Ok(store) => store.canonical_value(),
             Err(error) => return Err(super::forward_store_signal(error, value)),
         };
-        if let Some(buf) = self.buffers.get_mut(buffer) {
+        if let Some(buf) = self.edit.buffers.get_mut(buffer) {
             buf.slots[off] = stored;
         }
         Ok(())
@@ -1095,8 +1096,10 @@ impl Context {
         let old_default = buf_fwd
             .buffer_slot()
             .map(|slot| slot.index())
-            .filter(|&off| off < self.buffers.buffer_defaults.len())
-            .map_or(buf_fwd.default, |off| self.buffers.buffer_defaults[off]);
+            .filter(|&off| off < self.edit.buffers.buffer_defaults.len())
+            .map_or(buf_fwd.default, |off| {
+                self.edit.buffers.buffer_defaults[off]
+            });
         self.push_specpdl_with(|| SpecBinding::LetDefault {
             sym_id: resolved,
             old_value: super::SavedBindingValue::from_plain(old_default),
@@ -1334,7 +1337,7 @@ impl Context {
         let Channel::BufferLocal(buffer) = channel else {
             return true;
         };
-        let Some(buffer) = self.buffers.get(buffer) else {
+        let Some(buffer) = self.edit.buffers.get(buffer) else {
             return false;
         };
         match projection.arm() {
@@ -1957,7 +1960,7 @@ impl Context {
     /// local held, which GNU's entry carries and restores if the local is
     /// made again (`src/eval.c:3871-3883`).
     pub(crate) fn owner_local_killed(&mut self, id: SymId) {
-        let Some(buffer) = self.buffers.current_buffer_id() else {
+        let Some(buffer) = self.edit.buffers.current_buffer_id() else {
             return;
         };
         let channel = Channel::BufferLocal(buffer);
@@ -2077,7 +2080,7 @@ impl Context {
     pub(crate) fn projected_local_in_current_buffer(&self, id: SymId) -> bool {
         let (Some(projection), Some(buffer)) = (
             self.obarray.thread_projection_of(id),
-            self.buffers.current_buffer_id(),
+            self.edit.buffers.current_buffer_id(),
         ) else {
             return false;
         };
@@ -2091,7 +2094,7 @@ impl Context {
     /// the new local back: the local holds what its outermost binding hid,
     /// and the owner's slot the value the local starts with.
     pub(crate) fn owner_local_made(&mut self, id: SymId) {
-        let Some(buffer) = self.buffers.current_buffer_id() else {
+        let Some(buffer) = self.edit.buffers.current_buffer_id() else {
             return;
         };
         let channel = Channel::BufferLocal(buffer);
@@ -2198,7 +2201,7 @@ impl Context {
             .thread_projection_of(id)
             .expect("projected depth variable");
         let index = projection.index();
-        let channel = access_channel(&self.buffers, id, projection);
+        let channel = access_channel(&self.edit.buffers, id, projection);
         let bound = self
             .owner
             .slab()
@@ -2223,6 +2226,7 @@ impl Context {
                 let cell = match channel {
                     Channel::Default => blv.defcell.get(),
                     Channel::BufferLocal(buffer) => self
+                        .edit
                         .buffers
                         .get(buffer)
                         .and_then(|buffer| buffer.local_variable_binding_cell(id))

@@ -22,7 +22,7 @@ pub(crate) fn backward_extent(
     offset: i64,
 ) -> Result<Option<BackwardPixelExtent>, Flow> {
     debug_assert!(offset < 0);
-    let Some(source) = eval.buffers.get(buffer) else {
+    let Some(source) = eval.edit.buffers.get(buffer) else {
         return Ok(None);
     };
     let mut start = measurement::backtrack(source, origin, 1);
@@ -42,6 +42,7 @@ pub(crate) fn backward_extent(
             return Ok(None);
         };
         let accessible = eval
+            .edit
             .buffers
             .get(buffer)
             .ok_or_else(|| {
@@ -76,7 +77,7 @@ pub(crate) fn backward_extent(
                 }));
             }
             start = measurement::backtrack(
-                eval.buffers.get(buffer).expect("validated buffer"),
+                eval.edit.buffers.get(buffer).expect("validated buffer"),
                 start,
                 count,
             );

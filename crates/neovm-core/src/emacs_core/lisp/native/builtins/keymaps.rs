@@ -513,7 +513,7 @@ pub(super) fn builtin_use_local_map(
     } else {
         expect_keymap(eval, &args[0])?
     };
-    let _ = eval.buffers.set_current_local_map(keymap);
+    let _ = eval.edit.buffers.set_current_local_map(keymap);
     Ok(Value::NIL)
 }
 
@@ -533,7 +533,7 @@ pub(super) fn builtin_current_local_map(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_current_local_map_impl(eval.buffers.current_local_map(), &args)
+    builtin_current_local_map_impl(eval.edit.buffers.current_local_map(), &args)
 }
 
 pub(crate) fn builtin_current_local_map_impl(
@@ -592,7 +592,7 @@ pub(super) fn builtin_describe_buffer_bindings(
             vec![Value::symbol("bufferp"), buffer],
         ));
     };
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return Err(signal(
             "error",
             vec![Value::string("Selecting deleted buffer")],
@@ -995,7 +995,7 @@ fn describe_buffer_binding_sections(
     } else {
         let keymap_property = crate::emacs_core::keymap::local_map_property_at_buffer_point(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             buffer,
             buffer_point,
             crate::emacs_core::keymap::LocalMapProperty::Keymap,
@@ -1015,7 +1015,7 @@ fn describe_buffer_binding_sections(
         for (mode, keymap) in collect_minor_mode_map_entries_in_state(
             eval.variables(),
             &[],
-            &eval.buffers,
+            &eval.edit.buffers,
             Some(buffer_id),
             symbol_mode,
         ) {
@@ -1030,7 +1030,7 @@ fn describe_buffer_binding_sections(
 
         let local_map = crate::emacs_core::keymap::local_map_property_at_buffer_point(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             buffer,
             buffer_point,
             crate::emacs_core::keymap::LocalMapProperty::LocalMap,
@@ -1118,8 +1118,8 @@ pub(crate) fn builtin_current_minor_mode_maps_impl(
     let maps = collect_minor_mode_maps_in_state(
         ctx.variables(),
         &[],
-        &ctx.buffers,
-        ctx.buffers.current_buffer_id(),
+        &ctx.edit.buffers,
+        ctx.edit.buffers.current_buffer_id(),
         symbol_mode,
     );
     if maps.is_empty() {

@@ -77,7 +77,7 @@ fn measure(
     buffer: BufferId,
     placement: RecenterPlacement,
 ) -> Result<Option<RecenterTarget>, Flow> {
-    let Some(source) = eval.buffers.get(buffer) else {
+    let Some(source) = eval.edit.buffers.get(buffer) else {
         return Err(failure("Recenter buffer was deleted"));
     };
     // GNU's selected window uses the buffer's live point. Once a callback
@@ -137,6 +137,7 @@ fn measure(
             return Ok(None);
         };
         let source = eval
+            .edit
             .buffers
             .get(buffer)
             .ok_or_else(|| failure("Recenter buffer was deleted"))?;

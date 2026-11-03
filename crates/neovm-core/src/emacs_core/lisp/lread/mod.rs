@@ -373,9 +373,9 @@ fn eval_region_bounds_in_state(
 /// Evaluate all forms from BUFFER (or current buffer) and return nil.
 pub(crate) fn builtin_eval_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("eval-buffer", &args, 5)?;
-    let buffer_id = resolve_eval_buffer_id_in_state(&eval.buffers, args.first())?;
-    let source = eval_buffer_source_text_in_state(&eval.buffers, args.first())?;
-    let filename = eval_buffer_filename_in_state(&eval.buffers, buffer_id, args.get(2))?;
+    let buffer_id = resolve_eval_buffer_id_in_state(&eval.edit.buffers, args.first())?;
+    let source = eval_buffer_source_text_in_state(&eval.edit.buffers, args.first())?;
+    let filename = eval_buffer_filename_in_state(&eval.edit.buffers, buffer_id, args.get(2))?;
 
     let specpdl_count = eval.specpdl.len();
 
@@ -421,6 +421,7 @@ pub(crate) fn builtin_eval_buffer(eval: &mut super::eval::Context, args: Vec<Val
         }
 
         let buffer_has_local_lexical_binding = eval
+            .edit
             .buffers
             .get(buffer_id)
             .and_then(|buffer| buffer.get_buffer_local_binding("lexical-binding"))
@@ -527,11 +528,12 @@ pub(crate) fn builtin_eval_region(eval: &mut super::eval::Context, args: Vec<Val
 
 fn eval_region_in_scope(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     if let FormReader::Lisp(read_function) = FormReader::resolve(eval, args.get(3).copied()) {
-        let (start, end) = eval_region_bounds_in_state(&eval.buffers, args)?;
+        let (start, end) = eval_region_bounds_in_state(&eval.edit.buffers, args)?;
         if start >= end {
             return Ok(Value::NIL);
         }
         let buffer_id = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
@@ -544,11 +546,12 @@ fn eval_region_in_scope(eval: &mut super::eval::Context, args: &[Value]) -> Eval
         );
     }
 
-    let source = eval_region_source_text_in_state(&eval.buffers, args)?;
+    let source = eval_region_source_text_in_state(&eval.edit.buffers, args)?;
     if source.as_bytes().is_empty() {
         return Ok(Value::NIL);
     }
     let buffer = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -728,7 +731,7 @@ fn readevalloop_buffer_with_lisp_reader(
         // `BUF_TEMP_SET_PT (XBUFFER (buf), BUF_BEGV (XBUFFER (buf)));'
         // (src/lread.c:2411) -- note GNU sets the point of BUF, which need not
         // be the current buffer, and does not switch to it.
-        if let Some(buffer) = eval.buffers.get_mut(buffer_id) {
+        if let Some(buffer) = eval.edit.buffers.get_mut(buffer_id) {
             let begv = buffer.accessible_emacs_byte_region().start();
             buffer.goto_emacs_byte_pos(begv);
         }
@@ -757,7 +760,7 @@ fn readevalloop_buffer_with_lisp_reader(
                         eval.record_save_excursion();
                         eval.set_current_buffer_unrecorded(buffer_id)?;
                         eval.record_save_excursion();
-                        if let Some(state) = eval.buffers.save_current_restriction_state() {
+                        if let Some(state) = eval.edit.buffers.save_current_restriction_state() {
                             eval.specpdl
                                 .push(super::eval::SpecBinding::save_restriction(state));
                         }
@@ -767,7 +770,7 @@ fn readevalloop_buffer_with_lisp_reader(
                 };
 
                 let end_byte = {
-                    let buffer = eval.buffers.get(buffer_id).ok_or_else(|| {
+                    let buffer = eval.edit.buffers.get(buffer_id).ok_or_else(|| {
                         signal("error", vec![Value::string("Reading from killed buffer")])
                     })?;
                     match end {
@@ -780,6 +783,7 @@ fn readevalloop_buffer_with_lisp_reader(
                 if let BufferReadRegion::Bounded { .. } = region {
                     let (accessible_start, start_byte) = {
                         let buffer = eval
+                            .edit
                             .buffers
                             .get(buffer_id)
                             .expect("buffer checked live above");
@@ -791,6 +795,7 @@ fn readevalloop_buffer_with_lisp_reader(
                         )
                     };
                     let buffer = eval
+                        .edit
                         .buffers
                         .get_mut(buffer_id)
                         .expect("buffer checked live");
@@ -801,7 +806,7 @@ fn readevalloop_buffer_with_lisp_reader(
                     buffer.goto_emacs_byte_pos(start_byte);
                 }
 
-                let buffer = eval.buffers.get_mut(buffer_id).ok_or_else(|| {
+                let buffer = eval.edit.buffers.get_mut(buffer_id).ok_or_else(|| {
                     signal("error", vec![Value::string("Reading from killed buffer")])
                 })?;
                 if !skip_to_next_form_in_buffer(buffer, end_byte) {
@@ -811,6 +816,7 @@ fn readevalloop_buffer_with_lisp_reader(
 
                 let form = eval.funcall_general(read_function, vec![buffer_value])?;
                 let after_read = eval
+                    .edit
                     .buffers
                     .get(buffer_id)
                     .ok_or_else(|| {

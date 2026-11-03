@@ -145,11 +145,12 @@ pub(crate) fn builtin_get_buffer_create(
         ValueKind::Veclike(VecLikeType::Buffer) => Ok(args[0]),
         _ => {
             let name = expect_string_lossy(&args[0])?;
-            if let Some(id) = eval.buffers.find_buffer_by_name(&name) {
+            if let Some(id) = eval.edit.buffers.find_buffer_by_name(&name) {
                 Ok(Value::make_buffer(id))
             } else {
                 let inhibit_buffer_hooks = args.get(1).is_some_and(|value| !value.is_nil());
                 let id = eval
+                    .edit
                     .buffers
                     .create_buffer_with_hook_inhibition(&name, inhibit_buffer_hooks);
                 if !inhibit_buffer_hooks {
@@ -166,7 +167,7 @@ pub(crate) fn builtin_make_indirect_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let plan = prepare_make_indirect_buffer_in_manager(&mut eval.buffers, args)?;
+    let plan = prepare_make_indirect_buffer_in_manager(&mut eval.edit.buffers, args)?;
     finish_make_indirect_buffer_hooks(eval, plan)
 }
 
@@ -249,14 +250,14 @@ pub(crate) fn finish_make_indirect_buffer_hooks(
         }
         clone_result?;
     }
-    if !eval.buffers.buffer_hooks_inhibited(plan.id) {
+    if !eval.edit.buffers.buffer_hooks_inhibited(plan.id) {
         run_buffer_list_update_hook(eval)?;
     }
     Ok(Value::make_buffer(plan.id))
 }
 
 pub(crate) fn builtin_get_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_args("get-buffer", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => Ok(args[0]),
@@ -273,7 +274,7 @@ pub(crate) fn builtin_get_buffer(eval: &mut super::eval::Context, args: Vec<Valu
 pub(crate) fn builtin_find_buffer(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
     let dynamic: &[OrderedRuntimeBindingMap] = &[];
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_args("find-buffer", &args, 2)?;
     let name = args[0].as_symbol_name(symbol_mode).ok_or_else(|| {
         signal(
@@ -328,7 +329,7 @@ pub(crate) fn builtin_delete_all_overlays(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &mut eval.buffers;
+    let buffers = &mut eval.edit.buffers;
     expect_max_args("delete-all-overlays", &args, 1)?;
     let target = if args.is_empty() || args[0].is_nil() {
         buffers.current_buffer().map(|buf| buf.id)
@@ -348,7 +349,7 @@ pub(crate) fn builtin_delete_all_overlays(
 }
 
 pub(crate) fn builtin_buffer_live_p(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_args("buffer-live-p", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => {
@@ -370,8 +371,8 @@ pub(crate) fn builtin_get_truename_buffer(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("get-truename-buffer", &args, 1)?;
-    for id in eval.buffers.buffer_list() {
-        let Some(buf) = eval.buffers.get(id) else {
+    for id in eval.edit.buffers.buffer_list() {
+        let Some(buf) = eval.edit.buffers.get(id) else {
             continue;
         };
         // GNU skips buffers whose file_truename is not a string BEFORE
@@ -402,14 +403,14 @@ pub(crate) fn builtin_get_file_buffer(
     let resolved = super::fileio::resolve_filename_lisp_in_state(
         eval.variables(),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         expect_lisp_string(&args[0])?,
     );
     let resolved_path = super::file_name::lisp_file_name_to_path_buf(&resolved);
     let resolved_true = canonicalize_or_self(&resolved_path);
 
-    for id in eval.buffers.buffer_list() {
-        let Some(buf) = eval.buffers.get(id) else {
+    for id in eval.edit.buffers.buffer_list() {
+        let Some(buf) = eval.edit.buffers.get(id) else {
             continue;
         };
         let Some(file_name) = buf.file_name_lisp_string() else {
@@ -419,7 +420,7 @@ pub(crate) fn builtin_get_file_buffer(
         let candidate = super::fileio::resolve_filename_lisp_in_state(
             eval.variables(),
             &[],
-            &eval.buffers,
+            &eval.edit.buffers,
             file_name,
         );
         if candidate == resolved {
@@ -473,7 +474,7 @@ pub(crate) fn builtin_set_buffer_1(
     let id = match args[0].kind() {
         ValueKind::Veclike(VecLikeType::Buffer) => {
             let bid = args[0].as_buffer_id().unwrap();
-            if eval.buffers.get(bid).is_none() {
+            if eval.edit.buffers.get(bid).is_none() {
                 return Err(signal(
                     "error",
                     vec![Value::string("Selecting deleted buffer")],
@@ -483,7 +484,7 @@ pub(crate) fn builtin_set_buffer_1(
         }
         ValueKind::String => {
             let s = expect_buffer_name_string(&args[0])?;
-            eval.buffers.find_buffer_by_name(&s).ok_or_else(|| {
+            eval.edit.buffers.find_buffer_by_name(&s).ok_or_else(|| {
                 signal("error", vec![Value::string(format!("No buffer named {s}"))])
             })?
         }
@@ -511,7 +512,7 @@ pub(crate) fn builtin_current_buffer(
 /// The `Vec` entry point above serves Rust callers.
 pub(crate) fn builtin_current_buffer_0(eval: &mut super::eval::Context) -> EvalResult {
     let args: [Value; 0] = [];
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_args("current-buffer", &args, 0)?;
     match buffers.current_buffer() {
         Some(buf) => Ok(Value::make_buffer(buf.id)),
@@ -520,7 +521,7 @@ pub(crate) fn builtin_current_buffer_0(eval: &mut super::eval::Context) -> EvalR
 }
 
 pub(crate) fn builtin_buffer_name(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_max_args("buffer-name", &args, 1)?;
     let id = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -540,7 +541,7 @@ pub(crate) fn builtin_buffer_file_name(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_max_args("buffer-file-name", &args, 1)?;
     let id = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -560,7 +561,7 @@ pub(crate) fn builtin_buffer_base_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_max_args("buffer-base-buffer", &args, 1)?;
     let target = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -582,7 +583,7 @@ pub(crate) fn builtin_buffer_last_name(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_max_args("buffer-last-name", &args, 1)?;
     let target = if args.is_empty() || args[0].is_nil() {
         match buffers.current_buffer() {
@@ -674,14 +675,16 @@ pub(crate) fn builtin_buffer_substring_2(
 ) -> EvalResult {
     let args: [Value; 2] = [start, end];
     expect_args("buffer-substring", &args, 2)?;
-    let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let (start, end) = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -694,6 +697,7 @@ pub(crate) fn builtin_buffer_substring_2(
     };
     update_buffer_properties_for_access(eval, start, end)?;
     let buf = eval
+        .edit
         .buffers
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -708,6 +712,7 @@ pub(crate) fn builtin_buffer_string(
     expect_args("buffer-string", &args, 0)?;
     let (current_id, start, end) = {
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -719,6 +724,7 @@ pub(crate) fn builtin_buffer_string(
     };
     update_buffer_properties_for_access(eval, start, end)?;
     let buf = eval
+        .edit
         .buffers
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -735,13 +741,14 @@ fn resolve_buffer_designator_allow_nil_current(
 ) -> Result<Option<BufferId>, Flow> {
     match arg.kind() {
         ValueKind::Nil => eval
+            .edit
             .buffers
             .current_buffer()
             .map(|buf| Some(buf.id))
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")])),
         ValueKind::Veclike(VecLikeType::Buffer) => {
             let id = arg.as_buffer_id().unwrap();
-            if eval.buffers.get(id).is_some() {
+            if eval.edit.buffers.get(id).is_some() {
                 Ok(Some(id))
             } else {
                 Err(signal(
@@ -752,7 +759,8 @@ fn resolve_buffer_designator_allow_nil_current(
         }
         ValueKind::String => {
             let name = expect_buffer_name_string(arg)?;
-            eval.buffers
+            eval.edit
+                .buffers
                 .find_buffer_by_name(&name)
                 .map(Some)
                 .ok_or_else(|| {
@@ -1048,7 +1056,7 @@ pub(crate) fn builtin_buffer_line_statistics(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_max_args("buffer-line-statistics", &args, 1)?;
     let buffer_id = if args.is_empty() {
         resolve_buffer_designator_allow_nil_current_in_manager(buffers, &Value::NIL)?
@@ -1189,7 +1197,7 @@ pub(crate) fn builtin_buffer_swap_text(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let buffers = &mut eval.buffers;
+    let buffers = &mut eval.edit.buffers;
     expect_args("buffer-swap-text", &args, 1)?;
     let other_id = expect_buffer_id(&args[0])?;
     let current_id = buffers
@@ -1214,13 +1222,13 @@ pub(crate) fn builtin_insert_buffer_substring(
     expect_args_range("insert-buffer-substring", &args, 1, 3)?;
     // GNU editfns.c:1728 resolves a required BUFFER through get-buffer.
     let buffer_id = Some(resolve_buffer_designator_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         &args[0],
         BufferDesignatorDefault::Required,
     )?);
     let (default_start, default_end) = buffer_id
         .and_then(|id| {
-            eval.buffers.get(id).map(|buf| {
+            eval.edit.buffers.get(id).map(|buf| {
                 (
                     buf.point_min_lisp_char_pos().as_i64(),
                     buf.point_max_lisp_char_pos().as_i64(),
@@ -1229,18 +1237,18 @@ pub(crate) fn builtin_insert_buffer_substring(
         })
         .unwrap_or((1, 1));
     let start = if args.len() > 1 && !args[1].is_nil() {
-        expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?
+        expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?
     } else {
         default_start
     };
     let end = if args.len() > 2 && !args[2].is_nil() {
-        expect_integer_or_marker_in_buffers(&eval.buffers, &args[2])?
+        expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[2])?
     } else {
         default_end
     };
 
     let text = checked_buffer_substring_for_char_region_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         buffer_id,
         LispCharPos1::new(start),
         LispCharPos1::new(end),
@@ -1256,6 +1264,7 @@ pub(crate) fn builtin_kill_all_local_variables(
 ) -> EvalResult {
     expect_args_range("kill-all-local-variables", &args, 0, 1)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1271,7 +1280,8 @@ pub(crate) fn builtin_kill_all_local_variables(
     // `major-mode' still naming the *previous* mode -- matches GNU exactly.
     run_buffer_change_major_mode_hook(eval)?;
     let current_id = if super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
     } else {
@@ -1317,7 +1327,7 @@ fn reset_buffer_local_variables(
     buffer: crate::buffer::BufferId,
     kill_permanent: bool,
 ) {
-    let buffers = &mut eval.buffers;
+    let buffers = &mut eval.edit.buffers;
     // SAFETY: the major-mode hook has returned. This local-value/cache reset
     // invokes no Lisp and preserves canonical dispatch metadata and storage.
     let _ = unsafe {
@@ -1468,6 +1478,7 @@ pub(crate) fn builtin_replace_buffer_contents(
 
     let (point_min, point_max) = {
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1500,11 +1511,12 @@ pub(crate) fn builtin_replace_region_contents(
 ) -> EvalResult {
     expect_args_range("replace-region-contents", &args, 3, 6)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
 
     // GNU editfns.c `Freplace_region_contents`: if SOURCE is a function, call
     // it with no arguments and the current buffer narrowed to BEG..END, and use
@@ -1515,7 +1527,7 @@ pub(crate) fn builtin_replace_region_contents(
     if super::builtins::types::builtin_functionp_1(eval, source)?.is_truthy() {
         let count = eval.specpdl.len();
         eval.record_save_excursion();
-        if let Some(state) = eval.buffers.save_current_restriction_state() {
+        if let Some(state) = eval.edit.buffers.save_current_restriction_state() {
             eval.specpdl
                 .push(super::eval::SpecBinding::save_restriction(state));
         }
@@ -1526,7 +1538,8 @@ pub(crate) fn builtin_replace_region_contents(
         source = narrow_result?;
     }
 
-    let source_value = replace_region_source_value_in_state(&eval.buffers, &source, current_id)?;
+    let source_value =
+        replace_region_source_value_in_state(&eval.edit.buffers, &source, current_id)?;
     // When SOURCE is a buffer, source_value is a FRESH substring held only
     // in this Rust local while modification hooks run arbitrary Lisp during
     // the replacement below; root it for the rest of the function. Normal
@@ -1534,7 +1547,7 @@ pub(crate) fn builtin_replace_region_contents(
     let source_root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(source_value);
 
-    let read_only_buffer_name = eval.buffers.current_buffer().and_then(|buf| {
+    let read_only_buffer_name = eval.edit.buffers.current_buffer().and_then(|buf| {
         if super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf) {
             Some(buf.name_value())
         } else {
@@ -1547,6 +1560,7 @@ pub(crate) fn builtin_replace_region_contents(
 
     let byte_range = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1560,11 +1574,11 @@ pub(crate) fn builtin_replace_region_contents(
         }
     };
     let old_range = super::editfns::buffer_edit_range_for_byte_range_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         byte_range,
     )?;
-    let target_multibyte = current_buffer_multibyte(&eval.buffers)?;
+    let target_multibyte = current_buffer_multibyte(&eval.edit.buffers)?;
     // GNU 31's Freplace_region_contents currently passes its Lisp INHERIT
     // argument to replace_range's adjust-match-data parameter and hard-codes
     // the distinct property-inheritance parameter to false (editfns.c).
@@ -1584,6 +1598,7 @@ pub(crate) fn builtin_replace_region_contents(
     // converted into the destination buffer's representation so both sides use
     // the same encoding.
     let region_bytes = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|buf| buf.buffer_substring_bytes_range(byte_range))
@@ -1641,7 +1656,7 @@ pub(crate) fn builtin_replace_region_contents(
         );
         if let Some(prepared) = pending.prepare(eval)? {
             let new_extent = prepared
-                .lease(&mut eval.buffers)
+                .lease(&mut eval.edit.buffers)
                 .and_then(|lease| lease.replace(&replacement))
                 .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
             super::editfns::signal_after_text_change(
@@ -1665,6 +1680,7 @@ pub(crate) fn builtin_replace_region_contents(
     // GNU's `Freplace_buffer_contents' calls `Fundo_boundary' (src/editfns.c:2139),
     // so it sets `undo-auto--last-boundary-cause' by exactly the same route.
     if eval
+        .edit
         .buffers
         .add_undo_boundary(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?
@@ -1696,7 +1712,7 @@ pub(crate) fn builtin_replace_region_contents(
     // Apply the change runs back-to-front so that earlier positions stay
     // valid as we edit (mirrors GNU walking the change lists backwards).
     for run in runs.iter().rev() {
-        let Some((target, del_range)) = eval.buffers.current_buffer().map(|buf| {
+        let Some((target, del_range)) = eval.edit.buffers.current_buffer().map(|buf| {
             let begv = buf.point_min_char_pos();
             let zv = buf.point_max_char_pos();
             let total = buf.total_char_end_pos();
@@ -1730,7 +1746,8 @@ pub(crate) fn builtin_replace_region_contents(
         };
         let replacement =
             buffer_insert_piece_from_string(replacement, target_multibyte)?.into_replacement_text();
-        eval.buffers
+        eval.edit
+            .buffers
             .replace_buffer_measured_region_lisp_string(target, del_range, &replacement)
             .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     }
@@ -1761,12 +1778,14 @@ pub(crate) fn builtin_set_buffer_multibyte(
     let flag = args[0];
     let target_multibyte = !flag.is_nil();
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
     let (already_multibyte, narrowed, base_buffer, shared_ids) = {
         let current = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1774,10 +1793,11 @@ pub(crate) fn builtin_set_buffer_multibyte(
             current.get_multibyte(),
             current.is_narrowed(),
             current.base_buffer,
-            eval.buffers.shared_text_buffer_ids(current_id),
+            eval.edit.buffers.shared_text_buffer_ids(current_id),
         )
     };
     let old_undo_list = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|buffer| buffer.get_undo_list())
@@ -1825,6 +1845,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
         let mut snapshots = Vec::with_capacity(shared_ids.len());
         for id in &shared_ids {
             let buffer = eval
+                .edit
                 .buffers
                 .get(*id)
                 .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
@@ -1864,6 +1885,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
 
     let source_value = {
         let buffer = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1882,6 +1904,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
 
     let new_props = {
         let buffer = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1912,6 +1935,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
     // overlays.
     {
         let buffer = eval
+            .edit
             .buffers
             .get_mut(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1936,7 +1960,8 @@ pub(crate) fn builtin_set_buffer_multibyte(
     // narrowing / marker remapping must see the new multibyteness, otherwise it
     // counts every byte as a character.
     for id in &shared_ids {
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_multibyte_flag(*id, target_multibyte)
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
     }
@@ -1960,27 +1985,32 @@ pub(crate) fn builtin_set_buffer_multibyte(
             .map(|old_byte| map_boundary(old_byte.get()));
         let last_window_start_byte = map_boundary(snapshot.last_window_start_old_emacs_byte.get());
 
-        eval.buffers
+        eval.edit
+            .buffers
             .restore_buffer_emacs_byte_restriction(
                 snapshot.id,
                 EmacsByteRange::new(EmacsBytePos::new(begv_byte), EmacsBytePos::new(zv_byte)),
             )
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
-        eval.buffers
+        eval.edit
+            .buffers
             .goto_buffer_emacs_byte_pos(snapshot.id, EmacsBytePos::new(pt_byte))
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
 
         if let Some(mark_byte) = mark_byte {
-            eval.buffers
+            eval.edit
+                .buffers
                 .set_buffer_mark_emacs_byte_pos(snapshot.id, EmacsBytePos::new(mark_byte))
                 .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
         } else {
-            eval.buffers
+            eval.edit
+                .buffers
                 .clear_buffer_mark(snapshot.id)
                 .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
         }
 
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_last_window_start(
                 snapshot.id,
                 LispCharPos1::from_one_based_usize(
@@ -1993,6 +2023,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
         // compares numeric begins while nodes change coordinate spaces. Build
         // the complete remap before publication, rather than moving by bytes.
         let remap_buffer = eval
+            .edit
             .buffers
             .get(snapshot.id)
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
@@ -2020,18 +2051,21 @@ pub(crate) fn builtin_set_buffer_multibyte(
                 }
             })
             .collect();
-        eval.buffers
+        eval.edit
+            .buffers
             .get_mut(snapshot.id)
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?
             .overlays
             .remap_overlay_positions(&remaps);
         for _ in &remaps {
-            eval.buffers
+            eval.edit
+                .buffers
                 .note_overlay_modification(snapshot.id)
                 .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
         }
 
-        eval.buffers
+        eval.edit
+            .buffers
             .set_buffer_multibyte_flag(snapshot.id, target_multibyte)
             .ok_or_else(|| signal("error", vec![Value::string("Missing shared buffer")]))?;
         // The remap above moved every marker in the chain, the windows'
@@ -2046,7 +2080,10 @@ pub(crate) fn builtin_set_buffer_multibyte(
     // GNU buffer.c:2985-2989: a real displayed-buffer conversion raises
     // windows_or_buffers_changed ALL after remapping text and overlays.
     if super::redisplay_policy::gnu_redisplay_hooks_enabled()
-        && eval.frames.buffer_window_count(&eval.buffers, current_id) > 0
+        && eval
+            .frames
+            .buffer_window_count(&eval.edit.buffers, current_id)
+            > 0
     {
         eval.gnu_mark_windows_all();
         eval.request_menu_bar_rebuild(super::eval::MenuBarRebuildReason::WindowsOrBuffersChanged);
@@ -2060,6 +2097,7 @@ pub(crate) fn builtin_set_buffer_multibyte(
             restore_flag,
         ]);
         let _ = eval
+            .edit
             .buffers
             .configure_buffer_undo_list(current_id, Value::cons(undo_entry, old_undo_list));
     }
@@ -2106,7 +2144,7 @@ pub(crate) fn builtin_split_window_internal(
     // rejects, and let every in-tree caller omit a size without noticing.
     super::window_cmds::validate_split_window_target(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &args[0],
     )?;
     let _ = expect_fixnum(&args[1])?;
@@ -2146,7 +2184,7 @@ pub(crate) fn builtin_split_window_internal(
     );
     let result = super::window_cmds::split_window_internal_impl_in_state_with_normal(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args[0],
         args[1],
         args[2],
@@ -2291,7 +2329,7 @@ fn constrain_to_field_syms() -> &'static ConstrainToFieldSyms {
 fn current_buffer_cannot_have_fields(eval: &super::eval::Context) -> bool {
     use crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent;
     let syms = constrain_to_field_syms();
-    let Some(buf) = eval.buffers.current_buffer() else {
+    let Some(buf) = eval.edit.buffers.current_buffer() else {
         return false;
     };
     let nil_var = |sym: crate::emacs_core::intern::SymId| {
@@ -2392,6 +2430,7 @@ pub(crate) fn builtin_constrain_to_field_5(
     args: &[Value],
 ) -> EvalResult {
     let current = &mut eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2405,9 +2444,9 @@ pub(crate) fn builtin_constrain_to_field_5(
     let new_argument = if let Some(point) = orig_point {
         point
     } else {
-        FieldMotionPosition::try_from((&eval.buffers, args[0]))?
+        FieldMotionPosition::try_from((&eval.edit.buffers, args[0]))?
     };
-    let old_argument = FieldMotionPosition::try_from((&eval.buffers, args[1]))?;
+    let old_argument = FieldMotionPosition::try_from((&eval.edit.buffers, args[1]))?;
     let mut result = new_argument;
     let new_pos = i64::from(new_argument.0);
     let old_pos = i64::from(old_argument.0);
@@ -2443,7 +2482,7 @@ pub(crate) fn builtin_constrain_to_field_5(
         let field = Value::from_sym_id(constrain_to_field_syms().field);
         let has_field = |eval: &super::eval::Context, pos: i64| -> Result<bool, Flow> {
             Ok(
-                !char_property_in_current_buffer(eval.variables(), &eval.buffers, pos, field)?
+                !char_property_in_current_buffer(eval.variables(), &eval.edit.buffers, pos, field)?
                     .is_nil(),
             )
         };
@@ -2458,21 +2497,21 @@ pub(crate) fn builtin_constrain_to_field_5(
             eval.variables(),
             &[],
             None,
-            &eval.buffers,
+            &eval.edit.buffers,
             &[Value::fixnum(old_pos), *capture_prop],
         )?;
         constrain = old_capture.is_nil()
             && (old_pos <= point_min
                 || char_property_in_current_buffer(
                     eval.variables(),
-                    &eval.buffers,
+                    &eval.edit.buffers,
                     old_pos,
                     *capture_prop,
                 )?
                 .is_nil()
                 || char_property_in_current_buffer(
                     eval.variables(),
-                    &eval.buffers,
+                    &eval.edit.buffers,
                     old_pos - 1,
                     *capture_prop,
                 )?
@@ -2501,12 +2540,12 @@ pub(crate) fn builtin_constrain_to_field_5(
             )?
         };
         expect_int(&field_bound)?;
-        let field_bound = FieldMotionPosition::try_from((&eval.buffers, field_bound))?;
+        let field_bound = FieldMotionPosition::try_from((&eval.edit.buffers, field_bound))?;
         let bound = i64::from(field_bound.0);
 
         let should_constrain = if bound < new_pos { forward } else { !forward };
         let same_line = !only_in_line
-            || !current_buffer_has_newline_between_positions(&eval.buffers, new_pos, bound)?;
+            || !current_buffer_has_newline_between_positions(&eval.edit.buffers, new_pos, bound)?;
         if should_constrain && same_line {
             result = field_bound;
         }
@@ -2517,15 +2556,18 @@ pub(crate) fn builtin_constrain_to_field_5(
         && new_pos != orig_point
     {
         let current_id = eval
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let buf = &mut eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let byte_pos = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(new_pos));
         let _ = eval
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(current_id, byte_pos);
     }
@@ -2718,7 +2760,7 @@ pub(crate) fn builtin_field_beginning(
     expect_max_args("field-beginning", &args, 3)?;
     let limit = match args.get(2) {
         Some(limit_value) if !limit_value.is_nil() => {
-            let limit = expect_integer_or_marker_in_buffers(&eval.buffers, limit_value)?;
+            let limit = expect_integer_or_marker_in_buffers(&eval.edit.buffers, limit_value)?;
             if limit <= 0 {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
@@ -2732,7 +2774,7 @@ pub(crate) fn builtin_field_beginning(
     let (beg, _) = find_field_bounds_in_state(
         eval.variables(),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         args.first(),
         args.get(1).is_some_and(|value| value.is_truthy()),
         limit,
@@ -2745,7 +2787,7 @@ pub(crate) fn builtin_field_end(eval: &mut super::eval::Context, args: Vec<Value
     expect_max_args("field-end", &args, 3)?;
     let limit = match args.get(2) {
         Some(limit_value) if !limit_value.is_nil() => Some(expect_integer_or_marker_in_buffers(
-            &eval.buffers,
+            &eval.edit.buffers,
             limit_value,
         )?),
         _ => None,
@@ -2753,7 +2795,7 @@ pub(crate) fn builtin_field_end(eval: &mut super::eval::Context, args: Vec<Value
     let (_, end) = find_field_bounds_in_state(
         eval.variables(),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         args.first(),
         args.get(1).is_some_and(|value| value.is_truthy()),
         None,
@@ -2770,7 +2812,7 @@ pub(crate) fn builtin_field_string(
     let (beg, end) = find_field_bounds_in_state(
         eval.variables(),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         args.first(),
         false,
         None,
@@ -2787,7 +2829,7 @@ pub(crate) fn builtin_field_string_no_properties(
     let (beg, end) = find_field_bounds_in_state(
         eval.variables(),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         args.first(),
         false,
         None,
@@ -2807,7 +2849,7 @@ pub(crate) fn builtin_delete_field(
     let (beg, end) = find_field_bounds_in_state(
         eval.variables(),
         &[],
-        &eval.buffers,
+        &eval.edit.buffers,
         args.first(),
         false,
         None,
@@ -2852,6 +2894,7 @@ pub(crate) fn builtin_point(eval: &mut super::eval::Context, args: Vec<Value>) -
 
 pub(crate) fn builtin_point_0(eval: &mut super::eval::Context) -> EvalResult {
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2860,6 +2903,7 @@ pub(crate) fn builtin_point_0(eval: &mut super::eval::Context) -> EvalResult {
 
 pub(crate) fn builtin_point_min_0(eval: &mut super::eval::Context) -> EvalResult {
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2874,6 +2918,7 @@ pub(crate) fn builtin_point_max(eval: &mut super::eval::Context, args: Vec<Value
 
 pub(crate) fn builtin_point_max_0(eval: &mut super::eval::Context) -> EvalResult {
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2891,11 +2936,13 @@ pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -
     // arg survives extraction; the typed position carries the coordinate.
     let pos = LispCharPos1::from_value(eval, arg)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let (old_byte, byte_pos) = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -2908,6 +2955,7 @@ pub(crate) fn builtin_goto_char_1(eval: &mut super::eval::Context, arg: Value) -
     let direction = if byte_pos >= old_byte { 1 } else { -1 };
     let adjusted = super::navigation::adjust_for_intangible(eval, byte_pos, direction);
     let _ = eval
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current_id, adjusted);
     // Run point motion hooks
@@ -3438,7 +3486,7 @@ fn general_insert_function(
     property_mode: InsertPiecePropertyMode,
 ) -> EvalResult {
     for arg in args {
-        let target_multibyte = current_buffer_multibyte(&eval.buffers)?;
+        let target_multibyte = current_buffer_multibyte(&eval.edit.buffers)?;
         let Some(pending) = PendingInsert::classify(*arg, target_multibyte)? else {
             continue;
         };
@@ -3561,10 +3609,12 @@ fn insert_one_pending(
     property_mode: InsertPiecePropertyMode,
 ) -> EvalResult {
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let insert_pos = eval
+        .edit
         .buffers
         .get(current_id)
         .map(Buffer::point_emacs_byte_pos)
@@ -3603,7 +3653,7 @@ fn insert_one_pending(
         return Ok(Value::NIL);
     }
     let change = current_empty_text_change_at_emacs_byte_pos(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         insert_pos,
         insert_extent,
@@ -3612,7 +3662,7 @@ fn insert_one_pending(
     insert_pieces_in_state(
         VariableView::new(&eval.obarray, &eval.owner),
         &[],
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         pieces,
         marker_placement,
         property_mode,
@@ -3795,7 +3845,7 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
         return Ok(Value::NIL);
     }
 
-    let multibyte = current_buffer_multibyte(&eval.buffers)?;
+    let multibyte = current_buffer_multibyte(&eval.edit.buffers)?;
     let unit = if let Some(bytes) = encode_char_code_for_buffer_bytes(char_code as u32, multibyte) {
         bytes
     } else {
@@ -3805,6 +3855,7 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
         ));
     };
     let existing = eval
+        .edit
         .buffers
         .current_buffer()
         .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
@@ -3823,10 +3874,11 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
     }
     let to_insert = lisp_string_from_buffer_bytes(bytes, multibyte);
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if eval.buffers.get(current_id).is_some_and(|buf| {
+    if eval.edit.buffers.get(current_id).is_some_and(|buf| {
         super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
     }) {
         return Err(signal(
@@ -3836,6 +3888,7 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
     }
 
     let insert_pos = eval
+        .edit
         .buffers
         .get(current_id)
         .map(Buffer::point_emacs_byte_pos)
@@ -3843,13 +3896,14 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
     let text_extent = super::editfns::lisp_string_text_extent(&to_insert);
     let text_len = text_extent.emacs_bytes();
     let change = current_empty_text_change_at_emacs_byte_pos(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         insert_pos,
         text_extent,
     )?;
     super::editfns::signal_before_text_change(eval, change)?;
     let _ = eval
+        .edit
         .buffers
         .insert_lisp_string_into_buffer(current_id, &to_insert);
     if args.get(2).is_some_and(|value| value.is_truthy()) {
@@ -3857,16 +3911,19 @@ pub(crate) fn builtin_insert_char(eval: &mut super::eval::Context, args: Vec<Val
         apply_inherited_text_properties(
             VariableView::new(&eval.obarray, &eval.owner),
             &[],
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             current_id,
             insert_pos.get(),
             text_len.get(),
             mode,
         );
-        let _ = eval.buffers.merge_adjacent_equal_buffer_text_properties(
-            current_id,
-            EmacsByteRange::from_start_len(insert_pos, text_len),
-        );
+        let _ = eval
+            .edit
+            .buffers
+            .merge_adjacent_equal_buffer_text_properties(
+                current_id,
+                EmacsByteRange::from_start_len(insert_pos, text_len),
+            );
     }
     super::editfns::signal_after_text_change(eval, change)?;
     Ok(Value::NIL)
@@ -3887,15 +3944,17 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
     }
 
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let multibyte = eval
+        .edit
         .buffers
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .get_multibyte();
-    if eval.buffers.get(current_id).is_some_and(|buf| {
+    if eval.edit.buffers.get(current_id).is_some_and(|buf| {
         super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
     }) {
         return Err(signal(
@@ -3914,6 +3973,7 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
     )
     .expect("insert-byte must produce a valid buffer encoding");
     let existing = eval
+        .edit
         .buffers
         .current_buffer()
         .map_or(0, |buffer| buffer.total_emacs_byte_len().get());
@@ -3932,6 +3992,7 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
     }
     let to_insert = lisp_string_from_buffer_bytes(bytes, multibyte);
     let insert_pos = eval
+        .edit
         .buffers
         .get(current_id)
         .map(Buffer::point_emacs_byte_pos)
@@ -3939,13 +4000,14 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
     let text_extent = super::editfns::lisp_string_text_extent(&to_insert);
     let text_len = text_extent.emacs_bytes();
     let change = current_empty_text_change_at_emacs_byte_pos(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         insert_pos,
         text_extent,
     )?;
     super::editfns::signal_before_text_change(eval, change)?;
     let _ = eval
+        .edit
         .buffers
         .insert_lisp_string_into_buffer(current_id, &to_insert);
     if args.get(2).is_some_and(|value| value.is_truthy()) {
@@ -3953,16 +4015,19 @@ pub(crate) fn builtin_insert_byte(eval: &mut super::eval::Context, args: Vec<Val
         apply_inherited_text_properties(
             VariableView::new(&eval.obarray, &eval.owner),
             &[],
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             current_id,
             insert_pos.get(),
             text_len.get(),
             mode,
         );
-        let _ = eval.buffers.merge_adjacent_equal_buffer_text_properties(
-            current_id,
-            EmacsByteRange::from_start_len(insert_pos, text_len),
-        );
+        let _ = eval
+            .edit
+            .buffers
+            .merge_adjacent_equal_buffer_text_properties(
+                current_id,
+                EmacsByteRange::from_start_len(insert_pos, text_len),
+            );
     }
     super::editfns::signal_after_text_change(eval, change)?;
     Ok(Value::NIL)
@@ -4007,20 +4072,20 @@ pub(crate) fn builtin_subst_char_in_region(
 ) -> EvalResult {
     expect_args_range("subst-char-in-region", &args, 4, 5)?;
 
-    let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
     // The Lisp boundary has checked both codes against EmacsChar::MAX.
     let from_code = EmacsChar::from_code_unchecked(expect_character_code(&args[2])? as u32);
     let to_code = EmacsChar::from_code_unchecked(expect_character_code(&args[3])? as u32);
     let noundo = args.get(4).is_some_and(|value| !value.is_nil());
 
-    let current_id = eval.buffers.current_buffer_id().ok_or_else(|| {
+    let current_id = eval.edit.buffers.current_buffer_id().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
         )
     })?;
-    let buffer = eval.buffers.get(current_id).ok_or_else(|| {
+    let buffer = eval.edit.buffers.get(current_id).ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -4066,7 +4131,7 @@ pub(crate) fn builtin_subst_char_in_region(
         return Ok(Value::NIL);
     };
 
-    if eval.buffers.get(current_id).is_some_and(|buf| {
+    if eval.edit.buffers.get(current_id).is_some_and(|buf| {
         super::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
     }) {
         return Err(signal(
@@ -4099,7 +4164,7 @@ pub(crate) fn builtin_subst_char_in_region(
         TextEditRange::from_start_end(changed_range.start_anchor(), range.end_anchor());
     let after_change =
         TextChange::unchanged_extent_with_after_range(changed_range_through_end, changed_range);
-    let changed = eval.buffers.subst_char_in_buffer_region(
+    let changed = eval.edit.buffers.subst_char_in_buffer_region(
         current_id,
         range,
         changed_range_through_end,
@@ -4124,7 +4189,7 @@ fn subst_char_in_region_scan(
     to_bytes: &[u8],
     args: &[Value],
 ) -> Result<Option<(TextEditRange, TextEditRange)>, Flow> {
-    let buf = eval.buffers.get(current_id).ok_or_else(|| {
+    let buf = eval.edit.buffers.get(current_id).ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -4165,7 +4230,8 @@ pub(crate) fn builtin_buffer_enable_undo(
     }
 
     let id = if args.is_empty() || args[0].is_nil() {
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
             .id
@@ -4173,19 +4239,22 @@ pub(crate) fn builtin_buffer_enable_undo(
         match args[0].kind() {
             ValueKind::Veclike(VecLikeType::Buffer) => {
                 let bid = args[0].as_buffer_id().unwrap();
-                if eval.buffers.get(bid).is_none() {
+                if eval.edit.buffers.get(bid).is_none() {
                     return Ok(Value::NIL);
                 }
                 bid
             }
             ValueKind::String => {
                 let name = expect_buffer_name_string(&args[0])?;
-                eval.buffers.find_buffer_by_name(&name).ok_or_else(|| {
-                    signal(
-                        "error",
-                        vec![Value::string(format!("No buffer named {name}"))],
-                    )
-                })?
+                eval.edit
+                    .buffers
+                    .find_buffer_by_name(&name)
+                    .ok_or_else(|| {
+                        signal(
+                            "error",
+                            vec![Value::string(format!("No buffer named {name}"))],
+                        )
+                    })?
             }
             _other => {
                 return Err(signal(
@@ -4195,7 +4264,8 @@ pub(crate) fn builtin_buffer_enable_undo(
             }
         }
     };
-    eval.buffers
+    eval.edit
+        .buffers
         .enable_buffer_undo(id)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     Ok(Value::NIL)
@@ -4211,6 +4281,7 @@ pub(crate) fn builtin_buffer_size(eval: &mut super::eval::Context, args: Vec<Val
     expect_max_args("buffer-size", &args, 1)?;
     if args.is_empty() || args[0].is_nil() {
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4218,7 +4289,7 @@ pub(crate) fn builtin_buffer_size(eval: &mut super::eval::Context, args: Vec<Val
     }
 
     let id = expect_buffer_id(&args[0])?;
-    if let Some(buf) = eval.buffers.get(id) {
+    if let Some(buf) = eval.edit.buffers.get(id) {
         Ok(Value::fixnum(buf.total_char_len().get() as i64))
     } else {
         Ok(Value::fixnum(0))
@@ -4243,14 +4314,15 @@ pub(crate) fn builtin_narrow_to_region_2(
 ) -> EvalResult {
     let args: [Value; 2] = [start, end];
     expect_args("narrow-to-region", &args, 2)?;
-    let start = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let start = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let byte_range = normalize_narrow_region_in_buffers(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         LispCharPos1::new(start),
         LispCharPos1::new(end),
@@ -4259,6 +4331,7 @@ pub(crate) fn builtin_narrow_to_region_2(
     )?;
     let before = accessible_bounds(eval, current_id);
     let _ = eval
+        .edit
         .buffers
         .narrow_buffer_to_emacs_byte_range(current_id, byte_range);
     // GNU carries narrowing into the mode line through `clip_changed`: it is a
@@ -4288,7 +4361,7 @@ fn accessible_bounds(
     eval: &super::eval::Context,
     buffer: crate::buffer::BufferId,
 ) -> Option<(usize, usize)> {
-    eval.buffers.get(buffer).map(|buf| {
+    eval.edit.buffers.get(buffer).map(|buf| {
         let range = buf.accessible_emacs_byte_region().range();
         (range.start().get(), range.end().get())
     })
@@ -4306,11 +4379,12 @@ pub(crate) fn builtin_widen_0(eval: &mut super::eval::Context) -> EvalResult {
     let args: [Value; 0] = [];
     expect_args("widen", &args, 0)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let before = accessible_bounds(eval, current_id);
-    let _ = eval.buffers.widen_buffer(current_id);
+    let _ = eval.edit.buffers.widen_buffer(current_id);
     // The other half of GNU's clip_changed, and the same bounds-changed guard
     // (GNU: `if (BEGV != s || ZV != e) current_buffer->clip_changed = 1;`,
     // editfns.c:2990). This is the call that made the guard load-bearing —
@@ -4341,6 +4415,7 @@ pub(crate) fn builtin_buffer_modified_p_1(
     expect_max_args("buffer-modified-p", &args, 1)?;
     if args.is_empty() || args[0].is_nil() {
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4348,7 +4423,7 @@ pub(crate) fn builtin_buffer_modified_p_1(
     }
 
     let id = expect_buffer_id(&args[0])?;
-    if let Some(buf) = eval.buffers.get(id) {
+    if let Some(buf) = eval.edit.buffers.get(id) {
         Ok(buf.modified_state_value())
     } else {
         Ok(Value::NIL)
@@ -4361,16 +4436,19 @@ pub(crate) fn builtin_set_buffer_modified_p(
 ) -> EvalResult {
     expect_args("set-buffer-modified-p", &args, 1)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let was_modified = eval
+        .edit
         .buffers
         .modified_state_root_id(current_id)
-        .and_then(|root_id| eval.buffers.get(root_id))
+        .and_then(|root_id| eval.edit.buffers.get(root_id))
         .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
     filelock::sync_modified_buffer_file_lock(eval, current_id, was_modified, args[0])?;
     let _ = eval
+        .edit
         .buffers
         .restore_buffer_modified_state(current_id, args[0]);
     super::builtins::misc_pure::builtin_force_mode_line_update(eval, vec![Value::NIL])
@@ -4382,16 +4460,19 @@ pub(crate) fn builtin_restore_buffer_modified_p(
 ) -> EvalResult {
     expect_args("restore-buffer-modified-p", &args, 1)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let was_modified = eval
+        .edit
         .buffers
         .modified_state_root_id(current_id)
-        .and_then(|root_id| eval.buffers.get(root_id))
+        .and_then(|root_id| eval.edit.buffers.get(root_id))
         .is_some_and(|buffer| buffer.modified_state_value().is_truthy());
     filelock::sync_modified_buffer_file_lock(eval, current_id, was_modified, args[0])?;
-    eval.buffers
+    eval.edit
+        .buffers
         .restore_buffer_modified_state(current_id, args[0])
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
@@ -4414,9 +4495,9 @@ pub(crate) fn builtin_buffer_modified_tick(
     args: Vec<Value>,
 ) -> EvalResult {
     let target =
-        optional_buffer_tick_target_in_manager(&eval.buffers, "buffer-modified-tick", &args)?;
+        optional_buffer_tick_target_in_manager(&eval.edit.buffers, "buffer-modified-tick", &args)?;
     if let Some(id) = target
-        && let Some(buf) = eval.buffers.get(id)
+        && let Some(buf) = eval.edit.buffers.get(id)
     {
         return Ok(Value::fixnum(buf.modified_tick()));
     }
@@ -4427,10 +4508,13 @@ pub(crate) fn builtin_buffer_chars_modified_tick(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let target =
-        optional_buffer_tick_target_in_manager(&eval.buffers, "buffer-chars-modified-tick", &args)?;
+    let target = optional_buffer_tick_target_in_manager(
+        &eval.edit.buffers,
+        "buffer-chars-modified-tick",
+        &args,
+    )?;
     if let Some(id) = target
-        && let Some(buf) = eval.buffers.get(id)
+        && let Some(buf) = eval.edit.buffers.get(id)
     {
         return Ok(Value::fixnum(buf.chars_modified_tick()));
     }
@@ -4445,16 +4529,17 @@ pub(crate) fn builtin_internal_set_buffer_modified_tick(
     let tick = expect_fixnum(&args[0])?;
     let target = if let Some(buffer) = args.get(1) {
         if buffer.is_nil() {
-            eval.buffers.current_buffer_id()
+            eval.edit.buffers.current_buffer_id()
         } else {
             Some(expect_buffer_id(buffer)?)
         }
     } else {
-        eval.buffers.current_buffer_id()
+        eval.edit.buffers.current_buffer_id()
     }
     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
 
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_modified_tick(target, tick)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::NIL)
@@ -4466,6 +4551,7 @@ pub(crate) fn builtin_recent_auto_save_p(
 ) -> EvalResult {
     expect_args("recent-auto-save-p", &args, 0)?;
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4478,10 +4564,12 @@ pub(crate) fn builtin_set_buffer_auto_saved(
 ) -> EvalResult {
     expect_args("set-buffer-auto-saved", &args, 0)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_auto_saved(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     Ok(Value::NIL)
@@ -4497,7 +4585,7 @@ pub(crate) fn builtin_buffer_list(eval: &mut super::eval::Context, args: Vec<Val
                 let frame = eval.frames.get(fid)?;
 
                 // Global buffer list (Vbuffer_alist equivalent).
-                let mut general = eval.buffers.buffer_list();
+                let mut general = eval.edit.buffers.buffer_list();
 
                 // Frame-specific lists (GNU buffer.c:438-460).
                 // f->buffer_list: most-recently-shown first.
@@ -4522,7 +4610,7 @@ pub(crate) fn builtin_buffer_list(eval: &mut super::eval::Context, args: Vec<Val
             }
             _ => None,
         })
-        .unwrap_or_else(|| eval.buffers.buffer_list());
+        .unwrap_or_else(|| eval.edit.buffers.buffer_list());
     let vals: Vec<Value> = ids.into_iter().map(Value::make_buffer).collect();
     Ok(Value::list(vals))
 }
@@ -4563,7 +4651,7 @@ pub(crate) fn builtin_other_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    other_buffer_impl_in_state(&mut eval.frames, &mut eval.buffers, args)
+    other_buffer_impl_in_state(&mut eval.frames, &mut eval.edit.buffers, args)
 }
 
 pub(crate) fn other_buffer_impl(
@@ -4705,7 +4793,7 @@ pub(crate) fn builtin_generate_new_buffer_name(
         ));
     }
     let ignore = args.get(1).and_then(|v| v.as_utf8_str());
-    generate_new_buffer_name_value_in_state(&eval.buffers, args[0], ignore)
+    generate_new_buffer_name_value_in_state(&eval.edit.buffers, args[0], ignore)
 }
 
 /// Return GNU `generate-new-buffer-name`'s Lisp string result.
@@ -4750,7 +4838,7 @@ pub(crate) fn builtin_char_after(eval: &mut super::eval::Context, args: Vec<Valu
 pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
     let args: [Value; 1] = [pos];
     expect_max_args("char-after", &args, 1)?;
-    let buf = eval.buffers.current_buffer().ok_or_else(|| {
+    let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -4763,7 +4851,7 @@ pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) 
     } else if pos.is_marker() {
         // GNU editfns.c:1052-1057/1085-1090 uses the marker's own byte
         // position even when its buffer differs from the current buffer.
-        let location = super::marker::marker_location_or_signal(&eval.buffers, pos)?;
+        let location = super::marker::marker_location_or_signal(&eval.edit.buffers, pos)?;
         let byte_pos = location.byte_pos();
         if !accessible.contains(byte_pos) {
             return Ok(Value::NIL);
@@ -4775,7 +4863,7 @@ pub(crate) fn builtin_char_after_1(eval: &mut super::eval::Context, pos: Value) 
         };
         return Ok(code.map_or(Value::NIL, |code| Value::fixnum(i64::from(code))));
     } else {
-        let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
+        let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
         if pos <= 0 {
             return Ok(Value::NIL);
         }
@@ -4804,7 +4892,7 @@ pub(crate) fn builtin_char_before(eval: &mut super::eval::Context, args: Vec<Val
 pub(crate) fn builtin_char_before_1(eval: &mut super::eval::Context, pos: Value) -> EvalResult {
     let args: [Value; 1] = [pos];
     expect_max_args("char-before", &args, 1)?;
-    let buf = eval.buffers.current_buffer().ok_or_else(|| {
+    let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -4819,12 +4907,13 @@ pub(crate) fn builtin_char_before_1(eval: &mut super::eval::Context, pos: Value)
     } else if pos.is_marker() {
         // GNU editfns.c:1052-1057/1085-1090 uses the marker's own byte
         // position even when its buffer differs from the current buffer.
-        let byte_pos = super::marker::marker_location_or_signal(&eval.buffers, pos)?.byte_pos();
+        let byte_pos =
+            super::marker::marker_location_or_signal(&eval.edit.buffers, pos)?.byte_pos();
         accessible
             .contains_preceding_char_boundary(byte_pos)
             .then_some(byte_pos)
     } else {
-        let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
+        let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
         if pos <= 0 {
             return Ok(Value::NIL);
         }
@@ -4875,6 +4964,7 @@ pub(crate) fn builtin_byte_to_position_1(
     }
 
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4913,9 +5003,10 @@ pub(crate) fn builtin_position_bytes(
 }
 
 pub(crate) fn builtin_position_bytes_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
-    let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &arg)?;
+    let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &arg)?;
 
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4977,6 +5068,7 @@ pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>
 
     // Buffer path: POSITION is a 1-based character position.
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4984,7 +5076,7 @@ pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>
     let byte_pos = if args.is_empty() || args[0].is_nil() {
         buf.point_emacs_byte_pos()
     } else {
-        let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
+        let pos = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
         let point_min = buf.point_min_lisp_char_pos().as_i64();
         let point_max = buf.point_max_lisp_char_pos().as_i64();
         if pos < point_min || pos >= point_max {
@@ -5070,6 +5162,7 @@ pub(crate) fn buffer_local_value_in(
     )?;
     let id = expect_buffer_id(&args[1])?;
     let buf = eval
+        .edit
         .buffers
         .get_any(id)
         .ok_or_else(|| signal("error", vec![Value::string("No such buffer")]))?;
@@ -5168,7 +5261,7 @@ pub(crate) fn builtin_next_overlay_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_next_overlay_change_in_buffers(&eval.buffers, args)
+    builtin_next_overlay_change_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_next_overlay_change_in_buffers(
@@ -5198,7 +5291,7 @@ pub(crate) fn builtin_previous_overlay_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_previous_overlay_change_in_buffers(&eval.buffers, args)
+    builtin_previous_overlay_change_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_previous_overlay_change_in_buffers(
@@ -5228,7 +5321,7 @@ pub(crate) fn builtin_make_overlay(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_make_overlay_in_buffers(&mut eval.buffers, args)
+    builtin_make_overlay_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_make_overlay_in_buffers(
@@ -5273,12 +5366,12 @@ pub(crate) fn builtin_delete_overlay(
     args: Vec<Value>,
 ) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        return builtin_delete_overlay_in_buffers(&mut eval.buffers, args);
+        return builtin_delete_overlay_in_buffers(&mut eval.edit.buffers, args);
     }
     expect_args("delete-overlay", &args, 1)?;
     let overlay = expect_overlay(&args[0])?;
     let buffer = resolve_overlay_buffer_id(overlay);
-    let result = builtin_delete_overlay_in_buffers(&mut eval.buffers, args)?;
+    let result = builtin_delete_overlay_in_buffers(&mut eval.edit.buffers, args)?;
     if let Some(buffer) = buffer {
         eval.gnu_mark_buffer_redisplay(buffer);
     }
@@ -5301,18 +5394,20 @@ pub(crate) fn builtin_delete_overlay_in_buffers(
 /// (overlay-put OVERLAY PROP VAL)
 pub(crate) fn builtin_overlay_put(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        return builtin_overlay_put_in_buffers(&mut eval.buffers, args);
+        return builtin_overlay_put_in_buffers(&mut eval.edit.buffers, args);
     }
     expect_args("overlay-put", &args, 3)?;
     let overlay = expect_overlay(&args[0])?;
     let before = resolve_overlay_buffer_id(overlay).and_then(|buffer| {
-        eval.buffers
+        eval.edit
+            .buffers
             .get(buffer)
             .map(|value| (buffer, value.overlay_modified_tick()))
     });
-    let result = builtin_overlay_put_in_buffers(&mut eval.buffers, args)?;
+    let result = builtin_overlay_put_in_buffers(&mut eval.edit.buffers, args)?;
     if let Some((buffer, tick)) = before
         && eval
+            .edit
             .buffers
             .get(buffer)
             .is_some_and(|value| value.overlay_modified_tick() != tick)
@@ -5371,7 +5466,7 @@ pub(crate) fn builtin_overlay_get(eval: &mut super::eval::Context, args: Vec<Val
     let overlay = expect_overlay(&args[0])?;
     Ok(lookup_overlay_property(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         overlay,
         args[1],
     ))
@@ -5392,7 +5487,7 @@ pub(crate) fn builtin_overlayp_pure(args: &[Value]) -> EvalResult {
 
 /// (overlays-at POS &optional SORTED)
 pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_min_args("overlays-at", &args, 1)?;
     expect_max_args("overlays-at", &args, 2)?;
     let pos = expect_integer_or_marker_in_buffers(buffers, &args[0])?;
@@ -5435,7 +5530,7 @@ pub(crate) fn builtin_overlays_at(eval: &mut super::eval::Context, args: Vec<Val
 
 /// (overlays-in BEG END)
 pub(crate) fn builtin_overlays_in(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_overlays_in_in_buffers(&eval.buffers, args)
+    builtin_overlays_in_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_overlays_in_in_buffers(
@@ -5481,7 +5576,7 @@ pub(crate) fn builtin_overlay_lists(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_lists_in_buffers(&eval.buffers, args)
+    builtin_overlay_lists_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_overlay_lists_in_buffers(
@@ -5508,7 +5603,7 @@ pub(crate) fn builtin_overlay_recenter(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("overlay-recenter", &args, 1)?;
-    let _ = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
+    let _ = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
     Ok(Value::NIL)
 }
 
@@ -5518,20 +5613,20 @@ pub(crate) fn builtin_move_overlay(
     args: Vec<Value>,
 ) -> EvalResult {
     if !super::redisplay_policy::gnu_redisplay_hooks_enabled() {
-        return builtin_move_overlay_in_buffers(&mut eval.buffers, args);
+        return builtin_move_overlay_in_buffers(&mut eval.edit.buffers, args);
     }
     expect_min_args("move-overlay", &args, 3)?;
     expect_max_args("move-overlay", &args, 4)?;
     let overlay = expect_overlay(&args[0])?;
     let old_buffer = resolve_overlay_buffer_id(overlay);
     let new_buffer = if args.get(3).is_some_and(|value| value.is_truthy()) {
-        resolve_buffer_id_in_buffers(&eval.buffers, args.get(3))?
+        resolve_buffer_id_in_buffers(&eval.edit.buffers, args.get(3))?
     } else {
         old_buffer
-            .or_else(|| eval.buffers.current_buffer_id())
+            .or_else(|| eval.edit.buffers.current_buffer_id())
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
     };
-    let result = builtin_move_overlay_in_buffers(&mut eval.buffers, args)?;
+    let result = builtin_move_overlay_in_buffers(&mut eval.edit.buffers, args)?;
     if let Some(buffer) = old_buffer.filter(|buffer| *buffer != new_buffer) {
         eval.gnu_mark_buffer_redisplay(buffer);
     }
@@ -5622,7 +5717,7 @@ pub(crate) fn builtin_overlay_start(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_start_in_buffers(&eval.buffers, args)
+    builtin_overlay_start_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_overlay_start_in_buffers(
@@ -5646,7 +5741,7 @@ pub(crate) fn builtin_overlay_start_in_buffers(
 
 /// (overlay-end OVERLAY)
 pub(crate) fn builtin_overlay_end(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    builtin_overlay_end_in_buffers(&eval.buffers, args)
+    builtin_overlay_end_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_overlay_end_in_buffers(
@@ -5673,7 +5768,7 @@ pub(crate) fn builtin_overlay_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_buffer_in_buffers(&eval.buffers, args)
+    builtin_overlay_buffer_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_overlay_buffer_in_buffers(
@@ -5695,7 +5790,7 @@ pub(crate) fn builtin_overlay_properties(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_overlay_properties_in_buffers(&eval.buffers, args)
+    builtin_overlay_properties_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_overlay_properties_in_buffers(

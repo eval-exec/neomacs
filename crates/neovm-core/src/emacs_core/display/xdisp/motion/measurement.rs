@@ -142,7 +142,7 @@ pub(super) fn resolve(
     window: WindowId,
     request: MotionRequest,
 ) -> Result<Option<MeasuredMotion>, Flow> {
-    let Some(buffer) = eval.buffers.get(request.buffer) else {
+    let Some(buffer) = eval.edit.buffers.get(request.buffer) else {
         return Ok(None);
     };
     let mut backtrack_lines = if request.rows < 0 {
@@ -194,6 +194,7 @@ pub(super) fn resolve(
         {
             backtrack_lines = backtrack_lines.saturating_mul(2).max(1);
             let buffer = eval
+                .edit
                 .buffers
                 .get(request.buffer)
                 .expect("validated source buffer");

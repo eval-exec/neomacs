@@ -137,8 +137,10 @@ pub(crate) fn compose_region_internal(
     // GNU `Fcompose_region_internal` runs `validate_region (&start, &end)`
     // (buffer.c), which resolves markers, swaps so the lower bound comes first,
     // then bounds-checks against `BEGV`/`ZV`.
-    let mut beg = super::builtins::expect_integer_or_marker_in_buffers(&ctx.buffers, &args[0])?;
-    let mut end = super::builtins::expect_integer_or_marker_in_buffers(&ctx.buffers, &args[1])?;
+    let mut beg =
+        super::builtins::expect_integer_or_marker_in_buffers(&ctx.edit.buffers, &args[0])?;
+    let mut end =
+        super::builtins::expect_integer_or_marker_in_buffers(&ctx.edit.buffers, &args[1])?;
     if end < beg {
         std::mem::swap(&mut beg, &mut end);
     }
@@ -146,7 +148,8 @@ pub(crate) fn compose_region_internal(
     let modification_func = args.get(3).copied().unwrap_or(Value::NIL);
     expect_composition_components(components)?;
 
-    let (buffer_handle, point_min, point_max) = if let Some(buf) = ctx.buffers.current_buffer() {
+    let (buffer_handle, point_min, point_max) = if let Some(buf) = ctx.edit.buffers.current_buffer()
+    {
         (
             Value::make_buffer(buf.id),
             buf.point_min_lisp_char_pos().as_i64(),
@@ -483,7 +486,7 @@ pub(crate) fn composition_width_at(
     install_substrate_seams();
     let prop = super::textprop::builtin_get_text_property_in_state(
         ctx.variables(),
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &[Value::fixnum(charpos1), composition_prop_symbol()],
     )
     .ok()?;
@@ -566,7 +569,7 @@ fn composition_components_key(
                 let from = start.max(0) as usize;
                 let to = ((start + nchars).max(0) as usize).min(all.len());
                 all.get(from..to).map(|s| s.to_vec()).unwrap_or_default()
-            } else if let Some(buf) = ctx.buffers.current_buffer() {
+            } else if let Some(buf) = ctx.edit.buffers.current_buffer() {
                 let byte_start = buf
                     .char_pos_to_emacs_byte_pos_clamped(CharPos0::new((start - 1).max(0) as usize));
                 let byte_end = buf.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(
@@ -1208,7 +1211,7 @@ fn has_default_combining_rule(ctx: &super::eval::Context, code: u32) -> bool {
 }
 
 fn current_buffer_is_displayed(ctx: &super::eval::Context) -> bool {
-    let Some(buffer_id) = ctx.buffers.current_buffer_id() else {
+    let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() else {
         return false;
     };
     ctx.frames.selected_frame().is_some_and(|frame| {
@@ -1355,7 +1358,7 @@ pub(crate) fn find_composition_internal(
         }
     } else {
         let (begv, zv) = {
-            let Some(buf) = ctx.buffers.current_buffer() else {
+            let Some(buf) = ctx.edit.buffers.current_buffer() else {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
                     vec![Value::NIL, Value::fixnum(pos)],
@@ -1368,6 +1371,7 @@ pub(crate) fn find_composition_internal(
         };
         if pos < begv || pos > zv {
             let handle = ctx
+                .edit
                 .buffers
                 .current_buffer()
                 .map(|b| Value::make_buffer(b.id))
@@ -1379,6 +1383,7 @@ pub(crate) fn find_composition_internal(
         }
         let to = if limit < 0 { -1 } else { limit.clamp(begv, zv) };
         let buf = ctx
+            .edit
             .buffers
             .current_buffer()
             .expect("checked current buffer");
@@ -1483,11 +1488,11 @@ pub(crate) fn composition_get_gstring(
 
     let codes = if args[3].is_nil() {
         let byte_range = super::editfns::current_buffer_accessible_char_region_in_buffers(
-            &ctx.buffers,
+            &ctx.edit.buffers,
             &args[0],
             &args[1],
         )?;
-        let Some(buf) = ctx.buffers.current_buffer() else {
+        let Some(buf) = ctx.edit.buffers.current_buffer() else {
             return Err(signal("error", vec![Value::string("No current buffer")]));
         };
         if !buf.get_multibyte() {

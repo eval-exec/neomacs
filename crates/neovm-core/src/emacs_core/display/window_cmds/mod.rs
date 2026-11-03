@@ -171,7 +171,7 @@ pub(crate) fn builtin_coordinates_in_window_p(
 ) -> EvalResult {
     expect_args("coordinates-in-window-p", &args, 2)?;
     // GNU decodes WINDOW before it `CHECK_CONS`es COORDINATES.
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let live = decode_live_window_in_state(frames, buffers, args.get(1))?;
 
@@ -1084,7 +1084,7 @@ fn resolve_window_id_with_pred(
     arg: Option<&Value>,
     pred: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
-    resolve_window_id_with_pred_in_state(&mut eval.frames, &mut eval.buffers, arg, pred)
+    resolve_window_id_with_pred_in_state(&mut eval.frames, &mut eval.edit.buffers, arg, pred)
 }
 
 fn resolve_window_id_with_pred_in_state(
@@ -1173,7 +1173,7 @@ pub(crate) fn resolve_frame_id(
     arg: Option<&Value>,
     predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
-    resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, arg, predicate)
+    resolve_frame_id_in_state(&mut eval.frames, &mut eval.edit.buffers, arg, predicate)
 }
 
 pub(crate) fn resolve_frame_id_in_state(
@@ -1412,7 +1412,7 @@ fn get_window(frames: &FrameManager, w: ValidWindow) -> Result<&Window, Flow> {
 /// In batch compatibility mode, GNU Emacs still has an initial frame (`F1`).
 /// When the evaluator has no frame yet, synthesize one on demand.
 pub(crate) fn ensure_selected_frame_id(eval: &mut super::eval::Context) -> FrameId {
-    ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers)
+    ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.edit.buffers)
 }
 
 pub(crate) fn ensure_selected_frame_id_in_state(
@@ -1564,16 +1564,16 @@ pub(crate) fn window_line_wrap(
     current_buffer_id: BufferId,
     engine: MotionEngine,
 ) -> LineWrap {
-    let _ = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers);
+    let _ = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.edit.buffers);
     let Ok((fid, wid)) = resolve_window_id_with_pred_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         window.as_ref(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     ) else {
         return LineWrap::WindowWrap;
     };
-    let current_buffer = eval.buffers.get(current_buffer_id);
+    let current_buffer = eval.edit.buffers.get(current_buffer_id);
     let read = |symbol: crate::emacs_core::intern::WellKnown| {
         crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
@@ -1607,14 +1607,17 @@ pub(crate) fn window_line_wrap(
         Some(frame) => frame.root_window().id(),
         None => return wrapped,
     };
-    let window_cols =
-        window_total_width_impl(&mut eval.frames, &mut eval.buffers, vec![window_value(wid)])
-            .ok()
-            .and_then(|value| value.as_fixnum())
-            .unwrap_or(0);
+    let window_cols = window_total_width_impl(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+        vec![window_value(wid)],
+    )
+    .ok()
+    .and_then(|value| value.as_fixnum())
+    .unwrap_or(0);
     let root_cols = window_total_width_impl(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         vec![window_value(root_wid)],
     )
     .ok()
@@ -1625,7 +1628,7 @@ pub(crate) fn window_line_wrap(
     }
 
     // Re-read through the buffer: `eval.buffers` was borrowed mutably above.
-    let current_buffer = eval.buffers.get(current_buffer_id);
+    let current_buffer = eval.edit.buffers.get(current_buffer_id);
     let partial_width_truncates =
         match crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             eval.variables(),
@@ -1858,7 +1861,7 @@ pub(crate) fn record_window_buffer_change_history_in_state(
 // ===========================================================================
 /// Return the selected window as a typed editor-domain identifier.
 pub(crate) fn selected_window_id(eval: &mut super::eval::Context) -> Result<WindowId, Flow> {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     let fid = ensure_selected_frame_id_in_state(frames, buffers);
     frames
         .get(fid)
@@ -1909,7 +1912,7 @@ pub(crate) fn builtin_frame_selected_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-selected-window", &args, 1)?;
     let fid = resolve_frame_or_window_frame_id_in_state(
         frames,
@@ -1938,7 +1941,7 @@ pub(crate) fn builtin_frame_old_selected_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-old-selected-window", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -2180,7 +2183,7 @@ pub(crate) fn builtin_set_frame_selected_window(
     expect_max_args("set-frame-selected-window", &args, 3)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -2213,7 +2216,7 @@ pub(crate) fn builtin_set_frame_selected_window(
             )],
         ));
     }
-    let selected_fid = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers);
+    let selected_fid = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.edit.buffers);
     if fid == selected_fid {
         let mut select_args = vec![window_value(wid)];
         if let Some(norecord) = args.get(2) {
@@ -2240,7 +2243,7 @@ pub(crate) fn builtin_frame_first_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-first-window", &args, 1)?;
     let fid = resolve_frame_or_window_frame_id_in_state(
         frames,
@@ -2263,7 +2266,7 @@ pub(crate) fn builtin_frame_root_window(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-root-window", &args, 1)?;
     let fid = resolve_frame_or_window_frame_id_in_state(
         frames,
@@ -2281,7 +2284,7 @@ pub(crate) fn builtin_minibuffer_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("minibuffer-window", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -2302,7 +2305,7 @@ pub(crate) fn builtin_window_minibuffer_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-minibuffer-p", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
@@ -2340,7 +2343,7 @@ fn active_minibuffer_window_id(eval: &super::eval::Context) -> Option<WindowId> 
 }
 /// `(window-frame &optional WINDOW)` -> frame of WINDOW.
 pub(crate) fn builtin_window_frame(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-frame", &args, 1)?;
     let (fid, _wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
@@ -2348,7 +2351,7 @@ pub(crate) fn builtin_window_frame(eval: &mut super::eval::Context, args: &[Valu
 }
 /// `(window-buffer &optional WINDOW)` -> buffer object.
 pub(crate) fn builtin_window_buffer(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-buffer", &args, 1)?;
     let resolve_buffer = |frames: &FrameManager, fid: FrameId, wid: WindowId| -> EvalResult {
         let w = get_leaf(frames, fid, wid)?;
@@ -2386,7 +2389,7 @@ pub(crate) fn builtin_window_display_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-display-table", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -2398,7 +2401,7 @@ pub(crate) fn builtin_set_window_display_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-display-table", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -2412,7 +2415,7 @@ pub(crate) fn builtin_window_cursor_type(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-cursor-type", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -2437,7 +2440,7 @@ pub(crate) fn builtin_set_window_cursor_type(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-cursor-type", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -2461,7 +2464,7 @@ pub(crate) fn builtin_window_cursor_info(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-cursor-info", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2517,7 +2520,7 @@ pub(crate) fn builtin_window_parameter(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("window-parameter", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let wid = resolve_window_object_id_with_pred_in_state(
@@ -2542,7 +2545,7 @@ pub(crate) fn builtin_set_window_parameter(
         && eval
             .special_variable_value_by_id(intern("window-auto-redraw-on-parameter-change"))
             .is_none_or(|enabled| enabled.is_truthy());
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let wid = resolve_window_object_id_with_pred_in_state(
         frames,
@@ -2586,7 +2589,7 @@ pub(crate) fn builtin_window_parameters(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-parameters", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -2598,7 +2601,7 @@ pub(crate) fn builtin_window_parent(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-parent", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2613,7 +2616,7 @@ pub(crate) fn builtin_window_top_child(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-top-child", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2631,7 +2634,7 @@ pub(crate) fn builtin_window_left_child(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-left-child", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2649,7 +2652,7 @@ pub(crate) fn builtin_window_next_sibling(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-next-sibling", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2664,7 +2667,7 @@ pub(crate) fn builtin_window_prev_sibling(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-prev-sibling", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2688,7 +2691,7 @@ pub(crate) fn builtin_window_normal_size(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-normal-size", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -2708,7 +2711,7 @@ pub(crate) fn builtin_window_normal_size(
 }
 /// `(window-start &optional WINDOW)` -> integer position.
 pub(crate) fn builtin_window_start(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-start", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -2761,7 +2764,7 @@ fn query_window_end(
         } => (*window_start, *buffer_id, *window_end),
         Window::Internal { .. } => return Ok(Value::NIL),
     };
-    let buffer_z = current_buffer_z(&eval.buffers, buffer_id, window_start);
+    let buffer_z = current_buffer_z(&eval.edit.buffers, buffer_id, window_start);
     let stored_end = window_end.charpos_from_z(buffer_z);
     if policy == WindowEndQueryPolicy::LastPresented || noninteractive || frame_initial {
         return Ok(Value::fixnum(stored_end.as_i64()));
@@ -2806,7 +2809,7 @@ pub(crate) fn builtin_window_end(eval: &mut super::eval::Context, args: Vec<Valu
     expect_max_args("window-end", &args, 2)?;
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -2822,7 +2825,7 @@ pub(crate) fn builtin_window_point(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-point", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -2853,7 +2856,7 @@ pub(crate) fn builtin_set_window_start(
     expect_max_args("set-window-start", &args, 3)?;
     let chrome_dirty_window;
     let result = {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
         let (fid, wid) = resolve_window_id_with_pred_in_state(
             frames,
             buffers,
@@ -2932,7 +2935,7 @@ pub(crate) fn builtin_set_window_point(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-point", &args, 2)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3035,7 +3038,7 @@ pub(crate) fn builtin_window_use_time(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-use-time", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -3047,7 +3050,7 @@ pub(crate) fn builtin_window_bump_use_time(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-bump-use-time", &args, 1)?;
     let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
     let selected_wid = frames
@@ -3090,7 +3093,7 @@ pub(crate) fn builtin_window_old_point(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-old-point", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -3132,7 +3135,7 @@ pub(crate) fn builtin_window_old_buffer(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-old-buffer", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = resolve_window_object_id_with_pred_in_state(
@@ -3154,7 +3157,7 @@ pub(crate) fn builtin_window_prev_buffers(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-prev-buffers", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -3166,7 +3169,7 @@ pub(crate) fn builtin_window_next_buffers(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-next-buffers", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -3178,7 +3181,7 @@ pub(crate) fn builtin_set_window_prev_buffers(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-prev-buffers", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -3192,7 +3195,7 @@ pub(crate) fn builtin_set_window_next_buffers(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-next-buffers", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -3207,7 +3210,7 @@ pub(crate) fn builtin_window_discard_buffer_from_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_min_args("window-discard-buffer-from-window", &args, 2)?;
     expect_max_args("window-discard-buffer-from-window", &args, 3)?;
     let buffer_id = match args.first().and_then(|v| v.as_buffer_id()) {
@@ -3233,7 +3236,7 @@ pub(crate) fn builtin_combine_windows(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("combine-windows", &args, 2)?;
     let (_first_fid, first_wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
@@ -3259,7 +3262,7 @@ pub(crate) fn builtin_uncombine_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("uncombine-window", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
@@ -3282,7 +3285,7 @@ pub(crate) fn builtin_window_left_column(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-left-column", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
@@ -3296,7 +3299,7 @@ pub(crate) fn builtin_window_top_line(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-top-line", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
@@ -3370,7 +3373,7 @@ pub(crate) fn builtin_window_pixel_left(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-pixel-left", &args, 1)?;
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
@@ -3393,7 +3396,7 @@ pub(crate) fn builtin_window_pixel_top(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-pixel-top", &args, 1)?;
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
@@ -3413,7 +3416,7 @@ pub(crate) fn builtin_window_hscroll(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-hscroll", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -3429,7 +3432,7 @@ pub(crate) fn builtin_set_window_hscroll(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-hscroll", &args, 2)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3477,7 +3480,7 @@ fn default_scroll_columns_in_state(frames: &FrameManager, fid: FrameId, wid: Win
 }
 /// `(scroll-left &optional SET-MINIMUM ARG)` -> new horizontal scroll amount.
 pub(crate) fn builtin_scroll_left(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("scroll-left", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
@@ -3529,7 +3532,7 @@ pub(crate) fn builtin_scroll_right(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("scroll-right", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) = resolve_window_id_in_state(frames, buffers, None)?;
@@ -3580,7 +3583,7 @@ pub(crate) fn builtin_window_vscroll(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-vscroll", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
@@ -3595,7 +3598,7 @@ pub(crate) fn builtin_set_window_vscroll(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_min_args("set-window-vscroll", &args, 2)?;
     expect_max_args("set-window-vscroll", &args, 4)?;
     let (_fid, wid) =
@@ -3618,7 +3621,7 @@ pub(crate) fn builtin_set_window_margins(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_min_args("set-window-margins", &args, 2)?;
     expect_max_args("set-window-margins", &args, 3)?;
     let (fid, wid) =
@@ -3652,7 +3655,7 @@ pub(crate) fn builtin_window_margins(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-margins", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3696,7 +3699,7 @@ pub(crate) fn builtin_window_fringes(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-fringes", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3725,7 +3728,7 @@ pub(crate) fn builtin_set_window_fringes(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_min_args("set-window-fringes", &args, 2)?;
     expect_max_args("set-window-fringes", &args, 5)?;
     let (fid, wid) =
@@ -3794,7 +3797,7 @@ pub(crate) fn builtin_window_scroll_bars(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-scroll-bars", &args, 1)?;
     let (_fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3816,7 +3819,7 @@ pub(crate) fn builtin_set_window_scroll_bars(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_min_args("set-window-scroll-bars", &args, 1)?;
     expect_max_args("set-window-scroll-bars", &args, 6)?;
     let (fid, wid) =
@@ -3903,7 +3906,7 @@ pub(crate) fn builtin_window_scroll_bar_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-scroll-bar-width", &args, 1)?;
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(regions) = published_window_regions(frames, fid, wid)? {
@@ -3920,7 +3923,7 @@ pub(crate) fn builtin_window_scroll_bar_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-scroll-bar-height", &args, 1)?;
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(regions) = published_window_regions(frames, fid, wid)? {
@@ -3935,7 +3938,7 @@ pub(crate) fn builtin_window_mode_line_height(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-mode-line-height", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3948,7 +3951,7 @@ pub(crate) fn builtin_window_header_line_height(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-header-line-height", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3965,7 +3968,7 @@ pub(crate) fn builtin_window_tab_line_height(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-tab-line-height", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -3985,7 +3988,7 @@ pub(crate) fn builtin_window_pixel_height(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-pixel-height", &args, 1)?;
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
@@ -4001,7 +4004,7 @@ pub(crate) fn builtin_window_pixel_width(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-pixel-width", &args, 1)?;
     let window = decode_valid_window_in_state(frames, buffers, args.first())?;
     let w = get_window(frames, window)?;
@@ -4023,12 +4026,12 @@ pub(crate) fn builtin_window_body_height(
     let unit = window_body_unit_from_lisp(args.get(1));
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
     let remapped = remapped_window_body_cell_size(eval, fid, unit);
-    window_body_height_for_window(&eval.frames, &eval.buffers, fid, wid, unit, remapped)
+    window_body_height_for_window(&eval.frames, &eval.edit.buffers, fid, wid, unit, remapped)
 }
 
 fn window_body_height_impl(
@@ -4110,7 +4113,7 @@ pub(crate) fn builtin_window_body_width(
     let unit = window_body_unit_from_lisp(args.get(1));
     let (fid, wid) = resolve_window_id_with_pred_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -4133,7 +4136,7 @@ pub(crate) fn builtin_window_text_height(
     args: Vec<Value>,
 ) -> EvalResult {
     eval.sync_pending_resize_events();
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-text-height", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -4157,7 +4160,7 @@ pub(crate) fn builtin_window_text_width(
     args: Vec<Value>,
 ) -> EvalResult {
     eval.sync_pending_resize_events();
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-text-width", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
@@ -4189,7 +4192,7 @@ pub(crate) fn builtin_window_total_height(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    window_total_height_impl(&mut eval.frames, &mut eval.buffers, args)
+    window_total_height_impl(&mut eval.frames, &mut eval.edit.buffers, args)
 }
 
 pub(crate) fn window_total_height_impl(
@@ -4220,7 +4223,7 @@ pub(crate) fn builtin_window_total_width(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    window_total_width_impl(&mut eval.frames, &mut eval.buffers, args)
+    window_total_width_impl(&mut eval.frames, &mut eval.edit.buffers, args)
 }
 
 pub(crate) fn window_total_width_impl(
@@ -4246,7 +4249,7 @@ pub(crate) fn window_total_width_impl(
 }
 /// `(window-list &optional FRAME MINIBUF WINDOW)` -> list of window objects.
 pub(crate) fn builtin_window_list(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-list", &args, 3)?;
     let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
     // GNU validates WINDOW before FRAME mismatch checks.
@@ -4329,7 +4332,7 @@ pub(crate) fn builtin_window_list(eval: &mut super::eval::Context, args: Vec<Val
 /// `(window-list-1 &optional WINDOW MINIBUF ALL-FRAMES)` -> list of live windows.
 pub(crate) fn builtin_window_list_1(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     let active_minibuffer_window = active_minibuffer_window_id(eval);
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-list-1", &args, 3)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, start_wid) = if args.first().is_none_or(|v| v.is_nil()) {
@@ -4424,13 +4427,13 @@ pub(crate) fn builtin_get_buffer_window(
     let fid = ensure_selected_frame_id(eval);
     let target = match args.first().copied() {
         Some(value) if !value.is_nil() => match value.kind() {
-            ValueKind::String => match find_buffer_by_name_arg(&eval.buffers, &value)? {
+            ValueKind::String => match find_buffer_by_name_arg(&eval.edit.buffers, &value)? {
                 Some(id) => id,
                 None => return Ok(Value::NIL),
             },
             ValueKind::Veclike(VecLikeType::Buffer) => {
                 let bid = value.as_buffer_id().unwrap();
-                if eval.buffers.get(bid).is_none() {
+                if eval.edit.buffers.get(bid).is_none() {
                     return Ok(Value::NIL);
                 }
                 bid
@@ -4442,7 +4445,7 @@ pub(crate) fn builtin_get_buffer_window(
                 ));
             }
         },
-        _ => match eval.buffers.current_buffer_id() {
+        _ => match eval.edit.buffers.current_buffer_id() {
             Some(buffer_id) => buffer_id,
             None => return Ok(Value::NIL),
         },
@@ -4481,7 +4484,7 @@ pub(crate) fn builtin_window_dedicated_p(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-dedicated-p", &args, 1)?;
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
@@ -4496,7 +4499,7 @@ pub(crate) fn builtin_set_window_dedicated_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-dedicated-p", &args, 2)?;
     let flag = args[1];
     let (fid, wid) =
@@ -4562,7 +4565,7 @@ pub(crate) fn builtin_window_live_p(eval: &mut super::eval::Context, args: &[Val
 }
 /// `(window-at X Y &optional FRAME)` -> window object or nil.
 pub(crate) fn builtin_window_at(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_min_args("window-at", &args, 2)?;
     expect_max_args("window-at", &args, 3)?;
     let x = expect_number(&args[0])?;
@@ -4751,7 +4754,7 @@ pub(crate) fn builtin_delete_window_internal(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("delete-window-internal", &args, 1)?;
 
     let wid = resolve_window_object_id_with_pred_in_state(
@@ -4821,7 +4824,7 @@ pub(crate) fn builtin_delete_other_windows_internal(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("delete-other-windows-internal", &args, 2)?;
     let (fid, keep_wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
@@ -5069,7 +5072,7 @@ pub(crate) fn select_window(
         );
     }
     let (record_selection, run_buffer_list_hook, frame_changed, reset_input_frame) = {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
         let selected_fid = ensure_selected_frame_id_in_state(frames, buffers);
         // GNU `select_window' derives WINDOW_FRAME and selects that frame when
         // it differs.  Posframe/transient relies on this for child-frame roots.
@@ -5171,7 +5174,7 @@ pub(crate) fn builtin_other_window_for_scrolling(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("other-window-for-scrolling", &args, 0)?;
     let fid = ensure_selected_frame_id_in_state(frames, buffers);
     let frame = frames
@@ -5193,7 +5196,7 @@ pub(crate) fn builtin_other_window_for_scrolling(
 }
 /// `(next-window &optional WINDOW MINIBUF ALL-FRAMES)` -> window object.
 pub(crate) fn builtin_next_window(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("next-window", &args, 3)?;
     let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
     let frame = frames
@@ -5212,7 +5215,7 @@ pub(crate) fn builtin_previous_window(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("previous-window", &args, 3)?;
     let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
     let frame = frames
@@ -5288,7 +5291,7 @@ pub(crate) fn builtin_set_window_buffer(
     expect_max_args("set-window-buffer", &args, 3)?;
     let (fid, wid, buf_id, keep_margins, run_buffer_list_hook, display_effect) = {
         let (frames, buffers, minibuffers) =
-            (&mut eval.frames, &mut eval.buffers, &eval.minibuffers);
+            (&mut eval.frames, &mut eval.edit.buffers, &eval.minibuffers);
         let (fid, wid) = resolve_window_id_in_state(frames, buffers, args.first())?;
         let buf_id = match args[1].kind() {
             ValueKind::Veclike(VecLikeType::Buffer) => {
@@ -5410,7 +5413,7 @@ pub(crate) fn builtin_set_window_buffer(
         super::builtins::run_buffer_list_update_hook(eval)?;
     }
     {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
         if buffers.get(buf_id).is_none() {
             return Err(signal(
                 "error",
@@ -6083,7 +6086,7 @@ pub(crate) fn flush_pending_live_gui_resize(
     if pending.is_queued() {
         super::frame::request_live_gui_frame_resize_and_keep_pending(
             &mut eval.frames,
-            &eval.buffers,
+            &eval.edit.buffers,
             &mut eval.display_host,
             fid,
             FrameResizeRequest::Cells {
@@ -6171,7 +6174,7 @@ pub(crate) fn builtin_scroll_up(eval: &mut super::eval::Context, args: Vec<Value
     let lines = scroll_lines_in_state(
         VariableView::new(&eval.obarray, &eval.owner),
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         arg.as_ref(),
         1,
     );
@@ -6200,7 +6203,7 @@ pub(crate) fn builtin_scroll_down(eval: &mut super::eval::Context, args: Vec<Val
     let lines = scroll_lines_in_state(
         VariableView::new(&eval.obarray, &eval.owner),
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         arg.as_ref(),
         -1,
     );
@@ -6308,7 +6311,7 @@ fn scroll_origin(
     // `pos-visible-in-window-p` keeps the two in lock-step (it answers nil
     // when noninteractive, matrix-exact or geometric from the CURRENT start
     // otherwise — so queued interactive scrolls still stay monotonic).
-    let point_lisp = match eval.buffers.get(buffer_id) {
+    let point_lisp = match eval.edit.buffers.get(buffer_id) {
         Some(buf) => buf.emacs_byte_pos_to_lisp_char_pos(point),
         None => return Ok(ScrollOrigin::WindowStart(window_start)),
     };
@@ -6336,7 +6339,7 @@ fn scroll_origin(
 }
 
 fn scroll_by_screen_lines(eval: &mut super::eval::Context, lines: i64) -> EvalResult {
-    let _ = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers);
+    let _ = ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.edit.buffers);
     crate::emacs_core::xdisp::motion::paging::commit_scroll_plan(eval, |eval| {
         plan_scroll_by_screen_lines(eval, lines)
     })?;
@@ -6347,8 +6350,8 @@ fn plan_scroll_by_screen_lines(
     eval: &mut super::eval::Context,
     lines: i64,
 ) -> Result<Option<crate::window::WindowScrollUpdate>, super::error::Flow> {
-    let (fid, wid) = resolve_window_id_in_state(&mut eval.frames, &mut eval.buffers, None)?;
-    let body_height = window_body_height_impl(&mut eval.frames, &mut eval.buffers, vec![])
+    let (fid, wid) = resolve_window_id_in_state(&mut eval.frames, &mut eval.edit.buffers, None)?;
+    let body_height = window_body_height_impl(&mut eval.frames, &mut eval.edit.buffers, vec![])
         .ok()
         .and_then(|v| v.as_fixnum())
         .unwrap_or(24)
@@ -6362,7 +6365,7 @@ fn plan_scroll_by_screen_lines(
         } => (*buffer_id, *point, *window_start),
         _ => return Ok(None),
     };
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return Ok(None);
     };
     let accessible = buf.accessible_emacs_byte_region();
@@ -6454,7 +6457,7 @@ fn plan_scroll_by_screen_lines(
         pos = start;
     }
 
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return Ok(None);
     };
     let start_lisp = buf.emacs_byte_pos_to_lisp_char_pos(EmacsBytePos::new(pos));
@@ -6522,7 +6525,7 @@ pub(crate) fn builtin_recenter(eval: &mut super::eval::Context, args: Vec<Value>
     };
 
     {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
         let Some(buf) = buffers.get(buffer_id) else {
             return Ok(Value::NIL);
         };
@@ -6608,7 +6611,7 @@ fn recenter_backward_origin(
     args: &[Value],
 ) -> Result<Option<RecenterOrigin>, Flow> {
     use crate::emacs_core::xdisp::motion::recenter::RecenterPlacement;
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
 
     let wh = window_body_height_impl(frames, buffers, vec![])
         .ok()
@@ -7254,7 +7257,7 @@ pub(crate) fn builtin_x_create_frame(
         .is_some_and(|host| host.opening_gui_frame_pending());
     let result = x_create_frame_impl(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &mut eval.display_host,
         args,
     );
@@ -7911,7 +7914,7 @@ pub(crate) fn delete_frame_owned(
             {
                 let _ = eval.frames.note_window_selected(selected_wid);
             }
-            sync_selected_window_buffer_in_state(&eval.frames, &mut eval.buffers, replacement);
+            sync_selected_window_buffer_in_state(&eval.frames, &mut eval.edit.buffers, replacement);
         }
     }
     super::frame::sync_gui_frame_focus_redirects(eval)?;
@@ -7925,7 +7928,7 @@ pub(crate) fn delete_frame_owned(
         FrameDeletion::Deleted {
             selected: SelectedFrameAfterDeletion::Replaced(replacement),
         } => {
-            sync_selected_window_buffer_in_state(&eval.frames, &mut eval.buffers, replacement);
+            sync_selected_window_buffer_in_state(&eval.frames, &mut eval.edit.buffers, replacement);
         }
         FrameDeletion::Deleted {
             selected: SelectedFrameAfterDeletion::Cleared,
@@ -8174,7 +8177,7 @@ pub(crate) fn builtin_window_combination_limit(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("window-combination-limit", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let window = check_valid_window_in_state(frames, buffers, &args[0])?;
@@ -8198,7 +8201,7 @@ pub(crate) fn builtin_set_window_combination_limit(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-window-combination-limit", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     // GNU spells this `CHECK_VALID_WINDOW (window)' too, so nil is rejected
@@ -8230,7 +8233,7 @@ pub(crate) fn builtin_window_resize_apply(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-resize-apply", &args, 2)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -8302,7 +8305,7 @@ pub(crate) fn builtin_window_resize_apply_total(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("window-resize-apply-total", &args, 2)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -8400,8 +8403,8 @@ pub(crate) fn builtin_force_window_update(
             let buffer = match object.kind() {
                 ValueKind::Veclike(VecLikeType::Buffer) => object
                     .as_buffer_id()
-                    .filter(|id| eval.buffers.get(*id).is_some()),
-                ValueKind::String => find_buffer_by_name_arg(&eval.buffers, object)?,
+                    .filter(|id| eval.edit.buffers.get(*id).is_some()),
+                ValueKind::String => find_buffer_by_name_arg(&eval.edit.buffers, object)?,
                 _ => None,
             };
             let Some(buffer) = buffer else {

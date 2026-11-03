@@ -3,6 +3,7 @@
 pub mod buffer;
 pub(crate) mod buffer_text;
 pub(crate) mod composition;
+mod edit_runtime;
 mod edit_transaction;
 pub(crate) mod storage_string;
 pub(crate) mod syntax_cache;
@@ -29,6 +30,7 @@ pub use buffer::{
 };
 pub(crate) use buffer_text::BufferText;
 pub use buffer_text::{BufferSourceAuthority, BufferSourceReadLease};
+pub use edit_runtime::EditRuntime;
 pub use edit_transaction::TranspositionAnchorPolicy;
 pub(crate) use edit_transaction::{PreparedBufferEdit, TextMeasurement};
 pub use overlay::{Overlay, OverlayList};

@@ -2704,9 +2704,10 @@ pub(crate) fn builtin_find_charset_region(
 ) -> EvalResult {
     expect_min_args("find-charset-region", &args, 2)?;
     expect_max_args("find-charset-region", &args, 3)?;
-    let region = super::position::LispRegionArgs::from_values(&ctx.buffers, args[0], args[1])?;
+    let region = super::position::LispRegionArgs::from_values(&ctx.edit.buffers, args[0], args[1])?;
 
     let buf = ctx
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3003,6 +3004,7 @@ pub(crate) fn builtin_charset_after(
 ) -> EvalResult {
     expect_max_args("charset-after", &args, 1)?;
     let buf = ctx
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

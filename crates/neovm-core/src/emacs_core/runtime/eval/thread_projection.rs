@@ -36,7 +36,7 @@ impl Context {
             && let Some(binding) = slab
                 .slot(
                     projection.index(),
-                    super::owner_bindings::access_channel(&self.buffers, id, projection),
+                    super::owner_bindings::access_channel(&self.edit.buffers, id, projection),
                 )
                 .value()
         {
@@ -49,7 +49,7 @@ impl Context {
             CanonicalArm::Plain => projection.plain_value(),
             CanonicalArm::Localized(blv) => {
                 self.obarray
-                    .read_projected_localized(id, blv, self.buffers.current_buffer())
+                    .read_projected_localized(id, blv, self.edit.buffers.current_buffer())
             }
             CanonicalArm::Forwarded(builtin) => {
                 let fwd = builtin.descriptor();
@@ -137,7 +137,7 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn projected_locals_of(&self, buffer: crate::buffer::BufferId) -> Vec<SymId> {
-        let Some(buffer) = self.buffers.get(buffer) else {
+        let Some(buffer) = self.edit.buffers.get(buffer) else {
             return Vec::new();
         };
         let mut ids = Vec::new();
@@ -202,7 +202,7 @@ impl Context {
             && let Some(slab) = self.owner.slab()
             && let Some(channel) = super::owner_bindings::owner_store_channel(
                 slab,
-                &self.buffers,
+                &self.edit.buffers,
                 resolved,
                 projection,
                 bindflag,
@@ -215,7 +215,7 @@ impl Context {
             };
             let stored = super::check_forwarded_store_at(
                 &self.obarray,
-                &self.buffers,
+                &self.edit.buffers,
                 &self.specpdl,
                 resolved,
                 value,
@@ -272,6 +272,7 @@ impl Context {
                 let local_if_set = unsafe { (*blv.blv().as_ptr()).local_if_set };
                 local_if_set
                     || self
+                        .edit
                         .buffers
                         .get(current)
                         .is_some_and(|buf| buf.has_buffer_local_by_sym_id(id))

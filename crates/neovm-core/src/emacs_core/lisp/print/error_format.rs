@@ -285,7 +285,7 @@ pub(crate) fn print_value_in_state_with_options(
 ) -> String {
     format_value_in_state(
         &ctx.obarray,
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &ctx.frames,
         &ctx.threads,
         value,
@@ -671,7 +671,7 @@ pub(crate) fn print_value_bytes_in_state_with_options(
 ) -> Vec<u8> {
     format_value_bytes_in_state_with_options(
         &ctx.obarray,
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &ctx.frames,
         &ctx.threads,
         value,
@@ -992,7 +992,7 @@ pub fn print_value_bytes_with_eval(
 ) -> Vec<u8> {
     print_value_bytes_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &eval.frames,
         &eval.threads,
         value,
@@ -1009,7 +1009,7 @@ pub fn print_value_bytes_escaped_with_eval(
     value: &Value,
 ) -> Vec<u8> {
     if let Some(handle) =
-        format_opaque_handle_in_state(&eval.buffers, &eval.frames, &eval.threads, value)
+        format_opaque_handle_in_state(&eval.edit.buffers, &eval.frames, &eval.threads, value)
     {
         return handle.into_bytes();
     }
@@ -1017,7 +1017,7 @@ pub fn print_value_bytes_escaped_with_eval(
     options.print_escape_nonascii = true;
     format_value_bytes_in_state_with_options(
         &eval.obarray,
-        &eval.buffers,
+        &eval.edit.buffers,
         &eval.frames,
         &eval.threads,
         value,

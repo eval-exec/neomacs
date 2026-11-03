@@ -70,7 +70,7 @@ fn message_log_coalesce(
 ) -> (crate::heap_types::LispString, crate::buffer::EmacsBytePos) {
     use crate::buffer::{EmacsByteLen, EmacsByteRange};
     let no_coalesce = (msg.clone(), old_full_end);
-    let Some(buf) = ctx.buffers.get(buf_id) else {
+    let Some(buf) = ctx.edit.buffers.get(buf_id) else {
         return no_coalesce;
     };
     let bob = buf.full_emacs_byte_range().start();
@@ -146,18 +146,18 @@ fn message_dolog(
         .visible_variable_value_or_nil_by_id(MESSAGES_BUFFER_NAME.id())
         .as_str_owned()
         .unwrap_or_else(|| "*Messages*".to_string());
-    let buf_id = if let Some(id) = ctx.buffers.find_buffer_by_name(&messages_name) {
+    let buf_id = if let Some(id) = ctx.edit.buffers.find_buffer_by_name(&messages_name) {
         id
     } else {
-        ctx.buffers.create_buffer(&messages_name)
+        ctx.edit.buffers.create_buffer(&messages_name)
     };
 
     // Insert the message text at the end, followed by newline.
     // Save and restore current buffer like GNU does.
-    let old_buf = ctx.buffers.current_buffer().map(|b| b.id);
+    let old_buf = ctx.edit.buffers.current_buffer().map(|b| b.id);
     let _ = ctx.set_current_buffer_unrecorded(buf_id);
     let Some((old_pt_byte, old_accessible, mut old_full_end, point_at_end, zv_at_end)) =
-        ctx.buffers.get(buf_id).map(|buf| {
+        ctx.edit.buffers.get(buf_id).map(|buf| {
             let old_pt_byte = buf.point_emacs_byte_pos();
             let old_accessible = buf.accessible_region_snapshot();
             let old_full_end = buf.full_emacs_byte_range().end();
@@ -177,8 +177,9 @@ fn message_dolog(
         }
         return;
     };
-    if let Some(full_range) = ctx.buffers.full_buffer_emacs_byte_range(buf_id) {
+    if let Some(full_range) = ctx.edit.buffers.full_buffer_emacs_byte_range(buf_id) {
         let _ = ctx
+            .edit
             .buffers
             .restore_buffer_emacs_byte_restriction(buf_id, full_range);
     }
@@ -195,9 +196,13 @@ fn message_dolog(
         // "keephello\n").
         let needs_newline = ctx.message_log_need_newline();
         if needs_newline {
-            let _ = ctx.buffers.goto_buffer_emacs_byte_pos(buf_id, old_full_end);
-            let _ = ctx.buffers.insert_into_buffer(buf_id, "\n");
+            let _ = ctx
+                .edit
+                .buffers
+                .goto_buffer_emacs_byte_pos(buf_id, old_full_end);
+            let _ = ctx.edit.buffers.insert_into_buffer(buf_id, "\n");
             old_full_end = ctx
+                .edit
                 .buffers
                 .get(buf_id)
                 .map(|buffer| buffer.full_emacs_byte_range().end())
@@ -217,6 +222,7 @@ fn message_dolog(
     };
     if termination != MessageLogTermination::FlushPendingFragment
         && ctx
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(buf_id, delete_from)
             .is_some()
@@ -225,12 +231,12 @@ fn message_dolog(
             let del_range = crate::buffer::EmacsByteRange::new(delete_from, old_full_end);
             if let Ok(edit) =
                 crate::emacs_core::editfns::buffer_edit_range_for_byte_range_in_manager(
-                    &ctx.buffers,
+                    &ctx.edit.buffers,
                     buf_id,
                     del_range,
                 )
             {
-                let _ = ctx.buffers.delete_buffer_measured_region(buf_id, edit);
+                let _ = ctx.edit.buffers.delete_buffer_measured_region(buf_id, edit);
             }
         }
         // Issue #131: `*Messages*` content must stay byte-faithful. Always go
@@ -239,24 +245,28 @@ fn message_dolog(
         // bytes preserved as raw-byte chars) instead of a lossy Rust-String
         // round-trip that would corrupt them.
         let _ = ctx
+            .edit
             .buffers
             .insert_lisp_string_into_buffer(buf_id, &log_text);
         if termination == MessageLogTermination::Line {
-            let _ = ctx.buffers.insert_into_buffer(buf_id, "\n");
+            let _ = ctx.edit.buffers.insert_into_buffer(buf_id, "\n");
         }
     }
 
     if let Some(new_full_end) = ctx
+        .edit
         .buffers
         .get(buf_id)
         .map(|buf| buf.full_emacs_byte_range().end())
     {
         if zv_at_end {
             let _ = ctx
+                .edit
                 .buffers
                 .restore_buffer_accessible_region_with_current_full_end(buf_id, old_accessible);
         } else {
             let _ = ctx
+                .edit
                 .buffers
                 .restore_buffer_accessible_region(buf_id, old_accessible);
         }
@@ -266,6 +276,7 @@ fn message_dolog(
             old_pt_byte
         };
         let _ = ctx
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(buf_id, restored_point);
     }

@@ -216,7 +216,7 @@ impl Context {
         }
         let other = crate::emacs_core::buffer::other_buffer_impl_in_state(
             &mut self.frames,
-            &mut self.buffers,
+            &mut self.edit.buffers,
             vec![Value::make_buffer(buffer)],
         )?
         .as_buffer_id();

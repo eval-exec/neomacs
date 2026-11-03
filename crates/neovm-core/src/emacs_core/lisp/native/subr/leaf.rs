@@ -485,7 +485,7 @@ impl LeafWitness {
             bc_buf: ctx.bc_buf.len(),
             depth: ctx.depth,
             function_epoch: ctx.obarray.function_epoch(),
-            buffer: ctx.buffers.current_buffer().map(|buf| {
+            buffer: ctx.edit.buffers.current_buffer().map(|buf| {
                 (
                     buf.id(),
                     buf.point_char_pos(),

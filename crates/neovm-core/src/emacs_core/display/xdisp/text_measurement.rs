@@ -50,6 +50,7 @@ impl TextMeasurement {
             return Ok(RegionTextMetrics::EMPTY);
         }
         let source = eval
+            .edit
             .buffers
             .get(buffer)
             .expect("resolved measurement buffer");
@@ -112,7 +113,7 @@ impl TextMeasurement {
         let origin = snapshot.point_for_buffer_pos(from);
         let origin_row = origin.as_ref().map_or(0, |point| point.row);
         let origin_x = origin.as_ref().map_or(0, |point| point.x);
-        let source = eval.buffers.get(buffer).ok_or_else(|| {
+        let source = eval.edit.buffers.get(buffer).ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Measurement buffer was deleted")],

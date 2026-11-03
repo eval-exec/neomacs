@@ -222,7 +222,7 @@ fn expect_integer_or_marker(value: &Value) -> Result<i64, Flow> {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn expect_integer_or_marker_eval(eval: &super::eval::Context, value: &Value) -> Result<i64, Flow> {
-    super::position::fix_position_eval(&eval.buffers, value)
+    super::position::fix_position_eval(&eval.edit.buffers, value)
 }
 
 pub(crate) fn expect_integer_or_marker_in_buffers(
@@ -1552,12 +1552,13 @@ fn verify_property_change_read_only(
     if args.len() < 2 {
         return Ok(());
     }
-    let beg = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let beg = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
     let buf_id =
-        resolve_text_property_buffer_id_in_buffers(&eval.buffers, args.get(object_arg_idx))?;
+        resolve_text_property_buffer_id_in_buffers(&eval.edit.buffers, args.get(object_arg_idx))?;
     let byte_range = {
         let buf = eval
+            .edit
             .buffers
             .get(buf_id)
             .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
@@ -1568,7 +1569,7 @@ fn verify_property_change_read_only(
     };
     verify_text_read_only_emacs_byte_range_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         buf_id,
         byte_range,
     )
@@ -1585,11 +1586,11 @@ fn buffer_property_range_for_args(
     if args.len() < 2 {
         return Ok(None);
     }
-    let beg = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-    let end = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
+    let beg = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+    let end = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
     let buf_id =
-        resolve_text_property_buffer_id_in_buffers(&eval.buffers, args.get(object_arg_idx))?;
-    let Some(buf) = eval.buffers.get(buf_id) else {
+        resolve_text_property_buffer_id_in_buffers(&eval.edit.buffers, args.get(object_arg_idx))?;
+    let Some(buf) = eval.edit.buffers.get(buf_id) else {
         return Err(signal(
             "error",
             vec![Value::string("Buffer does not exist")],
@@ -1617,12 +1618,12 @@ fn with_buffer_property_change(
     let result = (|| {
         let ctx = scope.context();
         let change = super::editfns::text_change_for_unchanged_extent_in_manager(
-            &ctx.buffers,
+            &ctx.edit.buffers,
             buf_id,
             byte_range,
         )?;
         super::editfns::signal_before_property_change(ctx, change)?;
-        let value = mutate(&mut ctx.buffers)?;
+        let value = mutate(&mut ctx.edit.buffers)?;
         super::editfns::signal_after_property_change(ctx, change)?;
         Ok(value)
     })();
@@ -1704,7 +1705,7 @@ pub(crate) fn prepare_interval_modification_for_change(
 
     let (lisp_start, lisp_end, hook_lists) = {
         let vars = eval.variables();
-        let buffers = &eval.buffers;
+        let buffers = &eval.edit.buffers;
         let Some(buf) = buffers.get(buf_id) else {
             return Ok(());
         };
@@ -1753,7 +1754,7 @@ fn record_interval_insert_hooks(
     buf_id: BufferId,
     byte_pos: EmacsBytePos,
 ) {
-    let Some(buf) = eval.buffers.get(buf_id) else {
+    let Some(buf) = eval.edit.buffers.get(buf_id) else {
         return;
     };
     // With no text properties anywhere, no `insert-in-front-hooks' /
@@ -1836,7 +1837,7 @@ pub(crate) fn builtin_put_text_property_5(
     // put returns nil having done ONE early-exiting walk: no text-read-only
     // signal, no hooks, no undo entry, no apply walk.
     if let Some((buf_id, byte_range)) = buffer_property_range_for_args(eval, &args, 4)? {
-        let unchanged = eval.buffers.get(buf_id).is_some_and(|buf| {
+        let unchanged = eval.edit.buffers.get(buf_id).is_some_and(|buf| {
             let properties = [(args[2], args[3])];
             buf.text_props_range_has_all_properties_in_emacs_byte_range(byte_range, &properties)
         });
@@ -1858,7 +1859,7 @@ pub(crate) fn builtin_put_text_property_5(
     } else {
         // Strings (and degenerate arg shapes): no buffer hooks, no buffer
         // read-only semantics — GNU's modify_text_properties is buffer-only.
-        builtin_put_text_property_in_buffers(&mut eval.buffers, &args)
+        builtin_put_text_property_in_buffers(&mut eval.edit.buffers, &args)
     }
 }
 
@@ -1941,7 +1942,7 @@ pub(crate) fn builtin_get_text_property_3(
     object: Value,
 ) -> EvalResult {
     let args: [Value; 3] = [position, prop, object];
-    builtin_get_text_property_in_state(eval.variables(), &eval.buffers, &args)
+    builtin_get_text_property_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_get_text_property_in_state(
@@ -2318,7 +2319,7 @@ pub(crate) fn builtin_get_char_property_3(
     let args: [Value; 3] = [position, prop, object];
     builtin_get_char_property_with_frames(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         Some(&eval.frames),
         &args,
     )
@@ -2445,7 +2446,7 @@ pub(crate) fn builtin_add_text_properties_4(
     // read-only verification, hooks, undo entry, or apply walk.
     let pairs_for_probe = plist_pairs(&args[2])?;
     if let Some((buf_id, byte_range)) = buffer_property_range_for_args(eval, &args, 3)? {
-        let unchanged = eval.buffers.get(buf_id).is_some_and(|buf| {
+        let unchanged = eval.edit.buffers.get(buf_id).is_some_and(|buf| {
             buf.text_props_range_has_all_properties_in_emacs_byte_range(
                 byte_range,
                 &pairs_for_probe,
@@ -2460,7 +2461,7 @@ pub(crate) fn builtin_add_text_properties_4(
             builtin_add_text_properties_in_buffers(buffers, &args)
         })
     } else {
-        builtin_add_text_properties_in_buffers(&mut eval.buffers, &args)
+        builtin_add_text_properties_in_buffers(&mut eval.edit.buffers, &args)
     }
 }
 
@@ -2592,7 +2593,7 @@ pub(crate) fn builtin_add_face_text_property(
     // verification, hooks, undo entry, or apply walk.
     if let Some((buf_id, byte_range)) = buffer_property_range_for_args(eval, &args, 4)? {
         let new_face = args[2];
-        let unchanged = eval.buffers.get(buf_id).is_some_and(|buf| {
+        let unchanged = eval.edit.buffers.get(buf_id).is_some_and(|buf| {
             buf.text_props_range_has_all_properties_in_emacs_byte_range(
                 byte_range,
                 &[(face_prop(), new_face)],
@@ -2607,7 +2608,7 @@ pub(crate) fn builtin_add_face_text_property(
             builtin_add_face_text_property_in_buffers(buffers, args)
         })
     } else {
-        builtin_add_face_text_property_in_buffers(&mut eval.buffers, args)
+        builtin_add_face_text_property_in_buffers(&mut eval.edit.buffers, args)
     }
 }
 
@@ -2730,7 +2731,7 @@ pub(crate) fn builtin_remove_text_properties(
     let names_for_probe = plist_names_for_remove(args[2]);
     let change =
         buffer_property_range_for_args(eval, &args, 3)?.and_then(|(buf_id, byte_range)| {
-            let buf = eval.buffers.get(buf_id)?;
+            let buf = eval.edit.buffers.get(buf_id)?;
             buf.text_props_range_has_any_property_named_in_emacs_byte_range(
                 byte_range,
                 &names_for_probe,
@@ -2743,7 +2744,7 @@ pub(crate) fn builtin_remove_text_properties(
                 builtin_remove_text_properties_in_buffers(buffers, args)
             })
         }
-        None => builtin_remove_text_properties_in_buffers(&mut eval.buffers, args),
+        None => builtin_remove_text_properties_in_buffers(&mut eval.edit.buffers, args),
     }
 }
 
@@ -2822,7 +2823,7 @@ pub(crate) fn builtin_set_text_properties(
     };
     let change =
         buffer_property_range_for_args(eval, &args, 3)?.and_then(|(buf_id, byte_range)| {
-            let buf = eval.buffers.get(buf_id)?;
+            let buf = eval.edit.buffers.get(buf_id)?;
             (!pairs_for_probe.is_empty()
                 || buf.text_props_range_has_any_interval_in_emacs_byte_range(byte_range))
             .then_some((buf_id, byte_range))
@@ -2833,7 +2834,7 @@ pub(crate) fn builtin_set_text_properties(
                 builtin_set_text_properties_in_buffers(buffers, args)
             })
         }
-        None => builtin_set_text_properties_in_buffers(&mut eval.buffers, args),
+        None => builtin_set_text_properties_in_buffers(&mut eval.edit.buffers, args),
     }
 }
 
@@ -2970,7 +2971,7 @@ pub(crate) fn builtin_remove_list_of_text_properties_4(
     let names_for_probe = list_names_for_remove(args[2]);
     let change =
         buffer_property_range_for_args(eval, &args, 3)?.and_then(|(buf_id, byte_range)| {
-            let buf = eval.buffers.get(buf_id)?;
+            let buf = eval.edit.buffers.get(buf_id)?;
             buf.text_props_range_has_any_property_named_in_emacs_byte_range(
                 byte_range,
                 &names_for_probe,
@@ -2983,7 +2984,7 @@ pub(crate) fn builtin_remove_list_of_text_properties_4(
                 builtin_remove_list_of_text_properties_in_buffers(buffers, &args)
             })
         }
-        None => builtin_remove_list_of_text_properties_in_buffers(&mut eval.buffers, &args),
+        None => builtin_remove_list_of_text_properties_in_buffers(&mut eval.edit.buffers, &args),
     }
 }
 
@@ -3063,7 +3064,7 @@ pub(crate) fn builtin_text_properties_at_2(
     object: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [position, object];
-    builtin_text_properties_at_in_buffers(&eval.buffers, &args)
+    builtin_text_properties_at_in_buffers(&eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_text_properties_at_in_buffers(
@@ -3122,7 +3123,7 @@ pub(crate) fn builtin_next_single_property_change_4(
     limit: Value,
 ) -> EvalResult {
     let args: [Value; 4] = [position, prop, object, limit];
-    builtin_next_single_property_change_in_state(eval.variables(), &eval.buffers, &args)
+    builtin_next_single_property_change_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_next_single_property_change_in_state(
@@ -3539,7 +3540,7 @@ pub(crate) fn builtin_previous_single_property_change_4(
     limit: Value,
 ) -> EvalResult {
     let args: [Value; 4] = [position, prop, object, limit];
-    builtin_previous_single_property_change_in_state(eval.variables(), &eval.buffers, &args)
+    builtin_previous_single_property_change_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_previous_single_property_change_in_state(
@@ -3660,7 +3661,7 @@ pub(crate) fn builtin_next_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_next_property_change_in_buffers(&eval.buffers, args)
+    builtin_next_property_change_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_next_property_change_in_buffers(
@@ -3775,7 +3776,7 @@ pub(crate) fn builtin_text_property_any(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    builtin_text_property_any_in_state(eval.variables(), &eval.buffers, args)
+    builtin_text_property_any_in_state(eval.variables(), &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_text_property_any_in_state(
@@ -3918,7 +3919,7 @@ pub(crate) fn builtin_text_property_not_all_5(
     object: Value,
 ) -> EvalResult {
     let args: [Value; 5] = [start, end, property, value, object];
-    builtin_text_property_not_all_in_state(eval.variables(), &eval.buffers, &args)
+    builtin_text_property_not_all_in_state(eval.variables(), &eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_text_property_not_all_in_state(
@@ -4029,7 +4030,7 @@ pub(crate) fn builtin_get_char_property_and_overlay(
 ) -> EvalResult {
     builtin_get_char_property_and_overlay_with_frames(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         Some(&eval.frames),
         args,
     )
@@ -4080,7 +4081,7 @@ pub(crate) fn builtin_get_display_property(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_display_property_in_state(eval.variables(), &eval.buffers, args)
+    builtin_get_display_property_in_state(eval.variables(), &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_get_display_property_in_state(
@@ -4113,6 +4114,7 @@ pub(crate) fn builtin_remove_overlays(
 ) -> EvalResult {
     expect_max_args("remove-overlays", &args, 4)?;
     let buf_id = eval
+        .edit
         .buffers
         .current_buffer()
         .map(|b| b.id)
@@ -4120,6 +4122,7 @@ pub(crate) fn builtin_remove_overlays(
 
     let (start_pos, end_pos) = {
         let buf = eval
+            .edit
             .buffers
             .get(buf_id)
             .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
@@ -4137,6 +4140,7 @@ pub(crate) fn builtin_remove_overlays(
     };
 
     let buf = eval
+        .edit
         .buffers
         .get_mut(buf_id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;

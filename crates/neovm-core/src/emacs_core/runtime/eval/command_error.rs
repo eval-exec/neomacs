@@ -47,7 +47,7 @@ impl super::Context {
         // current buffer's binding; `lisp/simple.el` localises it. Ledger 196.
         let handler = self
             .variables()
-            .value_in_buffer_by_name(self.buffers.current_buffer(), "command-error-function")
+            .value_in_buffer_by_name(self.edit.buffers.current_buffer(), "command-error-function")
             .unwrap_or(Value::NIL);
         let context_value = Value::string(context);
         // GNU's variable defaults to the C function itself, so its handler is

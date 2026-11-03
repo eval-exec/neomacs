@@ -64,22 +64,23 @@ impl PendingTextEdit {
         ctx: &mut crate::emacs_core::eval::Context,
     ) -> Result<Option<PreparedTextEdit>, Flow> {
         let before = ctx
+            .edit
             .buffers
             .current_buffer_id()
-            .and_then(|buffer| TextMeasurement::of(&ctx.buffers, buffer));
+            .and_then(|buffer| TextMeasurement::of(&ctx.edit.buffers, buffer));
         let from = prepare_buffer_change(
             ctx,
             self.range,
             BufferChangeKind::Characters,
             ChangeStartPolicy::Preserved,
         )?;
-        let Some(buffer) = ctx.buffers.current_buffer_id() else {
+        let Some(buffer) = ctx.edit.buffers.current_buffer_id() else {
             return Ok(None);
         };
-        let Some(measured_at) = TextMeasurement::of(&ctx.buffers, buffer) else {
+        let Some(measured_at) = TextMeasurement::of(&ctx.edit.buffers, buffer) else {
             return Ok(None);
         };
-        let Some(live) = ctx.buffers.get(buffer) else {
+        let Some(live) = ctx.edit.buffers.get(buffer) else {
             return Ok(None);
         };
         let chars = self.remeasured_chars(live, from);
@@ -148,7 +149,7 @@ pub(crate) fn delete_text_range(
         return Ok(None);
     };
     let mut deleted_range = prepared.range();
-    let text = match prepared.lease(&mut ctx.buffers) {
+    let text = match prepared.lease(&mut ctx.edit.buffers) {
         Some(lease) => {
             deleted_range = lease.range();
             match deleted {
@@ -172,6 +173,7 @@ pub(crate) fn delete_text_range(
 /// takes the current buffer's multibyteness.
 fn empty_buffer_string(ctx: &crate::emacs_core::eval::Context) -> crate::heap_types::LispString {
     if ctx
+        .edit
         .buffers
         .current_buffer()
         .is_some_and(Buffer::get_multibyte)

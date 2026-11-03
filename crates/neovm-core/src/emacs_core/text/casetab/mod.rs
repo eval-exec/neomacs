@@ -392,7 +392,7 @@ pub(crate) fn builtin_set_case_table(
     let table = args[0];
     let _ = ensure_standard_case_table_for_context(ctx, mode)?;
     ensure_case_table_derived_slots_with_symbols(table, mode)?;
-    set_current_case_table_for_buffer_in_state(&mut ctx.buffers, table)?;
+    set_current_case_table_for_buffer_in_state(&mut ctx.edit.buffers, table)?;
     Ok(table)
 }
 
@@ -440,7 +440,7 @@ fn current_case_table_for_context(
     ctx: &mut crate::emacs_core::eval::Context,
     mode: SymbolMode,
 ) -> Result<Value, Flow> {
-    let buffers = &mut ctx.buffers;
+    let buffers = &mut ctx.edit.buffers;
     // SAFETY: this noncalling phase selects/seeds case-table Values and buffer
     // slots, without changing function/debugger metadata or escaping a loan.
     unsafe {
@@ -607,7 +607,7 @@ impl CaseTableOverride {
         let mode = ctx.symbol_mode();
         // Without a current buffer there is no buffer-local case table; behave
         // like GNU's default (the standard table) and use the hardwired path.
-        if ctx.buffers.current_buffer_id().is_none() {
+        if ctx.edit.buffers.current_buffer_id().is_none() {
             return Ok(Self::none());
         }
         let standard = ensure_standard_case_table_for_context(ctx, mode)?;

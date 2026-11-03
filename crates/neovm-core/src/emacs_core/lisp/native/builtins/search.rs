@@ -254,7 +254,7 @@ impl FastStringMatchSyntax {
     /// the default classification at match time
     /// (`BufferSyntaxLookup::char_has_category`).
     pub(crate) fn for_current_buffer(eval: &super::eval::Context) -> Self {
-        let current_buffer = eval.buffers.current_buffer();
+        let current_buffer = eval.edit.buffers.current_buffer();
         let base =
             current_buffer.map(
                 |buffer| crate::emacs_core::regex_emacs::BufferSyntaxLookup {
@@ -483,7 +483,7 @@ pub(crate) fn builtin_search_forward_4(
     let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
     builtin_search_forward_with_state_with_symbols(
         case_fold,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         &args,
         mode,
@@ -838,6 +838,7 @@ fn prepare_current_buffer_regexp_syntax_to_reporting_compiled(
     let (dependency, compiled) = {
         let pattern = eval.expect_lisp_string(pattern)?;
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -860,6 +861,7 @@ fn prepare_current_buffer_regexp_syntax_to_reporting_compiled(
     let lazy_relevant = dependency.is_buffer_syntax_dependent() && syntax_properties.is_honor();
     if lazy_relevant {
         let accessible_target = eval
+            .edit
             .buffers
             .current_buffer()
             .map(|buf| buf.accessible_char_region().end().get().saturating_add(1))
@@ -940,7 +942,7 @@ impl AnchoredPropertize {
         let done = eval
             .builtin_var_value(crate::emacs_core::syntax::syntax_propertize_done_sym())?
             .as_fixnum()?;
-        let buf = eval.buffers.current_buffer()?;
+        let buf = eval.edit.buffers.current_buffer()?;
         let accessible_end_lisp = buf.accessible_char_region().end().get() as i64 + 1;
         if done >= accessible_end_lisp {
             return None;
@@ -1015,7 +1017,8 @@ fn prepare_buffer_regexp_search(
     // would do nothing. Keep that order without carrying the borrow past the
     // `syntax-propertize` below: `let _ =` drops it on this line.
     let _ = eval.expect_lisp_string(args[0])?;
-    let (_, opts, _, start_char) = current_search_context_in_manager(&eval.buffers, args, kind)?;
+    let (_, opts, _, start_char) =
+        current_search_context_in_manager(&eval.edit.buffers, args, kind)?;
     if opts.steps == 0 {
         return Ok(RegexpSearchPrep::Ready(ReadyRegexpSearch {
             syntax_properties: if crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(
@@ -1040,7 +1043,7 @@ fn prepare_buffer_regexp_search(
     let target = match opts.direction {
         SearchDirection::Backward => Some(start_char.saturating_add(1)),
         SearchDirection::Forward => opts.bound.and_then(|bound| {
-            eval.buffers.current_buffer().map(|buf| {
+            eval.edit.buffers.current_buffer().map(|buf| {
                 // 0-based char of the bound, +1 to 1-based, +1 past it.
                 buf.emacs_byte_pos_to_char_pos_clamped(bound).get() as i64 + 2
             })
@@ -1063,6 +1066,7 @@ fn prepare_buffer_regexp_search(
             .builtin_var_value(crate::emacs_core::syntax::syntax_propertize_done_sym())
             .unwrap_or(Value::fixnum(-1));
         let covered = eval
+            .edit
             .buffers
             .current_buffer()
             .map(|buf| buf.accessible_char_region().end().get() as i64 + 1)
@@ -1084,6 +1088,7 @@ fn prepare_buffer_regexp_search(
         let windowed = {
             let pattern = eval.expect_lisp_string(args[0])?;
             let buf = eval
+                .edit
                 .buffers
                 .current_buffer()
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1220,13 +1225,13 @@ fn propertize_window_for_forward_regexp(
         }
         let match_context = current_buffer_regexp_match_context(
             VariableView::new(&eval.obarray, &eval.owner),
-            &eval.buffers,
+            &eval.edit.buffers,
             current_word_boundary_lookup(eval),
             syntax_properties,
         );
         let probe = {
             let pattern = expect_lisp_string(&args[0])?;
-            let Some(buf) = eval.buffers.current_buffer_mut() else {
+            let Some(buf) = eval.edit.buffers.current_buffer_mut() else {
                 return Ok(());
             };
             super::regex::re_search_forward_lisp_with_posix(
@@ -1243,6 +1248,7 @@ fn propertize_window_for_forward_regexp(
             Ok(Some(success)) => {
                 let (_, end_byte, _) = success.into_parts();
                 let end_char = eval
+                    .edit
                     .buffers
                     .current_buffer()
                     .map(|buf| buf.emacs_byte_pos_to_char_pos_clamped(end_byte).get())
@@ -1278,7 +1284,7 @@ pub(crate) fn builtin_search_backward(
     let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
     builtin_search_backward_with_state_with_symbols(
         case_fold,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         &args,
         mode,
@@ -1404,6 +1410,7 @@ pub(crate) fn builtin_re_search_forward_4(
         None => {
             let pattern = eval.expect_lisp_string(args[0])?;
             let buf = eval
+                .edit
                 .buffers
                 .current_buffer()
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1431,7 +1438,7 @@ pub(crate) fn builtin_re_search_forward_4(
     };
     let match_context = current_buffer_regexp_match_context(
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         word_boundary,
         ready.syntax_properties,
     );
@@ -1441,7 +1448,7 @@ pub(crate) fn builtin_re_search_forward_4(
         case_fold,
         false,
         match_context,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         &args,
         compiled.as_deref(),
@@ -1661,7 +1668,7 @@ fn buffer_regexp_search_fast(
     if !crate::emacs_core::eval::builtin_frontend_on() || !args[0].is_string() {
         return None;
     }
-    let context = match BufferSearchContext::current(&eval.buffers, args, kind) {
+    let context = match BufferSearchContext::current(&eval.edit.buffers, args, kind) {
         Ok(context) => context,
         Err(flow) => return Some(Err(flow)),
     };
@@ -1670,7 +1677,7 @@ fn buffer_regexp_search_fast(
     }
     let compiled = {
         let pattern = expect_lisp_string(&args[0]).ok()?;
-        let buf = eval.buffers.get(context.buffer)?;
+        let buf = eval.edit.buffers.get(context.buffer)?;
         match super::regex::buffer_regexp_syntax_dependency_compiled_with_symbols(
             buf,
             pattern,
@@ -1685,7 +1692,7 @@ fn buffer_regexp_search_fast(
     let honor = compiled.uses_syntax
         && crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
     if honor {
-        let buf = eval.buffers.get(context.buffer)?;
+        let buf = eval.edit.buffers.get(context.buffer)?;
         // 1-based point-max, the conservative target; a BOUND caps a
         // forward search's reach at BOUND + 1, a backward search reaches
         // point: exactly the targets the general path propertizes to.
@@ -1719,7 +1726,7 @@ fn buffer_regexp_search_fast(
     };
     let match_context = current_buffer_regexp_match_context(
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         word_boundary,
         syntax_properties,
     );
@@ -1731,7 +1738,7 @@ fn buffer_regexp_search_fast(
         case_fold,
         posix,
         match_context,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         args,
         pattern,
@@ -1771,7 +1778,7 @@ pub(crate) fn builtin_re_search_backward(
     };
     let match_context = current_buffer_regexp_match_context(
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         word_boundary,
         ready.syntax_properties,
     );
@@ -1781,7 +1788,7 @@ pub(crate) fn builtin_re_search_backward(
         case_fold,
         false,
         match_context,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         &args,
         ready.compiled.as_deref(),
@@ -1854,7 +1861,7 @@ pub(crate) fn builtin_posix_search_forward(
     };
     let match_context = current_buffer_regexp_match_context(
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         word_boundary,
         ready.syntax_properties,
     );
@@ -1864,7 +1871,7 @@ pub(crate) fn builtin_posix_search_forward(
         case_fold,
         true,
         match_context,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         &args,
         ready.compiled.as_deref(),
@@ -1901,7 +1908,7 @@ pub(crate) fn builtin_posix_search_backward(
     };
     let match_context = current_buffer_regexp_match_context(
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         word_boundary,
         ready.syntax_properties,
     );
@@ -1911,7 +1918,7 @@ pub(crate) fn builtin_posix_search_backward(
         case_fold,
         true,
         match_context,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         match_data,
         &args,
         ready.compiled.as_deref(),
@@ -1942,7 +1949,7 @@ pub(crate) fn builtin_looking_at_2(
         eval.maybe_quit()?;
         return result;
     }
-    let mut lazy = AnchoredPropertize::new(&eval.buffers);
+    let mut lazy = AnchoredPropertize::new(&eval.edit.buffers);
     loop {
         let (syntax_properties, lazy_relevant, compiled) =
             prepare_current_buffer_regexp_syntax_to_reporting_compiled(
@@ -1972,7 +1979,7 @@ pub(crate) fn builtin_looking_at_2(
         };
         let mut match_context = current_buffer_regexp_match_context(
             VariableView::new(&eval.obarray, &eval.owner),
-            &eval.buffers,
+            &eval.edit.buffers,
             word_boundary,
             syntax_properties,
         );
@@ -1982,13 +1989,13 @@ pub(crate) fn builtin_looking_at_2(
         let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
         let result = builtin_looking_at_with_state_and_syntax_properties(
             match_context,
-            &eval.buffers,
+            &eval.edit.buffers,
             match_data,
             &args,
             &compiled,
         );
         if let Some(byte) = crossed.get()
-            && lazy.advance(&eval.buffers, byte)
+            && lazy.advance(&eval.edit.buffers, byte)
         {
             continue;
         }
@@ -2017,7 +2024,7 @@ fn looking_at_fast(
     }
     let compiled = {
         let pattern = expect_lisp_string(&args[0]).ok()?;
-        let buf = eval.buffers.current_buffer()?;
+        let buf = eval.edit.buffers.current_buffer()?;
         match super::regex::buffer_regexp_syntax_dependency_compiled_with_symbols(
             buf,
             pattern,
@@ -2041,7 +2048,7 @@ fn looking_at_fast(
     };
     let match_context = current_buffer_regexp_match_context(
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         word_boundary,
         BufferRegexpSyntaxProperties::Ignore,
     );
@@ -2049,7 +2056,7 @@ fn looking_at_fast(
     let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
     Some(builtin_looking_at_with_state_and_syntax_properties(
         match_context,
-        &eval.buffers,
+        &eval.edit.buffers,
         match_data,
         args,
         &compiled,
@@ -2108,7 +2115,7 @@ pub(crate) fn builtin_looking_at_p(
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
-    let mut lazy = AnchoredPropertize::new(&eval.buffers);
+    let mut lazy = AnchoredPropertize::new(&eval.edit.buffers);
     loop {
         let (syntax_properties, lazy_relevant) = prepare_current_buffer_regexp_syntax_to_reporting(
             eval,
@@ -2126,7 +2133,7 @@ pub(crate) fn builtin_looking_at_p(
         });
         let mut match_context = current_buffer_regexp_match_context(
             eval.variables(),
-            &eval.buffers,
+            &eval.edit.buffers,
             current_word_boundary_lookup(eval),
             syntax_properties,
         );
@@ -2136,11 +2143,11 @@ pub(crate) fn builtin_looking_at_p(
         let result = builtin_looking_at_p_with_state_and_syntax_properties(
             case_fold,
             match_context,
-            &eval.buffers,
+            &eval.edit.buffers,
             &args,
         );
         if let Some(byte) = crossed.get()
-            && lazy.advance(&eval.buffers, byte)
+            && lazy.advance(&eval.edit.buffers, byte)
         {
             continue;
         }
@@ -2193,7 +2200,7 @@ pub(crate) fn builtin_posix_looking_at(
         .map(|v| !v.is_nil())
         .unwrap_or(true);
     let inhibit_changing = read_inhibit_changing_match_data(eval);
-    let mut lazy = AnchoredPropertize::new(&eval.buffers);
+    let mut lazy = AnchoredPropertize::new(&eval.edit.buffers);
     loop {
         let (syntax_properties, lazy_relevant) = prepare_current_buffer_regexp_syntax_to_reporting(
             eval,
@@ -2211,7 +2218,7 @@ pub(crate) fn builtin_posix_looking_at(
         });
         let mut match_context = current_buffer_regexp_match_context(
             VariableView::new(&eval.obarray, &eval.owner),
-            &eval.buffers,
+            &eval.edit.buffers,
             current_word_boundary_lookup(eval),
             syntax_properties,
         );
@@ -2222,12 +2229,12 @@ pub(crate) fn builtin_posix_looking_at(
         let result = builtin_posix_looking_at_with_state_and_syntax_properties(
             case_fold,
             match_context,
-            &eval.buffers,
+            &eval.edit.buffers,
             match_data,
             &args,
         );
         if let Some(byte) = crossed.get()
-            && lazy.advance(&eval.buffers, byte)
+            && lazy.advance(&eval.edit.buffers, byte)
         {
             continue;
         }
@@ -2387,7 +2394,7 @@ pub(crate) fn builtin_string_match_slice(
     } else {
         None
     };
-    let current_buffer = eval.buffers.current_buffer();
+    let current_buffer = eval.edit.buffers.current_buffer();
     let syntax_table = current_buffer.map(crate::emacs_core::syntax::SyntaxTable::for_buffer);
     let category_table =
         Some(crate::emacs_core::category::active_category_table_for_buffer(current_buffer)?);
@@ -2396,7 +2403,7 @@ pub(crate) fn builtin_string_match_slice(
     let syntax_properties = current_string_match_syntax_properties(
         eval,
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         args.get(1),
     );
     let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
@@ -2448,7 +2455,7 @@ fn string_match_fast(
     } else {
         None
     };
-    let current_buffer = eval.buffers.current_buffer();
+    let current_buffer = eval.edit.buffers.current_buffer();
     let syntax_table = current_buffer.map(crate::emacs_core::syntax::SyntaxTable::for_buffer);
     let category_table =
         match crate::emacs_core::category::active_category_table_for_buffer(current_buffer) {
@@ -2503,7 +2510,7 @@ fn string_match_fast(
             current_string_match_syntax_properties(
                 eval,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 args.get(1),
             ),
         )
@@ -2700,7 +2707,7 @@ pub(crate) fn builtin_posix_string_match(
     } else {
         None
     };
-    let current_buffer = eval.buffers.current_buffer();
+    let current_buffer = eval.edit.buffers.current_buffer();
     let syntax_table = current_buffer.map(crate::emacs_core::syntax::SyntaxTable::for_buffer);
     let category_table =
         Some(crate::emacs_core::category::active_category_table_for_buffer(current_buffer)?);
@@ -2709,7 +2716,7 @@ pub(crate) fn builtin_posix_string_match(
     let syntax_properties = current_string_match_syntax_properties(
         eval,
         VariableView::new(&eval.obarray, &eval.owner),
-        &eval.buffers,
+        &eval.edit.buffers,
         args.get(1),
     );
     let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
@@ -2846,7 +2853,7 @@ pub(crate) fn builtin_match_string(
         return Ok(Value::NIL);
     }
 
-    let buf = match eval.buffers.current_buffer() {
+    let buf = match eval.edit.buffers.current_buffer() {
         Some(b) => b,
         None => return Ok(Value::NIL),
     };
@@ -3171,7 +3178,7 @@ pub(crate) fn builtin_match_data_3(
     reseat: Value,
 ) -> EvalResult {
     let args: [Value; 3] = [integers, reuse, reseat];
-    builtin_match_data_with_state(&mut eval.buffers, &eval.match_data, &args)
+    builtin_match_data_with_state(&mut eval.edit.buffers, &eval.match_data, &args)
 }
 
 /// Native unwind snapshots preserve signed string registers directly and
@@ -3373,7 +3380,7 @@ pub(crate) fn builtin_set_match_data_2(
     reseat: Value,
 ) -> EvalResult {
     let args: [Value; 2] = [list, reseat];
-    builtin_set_match_data_with_state(&mut eval.buffers, &mut eval.match_data, &args)
+    builtin_set_match_data_with_state(&mut eval.edit.buffers, &mut eval.match_data, &args)
 }
 
 fn translate_match_data(
@@ -3403,7 +3410,7 @@ pub(crate) fn builtin_match_data_translate(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_match_data_translate_with_state(&eval.buffers, &mut eval.match_data, &args)
+    builtin_match_data_translate_with_state(&eval.edit.buffers, &mut eval.match_data, &args)
 }
 
 #[derive(Clone, Copy)]
@@ -3984,7 +3991,7 @@ fn rebase_match_data_onto_prepared_range(
     measured: crate::buffer::TextEditRange,
     prepared: crate::buffer::TextEditRange,
 ) {
-    let Some((begv, zv)) = eval.buffers.current_buffer().map(|buf| {
+    let Some((begv, zv)) = eval.edit.buffers.current_buffer().map(|buf| {
         (
             buf.point_min_lisp_char_pos().to_one_based_usize(),
             buf.point_max_lisp_char_pos().to_one_based_usize(),
@@ -4028,7 +4035,7 @@ pub(crate) fn builtin_replace_match(
                 _ => {
                     return builtin_replace_match_with_state_and_flags(
                         VariableView::new(&eval.obarray, &eval.owner),
-                        &mut eval.buffers,
+                        &mut eval.edit.buffers,
                         &mut eval.match_data,
                         &args,
                         case_symbols_as_words,
@@ -4054,59 +4061,61 @@ pub(crate) fn builtin_replace_match(
                 eval.variables(),
                 eval.symbol_mode(),
             );
-            let change = {
-                let buf = eval
-                    .buffers
-                    .current_buffer()
-                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-                let (oldstart, oldend, replacement) =
-                    crate::emacs_core::search::compute_buffer_replacement_lisp_string(
-                        buf,
-                        newtext_lisp,
-                        fixedcase,
-                        literal,
-                        subexp,
-                        &eval.match_data,
-                        eval.symbol_mode(),
-                    )
-                    .map_err(|msg| {
-                        if msg == missing_subexp_error {
-                            signal(
-                                "error",
-                                vec![Value::string(missing_subexp_error), raw_subexp],
-                            )
-                        } else {
-                            signal(
-                                "error",
-                                vec![Value::string(
-                                    crate::emacs_core::coding::requote_c_error_message(
-                                        &msg,
-                                        quoting_style,
-                                    ),
-                                )],
-                            )
-                        }
-                    })?;
-                let current_id = eval
-                    .buffers
-                    .current_buffer_id()
-                    .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+            let change =
+                {
+                    let buf =
+                        eval.edit.buffers.current_buffer().ok_or_else(|| {
+                            signal("error", vec![Value::string("No current buffer")])
+                        })?;
+                    let (oldstart, oldend, replacement) =
+                        crate::emacs_core::search::compute_buffer_replacement_lisp_string(
+                            buf,
+                            newtext_lisp,
+                            fixedcase,
+                            literal,
+                            subexp,
+                            &eval.match_data,
+                            eval.symbol_mode(),
+                        )
+                        .map_err(|msg| {
+                            if msg == missing_subexp_error {
+                                signal(
+                                    "error",
+                                    vec![Value::string(missing_subexp_error), raw_subexp],
+                                )
+                            } else {
+                                signal(
+                                    "error",
+                                    vec![Value::string(
+                                        crate::emacs_core::coding::requote_c_error_message(
+                                            &msg,
+                                            quoting_style,
+                                        ),
+                                    )],
+                                )
+                            }
+                        })?;
+                    let current_id =
+                        eval.edit.buffers.current_buffer_id().ok_or_else(|| {
+                            signal("error", vec![Value::string("No current buffer")])
+                        })?;
 
-                super::editfns::text_change_for_lisp_string_replacement_in_manager(
-                    &eval.buffers,
-                    current_id,
-                    EmacsByteRange::new(EmacsBytePos::new(oldstart), EmacsBytePos::new(oldend)),
-                    &replacement,
-                )?
-            };
+                    super::editfns::text_change_for_lisp_string_replacement_in_manager(
+                        &eval.edit.buffers,
+                        current_id,
+                        EmacsByteRange::new(EmacsBytePos::new(oldstart), EmacsBytePos::new(oldend)),
+                        &replacement,
+                    )?
+                };
             // GNU `replace_range (sub_start, sub_end, ..., true, ...)`
             // (search.c Freplace_match): the before-change callbacks run
             // first and may edit the buffer; the replaced range is then
             // re-measured from the preserved start (insdel.c:1502-1513).
             let measured_at = eval
+                .edit
                 .buffers
                 .current_buffer_id()
-                .and_then(|id| crate::buffer::TextMeasurement::of(&eval.buffers, id));
+                .and_then(|id| crate::buffer::TextMeasurement::of(&eval.edit.buffers, id));
             let pending = super::editfns::PendingTextEdit::new(
                 change.old_range(),
                 super::editfns::RemeasureRule::ReplaceRange,
@@ -4115,9 +4124,10 @@ pub(crate) fn builtin_replace_match(
                 return Ok(Value::NIL);
             };
             let live = eval
+                .edit
                 .buffers
                 .current_buffer_id()
-                .and_then(|id| crate::buffer::TextMeasurement::of(&eval.buffers, id));
+                .and_then(|id| crate::buffer::TextMeasurement::of(&eval.edit.buffers, id));
             let rebased = live != measured_at;
             let measured = change.old_range();
             let registers_before_rebase = rebased.then(|| eval.match_data.clone()).flatten();
@@ -4130,7 +4140,7 @@ pub(crate) fn builtin_replace_match(
             let symbol_mode = eval.symbol_mode();
             let result = builtin_replace_match_with_state_and_flags(
                 VariableView::new(&eval.obarray, &eval.owner),
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
                 &mut eval.match_data,
                 &args,
                 case_symbols_as_words,
@@ -4152,12 +4162,12 @@ pub(crate) fn builtin_replace_match(
                 // the start it read BEFORE the callbacks and moves point there
                 // (search.c Freplace_match), however the callbacks moved the text.
                 let newpoint = measured.char_start().add_len(change.new_extent().chars());
-                if let Some((id, byte_pos)) = eval.buffers.current_buffer().map(|buf| {
+                if let Some((id, byte_pos)) = eval.edit.buffers.current_buffer().map(|buf| {
                     let accessible = buf.point_min_char_pos()..=buf.point_max_char_pos();
                     let newpoint = newpoint.clamp(*accessible.start(), *accessible.end());
                     (buf.id, buf.char_pos_to_emacs_byte_pos_clamped(newpoint))
                 }) {
-                    let _ = eval.buffers.goto_buffer_emacs_byte_pos(id, byte_pos);
+                    let _ = eval.edit.buffers.goto_buffer_emacs_byte_pos(id, byte_pos);
                 }
             }
             super::editfns::signal_after_text_change(eval, change)?;
@@ -4168,7 +4178,7 @@ pub(crate) fn builtin_replace_match(
     // Fallback: string replacement or no match data — no buffer hooks needed.
     builtin_replace_match_with_state_and_flags(
         VariableView::new(&eval.obarray, &eval.owner),
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &mut eval.match_data,
         &args,
         case_symbols_as_words,

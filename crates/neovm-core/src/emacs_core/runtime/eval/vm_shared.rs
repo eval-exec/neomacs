@@ -56,7 +56,11 @@ impl Context {
         &mut BufferManager,
         &mut Option<Box<dyn DisplayHost>>,
     ) {
-        (&mut self.frames, &mut self.buffers, &mut self.display_host)
+        (
+            &mut self.frames,
+            &mut self.edit.buffers,
+            &mut self.display_host,
+        )
     }
 
     pub(crate) fn recursive_command_loop_depth(&self) -> usize {
@@ -83,7 +87,8 @@ impl Context {
 
     /// Current buffer point as a 1-based Lisp char position.
     pub(super) fn apfp_point(&self, id: crate::buffer::BufferId) -> i64 {
-        self.buffers
+        self.edit
+            .buffers
             .get(id)
             .map(|b| b.point_char_pos().to_lisp().as_i64())
             .unwrap_or(1)
@@ -92,13 +97,13 @@ impl Context {
     /// Raw `SET_PT` equivalent: move point without running point-motion or
     /// intangibility hooks (GNU's `adjust_point_for_property` uses `SET_PT`).
     pub(super) fn apfp_set_point(&mut self, id: crate::buffer::BufferId, lisp_pos: i64) {
-        let byte = match self.buffers.get(id) {
+        let byte = match self.edit.buffers.get(id) {
             Some(b) => b.lisp_pos_to_accessible_emacs_byte_pos(
                 crate::buffer::position::LispCharPos1::new(lisp_pos.max(1)),
             ),
             None => return,
         };
-        let _ = self.buffers.goto_buffer_emacs_byte_pos(id, byte);
+        let _ = self.edit.buffers.goto_buffer_emacs_byte_pos(id, byte);
     }
 
     pub(super) fn apfp_char_property(&mut self, pos: i64, prop: Value) -> Result<Value, Flow> {
@@ -153,7 +158,7 @@ impl Context {
         last_pt: i64,
         modified: bool,
     ) -> Result<(), Flow> {
-        let Some(id) = self.buffers.current_buffer_id() else {
+        let Some(id) = self.edit.buffers.current_buffer_id() else {
             return Ok(());
         };
         let inv = Value::symbol(crate::emacs_core::intern::WellKnown::Invisible);
@@ -175,7 +180,7 @@ impl Context {
 
         for _ in 0..50 {
             let pt = self.apfp_point(id);
-            let (begv, zv) = match self.buffers.get(id) {
+            let (begv, zv) = match self.edit.buffers.get(id) {
                 Some(b) => (
                     b.point_min_lisp_char_pos().as_i64(),
                     b.point_max_lisp_char_pos().as_i64(),
@@ -334,12 +339,12 @@ impl Context {
         };
         super::super::window_cmds::remember_selected_window_point_in_state(
             &mut self.frames,
-            &mut self.buffers,
+            &mut self.edit.buffers,
             frame_id,
         );
         super::super::window_cmds::sync_selected_window_buffer_in_state(
             &self.frames,
-            &mut self.buffers,
+            &mut self.edit.buffers,
             frame_id,
         );
         let _ = self.sync_current_buffer_runtime_state();

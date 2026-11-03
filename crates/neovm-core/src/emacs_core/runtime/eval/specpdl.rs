@@ -394,7 +394,8 @@ impl Context {
                     self.restore_current_buffer_storage_if_live(buffer_id);
                 }
                 SpecBinding::SaveRestriction { state } => {
-                    self.buffers
+                    self.edit
+                        .buffers
                         .restore_saved_restriction_state(state.into_state());
                 }
                 SpecBinding::LoadsInProgress { len } => self.loads_in_progress.truncate(len),
@@ -472,7 +473,8 @@ impl Context {
                         if let Some(info) =
                             crate::buffer::buffer::lookup_buffer_slot_by_sym_id(resolved)
                         {
-                            self.buffers
+                            self.edit
+                                .buffers
                                 .set_buffer_default_slot(info, store.canonical_value());
                         }
                     }
@@ -498,7 +500,8 @@ impl Context {
                 // a buffer Value wrapper. Recovery reads the same canonical
                 // current binding without allocating in an ambient TLS heap
                 // or changing the retained BLV's defcell/valcell identity.
-                self.buffers
+                self.edit
+                    .buffers
                     .current_buffer()
                     .and_then(|buffer| buffer.local_variable_binding_cell(resolved))
                     .unwrap_or(blv.defcell.get())
@@ -589,7 +592,7 @@ impl Context {
             _ if bindflag == SetInternalBind::Set => {
                 let checked = check_forwarded_store(
                     &self.obarray,
-                    &self.buffers,
+                    &self.edit.buffers,
                     &self.specpdl,
                     resolved,
                     value,
@@ -602,7 +605,7 @@ impl Context {
                     self.obarray.with_legacy_value_write(|obarray| {
                         store_runtime_binding(
                             obarray,
-                            &mut self.buffers,
+                            &mut self.edit.buffers,
                             self.owner.slab_mut(),
                             &self.specpdl,
                             resolved,
@@ -615,16 +618,16 @@ impl Context {
             Some(ValueCell::Localized(_)) => {
                 let stored = check_forwarded_store_at(
                     &self.obarray,
-                    &self.buffers,
+                    &self.edit.buffers,
                     &self.specpdl,
                     resolved,
                     value,
                     ForwardStoreSite::Bind,
                 )?
                 .value();
-                match self.buffers.current_buffer_id() {
+                match self.edit.buffers.current_buffer_id() {
                     Some(buf_id) => {
-                        let (cur_val, alist) = match self.buffers.get(buf_id) {
+                        let (cur_val, alist) = match self.edit.buffers.get(buf_id) {
                             Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
                             None => (Value::NIL, Value::NIL),
                         };
@@ -633,7 +636,7 @@ impl Context {
                         let new_alist = self.obarray.set_internal_localized(
                             resolved, stored, cur_val, alist, bindflag, false,
                         );
-                        if let Some(buf) = self.buffers.get_mut(buf_id) {
+                        if let Some(buf) = self.edit.buffers.get_mut(buf_id) {
                             buf.replace_local_var_alist(new_alist);
                         }
                     }
@@ -656,8 +659,8 @@ impl Context {
                         // Only a thread projection's header has no slot.
                         return self.set_projected_internal(sym_id, resolved, value, bindflag);
                     };
-                    if let Some(buf_id) = self.buffers.current_buffer_id()
-                        && let Some(buf) = self.buffers.get_mut(buf_id)
+                    if let Some(buf_id) = self.edit.buffers.current_buffer_id()
+                        && let Some(buf) = self.edit.buffers.get_mut(buf_id)
                     {
                         buf.slots[slot.index()] = stored;
                     }
@@ -669,7 +672,7 @@ impl Context {
                 | ForwardSlot::KboardObj(_) => {
                     let stored = check_forwarded_store_at(
                         &self.obarray,
-                        &self.buffers,
+                        &self.edit.buffers,
                         &self.specpdl,
                         resolved,
                         value,
@@ -815,9 +818,10 @@ impl Context {
         // `buffer-undo-list` to t so font-lock/jit-lock text-property changes
         // do not enter the user's undo history.
         if resolved == buffer_undo_list_symbol()
-            && let Some(buf_id) = self.buffers.current_buffer_id()
+            && let Some(buf_id) = self.edit.buffers.current_buffer_id()
         {
             let old_value = self
+                .edit
                 .buffers
                 .get(buf_id)
                 .map(|buf| buf.get_undo_list())
@@ -829,6 +833,7 @@ impl Context {
             });
             self.run_specbind_watcher(resolved, value, "let")?;
             let _ = self
+                .edit
                 .buffers
                 .set_buffer_local_property_by_sym_id(buf_id, resolved, value);
             self.sync_cached_runtime_binding_by_id(resolved, value);
@@ -885,9 +890,10 @@ impl Context {
                     };
                     let off = slot.index();
                     let flags_idx = buf_fwd.local_flags_idx;
-                    let buf_id_opt = self.buffers.current_buffer_id();
+                    let buf_id_opt = self.edit.buffers.current_buffer_id();
                     let has_local = match buf_id_opt {
                         Some(id) => self
+                            .edit
                             .buffers
                             .get(id)
                             .map(|buf| flags_idx < 0 || buf.slot_local_flag(slot))
@@ -901,6 +907,7 @@ impl Context {
                         // which writes back to the slot.
                         let buf_id = buf_id_opt.expect("has_local implies current buffer");
                         let old_val = self
+                            .edit
                             .buffers
                             .get(buf_id)
                             .map(|b| b.slots[off])
@@ -920,7 +927,7 @@ impl Context {
                             Ok(store) => store.canonical_value(),
                             Err(error) => return Err(forward_store_signal(error, value)),
                         };
-                        if let Some(buf) = self.buffers.get_mut(buf_id) {
+                        if let Some(buf) = self.edit.buffers.get_mut(buf_id) {
                             buf.slots[off] = stored;
                             // Always-local slots need no flag
                             // change; conditional slots already
@@ -938,8 +945,8 @@ impl Context {
                         // propagate the new value via
                         // set_buffer_default_slot. On unbind we
                         // propagate the saved default back.
-                        let old_default = if off < self.buffers.buffer_defaults.len() {
-                            Some(self.buffers.buffer_defaults[off])
+                        let old_default = if off < self.edit.buffers.buffer_defaults.len() {
+                            Some(self.edit.buffers.buffer_defaults[off])
                         } else {
                             Some(buf_fwd.default)
                         };
@@ -976,9 +983,9 @@ impl Context {
         //   4. Call set_internal_localized(BIND) to write the new
         //      value into wherever the BLV cache currently points.
         if redirect == SymbolRedirect::Localized
-            && let Some(buf_id) = self.buffers.current_buffer_id()
+            && let Some(buf_id) = self.edit.buffers.current_buffer_id()
         {
-            let (cur_val, alist) = match self.buffers.get(buf_id) {
+            let (cur_val, alist) = match self.edit.buffers.get(buf_id) {
                 Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
                 None => (Value::NIL, Value::NIL),
             };
@@ -1016,7 +1023,7 @@ impl Context {
             self.run_specbind_watcher(resolved, value, "let")?;
             let stored = check_forwarded_store_at(
                 &self.obarray,
-                &self.buffers,
+                &self.edit.buffers,
                 &self.specpdl,
                 resolved,
                 value,
@@ -1036,7 +1043,7 @@ impl Context {
                 crate::emacs_core::symbol::SetInternalBind::Bind,
                 false,
             );
-            if let Some(buf) = self.buffers.get_mut(buf_id) {
+            if let Some(buf) = self.edit.buffers.get_mut(buf_id) {
                 buf.replace_local_var_alist(new_alist);
             }
             self.sync_cached_runtime_binding_by_id(resolved, stored);
@@ -1062,7 +1069,7 @@ impl Context {
         } else {
             check_forwarded_store_at(
                 &self.obarray,
-                &self.buffers,
+                &self.edit.buffers,
                 &self.specpdl,
                 resolved,
                 value,
@@ -1153,7 +1160,8 @@ impl Context {
         sym_id: SymId,
         buffer_id: crate::buffer::BufferId,
     ) -> Option<Value> {
-        self.buffers
+        self.edit
+            .buffers
             .get(buffer_id)
             .and_then(|buf| buf.get_buffer_local_binding_by_sym_id(sym_id))
             .map(|binding| binding.as_value().unwrap_or(Value::UNBOUND))
@@ -1180,6 +1188,7 @@ impl Context {
             // loaded cache stays valid. Avoid constructing a Buffer wrapper
             // through an ambient Context's TLS heap during panic recovery.
             if let Some(cell) = self
+                .edit
                 .buffers
                 .get(buffer_id)
                 .and_then(|buffer| buffer.local_variable_binding_cell(sym_id))
@@ -1188,10 +1197,12 @@ impl Context {
             }
         } else if value.is_unbound() {
             let _ = self
+                .edit
                 .buffers
                 .set_buffer_local_void_property_by_sym_id(buffer_id, sym_id);
         } else {
             let _ = self
+                .edit
                 .buffers
                 .set_buffer_local_property_by_sym_id(buffer_id, sym_id, value);
         }
@@ -1459,11 +1470,11 @@ impl Context {
                 // a fresh marker at the current buffer's point, plus the
                 // selected window when it displays that buffer. The old
                 // marker stays traceable in its slot until the write lands.
-                let Some(buffer_id) = self.buffers.current_buffer_id() else {
+                let Some(buffer_id) = self.edit.buffers.current_buffer_id() else {
                     return Ok(());
                 };
                 let new_marker = super::super::marker::make_registered_point_marker(
-                    &mut self.buffers,
+                    &mut self.edit.buffers,
                     buffer_id,
                 )
                 .expect("the current buffer is live, so its point marker registers");
@@ -1485,7 +1496,7 @@ impl Context {
             Swap::CurrentBuffer(old_buffer_id) => {
                 // eval.c:4152-4159: record the current buffer into the entry
                 // and restore the saved one if it is still live.
-                let current = self.buffers.current_buffer_id();
+                let current = self.edit.buffers.current_buffer_id();
                 if let (Some(entry), Some(current_buffer_id)) =
                     (self.specpdl.get_mut(index), current)
                 {
@@ -1817,7 +1828,7 @@ impl Context {
                     .get_by_id(sym_id)
                     .map(|s| s.redirect() == SymbolRedirect::Localized)
                     .unwrap_or(false);
-                let still_local = match self.buffers.get(buffer_id) {
+                let still_local = match self.edit.buffers.get(buffer_id) {
                     None => false,
                     Some(buf) => {
                         if is_localized {
@@ -1856,6 +1867,7 @@ impl Context {
                     if is_localized {
                         let buf_val = Value::make_buffer(buffer_id);
                         let alist = self
+                            .edit
                             .buffers
                             .get(buffer_id)
                             .map(|buf| buf.local_var_alist_value())
@@ -1868,11 +1880,12 @@ impl Context {
                             SetInternalBind::Unbind,
                             false,
                         );
-                        if let Some(buf) = self.buffers.get_mut(buffer_id) {
+                        if let Some(buf) = self.edit.buffers.get_mut(buffer_id) {
                             buf.replace_local_var_alist(new_alist);
                         }
                     } else {
                         let _ = self
+                            .edit
                             .buffers
                             .set_buffer_local_property_by_sym_id(buffer_id, sym_id, old_value);
                     }
@@ -1950,7 +1963,8 @@ impl Context {
                 self.restore_current_buffer_if_live(buffer_id);
             }
             SpecBinding::SaveRestriction { state } => {
-                self.buffers
+                self.edit
+                    .buffers
                     .restore_saved_restriction_state(state.into_state());
             }
             SpecBinding::LoadsInProgress { len } => {
@@ -1976,10 +1990,11 @@ impl Context {
         marker: Value,
         saved_window: ExcursionWindow,
     ) -> ExcursionStorageRestore {
-        let Some(location) = super::super::marker::marker_location(&self.buffers, marker) else {
+        let Some(location) = super::super::marker::marker_location(&self.edit.buffers, marker)
+        else {
             return ExcursionStorageRestore::NeedsRuntime;
         };
-        if self.buffers.current_buffer_id() != Some(location.buffer()) {
+        if self.edit.buffers.current_buffer_id() != Some(location.buffer()) {
             return ExcursionStorageRestore::NeedsRuntime;
         }
         if let Some(window) = saved_window.window()
@@ -1994,9 +2009,10 @@ impl Context {
         // Use the live marker and normal point setter: a changed narrowing
         // still clamps point just as GNU Fgoto_char does (editfns.c:802).
         let _ = self
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(location.buffer(), location.byte_pos());
-        super::super::marker::unchain_marker(&mut self.buffers, &marker);
+        super::super::marker::unchain_marker(&mut self.edit.buffers, &marker);
         ExcursionStorageRestore::Completed
     }
 
@@ -2018,7 +2034,7 @@ impl Context {
         saved_window: ExcursionWindow,
         restore: SavedBufferRestore,
     ) {
-        if let Some(location) = super::super::marker::marker_location(&self.buffers, marker) {
+        if let Some(location) = super::super::marker::marker_location(&self.edit.buffers, marker) {
             let restored_buffer = location.buffer();
             match restore {
                 SavedBufferRestore::Runtime => {
@@ -2029,6 +2045,7 @@ impl Context {
                 }
             }
             let _ = self
+                .edit
                 .buffers
                 .goto_buffer_emacs_byte_pos(restored_buffer, location.byte_pos());
             // GNU editfns.c:804-810: when the recorded window is not the
@@ -2042,6 +2059,7 @@ impl Context {
                         .selected_frame()
                         .map(|frame| frame.selected_window)
                 && let Some(point) = self
+                    .edit
                     .buffers
                     .get(restored_buffer)
                     .map(crate::buffer::Buffer::point_lisp_char_pos)
@@ -2049,14 +2067,14 @@ impl Context {
                 && window.buffer_id() == Some(restored_buffer)
             {
                 crate::window::window_markers::set_window_point_with_marker(
-                    &mut self.buffers,
+                    &mut self.edit.buffers,
                     window,
                     point,
                 );
                 self.gnu_mark_window_redisplay(window_id);
             }
         }
-        super::super::marker::unchain_marker(&mut self.buffers, &marker);
+        super::super::marker::unchain_marker(&mut self.edit.buffers, &marker);
     }
 }
 
@@ -2118,7 +2136,7 @@ impl<'a> CurrentBufferScope<'a> {
     #[inline]
     pub(crate) fn enter(context: &'a mut Context) -> Self {
         let count = Some(context.specpdl.len());
-        if let Some(buffer_id) = context.buffers.current_buffer_id() {
+        if let Some(buffer_id) = context.edit.buffers.current_buffer_id() {
             context.push_specpdl_with(|| SpecBinding::SaveCurrentBuffer { buffer_id });
         }
         Self(SavedStateScope {
@@ -2134,7 +2152,7 @@ impl<'a> CurrentBufferScope<'a> {
         context: &'a mut Context,
         buffer: crate::buffer::BufferId,
     ) -> Result<Self, Flow> {
-        if context.buffers.current_buffer_id() == Some(buffer) {
+        if context.edit.buffers.current_buffer_id() == Some(buffer) {
             // GNU does not record a buffer restore for this case. Still own
             // the child cleanup boundary if Rust unwinds unexpectedly.
             let count = Some(context.specpdl.len());
@@ -2198,7 +2216,7 @@ impl<'a> RestrictionScope<'a> {
     #[inline]
     pub(crate) fn enter(context: &'a mut Context) -> Self {
         let count = Some(context.specpdl.len());
-        if let Some(state) = context.buffers.save_current_restriction_state() {
+        if let Some(state) = context.edit.buffers.save_current_restriction_state() {
             context.push_specpdl_with(|| SpecBinding::save_restriction(state));
         }
         Self(SavedStateScope {

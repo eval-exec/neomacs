@@ -23,7 +23,7 @@ pub(crate) fn builtin_internal_default_interrupt_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_internal_default_interrupt_process_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_internal_default_interrupt_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_internal_default_interrupt_process_impl(
@@ -56,7 +56,7 @@ pub(crate) fn builtin_internal_default_signal_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_internal_default_signal_process_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_internal_default_signal_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_internal_default_signal_process_impl(
@@ -174,30 +174,33 @@ pub(super) fn insert_default_process_buffer_payload(
     let Some(buffer_id) = buffer.as_buffer_id() else {
         return Ok(Value::NIL);
     };
-    if eval.buffers.get(buffer_id).is_none() {
+    if eval.edit.buffers.get(buffer_id).is_none() {
         return Ok(Value::NIL);
     }
 
     let saved_current = insertion
         .restores_callers_current_buffer()
-        .then(|| eval.buffers.current_buffer_id())
+        .then(|| eval.edit.buffers.current_buffer_id())
         .flatten();
     eval.set_current_buffer_unrecorded(buffer_id)?;
 
-    let insert_pos = process_mark_insert_emacs_byte_pos(&eval.buffers, buffer_id, mark);
+    let insert_pos = process_mark_insert_emacs_byte_pos(&eval.edit.buffers, buffer_id, mark);
     let saved_point = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buffer| buffer.point_emacs_byte_pos());
     let saved_read_only = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buffer| buffer.get_read_only());
 
-    if let Some(buffer) = eval.buffers.get_mut(buffer_id) {
+    if let Some(buffer) = eval.edit.buffers.get_mut(buffer_id) {
         buffer.set_read_only_value(false);
     }
     let _ = eval
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(buffer_id, insert_pos);
 
@@ -205,30 +208,34 @@ pub(super) fn insert_default_process_buffer_payload(
     match insertion {
         DefaultProcessBufferInsertion::Output(text) => {
             let change = super::super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-                &eval.buffers,
+                &eval.edit.buffers,
                 buffer_id,
                 insert_pos,
                 super::super::editfns::lisp_string_text_extent(text),
             )?;
             super::super::editfns::signal_before_text_change(eval, change)?;
-            eval.buffers
+            eval.edit
+                .buffers
                 .insert_lisp_string_into_buffer_before_markers(buffer_id, text);
             super::super::editfns::signal_after_text_change(eval, change)?;
         }
         DefaultProcessBufferInsertion::StatusMessage(text) => {
             let _ = eval
+                .edit
                 .buffers
                 .insert_into_buffer_before_markers(buffer_id, text);
         }
     }
 
     let new_mark = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buffer| buffer.point_emacs_byte_pos())
         .unwrap_or(insert_pos.add_len(EmacsByteLen::new(fallback_byte_len)));
 
-    if let (Some(buffer), Some(read_only)) = (eval.buffers.get_mut(buffer_id), saved_read_only) {
+    if let (Some(buffer), Some(read_only)) = (eval.edit.buffers.get_mut(buffer_id), saved_read_only)
+    {
         buffer.set_read_only_value(read_only);
     }
 
@@ -236,18 +243,20 @@ pub(super) fn insert_default_process_buffer_payload(
     if let Some(old_point) = saved_point {
         let adjusted_point = adjusted_process_output_point(old_point, insert_pos, inserted_len);
         let _ = eval
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(buffer_id, adjusted_point);
     }
 
     if let Some(process) = eval.processes.get_any_mut(id) {
         let new_mark_pos = eval
+            .edit
             .buffers
             .get(buffer_id)
             .map(|buffer| Value::fixnum(buffer.emacs_byte_pos_to_lisp_char_pos(new_mark).as_i64()))
             .unwrap_or(Value::NIL);
         super::super::marker::builtin_set_marker_in_buffers(
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             &[process.mark, new_mark_pos, process.buffer],
         )?;
     }
@@ -1096,7 +1105,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                     )?;
 
                     let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                    eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                    eval.processes
+                        .sync_process_mark(&mut eval.edit.buffers, id)?;
                     if let Some(proc) = eval.processes.get_mut(id) {
                         proc.childp = contact;
                         proc.thread = current_thread_handle(&eval.threads);
@@ -1155,7 +1165,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 )?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.live_io.network_socket = Some(NetworkSocket::UdpSocket(socket));
                     proc.datagram_socket_addr = Some(addr);
@@ -1226,7 +1237,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 )?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.childp = contact;
                     proc.thread = current_thread_handle(&eval.threads);
@@ -1272,7 +1284,8 @@ pub(super) fn connect_network_process_at_explicit_address(
             if nowait {
                 let start = start_pending_tcp_stream_connect(vec![addr], &socket_options)?;
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.status = process_status_connect_value();
                     proc.childp = contact;
@@ -1341,7 +1354,8 @@ pub(super) fn connect_network_process_at_explicit_address(
             let local_addr = stream.local_addr().ok();
 
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-            eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+            eval.processes
+                .sync_process_mark(&mut eval.edit.buffers, id)?;
             if let Some(addr) = remote_addr {
                 contact = process_contact_plist_put(
                     contact,
@@ -1437,7 +1451,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                     )?;
 
                     let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                    eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                    eval.processes
+                        .sync_process_mark(&mut eval.edit.buffers, id)?;
                     if let Some(proc) = eval.processes.get_mut(id) {
                         proc.childp = contact;
                         proc.thread = current_thread_handle(&eval.threads);
@@ -1489,7 +1504,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 contact = client_local_contact(contact, socket.as_raw_fd())?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.live_io.network_socket = Some(NetworkSocket::UnixDatagram(socket));
                     proc.status = ProcessStatusSymbol::Open.value();
@@ -1544,7 +1560,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                     )?;
 
                     let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                    eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                    eval.processes
+                        .sync_process_mark(&mut eval.edit.buffers, id)?;
                     if let Some(proc) = eval.processes.get_mut(id) {
                         proc.childp = contact;
                         proc.thread = current_thread_handle(&eval.threads);
@@ -1597,7 +1614,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 contact = client_local_contact(contact, socket.as_raw_fd())?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.live_io.network_socket = Some(NetworkSocket::SeqpacketStream(socket));
                     proc.status = process_status_run_value();
@@ -1645,7 +1663,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                 )?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.childp = contact;
                     proc.thread = current_thread_handle(&eval.threads);
@@ -1708,7 +1727,8 @@ pub(super) fn connect_network_process_at_explicit_address(
                     contact = client_local_contact(contact, stream.as_raw_fd())?;
                 }
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.status = process_status_connect_value();
                     proc.childp = contact;
@@ -1755,7 +1775,8 @@ pub(super) fn connect_network_process_at_explicit_address(
             let stream = connect_unix_stream_socket(&path, &socket_options)?;
             contact = client_local_contact(contact, stream.as_raw_fd())?;
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-            eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+            eval.processes
+                .sync_process_mark(&mut eval.edit.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
                 proc.live_io.network_socket = Some(NetworkSocket::UnixStream(stream));
                 proc.status = process_status_run_value();
@@ -1847,7 +1868,8 @@ pub(super) fn connect_datagram_network_process(
             process_contact_plist_put(contact, ProcessKeyword::Remote.value(), zero_datagram)?;
 
         let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-        eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+        eval.processes
+            .sync_process_mark(&mut eval.edit.buffers, id)?;
         if let Some(proc) = eval.processes.get_mut(id) {
             proc.childp = contact;
             proc.thread = current_thread_handle(&eval.threads);
@@ -1901,7 +1923,8 @@ pub(super) fn connect_datagram_network_process(
     )?;
 
     let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-    eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+    eval.processes
+        .sync_process_mark(&mut eval.edit.buffers, id)?;
     if let Some(proc) = eval.processes.get_mut(id) {
         proc.live_io.network_socket = Some(NetworkSocket::UdpSocket(socket));
         proc.datagram_socket_addr = Some(remote_addr);
@@ -1983,7 +2006,8 @@ pub(super) fn listen_stream_network_process(
     contact = process_contact_plist_put(contact, ProcessKeyword::Local.value(), local)?;
 
     let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-    eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+    eval.processes
+        .sync_process_mark(&mut eval.edit.buffers, id)?;
     if let Some(proc) = eval.processes.get_mut(id) {
         proc.childp = contact;
         proc.thread = current_thread_handle(&eval.threads);
@@ -2099,7 +2123,8 @@ pub(super) fn connect_local_socket_process(
                 )?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.childp = contact;
                     proc.thread = current_thread_handle(&eval.threads);
@@ -2154,7 +2179,8 @@ pub(super) fn connect_local_socket_process(
             contact = client_local_contact(contact, socket.as_raw_fd())?;
 
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-            eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+            eval.processes
+                .sync_process_mark(&mut eval.edit.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
                 proc.live_io.network_socket = Some(NetworkSocket::UnixDatagram(socket));
                 proc.status = ProcessStatusSymbol::Open.value();
@@ -2210,7 +2236,8 @@ pub(super) fn connect_local_socket_process(
                 )?;
 
                 let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-                eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+                eval.processes
+                    .sync_process_mark(&mut eval.edit.buffers, id)?;
                 if let Some(proc) = eval.processes.get_mut(id) {
                     proc.childp = contact;
                     proc.thread = current_thread_handle(&eval.threads);
@@ -2264,7 +2291,8 @@ pub(super) fn connect_local_socket_process(
             contact = client_local_contact(contact, socket.as_raw_fd())?;
 
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-            eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+            eval.processes
+                .sync_process_mark(&mut eval.edit.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
                 proc.live_io.network_socket = Some(NetworkSocket::SeqpacketStream(socket));
                 proc.status = process_status_run_value();
@@ -2317,7 +2345,8 @@ pub(super) fn connect_local_socket_process(
             )?;
 
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-            eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+            eval.processes
+                .sync_process_mark(&mut eval.edit.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
                 proc.childp = contact;
                 proc.thread = current_thread_handle(&eval.threads);
@@ -2391,7 +2420,8 @@ pub(super) fn connect_local_socket_process(
                 contact = client_local_contact(contact, stream.as_raw_fd())?;
             }
             let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-            eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+            eval.processes
+                .sync_process_mark(&mut eval.edit.buffers, id)?;
             if let Some(proc) = eval.processes.get_mut(id) {
                 proc.status = process_status_connect_value();
                 proc.childp = contact;
@@ -2444,7 +2474,8 @@ pub(super) fn connect_local_socket_process(
         let stream = connect_unix_stream_socket(&service_path, &socket_options)?;
         contact = client_local_contact(contact, stream.as_raw_fd())?;
         let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-        eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+        eval.processes
+            .sync_process_mark(&mut eval.edit.buffers, id)?;
         if let Some(proc) = eval.processes.get_mut(id) {
             proc.live_io.network_socket = Some(NetworkSocket::UnixStream(stream));
             proc.status = process_status_run_value();
@@ -2587,8 +2618,12 @@ pub(crate) fn builtin_make_network_process(
     // `coding-system-for-read/write` precedence over the operation/default
     // codings; URL binds the read side to `binary` around this call.
     let multibyte = ProcessBufferMultibyteness {
-        process_buffer: match resolve_buffer_for_process_lookup_in_state(&eval.buffers, &buffer) {
+        process_buffer: match resolve_buffer_for_process_lookup_in_state(
+            &eval.edit.buffers,
+            &buffer,
+        ) {
             Ok(Some(bid)) => eval
+                .edit
                 .buffers
                 .get(bid)
                 .map(|b| b.get_multibyte())
@@ -2597,6 +2632,7 @@ pub(crate) fn builtin_make_network_process(
             _ => true,
         },
         current_buffer: eval
+            .edit
             .buffers
             .current_buffer()
             .map(|buffer| buffer.get_multibyte())
@@ -2773,7 +2809,8 @@ pub(crate) fn builtin_make_network_process(
         };
 
         let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-        eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+        eval.processes
+            .sync_process_mark(&mut eval.edit.buffers, id)?;
         if let Some(proc) = eval.processes.get_mut(id) {
             proc.status = process_status_connect_value();
             proc.childp = contact;
@@ -2842,7 +2879,8 @@ pub(crate) fn builtin_make_network_process(
     let local_addr = stream.local_addr().ok();
 
     let id = create_network_process_record(eval, name, buffer, resolved_coding)?;
-    eval.processes.sync_process_mark(&mut eval.buffers, id)?;
+    eval.processes
+        .sync_process_mark(&mut eval.edit.buffers, id)?;
     if let Some(addr) = remote_addr {
         contact = process_contact_plist_put(
             contact,
@@ -2939,7 +2977,7 @@ pub(crate) fn builtin_make_pipe_process(
     let coding_variables = read_connection_process_coding_variables(eval);
     let result = builtin_make_pipe_process_impl(
         &mut eval.processes,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.threads,
         Some(&eval.coding_systems),
         coding_variables,
@@ -3104,7 +3142,7 @@ pub(crate) fn builtin_make_serial_process(
     let coding_variables = read_connection_process_coding_variables(eval);
     let result = builtin_make_serial_process_impl(
         &mut eval.processes,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.threads,
         Some(&eval.coding_systems),
         coding_variables,
@@ -3270,7 +3308,7 @@ pub(crate) fn builtin_serial_process_configure(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_serial_process_configure_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_serial_process_configure_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_serial_process_configure_impl(
@@ -3498,12 +3536,20 @@ pub(crate) fn builtin_delete_process(
     }
     let id = if let Some(process) = args.first() {
         if process.as_bare_symbol_name() == Some("message") {
-            resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, &Value::NIL)?
+            resolve_get_process_designator_in_state(
+                &eval.processes,
+                &eval.edit.buffers,
+                &Value::NIL,
+            )?
         } else {
-            resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, process)?
+            resolve_get_process_designator_in_state(&eval.processes, &eval.edit.buffers, process)?
         }
     } else {
-        resolve_optional_process_or_current_buffer_in_state(&eval.processes, &eval.buffers, None)?
+        resolve_optional_process_or_current_buffer_in_state(
+            &eval.processes,
+            &eval.edit.buffers,
+            None,
+        )?
     };
     let was_terminal = eval
         .processes
@@ -3561,10 +3607,10 @@ pub(crate) fn builtin_continue_process(
     }
     let (id, _) = resolve_optional_process_with_explicit_return_in_state(
         &eval.processes,
-        &eval.buffers,
+        &eval.edit.buffers,
         args.first(),
     )?;
-    let ret = builtin_continue_process_impl(&mut eval.processes, &eval.buffers, args)?;
+    let ret = builtin_continue_process_impl(&mut eval.processes, &eval.edit.buffers, args)?;
     if eval
         .processes
         .get_any(id)
@@ -3660,7 +3706,7 @@ pub(crate) fn builtin_kill_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_kill_process_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_kill_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_kill_process_impl(
@@ -3772,7 +3818,7 @@ pub(crate) fn builtin_stop_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_stop_process_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_stop_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_stop_process_impl(
@@ -3815,7 +3861,7 @@ pub(crate) fn builtin_quit_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_quit_process_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_quit_process_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_quit_process_impl(
@@ -4120,7 +4166,7 @@ pub(crate) fn builtin_make_process(
     eval.push_specpdl_root(coding_environment.operation_coding_system);
     let process = builtin_make_process_impl_with_environment(
         &mut eval.processes,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &eval.threads,
         args,
         use_pty,
@@ -4689,7 +4735,8 @@ pub(crate) fn builtin_process_send_string(
     {
         return Err(signal_process_not_running_in_manager(&eval.processes, id));
     }
-    let id = resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, &args[0])?;
+    let id =
+        resolve_get_process_designator_in_state(&eval.processes, &eval.edit.buffers, &args[0])?;
     eval.wait_while_network_process_connecting(id)?;
     // GNU `send_process` runs `update_status` (:6725-6726) before it tests
     // `p->status`, and by then `handle_child_signal` has already recorded a
@@ -4759,7 +4806,7 @@ pub(crate) fn builtin_process_status(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_process_status_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_process_status_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_process_status_impl(
@@ -4968,7 +5015,7 @@ pub(crate) fn builtin_set_process_buffer(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_process_buffer_impl(&mut eval.processes, &mut eval.buffers, args)
+    builtin_set_process_buffer_impl(&mut eval.processes, &mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_set_process_buffer_impl(
@@ -5300,7 +5347,7 @@ pub(crate) fn builtin_process_mark(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_process_mark_impl(&eval.processes, &eval.buffers, args)
+    builtin_process_mark_impl(&eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_process_mark_impl(
@@ -5324,7 +5371,7 @@ pub(crate) fn builtin_process_type(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_process_type_impl(&eval.processes, &eval.buffers, args)
+    builtin_process_type_impl(&eval.processes, &eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_process_type_impl(
@@ -5376,12 +5423,16 @@ pub(crate) fn builtin_process_send_region(
     if let Some(id) = process_value_to_id(&args[0])
         && is_stale_process_id_designator_in_manager(&eval.processes, &args[0])
     {
-        let _ =
-            super::super::position::LispRegionArgs::from_values(&eval.buffers, args[1], args[2])?;
+        let _ = super::super::position::LispRegionArgs::from_values(
+            &eval.edit.buffers,
+            args[1],
+            args[2],
+        )?;
         return Err(signal_process_not_running_in_manager(&eval.processes, id));
     }
 
-    let id = resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, &args[0])?;
+    let id =
+        resolve_get_process_designator_in_state(&eval.processes, &eval.edit.buffers, &args[0])?;
     eval.wait_while_network_process_connecting(id)?;
     // `process-send-region` reaches GNU's `send_process` too, and therefore
     // the same `update_status` at :6726.
@@ -5393,10 +5444,11 @@ pub(crate) fn builtin_process_send_region(
         return Err(signal_process_not_running_in_manager(&eval.processes, id));
     }
     let region_args =
-        super::super::position::LispRegionArgs::from_values(&eval.buffers, args[1], args[2])?;
+        super::super::position::LispRegionArgs::from_values(&eval.edit.buffers, args[1], args[2])?;
 
     let region_text = {
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -5467,12 +5519,16 @@ pub(crate) fn builtin_process_send_eof(
         let maybe_id = args
             .first()
             .map(|process| {
-                resolve_get_process_designator_in_state(&eval.processes, &eval.buffers, process)
+                resolve_get_process_designator_in_state(
+                    &eval.processes,
+                    &eval.edit.buffers,
+                    process,
+                )
             })
             .unwrap_or_else(|| {
                 resolve_optional_process_or_current_buffer_in_state(
                     &eval.processes,
-                    &eval.buffers,
+                    &eval.edit.buffers,
                     None,
                 )
             })
@@ -5505,7 +5561,7 @@ pub(crate) fn builtin_process_send_eof(
             return Ok(args.first().copied().unwrap_or(Value::NIL));
         }
     }
-    builtin_process_send_eof_impl(&mut eval.processes, &eval.buffers, args)
+    builtin_process_send_eof_impl(&mut eval.processes, &eval.edit.buffers, args)
 }
 
 pub(super) fn send_eof_to_process(proc: &mut Process) -> EvalResult {
@@ -5624,7 +5680,7 @@ pub(crate) fn builtin_process_running_child_p(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_process_running_child_p_impl(&eval.processes, &eval.buffers, args)
+    builtin_process_running_child_p_impl(&eval.processes, &eval.edit.buffers, args)
 }
 
 #[cfg(unix)]
@@ -5756,7 +5812,7 @@ pub(crate) fn builtin_get_buffer_process(
     eval: &mut super::super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_get_buffer_process_impl(&eval.buffers, &eval.processes, args)
+    builtin_get_buffer_process_impl(&eval.edit.buffers, &eval.processes, args)
 }
 
 pub(crate) fn builtin_get_buffer_process_impl(

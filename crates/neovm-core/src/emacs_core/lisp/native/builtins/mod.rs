@@ -826,7 +826,12 @@ fn detect_coding_string(eval: &mut super::eval::Context, args: Vec<Value>) -> Ev
 }
 fn detect_coding_region(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let mode = eval.symbol_mode();
-    super::coding::builtin_detect_coding_region(&eval.coding_systems, &eval.buffers, args, mode)
+    super::coding::builtin_detect_coding_region(
+        &eval.coding_systems,
+        &eval.edit.buffers,
+        args,
+        mode,
+    )
 }
 fn keyboard_coding_system(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     super::coding::builtin_keyboard_coding_system(&eval.coding_systems, args)

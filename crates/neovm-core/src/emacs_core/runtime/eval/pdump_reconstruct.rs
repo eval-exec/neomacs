@@ -192,7 +192,7 @@ impl Context {
             loads_in_progress,
             load_read_cursors: Vec::new(),
             last_uncaught_signal_backtrace: None,
-            buffers: world.buffers,
+            edit: crate::buffer::EditRuntime::new(world.buffers),
             xwidgets: world.global.xwidgets,
             last_overlay_modification_hooks: Vec::new(),
             interval_insert_behind_hooks: Value::NIL,

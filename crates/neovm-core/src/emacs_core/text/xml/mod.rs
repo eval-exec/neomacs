@@ -48,12 +48,12 @@ fn validate_region_byte_bounds(
     ctx: &mut super::eval::Context,
     args: &[Value],
 ) -> Result<Option<(crate::buffer::BufferId, EmacsByteRange)>, Flow> {
-    let Some(buf) = ctx.buffers.current_buffer() else {
+    let Some(buf) = ctx.edit.buffers.current_buffer() else {
         return Ok(None);
     };
 
     let region = super::position::LispRegionArgs::from_optional_values(
-        &ctx.buffers,
+        &ctx.edit.buffers,
         args.first().copied(),
         args.get(1).copied(),
         buf.point_min_lisp_char_pos(),
@@ -70,7 +70,7 @@ fn read_region_bytes(
     byte_range: EmacsByteRange,
 ) -> Result<Vec<u8>, Flow> {
     let bytes =
-        super::fns::read_buffer_region_bytes_in_manager(&ctx.buffers, buffer_id, byte_range)?;
+        super::fns::read_buffer_region_bytes_in_manager(&ctx.edit.buffers, buffer_id, byte_range)?;
     Ok(bytes)
 }
 

@@ -1596,7 +1596,7 @@ fn directory_files_with_decoder(
             let matched = syntax
                 .search(
                     ctx.variables(),
-                    &ctx.buffers,
+                    &ctx.edit.buffers,
                     pattern,
                     &name,
                     super::regex::SearchedString::Owned(name.clone()),
@@ -3011,12 +3011,12 @@ pub(crate) fn default_directory_lisp_in_state(
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 fn default_directory_lisp_for_eval(eval: &Context) -> Option<crate::heap_types::LispString> {
-    default_directory_lisp_in_state(eval.variables(), &[], &eval.buffers)
+    default_directory_lisp_in_state(eval.variables(), &[], &eval.edit.buffers)
 }
 
 fn raw_default_directory_value_for_eval(eval: &Context) -> Option<Value> {
     eval.variables()
-        .value_in_buffer_by_name(eval.buffers.current_buffer(), "default-directory")
+        .value_in_buffer_by_name(eval.edit.buffers.current_buffer(), "default-directory")
 }
 
 fn invocation_directory_absolute_value_for_eval(eval: &Context) -> Option<Value> {
@@ -3068,7 +3068,7 @@ pub(crate) fn resolve_filename_lisp_for_eval(
     eval: &Context,
     filename: &crate::heap_types::LispString,
 ) -> crate::heap_types::LispString {
-    resolve_filename_lisp_in_state(eval.variables(), &[], &eval.buffers, filename)
+    resolve_filename_lisp_in_state(eval.variables(), &[], &eval.edit.buffers, filename)
 }
 
 fn file_error_symbol(kind: ErrorKind) -> &'static str {
@@ -4388,6 +4388,7 @@ fn validate_set_visited_file_modtime_arg(arg: &Value) -> Result<(), Flow> {
 pub(crate) fn builtin_visited_file_modtime(eval: &mut Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("visited-file-modtime", &args, 0)?;
     let buf = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4409,8 +4410,9 @@ pub(crate) fn builtin_verify_visited_file_modtime(
     // GNU fileio.c:6129 `decode_buffer (buf)`: BUF, not the current buffer,
     // is the one whose recorded modtime is compared.  filelock.c:605 passes
     // the buffer that visits the file being locked, which need not be current.
-    let buffer_id = decode_buffer_arg_in_state(&eval.buffers, args.first())?;
+    let buffer_id = decode_buffer_arg_in_state(&eval.edit.buffers, args.first())?;
     let buf = eval
+        .edit
         .buffers
         .get(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4511,6 +4513,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
             }
         };
         let buf = eval
+            .edit
             .buffers
             .current_buffer_mut()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -4526,6 +4529,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
     // file of its own, and this error is half of the same change that made
     // `record_first_change' read the BASE buffer's modtime (Bug#56397).
     let current_buffer_is_indirect = eval
+        .edit
         .buffers
         .current_buffer()
         .is_some_and(|buf| buf.base_buffer.is_some());
@@ -4538,6 +4542,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
         ));
     }
     let file_name = eval
+        .edit
         .buffers
         .current_buffer()
         .and_then(|b| b.file_name_lisp_string());
@@ -4571,6 +4576,7 @@ pub(crate) fn builtin_set_visited_file_modtime(eval: &mut Context, args: Vec<Val
     let path = lisp_file_name_to_path_buf(&expanded);
     if let Ok(meta) = std::fs::metadata(&path) {
         let buf = eval
+            .edit
             .buffers
             .current_buffer_mut()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -5140,7 +5146,7 @@ pub(crate) fn find_file_name_handler_lisp_for_eval(
 ) -> Value {
     find_file_name_handler_lisp_with_values(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval),
         filename,
         operation,
@@ -5539,12 +5545,16 @@ fn signal_and_delete_file_replace_region(
     if byte_range.is_empty() {
         return Ok(());
     }
-    let change =
-        super::editfns::text_change_for_deletion_in_manager(&eval.buffers, current_id, byte_range)?;
+    let change = super::editfns::text_change_for_deletion_in_manager(
+        &eval.edit.buffers,
+        current_id,
+        byte_range,
+    )?;
     if signal_hooks {
         super::editfns::signal_before_text_change(eval, change)?;
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .delete_buffer_measured_region(current_id, change.old_range())
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     if signal_hooks {
@@ -5563,11 +5573,12 @@ fn signal_and_insert_file_replace_text(
     if text.is_empty() {
         return Ok(());
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(current_id, byte_pos)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let change = super::editfns::text_change_for_lisp_string_replacement_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         EmacsByteRange::from_start_len(byte_pos, EmacsByteLen::ZERO),
         text,
@@ -5575,7 +5586,8 @@ fn signal_and_insert_file_replace_text(
     if signal_hooks {
         super::editfns::signal_before_text_change(eval, change)?;
     }
-    eval.buffers
+    eval.edit
+        .buffers
         // GNU's `insert-file-contents' REPLACE path performs a deletion and
         // then an ordinary insertion (`insert_from_buffer`), not one atomic
         // `adjust_markers_for_replace` edit.  Markers collapsed to the insert
@@ -5608,6 +5620,7 @@ fn replace_accessible_portion_for_insert_file_contents(
         old_text,
     ) = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -5637,7 +5650,7 @@ fn replace_accessible_portion_for_insert_file_contents(
 
     if prefix == old_bytes.len() && prefix == new_bytes.len() {
         restore_point_after_file_replace(
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             current_id,
             old_point_char,
             accessible_start_char + char_count_for_lisp_string_byte_prefix(&old_text, prefix),
@@ -5690,7 +5703,7 @@ fn replace_accessible_portion_for_insert_file_contents(
             signal_hooks,
         )?;
         restore_point_after_file_replace(
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             current_id,
             old_point_char,
             same_at_start_char,
@@ -5745,12 +5758,13 @@ fn insert_file_contents_into_current_buffer_in_state(
         // It calls TEMP_SET_PT_BOTH(BEG, BEG_BYTE) to keep point at the
         // beginning of the inserted region.
         let pt_before = eval
+            .edit
             .buffers
             .get(current_id)
             .map(|b| b.point_anchor())
             .unwrap_or_else(|| TextPositionAnchor::new(CharPos0::ZERO, EmacsBytePos::ZERO));
         let change = super::editfns::text_change_for_lisp_string_replacement_in_manager(
-            &eval.buffers,
+            &eval.edit.buffers,
             current_id,
             EmacsByteRange::from_start_len(pt_before.emacs_byte_pos(), EmacsByteLen::ZERO),
             contents,
@@ -5758,14 +5772,18 @@ fn insert_file_contents_into_current_buffer_in_state(
         if signal_hooks && !contents.is_empty() {
             super::editfns::signal_before_text_change(eval, change)?;
         }
-        eval.buffers
+        eval.edit
+            .buffers
             .insert_lisp_string_into_buffer(current_id, contents)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         if signal_hooks && !contents.is_empty() {
             super::editfns::signal_after_text_change(eval, change)?;
         }
         // Restore point to before the insertion (matching GNU).
-        let _ = eval.buffers.set_buffer_point_anchor(current_id, pt_before);
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_point_anchor(current_id, pt_before);
         Ok(None)
     }
 }
@@ -5818,9 +5836,10 @@ fn finish_handled_insert_file_contents(
     empty_undo_list_p: bool,
 ) -> EvalResult {
     // GNU continues with whatever buffer is current after the handler.
-    let current_id = current_buffer_id_or_error(&eval.buffers)?;
+    let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
     let inserted = handler_reported_inserted_chars(
-        eval.buffers
+        eval.edit
+            .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         handler_result,
@@ -5829,6 +5848,7 @@ fn finish_handled_insert_file_contents(
     if visit {
         if empty_undo_list_p {
             let _ = eval
+                .edit
                 .buffers
                 .configure_buffer_undo_list(current_id, Value::NIL);
         }
@@ -5836,9 +5856,12 @@ fn finish_handled_insert_file_contents(
         // save_length = Z - BEG (:5160-5162).  The modtime, file name and
         // lock are left to the handler (:5153-5158 and :5163-5168 only run
         // without one).
-        let _ = eval.buffers.set_buffer_modified_flag(current_id, false);
-        let _ = eval.buffers.set_buffer_auto_saved(current_id);
-        if let Some(buf) = eval.buffers.get_mut(current_id) {
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_modified_flag(current_id, false);
+        let _ = eval.edit.buffers.set_buffer_auto_saved(current_id);
+        if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
             let size = i64::try_from(buf.total_char_len().get()).unwrap_or(i64::MAX);
             buf.set_buffer_local("buffer-saved-size", Value::fixnum(size));
         }
@@ -5886,6 +5909,7 @@ fn run_after_insert_file_pipeline(
     }
 
     let (saved_point, accessible_start, chars_modiff_before) = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|buf| {
@@ -5913,10 +5937,11 @@ fn run_after_insert_file_pipeline(
     // A signal from `format-decode` or `after-insert-file-functions` leaves
     // undo disabled, and it is not a `let`, so nothing unwinds it (P4.10).
     let saved_undo_list = eval
+        .edit
         .buffers
         .get(current_id)
         .map(crate::buffer::Buffer::get_undo_list);
-    if let Some(buf) = eval.buffers.get_mut(current_id) {
+    if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
         buf.set_undo_list(Value::T);
     }
     let undo_root = eval.save_specpdl_roots();
@@ -5927,7 +5952,8 @@ fn run_after_insert_file_pipeline(
     let pipeline_result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<i64, Flow> {
             if replace_requested {
-                eval.buffers
+                eval.edit
+                    .buffers
                     .goto_buffer_emacs_byte_pos(current_id, accessible_start)
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             }
@@ -5988,17 +6014,19 @@ fn run_after_insert_file_pipeline(
         // GNU has no unwind here: a buffer the hooks selected stays current.
         return finish_inserted_count_scope(eval, specpdl_count, pipeline_result);
     }
-    if let (Some(saved), Some(buf)) = (saved_undo_list, eval.buffers.get_mut(current_id)) {
+    if let (Some(saved), Some(buf)) = (saved_undo_list, eval.edit.buffers.get_mut(current_id)) {
         buf.set_undo_list(saved);
     }
     eval.restore_current_buffer_if_live(current_id);
     let chars_modiff_after = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|buf| buf.chars_modified_tick())
         .unwrap_or(chars_modiff_before + 1);
     if replace_requested && chars_modiff_after == chars_modiff_before {
         let _ = eval
+            .edit
             .buffers
             .set_buffer_point_anchor(current_id, saved_point);
     }
@@ -6264,7 +6292,7 @@ impl PreparedWriteRegion {
             // so cleanup visits the most recent buffer first and the original
             // buffer last (`src/fileio.c:5804-5819`).
             for buffer in self.annotation_buffers.iter().rev().copied() {
-                if eval.buffers.get(buffer).is_none() {
+                if eval.edit.buffers.get(buffer).is_none() {
                     continue;
                 }
                 eval.switch_current_buffer(buffer)?;
@@ -6300,7 +6328,8 @@ fn prepare_write_region(
         });
     }
 
-    let mut source = WriteRegionSource::buffer_region(&eval.buffers, original_buffer, start, end)?;
+    let mut source =
+        WriteRegionSource::buffer_region(&eval.edit.buffers, original_buffer, start, end)?;
     let mut callback_start = start;
     let mut callback_end = end;
     let hook_sym = intern("write-region-annotate-functions");
@@ -6318,14 +6347,16 @@ fn prepare_write_region(
                 "write-region-annotations-so-far",
                 annotations.as_lisp_list(),
             );
-            let buffer_before = current_buffer_id_or_error(&eval.buffers)?;
+            let buffer_before = current_buffer_id_or_error(&eval.edit.buffers)?;
             let result = eval.apply(function, vec![callback_start, callback_end])?;
             eval.push_specpdl_root(result);
-            let buffer_after = current_buffer_id_or_error(&eval.buffers)?;
+            let buffer_after = current_buffer_id_or_error(&eval.edit.buffers)?;
             if buffer_after != buffer_before {
                 annotation_buffers.push(buffer_after);
-                source = WriteRegionSource::whole_accessible_buffer(&eval.buffers, buffer_after)?;
+                source =
+                    WriteRegionSource::whole_accessible_buffer(&eval.edit.buffers, buffer_after)?;
                 let buf = eval
+                    .edit
                     .buffers
                     .get(buffer_after)
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -6345,7 +6376,7 @@ fn prepare_write_region(
         // current (fileio.c:5596-5600, P4.10).
         return Err(error);
     }
-    let content = source.apply_annotations(&eval.buffers, &annotations)?;
+    let content = source.apply_annotations(&eval.edit.buffers, &annotations)?;
     eval.restore_specpdl_roots(root_scope);
 
     Ok(PreparedWriteRegion {
@@ -6503,11 +6534,12 @@ fn decide_auto_coding_for_insert_file_contents(
         return Ok(None);
     }
 
-    let saved_current = eval.buffers.current_buffer_id();
+    let saved_current = eval.edit.buffers.current_buffer_id();
     let work_buffer = eval
+        .edit
         .buffers
         .find_buffer_by_name(" *code-converting-work*")
-        .unwrap_or_else(|| eval.buffers.create_buffer(" *code-converting-work*"));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer(" *code-converting-work*"));
     let restore_and_finish = |eval: &mut super::eval::Context, result: EvalResult| {
         if let Some(saved) = saved_current {
             eval.restore_current_buffer_if_live(saved);
@@ -6517,23 +6549,28 @@ fn decide_auto_coding_for_insert_file_contents(
 
     eval.set_current_buffer_unrecorded(work_buffer)?;
     let old_range = eval
+        .edit
         .buffers
         .get(work_buffer)
         .map(|buf| buf.full_emacs_byte_range())
         .unwrap_or(EmacsByteRange::EMPTY);
     if !old_range.is_empty() {
-        eval.buffers
+        eval.edit
+            .buffers
             .delete_buffer_emacs_byte_range(work_buffer, old_range)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     }
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(work_buffer, false)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let raw = crate::heap_types::LispString::from_unibyte(bytes.to_vec());
-    eval.buffers
+    eval.edit
+        .buffers
         .insert_lisp_string_into_buffer(work_buffer, &raw)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(work_buffer, EmacsBytePos::new(0));
 
@@ -6584,30 +6621,34 @@ fn restore_empty_buffer_after_auto_coding_probe(
     saved_multibyte: bool,
     saved_undo_list: Value,
 ) {
-    if eval.buffers.get(buffer_id).is_none() {
+    if eval.edit.buffers.get(buffer_id).is_none() {
         return;
     }
     let _ = eval.set_current_buffer_unrecorded(buffer_id);
-    if let Some(buf) = eval.buffers.get_mut(buffer_id) {
+    if let Some(buf) = eval.edit.buffers.get_mut(buffer_id) {
         buf.set_undo_list(Value::T);
     }
     let delete_range = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| buf.full_emacs_byte_range())
         .unwrap_or(EmacsByteRange::EMPTY);
     if !delete_range.is_empty() {
         let _ = eval
+            .edit
             .buffers
             .delete_buffer_emacs_byte_range(buffer_id, delete_range);
     }
     let _ = eval
+        .edit
         .buffers
         .set_buffer_multibyte_flag(buffer_id, saved_multibyte);
-    if let Some(buf) = eval.buffers.get_mut(buffer_id) {
+    if let Some(buf) = eval.edit.buffers.get_mut(buffer_id) {
         buf.set_undo_list(saved_undo_list);
     }
     let _ = eval
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(buffer_id, EmacsBytePos::new(0));
 }
@@ -6642,6 +6683,7 @@ fn decide_auto_coding_for_empty_insert_file_contents(
 
     let (saved_multibyte, saved_undo_list) = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -6649,10 +6691,11 @@ fn decide_auto_coding_for_empty_insert_file_contents(
     };
 
     eval.set_current_buffer_unrecorded(current_id)?;
-    eval.buffers
+    eval.edit
+        .buffers
         .set_buffer_multibyte_flag(current_id, false)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if let Some(buf) = eval.buffers.get_mut(current_id) {
+    if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
         buf.set_undo_list(Value::T);
     }
     // GNU probes the HEAD and TAIL only (fileio.c `Finsert_file_contents`,
@@ -6665,10 +6708,12 @@ fn decide_auto_coding_for_empty_insert_file_contents(
     // source .el load at startup the same way.
     let probe = auto_coding_probe_bytes(bytes);
     let raw = crate::heap_types::LispString::from_unibyte(probe.to_vec());
-    eval.buffers
+    eval.edit
+        .buffers
         .insert_lisp_string_into_buffer(current_id, &raw)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let _ = eval
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current_id, EmacsBytePos::new(0));
 
@@ -6719,6 +6764,7 @@ pub(crate) fn builtin_insert_file_contents(
     // GNU decides this on entry (src/fileio.c:4125-4127), before a file name
     // handler gets to insert anything into the buffer.
     let empty_undo_list_p = eval
+        .edit
         .buffers
         .current_buffer()
         .is_some_and(|buf| visit && buf.get_undo_list().is_nil() && buf.is_text_empty());
@@ -6726,8 +6772,9 @@ pub(crate) fn builtin_insert_file_contents(
     // GNU refuses these before expanding the name or calling a file name
     // handler (src/fileio.c:4143-4147).
     {
-        let current_id = current_buffer_id_or_error(&eval.buffers)?;
+        let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -6788,9 +6835,10 @@ pub(crate) fn builtin_insert_file_contents(
         );
     }
 
-    let current_id = current_buffer_id_or_error(&eval.buffers)?;
+    let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
     {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -6817,9 +6865,13 @@ pub(crate) fn builtin_insert_file_contents(
         Err(err) => {
             if visit {
                 let _ = eval
+                    .edit
                     .buffers
                     .set_buffer_file_name(current_id, Value::heap_string(resolved.clone()));
-                let _ = eval.buffers.set_buffer_modified_flag(current_id, false);
+                let _ = eval
+                    .edit
+                    .buffers
+                    .set_buffer_modified_flag(current_id, false);
                 // GNU src/fileio.c:4194-4208: a file it was told to VISIT but
                 // could not open still records a modtime --
                 // `mtime = time_error_value (save_errno)` -- and only signals
@@ -6827,12 +6879,13 @@ pub(crate) fn builtin_insert_file_contents(
                 // `find-file' of a NEW file leaves `visited-file-modtime' at
                 // -1 rather than 0, and why the first change to that buffer
                 // records `(t . -1)'.
-                if let Some(buf) = eval.buffers.get_mut(current_id) {
+                if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
                     buf.set_visited_file_modtime(VisitedFileModtime::from_open_error(&err));
                     buf.modtime_size = None;
                 }
                 if empty_undo_list_p {
                     let _ = eval
+                        .edit
                         .buffers
                         .configure_buffer_undo_list(current_id, Value::NIL);
                 }
@@ -6876,11 +6929,13 @@ pub(crate) fn builtin_insert_file_contents(
 
     let slice = &contents_bytes[begin as usize..end_off as usize];
     let multibyte = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|buffer| buffer.get_multibyte())
         .unwrap_or(true);
     let current_buffer_was_empty = eval
+        .edit
         .buffers
         .get(current_id)
         .is_some_and(|buffer| buffer.is_text_empty());
@@ -6932,7 +6987,7 @@ pub(crate) fn builtin_insert_file_contents(
     let signal_change_hooks = !visit || replace_requested;
     let hide_visited_file_name_during_replace = visit
         && replace_requested
-        && eval.buffers.get(current_id).is_some_and(|buffer| {
+        && eval.edit.buffers.get(current_id).is_some_and(|buffer| {
             buffer.full_emacs_byte_range() == buffer.accessible_emacs_byte_range()
         });
     // GNU's REPLACE branch reports only the *net* inserted chars (the unchanged
@@ -6963,16 +7018,20 @@ pub(crate) fn builtin_insert_file_contents(
 
     if visit {
         let _ = eval
+            .edit
             .buffers
             .set_buffer_file_name(current_id, Value::heap_string(resolved.clone()));
-        let _ = eval.buffers.set_buffer_modified_flag(current_id, false);
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_modified_flag(current_id, false);
         // Store file modification time (GNU: insert-file-contents stores
         // current_buffer->modtime = mtime; current_buffer->modtime_size = st_size).
         if let Ok(meta) = std::fs::metadata(lisp_file_name_to_path_buf(&resolved))
             && let Ok(mtime) = meta.modified()
             && let Some(timestamp) = representable_file_timestamp(mtime)
         {
-            if let Some(buf) = eval.buffers.get_mut(current_id) {
+            if let Some(buf) = eval.edit.buffers.get_mut(current_id) {
                 buf.set_visited_file_modtime(VisitedFileModtime::Known {
                     sec: timestamp.seconds(),
                     nsec: timestamp.nanoseconds() as i32,
@@ -6982,6 +7041,7 @@ pub(crate) fn builtin_insert_file_contents(
         }
         if empty_undo_list_p {
             let _ = eval
+                .edit
                 .buffers
                 .configure_buffer_undo_list(current_id, Value::NIL);
         }
@@ -7032,7 +7092,7 @@ fn resolve_write_coding_system_symbol(
 
     // 2. Read the visible per-buffer slot, not only an explicitly local
     // override.  GNU's BVAR accessor sees the inherited slot value too.
-    if let Some(buf) = eval.buffers.get(buffer_id)
+    if let Some(buf) = eval.edit.buffers.get(buffer_id)
         && let Some(val) = buf.buffer_local_value("buffer-file-coding-system")
         && let Some(name) = coding_system_value_to_name(&val)
     {
@@ -7323,6 +7383,7 @@ fn select_write_region_coding_system(
     // GNU reads the buffer slot with BVAR and asks Flocal_variable_p whether
     // it is buffer-local; the inherited default alone does not count.
     let slot_value = eval
+        .edit
         .buffers
         .get(buffer_id)
         .and_then(|buf| buf.buffer_local_value("buffer-file-coding-system"))
@@ -7330,6 +7391,7 @@ fn select_write_region_coding_system(
         .map(|name| CodingValue::Coding(intern(&name)))
         .unwrap_or(CodingValue::Unset);
     let slot = match eval
+        .edit
         .buffers
         .get(buffer_id)
         .is_some_and(|buf| buf.has_buffer_local_by_sym_id(BUFFER_FILE_CODING_SYSTEM.id()))
@@ -7338,6 +7400,7 @@ fn select_write_region_coding_system(
         false => BufferCodingSlot::Inherited(slot_value),
     };
     let multibyte = match eval
+        .edit
         .buffers
         .get(buffer_id)
         .is_some_and(|buf| buf.get_multibyte())
@@ -7557,8 +7620,8 @@ fn write_region_without_handler(
     mustbenew_is_excl: bool,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    if let Some(current) = eval.buffers.current_buffer_id() {
-        let _ = eval.buffers.clear_buffer_labeled_restrictions(current);
+    if let Some(current) = eval.edit.buffers.current_buffer_id() {
+        let _ = eval.edit.buffers.clear_buffer_labeled_restrictions(current);
         if args[0].is_nil() {
             super::buffer::builtin_widen_0(eval)?;
         }
@@ -7580,10 +7643,11 @@ fn write_region_without_handler(
             _ => FileWriteMode::Truncate,
         }
     };
-    let current_id = current_buffer_id_or_error(&eval.buffers)?;
+    let current_id = current_buffer_id_or_error(&eval.edit.buffers)?;
 
     if visit.visited_file().is_some() {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -7741,11 +7805,15 @@ fn write_region_without_handler(
 
     if let Some(visit_path) = visit.visited_file().cloned() {
         let _ = eval
+            .edit
             .buffers
             .set_buffer_file_name(current_id, Value::heap_string(visit_path));
-        let _ = eval.buffers.set_buffer_modified_flag(current_id, false);
+        let _ = eval
+            .edit
+            .buffers
+            .set_buffer_modified_flag(current_id, false);
         if let Some((sec, nsec, size)) = visiting_modtime
-            && let Some(buf) = eval.buffers.get_mut(current_id)
+            && let Some(buf) = eval.edit.buffers.get_mut(current_id)
         {
             buf.set_visited_file_modtime(VisitedFileModtime::Known { sec, nsec });
             buf.modtime_size = Some(size);
@@ -7787,8 +7855,8 @@ pub(crate) fn builtin_find_file_noselect(
     let rawfile = args.get(2).is_some_and(|value| !value.is_nil());
 
     // Check if there's already a buffer visiting this file
-    for buf_id in eval.buffers.buffer_list() {
-        if let Some(buf) = eval.buffers.get(buf_id)
+    for buf_id in eval.edit.buffers.buffer_list() {
+        if let Some(buf) = eval.edit.buffers.get(buf_id)
             && buf
                 .file_name_value()
                 .as_lisp_string()
@@ -7803,10 +7871,10 @@ pub(crate) fn builtin_find_file_noselect(
     let buf_name = crate::emacs_core::emacs_char::to_utf8_lossy(
         lisp_file_name_nondirectory(&abs_path).as_bytes(),
     );
-    let unique_name = eval.buffers.generate_new_buffer_name(&buf_name);
-    let buf_id = eval.buffers.create_buffer(&unique_name);
+    let unique_name = eval.edit.buffers.generate_new_buffer_name(&buf_name);
+    let buf_id = eval.edit.buffers.create_buffer(&unique_name);
 
-    let saved_current = eval.buffers.current_buffer_id();
+    let saved_current = eval.edit.buffers.current_buffer_id();
     let open_result = (|| -> EvalResult {
         eval.switch_current_buffer(buf_id)?;
 
@@ -7816,6 +7884,7 @@ pub(crate) fn builtin_find_file_noselect(
                 vec![Value::heap_string(abs_path.clone()), Value::T],
             )?;
             let _ = eval
+                .edit
                 .buffers
                 .goto_buffer_emacs_byte_pos(buf_id, EmacsBytePos::new(0));
             Value::NIL
@@ -7824,20 +7893,22 @@ pub(crate) fn builtin_find_file_noselect(
         };
 
         let _ = eval
+            .edit
             .buffers
             .set_buffer_file_name(buf_id, Value::heap_string(abs_path.clone()));
         let truename = file_truename_lisp(&abs_path, None)?;
         let _ = eval
+            .edit
             .buffers
             .set_buffer_file_truename(buf_id, Value::heap_string(truename));
         if let Some(default_directory) = lisp_file_name_directory(&abs_path) {
-            let _ = eval.buffers.set_buffer_local_property(
+            let _ = eval.edit.buffers.set_buffer_local_property(
                 buf_id,
                 "default-directory",
                 Value::heap_string(default_directory),
             );
         }
-        let _ = eval.buffers.set_buffer_modified_flag(buf_id, false);
+        let _ = eval.edit.buffers.set_buffer_modified_flag(buf_id, false);
 
         // GNU `find-file-noselect-1` routes normal visits through
         // `after-find-file`, which applies major-mode detection,
@@ -7952,7 +8023,7 @@ fn auto_save_1(
 ) -> Result<(), Flow> {
     let creation_mode = auto_save_creation_mode(eval, visited_file)?;
     // A handler that killed the buffer leaves nothing to write.
-    let Some(buf) = eval.buffers.get(buf_id) else {
+    let Some(buf) = eval.edit.buffers.get(buf_id) else {
         return Ok(());
     };
     let mut content = Vec::new();
@@ -8039,7 +8110,7 @@ pub(crate) fn builtin_do_auto_save(
     let _no_message = args.first().is_some_and(|v| v.is_truthy());
     let current_only = args.get(1).is_some_and(|v| v.is_truthy());
     // GNU's `old`: the buffer current on entry, before `auto-save-hook`.
-    let old_buffer = eval.buffers.current_buffer_id();
+    let old_buffer = eval.edit.buffers.current_buffer_id();
 
     // GNU `Fdo_auto_save` runs this before inspecting or snapshotting any
     // buffer, so edits made by the hook belong to this auto-save pass.  Use
@@ -8056,15 +8127,15 @@ pub(crate) fn builtin_do_auto_save(
 
     // Collect buffer ids to process
     let buffer_ids: Vec<crate::buffer::BufferId> = if current_only {
-        eval.buffers.current_buffer_id().into_iter().collect()
+        eval.edit.buffers.current_buffer_id().into_iter().collect()
     } else {
-        eval.buffers.buffer_list()
+        eval.edit.buffers.buffer_list()
     };
 
     for buf_id in buffer_ids {
         // Gather info from the buffer (immutable borrow)
         let (auto_save_name, file_name) = {
-            let Some(buf) = eval.buffers.get(buf_id) else {
+            let Some(buf) = eval.edit.buffers.get(buf_id) else {
                 continue;
             };
 
@@ -8145,8 +8216,8 @@ pub(crate) fn builtin_do_auto_save(
             other => other,
         };
         if result.is_ok() {
-            let _ = eval.buffers.set_buffer_auto_saved(buf_id);
-            if let Some(buf) = eval.buffers.get_mut(buf_id) {
+            let _ = eval.edit.buffers.set_buffer_auto_saved(buf_id);
+            if let Some(buf) = eval.edit.buffers.get_mut(buf_id) {
                 let saved_size = buf.total_emacs_byte_len().get() as i64;
                 buf.set_buffer_local("buffer-saved-size", Value::fixnum(saved_size));
             }

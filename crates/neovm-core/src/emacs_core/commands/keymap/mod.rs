@@ -2992,8 +2992,8 @@ pub(crate) fn current_active_maps_for_position(
     current_active_maps_from_parts(
         ctx.variables(),
         &ctx.frames,
-        &ctx.buffers,
-        ctx.buffers.current_local_map(),
+        &ctx.edit.buffers,
+        ctx.edit.buffers.current_local_map(),
         global_map,
         Vec::new(),
         overriding_local_map,
@@ -3021,8 +3021,8 @@ pub(crate) fn current_active_maps_for_position_read_only(
     current_active_maps_from_parts(
         ctx.variables(),
         &ctx.frames,
-        &ctx.buffers,
-        ctx.buffers.current_local_map(),
+        &ctx.edit.buffers,
+        ctx.edit.buffers.current_local_map(),
         global_map,
         Vec::new(),
         overriding_local_map,
@@ -3187,10 +3187,10 @@ pub(crate) fn minor_mode_key_binding_in_context(
     events: &[Value],
 ) -> Result<Value, Flow> {
     let symbol_mode = ctx.symbol_mode();
-    let current_buffer_id = ctx.buffers.current_buffer_id();
+    let current_buffer_id = ctx.edit.buffers.current_buffer_id();
     if let Some(emulation_raw) = KeymapStateVariable::EmulationModeMapAlists.buffer_or_global_value(
         ctx.variables(),
-        &ctx.buffers,
+        &ctx.edit.buffers,
         current_buffer_id,
     ) && let Some(emulation_entries) = list_to_vec(&emulation_raw)
     {
@@ -3199,7 +3199,7 @@ pub(crate) fn minor_mode_key_binding_in_context(
                 Some(sym_id) => dynamic_buffer_or_global_symbol_value_by_sym_id_in_state(
                     ctx.variables(),
                     &[],
-                    &ctx.buffers,
+                    &ctx.edit.buffers,
                     current_buffer_id,
                     sym_id,
                 )
@@ -3209,7 +3209,7 @@ pub(crate) fn minor_mode_key_binding_in_context(
             if let Some((mode_name, binding)) = lookup_minor_mode_binding_in_alist_in_obarray(
                 ctx.variables(),
                 &[],
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 current_buffer_id,
                 events,
                 &alist_value,
@@ -3228,14 +3228,14 @@ pub(crate) fn minor_mode_key_binding_in_context(
         KeymapStateVariable::MinorModeMapAlist,
     ] {
         let Some(alist_value) =
-            variable.buffer_or_global_value(ctx.variables(), &ctx.buffers, current_buffer_id)
+            variable.buffer_or_global_value(ctx.variables(), &ctx.edit.buffers, current_buffer_id)
         else {
             continue;
         };
         if let Some((mode_name, binding)) = lookup_minor_mode_binding_in_alist_in_obarray(
             ctx.variables(),
             &[],
-            &ctx.buffers,
+            &ctx.edit.buffers,
             current_buffer_id,
             events,
             &alist_value,

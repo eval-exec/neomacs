@@ -92,7 +92,7 @@ pub(crate) fn builtin_frame_face_hash_table(
     crate::emacs_core::display::expect_args_range("frame--face-hash-table", &args, 0, 1)?;
     let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

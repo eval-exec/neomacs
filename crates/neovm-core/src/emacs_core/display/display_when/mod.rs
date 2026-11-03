@@ -77,7 +77,7 @@ impl Context {
         buf_id: BufferId,
         f: impl FnOnce(&mut Self) -> T,
     ) -> Result<T, Flow> {
-        let saved = self.buffers.current_buffer_id();
+        let saved = self.edit.buffers.current_buffer_id();
         if saved != Some(buf_id) {
             self.set_current_buffer_unrecorded(buf_id)?;
         }
@@ -148,7 +148,7 @@ impl Context {
                 }
             });
             let saved_point = window_point.and_then(|point| {
-                let buffer = ctx.buffers.get_mut(buf_id)?;
+                let buffer = ctx.edit.buffers.get_mut(buf_id)?;
                 let saved = buffer.point_char_pos();
                 let target = buffer.char_pos_to_emacs_byte_pos_clamped(point.to_char_pos());
                 buffer.goto_emacs_byte_pos(target);
@@ -206,7 +206,7 @@ impl Context {
             });
             if let Some(point) = saved_point {
                 ctx.restore_current_buffer_if_live(buf_id);
-                if let Some(buffer) = ctx.buffers.get_mut(buf_id) {
+                if let Some(buffer) = ctx.edit.buffers.get_mut(buf_id) {
                     let target = buffer.char_pos_to_emacs_byte_pos_clamped(point);
                     buffer.goto_emacs_byte_pos(target);
                 }

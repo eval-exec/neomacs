@@ -119,7 +119,7 @@ impl GreenBootstrap {
             standard_syntax_table: owner.standard_syntax_table,
             syntax_code_objects: owner.syntax_code_objects,
             standard_category_table: owner.standard_category_table,
-            current_buffer: owner.buffers.current_buffer_id(),
+            current_buffer: owner.edit.buffers.current_buffer_id(),
             noninteractive: owner.noninteractive,
             symbols_with_pos_enabled: owner.symbols_with_pos_enabled,
             print_symbols_bare: owner.print_symbols_bare,

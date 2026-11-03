@@ -104,14 +104,14 @@ impl Context {
 
         let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
             &mut self.frames,
-            &mut self.buffers,
+            &mut self.edit.buffers,
         );
         let Some(frame) = self.frames.get(frame_id) else {
-            self.buffers.switch_current(minibuf_id);
+            self.edit.buffers.switch_current(minibuf_id);
             return Ok(None);
         };
         let Some(minibuffer_window_id) = frame.minibuffer_window else {
-            self.buffers.switch_current(minibuf_id);
+            self.edit.buffers.switch_current(minibuf_id);
             return Ok(None);
         };
         let previous_selected_window = frame.selected_window;
@@ -127,7 +127,7 @@ impl Context {
 
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
             &mut self.frames,
-            &mut self.buffers,
+            &mut self.edit.buffers,
             frame_id,
         );
         if let Some(frame) = self.frames.get_mut(frame_id) {
@@ -140,13 +140,13 @@ impl Context {
                     window.set_suspend_auto_hscroll(false);
                 }
                 crate::window::window_markers::attach_window_position_markers(
-                    &mut self.buffers,
+                    &mut self.edit.buffers,
                     window,
                 );
             }
             let _ = frame.select_window(minibuffer_window_id);
         }
-        self.buffers.switch_current(minibuf_id);
+        self.edit.buffers.switch_current(minibuf_id);
         crate::emacs_core::reader::MinibufferSelectedWindowUpdate::for_entry(
             entry_level,
             previous_selected_window,

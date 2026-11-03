@@ -443,7 +443,7 @@ fn check_category_table(
     table: Option<Value>,
 ) -> Result<Value, Flow> {
     let mode = eval.symbol_mode();
-    check_category_table_in_buffers_with_symbols(&mut eval.buffers, table, mode)
+    check_category_table_in_buffers_with_symbols(&mut eval.edit.buffers, table, mode)
 }
 
 fn set_current_buffer_category_table_in_buffers(
@@ -745,7 +745,7 @@ pub(crate) fn builtin_char_category_set(
 ) -> EvalResult {
     expect_args("char-category-set", &args, 1)?;
     let _ = extract_char_code(&args[0], "char-category-set")?;
-    let table = current_buffer_category_table_in_buffers(&mut eval.buffers)?;
+    let table = current_buffer_category_table_in_buffers(&mut eval.edit.buffers)?;
     super::chartable::builtin_char_table_range_with_symbols(
         vec![table, args[0]],
         None,
@@ -757,7 +757,7 @@ pub(crate) fn builtin_category_table(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_category_table_in_buffers(&mut eval.buffers, args)
+    builtin_category_table_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_category_table_in_buffers(
@@ -781,7 +781,7 @@ pub(crate) fn builtin_set_category_table(
     args: Vec<Value>,
 ) -> EvalResult {
     let mode = eval.symbol_mode();
-    builtin_set_category_table_in_buffers_with_symbols(&mut eval.buffers, args, mode)
+    builtin_set_category_table_in_buffers_with_symbols(&mut eval.edit.buffers, args, mode)
 }
 
 pub(crate) fn builtin_set_category_table_in_buffers_with_symbols(

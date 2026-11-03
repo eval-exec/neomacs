@@ -128,6 +128,7 @@ fn display_table_replacement_width(disp: Value) -> Option<usize> {
 
 pub(crate) fn active_display_table(ctx: &crate::emacs_core::eval::Context) -> Option<Value> {
     if let Some(table) = ctx
+        .edit
         .buffers
         .current_buffer()
         .and_then(|buffer| buffer.buffer_local_value("buffer-display-table"))
@@ -1939,11 +1940,12 @@ fn insert_coding_result(
     text: &crate::heap_types::LispString,
     restore_point: Option<TextPositionAnchor>,
 ) -> Result<(), crate::emacs_core::error::Flow> {
-    ctx.buffers
+    ctx.edit
+        .buffers
         .insert_lisp_string_into_buffer(buffer_id, text)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     if let Some(point) = restore_point {
-        let _ = ctx.buffers.set_buffer_point_anchor(buffer_id, point);
+        let _ = ctx.edit.buffers.set_buffer_point_anchor(buffer_id, point);
     }
     Ok(())
 }
@@ -5119,7 +5121,11 @@ fn builtin_coding_string_in_context(
         let Some(buffer_id) = destination else {
             return Ok(result);
         };
-        let restore_point = ctx.buffers.get(buffer_id).map(|buf| buf.point_anchor());
+        let restore_point = ctx
+            .edit
+            .buffers
+            .get(buffer_id)
+            .map(|buf| buf.point_anchor());
         if restore_point.is_none() {
             return Err(signal(
                 "error",
@@ -5424,7 +5430,11 @@ fn builtin_coding_string_in_context(
     let Some(buffer_id) = destination else {
         return Ok(result);
     };
-    let restore_point = ctx.buffers.get(buffer_id).map(|buf| buf.point_anchor());
+    let restore_point = ctx
+        .edit
+        .buffers
+        .get(buffer_id)
+        .map(|buf| buf.point_anchor());
     if restore_point.is_none() {
         return Err(signal(
             "error",
@@ -5803,23 +5813,24 @@ fn builtin_coding_region(
     // (GNU `code_convert_region` with dst_object == the source buffer), not an
     // insertion that would duplicate the text.
     if let Some(Some(dest_id)) = destination
-        && Some(dest_id) == ctx.buffers.current_buffer_id()
+        && Some(dest_id) == ctx.edit.buffers.current_buffer_id()
     {
         destination = Some(None);
     }
     let Some(byte_range) =
         crate::emacs_core::editfns::current_buffer_accessible_char_region_in_buffers(
-            &ctx.buffers,
+            &ctx.edit.buffers,
             &args[0],
             &args[1],
         )?
     else {
         return Ok(Value::NIL);
     };
-    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
         return Ok(Value::NIL);
     };
     let source = ctx
+        .edit
         .buffers
         .get(current_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
@@ -5881,12 +5892,13 @@ fn builtin_coding_region(
             crate::emacs_core::editfns::ensure_current_buffer_writable_in_state(
                 ctx.variables(),
                 &[],
-                &ctx.buffers,
+                &ctx.edit.buffers,
             )?;
             // GNU sets `coding->dst_multibyte` from the destination buffer, so
             // the stored text must match the buffer's multibyteness
             // (coding.c:8153).
             let target_multibyte = ctx
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|buf| buf.get_multibyte())
@@ -5898,6 +5910,7 @@ fn builtin_coding_region(
             // `decode_coding_object`/`encode_coding_object`, the `saved_pt >= 0`
             // block).  All three are 1-based char positions.
             let (saved_pt, from_char, chars) = ctx
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|buf| {
@@ -5930,14 +5943,21 @@ fn builtin_coding_region(
             } else {
                 saved_pt + (produced_chars as i64 - chars)
             };
-            if let Some(buf) = ctx.buffers.get(current_id) {
+            if let Some(buf) = ctx.edit.buffers.get(current_id) {
                 let byte_pos = buf.lisp_pos_to_accessible_emacs_byte_pos(LispCharPos1::new(new_pt));
-                let _ = ctx.buffers.goto_buffer_emacs_byte_pos(current_id, byte_pos);
+                let _ = ctx
+                    .edit
+                    .buffers
+                    .goto_buffer_emacs_byte_pos(current_id, byte_pos);
             }
             Ok(Value::fixnum(produced_chars as i64))
         }
         Some(Some(buffer_id)) => {
-            let restore_point = ctx.buffers.get(buffer_id).map(|buf| buf.point_anchor());
+            let restore_point = ctx
+                .edit
+                .buffers
+                .get(buffer_id)
+                .map(|buf| buf.point_anchor());
             if restore_point.is_none() {
                 return Err(signal(
                     "error",
@@ -5945,6 +5965,7 @@ fn builtin_coding_region(
                 ));
             }
             let target_multibyte = ctx
+                .edit
                 .buffers
                 .get(buffer_id)
                 .map(|buf| buf.get_multibyte())

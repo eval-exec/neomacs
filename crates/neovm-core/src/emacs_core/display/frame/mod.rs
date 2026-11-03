@@ -53,7 +53,7 @@ enum IconifyFrameAction {
 
 /// `(frame-focus &optional FRAME)` -> frame receiving FRAME's keystrokes, or nil.
 pub(crate) fn builtin_frame_focus(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-focus", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -151,7 +151,7 @@ pub(crate) fn builtin_redirect_frame_focus(
     expect_max_args("redirect-frame-focus", &args, 2)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -161,7 +161,7 @@ pub(crate) fn builtin_redirect_frame_focus(
         } else {
             let focus_fid = resolve_frame_id_in_state(
                 &mut eval.frames,
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
                 Some(value),
                 crate::emacs_core::window_cmds::FrameDomain::Live,
             )?;
@@ -183,7 +183,7 @@ pub(crate) fn builtin_iconify_frame(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("iconify-frame", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -255,7 +255,7 @@ pub(crate) fn builtin_make_frame_invisible(
 ) -> EvalResult {
     expect_max_args("make-frame-invisible", &args, 2)?;
     let fid = {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
         resolve_frame_id_in_state(
             frames,
             buffers,
@@ -306,7 +306,7 @@ pub(crate) fn builtin_make_frame_invisible(
                 if let Some(old_fid) = eval.frames.selected_frame().map(|frame| frame.id) {
                     remember_selected_window_point_in_state(
                         &mut eval.frames,
-                        &mut eval.buffers,
+                        &mut eval.edit.buffers,
                         old_fid,
                     );
                 }
@@ -325,7 +325,11 @@ pub(crate) fn builtin_make_frame_invisible(
                     {
                         let _ = eval.frames.note_window_selected(selected_wid);
                     }
-                    sync_selected_window_buffer_in_state(&eval.frames, &mut eval.buffers, fallback);
+                    sync_selected_window_buffer_in_state(
+                        &eval.frames,
+                        &mut eval.edit.buffers,
+                        fallback,
+                    );
                     eval.sync_keyboard_terminal_owner();
                     sync_gui_frame_focus_redirects(eval)?;
                 }
@@ -344,7 +348,7 @@ pub(crate) fn builtin_make_frame_visible(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("make-frame-visible", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -369,12 +373,12 @@ pub(crate) fn builtin_selected_frame(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    selected_frame_impl(&mut eval.frames, &mut eval.buffers, args)
+    selected_frame_impl(&mut eval.frames, &mut eval.edit.buffers, args)
 }
 
 /// `(frame-list)` -> list of frame objects.
 pub(crate) fn builtin_frame_list(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("frame-list", &args, 0)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let ids: Vec<Value> = frames
@@ -390,7 +394,7 @@ pub(crate) fn builtin_visible_frame_list(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("visible-frame-list", &args, 0)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let mut frame_ids = frames.frame_list();
@@ -414,7 +418,7 @@ pub(crate) fn builtin_frame_char_height(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-char-height", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -433,7 +437,7 @@ pub(crate) fn builtin_frame_char_width(
     eval: &mut super::eval::Context,
     args: &[Value],
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-char-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -453,7 +457,7 @@ pub(crate) fn builtin_frame_native_height(
     expect_max_args("frame-native-height", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -477,7 +481,7 @@ pub(crate) fn builtin_frame_native_width(
     expect_max_args("frame-native-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -517,7 +521,7 @@ pub(crate) fn builtin_frame_text_cols(
     expect_max_args("frame-text-cols", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -537,7 +541,7 @@ pub(crate) fn builtin_frame_text_lines(
     expect_max_args("frame-text-lines", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -566,7 +570,7 @@ pub(crate) fn builtin_frame_text_width(
     expect_max_args("frame-text-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -592,7 +596,7 @@ pub(crate) fn builtin_frame_text_height(
     expect_max_args("frame-text-height", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -616,7 +620,7 @@ pub(crate) fn builtin_frame_total_cols(
     expect_max_args("frame-total-cols", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -636,7 +640,7 @@ pub(crate) fn builtin_frame_total_lines(
     expect_max_args("frame-total-lines", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -653,7 +657,7 @@ pub(crate) fn builtin_frame_position(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-position", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -679,7 +683,7 @@ pub(crate) fn builtin_set_frame_height(
     expect_max_args("set-frame-height", &args, 4)?;
     let fid = resolve_frame_id_in_state(
         &mut ctx.frames,
-        &mut ctx.buffers,
+        &mut ctx.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -715,7 +719,7 @@ pub(crate) fn builtin_set_frame_height(
                 .max(1.0) as i64;
             request_live_gui_frame_resize_and_keep_pending(
                 &mut ctx.frames,
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &mut ctx.display_host,
                 fid,
                 if pixelwise {
@@ -733,7 +737,7 @@ pub(crate) fn builtin_set_frame_height(
         } else {
             request_live_gui_frame_resize(
                 &mut ctx.frames,
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &mut ctx.display_host,
                 fid,
                 current_text_width_px,
@@ -804,7 +808,7 @@ pub(crate) fn builtin_set_frame_width(
     expect_max_args("set-frame-width", &args, 4)?;
     let fid = resolve_frame_id_in_state(
         &mut ctx.frames,
-        &mut ctx.buffers,
+        &mut ctx.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -830,7 +834,7 @@ pub(crate) fn builtin_set_frame_width(
         if ctx.display_host.is_some() && !pretend {
             request_live_gui_frame_resize_and_keep_pending(
                 &mut ctx.frames,
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &mut ctx.display_host,
                 fid,
                 FrameResizeRequest::TextWidth(text_width_px),
@@ -838,7 +842,7 @@ pub(crate) fn builtin_set_frame_width(
         } else {
             request_live_gui_frame_resize(
                 &mut ctx.frames,
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &mut ctx.display_host,
                 fid,
                 text_width_px,
@@ -914,7 +918,7 @@ pub(crate) fn builtin_set_frame_size(
     expect_max_args("set-frame-size", &args, 4)?;
     let fid = resolve_frame_id_in_state(
         &mut ctx.frames,
-        &mut ctx.buffers,
+        &mut ctx.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -956,7 +960,7 @@ pub(crate) fn builtin_set_frame_size(
         if ctx.display_host.is_some() {
             request_live_gui_frame_resize_and_keep_pending(
                 &mut ctx.frames,
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &mut ctx.display_host,
                 fid,
                 if pixelwise {
@@ -974,7 +978,7 @@ pub(crate) fn builtin_set_frame_size(
         } else {
             request_live_gui_frame_resize(
                 &mut ctx.frames,
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &mut ctx.display_host,
                 fid,
                 text_width_px,
@@ -1069,7 +1073,7 @@ pub(crate) fn builtin_set_frame_position(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_args("set-frame-position", &args, 3)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -1132,7 +1136,7 @@ pub(crate) fn builtin_set_frame_size_and_position_pixelwise(
     expect_max_args("set-frame-size-and-position-pixelwise", &args, 6)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1219,7 +1223,7 @@ pub(crate) fn builtin_make_terminal_frame(
         let terminal_id = super::terminal::pure::next_terminal_id();
         let frame = make_frame_plain_on_terminal(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             args,
             terminal_id,
             80,
@@ -1273,7 +1277,7 @@ pub(crate) fn builtin_make_terminal_frame(
         );
         let size = super::terminal::pure::install_opened_tty(&request, opened);
         let displays_chrome = !eval.noninteractive();
-        let (frames, buffers) = (&mut eval.frames, &eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &eval.edit.buffers);
         if let Some(frame) = frames.get_mut(frame_id) {
             apply_terminal_viewport_to_tty_frame(frame, buffers, size, displays_chrome);
         }
@@ -1334,7 +1338,7 @@ fn make_terminal_frame_on_existing_terminal(
         .unwrap_or((80, 25));
     let frame = make_frame_plain_on_terminal(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args,
         terminal_id,
         width,
@@ -1355,7 +1359,7 @@ fn make_terminal_frame_on_existing_terminal(
         ));
     }
     let displays_chrome = !eval.noninteractive();
-    let (frames, buffers) = (&mut eval.frames, &eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &eval.edit.buffers);
     if let Some(frame) = frames.get_mut(frame_id) {
         let size = super::terminal::pure::TtyFrameSize::new(width, height)
             .expect("live terminal frames have nonzero dimensions");
@@ -1419,7 +1423,7 @@ pub(crate) fn builtin_delete_frame(
         return Ok(Value::NIL);
     }
     let fid = {
-        let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+        let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
         resolve_frame_id_in_state(
             frames,
             buffers,
@@ -1500,7 +1504,7 @@ pub(crate) fn builtin_frame_parameters(
     args: Vec<Value>,
 ) -> EvalResult {
     let symbol_mode = eval.symbol_mode();
-    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
     expect_max_args("frame-parameters", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         frames,
@@ -1621,7 +1625,7 @@ pub(crate) fn builtin_frame_bottom_divider_width(
     expect_max_args("frame-bottom-divider-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -1641,7 +1645,7 @@ pub(crate) fn builtin_frame_child_frame_border_width(
     expect_max_args("frame-child-frame-border-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -1659,7 +1663,7 @@ pub(crate) fn builtin_frame_internal_border_width(
     expect_max_args("frame-internal-border-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -1677,7 +1681,7 @@ pub(crate) fn builtin_frame_right_divider_width(
     expect_max_args("frame-right-divider-width", &args, 1)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Any,
     )?;
@@ -1700,7 +1704,7 @@ pub(crate) fn builtin_frame_scale_factor(
     // diverged in that direction; its neighbours really are `decode_any_frame'.
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1726,7 +1730,7 @@ pub(crate) fn builtin_modify_frame_parameters(
     expect_max_args("modify-frame-parameters", &args, 2)?;
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1795,7 +1799,7 @@ pub(crate) fn builtin_modify_frame_parameters(
                         requested_top = FramePositionSpec::from_lisp(pair_cdr);
                     }
                     "buffer-list" => {
-                        let ids = live_frame_buffer_parameter_ids(&eval.buffers, pair_cdr);
+                        let ids = live_frame_buffer_parameter_ids(&eval.edit.buffers, pair_cdr);
                         if let Some(frame) = eval.frames.get_mut(fid) {
                             // GNU `store_frame_param` keeps these in
                             // `struct frame`, not in the generic parameter
@@ -1805,7 +1809,7 @@ pub(crate) fn builtin_modify_frame_parameters(
                         }
                     }
                     "buried-buffer-list" => {
-                        let ids = live_frame_buffer_parameter_ids(&eval.buffers, pair_cdr);
+                        let ids = live_frame_buffer_parameter_ids(&eval.edit.buffers, pair_cdr);
                         if let Some(frame) = eval.frames.get_mut(fid) {
                             frame.buried_buffer_list = ids;
                             frame.remove_parameter(Value::symbol("buried-buffer-list"));
@@ -2057,7 +2061,7 @@ pub(crate) fn builtin_modify_frame_parameters(
                     resize_request.text_pixels(&eval.frames, fid)?;
                 resize_live_gui_frame(
                     &mut eval.frames,
-                    &eval.buffers,
+                    &eval.edit.buffers,
                     &mut eval.display_host,
                     fid,
                     text_width_px,

@@ -1511,6 +1511,7 @@ pub(crate) fn builtin_json_parse_buffer(
     let opts = parse_parse_kwargs(&args, 0, eval.symbol_mode())?;
     let (input, point_base) = {
         let buf = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1524,8 +1525,9 @@ pub(crate) fn builtin_json_parse_buffer(
     let mut parser = JsonParser::new(input.as_bytes(), input.is_multibyte(), opts);
     let result = parser.parse()?;
     let new_point = point_base.add_len(EmacsByteLen::new(parser.pos));
-    if let Some(current_id) = eval.buffers.current_buffer_id() {
+    if let Some(current_id) = eval.edit.buffers.current_buffer_id() {
         let _ = eval
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(current_id, new_point);
     }
@@ -1540,22 +1542,24 @@ pub(crate) fn builtin_json_insert(eval: &mut super::eval::Context, args: Vec<Val
     let opts = parse_serialize_kwargs(&args, 1, eval.symbol_mode())?;
     let json = serialize_to_json(&args[0], &opts, 0)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let (insert_pos, target_multibyte) = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
         .unwrap_or((EmacsBytePos::ZERO, true));
     let change = super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         insert_pos,
         TextExtent::from_emacs_bytes(json.as_bytes(), target_multibyte),
     )?;
     super::editfns::signal_before_text_change(eval, change)?;
-    let _ = eval.buffers.insert_into_buffer(current_id, &json);
+    let _ = eval.edit.buffers.insert_into_buffer(current_id, &json);
     super::editfns::signal_after_text_change(eval, change)?;
     Ok(Value::NIL)
 }

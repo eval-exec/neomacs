@@ -184,14 +184,14 @@ impl crate::emacs_core::eval::Context {
     ) -> Result<CodeConversionBufferLease, crate::emacs_core::error::Flow> {
         let lease = self
             .code_conversion_workspace
-            .acquire(&mut self.buffers, encoding);
+            .acquire(&mut self.edit.buffers, encoding);
         if let Err(flow) = self.set_buffer_local_binding_by_id(
             lease.buffer_id(),
             crate::emacs_core::intern::intern("inhibit-modification-hooks"),
             Value::T,
         ) {
             self.code_conversion_workspace
-                .release(&mut self.buffers, lease);
+                .release(&mut self.edit.buffers, lease);
             return Err(flow);
         }
         Ok(lease)
@@ -203,12 +203,12 @@ impl crate::emacs_core::eval::Context {
         text: &LispString,
     ) {
         self.code_conversion_workspace
-            .replace_contents(&mut self.buffers, lease, text);
+            .replace_contents(&mut self.edit.buffers, lease, text);
     }
 
     pub(crate) fn release_code_conversion_buffer(&mut self, lease: CodeConversionBufferLease) {
         self.code_conversion_workspace
-            .release(&mut self.buffers, lease);
+            .release(&mut self.edit.buffers, lease);
     }
 }
 

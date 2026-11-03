@@ -4816,7 +4816,7 @@ fn dump_evaluator_for_session(eval: &Context, session: DumpSession) -> DumpConte
     let mut encoder = DumpEncoder::new();
     // Assign marker dump ids before anything is serialized: the obarray is
     // dumped ahead of the buffers and may already reference marker values.
-    encoder.assign_chain_marker_ids(&eval.buffers);
+    encoder.assign_chain_marker_ids(&eval.edit.buffers);
 
     let dump = DumpContextState {
         symbol_table: dump_symbol_table(),
@@ -4843,7 +4843,7 @@ fn dump_evaluator_for_session(eval: &Context, session: DumpSession) -> DumpConte
             .iter()
             .map(dump_lisp_string)
             .collect(),
-        buffers: dump_buffer_manager(&mut encoder, &eval.buffers),
+        buffers: dump_buffer_manager(&mut encoder, &eval.edit.buffers),
         autoloads: dump_autoload_manager(&mut encoder, &eval.autoloads),
         custom: dump_custom_manager(&eval.custom),
         modes: dump_mode_registry(&mut encoder, &eval.modes),

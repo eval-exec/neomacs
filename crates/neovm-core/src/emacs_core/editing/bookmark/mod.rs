@@ -451,7 +451,7 @@ pub(crate) fn builtin_bookmark_set(
     let name = expect_lisp_string(&args[0])?;
     let _no_overwrite = args.get(1);
 
-    let (position, filename) = match eval.buffers.current_buffer() {
+    let (position, filename) = match eval.edit.buffers.current_buffer() {
         Some(buffer) => (
             buffer.point_lisp_char_pos(),
             buffer.file_name_lisp_string().cloned(),

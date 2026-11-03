@@ -444,7 +444,10 @@ fn motion_parameters(
         None => LineWrap::Truncate,
     };
     Some((
-        eval.buffers.get(request.buffer)?.accessible_char_region(),
+        eval.edit
+            .buffers
+            .get(request.buffer)?
+            .accessible_char_region(),
         wrap,
     ))
 }

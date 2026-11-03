@@ -1196,7 +1196,7 @@ pub(crate) fn builtin_load_in_vm_runtime(
 
     match plan_load_in_state(
         shared.variables(),
-        shared.buffers.current_buffer(),
+        shared.edit.buffers.current_buffer(),
         args[0],
         args.get(1).copied(),
         args.get(3).copied(),
@@ -1403,7 +1403,7 @@ fn default_toplevel_lexical_binding(eval: &super::eval::Context) -> bool {
     crate::emacs_core::eval::default_toplevel_value_in_state(
         &eval.obarray,
         eval.specpdl.as_slice(),
-        Some(&eval.buffers.buffer_defaults),
+        Some(&eval.edit.buffers.buffer_defaults),
         intern("lexical-binding"),
     )
     .is_some_and(|value| value.is_truthy())
@@ -6000,21 +6000,24 @@ fn sync_runtime_interpreted_closure_filter(eval: &mut super::eval::Context) {
 pub fn apply_runtime_startup_state(eval: &mut super::eval::Context) -> Result<(), EvalError> {
     let project_root = runtime_project_root();
     let minibuf_id = eval
+        .edit
         .buffers
         .find_buffer_by_name(" *Minibuf-0*")
-        .unwrap_or_else(|| eval.buffers.create_buffer(" *Minibuf-0*"));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer(" *Minibuf-0*"));
     eval.ensure_startup_messages_buffer();
-    if let Some(messages_id) = eval.buffers.find_buffer_by_name("*Messages*") {
-        eval.buffers
+    if let Some(messages_id) = eval.edit.buffers.find_buffer_by_name("*Messages*") {
+        eval.edit
+            .buffers
             .note_buffer_order_after(messages_id, minibuf_id);
     }
     let scratch_id = eval
+        .edit
         .buffers
         .find_buffer_by_name("*scratch*")
-        .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
+        .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
     eval.set_current_buffer_unrecorded(scratch_id)
         .map_err(map_flow)?;
-    super::window_cmds::seed_batch_startup_frame_in_state(&mut eval.frames, &mut eval.buffers);
+    super::window_cmds::seed_batch_startup_frame_in_state(&mut eval.frames, &mut eval.edit.buffers);
     // GNU's `init_display' (src/dispnew.c:7413-7422) is the first thing after
     // the pdump is loaded that touches the initial frame's faces:
     //
@@ -6337,7 +6340,7 @@ pub fn create_bootstrap_evaluator_for_loadup(
         );
         let bootstrap_frame_id = super::window_cmds::seed_batch_startup_frame_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
         );
         maybe_trace_bootstrap_step(format!(
             "create_bootstrap_evaluator_with_features: seeded-batch-bootstrap-frame={bootstrap_frame_id:?}"

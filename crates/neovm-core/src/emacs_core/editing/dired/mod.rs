@@ -570,7 +570,7 @@ fn directory_files_and_attributes_from_reader(
                 let matched = syntax
                     .search(
                         ctx.variables(),
-                        &ctx.buffers,
+                        &ctx.edit.buffers,
                         pattern,
                         &name,
                         super::regex::SearchedString::Owned(name.clone()),
@@ -665,7 +665,7 @@ pub(crate) fn builtin_file_name_completion(eval: &mut Context, args: Vec<Value>)
         args.get(2).copied().unwrap_or(Value::NIL),
     ];
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
-    let plan = if super::minibuffer::completion_ignore_case(eval.variables(), &eval.buffers)
+    let plan = if super::minibuffer::completion_ignore_case(eval.variables(), &eval.edit.buffers)
         && super::fns::compare_strings_parity_enabled()
     {
         prepare_file_name_completion_with_case_table(eval, &args, syntax)?
@@ -707,8 +707,10 @@ pub(crate) fn builtin_file_name_all_completions(
     if file.as_bytes().contains(&b'/') {
         return Ok(Value::NIL);
     }
-    let ignore_case = super::minibuffer::completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = super::minibuffer::completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case =
+        super::minibuffer::completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps =
+        super::minibuffer::completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     // GNU Emacs: file-name-all-completions does NOT filter by
     // completion-ignored-extensions (the "all_flag" path).
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
@@ -727,7 +729,7 @@ pub(crate) fn builtin_file_name_all_completions(
     let completions = filter_by_completion_regexps(
         syntax,
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         raw,
         &regexps,
         ignore_case,
@@ -932,8 +934,16 @@ fn prepare_file_name_completion_with_case_table(
         let raw = collect_file_name_completions_with_parity(ctx, &file, &directory, false, true)?;
         let extensions = get_ignored_extensions(ctx.variables());
         let raw = filter_ignored_extensions_with_case_table(ctx, &file, raw, &extensions)?;
-        let regexps = super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.buffers);
-        filter_by_completion_regexps(syntax, ctx.variables(), &ctx.buffers, raw, &regexps, true)?
+        let regexps =
+            super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.edit.buffers);
+        filter_by_completion_regexps(
+            syntax,
+            ctx.variables(),
+            &ctx.edit.buffers,
+            raw,
+            &regexps,
+            true,
+        )?
     };
     Ok(FileNameCompletionPlan {
         file,
@@ -1157,12 +1167,13 @@ pub(crate) fn prepare_file_name_completion_in_state(
     let directory = super::fileio::resolve_filename_lisp_in_state(
         ctx.variables(),
         &[],
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &directory_arg,
     );
-    let ignore_case = super::minibuffer::completion_ignore_case(ctx.variables(), &ctx.buffers);
+    let ignore_case = super::minibuffer::completion_ignore_case(ctx.variables(), &ctx.edit.buffers);
     let ignored_extensions = get_ignored_extensions(ctx.variables());
-    let regexps = super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.buffers);
+    let regexps =
+        super::minibuffer::completion_regexp_lisp_list(ctx.variables(), &ctx.edit.buffers);
     let completions = if file.as_bytes().contains(&b'/') {
         Vec::new()
     } else {
@@ -1180,7 +1191,7 @@ pub(crate) fn prepare_file_name_completion_in_state(
         filter_by_completion_regexps(
             syntax,
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             filtered,
             &regexps,
             ignore_case,

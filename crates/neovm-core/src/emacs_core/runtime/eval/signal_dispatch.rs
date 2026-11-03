@@ -541,7 +541,7 @@ impl Context {
                     rendered
                 };
 
-                let current_buffer = self.buffers.current_buffer();
+                let current_buffer = self.edit.buffers.current_buffer();
                 let syntax_table =
                     current_buffer.map(crate::emacs_core::syntax::SyntaxTable::for_buffer);
                 let category_table = Some(
@@ -551,7 +551,7 @@ impl Context {
                 let syntax_properties = builtins::search::current_string_match_syntax_properties(
                     self,
                     self.variables(),
-                    &self.buffers,
+                    &self.edit.buffers,
                     Some(&message),
                 );
                 if builtins::search::builtin_string_match_p_with_case_fold(

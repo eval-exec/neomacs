@@ -81,7 +81,8 @@ struct RowMeasurer {
 
 impl RowMeasurer {
     fn accessible(&self, eval: &Context) -> Result<AccessibleCharRange, Flow> {
-        eval.buffers
+        eval.edit
+            .buffers
             .get(self.buffer)
             .map(|buffer| buffer.accessible_char_region())
             .ok_or_else(|| failure("Scroll buffer was deleted"))
@@ -94,6 +95,7 @@ impl RowMeasurer {
         lines: usize,
     ) -> Result<LispCharPos1, Flow> {
         let buffer = eval
+            .edit
             .buffers
             .get(self.buffer)
             .ok_or_else(|| failure("Scroll buffer was deleted"))?;
@@ -295,7 +297,7 @@ impl MeasurementTarget {
                     .and_then(|frame| frame.find_window(window))
                     .and_then(Window::buffer_id)
                     != Some(buffer)
-                    || eval.buffers.get(buffer).is_none()
+                    || eval.edit.buffers.get(buffer).is_none()
                 {
                     return Err(failure("Viewport window changed during measurement"));
                 }
@@ -320,7 +322,7 @@ fn synchronize_selected_point(eval: &mut Context) {
     if let Some(frame) = eval.frames.selected_frame().map(|frame| frame.id) {
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             frame,
         );
     }
@@ -412,6 +414,7 @@ fn plan_scroll(
     let mut start = *window_start;
     let hidden_top = -(*vscroll as i64);
     let point = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buffer| buffer.emacs_byte_pos_to_lisp_char_pos(buffer.point_emacs_byte_pos()))

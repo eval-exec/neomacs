@@ -102,7 +102,7 @@ fn live_done(eval: &crate::emacs_core::eval::Context) -> i64 {
     else {
         return i64::MAX;
     };
-    let Some(buf) = eval.buffers.current_buffer() else {
+    let Some(buf) = eval.edit.buffers.current_buffer() else {
         return i64::MAX;
     };
     if done < buf.accessible_char_region().end_lisp().as_i64() {
@@ -198,7 +198,8 @@ fn syntax_of_char_at(
 }
 
 fn current_buffer_or_error(eval: &crate::emacs_core::eval::Context) -> Result<&Buffer, Flow> {
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))
 }
@@ -309,7 +310,7 @@ pub(super) fn parse_partial_sexp_propertizing(
             let buf = current_buffer_or_error(eval)?;
             let table = SyntaxTable::for_buffer(buf);
             let honor = parse_sexp_lookup_properties_enabled(eval);
-            let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.buffers);
+            let props = SyntaxProperties::for_scan(honor, eval.variables(), &eval.edit.buffers);
             let escape_policy = CommentEndEscapePolicy::for_context(eval);
             let end = run_parse_loop(
                 buf,

@@ -900,7 +900,7 @@ impl Context {
             }
             Op::SaveCurrentBuffer(seq) => {
                 let count = self.specpdl.len();
-                if let Some(buf) = self.buffers.current_buffer() {
+                if let Some(buf) = self.edit.buffers.current_buffer() {
                     self.specpdl
                         .push(SpecBinding::SaveCurrentBuffer { buffer_id: buf.id });
                 }
@@ -909,7 +909,7 @@ impl Context {
             }
             Op::SaveRestriction(seq) => {
                 let count = self.specpdl.len();
-                if let Some(state) = self.buffers.save_current_restriction_state() {
+                if let Some(state) = self.edit.buffers.save_current_restriction_state() {
                     self.specpdl.push(SpecBinding::save_restriction(state));
                 }
                 let result = self.ti_progn(act, tail, seq);

@@ -954,7 +954,7 @@ impl Context {
         let was_bound = default_toplevel_value_in_state(
             &self.obarray,
             self.specpdl.as_slice(),
-            Some(&self.buffers.buffer_defaults),
+            Some(&self.edit.buffers.buffer_defaults),
             sym_id,
         )
         .is_some()
@@ -1708,7 +1708,7 @@ impl Context {
         let symbol_mode = self.symbol_mode();
         match plan_require_in_state(
             VariableView::new(&self.obarray, &self.owner),
-            self.buffers.current_buffer(),
+            self.edit.buffers.current_buffer(),
             &mut self.features,
             &self.require_stack,
             feature,

@@ -280,6 +280,7 @@ enum CasingWordState {
 /// [`CaseEncoding`] data.
 pub(crate) fn case_encoding_for_current_buffer(ctx: &super::eval::Context) -> CaseEncoding {
     if ctx
+        .edit
         .buffers
         .current_buffer()
         .is_some_and(|buf| !buf.get_multibyte())
@@ -816,7 +817,7 @@ fn noncontiguous_case_regions(
                 ));
             }
             super::position::LispRegionArgs::from_values(
-                &eval.buffers,
+                &eval.edit.buffers,
                 value.cons_car(),
                 value.cons_cdr(),
             )
@@ -880,7 +881,7 @@ fn casify_region_in_state(
         noncontiguous_case_regions(eval)?
     } else {
         vec![super::position::LispRegionArgs::from_values(
-            &eval.buffers,
+            &eval.edit.buffers,
             args[0],
             args[1],
         )?]
@@ -901,7 +902,7 @@ fn casify_replace_current_buffer_region(
     action: CaseAction,
 ) -> Result<crate::buffer::CharPos0, Flow> {
     let (buffer_id, byte_range) = {
-        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+        let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
             signal(
                 LispCondition::Error,
                 vec![Value::string("No current buffer")],
@@ -923,12 +924,12 @@ fn casify_replace_current_buffer_region(
     };
     crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         buffer_id,
         byte_range,
     )?;
     let before = super::editfns::text_change_for_unchanged_extent_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         buffer_id,
         byte_range,
     )?;
@@ -936,7 +937,7 @@ fn casify_replace_current_buffer_region(
     // A before-change hook can change text, encoding, syntax and case tables.
     super::editfns::signal_before_text_change(eval, before)?;
     let (buffer_id, byte_range, text) = {
-        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+        let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
             signal(
                 LispCondition::Error,
                 vec![Value::string("No current buffer")],
@@ -960,7 +961,7 @@ fn casify_replace_current_buffer_region(
         // (editfns.c:1620-1624), so narrowing past start signals before editing.
         if chars.start() < buf.point_min_char_pos() || chars.start() > buf.point_max_char_pos() {
             crate::emacs_core::textprop::builtin_text_properties_at_in_buffers(
-                &eval.buffers,
+                &eval.edit.buffers,
                 &[Value::fixnum(chars.start().to_lisp().as_i64())],
             )?;
         }
@@ -983,7 +984,7 @@ fn casify_replace_current_buffer_region(
         }
     };
     let change = super::editfns::text_change_for_lisp_string_replacement_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         buffer_id,
         byte_range,
         &replacement.text,
@@ -998,20 +999,23 @@ fn casify_replace_current_buffer_region(
     // Plain/no-expansion casing needs no policy lookup or interval allocation.
     let controls = (!replacement.expansions.is_empty()
         && eval
+            .edit
             .buffers
             .get(buffer_id)
             .is_some_and(|buf| !buf.text_props_is_empty()))
     .then(|| crate::buffer::text_props::CasingPropertyControls::for_context(eval));
     let properties =
         crate::buffer::text_props::CasingPropertyMode::from_controls(&eval.obarray, controls);
-    eval.buffers.casify_replace_buffer_region_with_expansions(
-        buffer_id,
-        byte_range,
-        &replacement.text,
-        &replacement.expansions,
-        replacement.storage_shape,
-        &properties,
-    )?;
+    eval.edit
+        .buffers
+        .casify_replace_buffer_region_with_expansions(
+            buffer_id,
+            byte_range,
+            &replacement.text,
+            &replacement.expansions,
+            replacement.storage_shape,
+            &properties,
+        )?;
     if replacement.text.as_bytes() != text.as_bytes() {
         if let Some(span) = changed_char_span(&text, &replacement) {
             // GNU casefiddle.c:475-525 retains the first source position and
@@ -1106,7 +1110,7 @@ fn casify_word_in_state(
     let honor = crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
     let target = crate::emacs_core::syntax::forward_word_destination(eval, n, honor);
     let (start, end) = {
-        let buf = eval.buffers.current_buffer().ok_or_else(|| {
+        let buf = eval.edit.buffers.current_buffer().ok_or_else(|| {
             signal(
                 LispCondition::Error,
                 vec![Value::string("No current buffer")],
@@ -1118,7 +1122,7 @@ fn casify_word_in_state(
         )
     };
     let region = super::position::LispRegionArgs::from_values(
-        &eval.buffers,
+        &eval.edit.buffers,
         Value::fixnum(start.as_i64()),
         Value::fixnum(end.as_i64()),
     )?;
@@ -1126,10 +1130,10 @@ fn casify_word_in_state(
     // GNU SET_PT converts casify_region's character endpoint after the after
     // hook, which can change byte widths again (casefiddle.c:668-669). Negative
     // word arguments retain the greater endpoint, as region validation orders it.
-    if let Some(buf) = eval.buffers.current_buffer() {
+    if let Some(buf) = eval.edit.buffers.current_buffer() {
         let id = buf.id;
         let point = buf.char_pos_to_emacs_byte_pos_clamped(end);
-        let _ = eval.buffers.goto_buffer_emacs_byte_pos(id, point);
+        let _ = eval.edit.buffers.goto_buffer_emacs_byte_pos(id, point);
     }
     Ok(Value::NIL)
 }

@@ -43,7 +43,7 @@ impl WindowScrollUpdate {
         if window.buffer_id() != Some(self.buffer) {
             return Err(invalid());
         }
-        let buffer = eval.buffers.get(self.buffer).ok_or_else(invalid)?;
+        let buffer = eval.edit.buffers.get(self.buffer).ok_or_else(invalid)?;
         let region = buffer.accessible_char_region();
         if self.start < region.start_lisp()
             || self.start > region.end_lisp()
@@ -55,13 +55,22 @@ impl WindowScrollUpdate {
         let position = buffer.lisp_pos_to_emacs_byte_pos(self.point);
         let adjust_old_point =
             matches!(window, Window::Leaf { point, old_point, .. } if point == old_point);
-        eval.buffers
+        eval.edit
+            .buffers
             .goto_buffer_emacs_byte_pos(self.buffer, position);
-        super::window_markers::set_window_point_with_marker(&mut eval.buffers, window, self.point);
-        super::window_markers::set_window_start_with_marker(&mut eval.buffers, window, self.start);
+        super::window_markers::set_window_point_with_marker(
+            &mut eval.edit.buffers,
+            window,
+            self.point,
+        );
+        super::window_markers::set_window_start_with_marker(
+            &mut eval.edit.buffers,
+            window,
+            self.start,
+        );
         if adjust_old_point {
             super::window_markers::set_window_old_point_with_marker(
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
                 window,
                 self.point,
             );
@@ -520,7 +529,7 @@ impl crate::emacs_core::eval::Context {
         window_id: WindowId,
         point_lisp: LispCharPos1,
     ) {
-        let buffers = &mut self.buffers;
+        let buffers = &mut self.edit.buffers;
         if let Some(window) = self
             .frames
             .get_mut(frame_id)
@@ -533,7 +542,7 @@ impl crate::emacs_core::eval::Context {
     pub fn create_window_markers_for_root(&mut self, frame_id: FrameId, buffer_id: BufferId) {
         let root = &mut self.frames.get_mut(frame_id).unwrap().root_window_mut();
         debug_assert_eq!(root.buffer_id(), Some(buffer_id));
-        super::window_markers::attach_window_position_markers(&mut self.buffers, root);
+        super::window_markers::attach_window_position_markers(&mut self.edit.buffers, root);
     }
 
     pub fn create_window_markers_for_minibuffer(&mut self, frame_id: FrameId, buffer_id: BufferId) {
@@ -545,7 +554,7 @@ impl crate::emacs_core::eval::Context {
             .as_mut();
         if let Some(mini) = mini {
             debug_assert_eq!(mini.buffer_id(), Some(buffer_id));
-            super::window_markers::attach_window_position_markers(&mut self.buffers, mini);
+            super::window_markers::attach_window_position_markers(&mut self.edit.buffers, mini);
         }
     }
 
@@ -583,7 +592,7 @@ impl crate::emacs_core::eval::Context {
 
         let frame = self.frames.get(frame_id)?;
         let live_buffer_id = frame.find_window(window_id)?.buffer_id()?;
-        let source_buffer = self.buffers.get(source_buffer_id)?;
+        let source_buffer = self.edit.buffers.get(source_buffer_id)?;
         let mut source_layout_variables = crate::window::WindowLayoutVariableState {
             values: [None; <crate::window::WindowLayoutVariable as strum::EnumCount>::COUNT],
         };
@@ -755,7 +764,7 @@ impl crate::emacs_core::eval::Context {
         {
             crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
                 &mut self.frames,
-                &mut self.buffers,
+                &mut self.edit.buffers,
                 frame_id,
             );
         }
@@ -791,10 +800,11 @@ impl crate::emacs_core::eval::Context {
             crate::window::WindowLayoutQueryScope::Viewport
                 | crate::window::WindowLayoutQueryScope::Position { .. }
         )
-        .then(|| self.buffers.reset_outermost_restrictions());
+        .then(|| self.edit.buffers.reset_outermost_restrictions());
         let record = query(self, frame_id, window_id, scope);
         if let Some(saved_restrictions) = saved_restrictions {
-            self.buffers
+            self.edit
+                .buffers
                 .restore_outermost_restrictions(saved_restrictions);
         }
         self.window_layout_query_adapter = WindowLayoutQueryAdapter::Ready(query);
@@ -809,7 +819,7 @@ impl crate::emacs_core::eval::Context {
         window_start_lisp: LispCharPos1,
     ) -> crate::window::WindowStartCommit {
         let frames = &mut self.frames;
-        let buffers = &mut self.buffers;
+        let buffers = &mut self.edit.buffers;
         let Some(frame) = frames.get_mut(frame_id) else {
             return crate::window::WindowStartCommit::Inherited;
         };
@@ -950,7 +960,7 @@ impl crate::emacs_core::eval::Context {
         buffer_id: BufferId,
         capture_fontification: impl FnOnce(&crate::buffer::Buffer) -> Fontification,
     ) -> Option<BufferLayoutInputState<Fontification>> {
-        let buffer = self.buffers.get(buffer_id)?;
+        let buffer = self.edit.buffers.get(buffer_id)?;
         Some(BufferLayoutInputState {
             id: buffer.id,
             modified_tick: buffer.modified_tick(),
@@ -970,7 +980,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     pub fn layout_word_wrap_policy(&self, buffer_id: BufferId) -> Option<super::WordWrapPolicy> {
-        let buffer = self.buffers.get(buffer_id)?;
+        let buffer = self.edit.buffers.get(buffer_id)?;
         let enabled = |variable: super::WindowLayoutVariable| {
             self.variable_value_in_buffer(Some(buffer), variable.sym_id())
                 .is_some_and(|value| value.is_truthy())
@@ -990,7 +1000,7 @@ impl crate::emacs_core::eval::Context {
         &self,
         buffer_id: BufferId,
     ) -> Option<super::LayoutDisplayTableInput> {
-        let buffer = self.buffers.get(buffer_id)?;
+        let buffer = self.edit.buffers.get(buffer_id)?;
         let value = |variable: super::WindowLayoutVariable| {
             self.variable_value_in_buffer(Some(buffer), variable.sym_id())
         };
@@ -1006,7 +1016,7 @@ impl crate::emacs_core::eval::Context {
         &self,
         buffer_id: BufferId,
     ) -> Option<super::LayoutInvisibilityInput> {
-        let buffer = self.buffers.get(buffer_id)?;
+        let buffer = self.edit.buffers.get(buffer_id)?;
         Some(super::LayoutInvisibilityInput::capture(
             self.variable_value_in_buffer(
                 Some(buffer),
@@ -1019,7 +1029,7 @@ impl crate::emacs_core::eval::Context {
     /// Capture effective buffer-local prefix values, never references to mutable
     /// Lisp strings. Every geometry consumer uses this same projection.
     pub fn layout_prefix_inputs(&self, buffer_id: BufferId) -> Option<super::LayoutPrefixInputs> {
-        let buffer = self.buffers.get(buffer_id)?;
+        let buffer = self.edit.buffers.get(buffer_id)?;
         let capture = |variable: super::WindowLayoutVariable| {
             super::LayoutPrefixInput::capture(
                 self.variable_value_in_buffer(Some(buffer), variable.sym_id()),
@@ -1063,6 +1073,7 @@ impl crate::emacs_core::eval::Context {
             function_epoch: self.obarray().function_epoch(),
             symbol_property_revision: crate::emacs_core::symbol::SymbolPropertyRevision::current(),
             overlays_face_only: self
+                .edit
                 .buffers
                 .get(buffer_id)
                 .is_some_and(|buffer| buffer.overlays_are_face_only()),

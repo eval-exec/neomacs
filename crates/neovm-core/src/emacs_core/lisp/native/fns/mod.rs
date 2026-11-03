@@ -649,7 +649,7 @@ pub(crate) fn replace_buffer_emacs_byte_range_lisp_string(
     replacement: &crate::heap_types::LispString,
 ) -> Result<(), Flow> {
     let range = super::editfns::buffer_edit_range_for_byte_range_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         buffer_id,
         byte_range,
     )?;
@@ -666,7 +666,7 @@ pub(crate) fn replace_buffer_emacs_byte_range_lisp_string(
     // belongs to insert-and-inherit (insert_pieces_in_state with
     // inherit=true), not general-purpose replace operations.
     let new_extent = prepared
-        .lease(&mut eval.buffers)
+        .lease(&mut eval.edit.buffers)
         .and_then(|lease| lease.replace(replacement))
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
     super::editfns::signal_after_text_change(
@@ -683,9 +683,10 @@ pub(crate) fn builtin_base64_encode_region(
 ) -> EvalResult {
     expect_args_range("base64-encode-region", &args, 2, 3)?;
     let (buffer_id, byte_range) =
-        normalize_current_buffer_region_bounds_in_manager(&eval.buffers, &args[0], &args[1])?;
-    let raw = read_buffer_region_bytes_in_manager(&eval.buffers, buffer_id, byte_range)?;
+        normalize_current_buffer_region_bounds_in_manager(&eval.edit.buffers, &args[0], &args[1])?;
+    let raw = read_buffer_region_bytes_in_manager(&eval.edit.buffers, buffer_id, byte_range)?;
     let target_multibyte = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| buf.get_multibyte())
@@ -709,9 +710,10 @@ pub(crate) fn builtin_base64url_encode_region(
 ) -> EvalResult {
     expect_args_range("base64url-encode-region", &args, 2, 3)?;
     let (buffer_id, byte_range) =
-        normalize_current_buffer_region_bounds_in_manager(&eval.buffers, &args[0], &args[1])?;
-    let raw = read_buffer_region_bytes_in_manager(&eval.buffers, buffer_id, byte_range)?;
+        normalize_current_buffer_region_bounds_in_manager(&eval.edit.buffers, &args[0], &args[1])?;
+    let raw = read_buffer_region_bytes_in_manager(&eval.edit.buffers, buffer_id, byte_range)?;
     let target_multibyte = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| buf.get_multibyte())
@@ -735,8 +737,8 @@ pub(crate) fn builtin_base64_decode_region(
 ) -> EvalResult {
     expect_args_range("base64-decode-region", &args, 2, 4)?;
     let (buffer_id, byte_range) =
-        normalize_current_buffer_region_bounds_in_manager(&eval.buffers, &args[0], &args[1])?;
-    let source = read_buffer_region_bytes_in_manager(&eval.buffers, buffer_id, byte_range)?;
+        normalize_current_buffer_region_bounds_in_manager(&eval.edit.buffers, &args[0], &args[1])?;
+    let source = read_buffer_region_bytes_in_manager(&eval.edit.buffers, buffer_id, byte_range)?;
     let use_url = args.get(2).is_some_and(|v| v.is_truthy());
     let noerror = args.get(3).is_some_and(|v| v.is_truthy());
     let table = if use_url {
@@ -745,6 +747,7 @@ pub(crate) fn builtin_base64_decode_region(
         build_decode_table(B64_STD)
     };
     let target_multibyte = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| buf.get_multibyte())
@@ -891,6 +894,7 @@ fn encoded_hash_slice_for_buffer_in_context(
 ) -> Result<Vec<u8>, Flow> {
     let (text, multibyte) = {
         let buf = eval
+            .edit
             .buffers
             .get(buffer_id)
             .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
@@ -1081,7 +1085,8 @@ pub(crate) fn builtin_buffer_hash(eval: &mut super::eval::Context, args: Vec<Val
     expect_args_range("buffer-hash", &args, 0, 1)?;
 
     let buffer_id = if args.is_empty() || args[0].is_nil() {
-        eval.buffers
+        eval.edit
+            .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
             .id
@@ -1092,12 +1097,15 @@ pub(crate) fn builtin_buffer_hash(eval: &mut super::eval::Context, args: Vec<Val
                 let name = crate::emacs_core::emacs_char::to_utf8_lossy(
                     require_lisp_string(&args[0])?.as_bytes(),
                 );
-                eval.buffers.find_buffer_by_name(&name).ok_or_else(|| {
-                    signal(
-                        "error",
-                        vec![Value::string(format!("No buffer named {name}"))],
-                    )
-                })?
+                eval.edit
+                    .buffers
+                    .find_buffer_by_name(&name)
+                    .ok_or_else(|| {
+                        signal(
+                            "error",
+                            vec![Value::string(format!("No buffer named {name}"))],
+                        )
+                    })?
             }
             _ => {
                 return Err(signal(
@@ -1114,6 +1122,7 @@ pub(crate) fn builtin_buffer_hash(eval: &mut super::eval::Context, args: Vec<Val
     // buffer, *ignoring narrowing* (unlike md5/secure-hash, which use the
     // accessible region). Use the full byte range here.
     let text = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| buf.buffer_substring_bytes_range(buf.full_emacs_byte_range()))
@@ -1489,6 +1498,7 @@ struct CompareStringsCase {
 impl CompareStringsCase {
     fn for_current_buffer(ctx: &mut Context) -> Result<Self, Flow> {
         let multibyte_buffer = ctx
+            .edit
             .buffers
             .current_buffer()
             .is_none_or(|buf| buf.get_multibyte());

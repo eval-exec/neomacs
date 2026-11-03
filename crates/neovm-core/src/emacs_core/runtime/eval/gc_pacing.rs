@@ -301,7 +301,9 @@ impl Context {
                     // The saved bounds live as marker ids only; root the
                     // marker objects so restore still finds them (see
                     // SavedRestrictionState::trace_marker_roots).
-                    state.state().trace_marker_roots(&self.buffers, &mut roots);
+                    state
+                        .state()
+                        .trace_marker_roots(&self.edit.buffers, &mut roots);
                     for root in roots {
                         visit(root);
                     }
@@ -514,7 +516,7 @@ impl Context {
             group("interactive");
             self.interactive.trace_roots_with(visit);
             group("buffers");
-            self.buffers.trace_roots_with(visit);
+            self.edit.buffers.trace_roots_with(visit);
             group("xwidgets");
             self.xwidgets.trace_roots_with(visit);
             group("face_table");
@@ -936,7 +938,7 @@ impl Context {
 
     pub(crate) fn sync_current_thread_buffer_state(&mut self) {
         let current_thread_id = self.threads.current_thread_id();
-        let current_buffer_id = self.buffers.current_buffer_id();
+        let current_buffer_id = self.edit.buffers.current_buffer_id();
         self.threads
             .set_thread_current_buffer(current_thread_id, current_buffer_id);
     }
@@ -952,7 +954,7 @@ impl Context {
         &mut self,
         id: crate::buffer::BufferId,
     ) -> Result<(), Flow> {
-        if !self.buffers.switch_current(id) {
+        if !self.edit.buffers.switch_current(id) {
             return Err(signal(
                 "error",
                 vec![Value::string("Selecting deleted buffer")],
@@ -965,7 +967,7 @@ impl Context {
         &mut self,
         id: crate::buffer::BufferId,
     ) -> Result<(), Flow> {
-        if !self.buffers.switch_current_unrecorded(id) {
+        if !self.edit.buffers.switch_current_unrecorded(id) {
             return Err(signal(
                 "error",
                 vec![Value::string("Selecting deleted buffer")],
@@ -987,13 +989,13 @@ impl Context {
     /// instructions a call it was 7% of a whole-buffer Org fontify (44,265
     /// restores per five fontifies, all of them same-buffer).
     pub fn restore_current_buffer_if_live(&mut self, id: crate::buffer::BufferId) {
-        if self.buffers.current_buffer_id() == Some(id) {
+        if self.edit.buffers.current_buffer_id() == Some(id) {
             return;
         }
-        if self.buffers.get(id).is_none() {
+        if self.edit.buffers.get(id).is_none() {
             return;
         }
-        let _ = self.buffers.switch_current_unrecorded(id);
+        let _ = self.edit.buffers.switch_current_unrecorded(id);
         let _ = self.sync_current_buffer_runtime_state();
     }
 
@@ -1007,10 +1009,10 @@ impl Context {
     #[cold]
     #[inline(never)]
     pub(crate) fn restore_current_buffer_storage_if_live(&mut self, id: crate::buffer::BufferId) {
-        if self.buffers.current_buffer_id() == Some(id) {
+        if self.edit.buffers.current_buffer_id() == Some(id) {
             return;
         }
-        if self.buffers.switch_current_unrecorded(id) {
+        if self.edit.buffers.switch_current_unrecorded(id) {
             self.sync_current_thread_buffer_state();
         }
     }

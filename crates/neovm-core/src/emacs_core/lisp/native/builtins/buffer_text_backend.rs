@@ -38,6 +38,7 @@ pub(crate) fn builtin_neomacs_buffer_text_backend(
 ) -> EvalResult {
     expect_args("neomacs-buffer-text-backend", &args, 0)?;
     let buffer = ctx
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -50,7 +51,7 @@ pub(crate) fn builtin_neomacs_default_buffer_text_backend(
 ) -> EvalResult {
     expect_args("neomacs-default-buffer-text-backend", &args, 0)?;
     Ok(buffer_text_backend_kind_value(
-        ctx.buffers.default_text_backend_kind(),
+        ctx.edit.buffers.default_text_backend_kind(),
     ))
 }
 
@@ -60,7 +61,7 @@ pub(crate) fn builtin_neomacs_set_default_buffer_text_backend(
 ) -> EvalResult {
     expect_args("neomacs-set-default-buffer-text-backend", &args, 1)?;
     let kind = value_to_buffer_text_backend_kind(args[0], ctx.symbol_mode())?;
-    ctx.buffers.set_default_text_backend_kind(kind);
+    ctx.edit.buffers.set_default_text_backend_kind(kind);
     Ok(buffer_text_backend_kind_value(kind.public_kind()))
 }
 
@@ -71,6 +72,7 @@ pub(crate) fn builtin_neomacs_set_buffer_text_backend(
     expect_args("neomacs-set-buffer-text-backend", &args, 1)?;
     let kind = value_to_buffer_text_backend_kind(args[0], ctx.symbol_mode())?;
     let buffer = ctx
+        .edit
         .buffers
         .current_buffer_mut()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

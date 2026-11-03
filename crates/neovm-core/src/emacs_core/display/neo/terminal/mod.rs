@@ -106,7 +106,7 @@ fn create(eval: &mut Context, args: Vec<Value>) -> EvalResult {
         .ok_or_else(|| wrong_type("fixnump", args[2]))?
     {
         0 => TerminalDisplayTarget::Window {
-            buffer: eval.buffers.current_buffer_id().ok_or_else(|| {
+            buffer: eval.edit.buffers.current_buffer_id().ok_or_else(|| {
                 terminal_error(format!(
                     "{OPERATION}: no current buffer for window terminal"
                 ))

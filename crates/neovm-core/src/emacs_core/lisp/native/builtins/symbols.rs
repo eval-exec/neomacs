@@ -283,7 +283,7 @@ pub(crate) fn boundp_in(eval: &super::eval::Context, symbol: SymId) -> EvalResul
     // symbol is never in any local_var_alist, so skip the per-buffer scan.
     let localized = obarray.is_localized(resolved);
     // specbind writes directly to obarray, so no dynamic stack lookup needed.
-    if let Some(buf) = eval.buffers.current_buffer()
+    if let Some(buf) = eval.edit.buffers.current_buffer()
         && let Some(binding) = buf.get_buffer_local_binding_by_sym_id_gated(resolved, localized)
     {
         return Ok(Value::bool_val(binding.as_value().is_some()));
@@ -2075,6 +2075,7 @@ pub(crate) fn read_symbol_shorthands_value(eval: &super::eval::Context) -> Value
         // A buffer-slot forward needs the general current-buffer lookup.
         Some(ValueCell::Forwarded(fwd)) => fwd.load(),
         Some(ValueCell::Localized(_)) => eval
+            .edit
             .buffers
             .current_buffer()
             .and_then(|buffer| eval.obarray().read_localized_in_buffer(id, buffer))
@@ -2415,7 +2416,7 @@ pub(crate) fn builtin_rename_buffer(
         ));
     }
 
-    let (current_id, old_name) = match eval.buffers.current_buffer() {
+    let (current_id, old_name) = match eval.edit.buffers.current_buffer() {
         Some(buf) => (buf.id, buf.name_value()),
         None => {
             return Err(signal("error", vec![Value::string("No current buffer")]));
@@ -2424,7 +2425,7 @@ pub(crate) fn builtin_rename_buffer(
     let old_name_text = expect_string_lossy(&old_name)?;
     let unique = args.get(1).copied().unwrap_or(Value::NIL);
 
-    let new_name = match eval.buffers.find_buffer_by_name(&name) {
+    let new_name = match eval.edit.buffers.find_buffer_by_name(&name) {
         Some(existing_id) if existing_id == current_id && unique.is_nil() => {
             // GNU returns the buffer's stored name object, not an equal string
             // supplied by the caller, and performs no rename side effects.
@@ -2438,7 +2439,7 @@ pub(crate) fn builtin_rename_buffer(
                 ));
             }
             super::super::buffer::generate_new_buffer_name_value_in_state(
-                &eval.buffers,
+                &eval.edit.buffers,
                 requested_name,
                 Some(&old_name_text),
             )?
@@ -2446,7 +2447,7 @@ pub(crate) fn builtin_rename_buffer(
         None => requested_name,
     };
 
-    let _ = eval.buffers.rename_buffer(current_id, new_name);
+    let _ = eval.edit.buffers.rename_buffer(current_id, new_name);
     // GNU `Frename_buffer` calls `bset_update_mode_line` only after a real
     // rename (buffer.c:1690-1720).  That helper raises global
     // `update_mode_lines` even when CURRENT-BUFFER is offscreen, which makes
@@ -2465,13 +2466,14 @@ pub(crate) fn builtin_rename_buffer(
     // after updating the buffer's name in `Vbuffer_alist', unless the buffer
     // has hooks inhibited.  This also makes `set-visited-file-name' (which
     // renames the buffer via `rename-buffer') fire the hook like GNU.
-    if !eval.buffers.buffer_hooks_inhibited(current_id) {
+    if !eval.edit.buffers.buffer_hooks_inhibited(current_id) {
         super::super::buffer::run_buffer_list_update_hook(eval)?;
     }
 
     // Hooks may themselves rename the buffer. GNU refetches the slot after
     // running them rather than returning a stale local copy.
     Ok(eval
+        .edit
         .buffers
         .get(current_id)
         .map(|buffer| buffer.name_value())
@@ -2484,7 +2486,7 @@ pub(crate) fn builtin_set_buffer_major_mode(
 ) -> EvalResult {
     expect_args("set-buffer-major-mode", &args, 1)?;
     let buffer_id = expect_buffer_id(&args[0])?;
-    let Some(target_buf) = eval.buffers.get(buffer_id) else {
+    let Some(target_buf) = eval.edit.buffers.get(buffer_id) else {
         return Err(signal(
             "error",
             vec![Value::string("Attempt to set major mode for a dead buffer")],
@@ -2495,7 +2497,7 @@ pub(crate) fn builtin_set_buffer_major_mode(
         eval.visible_variable_value_or_nil("initial-major-mode")
     } else {
         crate::buffer::buffer::lookup_buffer_slot("major-mode")
-            .map(|info| eval.buffers.buffer_defaults[info.offset.index()])
+            .map(|info| eval.edit.buffers.buffer_defaults[info.offset.index()])
             .unwrap_or(Value::NIL)
     };
 
@@ -2516,7 +2518,7 @@ pub(crate) fn builtin_set_buffer_major_mode(
         return Ok(Value::NIL);
     }
 
-    let saved_current = eval.buffers.current_buffer_id();
+    let saved_current = eval.edit.buffers.current_buffer_id();
     let mode_result = (|| -> EvalResult {
         eval.switch_current_buffer(buffer_id)?;
         let _ = eval.funcall_general(function, vec![])?;
@@ -2537,7 +2539,7 @@ pub(crate) fn builtin_set_buffer_redisplay(
     expect_args("set-buffer-redisplay", &args, 4)?;
     // GNU xdisp.c:928 ignores watcher WHERE and marks current_buffer,
     // even when it is undisplayed. This is SOME, not global ALL.
-    if let Some(buffer) = eval.buffers.current_buffer_id() {
+    if let Some(buffer) = eval.edit.buffers.current_buffer_id() {
         eval.gnu_mark_buffer_mode_line(buffer);
     }
     eval.invalidate_redisplay();
@@ -2804,8 +2806,10 @@ fn menu_bar_label(def: Value, symbol_mode: SymbolMode) -> Option<String> {
 }
 
 fn selected_frame_value(eval: &mut super::eval::Context) -> Value {
-    let fid =
-        super::window_cmds::ensure_selected_frame_id_in_state(&mut eval.frames, &mut eval.buffers);
+    let fid = super::window_cmds::ensure_selected_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.edit.buffers,
+    );
     Value::make_frame(fid.0)
 }
 
@@ -3003,7 +3007,7 @@ pub(crate) fn builtin_object_intervals(
 
     if args[0].is_buffer() {
         let id = args[0].as_buffer_id().expect("buffer value has id");
-        let Some(buf) = eval.buffers.get_any(id) else {
+        let Some(buf) = eval.edit.buffers.get_any(id) else {
             return Ok(Value::NIL);
         };
         let intervals = buf
@@ -3223,7 +3227,7 @@ pub(crate) fn builtin_reconsider_frame_fonts(
     expect_args("reconsider-frame-fonts", &args, 1)?;
     let frame_id = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -3315,7 +3319,7 @@ pub(crate) fn builtin_resize_mini_window_internal(
     // condition GNU never reaches.
     let (fid, window_id) = crate::emacs_core::window_cmds::check_window_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &args[0],
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
@@ -3588,7 +3592,7 @@ pub(crate) fn builtin_set_mouse_pixel_position(
     expect_args("set-mouse-pixel-position", &args, 3)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -3607,7 +3611,7 @@ pub(crate) fn builtin_set_mouse_position(
     expect_args("set-mouse-position", &args, 3)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -3744,7 +3748,7 @@ pub(crate) fn builtin_tool_bar_pixel_width(
         Some(frame) => {
             crate::emacs_core::window_cmds::resolve_frame_id_in_state(
                 &mut eval.frames,
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
                 Some(frame),
                 crate::emacs_core::window_cmds::FrameDomain::Any,
             )?;
@@ -3752,7 +3756,7 @@ pub(crate) fn builtin_tool_bar_pixel_width(
         None => {
             crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
                 &mut eval.frames,
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
             );
         }
     }
@@ -3765,20 +3769,22 @@ pub(crate) fn builtin_transpose_regions(
 ) -> EvalResult {
     expect_args_range("transpose-regions", &args, 4, 5)?;
     let current_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let (mut first, mut second) = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let point_min = buf.point_min_lisp_char_pos().as_i64();
         let point_max = buf.point_max_lisp_char_pos().as_i64();
-        let raw_start1 = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
-        let raw_end1 = expect_integer_or_marker_in_buffers(&eval.buffers, &args[1])?;
-        let raw_start2 = expect_integer_or_marker_in_buffers(&eval.buffers, &args[2])?;
-        let raw_end2 = expect_integer_or_marker_in_buffers(&eval.buffers, &args[3])?;
+        let raw_start1 = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[0])?;
+        let raw_end1 = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[1])?;
+        let raw_start2 = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[2])?;
+        let raw_end2 = expect_integer_or_marker_in_buffers(&eval.edit.buffers, &args[3])?;
         for (start, end, start_arg, end_arg) in [
             (raw_start1, raw_end1, args[0], args[1]),
             (raw_start2, raw_end2, args[2], args[3]),
@@ -3817,6 +3823,7 @@ pub(crate) fn builtin_transpose_regions(
 
     let transposition = {
         let buf = eval
+            .edit
             .buffers
             .get(current_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3826,7 +3833,7 @@ pub(crate) fn builtin_transpose_regions(
     let changed_start_byte = changed_byte_span.start().get();
     let changed_end_byte = changed_byte_span.end().get();
 
-    let read_only = eval.buffers.get(current_id).is_some_and(|buf| {
+    let read_only = eval.edit.buffers.get(current_id).is_some_and(|buf| {
         crate::emacs_core::editfns::buffer_read_only_active_in_state(eval.variables(), &[], buf)
     });
     if read_only {
@@ -3837,32 +3844,32 @@ pub(crate) fn builtin_transpose_regions(
     }
     crate::emacs_core::textprop::verify_text_read_only_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         changed_start_byte,
         changed_end_byte,
     )?;
 
     let change = crate::emacs_core::editfns::text_change_for_unchanged_extent_in_manager(
-        &eval.buffers,
+        &eval.edit.buffers,
         current_id,
         changed_byte_span,
     )?;
-    let measured_at = crate::buffer::TextMeasurement::of(&eval.buffers, current_id);
+    let measured_at = crate::buffer::TextMeasurement::of(&eval.edit.buffers, current_id);
     crate::emacs_core::editfns::signal_before_text_change(eval, change)?;
     // GNU `Ftranspose_regions` runs `modify_text (start1, end2)` and then
     // keeps using the positions it computed before (editfns.c), which reads
     // stale bytes once a before-change function edited the buffer. Measure
     // the same character positions in the live buffer instead, and reject
     // them as `validate_region` would when they no longer fit.
-    let Some(target) = eval.buffers.current_buffer_id() else {
+    let Some(target) = eval.edit.buffers.current_buffer_id() else {
         return Ok(Value::NIL);
     };
     let (transposition, change) =
-        if crate::buffer::TextMeasurement::of(&eval.buffers, target) == measured_at {
+        if crate::buffer::TextMeasurement::of(&eval.edit.buffers, target) == measured_at {
             (transposition, change)
         } else {
-            let Some(buf) = eval.buffers.get(target) else {
+            let Some(buf) = eval.edit.buffers.get(target) else {
                 return Ok(Value::NIL);
             };
             if first.start() < buf.point_min_char_pos() || second.end() > buf.point_max_char_pos() {
@@ -3882,6 +3889,7 @@ pub(crate) fn builtin_transpose_regions(
         };
     let leave_markers = args.get(4).is_some_and(|value| !value.is_nil());
     let _ = eval
+        .edit
         .buffers
         .transpose_buffer_regions(target, transposition, leave_markers.into());
     crate::emacs_core::editfns::signal_after_text_change(eval, change)?;
@@ -4085,9 +4093,9 @@ fn compare_markers_for_value_lt(
     }
 
     let left_pos =
-        crate::emacs_core::marker::marker_position_as_int_with_buffers(&eval.buffers, lhs)?;
+        crate::emacs_core::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, lhs)?;
     let right_pos =
-        crate::emacs_core::marker::marker_position_as_int_with_buffers(&eval.buffers, rhs)?;
+        crate::emacs_core::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, rhs)?;
     Ok(left_pos.cmp(&right_pos))
 }
 
@@ -4096,7 +4104,7 @@ fn marker_live_buffer_for_value_lt(
     value: &Value,
 ) -> Option<crate::buffer::BufferId> {
     let buffer_id = value.as_marker_data()?.buffer_id()?;
-    eval.buffers.get(buffer_id)?;
+    eval.edit.buffers.get(buffer_id)?;
     Some(buffer_id)
 }
 
@@ -4123,10 +4131,12 @@ fn compare_buffer_ids_for_value_lt(
     use std::cmp::Ordering;
 
     let left_name = eval
+        .edit
         .buffers
         .get(lhs)
         .map(|buffer| buffer.name.as_utf8_str());
     let right_name = eval
+        .edit
         .buffers
         .get(rhs)
         .map(|buffer| buffer.name.as_utf8_str());
@@ -4288,7 +4298,7 @@ pub(crate) fn builtin_variable_binding_locus(
     if let Some(sym) = ctx.obarray.get_by_id(resolved) {
         match sym.value_cell() {
             ValueCell::Localized(_) => {
-                if let Some(buf) = ctx.buffers.current_buffer() {
+                if let Some(buf) = ctx.edit.buffers.current_buffer() {
                     let target_buf = Value::make_buffer(buf.id);
                     if buf.has_buffer_local_by_sym_id(resolved) {
                         return Ok(target_buf);
@@ -4316,7 +4326,7 @@ pub(crate) fn builtin_variable_binding_locus(
                         );
                     }
                 }
-                if let Some(buf) = ctx.buffers.current_buffer() {
+                if let Some(buf) = ctx.edit.buffers.current_buffer() {
                     let is_local = {
                         if let Some(buf_fwd) = fwd.as_buffer_obj_fwd() {
                             let Some(slot) = buf_fwd.buffer_slot() else {
@@ -4340,7 +4350,7 @@ pub(crate) fn builtin_variable_binding_locus(
     }
 
     if is_canonical_symbol_id(resolved)
-        && let Some(buf) = ctx.buffers.current_buffer()
+        && let Some(buf) = ctx.edit.buffers.current_buffer()
         && buf.has_buffer_local_by_sym_id(resolved)
     {
         return Ok(Value::make_buffer(buf.id));
@@ -4907,11 +4917,13 @@ pub(crate) fn builtin_internal_track_mouse(
 
 fn internal_complete_buffer_alist(ctx: &super::eval::Context) -> Value {
     let entries: Vec<Value> = ctx
+        .edit
         .buffers
         .buffer_list()
         .into_iter()
         .filter_map(|id| {
-            ctx.buffers
+            ctx.edit
+                .buffers
                 .get(id)
                 .map(|buf| Value::cons(buf.name, Value::make_buffer(id)))
         })
@@ -4978,7 +4990,7 @@ pub(crate) fn builtin_internal_complete_buffer(
         }
         return Ok(strip_internal_buffer_completions(
             completions,
-            ctx.buffers.buffer_list().len(),
+            ctx.edit.buffers.buffer_list().len(),
         ));
     }
 
@@ -5761,7 +5773,7 @@ pub(crate) fn builtin_dump_emacs_portable(
         crate::emacs_core::fileio::default_directory_lisp_in_state(
             ctx.variables(),
             &[],
-            &ctx.buffers,
+            &ctx.edit.buffers,
         )
         .as_ref(),
     );

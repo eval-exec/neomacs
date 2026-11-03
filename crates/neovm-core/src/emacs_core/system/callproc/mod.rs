@@ -175,7 +175,7 @@ fn maybe_redisplay_sync_output(
     destination: &Value,
     display: bool,
 ) -> Result<(), Flow> {
-    if display && destination_writes_to_buffer_in_state(&eval.buffers, destination)? {
+    if display && destination_writes_to_buffer_in_state(&eval.edit.buffers, destination)? {
         eval.redisplay()?;
     }
     Ok(())
@@ -262,7 +262,7 @@ fn fallback_subprocess_directory() -> Option<PathBuf> {
 
 pub(super) fn subprocess_default_directory(eval: &super::eval::Context) -> Option<PathBuf> {
     let default_dir =
-        super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.buffers)?;
+        super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.edit.buffers)?;
     // GNU's encode_current_directory (callproc.c) runs default-directory through
     // Fexpand_file_name before the subprocess chdir. A buffer visiting a file under
     // $HOME has an abbreviated default-directory like "~/foo/" (GNU abbreviates it
@@ -295,7 +295,7 @@ fn subprocess_curdir_lisp(eval: &super::eval::Context) -> Option<LispString> {
     if let Some(string) = visible.as_lisp_string() {
         return Some(string.clone());
     }
-    super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.buffers)
+    super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.edit.buffers)
 }
 
 /// GNU `get_current_directory (true)` (callproc.c): make sure the child will be
@@ -560,14 +560,16 @@ fn insert_process_output_in_state(
 ) -> Result<(), Flow> {
     let buffer_id = match destination {
         BufferOutputTarget::Current => eval
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         BufferOutputTarget::Named(name) => {
             let name_str = crate::emacs_core::emacs_char::to_utf8_lossy(name.as_bytes());
-            eval.buffers
+            eval.edit
+                .buffers
                 .find_buffer_by_name(&name_str)
-                .unwrap_or_else(|| eval.buffers.create_buffer(&name_str))
+                .unwrap_or_else(|| eval.edit.buffers.create_buffer(&name_str))
         }
         BufferOutputTarget::Existing(buffer_id) => *buffer_id,
     };
@@ -824,7 +826,7 @@ fn run_process_command_in_state(
     cmd_args: &[LispString],
     operation_args: &[Value],
 ) -> EvalResult {
-    let destination_spec = parse_call_process_destination(&eval.buffers, destination)?;
+    let destination_spec = parse_call_process_destination(&eval.edit.buffers, destination)?;
     // GNU `Fcall_process`: validate the cwd via `get_current_directory` (signals
     // "Setting current directory" for an inaccessible local dir) and expand a
     // relative INFILE against `default-directory`, both *before* spawning. The cwd
@@ -1153,15 +1155,15 @@ fn destination_buffer_is_multibyte(eval: &super::eval::Context, target: &OutputT
         return true;
     };
     let buffer_id = match destination {
-        BufferOutputTarget::Current => eval.buffers.current_buffer_id(),
+        BufferOutputTarget::Current => eval.edit.buffers.current_buffer_id(),
         BufferOutputTarget::Named(name) => {
             let name = crate::emacs_core::emacs_char::to_utf8_lossy(name.as_bytes());
-            eval.buffers.find_buffer_by_name(&name)
+            eval.edit.buffers.find_buffer_by_name(&name)
         }
         BufferOutputTarget::Existing(buffer_id) => Some(*buffer_id),
     };
     buffer_id
-        .and_then(|id| eval.buffers.get(id))
+        .and_then(|id| eval.edit.buffers.get(id))
         .is_none_or(|buffer| buffer.get_multibyte())
 }
 
@@ -1278,7 +1280,7 @@ fn builtin_call_process_region_impl(
         super::editfns::ensure_current_buffer_writable_in_state(
             eval.variables(),
             &[],
-            &eval.buffers,
+            &eval.edit.buffers,
         )?;
     }
 
@@ -1292,6 +1294,7 @@ fn builtin_call_process_region_impl(
         ValueKind::Nil => {
             let (text, maybe_delete_range) = {
                 let buf = eval
+                    .edit
                     .buffers
                     .current_buffer()
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1307,10 +1310,12 @@ fn builtin_call_process_region_impl(
             };
             if delete {
                 let current_id = eval
+                    .edit
                     .buffers
                     .current_buffer_id()
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
                 let _ = eval
+                    .edit
                     .buffers
                     .delete_buffer_emacs_byte_range(current_id, maybe_delete_range);
             }
@@ -1333,9 +1338,10 @@ fn builtin_call_process_region_impl(
         }
         _ => {
             let region_args =
-                super::position::LispRegionArgs::from_values(&eval.buffers, args[0], args[1])?;
+                super::position::LispRegionArgs::from_values(&eval.edit.buffers, args[0], args[1])?;
             let (text, region) = {
                 let buf = eval
+                    .edit
                     .buffers
                     .current_buffer()
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1352,10 +1358,12 @@ fn builtin_call_process_region_impl(
 
             if delete {
                 let current_id = eval
+                    .edit
                     .buffers
                     .current_buffer_id()
                     .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
                 let _ = eval
+                    .edit
                     .buffers
                     .delete_buffer_emacs_byte_range(current_id, region);
             }
@@ -1395,7 +1403,7 @@ fn builtin_call_process_region_impl(
     } else {
         &Value::NIL
     };
-    let destination_spec = parse_call_process_destination(&eval.buffers, destination)?;
+    let destination_spec = parse_call_process_destination(&eval.edit.buffers, destination)?;
 
     // GNU does NOT pipe the region into the child. `Fcall_process_region'
     // writes it to a temp file with `create_temp_file' and hands that to

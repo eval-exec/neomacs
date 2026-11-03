@@ -75,7 +75,7 @@ impl Context {
         if !self.obarray.is_localized(id) {
             return None;
         }
-        if let Some(buffer) = self.buffers.current_buffer() {
+        if let Some(buffer) = self.edit.buffers.current_buffer() {
             self.obarray
                 .read_localized_in_buffer(id, buffer)
                 .expect("a localized depth variable has its current binding");

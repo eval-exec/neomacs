@@ -1718,7 +1718,7 @@ fn interactive_prefix_numeric_arg_in_state(
 }
 
 fn interactive_region_args(eval: &Context, missing_mark_signal: &str) -> Result<Vec<Value>, Flow> {
-    interactive_region_args_in_buffers(&eval.buffers, missing_mark_signal)
+    interactive_region_args_in_buffers(&eval.edit.buffers, missing_mark_signal)
 }
 
 fn interactive_region_args_in_buffers(
@@ -1746,7 +1746,7 @@ fn interactive_region_args_in_buffers(
 }
 
 fn interactive_point_arg(eval: &Context) -> Result<Value, Flow> {
-    interactive_point_arg_in_buffers(&eval.buffers)
+    interactive_point_arg_in_buffers(&eval.edit.buffers)
 }
 
 fn interactive_point_arg_in_buffers(buffers: &crate::buffer::BufferManager) -> Result<Value, Flow> {
@@ -1758,7 +1758,7 @@ fn interactive_point_arg_in_buffers(buffers: &crate::buffer::BufferManager) -> R
 }
 
 fn interactive_mark_arg(eval: &Context) -> Result<Value, Flow> {
-    interactive_mark_arg_in_buffers(&eval.buffers)
+    interactive_mark_arg_in_buffers(&eval.edit.buffers)
 }
 
 fn interactive_mark_arg_in_buffers(buffers: &crate::buffer::BufferManager) -> Result<Value, Flow> {
@@ -1941,7 +1941,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::ExistingBuffer => {
-                    let default = interactive_current_buffer_default(&shared.buffers);
+                    let default = interactive_current_buffer_default(&shared.edit.buffers);
                     let letter_args = [Value::heap_string(prompt.clone()), default, Value::T];
                     args.push(super::minibuffer::finish_read_buffer_in_vm_runtime(
                         shared,
@@ -1949,7 +1949,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::Buffer => {
-                    let default = interactive_other_buffer_default(&mut shared.buffers);
+                    let default = interactive_other_buffer_default(&mut shared.edit.buffers);
                     let letter_args = [Value::heap_string(prompt.clone()), default, Value::NIL];
                     args.push(super::minibuffer::finish_read_buffer_in_vm_runtime(
                         shared,
@@ -1971,7 +1971,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     args.push(arg);
                 }
                 InteractiveControlLetter::Point => {
-                    args.push(interactive_point_arg_in_buffers(&shared.buffers)?)
+                    args.push(interactive_point_arg_in_buffers(&shared.edit.buffers)?)
                 }
                 control @ (InteractiveControlLetter::DirectoryName
                 | InteractiveControlLetter::ExistingFile
@@ -2050,7 +2050,7 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     )?);
                 }
                 InteractiveControlLetter::Mark => {
-                    args.push(interactive_mark_arg_in_buffers(&shared.buffers)?)
+                    args.push(interactive_mark_arg_in_buffers(&shared.edit.buffers)?)
                 }
                 InteractiveControlLetter::NumberOrPrefix => {
                     let raw = interactive_prefix_raw_arg_in_state(shared.variables(), &[], kind);
@@ -2070,12 +2070,12 @@ fn interactive_args_from_string_code_in_vm_runtime(
                     interactive_prefix_raw_arg_in_state(shared.variables(), &[], kind),
                 ),
                 InteractiveControlLetter::Region => args.extend(
-                    interactive_region_args_in_buffers(&shared.buffers, "error")?,
+                    interactive_region_args_in_buffers(&shared.edit.buffers, "error")?,
                 ),
                 InteractiveControlLetter::ActiveRegion => {
                     if interactive_use_region_p_in_vm_runtime(shared)? {
                         args.extend(interactive_region_args_in_buffers(
-                            &shared.buffers,
+                            &shared.edit.buffers,
                             "error",
                         )?);
                     } else {
@@ -2355,7 +2355,7 @@ fn interactive_apply_prefix_flags(
                 interactive_require_writable_current_buffer_in_state(
                     eval.variables(),
                     &[],
-                    &eval.buffers,
+                    &eval.edit.buffers,
                 )?
             }
             InteractivePrefixFlag::SelectEventWindow => {
@@ -2677,13 +2677,13 @@ fn interactive_args_from_string_code(
                         eval,
                         vec![
                             Value::heap_string(prompt),
-                            interactive_current_buffer_default(&eval.buffers),
+                            interactive_current_buffer_default(&eval.edit.buffers),
                             Value::T,
                         ],
                     )?)
                 }
                 InteractiveControlLetter::Buffer => {
-                    let default = interactive_other_buffer_default(&mut eval.buffers);
+                    let default = interactive_other_buffer_default(&mut eval.edit.buffers);
                     args.push(super::minibuffer::builtin_read_buffer(
                         eval,
                         vec![Value::heap_string(prompt), default, Value::NIL],
@@ -3384,13 +3384,14 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
     for _ in 0..spaces_to_insert {
         text.push(' ');
     }
-    if let Some(current_id) = eval.buffers.current_buffer_id() {
+    if let Some(current_id) = eval.edit.buffers.current_buffer_id() {
         if chars_to_delete > 0 {
             // GNU `replace_range (PT, PT + chars_to_delete, string)` followed by
             // `Fforward_char (n)`: replace the overwritten run with the inserted
             // characters (plus any padding spaces), then move point past the
             // inserted characters so the cursor lands after C.
             let (point_pos, accessible_end) = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| {
@@ -3406,6 +3407,7 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
                     break;
                 }
                 match eval
+                    .edit
                     .buffers
                     .get(current_id)
                     .and_then(|b| b.char_after_emacs_byte_len(del_end))
@@ -3415,11 +3417,13 @@ pub(crate) fn builtin_self_insert_command(eval: &mut Context, args: Vec<Value>) 
                 }
             }
             let start_char = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| b.emacs_byte_pos_to_lisp_char_pos(point_pos).as_i64())
                 .unwrap_or(1);
             let end_char = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| b.emacs_byte_pos_to_lisp_char_pos(del_end).as_i64())
@@ -3514,9 +3518,10 @@ fn self_insert_expand_abbrev_at_word_boundary(
     }
 
     let should_expand = eval
+        .edit
         .buffers
         .current_buffer_id()
-        .and_then(|buffer_id| eval.buffers.get(buffer_id))
+        .and_then(|buffer_id| eval.edit.buffers.get(buffer_id))
         .is_some_and(|buffer| {
             let syntax = super::syntax::SyntaxTable::for_buffer(buffer);
             let point = buffer.point_emacs_byte_pos();
@@ -3573,12 +3578,12 @@ fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(us
     if overwrite.is_nil() {
         return Ok((0, 0));
     }
-    let Some(current_id) = eval.buffers.current_buffer_id() else {
+    let Some(current_id) = eval.edit.buffers.current_buffer_id() else {
         return Ok((0, 0));
     };
     // Require PT < ZV (there must be a character to overwrite).
     let (point_pos, accessible_end, c2) = {
-        let Some(buf) = eval.buffers.get(current_id) else {
+        let Some(buf) = eval.edit.buffers.get(current_id) else {
             return Ok((0, 0));
         };
         let pt = buf.point_emacs_byte_pos();
@@ -3632,7 +3637,7 @@ fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(us
     // chars_to_delete = PT - pos (characters between the original point and the
     // column-target point).
     let (new_point, prev_is_tab) = {
-        let Some(buf) = eval.buffers.get(current_id) else {
+        let Some(buf) = eval.edit.buffers.get(current_id) else {
             return Ok((0, 0));
         };
         let np = buf.point_emacs_byte_pos();
@@ -3661,11 +3666,13 @@ fn self_insert_overwrite_plan(eval: &mut Context, c: char, n: i64) -> Result<(us
 
     // SET_PT (pos): restore point to where the cursor was before the trial move.
     let start_char = eval
+        .edit
         .buffers
         .get(current_id)
         .map(|b| b.emacs_byte_pos_to_lisp_char_pos(point_pos).as_i64())
         .unwrap_or(1);
-    eval.buffers
+    eval.edit
+        .buffers
         .goto_buffer_emacs_byte_pos(current_id, point_pos);
     let _ = start_char;
 
@@ -3679,7 +3686,7 @@ fn byte_pos_char_distance(
     beg: EmacsBytePos,
     end: EmacsBytePos,
 ) -> usize {
-    let Some(buf) = eval.buffers.get(buf_id) else {
+    let Some(buf) = eval.edit.buffers.get(buf_id) else {
         return 0;
     };
     let beg_char = buf.emacs_byte_pos_to_lisp_char_pos(beg).as_i64();
@@ -3724,9 +3731,10 @@ impl NewlineFillStraddle {
             return Ok(());
         }
         let Some(buffer) = eval
+            .edit
             .buffers
             .current_buffer_id()
-            .and_then(|buffer_id| eval.buffers.get(buffer_id))
+            .and_then(|buffer_id| eval.edit.buffers.get(buffer_id))
         else {
             return Ok(());
         };
@@ -3786,8 +3794,8 @@ pub(crate) fn builtin_key_binding_impl(
     // key_events_from_designator below.
     if let Some(position) = args.get(3)
         && let ValueKind::Fixnum(pos_int) = position.kind()
-        && let Some(buf_id) = ctx.buffers.current_buffer_id()
-        && let Some(buf) = ctx.buffers.get(buf_id)
+        && let Some(buf_id) = ctx.edit.buffers.current_buffer_id()
+        && let Some(buf) = ctx.edit.buffers.get(buf_id)
     {
         // Lisp positions are 1-based character positions, so
         // valid range is `[char_min + 1, char_max + 1]`.
@@ -3850,7 +3858,7 @@ pub(crate) fn builtin_local_key_binding_impl(
     expect_min_args("local-key-binding", &args, 1)?;
     expect_max_args("local-key-binding", &args, 2)?;
 
-    if ctx.buffers.current_local_map().is_nil() {
+    if ctx.edit.buffers.current_local_map().is_nil() {
         return Ok(Value::NIL);
     }
 
@@ -3868,7 +3876,7 @@ pub(crate) fn builtin_local_key_binding_impl(
     };
     let emacs_events: Vec<Value> = events.iter().map(key_event_to_emacs_event).collect();
     Ok(lookup_keymap_with_partial(
-        &ctx.buffers.current_local_map(),
+        &ctx.edit.buffers.current_local_map(),
         &emacs_events,
         symbol_mode,
     ))

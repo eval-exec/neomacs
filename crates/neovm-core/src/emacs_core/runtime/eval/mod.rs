@@ -3036,8 +3036,10 @@ pub struct Context {
     interpreted_closure_filter_fn: Option<Value>,
     pub(crate) in_flight_registry: super::error::InFlightRegistryHandle,
     pub(crate) cached_standard_case_table: Option<Value>,
-    /// Buffer manager — owns all live buffers and tracks current buffer.
-    pub buffers: BufferManager,
+    /// Edit-owned runtime state: the buffer manager and the insdel
+    /// change-combining state. Embedded by value so field access stays one
+    /// offset; stage-3 inversion keeps the evaluator above the edit domain.
+    pub edit: crate::buffer::EditRuntime,
     /// Frontend-installed synchronous window layout query.
     ///
     /// `window-end` with UPDATE non-nil, and every geometry query in the `posn`
@@ -5069,7 +5071,7 @@ impl Context {
     /// slot directly.
     pub fn buffer_default_value(&self, name: &str) -> Option<Value> {
         if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(name) {
-            return Some(self.buffers.buffer_defaults[info.offset.index()]);
+            return Some(self.edit.buffers.buffer_defaults[info.offset.index()]);
         }
         self.variable_value_by_name(name)
     }
@@ -5080,7 +5082,7 @@ impl Context {
     /// registry epoch instead of at every layout probe.
     pub fn buffer_default_value_fixed(&self, symbol: &WellKnown) -> Option<Value> {
         if let Some(info) = crate::buffer::buffer::lookup_buffer_slot(symbol.name()) {
-            return Some(self.buffers.buffer_defaults[info.offset.index()]);
+            return Some(self.edit.buffers.buffer_defaults[info.offset.index()]);
         }
         self.variable_value(symbol.id())
     }
@@ -5137,7 +5139,7 @@ impl Context {
         };
         let offset = info.offset.index();
         // Don't clobber a default already installed (loaded fringe.el / user).
-        if !self.buffers.buffer_defaults[offset].is_nil() {
+        if !self.edit.buffers.buffer_defaults[offset].is_nil() {
             return;
         }
         // Build the literal GNU default alist (`lisp/fringe.el` ~65-77). Evaluate
@@ -5165,8 +5167,9 @@ impl Context {
         // from `buffer_defaults` at creation, before this seed ran). GNU buffers
         // read `buffer_defaults` live; neomacs copies, so update the copies that
         // are still nil (no explicit local override).
-        self.buffers.buffer_defaults_mut()[offset] = alist;
-        self.buffers
+        self.edit.buffers.buffer_defaults_mut()[offset] = alist;
+        self.edit
+            .buffers
             .seed_default_slot_into_unset_buffers(info.offset, alist);
     }
 
@@ -5194,12 +5197,12 @@ impl Context {
 
     /// Public read access to the buffer manager.
     pub fn buffer_manager(&self) -> &BufferManager {
-        &self.buffers
+        &self.edit.buffers
     }
 
     /// Public mutable access to the buffer manager.
     pub fn buffer_manager_mut(&mut self) -> &mut BufferManager {
-        &mut self.buffers
+        &mut self.edit.buffers
     }
 
     /// Public read access to the frame manager.
@@ -5317,9 +5320,12 @@ impl Context {
                 // adjustment and panic ("buffer text edit position underflow").
                 // Clear first (with the flag still matching the existing
                 // content), then toggle on the now-empty buffer, then insert.
-                let _ = self.buffers.replace_buffer_contents(id, "");
-                let buffer_is_multibyte =
-                    self.buffers.get(id).map(|buffer| buffer.get_multibyte())?;
+                let _ = self.edit.buffers.replace_buffer_contents(id, "");
+                let buffer_is_multibyte = self
+                    .edit
+                    .buffers
+                    .get(id)
+                    .map(|buffer| buffer.get_multibyte())?;
                 let resolved = EchoAreaMessageText::resolve(
                     message,
                     buffer_is_multibyte,
@@ -5327,9 +5333,11 @@ impl Context {
                         .is_truthy(),
                 );
                 let _ = self
+                    .edit
                     .buffers
                     .set_buffer_multibyte_flag(id, resolved.buffer_is_multibyte);
                 let _ = self
+                    .edit
                     .buffers
                     .replace_buffer_contents_lisp_string(id, &resolved.text);
                 Some(resolved.text)
@@ -5338,7 +5346,7 @@ impl Context {
                 // Clearing the message: only touch the echo buffer if it already
                 // exists; do not materialize it just to empty it.
                 let id = self.echo_area_display_buffer()?;
-                let _ = self.buffers.replace_buffer_contents(id, "");
+                let _ = self.edit.buffers.replace_buffer_contents(id, "");
                 None
             }
         }
@@ -5355,26 +5363,30 @@ impl Context {
     /// identified by id from then on.
     pub fn ensure_echo_area_buffers(&mut self) {
         for index in 0..EchoAreaBuffers::NAMES.len() {
-            let live =
-                self.echo_area_buffers.slots[index].filter(|id| self.buffers.get(*id).is_some());
+            let live = self.echo_area_buffers.slots[index]
+                .filter(|id| self.edit.buffers.get(*id).is_some());
             let id = match live {
                 Some(id) => id,
                 None => {
                     let name = EchoAreaBuffers::NAMES[index];
-                    let id = self.buffers.find_buffer_by_name(name).unwrap_or_else(|| {
-                        let id = self.buffers.create_buffer(name);
-                        let _ = self.buffers.set_buffer_local_property(
-                            id,
-                            "truncate-lines",
-                            Value::NIL,
-                        );
-                        id
-                    });
+                    let id = self
+                        .edit
+                        .buffers
+                        .find_buffer_by_name(name)
+                        .unwrap_or_else(|| {
+                            let id = self.edit.buffers.create_buffer(name);
+                            let _ = self.edit.buffers.set_buffer_local_property(
+                                id,
+                                "truncate-lines",
+                                Value::NIL,
+                            );
+                            id
+                        });
                     self.echo_area_buffers.slots[index] = Some(id);
                     id
                 }
             };
-            let _ = self.buffers.configure_buffer_undo_list(id, Value::T);
+            let _ = self.edit.buffers.configure_buffer_undo_list(id, Value::T);
         }
     }
 
@@ -5387,7 +5399,7 @@ impl Context {
     pub fn echo_area_display_buffer(&self) -> Option<crate::buffer::BufferId> {
         self.echo_area_buffers
             .display_slot()
-            .filter(|id| self.buffers.get(*id).is_some())
+            .filter(|id| self.edit.buffers.get(*id).is_some())
     }
 
     pub(crate) fn append_current_message_runtime_text(&mut self, text: &str) {
@@ -5838,10 +5850,10 @@ impl Context {
             .get_by_id(sym_id)
             .and_then(|sym| sym.forwarded_descriptor())
             .and_then(|fwd| fwd.as_buffer_obj_fwd())
-            && let Some(buf_id) = self.buffers.current_buffer_id()
+            && let Some(buf_id) = self.edit.buffers.current_buffer_id()
         {
             let offset = buf_fwd.slot_index();
-            if let Some(buf) = self.buffers.get_mut(buf_id)
+            if let Some(buf) = self.edit.buffers.get_mut(buf_id)
                 && let Some(offset) = offset.below(buf.slots.len())
             {
                 buf.slots[offset] = value;
@@ -5944,15 +5956,15 @@ impl Context {
         slot: crate::buffer::buffer::BufferSlot,
     ) -> Value {
         let off = slot.index();
-        if let Some(buf) = self.buffers.current_buffer() {
+        if let Some(buf) = self.edit.buffers.current_buffer() {
             let local = buf_fwd.local_flags_idx < 0 || buf.slot_local_flag(slot);
             if local && off < buf.slots.len() {
                 return buf.slots[off];
             }
         }
 
-        if off < self.buffers.buffer_defaults.len() {
-            self.buffers.buffer_defaults[off]
+        if off < self.edit.buffers.buffer_defaults.len() {
+            self.edit.buffers.buffer_defaults[off]
         } else {
             buf_fwd.default
         }
@@ -5969,6 +5981,7 @@ impl Context {
             || resolved == buffer_undo_list_symbol()
         {
             let _ = self
+                .edit
                 .buffers
                 .set_buffer_local_property_by_sym_id(buffer_id, resolved, value);
             // Finding 6: `setq-local`/`set` on a display-affecting slot.
@@ -5987,10 +6000,12 @@ impl Context {
         }
 
         let _ = self
+            .edit
             .buffers
             .set_buffer_local_property_by_sym_id(buffer_id, resolved, value);
         let target_buf = Value::make_buffer(buffer_id);
         let alist = self
+            .edit
             .buffers
             .get(buffer_id)
             .map(|buf| buf.local_var_alist_value())
@@ -6069,7 +6084,7 @@ impl Context {
                 // directly). `read_localized`'s same-buffer epoch check makes
                 // the common read one compare + one cdr.
                 crate::emacs_core::symbol::ValueCell::Localized(_) => {
-                    if let Some(buf) = self.buffers.current_buffer()
+                    if let Some(buf) = self.edit.buffers.current_buffer()
                         && let Some(value) = self.obarray.read_localized_symbol_for_buffer(
                             sym_id,
                             sym,
@@ -6120,7 +6135,7 @@ impl Context {
                 // redirect tag and only walks `local_var_alist` for
                 // `SYMBOL_LOCALIZED`.
                 SymbolRedirect::Localized => {
-                    if let Some(buf) = self.buffers.current_buffer()
+                    if let Some(buf) = self.edit.buffers.current_buffer()
                         && let Some(value) = self.obarray.read_localized_for_buffer(
                             resolved,
                             buf.id,
@@ -6148,7 +6163,7 @@ impl Context {
         // symbols do not scan `local_var_alist`.
         if resolved == buffer_undo_list_symbol()
             && is_canonical_id(resolved)
-            && let Some(buf) = self.buffers.current_buffer()
+            && let Some(buf) = self.edit.buffers.current_buffer()
             && let Some(binding) = buf.get_buffer_local_binding_by_sym_id(resolved)
         {
             return Ok(match binding.as_value() {
@@ -6644,7 +6659,7 @@ pub(crate) fn set_runtime_binding_in_state(
         ctx.obarray.with_legacy_value_write(|obarray| {
             set_runtime_binding(
                 obarray,
-                &mut ctx.buffers,
+                &mut ctx.edit.buffers,
                 ctx.owner.slab_mut(),
                 ctx.specpdl.as_slice(),
                 sym_id,
@@ -7241,8 +7256,13 @@ impl Context {
         sym_id: SymId,
         value: Value,
     ) -> Result<Option<crate::buffer::BufferId>, Flow> {
-        let checked =
-            check_forwarded_store(&self.obarray, &self.buffers, &self.specpdl, sym_id, value)?;
+        let checked = check_forwarded_store(
+            &self.obarray,
+            &self.edit.buffers,
+            &self.specpdl,
+            sym_id,
+            value,
+        )?;
         // A `Lisp_Fwd_Bool` slot stores `!NILP (newval)`, so every mirror of
         // this write has to see what the forwarder accepted, not what the
         // caller passed.
@@ -7254,7 +7274,7 @@ impl Context {
             self.obarray.with_legacy_value_write(|obarray| {
                 store_runtime_binding(
                     obarray,
-                    &mut self.buffers,
+                    &mut self.edit.buffers,
                     self.owner.slab_mut(),
                     &self.specpdl,
                     sym_id,
@@ -7370,7 +7390,7 @@ impl Context {
         if let Some(sym) = self.obarray.get_by_id(resolved) {
             match sym.redirect() {
                 SymbolRedirect::Localized => {
-                    if let Some(buf) = self.buffers.current_buffer()
+                    if let Some(buf) = self.edit.buffers.current_buffer()
                         && let Some(value) = self.obarray.read_localized_in_buffer(resolved, buf)
                     {
                         if value.is_unbound() {
@@ -7393,7 +7413,7 @@ impl Context {
 
         if resolved == buffer_undo_list_symbol()
             && is_canonical_id(resolved)
-            && let Some(buf) = self.buffers.current_buffer()
+            && let Some(buf) = self.edit.buffers.current_buffer()
             && let Some(binding) = buf.get_buffer_local_binding_by_sym_id(resolved)
         {
             return binding.as_value();
@@ -7520,7 +7540,7 @@ impl Context {
         use crate::emacs_core::forward::LispFwdType;
         use crate::emacs_core::symbol::SymbolRedirect;
 
-        let Some(current_id) = self.buffers.current_buffer_id() else {
+        let Some(current_id) = self.edit.buffers.current_buffer_id() else {
             return Value::NIL;
         };
         if sym_id == buffer_undo_list_symbol() {
@@ -7533,6 +7553,7 @@ impl Context {
             SymbolRedirect::Localized => {
                 if self.obarray.blv(sym_id).is_some_and(|blv| blv.local_if_set)
                     || self
+                        .edit
                         .buffers
                         .get(current_id)
                         .is_some_and(|buf| buf.has_buffer_local_by_sym_id(sym_id))

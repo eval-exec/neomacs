@@ -284,7 +284,7 @@ enum AutoHscrollMode {
 /// variable is unbound is the `t` behaviour.
 fn auto_hscroll_mode(ctx: &Context, buffer_id: crate::buffer::BufferId) -> AutoHscrollMode {
     let symbol_mode = ctx.symbol_mode();
-    let buf = ctx.buffers.get(buffer_id);
+    let buf = ctx.edit.buffers.get(buffer_id);
     let value = crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
         ctx.variables(),
         &[],
@@ -308,7 +308,7 @@ fn line_is_truncated(ctx: &Context, frame: &crate::window::Frame, window: &Windo
     let Some(buffer_id) = window.buffer_id() else {
         return false;
     };
-    let buf = ctx.buffers.get(buffer_id);
+    let buf = ctx.edit.buffers.get(buffer_id);
     let read = |symbol: &WellKnown| {
         crate::emacs_core::indent::dynamic_buffer_or_global_symbol_value_fixed(
             ctx.variables(),
@@ -379,6 +379,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
 
     let frame_ids: Vec<FrameId> = ctx.frames.frame_list();
     let selected_buffer_pt = ctx
+        .edit
         .buffers
         .current_buffer()
         .map(|b| (b.id, b.point_emacs_byte_pos()));
@@ -432,7 +433,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             // (`x_offset`) in the same place (hscroll_window_tree STEP 3).
             let body_cols = (body_px as f32 / char_width).floor() as i64;
             let window_height = window.bounds().height;
-            let gutter_cols = match ctx.buffers.get(buffer_id) {
+            let gutter_cols = match ctx.edit.buffers.get(buffer_id) {
                 Some(buf) => crate::emacs_core::xdisp::line_number_gutter_cols(
                     buf,
                     window_height,
@@ -453,7 +454,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             let (point_byte, point_lisp) =
                 if is_selected_window && selected_buffer_pt.map(|(id, _)| id) == Some(buffer_id) {
                     let byte = selected_buffer_pt.unwrap().1;
-                    let lisp = match ctx.buffers.get(buffer_id) {
+                    let lisp = match ctx.edit.buffers.get(buffer_id) {
                         Some(buf) => buf.emacs_byte_pos_to_char_pos_clamped(byte).to_lisp(),
                         None => continue,
                     };
@@ -461,7 +462,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                 } else {
                     let lisp = window_point_lisp(window);
                     let char_pos = lisp.to_char_pos();
-                    match ctx.buffers.get(buffer_id) {
+                    match ctx.edit.buffers.get(buffer_id) {
                         Some(buf) => (buf.char_pos_to_emacs_byte_pos_clamped(char_pos), lisp),
                         None => continue,
                     }
@@ -475,7 +476,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             // point — NOT `point >= ZV` — is what distinguishes `C-e` before a
             // newline (hscroll 144 in the spec scenario) from `C-e` at EOB on a
             // line with no newline (hscroll 220).
-            let point_at_eol = match ctx.buffers.get(buffer_id) {
+            let point_at_eol = match ctx.edit.buffers.get(buffer_id) {
                 Some(buf) => buf.emacs_byte_at_pos(point_byte) == Some(b'\n'),
                 None => false,
             };
@@ -538,7 +539,7 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
                 // between the two and the redisplay signature never matched --
                 // no idle `(redisplay)` could ever skip.
                 crate::window::window_markers::set_window_old_point_with_marker(
-                    &mut ctx.buffers,
+                    &mut ctx.edit.buffers,
                     window,
                     snap.point_lisp,
                 );

@@ -180,7 +180,7 @@ impl Context {
             return None;
         }
         self.variables()
-            .value_in_buffer_by_name(self.buffers.current_buffer(), "max-lisp-eval-depth")
+            .value_in_buffer_by_name(self.edit.buffers.current_buffer(), "max-lisp-eval-depth")
             .and_then(|value| value.as_fixnum())
     }
 
@@ -268,7 +268,7 @@ impl Context {
     pub(crate) fn raise_lisp_eval_depth_floor(&mut self) {
         let current = if self.obarray.is_localized(max_lisp_eval_depth_symbol()) {
             self.variables()
-                .value_in_buffer_by_name(self.buffers.current_buffer(), "max-lisp-eval-depth")
+                .value_in_buffer_by_name(self.edit.buffers.current_buffer(), "max-lisp-eval-depth")
                 .and_then(|value| value.as_fixnum())
         } else {
             self.variable_value(max_lisp_eval_depth_symbol())

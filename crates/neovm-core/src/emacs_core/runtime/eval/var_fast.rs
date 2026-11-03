@@ -362,7 +362,7 @@ impl Context {
 
     #[inline(always)]
     fn read_localized_cached(&self, sym: &LispSymbol) -> Option<Value> {
-        let buf = self.buffers.current_buffer()?;
+        let buf = self.edit.buffers.current_buffer()?;
         let hit = sym.blv_cache_hit(buf.id)?;
         let value = hit.valcell().cons_cdr();
         if value.is_unbound() {
@@ -381,11 +381,11 @@ impl Context {
         }
         // `load` answers `None` for exactly the per-buffer slot.
         let buf_fwd = fwd.as_buffer_obj_fwd()?;
-        let buf = self.buffers.current_buffer()?;
+        let buf = self.edit.buffers.current_buffer()?;
         let value = buf_fwd.value_in(
             Some(&buf.slots[..]),
             buf.local_flags,
-            Some(&self.buffers.buffer_defaults[..]),
+            Some(&self.edit.buffers.buffer_defaults[..]),
         );
         if value.is_unbound() {
             return None;
@@ -489,7 +489,7 @@ impl Context {
             return false;
         }
         // Its Localized arm needs a current buffer.
-        let Some(buf) = self.buffers.current_buffer() else {
+        let Some(buf) = self.edit.buffers.current_buffer() else {
             return false;
         };
         let Some(hit) = sym.blv_cache_hit(buf.id) else {
@@ -576,7 +576,7 @@ impl Context {
         // Everything the bind needs from the symbol is copied out here, so
         // its borrow ends before the push.
         let bound = if window == symcell_inline_write_value(SymbolRedirect::Localized) {
-            match self.buffers.current_buffer().map(|buf| buf.id) {
+            match self.edit.buffers.current_buffer().map(|buf| buf.id) {
                 Some(buffer_id) => match sym.blv_cache_hit(buffer_id) {
                     Some(hit) => self.specbind_localized_hit::<COMPILED>(id, buffer_id, hit, value),
                     None => false,
@@ -767,7 +767,9 @@ impl Context {
         }
         let popped = match sym.blv_cache_hit(buffer_id) {
             Some(hit)
-                if hit.found() && !old.is_unbound() && self.buffers.get(buffer_id).is_some() =>
+                if hit.found()
+                    && !old.is_unbound()
+                    && self.edit.buffers.get(buffer_id).is_some() =>
             {
                 store_cached_cons_cdr::<COMPILED>(hit.valcell(), old);
                 self.retire_top_let_entry();

@@ -77,7 +77,7 @@ fn sync_current_buffer_to_selected_window(eval: &mut crate::emacs_core::eval::Co
         .and_then(|frame| frame.find_window(frame.selected_window))
         .and_then(|window| window.buffer_id());
     if let Some(buffer_id) = selected_buffer_id {
-        let _ = eval.buffers.switch_current_unrecorded(buffer_id);
+        let _ = eval.edit.buffers.switch_current_unrecorded(buffer_id);
     }
 }
 
@@ -118,7 +118,7 @@ fn run_kill_buffer_hooks(
         }
     }
     // "If the hooks have killed the buffer, exit now."
-    if eval.buffers.get(buffer).is_none() {
+    if eval.edit.buffers.get(buffer).is_none() {
         return Ok(KillBufferHooks::Proceed);
     }
     if !inhibit_buffer_hooks {
@@ -137,25 +137,25 @@ pub(crate) fn builtin_kill_buffer(
 ) -> EvalResult {
     expect_max_args("kill-buffer", &args, 1)?;
     let id = match args.first() {
-        None => match eval.buffers.current_buffer() {
+        None => match eval.edit.buffers.current_buffer() {
             Some(buf) => buf.id,
             None => return Ok(Value::NIL),
         },
         Some(arg) => match arg.kind() {
-            ValueKind::Nil => match eval.buffers.current_buffer() {
+            ValueKind::Nil => match eval.edit.buffers.current_buffer() {
                 Some(buf) => buf.id,
                 None => return Ok(Value::NIL),
             },
             ValueKind::Veclike(VecLikeType::Buffer) => {
                 let bid = arg.as_buffer_id().unwrap();
-                if eval.buffers.get(bid).is_none() {
+                if eval.edit.buffers.get(bid).is_none() {
                     return Ok(Value::NIL);
                 }
                 bid
             }
             ValueKind::String => {
                 let name = expect_buffer_name_string(arg)?;
-                match eval.buffers.find_buffer_by_name(&name) {
+                match eval.edit.buffers.find_buffer_by_name(&name) {
                     Some(id) => id,
                     None => {
                         return Err(signal(
@@ -178,7 +178,7 @@ pub(crate) fn builtin_kill_buffer(
     if eval.green_buffer_held(id) {
         return Ok(Value::NIL);
     }
-    let inhibit_buffer_hooks = eval.buffers.buffer_hooks_inhibited(id);
+    let inhibit_buffer_hooks = eval.edit.buffers.buffer_hooks_inhibited(id);
     // GNU `Fkill_buffer` (buffer.c:1931-1987) runs the query functions and
     // `kill-buffer-hook` with the dying buffer current inside ONE
     // `record_unwind_protect_excursion`, so the caller's buffer and its
@@ -195,7 +195,7 @@ pub(crate) fn builtin_kill_buffer(
         KillBufferHooks::Refused => return Ok(Value::NIL),
         KillBufferHooks::Proceed => {}
     }
-    if eval.buffers.get(id).is_none() {
+    if eval.edit.buffers.get(id).is_none() {
         return Ok(Value::T);
     }
 
@@ -232,7 +232,7 @@ pub(crate) fn builtin_kill_buffer(
                 vec![Value::make_buffer(id)],
             )?;
         }
-        if eval.buffers.get(id).is_none() {
+        if eval.edit.buffers.get(id).is_none() {
             return Ok(Value::T);
         }
     }
@@ -244,6 +244,7 @@ pub(crate) fn builtin_kill_buffer(
             return Ok(Value::NIL);
         }
         for dying in eval
+            .edit
             .buffers
             .collect_killed_buffer_ids(id)
             .unwrap_or_default()
@@ -251,8 +252,9 @@ pub(crate) fn builtin_kill_buffer(
             eval.green_before_buffer_killed(dying)?;
         }
     }
-    let current_before = eval.buffers.current_buffer().map(|buf| buf.id);
+    let current_before = eval.edit.buffers.current_buffer().map(|buf| buf.id);
     let killed_ids = eval
+        .edit
         .buffers
         .collect_killed_buffer_ids(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
@@ -264,7 +266,7 @@ pub(crate) fn builtin_kill_buffer(
     let replacement = if current_will_die {
         let other = other_buffer_impl_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             vec![Value::make_buffer(current_before.expect("current buffer"))],
         )?;
         match other.as_buffer_id() {
@@ -276,23 +278,25 @@ pub(crate) fn builtin_kill_buffer(
     };
 
     let killed_ids_to_signal = eval
+        .edit
         .buffers
         .collect_killed_buffer_ids(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
     for killed_id in killed_ids_to_signal {
         eval.kill_buffer_processes(killed_id)?;
     }
-    if eval.buffers.get(id).is_none() {
+    if eval.edit.buffers.get(id).is_none() {
         return Ok(Value::T);
     }
 
-    let buffer_defaults = eval.buffers.buffer_defaults;
+    let buffer_defaults = eval.edit.buffers.buffer_defaults;
     let killed_ids_to_reset = eval
+        .edit
         .buffers
         .collect_killed_buffer_ids(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
     {
-        let buffers = &mut eval.buffers;
+        let buffers = &mut eval.edit.buffers;
         // SAFETY: killed-buffer retirement only resets buffer/BLV value
         // caches and reads properties. All process/Lisp callbacks finished
         // above; no function or canonical descriptor writer runs in this phase.
@@ -308,6 +312,7 @@ pub(crate) fn builtin_kill_buffer(
     }
 
     let killed_ids = eval
+        .edit
         .buffers
         .kill_buffer_collect(id)
         .ok_or_else(|| signal("error", vec![Value::string("Buffer does not exist")]))?;
@@ -331,7 +336,8 @@ pub(crate) fn builtin_kill_buffer(
                 // GNU picks `other_buffer_safely` per repaired window; with
                 // no hooks run by the raw binding replacement, one safe
                 // fallback serves every such window.
-                let fallback = other_buffer_safely_in_state(&mut eval.buffers, Some(*killed_id));
+                let fallback =
+                    other_buffer_safely_in_state(&mut eval.edit.buffers, Some(*killed_id));
                 dead_window_fallback = Some(fallback);
                 fallback
             }
@@ -352,20 +358,21 @@ pub(crate) fn builtin_kill_buffer(
 
     if current_will_die {
         if let Some(next) = replacement
-            && eval.buffers.get(next).is_some()
+            && eval.edit.buffers.get(next).is_some()
         {
             eval.set_current_buffer_unrecorded(next)?;
         }
-        if eval.buffers.current_buffer().is_none() {
-            if let Some(next) = eval.buffers.buffer_list().into_iter().next() {
+        if eval.edit.buffers.current_buffer().is_none() {
+            if let Some(next) = eval.edit.buffers.buffer_list().into_iter().next() {
                 eval.set_current_buffer_unrecorded(next)?;
             } else {
                 // No live buffer remains: GNU's `Fother_buffer` falls back to
                 // `get-scratch-buffer-create`.
                 let scratch = eval
+                    .edit
                     .buffers
                     .find_buffer_by_name("*scratch*")
-                    .unwrap_or_else(|| eval.buffers.create_buffer("*scratch*"));
+                    .unwrap_or_else(|| eval.edit.buffers.create_buffer("*scratch*"));
                 eval.set_current_buffer_unrecorded(scratch)?;
             }
         }

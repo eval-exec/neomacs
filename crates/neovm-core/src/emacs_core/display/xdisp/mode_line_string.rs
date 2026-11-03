@@ -380,7 +380,7 @@ fn prepare_string(
         i64::try_from(string.schars()).map_err(|_| signal(LispCondition::OverflowError, vec![]))?;
     let arguments = [Value::fixnum(0), Value::fixnum(length), merged, copied];
     let property_result = crate::emacs_core::textprop::builtin_set_text_properties_in_buffers(
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         arguments.to_vec(),
     );
     if property_result.is_err() {
@@ -622,7 +622,7 @@ impl PercentAppendDriver for StoredAppendDriver<'_, '_, '_, '_> {
                     vars,
                     coding: CodingAccess::Registry(&self.eval.coding_systems),
                     dynamic: &[],
-                    buffers: &self.eval.buffers,
+                    buffers: &self.eval.edit.buffers,
                     processes: &self.eval.processes,
                     command_loop_depth,
                     pctx: self.pctx,
@@ -647,7 +647,7 @@ impl PercentAppendDriver for StoredAppendDriver<'_, '_, '_, '_> {
                 let global = self
                     .pctx
                     .resolve_dynamic_symbol("global-mode-string")
-                    .value(self.eval.variables(), &self.eval.buffers)
+                    .value(self.eval.variables(), &self.eval.edit.buffers)
                     .unwrap_or(Value::NIL);
                 self.eval.push_specpdl_root(global);
                 let child_used = format_child(

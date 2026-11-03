@@ -151,7 +151,7 @@ pub(crate) fn frame_window_system_symbol(
     eval: &mut super::eval::Context,
     frame: Option<&Value>,
 ) -> Result<Option<Value>, Flow> {
-    frame_window_system_symbol_in_state(&mut eval.frames, &mut eval.buffers, frame)
+    frame_window_system_symbol_in_state(&mut eval.frames, &mut eval.edit.buffers, frame)
 }
 
 fn frame_window_system_symbol_in_state(
@@ -190,7 +190,7 @@ fn display_does_not_exist_error(display: &str) -> Flow {
 fn format_get_device_terminal_arg_eval(eval: &super::eval::Context, value: &Value) -> String {
     match value.as_window_id() {
         Some(window) => crate::emacs_core::print::format_window_handle_in_state(
-            &eval.buffers,
+            &eval.edit.buffers,
             &eval.frames,
             WindowId(window),
         ),
@@ -852,7 +852,7 @@ pub(crate) fn builtin_window_system(
             return Ok(window_system);
         }
     } else if let Some(window_system) =
-        frame_window_system_symbol_in_state(&mut eval.frames, &mut eval.buffers, args.first())?
+        frame_window_system_symbol_in_state(&mut eval.frames, &mut eval.edit.buffers, args.first())?
     {
         return Ok(window_system);
     } else {
@@ -2569,7 +2569,7 @@ pub(crate) fn builtin_x_focus_frame(eval: &mut Context, args: Vec<Value>) -> Eva
     expect_args_range("x-focus-frame", &args, 1, 2)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

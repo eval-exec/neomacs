@@ -114,8 +114,8 @@ pub(crate) fn compact_buffers_for_gc(ctx: &mut super::eval::Context) {
     let Some(latch) = CompactionLatch::acquire() else {
         return;
     };
-    let restore_to = ctx.buffers.current_buffer_id();
-    for id in ctx.buffers.buffer_list() {
+    let restore_to = ctx.edit.buffers.current_buffer_id();
+    for id in ctx.edit.buffers.buffer_list() {
         compact_one_buffer_for_gc(ctx, id);
     }
     if let Some(id) = restore_to {
@@ -129,7 +129,7 @@ pub(crate) fn compact_buffers_for_gc(ctx: &mut super::eval::Context) {
 fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::BufferId) {
     use crate::buffer::{UndoLimits, UndoRecording};
 
-    let Some(buffer) = ctx.buffers.get(id) else {
+    let Some(buffer) = ctx.edit.buffers.get(id) else {
         return; // killed while we walked the list
     };
     if buffer.base_buffer.is_some() {
@@ -185,14 +185,19 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
     }
 
     // Re-read the list: the function may have replaced it before answering nil.
-    let Some(undo_list) = ctx.buffers.get(id).map(|buffer| buffer.get_undo_list()) else {
+    let Some(undo_list) = ctx
+        .edit
+        .buffers
+        .get(id)
+        .map(|buffer| buffer.get_undo_list())
+    else {
         return; // the function killed the buffer
     };
     if UndoRecording::of(&undo_list) == UndoRecording::Disabled {
         return;
     }
     let truncated = crate::buffer::truncate_undo_list(undo_list, &limits);
-    if let Some(buffer) = ctx.buffers.get_mut(id) {
+    if let Some(buffer) = ctx.edit.buffers.get_mut(id) {
         buffer.set_undo_list(truncated);
     }
 }
@@ -207,7 +212,7 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
 /// undo boundary into the current buffer's undo list.
 pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Value]) -> EvalResult {
     expect_args("undo-boundary", &args, 0)?;
-    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
         return Err(signal("error", vec![Value::string("No current buffer")]));
     };
     // GNU sets `undo-auto--last-boundary-cause' to `explicit' inside
@@ -215,7 +220,7 @@ pub(crate) fn builtin_undo_boundary(ctx: &mut super::eval::Context, args: &[Valu
     // undo-disabled buffer, so a buffer that records nothing does not claim a
     // boundary either.  The boundary itself runs below the obarray, so the
     // assignment lives here, gated on the outcome it reports.
-    if ctx.buffers.add_undo_boundary(current_id) == Some(UndoBoundaryOutcome::Recorded) {
+    if ctx.edit.buffers.add_undo_boundary(current_id) == Some(UndoBoundaryOutcome::Recorded) {
         set_last_boundary_cause_explicit(ctx)?;
     }
     Ok(Value::NIL)

@@ -250,7 +250,7 @@ fn store_projected_default_internal(
         if ctx.owner_default_binding(resolved).is_some() {
             let stored = super::eval::check_forwarded_store_at(
                 ctx.obarray(),
-                &ctx.buffers,
+                &ctx.edit.buffers,
                 &ctx.specpdl,
                 resolved,
                 value,
@@ -309,7 +309,7 @@ fn store_default_internal(
 ) -> EvalResult {
     let stored = super::eval::check_forwarded_store_at(
         ctx.obarray(),
-        &ctx.buffers,
+        &ctx.edit.buffers,
         &ctx.specpdl,
         resolved,
         value,
@@ -322,7 +322,7 @@ fn store_default_internal(
             // GNU's BUFFER_OBJFWD arm updates the shared default and
             // propagates it only to live buffers that do not have a local
             // value.
-            Some(info) => ctx.buffers.set_buffer_default_slot(info, stored),
+            Some(info) => ctx.edit.buffers.set_buffer_default_slot(info, stored),
             // Only a thread projection's header has no slot.
             None => return store_projected_default_internal(ctx, resolved, value, bindflag),
         }
@@ -411,7 +411,11 @@ pub(crate) fn default_value_by_id(ctx: &Context, resolved: SymId) -> Option<Valu
     if let Some(binding) = ctx.owner_default_binding(resolved) {
         return binding.bound();
     }
-    default_value_in_state(ctx.obarray(), Some(&ctx.buffers.buffer_defaults), resolved)
+    default_value_in_state(
+        ctx.obarray(),
+        Some(&ctx.edit.buffers.buffer_defaults),
+        resolved,
+    )
 }
 
 /// State-only form of [`default_value_by_id`] for callers that already hold

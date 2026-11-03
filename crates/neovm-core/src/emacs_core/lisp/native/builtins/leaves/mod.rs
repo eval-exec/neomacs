@@ -111,7 +111,7 @@ pub(crate) fn get_char_property(
     Ok(
         crate::emacs_core::textprop::builtin_get_char_property_with_frames(
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             Some(&ctx.frames),
             &[position, prop, object],
         )?,
@@ -142,7 +142,7 @@ pub(crate) fn buffer_local_value(ctx: &Context, variable: Value, buffer: Value) 
     let symbol_mode = ctx.symbol_mode();
     if let Some(sym) = variable.as_symbol_id(symbol_mode)
         && buffer.as_buffer_id().is_some()
-        && buffer.as_buffer_id() == ctx.buffers.current_buffer_id()
+        && buffer.as_buffer_id() == ctx.edit.buffers.current_buffer_id()
         && ctx
             .obarray
             .get_by_id(sym)

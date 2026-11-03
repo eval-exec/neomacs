@@ -705,7 +705,7 @@ pub(crate) fn builtin_display_update_for_mouse_movement(
     expect_args("display--update-for-mouse-movement", &args, 3)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -785,7 +785,7 @@ pub(crate) fn builtin_internal_labeled_narrow_to_region(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_internal_labeled_narrow_to_region_in_buffers(&mut eval.buffers, args)
+    builtin_internal_labeled_narrow_to_region_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_internal_labeled_narrow_to_region_in_buffers(
@@ -815,7 +815,7 @@ pub(crate) fn builtin_internal_labeled_widen(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_internal_labeled_widen_in_buffers(&mut eval.buffers, args)
+    builtin_internal_labeled_widen_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_internal_labeled_widen_in_buffers(
@@ -1058,7 +1058,7 @@ pub(crate) fn builtin_frame_after_make_frame(
     expect_args("frame-after-make-frame", &args, 2)?;
     let frame_id = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         FrameDomain::Live,
     )?;
@@ -1148,7 +1148,7 @@ pub(crate) fn builtin_frame_scroll_bar_height(
     expect_args_range("frame-scroll-bar-height", &args, 0, 1)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         FrameDomain::Any,
     )?;
@@ -1168,7 +1168,7 @@ pub(crate) fn builtin_frame_scroll_bar_width(
     expect_args_range("frame-scroll-bar-width", &args, 0, 1)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         FrameDomain::Any,
     )?;
@@ -1185,7 +1185,7 @@ pub(crate) fn builtin_frame_id(eval: &mut super::eval::Context, args: Vec<Value>
     expect_args_range("frame-id", &args, 0, 1)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1205,7 +1205,7 @@ pub(crate) fn builtin_frame_root_frame(
     expect_args_range("frame-root-frame", &args, 0, 1)?;
     let fid = super::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
@@ -1297,6 +1297,7 @@ pub(crate) fn builtin_gap_position(
 ) -> EvalResult {
     expect_args("gap-position", &args, 0)?;
     let buffer = ctx
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -1309,7 +1310,8 @@ pub(crate) fn builtin_gap_size(
 ) -> EvalResult {
     expect_args("gap-size", &args, 0)?;
     Ok(Value::fixnum(
-        ctx.buffers
+        ctx.edit
+            .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
             .gap_size_lisp(),
@@ -1498,7 +1500,7 @@ pub(super) fn expect_live_frame_or_nil(
 ) -> Result<(), Flow> {
     crate::emacs_core::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         Some(value),
         FrameDomain::Live,
     )

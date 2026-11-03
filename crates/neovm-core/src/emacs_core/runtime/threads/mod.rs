@@ -405,7 +405,7 @@ pub(crate) fn builtin_make_thread(eval: &mut super::eval::Context, args: Vec<Val
     }
     let (thread_id, function) = prepare_make_thread(&mut eval.threads, &args)?;
     eval.threads
-        .set_thread_current_buffer(thread_id, eval.buffers.current_buffer_id());
+        .set_thread_current_buffer(thread_id, eval.edit.buffers.current_buffer_id());
     eval.with_sim_creation_local_bindings(|eval| {
         // Keep the existing two-word callback ABI: the registered object is
         // still a strong root when this callback begins, so its typed identity
@@ -465,9 +465,9 @@ pub(crate) fn enter_thread_runtime(
     let previous_buffer_id = eval
         .threads
         .thread_current_buffer(previous_thread_id)
-        .or_else(|| eval.buffers.current_buffer_id());
+        .or_else(|| eval.edit.buffers.current_buffer_id());
     if let Some(thread_buffer_id) = eval.threads.thread_current_buffer(thread_id) {
-        if eval.buffers.current_buffer_id() != Some(thread_buffer_id) {
+        if eval.edit.buffers.current_buffer_id() != Some(thread_buffer_id) {
             if let Err(err) = eval.switch_current_buffer(thread_buffer_id) {
                 eval.threads.restore_thread(previous_thread_id);
                 return match eval
@@ -496,7 +496,7 @@ pub(crate) fn exit_thread_runtime(
     runtime_state: ThreadRuntimeState,
 ) -> Result<(), Flow> {
     eval.threads
-        .set_thread_current_buffer(thread_id, eval.buffers.current_buffer_id());
+        .set_thread_current_buffer(thread_id, eval.edit.buffers.current_buffer_id());
     eval.threads
         .restore_thread(runtime_state.previous_thread_id);
     let resume_result =

@@ -236,7 +236,7 @@ fn previous_screen_line_target(
     if count == 0 {
         return Ok((pos, 0));
     }
-    let point_min = match eval.buffers.get(buffer_id) {
+    let point_min = match eval.edit.buffers.get(buffer_id) {
         Some(buf) => buf.accessible_emacs_byte_region().start(),
         None => return Ok((pos, 0)),
     };
@@ -248,6 +248,7 @@ fn previous_screen_line_target(
     }
 
     let mut anchor = eval
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| line_start_at_or_before(buf, current))
@@ -255,7 +256,7 @@ fn previous_screen_line_target(
     let mut logical_lines_to_back = count.max(1);
 
     loop {
-        if let Some(buf) = eval.buffers.get(buffer_id) {
+        if let Some(buf) = eval.edit.buffers.get(buffer_id) {
             for _ in 0..logical_lines_to_back {
                 let Some(previous) = previous_logical_line_start(buf, anchor) else {
                     anchor = point_min;
@@ -441,7 +442,7 @@ fn current_screen_line_start_with_truncation(
     screen_width: usize,
     wrap: LineWrap,
 ) -> Result<Option<EmacsBytePos>, Flow> {
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return Ok(None);
     };
     let accessible = buf.accessible_emacs_byte_region();
@@ -456,6 +457,7 @@ fn current_screen_line_start_with_truncation(
     while current > accessible.start() {
         let preceding = current.saturating_sub_len(EmacsByteLen::new(1));
         let preceding_lisp_pos = eval
+            .edit
             .buffers
             .get(buffer_id)
             .map(|buf| buf.emacs_byte_pos_to_lisp_char_pos(preceding).as_i64())
@@ -469,6 +471,7 @@ fn current_screen_line_start_with_truncation(
             break;
         }
         let Some(previous) = eval
+            .edit
             .buffers
             .get(buffer_id)
             .and_then(|buf| previous_logical_line_start(buf, current))
@@ -703,7 +706,7 @@ impl ScreenLineScanPolicy for WordWrapScan {
         buffer_id: BufferId,
     ) {
         use crate::window::{WindowLayoutVariable, WordWrapMode, WordWrapPolicy};
-        let Some(buffer) = eval.buffers.get(buffer_id) else {
+        let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
             return;
         };
         let mode = if eval
@@ -730,6 +733,7 @@ impl ScreenLineScanPolicy for WordWrapScan {
     ) {
         // Reacquire after display_advance_at, which may call Lisp at a stop.
         if let Some(code) = eval
+            .edit
             .buffers
             .get(buffer_id)
             .and_then(|buf| buf.char_code_after_emacs_byte_pos(scan))
@@ -796,7 +800,7 @@ fn next_screen_line_scan<P: ScreenLineScanPolicy>(
     start: EmacsBytePos,
     screen_width: usize,
 ) -> Result<Option<ScreenLineStep>, Flow> {
-    let point_max = match eval.buffers.get(buffer_id) {
+    let point_max = match eval.edit.buffers.get(buffer_id) {
         Some(buf) => buf.accessible_emacs_byte_region().end(),
         None => return Ok(None),
     };
@@ -855,6 +859,7 @@ fn next_screen_line_scan<P: ScreenLineScanPolicy>(
             // "lambda mu nu xi omicron\n" is 23 glyph columns plus the
             // newline, and GNU draws it as ONE row ending at the newline.
             if eval
+                .edit
                 .buffers
                 .get(buffer_id)
                 .and_then(|buf| buf.char_code_after_emacs_byte_pos(scan))
@@ -928,7 +933,7 @@ fn truncated_logical_line_step(
     buffer_id: crate::buffer::BufferId,
     from: EmacsBytePos,
 ) -> Result<ScreenLineStep, Flow> {
-    let Some(buf) = eval.buffers.get(buffer_id) else {
+    let Some(buf) = eval.edit.buffers.get(buffer_id) else {
         return Ok(ScreenLineStep {
             next: from,
             end: ScreenLineEnd::BufferEnd,
@@ -1016,10 +1021,10 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
         ));
     }
 
-    let Some(current_id) = eval.buffers.current_buffer_id() else {
+    let Some(current_id) = eval.edit.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
     };
-    let Some(buf) = eval.buffers.get(current_id) else {
+    let Some(buf) = eval.edit.buffers.get(current_id) else {
         return Ok(Value::fixnum(0));
     };
     let accessible = buf.accessible_emacs_byte_region();
@@ -1030,7 +1035,10 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
     if cols.is_none() {
         let (target, moved) =
             screen_line_motion_target(eval, current_id, pt, args.get(1).copied(), lines)?;
-        let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, target);
+        let _ = eval
+            .edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, target);
         return Ok(Value::fixnum(moved));
     }
 
@@ -1048,11 +1056,15 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
         },
     )? {
         let target = eval
+            .edit
             .buffers
             .get(current_id)
             .map(|buf| buf.lisp_pos_to_emacs_byte_pos(snapshot_motion.target))
             .unwrap_or(pt);
-        let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, target);
+        let _ = eval
+            .edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, target);
         return Ok(Value::fixnum(snapshot_motion.moved));
     }
 
@@ -1066,7 +1078,10 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
         let bol =
             current_screen_line_start_with_truncation(eval, current_id, pt, screen_width, wrap)?
                 .unwrap_or(begv);
-        let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, bol);
+        let _ = eval
+            .edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, bol);
         return Ok(Value::fixnum(0));
     }
 
@@ -1104,7 +1119,10 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
 
     // Now pos is at beginning of target line.
     // If COLS was specified, advance to that column.
-    let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, pos);
+    let _ = eval
+        .edit
+        .buffers
+        .goto_buffer_emacs_byte_pos(current_id, pos);
     if let Some(target_col) = cols {
         // GNU positions to COLS through the display engine, which needs a live
         // window with glyph matrices. The batch engine never runs that walk at
@@ -1125,7 +1143,10 @@ pub(crate) fn vertical_motion(eval: &mut super::eval::Context, args: &[Value]) -
                 wrap,
                 extent.goal_col_in_line_space(target_col),
             )?;
-            let _ = eval.buffers.goto_buffer_emacs_byte_pos(current_id, target);
+            let _ = eval
+                .edit
+                .buffers
+                .goto_buffer_emacs_byte_pos(current_id, target);
         }
     }
     Ok(Value::fixnum(moved))
@@ -1159,7 +1180,7 @@ fn goal_column_target_on_screen_line(
     wrap: LineWrap,
     goal_col: i64,
 ) -> Result<EmacsBytePos, Flow> {
-    let point_max = match eval.buffers.get(buffer_id) {
+    let point_max = match eval.edit.buffers.get(buffer_id) {
         Some(buf) => buf.accessible_emacs_byte_region().end(),
         None => return Ok(row_start),
     };
@@ -1261,7 +1282,7 @@ pub(crate) fn screen_line_motion_target(
     window: Option<Value>,
     lines: i64,
 ) -> Result<(EmacsBytePos, i64), Flow> {
-    let Some(buf) = eval.buffers.get(current_buffer) else {
+    let Some(buf) = eval.edit.buffers.get(current_buffer) else {
         return Ok((point, 0));
     };
     let accessible = buf.accessible_emacs_byte_region();
@@ -1279,6 +1300,7 @@ pub(crate) fn screen_line_motion_target(
         },
     )? {
         let target = eval
+            .edit
             .buffers
             .get(current_buffer)
             .map(|buf| buf.lisp_pos_to_emacs_byte_pos(snapshot_motion.target))
@@ -1303,7 +1325,7 @@ pub(crate) fn scan_screen_line_motion_target(
     window: Option<Value>,
     lines: i64,
 ) -> Result<ScreenLineMotionScan, Flow> {
-    let Some(buf) = eval.buffers.get(current_buffer) else {
+    let Some(buf) = eval.edit.buffers.get(current_buffer) else {
         return Ok(ScreenLineMotionScan {
             target: point,
             moved: 0,
@@ -1610,7 +1632,7 @@ fn tab_width_in_state(
 
 /// GNU SANE_TAB_WIDTH, shared with char-width and string formatting.
 pub(crate) fn current_buffer_tab_width(ctx: &crate::emacs_core::eval::Context) -> usize {
-    tab_width_in_state(ctx, &[], ctx.buffers.current_buffer()).get()
+    tab_width_in_state(ctx, &[], ctx.edit.buffers.current_buffer()).get()
 }
 
 fn indent_tabs_mode_in_state(
@@ -1824,7 +1846,7 @@ fn next_display_stop(
     byte: usize,
     end: usize,
 ) -> usize {
-    let Some(buf) = ctx.buffers.get(buffer_id) else {
+    let Some(buf) = ctx.edit.buffers.get(buffer_id) else {
         return end;
     };
     let char_pos = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte));
@@ -1966,7 +1988,7 @@ impl<'read> DisplayCharacterPhase<'read> {
     fn from_context(ctx: &'read super::eval::Context, buffer_id: BufferId) -> Option<Self> {
         Some(Self {
             ctx,
-            buffer: ctx.buffers.get(buffer_id)?,
+            buffer: ctx.edit.buffers.get(buffer_id)?,
             _confined: std::marker::PhantomData,
         })
     }
@@ -2001,7 +2023,7 @@ pub(crate) fn display_advance_at(
         // Header loans end before any mutable stop/property probe. The copied
         // headers deliberately retain the original pre-probe value timing.
         let ctx: &super::eval::Context = ctx;
-        let buf = match ctx.buffers.get(buffer_id) {
+        let buf = match ctx.edit.buffers.get(buffer_id) {
             Some(buf) => buf,
             None => return Ok(None),
         };
@@ -2058,7 +2080,7 @@ pub(crate) fn display_advance_at(
 
     // A stop probe may have changed or killed the buffer. Reacquire it, but
     // keep the headers captured before probes, matching the existing timing.
-    let buf = match ctx.buffers.get(buffer_id) {
+    let buf = match ctx.edit.buffers.get(buffer_id) {
         Some(buf) => buf,
         None => return Ok(None),
     };
@@ -2146,7 +2168,7 @@ fn display_run_at(
     byte: usize,
     column: usize,
 ) -> Option<(usize, usize)> {
-    let buf = ctx.buffers.get(buffer_id)?;
+    let buf = ctx.edit.buffers.get(buffer_id)?;
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte));
     let charpos1 = charpos0.get() as i64 + 1;
 
@@ -2155,7 +2177,7 @@ fn display_run_at(
     let display_sym = display_prop_symbol();
     let (display, overlay) = super::textprop::buffer_overlay_property_at_byte_pos(
         ctx.variables(),
-        &ctx.buffers,
+        &ctx.edit.buffers,
         buf,
         byte,
         display_sym,
@@ -2165,7 +2187,7 @@ fn display_run_at(
     .or_else(|| {
         let v = super::textprop::builtin_get_text_property_in_state(
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             &[Value::fixnum(charpos1), display_sym],
         )
         .ok()?;
@@ -2216,7 +2238,7 @@ fn display_run_at(
     } else {
         let run_end_char1 = super::textprop::builtin_next_single_property_change_in_state(
             ctx.variables(),
-            &ctx.buffers,
+            &ctx.edit.buffers,
             &[Value::fixnum(charpos1), display_prop_symbol()],
         )
         .ok()
@@ -2273,7 +2295,7 @@ fn composition_run_at(
     buffer_id: crate::buffer::BufferId,
     byte: usize,
 ) -> Option<(usize, usize)> {
-    let buf = ctx.buffers.get(buffer_id)?;
+    let buf = ctx.edit.buffers.get(buffer_id)?;
     let charpos0 = buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte));
     let charpos1 = charpos0.get() as i64 + 1;
     let (width, length) = super::composite::composition_width_at(ctx, charpos1)?;
@@ -2326,7 +2348,7 @@ fn current_buffer_line_bounds(
     buffer_id: crate::buffer::BufferId,
     point: EmacsBytePos,
 ) -> Result<EmacsByteRange, Flow> {
-    let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+    let buf = ctx.edit.buffers.get(buffer_id).ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -2348,7 +2370,7 @@ fn next_char_property_boundary_byte(
     prop: Value,
     limit: usize,
 ) -> usize {
-    let Some(buf) = ctx.buffers.get(buffer_id) else {
+    let Some(buf) = ctx.edit.buffers.get(buffer_id) else {
         return limit;
     };
     // GNU next-single-char-property-change = the nearer of the text
@@ -2593,7 +2615,7 @@ fn scan_for_column(
     let control_rendering = std::cell::OnceCell::new();
     let mut character_widths = None;
     let (mut scan, end, tab_width, line_end_policy, encoding) = {
-        let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+        let buf = ctx.edit.buffers.get(buffer_id).ok_or_else(|| {
             signal(
                 LispCondition::Error,
                 vec![Value::string("No current buffer")],
@@ -2652,7 +2674,7 @@ fn scan_for_column(
     // remaps individual characters to glyph sequences; consulted per char below.
     // Read by cached identity -- see the well-known-symbol block above.
     let display_table = {
-        let buf = ctx.buffers.get(buffer_id);
+        let buf = ctx.edit.buffers.get(buffer_id);
         ctx.variable_value_in_buffer(buf, buffer_display_table_sym_id())
             .filter(|v| !v.is_nil())
             .or_else(|| ctx.variable_value(standard_display_table_sym_id()))
@@ -2664,7 +2686,7 @@ fn scan_for_column(
     // and choose the wrong side of a line break inside a vector.
     if let ColumnTarget::Position(point) = target
         && (line_end_policy == LineEndPolicy::NewlineOrCarriageReturn || display_table.is_some())
-        && let Some(buf) = ctx.buffers.get(buffer_id)
+        && let Some(buf) = ctx.edit.buffers.get(buffer_id)
         && buf.text_props_is_empty()
         && buf.overlays.is_empty()
         && buf.total_char_len().get() == buf.total_emacs_byte_len().get()
@@ -2699,7 +2721,7 @@ fn scan_for_column(
     // probe -- three byte<->char conversions and two tree queries per run --
     // is skipped for the whole line.
     let (invisible_possible, display_possible, composition_possible) = {
-        let buf = ctx.buffers.get(buffer_id);
+        let buf = ctx.edit.buffers.get(buffer_id);
         let possible = |name: Value| {
             buf.is_none_or(|buf| {
                 !buf.overlays.is_empty()
@@ -2782,7 +2804,7 @@ fn scan_for_column(
         }
 
         let (code, char_len, width) = {
-            let buf = ctx.buffers.get(buffer_id).ok_or_else(|| {
+            let buf = ctx.edit.buffers.get(buffer_id).ok_or_else(|| {
                 signal(
                     LispCondition::Error,
                     vec![Value::string("No current buffer")],
@@ -2876,20 +2898,21 @@ fn insert_inheriting_indentation(
     }
     debug_assert!(indentation.bytes().all(|byte| matches!(byte, b' ' | b'\t')));
 
-    let current_id = ctx.buffers.current_buffer_id().ok_or_else(|| {
+    let current_id = ctx.edit.buffers.current_buffer_id().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
         )
     })?;
     let insert_pos = ctx
+        .edit
         .buffers
         .get(current_id)
         .map(Buffer::point_emacs_byte_pos)
         .unwrap_or(EmacsBytePos::ZERO);
     let indentation_len = indentation.len();
     let change = super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-        &ctx.buffers,
+        &ctx.edit.buffers,
         current_id,
         insert_pos,
         TextExtent::new(
@@ -2902,7 +2925,7 @@ fn insert_inheriting_indentation(
     super::builtins::insert_string_value_in_current_buffer(
         VariableView::new(&ctx.obarray, &ctx.owner),
         &[],
-        &mut ctx.buffers,
+        &mut ctx.edit.buffers,
         Value::string(indentation),
         super::builtins::InsertPieceMarkerPlacement::AfterMarkers,
         super::builtins::InsertPiecePropertyMode::InheritAdjoining,
@@ -2924,11 +2947,11 @@ pub(crate) fn current_indentation(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-indentation", &args, 0)?;
-    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
     };
     let (mut scan, end, tabw, invisible_possible) = {
-        let Some(buf) = ctx.buffers.get(current_id) else {
+        let Some(buf) = ctx.edit.buffers.get(current_id) else {
             return Ok(Value::fixnum(0));
         };
         let line = line_bounds(buf, buf.point_emacs_byte_pos());
@@ -2964,7 +2987,7 @@ pub(crate) fn current_indentation(
                 end,
             );
         }
-        let Some(buf) = ctx.buffers.get(current_id) else {
+        let Some(buf) = ctx.edit.buffers.get(current_id) else {
             break;
         };
         let pos = EmacsBytePos::new(scan);
@@ -2991,11 +3014,11 @@ pub(crate) fn current_column(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("current-column", &args, 0)?;
-    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
     };
     let (point, modiff) = {
-        let Some(buf) = ctx.buffers.get(current_id) else {
+        let Some(buf) = ctx.edit.buffers.get(current_id) else {
             return Ok(Value::fixnum(0));
         };
         (
@@ -3030,7 +3053,7 @@ pub(crate) fn display_column_at_emacs_byte_pos(
     pos: EmacsBytePos,
 ) -> Result<usize, Flow> {
     let clamped = {
-        let Some(buf) = ctx.buffers.get(buffer_id) else {
+        let Some(buf) = ctx.edit.buffers.get(buffer_id) else {
             return Ok(0);
         };
         buf.accessible_emacs_byte_region().clamp(pos)
@@ -3044,7 +3067,7 @@ pub(crate) fn display_column_at_emacs_byte_pos(
 fn char_after_point_edit_range(
     ctx: &crate::emacs_core::eval::Context,
 ) -> Option<crate::buffer::TextEditRange> {
-    let buf = ctx.buffers.current_buffer()?;
+    let buf = ctx.edit.buffers.current_buffer()?;
     let from = buf.point_char_pos();
     let to = from
         .add_len(crate::buffer::CharLen::new(1))
@@ -3055,7 +3078,10 @@ fn char_after_point_edit_range(
 fn current_point_char_pos(
     ctx: &crate::emacs_core::eval::Context,
 ) -> Option<crate::buffer::CharPos0> {
-    ctx.buffers.current_buffer().map(Buffer::point_char_pos)
+    ctx.edit
+        .buffers
+        .current_buffer()
+        .map(Buffer::point_char_pos)
 }
 
 /// Move point to a character position saved before Lisp ran (GNU
@@ -3066,13 +3092,17 @@ fn goto_current_buffer_char_pos(
     char_pos: crate::buffer::CharPos0,
 ) {
     let Some((buffer, byte_pos)) = ctx
+        .edit
         .buffers
         .current_buffer()
         .map(|buf| (buf.id, buf.char_pos_to_emacs_byte_pos_clamped(char_pos)))
     else {
         return;
     };
-    let _ = ctx.buffers.goto_buffer_emacs_byte_pos(buffer, byte_pos);
+    let _ = ctx
+        .edit
+        .buffers
+        .goto_buffer_emacs_byte_pos(buffer, byte_pos);
 }
 
 /// (move-to-column COLUMN &optional FORCE) -> COLUMN-REACHED
@@ -3088,10 +3118,10 @@ pub(crate) fn move_to_column(
     let force_arg = args.get(1).copied().unwrap_or(Value::NIL);
     let force_non_nil = force_arg.is_truthy();
     let force_is_t = force_arg == Value::T;
-    let Some(current_id) = ctx.buffers.current_buffer_id() else {
+    let Some(current_id) = ctx.edit.buffers.current_buffer_id() else {
         return Ok(Value::fixnum(0));
     };
-    let Some(buf) = ctx.buffers.get(current_id) else {
+    let Some(buf) = ctx.edit.buffers.get(current_id) else {
         return Ok(Value::fixnum(0));
     };
     let read_only = super::editfns::buffer_read_only_active_in_state(ctx.variables(), &[], buf);
@@ -3103,6 +3133,7 @@ pub(crate) fn move_to_column(
     if target == 0 {
         let line = current_buffer_line_bounds(ctx, current_id, pt)?;
         let _ = ctx
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(current_id, line.start());
         return Ok(Value::fixnum(0));
@@ -3130,7 +3161,10 @@ pub(crate) fn move_to_column(
         if read_only {
             return Err(signal(LispCondition::BufferReadOnly, vec![buffer_name]));
         }
-        let _ = ctx.buffers.goto_buffer_emacs_byte_pos(current_id, tab_byte);
+        let _ = ctx
+            .edit
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, tab_byte);
         let pad = spaces_to_column(col_before_tab, target);
         insert_inheriting_indentation(ctx, pad)?;
         // GNU Fmove_to_column (indent.c:1163-1168): `del_range (PT, PT + 1)`
@@ -3148,6 +3182,7 @@ pub(crate) fn move_to_column(
     }
 
     let _ = ctx
+        .edit
         .buffers
         .goto_buffer_emacs_byte_pos(current_id, dest_byte);
 
@@ -3181,14 +3216,14 @@ pub(crate) fn indent_to(
         0
     };
 
-    let current_id = ctx.buffers.current_buffer_id().ok_or_else(|| {
+    let current_id = ctx.edit.buffers.current_buffer_id().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
         )
     })?;
     let fromcol = expect_fixnump(&current_column(ctx, vec![])?)? as usize;
-    let buf = ctx.buffers.current_buffer().ok_or_else(|| {
+    let buf = ctx.edit.buffers.current_buffer().ok_or_else(|| {
         signal(
             LispCondition::Error,
             vec![Value::string("No current buffer")],
@@ -3255,7 +3290,7 @@ pub(crate) fn indent_to(
     // GNU `Findent_to` caches the resulting column at the new point/MODIFF so a
     // following `current-column' returns it without rescanning (src/indent.c:
     // 831-833).  Record it for the same reason here.
-    if let Some(buf) = ctx.buffers.get(current_id) {
+    if let Some(buf) = ctx.edit.buffers.get(current_id) {
         set_last_known_column(
             current_id.0,
             buf.point_emacs_byte_pos(),
@@ -3294,7 +3329,7 @@ pub fn init_indent_vars(obarray: &mut super::symbol::Obarray) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn compute_motion(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
-    let buffers = &eval.buffers;
+    let buffers = &eval.edit.buffers;
     expect_args("compute-motion", &args, 7)?;
 
     let from = crate::emacs_core::position::fix_position_with_buffers(buffers, &args[0])?;
@@ -3493,7 +3528,7 @@ pub(crate) fn line_number_display_width(
     let Some(buffer_id) = window.buffer_id() else {
         return Ok(Value::fixnum(0));
     };
-    let Some(buffer) = eval.buffers.get(buffer_id) else {
+    let Some(buffer) = eval.edit.buffers.get(buffer_id) else {
         return Ok(Value::fixnum(0));
     };
     let enabled = buffer

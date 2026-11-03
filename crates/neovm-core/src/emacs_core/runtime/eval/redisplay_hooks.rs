@@ -218,7 +218,7 @@ impl Context {
             .and_then(|frame| frame.find_window_mut(window))
         {
             crate::window::window_markers::set_window_start_with_marker(
-                &mut self.buffers,
+                &mut self.edit.buffers,
                 window,
                 start,
             );
@@ -257,7 +257,7 @@ impl Context {
             .retain(|frame| frames.contains(frame));
         self.gnu_redisplay_hooks
             .redisplay_text
-            .retain(|buffer| self.buffers.get(*buffer).is_some());
+            .retain(|buffer| self.edit.buffers.get(*buffer).is_some());
     }
 
     /// GNU grow_mini_window calls Lisp to stage achievable root sizes, then
@@ -413,7 +413,7 @@ impl Context {
                 .get(frame)
                 .and_then(|frame| frame.find_window(window))
                 .and_then(Window::buffer_id)
-                .and_then(|buffer| self.buffers.get(buffer))
+                .and_then(|buffer| self.edit.buffers.get(buffer))
                 .map(|buffer| {
                     LispCharPos1::from_one_based_usize(
                         buffer.point_min_char_pos().get().saturating_add(1),
@@ -493,11 +493,11 @@ impl Context {
         if !gnu_redisplay_hooks_enabled() {
             return;
         }
-        let count = self.frames.buffer_window_count(&self.buffers, buffer);
+        let count = self.frames.buffer_window_count(&self.edit.buffers, buffer);
         if count == 0 {
             return;
         }
-        if let Some(root) = self.buffers.shared_text_root_id(buffer) {
+        if let Some(root) = self.edit.buffers.shared_text_root_id(buffer) {
             self.gnu_redisplay_hooks.redisplay_text.insert(root);
         }
         let selected_buffer = self
@@ -519,8 +519,8 @@ impl Context {
                     .get(frame)
                     .and_then(|frame| frame.find_window(window))
                     .and_then(Window::buffer_id);
-                if shown.and_then(|shown| self.buffers.shared_text_root_id(shown))
-                    == self.buffers.shared_text_root_id(buffer)
+                if shown.and_then(|shown| self.edit.buffers.shared_text_root_id(shown))
+                    == self.edit.buffers.shared_text_root_id(buffer)
                 {
                     self.chrome_dirty.mark_window(window);
                 }
@@ -535,7 +535,7 @@ impl Context {
         self.gnu_redisplay_hooks
             .mode_lines
             .raise(PendingScope::Some);
-        if let Some(root) = self.buffers.shared_text_root_id(buffer) {
+        if let Some(root) = self.edit.buffers.shared_text_root_id(buffer) {
             self.gnu_redisplay_hooks.redisplay_text.insert(root);
         }
         self.gnu_mark_buffer_chrome_cache(buffer);
@@ -652,7 +652,8 @@ impl Context {
         let frame = self.frames.get(frame)?;
         let window_state = frame.find_window(window)?;
         if self.gnu_selected_window() == Some(window) {
-            self.buffers
+            self.edit
+                .buffers
                 .get(window_state.buffer_id()?)
                 .map(|buffer| buffer.point_lisp_char_pos())
         } else {
@@ -689,6 +690,7 @@ impl Context {
                     || state.mode_line_windows.contains(&window_id)
                     || state.redisplay_frames.contains(&frame_id)
                     || self
+                        .edit
                         .buffers
                         .shared_text_root_id(buffer)
                         .is_some_and(|root| state.redisplay_text.contains(&root))
@@ -711,7 +713,7 @@ impl Context {
                     .get(frame_id)
                     .and_then(|frame| frame.find_window(window_id))
                     .and_then(Window::buffer_id)
-                    .and_then(|buffer| self.buffers.shared_text_root_id(buffer));
+                    .and_then(|buffer| self.edit.buffers.shared_text_root_id(buffer));
                 if root.is_some_and(|root| self.gnu_redisplay_hooks.redisplay_text.contains(&root))
                 {
                     self.gnu_redisplay_hooks.redisplay_windows.insert(window_id);
@@ -746,7 +748,7 @@ impl Context {
                 .and_then(|_| {
                     crate::emacs_core::window_cmds::hook_window_body_dimensions(
                         &self.frames,
-                        &self.buffers,
+                        &self.edit.buffers,
                         frame,
                         window,
                     )
@@ -767,7 +769,7 @@ impl Context {
                 .get(frame)
                 .and_then(|frame| frame.find_window(window))
                 .and_then(Window::buffer_id)
-                .and_then(|buffer| self.buffers.shared_text_root_id(buffer));
+                .and_then(|buffer| self.edit.buffers.shared_text_root_id(buffer));
             self.gnu_redisplay_hooks.last_points.insert(window, point);
             self.gnu_redisplay_hooks.redisplay_windows.remove(&window);
             self.gnu_redisplay_hooks.mode_line_windows.remove(&window);
@@ -895,7 +897,7 @@ impl Context {
         }
         self.gnu_redisplay_hooks.active = RedisplayActiveOwner::RedisplayTransaction;
         let binding_count = self.specpdl.len();
-        let restrictions = self.buffers.reset_outermost_restrictions();
+        let restrictions = self.edit.buffers.reset_outermost_restrictions();
         let mut guard = RedisplayTransaction {
             eval: self,
             restrictions: Some(restrictions),
@@ -922,7 +924,7 @@ impl RedisplayTransaction<'_> {
     fn run(&mut self, force: bool) -> EvalResult {
         self.eval.sync_pending_resize_events();
         self.eval.gnu_prune_dead_owners();
-        if let Some(buffer) = self.eval.buffers.current_buffer() {
+        if let Some(buffer) = self.eval.edit.buffers.current_buffer() {
             crate::window::window_markers::sync_all_frames_for_buffer(
                 &mut self.eval.frames,
                 buffer.id,
@@ -931,7 +933,7 @@ impl RedisplayTransaction<'_> {
         if let Some(frame) = self.eval.frames.selected_frame().map(|frame| frame.id) {
             super::super::window_cmds::remember_selected_window_point_in_state(
                 &mut self.eval.frames,
-                &mut self.eval.buffers,
+                &mut self.eval.edit.buffers,
                 frame,
             );
         }
@@ -1045,6 +1047,7 @@ impl Drop for RedisplayTransaction<'_> {
         }
         if let Some(restrictions) = self.restrictions.take() {
             self.eval
+                .edit
                 .buffers
                 .restore_outermost_restrictions(restrictions);
         }
@@ -1099,7 +1102,7 @@ impl<'a> MiniDisplaySource<'a> {
     fn enter(eval: &'a mut Context, request: RedisplayMiniGeometryRequest) -> Result<Self, Flow> {
         use crate::gc_trace::GcTrace;
         let roots = eval.save_specpdl_roots();
-        let old_buffer = eval.buffers.current_buffer_id();
+        let old_buffer = eval.edit.buffers.current_buffer_id();
         let old_windows_scope = eval.gnu_redisplay_hooks.windows;
         let deactivate_mark = eval.eval_symbol("deactivate-mark").unwrap_or(Value::NIL);
         eval.push_specpdl_root(deactivate_mark);
@@ -1177,7 +1180,7 @@ impl<'a> MiniDisplaySource<'a> {
                     *position_markers = crate::window::WindowPositionMarkerState::Detached;
                 }
                 crate::window::window_markers::attach_window_position_markers(
-                    &mut scope.eval.buffers,
+                    &mut scope.eval.edit.buffers,
                     window,
                 );
             }
@@ -1206,7 +1209,7 @@ impl<'a> MiniDisplaySource<'a> {
                 .and_then(|frame| frame.find_window_mut(self.request.window))
             {
                 crate::window::window_markers::unchain_window_markers(
-                    &mut self.eval.buffers,
+                    &mut self.eval.edit.buffers,
                     window,
                 );
                 window.reset_mode_line_base();
@@ -1228,17 +1231,17 @@ impl<'a> MiniDisplaySource<'a> {
                     *force_start = old_force_start;
                 }
                 crate::window::window_markers::set_window_start_with_marker(
-                    &mut self.eval.buffers,
+                    &mut self.eval.edit.buffers,
                     window,
                     start,
                 );
                 crate::window::window_markers::set_window_point_with_marker(
-                    &mut self.eval.buffers,
+                    &mut self.eval.edit.buffers,
                     window,
                     point,
                 );
                 crate::window::window_markers::set_window_old_point_with_marker(
-                    &mut self.eval.buffers,
+                    &mut self.eval.edit.buffers,
                     window,
                     old_point,
                 );

@@ -89,7 +89,7 @@ fn cycle(eval: &mut Context, args: Vec<Value>, direction: Direction) -> EvalResu
     expect_max_args(direction.name(), &args, 2)?;
     let origin = crate::emacs_core::window_cmds::resolve_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         args.first(),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;

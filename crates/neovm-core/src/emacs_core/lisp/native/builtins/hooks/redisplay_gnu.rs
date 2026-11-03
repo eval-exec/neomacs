@@ -57,7 +57,7 @@ fn window_dimensions(
     let bounds = eval.frames.get(frame)?.find_window(window)?.bounds();
     let (body_width, body_height) = super::super::window_cmds::hook_window_body_dimensions(
         &eval.frames,
-        &eval.buffers,
+        &eval.edit.buffers,
         frame,
         window,
     )
@@ -144,6 +144,7 @@ fn local(
     name: &str,
 ) -> EvalResult {
     let has_local = eval
+        .edit
         .buffers
         .get(buffer)
         .and_then(|buffer| buffer.get_buffer_local_binding(name))
@@ -154,6 +155,7 @@ fn local(
     // Captured buffer, buffer-only context, and no buffer-list recency change.
     eval.set_current_buffer_unrecorded(buffer)?;
     let functions = eval
+        .edit
         .buffers
         .get(buffer)
         .and_then(|buffer| buffer.buffer_local_value(name))
@@ -310,7 +312,7 @@ pub(super) fn run_eager_scroll(eval: &mut super::eval::Context, window: WindowId
     })?;
     let argument = Value::make_window(window.0);
     let start = super::super::window_cmds::builtin_window_start(eval, &[argument])?;
-    let saved = eval.buffers.current_buffer_id();
+    let saved = eval.edit.buffers.current_buffer_id();
     let mut scope = BufferContext { eval, saved };
     if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
         scope.eval.set_current_buffer_unrecorded(buffer)?;
@@ -422,7 +424,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
                             .copied());
             frame_buffer_change |= buffer_changed;
             frame_size_change |= size_changed;
-            let saved = pass.eval.buffers.current_buffer_id();
+            let saved = pass.eval.edit.buffers.current_buffer_id();
             // A separate &mut scope restores current-buffer on throw/panic,
             // while deliberately preserving changed window/frame selection.
             let mut scope = BufferContext {
@@ -432,7 +434,7 @@ fn run_inner(pass: &mut ChangePass<'_>) -> EvalResult {
             let result = (|| -> EvalResult {
                 if buffer_changed {
                     if let Some(old_buffer) =
-                        old_buffer.filter(|old| scope.eval.buffers.get(*old).is_some())
+                        old_buffer.filter(|old| scope.eval.edit.buffers.get(*old).is_some())
                     {
                         local(
                             scope.eval,
@@ -570,7 +572,7 @@ pub(super) fn run_committed_scroll(
     })?;
     let window_arg = Value::make_window(window.0);
     let start = super::super::window_cmds::builtin_window_start(eval, &[window_arg])?;
-    let saved = eval.buffers.current_buffer_id();
+    let saved = eval.edit.buffers.current_buffer_id();
     let mut scope = BufferContext { eval, saved };
     if let Some(buffer) = super::window_buffer_id_in_state(scope.eval, frame, window) {
         scope.eval.set_current_buffer_unrecorded(buffer)?;
@@ -682,8 +684,8 @@ pub(super) fn run_configuration(eval: &mut super::eval::Context, frame: FrameId)
         .selected_frame()
         .and_then(|frame| frame.selected_window())
         .and_then(|window| window.buffer_id());
-    let saved_buffer = (eval.buffers.current_buffer_id() != selected_buffer)
-        .then(|| eval.buffers.current_buffer_id())
+    let saved_buffer = (eval.edit.buffers.current_buffer_id() != selected_buffer)
+        .then(|| eval.edit.buffers.current_buffer_id())
         .flatten();
     let saved_frame = (selected_frame != Some(frame))
         .then_some(selected_frame)
@@ -723,6 +725,7 @@ pub(super) fn run_configuration(eval: &mut super::eval::Context, frame: FrameId)
             };
             if !scope
                 .eval
+                .edit
                 .buffers
                 .get(buffer)
                 .and_then(|buffer| {
@@ -744,6 +747,7 @@ pub(super) fn run_configuration(eval: &mut super::eval::Context, frame: FrameId)
                 )?;
                 let local = window_scope
                     .eval
+                    .edit
                     .buffers
                     .get(buffer)
                     .and_then(|buffer| {

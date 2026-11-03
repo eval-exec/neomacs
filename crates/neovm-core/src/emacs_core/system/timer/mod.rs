@@ -275,7 +275,7 @@ impl super::eval::Context {
         callback: Value,
         args: Vec<Value>,
     ) -> Result<(), Flow> {
-        let saved_current_buffer = self.buffers.current_buffer_id();
+        let saved_current_buffer = self.edit.buffers.current_buffer_id();
         let saved_deactivate_mark = self.eval_symbol("deactivate-mark").unwrap_or(Value::NIL);
         let specpdl_count = self.specpdl.len();
 

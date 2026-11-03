@@ -37,11 +37,11 @@ pub(crate) fn builtin_zlib_decompress_region(
     super::builtins::expect_max_args("zlib-decompress-region", &args, 3)?;
     let allow_partial = args.get(2).is_some_and(|v| v.is_truthy());
 
-    let Some(buf) = ctx.buffers.current_buffer() else {
+    let Some(buf) = ctx.edit.buffers.current_buffer() else {
         return Ok(Value::NIL);
     };
 
-    let region = super::position::LispRegionArgs::from_values(&ctx.buffers, args[0], args[1])?;
+    let region = super::position::LispRegionArgs::from_values(&ctx.edit.buffers, args[0], args[1])?;
 
     // GNU `Fzlib_decompress_region` calls `validate_region` before the
     // unibyte-buffer check.
@@ -69,7 +69,7 @@ pub(crate) fn builtin_zlib_decompress_region(
     let to_byte = byte_range.end().get();
 
     let buffer_id = buf.id;
-    let compressed = read_buffer_region_bytes_in_manager(&ctx.buffers, buffer_id, byte_range)?;
+    let compressed = read_buffer_region_bytes_in_manager(&ctx.edit.buffers, buffer_id, byte_range)?;
 
     // Try gzip first (most common for Emacs .gz files), then fall back to zlib.
     // GNU uses inflateInit2 with MAX_WBITS + 32 which auto-detects format.

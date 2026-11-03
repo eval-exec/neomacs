@@ -31,7 +31,7 @@ pub(crate) fn builtin_get_pos_property_3(
         eval.variables(),
         &[],
         Some(&eval.frames),
-        &eval.buffers,
+        &eval.edit.buffers,
         &args,
     )
 }
@@ -78,7 +78,7 @@ pub(crate) fn builtin_next_char_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_next_char_property_change_in_buffers(&eval.buffers, args)
+    builtin_next_char_property_change_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_next_char_property_change_in_buffers(
@@ -138,7 +138,7 @@ pub(crate) fn builtin_previous_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_previous_property_change_in_buffers(&eval.buffers, args)
+    builtin_previous_property_change_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_previous_property_change_in_buffers(
@@ -291,7 +291,7 @@ pub(crate) fn builtin_previous_char_property_change(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_previous_char_property_change_in_buffers(&eval.buffers, args)
+    builtin_previous_char_property_change_in_buffers(&eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_previous_char_property_change_in_buffers(
@@ -344,7 +344,7 @@ pub(crate) fn builtin_next_single_char_property_change_4(
     builtin_next_single_char_property_change_in_buffers_with_symbols(
         eval.variables(),
         Some(&eval.frames),
-        &eval.buffers,
+        &eval.edit.buffers,
         &args,
         eval.symbol_mode(),
     )
@@ -518,7 +518,7 @@ pub(crate) fn builtin_previous_single_char_property_change(
     builtin_previous_single_char_property_change_in_buffers_with_symbols(
         eval.variables(),
         Some(&eval.frames),
-        &eval.buffers,
+        &eval.edit.buffers,
         args,
         eval.symbol_mode(),
     )
@@ -791,7 +791,7 @@ pub(crate) fn builtin_load(eval: &mut super::eval::Context, args: Vec<Value>) ->
     }
     match super::load::plan_load_in_state(
         eval.variables(),
-        eval.buffers.current_buffer(),
+        eval.edit.buffers.current_buffer(),
         args[0],
         args.get(1).copied(),
         args.get(3).copied(),
@@ -877,7 +877,7 @@ pub(crate) fn builtin_compare_buffer_substrings(
     } else {
         None
     };
-    crate::emacs_core::buffer::compare_buffer_substrings_with_canon(&eval.buffers, args, canon)
+    crate::emacs_core::buffer::compare_buffer_substrings_with_canon(&eval.edit.buffers, args, canon)
 }
 
 pub(super) fn dynamic_or_global_symbol_value_in_state(
@@ -1230,7 +1230,7 @@ pub(crate) fn builtin_barf_if_buffer_read_only_impl(
         Some(value) => Some(expect_fixnum(value)?),
     };
 
-    let Some(buf) = ctx.buffers.current_buffer() else {
+    let Some(buf) = ctx.edit.buffers.current_buffer() else {
         return Ok(Value::NIL);
     };
     let point_min = buf.point_min_lisp_char_pos().as_i64();
@@ -1266,9 +1266,9 @@ pub(crate) fn builtin_bury_buffer_internal(
     expect_args("bury-buffer-internal", &args, 1)?;
     let id = expect_buffer_id(&args[0])?;
     let mut moved = false;
-    if eval.buffers.get(id).is_some() {
+    if eval.edit.buffers.get(id).is_some() {
         // Move to end of global buffer order (Vbuffer_alist equivalent).
-        eval.buffers.note_buffer_order_tail(id);
+        eval.edit.buffers.note_buffer_order_tail(id);
         // Update frame buffer lists (GNU buffer.c:2259-2262).
         if let Some(frame) = eval.frames.selected_frame_mut() {
             frame.buffer_list.retain(|bid| *bid != id);
@@ -1280,7 +1280,7 @@ pub(crate) fn builtin_bury_buffer_internal(
     // GNU `Fbury_buffer_internal` (buffer.c:2264) runs
     // `buffer-list-update-hook' after moving BUFFER to the end of the buffer
     // lists, unless that buffer has hooks inhibited.
-    if moved && !eval.buffers.buffer_hooks_inhibited(id) {
+    if moved && !eval.edit.buffers.buffer_hooks_inhibited(id) {
         crate::emacs_core::buffer::run_buffer_list_update_hook(eval)?;
     }
     Ok(Value::NIL)
@@ -1352,8 +1352,8 @@ fn print_target_current_buffer(
     target: Value,
 ) -> Option<&crate::buffer::Buffer> {
     match print_target_buffer_id(ctx, target) {
-        Some(id) => ctx.buffers.get(id),
-        None => ctx.buffers.current_buffer(),
+        Some(id) => ctx.edit.buffers.get(id),
+        None => ctx.edit.buffers.current_buffer(),
     }
 }
 
@@ -1361,7 +1361,8 @@ fn print_settings_source(
     ctx: &super::eval::Context,
     target: Value,
 ) -> super::print::PrintSettingsSource {
-    let buffer = print_target_buffer_id(ctx, target).or_else(|| ctx.buffers.current_buffer_id());
+    let buffer =
+        print_target_buffer_id(ctx, target).or_else(|| ctx.edit.buffers.current_buffer_id());
     buffer.map_or(
         super::print::PrintSettingsSource::Globals,
         super::print::PrintSettingsSource::Buffer,
@@ -1388,7 +1389,7 @@ impl std::fmt::Debug for PrintBindingBufferGuard<'_> {
 }
 impl<'context> PrintBindingBufferGuard<'context> {
     fn new(context: &'context mut super::eval::Context) -> Self {
-        let origin = context.buffers.current_buffer_id();
+        let origin = context.edit.buffers.current_buffer_id();
         Self {
             context,
             origin,
@@ -1396,7 +1397,7 @@ impl<'context> PrintBindingBufferGuard<'context> {
         }
     }
     fn select(&mut self, target: crate::buffer::BufferId) -> Result<(), Flow> {
-        if self.context.buffers.current_buffer_id() == Some(target) {
+        if self.context.edit.buffers.current_buffer_id() == Some(target) {
             Ok(())
         } else {
             self.context.set_current_buffer_unrecorded(target)
@@ -1429,7 +1430,7 @@ fn print_target_buffer_multibyte(
     target: Value,
 ) -> Option<bool> {
     let id = print_target_buffer_id(ctx, target)?;
-    ctx.buffers.get(id).map(|buf| buf.get_multibyte())
+    ctx.edit.buffers.get(id).map(|buf| buf.get_multibyte())
 }
 
 /// Apply GNU `print_prepare`'s implicit binding of the `print-escape-*` flags to
@@ -1465,7 +1466,7 @@ fn apply_print_target_escape_bindings(
     };
     if ctx
         .variables()
-        .value_in_buffer_by_name(ctx.buffers.get(target_id), binding.as_ref())
+        .value_in_buffer_by_name(ctx.edit.buffers.get(target_id), binding.as_ref())
         .is_some_and(|value| value.is_truthy())
     {
         return Ok(());
@@ -1502,6 +1503,7 @@ fn insert_print_lisp_string_with_hooks(
     }
 
     let (insert_pos, insert_char_pos) = ctx
+        .edit
         .buffers
         .get(buffer_id)
         .map(|buf| (buf.point_emacs_byte_pos(), buf.point_char_pos()))
@@ -1512,7 +1514,7 @@ fn insert_print_lisp_string_with_hooks(
             )
         })?;
     let change = super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-        &ctx.buffers,
+        &ctx.edit.buffers,
         buffer_id,
         insert_pos,
         super::editfns::lisp_string_text_extent(text),
@@ -1520,10 +1522,13 @@ fn insert_print_lisp_string_with_hooks(
 
     super::editfns::signal_before_text_change(ctx, change)?;
     let inserted = if before_markers {
-        ctx.buffers
+        ctx.edit
+            .buffers
             .insert_lisp_string_into_buffer_before_markers(buffer_id, text)
     } else {
-        ctx.buffers.insert_lisp_string_into_buffer(buffer_id, text)
+        ctx.edit
+            .buffers
+            .insert_lisp_string_into_buffer(buffer_id, text)
     };
     inserted.ok_or_else(|| {
         signal(
@@ -1532,6 +1537,7 @@ fn insert_print_lisp_string_with_hooks(
         )
     })?;
     let _ = ctx
+        .edit
         .buffers
         .clear_inserted_plain_text_properties_in_char_range(
             buffer_id,
@@ -1546,14 +1552,14 @@ fn insert_print_lisp_string_to_buffer_target(
     buffer_id: crate::buffer::BufferId,
     text: &crate::heap_types::LispString,
 ) -> Result<(), Flow> {
-    if ctx.buffers.get(buffer_id).is_none() {
+    if ctx.edit.buffers.get(buffer_id).is_none() {
         return Err(signal(
             "error",
             vec![Value::string("Output buffer no longer exists")],
         ));
     }
 
-    let saved_current = ctx.buffers.current_buffer_id();
+    let saved_current = ctx.edit.buffers.current_buffer_id();
     let result = (|| -> Result<(), Flow> {
         ctx.set_current_buffer_unrecorded(buffer_id)?;
         insert_print_lisp_string_with_hooks(ctx, buffer_id, text, false)
@@ -1575,8 +1581,9 @@ fn insert_print_lisp_string_to_marker_target(
             vec![Value::string("Marker does not point anywhere")],
         ));
     };
-    let marker_pos = super::marker::marker_position_as_int_with_buffers(&ctx.buffers, &target)?;
-    let Some(buffer) = ctx.buffers.get(buffer_id) else {
+    let marker_pos =
+        super::marker::marker_position_as_int_with_buffers(&ctx.edit.buffers, &target)?;
+    let Some(buffer) = ctx.edit.buffers.get(buffer_id) else {
         return Err(signal(
             "error",
             vec![Value::string("Output buffer no longer exists")],
@@ -1595,16 +1602,18 @@ fn insert_print_lisp_string_to_marker_target(
 
     let marker_byte = buffer.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(marker_pos));
     let old_target_point = buffer.point_emacs_byte_pos();
-    let saved_current = ctx.buffers.current_buffer_id();
+    let saved_current = ctx.edit.buffers.current_buffer_id();
 
     let result = (|| -> Result<(), Flow> {
         ctx.set_current_buffer_unrecorded(buffer_id)?;
         let _ = ctx
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(buffer_id, marker_byte);
         insert_print_lisp_string_with_hooks(ctx, buffer_id, text, false)?;
 
         let new_marker_pos = ctx
+            .edit
             .buffers
             .get(buffer_id)
             .map(|buf| buf.point_lisp_char_pos().as_i64())
@@ -1615,7 +1624,7 @@ fn insert_print_lisp_string_to_marker_target(
                 )
             })?;
         let _ = super::marker::builtin_set_marker_in_buffers(
-            &mut ctx.buffers,
+            &mut ctx.edit.buffers,
             &[
                 target,
                 Value::fixnum(new_marker_pos),
@@ -1625,7 +1634,7 @@ fn insert_print_lisp_string_to_marker_target(
         Ok(())
     })();
 
-    if result.is_ok() && ctx.buffers.get(buffer_id).is_some() {
+    if result.is_ok() && ctx.edit.buffers.get(buffer_id).is_some() {
         let inserted_len = EmacsByteLen::new(text.sbytes());
         let restore_point = if old_target_point >= marker_byte {
             old_target_point.add_len(inserted_len)
@@ -1633,6 +1642,7 @@ fn insert_print_lisp_string_to_marker_target(
             old_target_point
         };
         let _ = ctx
+            .edit
             .buffers
             .goto_buffer_emacs_byte_pos(buffer_id, restore_point);
     }
@@ -1770,19 +1780,19 @@ fn write_terpri_output(eval: &mut super::eval::Context, target: Value) -> Result
         }
         ValueKind::Veclike(VecLikeType::Buffer) => {
             let id = target.as_buffer_id().unwrap();
-            if eval.buffers.get(id).is_none() {
+            if eval.edit.buffers.get(id).is_none() {
                 return Err(signal(
                     "error",
                     vec![Value::string("Output buffer no longer exists")],
                 ));
             }
-            let _ = eval.buffers.insert_into_buffer(id, "\n");
+            let _ = eval.edit.buffers.insert_into_buffer(id, "\n");
             Ok(())
         }
         _other => {
             // Root the callable target across eval.apply().
             let mut scope = super::print::PrintEvaluationGuard::new(eval);
-            if let Some(buffer_id) = scope.context().buffers.current_buffer_id() {
+            if let Some(buffer_id) = scope.context().edit.buffers.current_buffer_id() {
                 scope
                     .context()
                     .specpdl
@@ -2138,7 +2148,7 @@ fn prepare_prin1_string(
                     options,
                 });
             }
-            if let Some(buffer_id) = ctx.buffers.current_buffer_id() {
+            if let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() {
                 ctx.specpdl
                     .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
                 if needs_binding {
@@ -2155,7 +2165,7 @@ fn prepare_prin1_string(
 
     // Preserve Save-before-try_specbind on every refusal/general path: watched
     // binding may select a buffer, and unlet must precede buffer restoration.
-    if let Some(buffer_id) = ctx.buffers.current_buffer_id() {
+    if let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() {
         ctx.specpdl
             .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
     }
@@ -2225,7 +2235,7 @@ pub(crate) fn builtin_princ(eval: &mut super::eval::Context, args: Vec<Value>) -
     let result = (|| {
         let eval = scope.context();
         eval.push_specpdl_root(target);
-        if let Some(buffer_id) = eval.buffers.current_buffer_id() {
+        if let Some(buffer_id) = eval.edit.buffers.current_buffer_id() {
             eval.specpdl
                 .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
         }
@@ -2264,7 +2274,7 @@ pub(crate) fn builtin_princ_impl(
         ctx.push_specpdl_root(target);
         let output_target = if target.is_nil() { Value::T } else { target };
         let settings_source = print_settings_source(ctx, target);
-        if let Some(buffer_id) = ctx.buffers.current_buffer_id() {
+        if let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() {
             ctx.specpdl
                 .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
         }
@@ -2297,7 +2307,7 @@ pub(crate) fn builtin_prin1(eval: &mut super::eval::Context, args: Vec<Value>) -
         let target = resolve_print_target(eval, args.get(1));
         eval.push_specpdl_root(target);
         bind_print_overrides(eval, args.get(2).copied().unwrap_or(Value::NIL))?;
-        if let Some(buffer_id) = eval.buffers.current_buffer_id() {
+        if let Some(buffer_id) = eval.edit.buffers.current_buffer_id() {
             eval.specpdl
                 .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
         }
@@ -2338,7 +2348,7 @@ pub(crate) fn builtin_prin1_impl(
         let output_target = if target.is_nil() { Value::T } else { target };
         bind_print_overrides(ctx, args.get(2).copied().unwrap_or(Value::NIL))?;
         let settings_source = print_settings_source(ctx, target);
-        if let Some(buffer_id) = ctx.buffers.current_buffer_id() {
+        if let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() {
             ctx.specpdl
                 .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
         }
@@ -2390,7 +2400,7 @@ pub(crate) fn builtin_print(eval: &mut super::eval::Context, args: Vec<Value>) -
     let result = (|| {
         let eval = scope.context();
         eval.push_specpdl_root(target);
-        if let Some(buffer_id) = eval.buffers.current_buffer_id() {
+        if let Some(buffer_id) = eval.edit.buffers.current_buffer_id() {
             eval.specpdl
                 .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
         }
@@ -2435,7 +2445,7 @@ pub(crate) fn builtin_print_impl(
         ctx.push_specpdl_root(target);
         let output_target = if target.is_nil() { Value::T } else { target };
         let settings_source = print_settings_source(ctx, target);
-        if let Some(buffer_id) = ctx.buffers.current_buffer_id() {
+        if let Some(buffer_id) = ctx.edit.buffers.current_buffer_id() {
             ctx.specpdl
                 .push(crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id });
         }
@@ -2483,19 +2493,19 @@ fn terpri_line_state(
             )
         })?)
     } else {
-        print_target_buffer_id(ctx, target).or_else(|| ctx.buffers.current_buffer_id())
+        print_target_buffer_id(ctx, target).or_else(|| ctx.edit.buffers.current_buffer_id())
     };
     let Some(buffer_id) = buffer_id else {
         return Ok(TerpriLineState::BeginningOfLine);
     };
-    let Some(buffer) = ctx.buffers.get(buffer_id) else {
+    let Some(buffer) = ctx.edit.buffers.get(buffer_id) else {
         return Err(signal(
             LispCondition::Error,
             vec![Value::string("Output buffer no longer exists")],
         ));
     };
     let point = if super::marker::is_marker(&target) {
-        let pos = super::marker::marker_position_as_int_with_buffers(&ctx.buffers, &target)?;
+        let pos = super::marker::marker_position_as_int_with_buffers(&ctx.edit.buffers, &target)?;
         let min = buffer.point_min_lisp_char_pos().as_i64();
         let max = buffer.point_max_lisp_char_pos().as_i64();
         if pos < min || pos > max {
@@ -2603,19 +2613,19 @@ pub(crate) fn finish_write_char_in_eval(
         ValueKind::Veclike(VecLikeType::Buffer) => {
             if let Some(bytes) = write_char_emacs_bytes(char_code) {
                 let id = target.as_buffer_id().unwrap();
-                if eval.buffers.get(id).is_none() {
+                if eval.edit.buffers.get(id).is_none() {
                     return Err(signal(
                         "error",
                         vec![Value::string("Output buffer no longer exists")],
                     ));
                 }
                 let ls = crate::heap_types::LispString::from_emacs_bytes(bytes);
-                let _ = eval.buffers.insert_lisp_string_into_buffer(id, &ls);
+                let _ = eval.edit.buffers.insert_lisp_string_into_buffer(id, &ls);
             }
         }
         _other => {
             let mut scope = super::print::PrintEvaluationGuard::new(eval);
-            if let Some(buffer_id) = scope.context().buffers.current_buffer_id() {
+            if let Some(buffer_id) = scope.context().edit.buffers.current_buffer_id() {
                 scope
                     .context()
                     .specpdl

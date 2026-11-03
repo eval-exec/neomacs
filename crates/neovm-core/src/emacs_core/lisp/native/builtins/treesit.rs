@@ -580,16 +580,19 @@ fn resolve_buffer_ids(
 ) -> Result<(BufferId, BufferId, Value), Flow> {
     let orig_id = match arg {
         None => eval
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         Some(value) if value.is_nil() => eval
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
         Some(value) => expect_buffer_id(value)?,
     };
     let orig_buffer = eval
+        .edit
         .buffers
         .get(orig_id)
         .ok_or_else(|| signal("error", vec![Value::string("Selecting deleted buffer")]))?;
@@ -671,7 +674,7 @@ fn ensure_current_node(
     if parser.generation != handle.generation {
         return Err(node_outdated_error(value));
     }
-    if eval.buffers.get(parser.orig_buffer_id).is_none() {
+    if eval.edit.buffers.get(parser.orig_buffer_id).is_none() {
         return Err(node_buffer_killed_error(value));
     }
     Ok(handle)
@@ -681,7 +684,7 @@ fn parser_live_p(eval: &super::eval::Context, parser_id: u64) -> bool {
     let Some(parser) = eval.treesit.parser(parser_id) else {
         return false;
     };
-    !parser.deleted && eval.buffers.get(parser.orig_buffer_id).is_some()
+    !parser.deleted && eval.edit.buffers.get(parser.orig_buffer_id).is_some()
 }
 
 fn make_node_value_for_parser(
@@ -818,7 +821,7 @@ fn parser_reparse_request(
     };
 
     let current_revision = {
-        let buffer = eval.buffers.get(orig_buffer_id).ok_or_else(|| {
+        let buffer = eval.edit.buffers.get(orig_buffer_id).ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Parser buffer has been killed")],
@@ -830,7 +833,7 @@ fn parser_reparse_request(
     // GNU catches up with the narrowing situation before it consults
     // `need_reparse`, because syncing can set it (`src/treesit.c:1908-1914`).
     {
-        let buffer = eval.buffers.get(orig_buffer_id).ok_or_else(|| {
+        let buffer = eval.edit.buffers.get(orig_buffer_id).ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Parser buffer has been killed")],
@@ -853,7 +856,7 @@ fn parser_reparse_request(
         return Ok(None);
     };
     let visible = {
-        let buffer = eval.buffers.get(orig_buffer_id).ok_or_else(|| {
+        let buffer = eval.edit.buffers.get(orig_buffer_id).ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Parser buffer has been killed")],
@@ -880,12 +883,16 @@ fn ensure_parser_reparsed(
     };
 
     let changed_ranges = {
-        let buffer = eval.buffers.get(request.orig_buffer_id).ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string("Parser buffer has been killed")],
-            )
-        })?;
+        let buffer = eval
+            .edit
+            .buffers
+            .get(request.orig_buffer_id)
+            .ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Parser buffer has been killed")],
+                )
+            })?;
         let parser = eval
             .treesit
             .parser_mut(parser_id)
@@ -1123,12 +1130,16 @@ fn changed_ranges_to_lisp(
         .treesit
         .parser(parser_id)
         .ok_or_else(|| signal("error", vec![Value::string("Missing tree-sitter parser")]))?;
-    let buf = eval.buffers.get(parser.orig_buffer_id).ok_or_else(|| {
-        signal(
-            "error",
-            vec![Value::string("Parser buffer has been killed")],
-        )
-    })?;
+    let buf = eval
+        .edit
+        .buffers
+        .get(parser.orig_buffer_id)
+        .ok_or_else(|| {
+            signal(
+                "error",
+                vec![Value::string("Parser buffer has been killed")],
+            )
+        })?;
     let visible_start =
         parser_visible_start(parser).ok_or_else(|| treesit_parse_error(parser.value))?;
     Ok(Value::list(
@@ -1891,6 +1902,7 @@ pub(crate) fn builtin_treesit_node_descendant_for_range(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?;
     let buf = eval
+        .edit
         .buffers
         .get(parser.orig_buffer_id)
         .ok_or_else(|| node_buffer_killed_error(args[0]))?;
@@ -1922,6 +1934,7 @@ pub(crate) fn builtin_treesit_node_end(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?;
     let buf = eval
+        .edit
         .buffers
         .get(parser.orig_buffer_id)
         .ok_or_else(|| node_buffer_killed_error(args[0]))?;
@@ -1987,6 +2000,7 @@ pub(crate) fn builtin_treesit_node_first_child_for_pos(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?;
     let buf = eval
+        .edit
         .buffers
         .get(parser.orig_buffer_id)
         .ok_or_else(|| node_buffer_killed_error(args[0]))?;
@@ -2118,6 +2132,7 @@ pub(crate) fn builtin_treesit_node_start(
         .parser(handle.parser_id)
         .ok_or_else(|| node_outdated_error(args[0]))?;
     let buf = eval
+        .edit
         .buffers
         .get(parser.orig_buffer_id)
         .ok_or_else(|| node_buffer_killed_error(args[0]))?;
@@ -2271,7 +2286,7 @@ pub(crate) fn builtin_treesit_parser_delete(
     };
     let _ = eval.treesit.mark_parser_deleted(parser_id);
     if need_to_gc_buffer {
-        let _ = eval.buffers.kill_buffer(buffer_id);
+        let _ = eval.edit.buffers.kill_buffer(buffer_id);
     }
     Ok(Value::NIL)
 }
@@ -2406,12 +2421,15 @@ pub(crate) fn builtin_treesit_parser_set_included_ranges(
             .treesit
             .parser(parser_id)
             .ok_or_else(|| parser_deleted_error(args[0]))?;
-        eval.buffers.get(parser.orig_buffer_id).ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string("Parser buffer has been killed")],
-            )
-        })?
+        eval.edit
+            .buffers
+            .get(parser.orig_buffer_id)
+            .ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Parser buffer has been killed")],
+                )
+            })?
     };
 
     let ts_ranges = if args[1].is_nil() {
@@ -2451,7 +2469,7 @@ pub(crate) fn builtin_treesit_parser_set_included_ranges(
             .parser(parser_id)
             .ok_or_else(|| parser_deleted_error(args[0]))?
             .orig_buffer_id;
-        let buffer = eval.buffers.get(orig_buffer_id).ok_or_else(|| {
+        let buffer = eval.edit.buffers.get(orig_buffer_id).ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Parser buffer has been killed")],
@@ -2615,6 +2633,7 @@ fn query_predicate_parser_source(
     let visible_start = parser_visible_start(parser)
         .ok_or_else(|| treesit_query_error("Missing tree-sitter parser source"))?;
     let buffer = eval
+        .edit
         .buffers
         .get(parser.orig_buffer_id)
         .ok_or_else(|| treesit_query_error("Missing tree-sitter parser source"))?;
@@ -2703,7 +2722,7 @@ fn query_predicate_match(
     let capture = query_predicate_capture(query_match, capture_index, capture_names)?;
     let node = unsafe { tree_sitter::Node::from_raw(capture.node) };
     let result = {
-        let buffer = eval.buffers.get(parser_buffer_id).ok_or_else(|| {
+        let buffer = eval.edit.buffers.get(parser_buffer_id).ok_or_else(|| {
             signal(
                 "error",
                 vec![Value::string("Parser buffer has been killed")],
@@ -2772,7 +2791,7 @@ fn query_predicate_pred(
         .parser(parser_id)
         .ok_or_else(|| treesit_query_error("Missing tree-sitter parser"))?
         .generation;
-    let saved_buffer = eval.buffers.current_buffer_id();
+    let saved_buffer = eval.edit.buffers.current_buffer_id();
     if saved_buffer != Some(parser_buffer_id) {
         eval.set_current_buffer_unrecorded(parser_buffer_id)?;
     }
@@ -2864,12 +2883,16 @@ pub(crate) fn builtin_treesit_query_capture(
             .treesit
             .parser(input.parser_id)
             .ok_or_else(|| parser_deleted_error(input.parser_value))?;
-        let buf = eval.buffers.get(parser.orig_buffer_id).ok_or_else(|| {
-            signal(
-                "error",
-                vec![Value::string("Parser buffer has been killed")],
-            )
-        })?;
+        let buf = eval
+            .edit
+            .buffers
+            .get(parser.orig_buffer_id)
+            .ok_or_else(|| {
+                signal(
+                    "error",
+                    vec![Value::string("Parser buffer has been killed")],
+                )
+            })?;
         query_range_bytes(buf, &args, 2, 3)?
     };
     if byte_range
@@ -2904,7 +2927,8 @@ pub(crate) fn builtin_treesit_query_capture(
             predicates,
             raw_matches,
             parser.orig_buffer_id,
-            eval.buffers
+            eval.edit
+                .buffers
                 .get(parser.orig_buffer_id)
                 .expect("parser buffer checked above")
                 .accessible_emacs_byte_range()
@@ -3194,6 +3218,7 @@ pub(crate) fn builtin_treesit_tracking_line_column_p(
     expect_args_range("treesit-tracking-line-column-p", &args, 0, 1)?;
     let buffer_id = match args.first().copied().unwrap_or(Value::NIL) {
         value if value.is_nil() => eval
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?,
@@ -3266,12 +3291,18 @@ pub(crate) fn builtin_treesit_parse_string(
     // `Context::lisp_string`, landed rather than reverted.
     let text = args[0].expect_lisp_string_in(&eval.tagged_heap)?;
     let name = format!(" *treesit-parse-string-{}*", eval.treesit.roots().len() + 1);
-    let buffer_id = eval.buffers.create_buffer_with_hook_inhibition(&name, true);
+    let buffer_id = eval
+        .edit
+        .buffers
+        .create_buffer_with_hook_inhibition(&name, true);
     // GNU selects the scratch buffer only around `insert1` and selects the
     // caller's buffer again BEFORE creating the parser (treesit.c:2874-2879),
     // so a failing parser creation leaves the caller's buffer current. The
     // insertion here names its buffer, so nothing needs selecting at all.
-    let _ = eval.buffers.insert_lisp_string_into_buffer(buffer_id, text);
+    let _ = eval
+        .edit
+        .buffers
+        .insert_lisp_string_into_buffer(buffer_id, text);
     let parser = builtin_treesit_parser_create(
         eval,
         vec![
@@ -3319,10 +3350,12 @@ pub(crate) fn builtin_treesit_linecol_at(
     expect_args("treesit--linecol-at", &args, 1)?;
     let pos = expect_number(&args[0])? as i64;
     let buffer_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let buffer = eval
+        .edit
         .buffers
         .get(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3348,6 +3381,7 @@ pub(crate) fn builtin_treesit_linecol_cache_set(
 ) -> EvalResult {
     expect_args("treesit--linecol-cache-set", &args, 3)?;
     let buffer_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3371,6 +3405,7 @@ pub(crate) fn builtin_treesit_linecol_cache(
 ) -> EvalResult {
     expect_args("treesit--linecol-cache", &args, 0)?;
     let buffer_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3378,6 +3413,7 @@ pub(crate) fn builtin_treesit_linecol_cache(
         return Ok(Value::NIL);
     };
     let buffer = eval
+        .edit
         .buffers
         .get(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

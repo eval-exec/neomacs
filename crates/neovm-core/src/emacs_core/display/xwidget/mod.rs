@@ -539,6 +539,7 @@ fn ensure_proper_list(value: Value) -> Result<(), Flow> {
 
 fn current_buffer_value(eval: &Context) -> EvalResult {
     let id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

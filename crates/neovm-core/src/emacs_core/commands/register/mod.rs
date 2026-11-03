@@ -345,13 +345,17 @@ pub(crate) fn builtin_point_to_register(
     expect_args("point-to-register", &args, 1)?;
     let reg = expect_register(&args[0])?;
     let marker = match eval
+        .edit
         .buffers
         .current_buffer()
         .map(|buffer| (buffer.id, buffer.point_lisp_char_pos()))
     {
-        Some((buffer_id, point)) => {
-            super::marker::make_registered_buffer_marker(&mut eval.buffers, buffer_id, point, false)
-        }
+        Some((buffer_id, point)) => super::marker::make_registered_buffer_marker(
+            &mut eval.edit.buffers,
+            buffer_id,
+            point,
+            false,
+        ),
         None => super::marker::make_marker_value(None, None, false),
     };
     eval.registers.set(reg, RegisterContent::Marker(marker));
@@ -442,13 +446,14 @@ pub(crate) fn builtin_view_register(
             let (buffer_id, _, _) =
                 super::marker::marker_logical_fields(marker).expect("register marker");
             let buffer_desc = buffer_id
-                .and_then(|id| eval.buffers.get(id))
+                .and_then(|id| eval.edit.buffers.get(id))
                 .map(|buffer| buffer.name_runtime_string_owned())
                 .unwrap_or_else(|| "no buffer".to_string());
-            let point = super::marker::marker_position_as_int_with_buffers(&eval.buffers, marker)
-                .ok()
-                .map(|pos| pos.to_string())
-                .unwrap_or_else(|| "nowhere".to_string());
+            let point =
+                super::marker::marker_position_as_int_with_buffers(&eval.edit.buffers, marker)
+                    .ok()
+                    .map(|pos| pos.to_string())
+                    .unwrap_or_else(|| "nowhere".to_string());
             Ok(Value::string(format!(
                 "Register {} contains a marker: buffer={} point={}",
                 reg, buffer_desc, point

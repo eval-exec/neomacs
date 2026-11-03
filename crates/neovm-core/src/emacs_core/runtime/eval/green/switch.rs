@@ -651,7 +651,7 @@ impl Context {
         let mut receiver = seat.receiver.take().expect("a seat keeps its channel");
         // The thread record keeps what another thread may read or change
         // while this one is parked: its current buffer and its errors.
-        let current = self.buffers.current_buffer_id();
+        let current = self.edit.buffers.current_buffer_id();
         self.threads.set_thread_current_buffer(key.id(), current);
         self.restore_deferred_error(&baton, key);
         if let Some(runtime) = baton.green_runtime().as_ref() {
@@ -765,9 +765,9 @@ impl Context {
         let moved = self
             .threads
             .thread_current_buffer(key.id())
-            .filter(|buffer| current != Some(*buffer) && self.buffers.get(*buffer).is_some());
+            .filter(|buffer| current != Some(*buffer) && self.edit.buffers.get(*buffer).is_some());
         if let Some(buffer) = moved {
-            let _ = self.buffers.switch_current_unrecorded(buffer);
+            let _ = self.edit.buffers.switch_current_unrecorded(buffer);
         }
         let case_table_changed =
             case_table.map(Value::bits) != self.cached_standard_case_table.map(Value::bits);
@@ -1213,7 +1213,7 @@ impl Context {
             self.start_green_threads()
                 .map_err(|error| signal("error", vec![Value::string(error.to_string())]))?;
         }
-        let current = self.buffers.current_buffer_id();
+        let current = self.edit.buffers.current_buffer_id();
         let (id, function) =
             crate::emacs_core::threads::prepare_make_thread(&mut self.threads, args)?;
         self.threads.set_thread_current_buffer(id, current);

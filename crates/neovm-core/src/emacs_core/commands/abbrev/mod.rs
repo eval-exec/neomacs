@@ -1065,20 +1065,21 @@ pub(crate) fn builtin_insert_abbrev_table_description(
     if expect_abbrev_table(eval, &table_val).is_err() {
         // Insert empty table description
         let text = format!("(define-abbrev-table '{})\n", name);
-        if let Some(current_id) = eval.buffers.current_buffer_id() {
+        if let Some(current_id) = eval.edit.buffers.current_buffer_id() {
             let (insert_pos, target_multibyte) = eval
+                .edit
                 .buffers
                 .get(current_id)
                 .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
                 .unwrap_or((EmacsBytePos::ZERO, true));
             let change = super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-                &eval.buffers,
+                &eval.edit.buffers,
                 current_id,
                 insert_pos,
                 TextExtent::from_emacs_bytes(text.as_bytes(), target_multibyte),
             )?;
             super::editfns::signal_before_text_change(eval, change)?;
-            let _ = eval.buffers.insert_into_buffer(current_id, &text);
+            let _ = eval.edit.buffers.insert_into_buffer(current_id, &text);
             super::editfns::signal_after_text_change(eval, change)?;
         }
         return Ok(Value::NIL);
@@ -1136,20 +1137,21 @@ pub(crate) fn builtin_insert_abbrev_table_description(
     text.push_str("   ))\n\n");
 
     // Insert into current buffer
-    if let Some(current_id) = eval.buffers.current_buffer_id() {
+    if let Some(current_id) = eval.edit.buffers.current_buffer_id() {
         let (insert_pos, target_multibyte) = eval
+            .edit
             .buffers
             .get(current_id)
             .map(|b| (b.point_emacs_byte_pos(), b.get_multibyte()))
             .unwrap_or((EmacsBytePos::ZERO, true));
         let change = super::editfns::text_change_for_empty_insertion_at_emacs_byte_pos(
-            &eval.buffers,
+            &eval.edit.buffers,
             current_id,
             insert_pos,
             TextExtent::from_emacs_bytes(text.as_bytes(), target_multibyte),
         )?;
         super::editfns::signal_before_text_change(eval, change)?;
-        let _ = eval.buffers.insert_into_buffer(current_id, &text);
+        let _ = eval.edit.buffers.insert_into_buffer(current_id, &text);
         super::editfns::signal_after_text_change(eval, change)?;
     }
     Ok(Value::NIL)

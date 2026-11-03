@@ -834,18 +834,19 @@ impl Context {
     /// taken around a recorded run, never on a hit.
     pub(crate) fn cconv_effect_snapshot(&self) -> EffectSnapshot {
         let buffer_ticks = self
+            .edit
             .buffers
             .buffer_list()
             .into_iter()
             .map(|id| {
-                let tick = self.buffers.get(id).map_or(0, |b| b.modified_tick());
+                let tick = self.edit.buffers.get(id).map_or(0, |b| b.modified_tick());
                 (id, tick)
             })
             .collect();
         EffectSnapshot {
             loads: self.cconv_memo.loads,
             outputs: self.cconv_memo.outputs,
-            next_buffer_id: self.buffers.dump_next_id(),
+            next_buffer_id: self.edit.buffers.dump_next_id(),
             buffer_ticks,
             gensym_counter: self
                 .variable_value(gensym_counter_symbol())
@@ -1015,10 +1016,11 @@ impl Context {
             limit = limit.min(global);
         }
         if self.obarray.is_localized(max_lisp_eval_depth_symbol())
-            && let Some(local) = as_limit(
-                self.variables()
-                    .value_in_buffer_by_name(self.buffers.current_buffer(), "max-lisp-eval-depth"),
-            )
+            && let Some(local) =
+                as_limit(self.variables().value_in_buffer_by_name(
+                    self.edit.buffers.current_buffer(),
+                    "max-lisp-eval-depth",
+                ))
         {
             limit = limit.min(local);
         }

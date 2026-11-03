@@ -4200,7 +4200,7 @@ impl crate::emacs_core::eval::Context {
             }
             if let Some(frame) = apply_resize_input_event_in_keyboard_runtime(
                 &mut self.frames,
-                &self.buffers,
+                &self.edit.buffers,
                 width,
                 height,
                 scale_factor,
@@ -4245,14 +4245,14 @@ impl crate::emacs_core::eval::Context {
         let mut publications = Vec::new();
         let applied_resize = sync_pending_resize_events_in_keyboard_runtime(
             &mut self.frames,
-            &self.buffers,
+            &self.edit.buffers,
             &mut self.input_rx,
             &mut self.command_loop.keyboard,
             &mut publications,
         );
         if let Some(frame) = sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
             &mut self.frames,
-            &self.buffers,
+            &self.edit.buffers,
             self.display_host.as_deref(),
         ) && crate::emacs_core::eval::gnu_redisplay_hooks_enabled()
         {
@@ -4277,7 +4277,7 @@ impl crate::emacs_core::eval::Context {
             .unwrap_or(false);
         if let Some(frame) = sync_opening_gui_frame_size_from_host_in_keyboard_runtime(
             &mut self.frames,
-            &self.buffers,
+            &self.edit.buffers,
             self.display_host.as_deref(),
         ) {
             self.gnu_mark_frame_redisplay(frame);
@@ -5160,9 +5160,9 @@ impl crate::emacs_core::eval::Context {
                     &self.frames,
                     self.symbol_mode(),
                 )
-                && self.buffers.current_buffer_id() != Some(target_buffer_id)
+                && self.edit.buffers.current_buffer_id() != Some(target_buffer_id)
             {
-                saved_current_buffer = self.buffers.current_buffer_id();
+                saved_current_buffer = self.edit.buffers.current_buffer_id();
                 if let Err(err) = self.switch_current_buffer(target_buffer_id) {
                     self.restore_delayed_selection_event(&mut delayed_selection_event);
                     self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
@@ -6456,7 +6456,7 @@ impl crate::emacs_core::eval::Context {
             })
         });
         if let Some((false, Some(buffer_id))) = selected
-            && let Some(buffer) = self.buffers.get(buffer_id)
+            && let Some(buffer) = self.edit.buffers.get(buffer_id)
         {
             self.command_loop.last_non_minibuffer_size = buffer.accessible_char_len().get();
         }
@@ -6609,7 +6609,7 @@ impl crate::emacs_core::eval::Context {
 
         let pair = crate::emacs_core::textprop::builtin_get_char_property_and_overlay_in_state(
             self.variables(),
-            &self.buffers,
+            &self.edit.buffers,
             vec![
                 Value::fixnum(buffer_position),
                 Value::symbol("help-echo"),
@@ -6845,7 +6845,7 @@ impl crate::emacs_core::eval::Context {
         {
             let inhibit = crate::emacs_core::textprop::builtin_get_text_property_in_state(
                 self.variables(),
-                &self.buffers,
+                &self.edit.buffers,
                 &[
                     Value::fixnum(0),
                     Value::symbol("help-echo-inhibit-substitution"),
@@ -7376,7 +7376,7 @@ impl crate::emacs_core::eval::Context {
                 .get(frame_id)
                 .and_then(|frame| frame.selected_window())
                 .and_then(|window| window.buffer_id())
-            && let Some(buffer) = self.buffers.get(buffer_id)
+            && let Some(buffer) = self.edit.buffers.get(buffer_id)
             && let Some(local) = buffer.buffer_local_value("tool-bar-map")
         {
             return local;
@@ -7391,7 +7391,7 @@ impl crate::emacs_core::eval::Context {
     }
 
     fn current_tool_bar_map(&self) -> Value {
-        if let Some(buffer) = self.buffers.current_buffer()
+        if let Some(buffer) = self.edit.buffers.current_buffer()
             && let Some(local) = buffer.buffer_local_value("tool-bar-map")
         {
             return local;

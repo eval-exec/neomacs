@@ -307,7 +307,7 @@ pub(crate) fn marker_position_as_int_eval(
     eval: &super::eval::Context,
     v: &Value,
 ) -> Result<i64, Flow> {
-    marker_position_as_int_with_buffers(&eval.buffers, v)
+    marker_position_as_int_with_buffers(&eval.edit.buffers, v)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -368,7 +368,7 @@ pub(crate) fn builtin_marker_position_1(
     marker: Value,
 ) -> EvalResult {
     let args: [Value; 1] = [marker];
-    builtin_marker_position_in_buffers(&eval.buffers, &args)
+    builtin_marker_position_in_buffers(&eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_marker_position_in_buffers(
@@ -386,7 +386,7 @@ pub(crate) fn builtin_marker_buffer(eval: &mut super::eval::Context, args: &[Val
     expect_args("marker-buffer", &args, 1)?;
     expect_marker("marker-buffer", &args[0])?;
     if let Some(buffer_id) = marker_buffer_id(&args[0])
-        && eval.buffers.get(buffer_id).is_some()
+        && eval.edit.buffers.get(buffer_id).is_some()
     {
         return Ok(Value::make_buffer(buffer_id));
     }
@@ -423,7 +423,7 @@ pub(crate) fn builtin_set_marker_insertion_type(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_set_marker_insertion_type_in_buffers(&mut eval.buffers, args)
+    builtin_set_marker_insertion_type_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_set_marker_insertion_type_in_buffers(
@@ -459,7 +459,7 @@ pub(crate) fn builtin_make_marker(args: &[Value]) -> EvalResult {
 
 /// Eval-dependent copy-marker that registers the new marker in the buffer.
 pub(crate) fn builtin_copy_marker(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
-    builtin_copy_marker_in_buffers(&mut eval.buffers, args)
+    builtin_copy_marker_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_copy_marker_in_buffers(
@@ -524,7 +524,7 @@ pub(crate) fn builtin_set_marker_3(
     buffer: Value,
 ) -> EvalResult {
     let args: [Value; 3] = [marker, position, buffer];
-    builtin_set_marker_in_buffers(&mut eval.buffers, &args)
+    builtin_set_marker_in_buffers(&mut eval.edit.buffers, &args)
 }
 
 pub(crate) fn builtin_set_marker_in_buffers(
@@ -703,7 +703,7 @@ pub(crate) fn builtin_point_marker(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_point_marker_in_buffers(&mut eval.buffers, args)
+    builtin_point_marker_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_point_marker_in_buffers(
@@ -726,7 +726,7 @@ pub(crate) fn builtin_point_min_marker(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_point_min_marker_in_buffers(&mut eval.buffers, args)
+    builtin_point_min_marker_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_point_min_marker_in_buffers(
@@ -749,7 +749,7 @@ pub(crate) fn builtin_point_max_marker(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    builtin_point_max_marker_in_buffers(&mut eval.buffers, args)
+    builtin_point_max_marker_in_buffers(&mut eval.edit.buffers, args)
 }
 
 pub(crate) fn builtin_point_max_marker_in_buffers(
@@ -779,12 +779,14 @@ pub(crate) fn builtin_point_max_marker_in_buffers(
 pub(crate) fn builtin_mark_marker(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("mark-marker", &args, 0)?;
     let buffer_id = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
         .id;
 
     let buf = eval
+        .edit
         .buffers
         .get_mut(buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

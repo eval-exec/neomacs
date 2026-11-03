@@ -1395,7 +1395,7 @@ pub(crate) fn builtin_minibuffer_prompt_end_ctx(
     expect_args("minibuffer-prompt-end", &args, 0)?;
 
     Ok(Value::fixnum(
-        minibuffer_prompt_end_in_state(eval.variables(), &eval.buffers, &eval.minibuffers)?
+        minibuffer_prompt_end_in_state(eval.variables(), &eval.edit.buffers, &eval.minibuffers)?
             .as_i64(),
     ))
 }
@@ -1509,15 +1509,15 @@ pub(crate) fn builtin_minibufferp_ctx(
 ) -> EvalResult {
     validate_minibufferp_args(&args)?;
     let live_only = args.get(1).is_some_and(|v| v.is_truthy());
-    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.buffers, args.first())? else {
+    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
     let is_live = eval.minibuffers.has_buffer(buffer_id);
-    let is_minibuffer = is_live
-        || eval
-            .buffers
-            .get(buffer_id)
-            .is_some_and(|buffer| is_minibuffer_buffer_name(&buffer.name_runtime_string_owned()));
+    let is_minibuffer =
+        is_live
+            || eval.edit.buffers.get(buffer_id).is_some_and(|buffer| {
+                is_minibuffer_buffer_name(&buffer.name_runtime_string_owned())
+            });
     Ok(Value::bool_val(if live_only {
         is_live
     } else {
@@ -1530,7 +1530,7 @@ pub(crate) fn builtin_minibuffer_innermost_command_loop_p_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("minibuffer-innermost-command-loop-p", &args, 0, 1)?;
-    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.buffers, args.first())? else {
+    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
     let recursive_depth = eval.recursive_command_loop_depth();
@@ -1550,7 +1550,7 @@ pub(crate) fn builtin_innermost_minibuffer_p_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("innermost-minibuffer-p", &args, 0, 1)?;
-    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.buffers, args.first())? else {
+    let Some(buffer_id) = resolve_minibuffer_buffer_arg(&eval.edit.buffers, args.first())? else {
         return Ok(Value::NIL);
     };
     Ok(Value::bool_val(
@@ -1618,7 +1618,7 @@ enum RecursiveEditBuffer {
 
 impl RecursiveEditBuffer {
     fn record(eval: &mut super::eval::Context) -> Self {
-        let Some(current) = eval.buffers.current_buffer_id() else {
+        let Some(current) = eval.edit.buffers.current_buffer_id() else {
             return Self::SelectedWindows;
         };
         let window_buffer = super::window_cmds::builtin_window_buffer(eval, &[])
@@ -1633,9 +1633,9 @@ impl RecursiveEditBuffer {
 
     fn unwind(self, eval: &mut super::eval::Context) {
         if let Self::Restore(buffer_id) = self
-            && eval.buffers.get(buffer_id).is_some()
+            && eval.edit.buffers.get(buffer_id).is_some()
         {
-            let _ = eval.buffers.switch_current(buffer_id);
+            let _ = eval.edit.buffers.switch_current(buffer_id);
         }
     }
 }
@@ -1706,7 +1706,7 @@ pub(crate) fn builtin_abort_minibuffers(args: Vec<Value>) -> EvalResult {
 /// GNU minibuf.c `this_minibuffer_depth`: the 1-based minibuffer level of the
 /// current buffer, or 0 when it is not one of the active minibuffers.
 fn this_minibuffer_depth(eval: &super::eval::Context) -> usize {
-    let Some(buffer_id) = eval.buffers.current_buffer_id() else {
+    let Some(buffer_id) = eval.edit.buffers.current_buffer_id() else {
         return 0;
     };
     eval.minibuffers
@@ -1788,7 +1788,7 @@ fn minibuffer_contents_lisp_string(
 ) -> Result<LispString, Flow> {
     minibuffer_contents_lisp_string_in_state(
         eval.variables(),
-        &eval.buffers,
+        &eval.edit.buffers,
         &eval.minibuffers,
         preserve_properties,
     )
@@ -2422,7 +2422,7 @@ pub(crate) fn builtin_try_completion_with_candidates(
             && !matches_completion_regexps(
                 syntax,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 &candidate.completion,
                 regexps,
                 ignore_case,
@@ -2576,7 +2576,7 @@ pub(crate) fn builtin_all_completions_with_candidates(
             && !matches_completion_regexps(
                 syntax,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 &candidate.completion,
                 regexps,
                 ignore_case,
@@ -2634,7 +2634,7 @@ pub(crate) fn builtin_test_completion_with_candidates(
             && !matches_completion_regexps(
                 syntax,
                 eval.variables(),
-                &eval.buffers,
+                &eval.edit.buffers,
                 &candidate.completion,
                 regexps,
                 ignore_case,
@@ -2958,8 +2958,8 @@ pub(crate) fn builtin_try_completion(
     args: Vec<Value>,
 ) -> EvalResult {
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -2983,8 +2983,8 @@ pub(crate) fn builtin_all_completions(
     args: Vec<Value>,
 ) -> EvalResult {
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -3017,7 +3017,7 @@ pub(crate) fn builtin_test_completion(
     if args.len() >= 2
         && let Ok(string) = expect_lisp_string(&args[0])
     {
-        let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
+        let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
         let probe =
             match direct_hash_completion_candidate(args[1], &string, eval.symbols_with_pos_enabled)
             {
@@ -3026,7 +3026,7 @@ pub(crate) fn builtin_test_completion(
             };
         match probe {
             ObarrayProbe::Found(candidate) => {
-                let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+                let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
                 let syntax =
                     super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
                 return builtin_test_completion_with_candidates(
@@ -3045,8 +3045,8 @@ pub(crate) fn builtin_test_completion(
         }
     }
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
-    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
+    let regexps = completion_regexp_lisp_list(eval.variables(), &eval.edit.buffers);
     let syntax = super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
     // Root the candidate set across the predicate calls (see the holder doc).
     let root_scope = eval.save_specpdl_roots();
@@ -3117,7 +3117,7 @@ pub(crate) fn builtin_flex_cost_gotoh(
         return Ok(Value::NIL);
     }
 
-    let ignore_case = completion_ignore_case(eval.variables(), &eval.buffers);
+    let ignore_case = completion_ignore_case(eval.variables(), &eval.edit.buffers);
 
     // Cheap subsequence pre-filter for the common case-sensitive case: if PAT
     // is not a subsequence of STR there can be no match, so bail before the

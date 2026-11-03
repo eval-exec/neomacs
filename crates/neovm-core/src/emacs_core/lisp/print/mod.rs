@@ -483,7 +483,7 @@ impl PrintSettingsSource {
     ) -> Option<&'context crate::buffer::Buffer> {
         match self {
             Self::Globals => None,
-            Self::Buffer(id) => context.buffers.get(id),
+            Self::Buffer(id) => context.edit.buffers.get(id),
         }
     }
 }
@@ -508,7 +508,7 @@ impl std::fmt::Debug for PrintSettingsBufferGuard<'_> {
 }
 impl<'context> PrintSettingsBufferGuard<'context> {
     fn new(context: &'context mut crate::emacs_core::eval::Context) -> Self {
-        let origin = context.buffers.current_buffer_id();
+        let origin = context.edit.buffers.current_buffer_id();
         Self {
             context,
             origin,
@@ -519,7 +519,7 @@ impl<'context> PrintSettingsBufferGuard<'context> {
         &mut self,
         buffer: crate::buffer::BufferId,
     ) -> Result<(), crate::emacs_core::error::Flow> {
-        if self.context.buffers.current_buffer_id() == Some(buffer) {
+        if self.context.edit.buffers.current_buffer_id() == Some(buffer) {
             Ok(())
         } else {
             self.context.set_current_buffer_unrecorded(buffer)
@@ -607,7 +607,7 @@ impl PrinterContext<'_> {
     fn buffers(&self) -> Option<&crate::buffer::BufferManager> {
         match self {
             Self::Standalone(buffers) => *buffers,
-            Self::Evaluator(ctx) => Some(&ctx.buffers),
+            Self::Evaluator(ctx) => Some(&ctx.edit.buffers),
         }
     }
 }
@@ -853,7 +853,7 @@ fn call_unreadable_printer(
     if !crate::emacs_core::builtins::value_is_function(context, function) {
         return Ok(UnreadableResult::NotCalled);
     }
-    let caller_buffer = context.buffers.current_buffer_id();
+    let caller_buffer = context.edit.buffers.current_buffer_id();
     let caller_scope = PrintSettingsBufferGuard::new(context);
     let mut scope = PrintEvaluationGuard::new(caller_scope.context);
     // A successful earlier callback can replace the dynamic printer function.
@@ -871,7 +871,7 @@ fn call_unreadable_printer(
         match settings_source {
             PrintSettingsSource::Globals => {
                 let binding_result = bind_unreadable_printer_default(scope.context());
-                if let Some(buffer_id) = scope.context.buffers.current_buffer_id() {
+                if let Some(buffer_id) = scope.context.edit.buffers.current_buffer_id() {
                     scope.context.specpdl.push(
                         crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id },
                     );
@@ -885,7 +885,7 @@ fn call_unreadable_printer(
                     let binding_result = destination
                         .context
                         .try_specbind(intern("print-unreadable-function"), Value::NIL);
-                    if let Some(buffer_id) = destination.context.buffers.current_buffer_id() {
+                    if let Some(buffer_id) = destination.context.edit.buffers.current_buffer_id() {
                         destination.context.specpdl.push(
                             crate::emacs_core::eval::SpecBinding::SaveCurrentBuffer { buffer_id },
                         );
@@ -896,7 +896,7 @@ fn call_unreadable_printer(
             }
         }
         if let Some(caller_buffer) = caller_buffer {
-            if scope.context.buffers.current_buffer_id() != Some(caller_buffer) {
+            if scope.context.edit.buffers.current_buffer_id() != Some(caller_buffer) {
                 scope.context.set_current_buffer_unrecorded(caller_buffer)?;
             }
         }
@@ -987,7 +987,7 @@ pub(crate) fn print_value_bytes_in_context(
         return Ok(print_value_bytes_with_options(value, options));
     }
     let scope = PrintEvaluationGuard::new(context);
-    if let Some(buffer_id) = scope.context.buffers.current_buffer_id() {
+    if let Some(buffer_id) = scope.context.edit.buffers.current_buffer_id() {
         scope
             .context
             .specpdl
@@ -1743,7 +1743,7 @@ fn write_value_stateful_inner(
         if let PrinterContext::Evaluator(context) = &state.context {
             if !options_buffer_princ(state.options, *value)
                 && let Some(handle) = format_opaque_handle_in_state(
-                    &context.buffers,
+                    &context.edit.buffers,
                     &context.frames,
                     &context.threads,
                     value,

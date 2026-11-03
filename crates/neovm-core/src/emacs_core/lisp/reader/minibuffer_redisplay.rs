@@ -15,7 +15,7 @@ pub(super) fn activate(
 ) -> Option<ActiveMinibufferWindowState> {
     let caller = super::super::window_cmds::ensure_selected_frame_id_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
     );
     let frame = eval.frames.get(caller)?;
     let old = frame.selected_window;
@@ -31,7 +31,7 @@ pub(super) fn activate(
     publish_tty_top_change(eval, owner);
     let saved = activate_minibuffer_window_in_state(
         &mut eval.frames,
-        &mut eval.buffers,
+        &mut eval.edit.buffers,
         &mut eval.minibuffer_selected_window,
         &mut eval.active_minibuffer_window,
         minibuf_id,
@@ -119,7 +119,7 @@ pub(super) fn publish_expired_buffer(
     buffer: crate::buffer::BufferId,
 ) {
     if super::super::eval::gnu_redisplay_hooks_enabled()
-        && eval.buffers.get(buffer).is_some_and(|buffer| {
+        && eval.edit.buffers.get(buffer).is_some_and(|buffer| {
             buffer.total_char_len().get() != 0 || !buffer.overlays().is_empty()
         })
     {
@@ -202,14 +202,17 @@ pub(super) fn restore_buffer(
         && let Some(buffer) = saved.previous_minibuffer_buffer
     {
         window.set_buffer(buffer);
-        crate::window::window_markers::attach_window_position_markers(&mut eval.buffers, window);
+        crate::window::window_markers::attach_window_position_markers(
+            &mut eval.edit.buffers,
+            window,
+        );
         crate::window::window_markers::set_window_start_with_marker(
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             window,
             saved.previous_minibuffer_window_start,
         );
         crate::window::window_markers::set_window_point_with_marker(
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             window,
             saved.previous_minibuffer_point,
         );
@@ -244,7 +247,7 @@ pub(super) fn teardown(
         let _ = eval.frames.select_frame(saved.minibuffer_frame.0);
     }
     publish_expired_buffer(eval, buffer);
-    erase_expired_minibuffer_buffer_in_state(&mut eval.buffers, buffer);
+    erase_expired_minibuffer_buffer_in_state(&mut eval.edit.buffers, buffer);
     let inactive_mode_result = resize_empty(eval, buffer, depth_after_pop, saved)
         .and_then(|_| run_minibuffer_mode_if_bound(eval, "minibuffer-inactive-mode"));
     if inactive_mode_result.is_ok() {
@@ -294,6 +297,7 @@ fn resize_empty(
         .special_variable_value_by_id(intern("redisplay-adhoc-scroll-in-resize-mini-windows"))
         .is_some_and(|value| value.is_truthy())
         && let Some(start) = eval
+            .edit
             .buffers
             .get(buffer)
             .map(|buffer| buffer.point_min_lisp_char_pos())
@@ -317,6 +321,7 @@ fn resize_empty(
     // The ordinary-window empty-source branch sets BEGV even when the
     // custom-tailored scrolling flag is nil (xdisp.c:13395-13404).
     if let Some(start) = eval
+        .edit
         .buffers
         .get(buffer)
         .map(|buffer| buffer.point_min_lisp_char_pos())

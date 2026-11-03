@@ -933,7 +933,7 @@ pub(crate) fn decode_frame_or_terminal(
         return FrameOrTerminal::Frame(
             crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
                 &mut eval.frames,
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
             ),
         );
     };

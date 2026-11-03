@@ -800,7 +800,7 @@ pub(crate) fn sync_live_frame_font_state(
         // (frame.c:909-930,1076-1082). No native acknowledgement will arrive to
         // do that work for us when the allocated pixels have not changed.
         if let Some(frame) = eval.frames.get_mut(frame_id) {
-            frame.refresh_geometry_for_changed_font(&eval.buffers);
+            frame.refresh_geometry_for_changed_font(&eval.edit.buffers);
         }
         return Ok(());
     }
@@ -825,7 +825,7 @@ pub(crate) fn sync_live_frame_font_state(
     };
     if let Err(err) = super::frame::request_live_gui_frame_resize_and_keep_pending(
         &mut eval.frames,
-        &eval.buffers,
+        &eval.edit.buffers,
         &mut eval.display_host,
         frame_id,
         super::window_cmds::FrameResizeRequest::TextPixels { width, height },
@@ -2835,7 +2835,8 @@ fn face_remapping_for_buffer(eval: &super::eval::Context, buffer: &Buffer) -> Fa
 }
 
 fn face_remapping_value_for_current_buffer(eval: &super::eval::Context) -> Value {
-    eval.buffers
+    eval.edit
+        .buffers
         .current_buffer()
         .map(|buffer| face_remapping_value_for_buffer(eval, buffer))
         .unwrap_or_else(|| {
@@ -3690,6 +3691,7 @@ pub(crate) fn font_at(eval: &mut super::eval::Context, args: Vec<Value>) -> Eval
     }
 
     let current_buffer_id = eval
+        .edit
         .buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3702,9 +3704,12 @@ pub(crate) fn font_at(eval: &mut super::eval::Context, args: Vec<Value>) -> Eval
         ));
     }
 
-    let pos =
-        crate::emacs_core::builtins::expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
+    let pos = crate::emacs_core::builtins::expect_integer_or_marker_in_buffers(
+        &eval.edit.buffers,
+        &args[0],
+    )?;
     let buffer = eval
+        .edit
         .buffers
         .get(current_buffer_id)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3773,15 +3778,17 @@ pub(crate) fn internal_char_font(eval: &mut super::eval::Context, args: Vec<Valu
         (frame_id, character, default_face)
     } else {
         let current_buffer_id = eval
+            .edit
             .buffers
             .current_buffer_id()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
         let pos = crate::emacs_core::builtins::expect_integer_or_marker_in_buffers(
-            &eval.buffers,
+            &eval.edit.buffers,
             &args[0],
         )?;
         let (beg, end, bytepos) = {
             let buffer = eval
+                .edit
                 .buffers
                 .get(current_buffer_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3830,6 +3837,7 @@ pub(crate) fn internal_char_font(eval: &mut super::eval::Context, args: Vec<Valu
 
         let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
         let buffer = eval
+            .edit
             .buffers
             .get(current_buffer_id)
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

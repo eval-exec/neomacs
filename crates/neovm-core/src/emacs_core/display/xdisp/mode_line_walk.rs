@@ -372,7 +372,7 @@ pub(super) fn walk<P: WalkPolicy>(
                     }
                     SymbolRiskTiming::BeforeChild => {}
                 }
-                let Some(value) = symbol.value(eval.variables(), &eval.buffers) else {
+                let Some(value) = symbol.value(eval.variables(), &eval.edit.buffers) else {
                     break;
                 };
                 match P::GRAMMAR {
@@ -502,7 +502,7 @@ pub(super) fn walk<P: WalkPolicy>(
                         let truth = car
                             .as_symbol_id(symbol_mode)
                             .map(mode_line_symbols::ResolvedModeLineSymbol::from)
-                            .and_then(|symbol| symbol.value(eval.variables(), &eval.buffers))
+                            .and_then(|symbol| symbol.value(eval.variables(), &eval.edit.buffers))
                             .is_some_and(|value| value.is_truthy());
                         match select_branch(cdr, truth.into()) {
                             Branch::Absent => break,

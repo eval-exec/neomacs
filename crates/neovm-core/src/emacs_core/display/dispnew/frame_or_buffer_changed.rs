@@ -84,7 +84,7 @@ struct FrameBufferState {
 impl FrameBufferState {
     fn capture(eval: &Context) -> Self {
         let frames = eval.frames.frame_list();
-        let buffers = eval.buffers.buffer_list();
+        let buffers = eval.edit.buffers.buffer_list();
         let mut entries = Vec::with_capacity(frames.len() * 2 + buffers.len() * 3);
         for frame_id in &frames {
             if let Some(frame) = eval.frames.get(*frame_id) {
@@ -95,7 +95,7 @@ impl FrameBufferState {
             }
         }
         for buffer_id in &buffers {
-            let Some(buffer) = eval.buffers.get(*buffer_id) else {
+            let Some(buffer) = eval.edit.buffers.get(*buffer_id) else {
                 continue;
             };
             if buffer_name_is_hidden(buffer) {

@@ -525,7 +525,7 @@ fn execute_autoload_load(
 
     let load_result = with_implicit_load_state(eval, |eval| {
         let path =
-            resolve_autoload_load_path(eval.variables(), eval.buffers.current_buffer(), file)?;
+            resolve_autoload_load_path(eval.variables(), eval.edit.buffers.current_buffer(), file)?;
         // GNU eval.c:Fautoload_do_load calls load_with_autoload_queue with
         // NOMESSAGE=t: autoloading is an implicit consequence of calling a
         // function, not an explicit user request to load a file.

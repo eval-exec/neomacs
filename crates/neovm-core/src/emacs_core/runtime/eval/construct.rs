@@ -152,8 +152,13 @@ impl Context {
         // `message_dolog`, whose xdisp.c path creates `messages-buffer-name`.
         // Keep it after the initial minibuffer in buffer-list order and do not
         // select it.
-        if self.buffers.find_buffer_by_name("*Messages*").is_none() {
-            self.buffers.create_buffer("*Messages*");
+        if self
+            .edit
+            .buffers
+            .find_buffer_by_name("*Messages*")
+            .is_none()
+        {
+            self.edit.buffers.create_buffer("*Messages*");
         }
     }
 
@@ -2209,7 +2214,7 @@ impl Context {
             loads_in_progress: Vec::new(),
             load_read_cursors: Vec::new(),
             last_uncaught_signal_backtrace: None,
-            buffers: world.buffers,
+            edit: crate::buffer::EditRuntime::new(world.buffers),
             xwidgets: world.global.xwidgets,
             last_overlay_modification_hooks: Vec::new(),
             interval_insert_behind_hooks: Value::NIL,

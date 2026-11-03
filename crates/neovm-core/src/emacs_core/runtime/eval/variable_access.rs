@@ -568,7 +568,7 @@ impl Context {
     #[inline]
     pub fn variable_value_in_current_buffer(&self, id: SymId) -> Option<Value> {
         self.variables()
-            .value_in_buffer(self.buffers.current_buffer(), id)
+            .value_in_buffer(self.edit.buffers.current_buffer(), id)
     }
 
     /// GNU `Vfoo = VALUE` from C: the running owner's binding of the

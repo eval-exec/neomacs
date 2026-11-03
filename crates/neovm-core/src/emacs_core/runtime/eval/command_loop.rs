@@ -632,6 +632,7 @@ impl Context {
         }
 
         let current_buffer = self
+            .edit
             .buffers
             .current_buffer()
             .map(|buffer| buffer.name_runtime_string_owned())
@@ -640,7 +641,7 @@ impl Context {
             let selected_window_buffer = frame
                 .selected_window()
                 .and_then(|window| window.buffer_id())
-                .and_then(|buffer_id| self.buffers.get(buffer_id))
+                .and_then(|buffer_id| self.edit.buffers.get(buffer_id))
                 .map(|buffer| buffer.name_runtime_string_owned())
                 .unwrap_or_else(|| "<missing>".to_string());
             format!(
@@ -1009,7 +1010,7 @@ impl Context {
                         Self::command_value_for_log(binding.original()),
                         Self::command_value_for_log(remapped),
                         self.frames.selected_frame().map(|frame| frame.id),
-                        self.buffers.current_buffer_id(),
+                        self.edit.buffers.current_buffer_id(),
                     ),
                 )
             });
@@ -1036,7 +1037,7 @@ impl Context {
             tracing::debug!(
                 "command_loop_1: binding={} current_buffer={:?} active_minibuffer_window={:?}",
                 self.this_command_name_for_log(),
-                self.buffers.current_buffer_id(),
+                self.edit.buffers.current_buffer_id(),
                 self.active_minibuffer_window
             );
 
@@ -1074,18 +1075,21 @@ impl Context {
                     vec![],
                 );
             }
-            if let Some(current_id) = self.buffers.current_buffer_id() {
-                let _ = self.buffers.record_undo_point_before_command(current_id);
+            if let Some(current_id) = self.edit.buffers.current_buffer_id() {
+                let _ = self
+                    .edit
+                    .buffers
+                    .record_undo_point_before_command(current_id);
             }
 
             // GNU `keyboard.c:1477-1486` snapshots prev-buffer/modiff and
             // `last_point_position = PT` here, then resets
             // `disable-point-adjustment` to nil so a command must opt back in
             // to suppress the post-command point adjustment.
-            let apfp_prev_buffer = self.buffers.current_buffer_id();
+            let apfp_prev_buffer = self.edit.buffers.current_buffer_id();
             let apfp_last_pt = apfp_prev_buffer.map(|id| self.apfp_point(id)).unwrap_or(0);
             let apfp_prev_modiff = apfp_prev_buffer
-                .and_then(|id| self.buffers.get(id))
+                .and_then(|id| self.edit.buffers.get(id))
                 .map(|b| b.modified_tick())
                 .unwrap_or(0);
             self.assign_by_id(CommandLoopSymbol::DisablePointAdjustment.id(), Value::NIL);
@@ -1153,7 +1157,7 @@ impl Context {
             // same-buffer, the selected window showing that buffer, point
             // having actually moved, and neither disable var being set.
             {
-                let cur_buffer = self.buffers.current_buffer_id();
+                let cur_buffer = self.edit.buffers.current_buffer_id();
                 let win_buffer = self
                     .frames
                     .selected_frame()
@@ -1175,7 +1179,7 @@ impl Context {
                     && !disabled
                 {
                     let modified = cur_buffer
-                        .and_then(|id| self.buffers.get(id))
+                        .and_then(|id| self.edit.buffers.get(id))
                         .map(|b| b.modified_tick())
                         .unwrap_or(apfp_prev_modiff)
                         != apfp_prev_modiff;
@@ -1854,7 +1858,7 @@ impl Context {
     pub(crate) fn request_mode_line_update(&mut self, target: ModeLineUpdateTarget) {
         let has_mode_line_to_update = match target {
             ModeLineUpdateTarget::CurrentBuffer(buffer) => {
-                self.frames.buffer_window_count(&self.buffers, buffer) != 0
+                self.frames.buffer_window_count(&self.edit.buffers, buffer) != 0
             }
             ModeLineUpdateTarget::AllBuffers => true,
         };
@@ -1930,7 +1934,7 @@ impl Context {
             // the chrome flag too.
             if crate::buffer::buffer::variable_affects_chrome_by_sym_id(resolved) {
                 if gnu_redisplay_hooks_enabled() {
-                    if let Some(buffer) = self.buffers.current_buffer_id() {
+                    if let Some(buffer) = self.edit.buffers.current_buffer_id() {
                         self.gnu_mark_buffer_chrome_cache(buffer);
                     }
                 } else {
@@ -1973,7 +1977,7 @@ impl Context {
         // Sync window position caches from markers.  After text edits,
         // markers have auto-adjusted but the usize caches on Window::Leaf
         // may be stale.  Refresh them before redisplay reads positions.
-        if let Some(buffer) = self.buffers.current_buffer() {
+        if let Some(buffer) = self.edit.buffers.current_buffer() {
             let buf_id = buffer.id;
             crate::window::window_markers::sync_all_frames_for_buffer(&mut self.frames, buf_id);
         }
@@ -1984,7 +1988,7 @@ impl Context {
         if let Some(frame_id) = self.frames.selected_frame().map(|frame| frame.id) {
             super::super::window_cmds::remember_selected_window_point_in_state(
                 &mut self.frames,
-                &mut self.buffers,
+                &mut self.edit.buffers,
                 frame_id,
             );
         }
@@ -2073,7 +2077,7 @@ impl Context {
         // exactly that from GNU while this path ran the hooks after layout
         // and read the auto-hscroll of 85 it had just computed. Same hook
         // pass per redisplay as before; only its position moved.
-        let saved = self.buffers.reset_outermost_restrictions();
+        let saved = self.edit.buffers.reset_outermost_restrictions();
         let _ = super::super::builtins::run_redisplay_window_change_hooks(self);
         // GNU `redisplay_internal` calls `hscroll_window_tree` (src/xdisp.c)
         // before laying out windows so each window's `hscroll` follows point;
@@ -2093,7 +2097,7 @@ impl Context {
             // the command boundary, not on every `redisplay_window`.
             self.echo_area_resize_exact_pending = false;
             if let Some(flow) = self.take_mode_line_display_flow() {
-                self.buffers.restore_outermost_restrictions(saved);
+                self.edit.buffers.restore_outermost_restrictions(saved);
                 self.redisplay_fn = Some(f);
                 return Err(flow);
             }
@@ -2103,15 +2107,15 @@ impl Context {
             if crate::face::realization::enabled()
                 && let Some(flow) = self.take_deferred_redisplay_layout_flow()
             {
-                self.buffers.restore_outermost_restrictions(saved);
+                self.edit.buffers.restore_outermost_restrictions(saved);
                 self.redisplay_fn = Some(f);
                 return Err(flow);
             }
-            self.buffers.restore_outermost_restrictions(saved);
+            self.edit.buffers.restore_outermost_restrictions(saved);
             self.redisplay_fn = Some(f);
         } else {
             self.echo_area_resize_exact_pending = false;
-            self.buffers.restore_outermost_restrictions(saved);
+            self.edit.buffers.restore_outermost_restrictions(saved);
         }
         *self.last_redisplay_signature = Some(self.redisplay_signature());
         Ok(())
@@ -2207,7 +2211,7 @@ impl Context {
             frame
                 .find_window(window_id)
                 .and_then(|window| window.buffer_id())
-                .and_then(|buffer_id| self.buffers.get(buffer_id))
+                .and_then(|buffer_id| self.edit.buffers.get(buffer_id))
                 .is_some_and(|buffer| buffer.changed_char_range().is_some())
         })
     }
@@ -2286,7 +2290,7 @@ impl Context {
             input_checkpoint: self.input_progress.checkpoint(),
             selected_frame,
             selected_window,
-            current_buffer: self.buffers.current_buffer_id().map(|id| id.0),
+            current_buffer: self.edit.buffers.current_buffer_id().map(|id| id.0),
             current_message: self.current_message.clone(),
             active_minibuffer_window: self.active_minibuffer_window.map(|id| id.0),
             minibuffer_selected_window: self.minibuffer_selected_window.map(|id| id.0),
@@ -2302,7 +2306,7 @@ impl Context {
         &self,
         id: crate::buffer::BufferId,
     ) -> Option<RedisplayBufferSignature> {
-        let buffer = self.buffers.get(id)?;
+        let buffer = self.edit.buffers.get(id)?;
         Some(RedisplayBufferSignature {
             layout: self.redisplay_buffer_layout_inputs(id)?,
             save_modified_tick: buffer.save_modified_tick(),
@@ -2841,7 +2845,7 @@ impl Context {
         // Safety: stop-the-world GC — no concurrent borrows of the buffer
         // storage exist (the pre-refactor body relied on the enclosing
         // `unsafe fn` for this same call).
-        let chain_heads = unsafe { self.buffers.collect_marker_chain_head_slots() };
+        let chain_heads = unsafe { self.edit.buffers.collect_marker_chain_head_slots() };
         let heads_count = chain_heads.len();
         unsafe {
             (*heap_ptr).set_marker_chain_head_slots(chain_heads);
@@ -3665,7 +3669,7 @@ impl Context {
         // the by-name spelling re-interned it at each probe.
         static TRACK_MOUSE: WellKnown = WellKnown::TrackMouse;
         self.variables()
-            .value_in_buffer(self.buffers.current_buffer(), TRACK_MOUSE.id())
+            .value_in_buffer(self.edit.buffers.current_buffer(), TRACK_MOUSE.id())
             .unwrap_or(Value::NIL)
             .is_truthy()
     }

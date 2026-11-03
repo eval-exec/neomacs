@@ -18,7 +18,7 @@ const _: () = assert!(std::mem::size_of::<u32>() == 4);
 /// the current buffer's `point` / `BEGV` / `ZV`. See
 /// [`crate::buffer::buffer::jit_layout`] for the rest of the chain and for why
 /// two of its hops are probed rather than baked.
-pub(crate) const CONTEXT_BUFFERS_OFFSET: usize = std::mem::offset_of!(Context, buffers);
+pub(crate) const CONTEXT_BUFFERS_OFFSET: usize = std::mem::offset_of!(Context, edit.buffers);
 /// Where compiled code reads the `Box<TaggedHeap>` pointer, the first hop to
 /// the heap state it tests and bumps in place (`tagged::gc::JitHeapState`).
 /// The box is assigned only by the constructors, so the pointer is stable

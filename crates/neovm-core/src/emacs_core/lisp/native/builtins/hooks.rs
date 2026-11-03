@@ -102,7 +102,7 @@ fn save_hook_caller_context(eval: &super::eval::Context) -> HookCallerContextSta
     HookCallerContextState {
         selected_frame_id,
         selected_window_id,
-        current_buffer_id: eval.buffers.current_buffer_id(),
+        current_buffer_id: eval.edit.buffers.current_buffer_id(),
     }
 }
 
@@ -258,6 +258,7 @@ fn run_window_local_hook_values(
                 continue;
             };
             let has_local_hook = eval
+                .edit
                 .buffers
                 .get(buffer_id)
                 .and_then(|buffer| buffer.get_buffer_local_binding(hook_name))
@@ -267,6 +268,7 @@ fn run_window_local_hook_values(
             }
             select_frame_window_for_hook_context(eval, frame_id, *window_id)?;
             let Some(local_hook_value) = eval
+                .edit
                 .buffers
                 .current_buffer()
                 .and_then(|buffer| buffer.buffer_local_value(hook_name))
@@ -791,7 +793,8 @@ fn prepare_saved_window_buffer_restoration(
                         return None;
                     };
                     let point = if globally_selected_window == Some(window_id) {
-                        eval.buffers
+                        eval.edit
+                            .buffers
                             .get(*buffer_id)
                             .map(|buffer| {
                                 LispCharPos1::from_one_based_usize(
@@ -813,7 +816,11 @@ fn prepare_saved_window_buffer_restoration(
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
-    apply_saved_window_buffer_restoration(&mut snapshot.tree, &current_buffers, &mut eval.buffers);
+    apply_saved_window_buffer_restoration(
+        &mut snapshot.tree,
+        &current_buffers,
+        &mut eval.edit.buffers,
+    );
 }
 
 fn collect_leaf_buffer_ids(
@@ -870,7 +877,8 @@ fn prepare_reused_window_histories(
                         return None;
                     };
                     let window_point = if globally_selected_window == Some(window_id) {
-                        eval.buffers
+                        eval.edit
+                            .buffers
                             .get(*buffer_id)
                             .map(|buffer| {
                                 LispCharPos1::from_one_based_usize(
@@ -888,7 +896,7 @@ fn prepare_reused_window_histories(
                         window_point,
                     };
                     if outgoing.buffer_id != saved_buffer_id
-                        && eval.buffers.get(saved_buffer_id).is_some()
+                        && eval.edit.buffers.get(saved_buffer_id).is_some()
                     {
                         Some(ReusedWindowHistoryTransition::RecordOutgoingBuffer {
                             outgoing,
@@ -911,7 +919,7 @@ fn prepare_reused_window_histories(
             } => {
                 let run_buffer_list_hook = {
                     let (frames, buffers, minibuffers) =
-                        (&mut eval.frames, &eval.buffers, &eval.minibuffers);
+                        (&mut eval.frames, &eval.edit.buffers, &eval.minibuffers);
                     super::window_cmds::record_window_buffer_change_history_in_state(
                         frames,
                         minibuffers,
@@ -979,6 +987,7 @@ fn disconnected_window_point(
     }
 
     let last_selected_window = eval
+        .edit
         .buffers
         .get(outgoing.buffer_id)
         .and_then(|buffer| buffer.last_selected_window);
@@ -1001,7 +1010,7 @@ fn unshow_frame_root_buffers(eval: &mut super::eval::Context, frame_id: crate::w
     if let Some(selected_frame_id) = eval.frames.selected_frame().map(|frame| frame.id) {
         super::window_cmds::remember_selected_window_point_in_state(
             &mut eval.frames,
-            &mut eval.buffers,
+            &mut eval.edit.buffers,
             selected_frame_id,
         );
     }
@@ -1033,7 +1042,7 @@ fn unshow_frame_root_buffers(eval: &mut super::eval::Context, frame_id: crate::w
 
     for outgoing in outgoing_windows {
         let point = disconnected_window_point(eval, outgoing);
-        if let Some(buffer) = eval.buffers.get_mut(outgoing.buffer_id) {
+        if let Some(buffer) = eval.edit.buffers.get_mut(outgoing.buffer_id) {
             buffer.last_window_start = outgoing.window_start.max(LispCharPos1::ONE);
         }
 
@@ -1047,18 +1056,19 @@ fn unshow_frame_root_buffers(eval: &mut super::eval::Context, frame_id: crate::w
                 ));
             }
             DisconnectedWindowPoint::CommitWindowPoint(window_point) => {
-                let byte_pos = eval.buffers.get(outgoing.buffer_id).map(|buffer| {
+                let byte_pos = eval.edit.buffers.get(outgoing.buffer_id).map(|buffer| {
                     buffer.lisp_pos_to_emacs_byte_pos(window_point.max(LispCharPos1::ONE))
                 });
                 if let Some(byte_pos) = byte_pos {
                     let _ = eval
+                        .edit
                         .buffers
                         .goto_buffer_emacs_byte_pos(outgoing.buffer_id, byte_pos);
                 }
             }
         }
 
-        if let Some(buffer) = eval.buffers.get_mut(outgoing.buffer_id)
+        if let Some(buffer) = eval.edit.buffers.get_mut(outgoing.buffer_id)
             && buffer.last_selected_window == Some(outgoing.window_id)
         {
             buffer.last_selected_window = None;
@@ -1506,12 +1516,16 @@ pub(crate) fn builtin_current_window_configuration(
     let frame = if let Some(frame) = args.first() {
         expect_optional_live_frame_designator_in_state(frame, &eval.frames)?;
         if frame.is_nil() {
-            super::window_cmds::selected_frame_impl(&mut eval.frames, &mut eval.buffers, vec![])?
+            super::window_cmds::selected_frame_impl(
+                &mut eval.frames,
+                &mut eval.edit.buffers,
+                vec![],
+            )?
         } else {
             *frame
         }
     } else {
-        super::window_cmds::selected_frame_impl(&mut eval.frames, &mut eval.buffers, vec![])?
+        super::window_cmds::selected_frame_impl(&mut eval.frames, &mut eval.edit.buffers, vec![])?
     };
 
     if !frame.is_frame() {
@@ -1535,20 +1549,20 @@ pub(crate) fn builtin_current_window_configuration(
             change_stamp: frame_state.change_stamp,
             tree:
                 crate::window::window_markers::clone_window_tree_with_independent_position_markers(
-                    &mut eval.buffers,
+                    &mut eval.edit.buffers,
                     frame_state.tree(),
                 ),
             selected_window: frame_state.selected_window,
-            current_buffer: eval.buffers.current_buffer_id(),
+            current_buffer: eval.edit.buffers.current_buffer_id(),
             minibuffer_window: frame_state.minibuffer_window,
             minibuffer_leaf: frame_state.minibuffer_leaf.as_ref().map(|window| {
                 crate::window::window_markers::clone_window_leaf_with_independent_position_markers(
-                    &mut eval.buffers,
+                    &mut eval.edit.buffers,
                     window,
                 )
             }),
         };
-        normalize_selected_window_point_in_snapshot(&mut snapshot, &mut eval.buffers);
+        normalize_selected_window_point_in_snapshot(&mut snapshot, &mut eval.edit.buffers);
         save_snapshot_persistent_window_parameters(
             &mut snapshot,
             eval.variable_value_by_name("window-persistent-parameters")
@@ -1629,7 +1643,7 @@ impl LiveCurrentBufferPoint {
         // `new_current_buffer`: the buffer current at save time, unless it has
         // since been killed (GNU drops it then, and with it the whole rule).
         let saved_current_buffer = snapshot.current_buffer?;
-        eval.buffers.get(saved_current_buffer)?;
+        eval.edit.buffers.get(saved_current_buffer)?;
 
         let frame = eval.frames.get(snapshot.frame_id)?;
         // A dead saved-selected window has nil contents in GNU, so it can never
@@ -1665,12 +1679,12 @@ impl LiveCurrentBufferPoint {
         });
 
         let buffer_point = |buffer_id: crate::buffer::BufferId| {
-            eval.buffers.get(buffer_id).map(|buffer| {
+            eval.edit.buffers.get(buffer_id).map(|buffer| {
                 LispCharPos1::from_one_based_usize(buffer.point_char_pos().get().saturating_add(1))
             })
         };
 
-        let point = if eval.buffers.current_buffer_id() == Some(saved_current_buffer) {
+        let point = if eval.edit.buffers.current_buffer_id() == Some(saved_current_buffer) {
             if saved_selected_shows_it
                 && live_selected_buffer == Some(saved_current_buffer)
                 && !live_selected_is_saved_selected
@@ -1697,7 +1711,7 @@ impl LiveCurrentBufferPoint {
     /// `EQ (XWINDOW (data->current_window)->contents, new_current_buffer)`
     /// guard, evaluated against the freshly restored tree.
     fn apply(self, eval: &mut super::eval::Context, frame_id: crate::window::FrameId) {
-        let buffers = &mut eval.buffers;
+        let buffers = &mut eval.edit.buffers;
         let Some(frame) = eval.frames.get_mut(frame_id) else {
             return;
         };
@@ -1748,7 +1762,7 @@ pub(crate) fn set_window_configuration_with_options(
     let snapshot = WINDOW_CONFIGURATION_SNAPSHOTS.with(|slot| {
         slot.borrow()
             .get(&serial)
-            .map(|snapshot| snapshot.clone_for_restore(&mut eval.buffers))
+            .map(|snapshot| snapshot.clone_for_restore(&mut eval.edit.buffers))
     });
 
     if let Some(snapshot) = snapshot {
@@ -1829,24 +1843,26 @@ pub(crate) fn set_window_configuration_with_options(
             })
             .unwrap_or_default()
             .into_iter()
-            .filter(|(_, buffer_id)| eval.buffers.get(*buffer_id).is_none())
+            .filter(|(_, buffer_id)| eval.edit.buffers.get(*buffer_id).is_none())
             .map(|(wid, _)| wid)
             .collect();
         if !dead_leaf_windows.is_empty() {
             let avoid = eval
+                .edit
                 .buffers
                 .current_buffer_id()
                 .map(Value::make_buffer)
                 .unwrap_or(Value::NIL);
             let substitute = super::super::buffer::other_buffer_impl_in_state(
                 &mut eval.frames,
-                &mut eval.buffers,
+                &mut eval.edit.buffers,
                 vec![avoid, Value::NIL, Value::NIL],
             )
             .ok()
             .and_then(|value| value.as_buffer_id());
             if let Some(substitute) = substitute {
                 let substitute_point = eval
+                    .edit
                     .buffers
                     .get(substitute)
                     .map(|buffer| {
@@ -1855,7 +1871,7 @@ pub(crate) fn set_window_configuration_with_options(
                         )
                     })
                     .unwrap_or(LispCharPos1::ONE);
-                let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+                let (frames, buffers) = (&mut eval.frames, &mut eval.edit.buffers);
                 if let Some(frame) = frames.get_mut(snapshot.frame_id) {
                     for wid in dead_leaf_windows {
                         if let Some(window) = frame.find_window_mut(wid) {
@@ -1900,13 +1916,16 @@ pub(crate) fn set_window_configuration_with_options(
                 })
         });
         if let Some((buffer_id, point)) = selected_window_state
-            && let Some(buffer) = eval.buffers.get(buffer_id)
+            && let Some(buffer) = eval.edit.buffers.get(buffer_id)
         {
             let byte_pos = buffer.lisp_pos_to_emacs_byte_pos(point);
-            let _ = eval.buffers.goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
+            let _ = eval
+                .edit
+                .buffers
+                .goto_buffer_emacs_byte_pos(buffer_id, byte_pos);
         }
         if let Some(buffer_id) = snapshot.current_buffer {
-            if eval.buffers.get(buffer_id).is_some() {
+            if eval.edit.buffers.get(buffer_id).is_some() {
                 eval.set_current_buffer_unrecorded(buffer_id)?;
             } else if let Some((buffer_id, _)) = selected_window_state {
                 eval.set_current_buffer_unrecorded(buffer_id)?;
@@ -1968,9 +1987,11 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
         expect_optional_live_frame_designator(frame, eval)?;
     }
     let frame = match args.first().copied().unwrap_or(Value::NIL).kind() {
-        ValueKind::Nil => {
-            super::window_cmds::selected_frame_impl(&mut eval.frames, &mut eval.buffers, vec![])?
-        }
+        ValueKind::Nil => super::window_cmds::selected_frame_impl(
+            &mut eval.frames,
+            &mut eval.edit.buffers,
+            vec![],
+        )?,
         _value => args.first().copied().unwrap_or(Value::NIL),
     };
     let Some(fid) = frame.as_frame_id() else {
@@ -2010,6 +2031,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
                 continue;
             };
             let has_local_hook = eval
+                .edit
                 .buffers
                 .get(buffer_id)
                 .and_then(|buffer| buffer.get_buffer_local_binding(hook_name))
@@ -2019,6 +2041,7 @@ pub(crate) fn builtin_run_window_configuration_change_hook(
             }
             select_frame_window_for_hook_context(eval, frame_id, *window_id)?;
             let Some(local_hook_value) = eval
+                .edit
                 .buffers
                 .current_buffer()
                 .and_then(|buffer| buffer.buffer_local_value(hook_name))
@@ -2073,7 +2096,7 @@ pub(crate) fn builtin_run_window_scroll_functions(
     })?;
     let window_start = super::window_cmds::builtin_window_start(eval, &[window_arg])?;
     let hook_sym = hook_runtime::hook_symbol_by_id(eval, WINDOW_SCROLL_FUNCTIONS.id());
-    let saved_buffer_id = eval.buffers.current_buffer_id();
+    let saved_buffer_id = eval.edit.buffers.current_buffer_id();
     if let Some(buffer_id) = window_buffer_id_in_state(eval, frame_id, window_id) {
         // GNU `set_window_buffer` temporarily enters the displayed buffer
         // with `Fset_buffer` before running `window-scroll-functions`

@@ -1695,7 +1695,7 @@ pub(super) fn visible_default_directory_lisp(
     if let Some(string) = visible.as_lisp_string() {
         return Some(string.clone());
     }
-    super::super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.buffers)
+    super::super::fileio::default_directory_lisp_in_state(eval.variables(), &[], &eval.edit.buffers)
 }
 
 pub(super) fn os_str_to_lisp_string(value: &OsStr) -> LispString {
@@ -9046,7 +9046,7 @@ impl super::super::eval::Context {
         kind: AsyncCallbackKind,
     ) -> Result<(), Flow> {
         let saved_match_data = self.match_data.clone();
-        let saved_current_buffer = self.buffers.current_buffer_id();
+        let saved_current_buffer = self.edit.buffers.current_buffer_id();
         let saved_waiting_for_input = self.waiting_for_user_input();
         let saved_deactivate_mark = self.eval_symbol("deactivate-mark").unwrap_or(Value::NIL);
         let specpdl_count = self.specpdl.len();
@@ -9297,7 +9297,7 @@ impl super::super::eval::Context {
         let Some(proc) = self.processes.get(id) else {
             return ProcessOutputDestination::to_filter();
         };
-        ProcessOutputDestination::of(proc, &self.buffers, fast_read)
+        ProcessOutputDestination::of(proc, &self.edit.buffers, fast_read)
     }
 
     /// GNU's `fast_read_process_output` (src/process.c:8980), the Lisp variable
@@ -10140,7 +10140,7 @@ impl super::super::eval::Context {
             self.sync_process_read_config_from_visible_variables();
             let accepted = self
                 .processes
-                .accept_network_server_connections(&mut self.buffers, pid)?;
+                .accept_network_server_connections(&mut self.edit.buffers, pid)?;
             for event in &accepted {
                 self.setup_process_output_descriptor(event.client_id)?;
             }

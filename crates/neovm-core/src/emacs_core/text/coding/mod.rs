@@ -3333,6 +3333,7 @@ pub(crate) fn builtin_check_coding_systems_region(
         let end = marker_or_integer_position(&args[1])?;
 
         let buffer = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -3469,6 +3470,7 @@ pub(crate) fn builtin_unencodable_char_position(
             (end_raw, start_raw)
         };
         let buffer = eval
+            .edit
             .buffers
             .current_buffer()
             .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -6149,6 +6151,7 @@ pub(crate) fn builtin_find_coding_systems_region_internal(
     let end = marker_or_integer_position(&args[1])?;
 
     let buffer = eval
+        .edit
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;

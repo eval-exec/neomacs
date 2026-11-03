@@ -5512,8 +5512,12 @@ impl<'a> Vm<'a> {
                         return_value!(result);
                     }
                     Op::SaveCurrentBuffer => {
-                        if let Some(buffer_id) =
-                            self.ctx.buffers.current_buffer().map(|buffer| buffer.id)
+                        if let Some(buffer_id) = self
+                            .ctx
+                            .edit
+                            .buffers
+                            .current_buffer()
+                            .map(|buffer| buffer.id)
                         {
                             aux_stack
                                 .current_mut()
@@ -5530,7 +5534,8 @@ impl<'a> Vm<'a> {
                         }
                     }
                     Op::SaveRestriction => {
-                        if let Some(saved) = self.ctx.buffers.save_current_restriction_state() {
+                        if let Some(saved) = self.ctx.edit.buffers.save_current_restriction_state()
+                        {
                             aux_stack
                                 .current_mut()
                                 .bind_stack
@@ -6663,7 +6668,7 @@ impl<'a> Vm<'a> {
                 }
                 if let Some(dedicated) =
                     crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
-                    && let Some(buf) = self.ctx.buffers.current_buffer()
+                    && let Some(buf) = self.ctx.edit.buffers.current_buffer()
                 {
                     return Ok(dedicated.read(buf));
                 }
@@ -6715,7 +6720,7 @@ impl<'a> Vm<'a> {
                 SymbolRedirect::Localized => {
                     // Reuse the existing buffer-id/epoch cache before constructing
                     // a buffer Value or gathering general forwarding inputs.
-                    if let Some(buf) = self.ctx.buffers.current_buffer()
+                    if let Some(buf) = self.ctx.edit.buffers.current_buffer()
                         && let Some(value) = ob.read_localized_symbol_for_buffer(
                             name_id,
                             sym,
@@ -6757,7 +6762,7 @@ impl<'a> Vm<'a> {
             Some(SymbolRedirect::Localized | SymbolRedirect::Forwarded)
         ) {
             let (cur_val, alist, slots_ptr, buf_id, local_flags) =
-                match self.ctx.buffers.current_buffer() {
+                match self.ctx.edit.buffers.current_buffer() {
                     Some(buf) => (
                         Value::make_buffer(buf.id),
                         buf.local_var_alist_value(),
@@ -6768,7 +6773,7 @@ impl<'a> Vm<'a> {
                     None => (Value::NIL, Value::NIL, None, None, 0u64),
                 };
             let defaults_ptr: *const [Value] =
-                &self.ctx.buffers.buffer_defaults[..] as *const [Value];
+                &self.ctx.edit.buffers.buffer_defaults[..] as *const [Value];
             // Safety: the slots and defaults pointers are valid for
             // the duration of this call because we hold `&mut self.ctx`,
             // the buffer and BufferManager live inside `self.ctx`, and
@@ -6813,7 +6818,7 @@ impl<'a> Vm<'a> {
         // the per-buffer scan for them (slot/undo names still resolve inside the
         // gated call). See `Obarray::is_localized`.
         let name_localized = self.ctx.obarray.is_localized(name_id);
-        if let Some(buf) = self.ctx.buffers.current_buffer()
+        if let Some(buf) = self.ctx.edit.buffers.current_buffer()
             && let Some(val) = buf.get_buffer_local_by_sym_id_gated(name_id, name_localized)
             && !val.is_nil()
         {
@@ -6830,7 +6835,7 @@ impl<'a> Vm<'a> {
 
         // Retry buffer-local for nil-valued defaults (e.g. unset
         // `buffer-undo-list` on a clean buffer).
-        if let Some(buf) = self.ctx.buffers.current_buffer()
+        if let Some(buf) = self.ctx.edit.buffers.current_buffer()
             && let Some(val) = buf.get_buffer_local_by_sym_id_gated(name_id, name_localized)
         {
             return Ok(val);
@@ -6892,7 +6897,7 @@ impl<'a> Vm<'a> {
         // cell and would otherwise have to remember the rule itself.
         let value = crate::emacs_core::eval::check_forwarded_store(
             &self.ctx.obarray,
-            &self.ctx.buffers,
+            &self.ctx.edit.buffers,
             &self.ctx.specpdl,
             resolved,
             value,
@@ -6910,7 +6915,7 @@ impl<'a> Vm<'a> {
         // mirrors GNU `set_internal` SYMBOL_FORWARDED arm at
         // `data.c:1774-1786` which calls `SET_PER_BUFFER_VALUE_P`.
         if matches!(redirect, Some(SymbolRedirect::Forwarded))
-            && let Some(buf_id) = self.ctx.buffers.current_buffer_id()
+            && let Some(buf_id) = self.ctx.edit.buffers.current_buffer_id()
         {
             let buf_fwd = self
                 .ctx
@@ -6928,6 +6933,7 @@ impl<'a> Vm<'a> {
                     let flags_idx = buf_fwd.local_flags_idx;
                     let slot_exists = self
                         .ctx
+                        .edit
                         .buffers
                         .get(buf_id)
                         .is_some_and(|buf| offset < buf.slots.len());
@@ -6944,7 +6950,7 @@ impl<'a> Vm<'a> {
                             "set",
                             &where_value,
                         )?;
-                        if let Some(buf) = self.ctx.buffers.get_mut(buf_id) {
+                        if let Some(buf) = self.ctx.edit.buffers.get_mut(buf_id) {
                             buf.slots[offset] = value;
                             if flags_idx >= 0 {
                                 buf.set_slot_local_flag(slot, true);
@@ -6959,7 +6965,7 @@ impl<'a> Vm<'a> {
         }
 
         if matches!(redirect, Some(SymbolRedirect::Localized))
-            && let Some(first_buf_id) = self.ctx.buffers.current_buffer_id()
+            && let Some(first_buf_id) = self.ctx.edit.buffers.current_buffer_id()
         {
             if self.ctx.watchers.has_watchers(resolved) {
                 let where_value = self.ctx.variable_watcher_where_for_set_by_id(resolved);
@@ -6974,8 +6980,13 @@ impl<'a> Vm<'a> {
             // GNU `set_internal' reads the current buffer AFTER notifying the
             // watchers, which may have switched it.  Extract buffer state
             // before the obarray borrow.
-            let buf_id = self.ctx.buffers.current_buffer_id().unwrap_or(first_buf_id);
-            let (cur_val, alist) = match self.ctx.buffers.get(buf_id) {
+            let buf_id = self
+                .ctx
+                .edit
+                .buffers
+                .current_buffer_id()
+                .unwrap_or(first_buf_id);
+            let (cur_val, alist) = match self.ctx.edit.buffers.get(buf_id) {
                 Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
                 None => (Value::NIL, Value::NIL),
             };
@@ -6984,7 +6995,7 @@ impl<'a> Vm<'a> {
             // as shadowing. SPECPDL_LET_LOCAL is explicitly excluded
             // by bug#62419.  Asked lazily, after the watchers, as GNU
             // `set_internal' does.
-            let (specpdl, buffers) = (&self.ctx.specpdl, &self.ctx.buffers);
+            let (specpdl, buffers) = (&self.ctx.specpdl, &self.ctx.edit.buffers);
             let new_alist = self.ctx.obarray.set_internal_localized_with(
                 resolved,
                 value,
@@ -6998,7 +7009,7 @@ impl<'a> Vm<'a> {
                 },
             );
             // Store back the (possibly extended) alist.
-            if let Some(buf) = self.ctx.buffers.get_mut(buf_id) {
+            if let Some(buf) = self.ctx.edit.buffers.get_mut(buf_id) {
                 buf.replace_local_var_alist(new_alist);
             }
             self.ctx
@@ -7224,7 +7235,7 @@ impl<'a> Vm<'a> {
     fn ensure_selected_frame_id(&mut self) -> FrameId {
         crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
             &mut self.ctx.frames,
-            &mut self.ctx.buffers,
+            &mut self.ctx.edit.buffers,
         )
     }
 
@@ -7278,7 +7289,7 @@ impl<'a> Vm<'a> {
             return value;
         }
         // specbind writes directly to obarray, so no dynamic stack lookup needed.
-        if let Some(buffer) = self.ctx.buffers.current_buffer()
+        if let Some(buffer) = self.ctx.edit.buffers.current_buffer()
             && let Some(binding) = buffer.get_buffer_local_binding(name)
         {
             return binding.as_value().unwrap_or(Value::NIL);
@@ -9553,7 +9564,7 @@ impl<'a> Vm<'a> {
     fn op_point(&mut self) -> EvalResult {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
-        match self.ctx.buffers.current_buffer() {
+        match self.ctx.edit.buffers.current_buffer() {
             Some(buf) => Ok(Value::from_fixnum(buf.point_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
@@ -9563,7 +9574,7 @@ impl<'a> Vm<'a> {
     fn op_point_min(&mut self) -> EvalResult {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
-        match self.ctx.buffers.current_buffer() {
+        match self.ctx.edit.buffers.current_buffer() {
             Some(buf) => Ok(Value::from_fixnum(buf.point_min_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
@@ -9573,7 +9584,7 @@ impl<'a> Vm<'a> {
     fn op_point_max(&mut self) -> EvalResult {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
-        match self.ctx.buffers.current_buffer() {
+        match self.ctx.edit.buffers.current_buffer() {
             Some(buf) => Ok(Value::from_fixnum(buf.point_max_position().into())),
             None => Err(signal("error", vec![Value::string("No current buffer")])),
         }
@@ -9583,7 +9594,7 @@ impl<'a> Vm<'a> {
     fn op_current_buffer(&mut self) -> EvalResult {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
-        Ok(match self.ctx.buffers.current_buffer() {
+        Ok(match self.ctx.edit.buffers.current_buffer() {
             Some(buf) => Value::make_buffer(buf.id),
             None => Value::NIL,
         })

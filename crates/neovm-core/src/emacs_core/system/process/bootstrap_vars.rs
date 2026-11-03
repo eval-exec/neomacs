@@ -541,7 +541,7 @@ pub(super) fn parse_make_process_buffer(
     eval: &mut super::super::eval::Context,
     value: &Value,
 ) -> Result<Value, Flow> {
-    parse_make_process_buffer_in_state(&mut eval.buffers, value)
+    parse_make_process_buffer_in_state(&mut eval.edit.buffers, value)
 }
 
 /// Every process constructor's `:buffer`, which in GNU is one call to
