@@ -13,13 +13,13 @@ use std::rc::Rc;
 
 use crate::buffer::BufferId;
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::eval::{
-    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
-};
 use crate::emacs_core::plist;
 use crate::emacs_core::value::{Value, ValueKind, eq_value};
 use crate::gc_trace::GcTrace;
 use crate::heap_types::OverlayData;
+use neovm_value::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 
 pub use super::overlay_index::OverlayPropertyFilter;
 use super::overlay_index::{

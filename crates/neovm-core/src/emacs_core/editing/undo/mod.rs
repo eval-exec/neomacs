@@ -14,6 +14,9 @@ use super::value::*;
 use crate::buffer::buffer::UndoBoundaryOutcome;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::intern::WellKnown;
+use neovm_value::value::scratch_bridge::{
+    push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
+};
 
 // ---------------------------------------------------------------------------
 // Bootstrap variables
@@ -159,12 +162,12 @@ fn compact_one_buffer_for_gc(ctx: &mut super::eval::Context, id: crate::buffer::
 
     let first_group_bytes = crate::buffer::undo_first_group_bytes(undo_list);
     if let Some(function) = limits.outer_limit_function_for(first_group_bytes) {
-        let saved_roots = super::eval::save_scratch_gc_roots();
-        super::eval::push_scratch_gc_root(function);
+        let saved_roots = save_scratch_gc_roots();
+        push_scratch_gc_root(function);
         let handled = ctx.with_gc_inhibited(|eval| {
             eval.funcall_general(function, vec![Value::fixnum(first_group_bytes)])
         });
-        super::eval::restore_scratch_gc_roots(saved_roots);
+        restore_scratch_gc_roots(saved_roots);
         if handled.is_ok_and(|answer| !answer.is_nil()) {
             // "The function is responsible for making any desired changes in
             // buffer-undo-list." (src/undo.c:362-368)

@@ -67,7 +67,7 @@ pub mod flow_vocab;
 #[doc(hidden)]
 pub mod jit_runtime;
 pub mod positions;
-pub(crate) mod scratch_bridge;
+pub mod scratch_bridge;
 pub mod text_props;
 
 // Re-export tagged types for downstream use.
