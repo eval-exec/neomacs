@@ -86,8 +86,8 @@ pub(super) fn font_postscript_name(font: &CTFont) -> Option<String> {
 
 /// GNU accepts a best-matched face when its requested family is catalogued,
 /// or when CoreText resolves the request to the same family. A NULL family
-/// name can only prove the second case, so it is accepted when the family is
-/// already catalogued and declined otherwise.
+/// name cannot prove the CoreText-resolved case, so it is accepted only when
+/// the requested family is already catalogued and declined otherwise.
 pub(super) fn fallback_family_matches(
     requested: &str,
     is_available: bool,
