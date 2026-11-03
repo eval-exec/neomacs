@@ -75,6 +75,7 @@ fn emacs_get_random_unlocked() -> i64 {
 /// limb of one sample, exactly as GNU's `random` loop in `src/bignum.c`
 /// does; keeping the guard inside the substrate leaves the lock with a
 /// single owner.
+#[doc(hidden)]
 pub fn with_random_locked<R>(body: impl FnOnce() -> R) -> R {
     let mut state = lock_generator();
     if *state == GeneratorSeed::Unseeded {
@@ -88,12 +89,14 @@ pub fn with_random_locked<R>(body: impl FnOnce() -> R) -> R {
 
 /// A full-width `emacs_get_random()` fixnum value, as GNU's unbounded
 /// `random` returns.
+#[doc(hidden)]
 pub fn emacs_get_random() -> i64 {
     with_random_locked(emacs_get_random_unlocked)
 }
 
 /// A uniform fixnum in `[0, limit)`, matching GNU's bounded `random`
 /// rejection loop.
+#[doc(hidden)]
 pub fn emacs_get_random_fixnum(limit: i64) -> i64 {
     let lim = limit as u64;
     let intmask = emacs_intmask();
@@ -110,6 +113,7 @@ pub fn emacs_get_random_fixnum(limit: i64) -> i64 {
     })
 }
 
+#[doc(hidden)]
 pub fn emacs_seed_random(seed: &[u8]) {
     let mut arg = 0u32;
     for (index, byte) in seed.iter().enumerate() {
@@ -122,6 +126,7 @@ pub fn emacs_seed_random(seed: &[u8]) {
     *state = GeneratorSeed::Seeded;
 }
 
+#[doc(hidden)]
 pub fn emacs_init_random() {
     seed_from_entropy(&mut lock_generator());
 }
@@ -129,6 +134,7 @@ pub fn emacs_init_random() {
 /// One PRNG word mixed into a full `u64` limb, for the bignum sampler.
 /// Callers must already hold the process lock (`with_random_locked`);
 /// GNU `src/sysdep.c:2270-2276`, `get_random_ulong`.
+#[doc(hidden)]
 pub fn emacs_random_limb_unlocked() -> u64 {
     let mut word = 0u64;
     for _ in 0..64u32.div_ceil(31) {

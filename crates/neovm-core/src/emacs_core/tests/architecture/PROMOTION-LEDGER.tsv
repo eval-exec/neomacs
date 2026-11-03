@@ -1055,9 +1055,35 @@ OverlayData::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_
 DumpedSymbolFlags::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/symbol/cell.rs:581	symbol::cell	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
 ThreadChildren::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs:328	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
 MutexPayload::new	fn	(new fn)	crates/neovm-value/src/crates/neovm-value/src/heap_types/threading.rs:488	heap_types::threading	PC1-D constructor (batch 3): cross-crate literal for the upper owner; fields stay private
-emacs_get_random	fn	pub(crate)	crates/neovm-value/src/random.rs:55	random	stage-3 C12: buffer substrate (generate_new_buffer_name) calls the PRNG below the lisp layer; body unchanged, moved from builtins/arithmetic.rs
-emacs_get_random_fixnum	fn	private	crates/neovm-value/src/random.rs:61	random	stage-3 C12: moved with the lock owner (arithmetic's random subr keeps its caller)
-emacs_seed_random	fn	private	crates/neovm-value/src/random.rs:77	random	stage-3 C12: moved with the lock owner
-emacs_init_random	fn	private	crates/neovm-value/src/random.rs:87	random	stage-3 C12: moved with the lock owner
-emacs_random_limb_unlocked	fn	private	crates/neovm-value/src/random.rs:99	random	stage-3 C12: bignum sampler limb word; caller must hold the lock
-with_random_locked	fn	(new fn)	crates/neovm-value/src/random.rs:46	random	stage-3 C12: keeps the single process PRNG lock inside the substrate; the bignum sampler spans limbs under it (GNU bignum.c loop)
+emacs_get_random	fn	pub(crate)	crates/neovm-value/src/random.rs:57	random	stage-3 C12: buffer substrate (generate_new_buffer_name) calls the PRNG below the lisp layer; body unchanged, moved from builtins/arithmetic.rs
+emacs_get_random_fixnum	fn	private	crates/neovm-value/src/random.rs:64	random	stage-3 C12: moved with the lock owner (arithmetic's random subr keeps its caller)
+emacs_seed_random	fn	private	crates/neovm-value/src/random.rs:81	random	stage-3 C12: moved with the lock owner
+emacs_init_random	fn	private	crates/neovm-value/src/random.rs:92	random	stage-3 C12: moved with the lock owner
+emacs_random_limb_unlocked	fn	private	crates/neovm-value/src/random.rs:105	random	stage-3 C12: bignum sampler limb word; caller must hold the lock
+with_random_locked	fn	(new fn)	crates/neovm-value/src/random.rs:47	random	stage-3 C12: keeps the single process PRNG lock inside the substrate; the bignum sampler spans limbs under it (GNU bignum.c loop)
+unobserved_list_scan	fn	private	crates/neovm-value/src/list_scan.rs:28	list_scan	stage-3 C12: scan-policy selector shared by every staying list walker in builtins/cons_list.rs
+scan_car	fn	private	crates/neovm-value/src/list_scan.rs:34	list_scan	stage-3 C12: observed/unobserved car read used by staying assoc/member/memql scans
+scan_cdr	fn	private	crates/neovm-value/src/list_scan.rs:44	list_scan	stage-3 C12: observed/unobserved cdr read used by staying walkers (nthcdr/nth/copy_list)
+for_each_tail_cycle_tail	fn	private	crates/neovm-value/src/list_scan.rs:61	list_scan	stage-3 C12: GNU FOR_EACH_TAIL Brent step used by staying cons_list walks
+GnuTailCycle	struct	pub(crate)	crates/neovm-value/src/list_scan.rs:98	list_scan	stage-3 C12: Brent state used by runtime/eval (special_forms, tier_i) and higher_order/misc
+GnuTailCycle::new	method	pub(crate)	crates/neovm-value/src/list_scan.rs:110	list_scan	stage-3 C12: constructor moved with GnuTailCycle
+GnuTailCycle::tortoise	method	pub(crate)	crates/neovm-value/src/list_scan.rs:121	list_scan	stage-3 C12: tortoise root accessor moved with GnuTailCycle
+GnuTailCycle::check	method	pub(crate)	crates/neovm-value/src/list_scan.rs:127	list_scan	stage-3 C12: cycle check moved with GnuTailCycle
+for_each_proper_list_tail	fn	private	crates/neovm-value/src/list_scan.rs:143	list_scan	stage-3 C12: proper-list walker used by staying assoc-with-testfn in cons_list.rs
+for_each_proper_list_tail_rooting_tortoise	fn	private	crates/neovm-value/src/list_scan.rs:161	list_scan	stage-3 C12: callback-rooting walker for staying Lisp-calling walks
+for_each_proper_list_tail_scan	fn	private	crates/neovm-value/src/list_scan.rs:201	list_scan	stage-3 C12: observed-generic walker used by staying assoc/member/memql scans
+proper_list_length_or_signal	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:240	list_scan	stage-3 C12: concat/special_forms/hof_runtime share the length probe below the lisp layer
+collect_proper_list_items	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:280	list_scan	stage-3 C12: higher_order/collections/xwidget collect via the value walker
+LIST_SCAN_BUDGET	const	pub(crate)	crates/neovm-value/src/list_scan.rs:317	list_scan	stage-3 C12: budget bound moved with the scans it bounds
+builtin_memq_values	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:326	list_scan	stage-3 C12: hot memq entry (208,797 calls per elb-smie compile); edit-layer casing reaches it below the lisp builtins
+builtin_memq_values_from	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:367	list_scan	stage-3 C12: budgeted continuation used by jit dispatch slot
+memq_exact	fn	private	crates/neovm-value/src/list_scan.rs:437	list_scan	stage-3 C12: exact fallback kept reachable for the fixed-arity regression wrapper (cfg(test) in core)
+memq_swp_exact	fn	private	crates/neovm-value/src/list_scan.rs:536	list_scan	stage-3 C12: swp exact fallback kept reachable for the fixed-arity regression wrapper
+eq_bare_symbol_swp	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:455	list_scan	stage-3 C12: swp eq used by misc and jit dispatch
+positioned_symbol_scan	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:461	list_scan	stage-3 C12: observed/unobserved positioned-symbol read used by misc and jit dispatch
+eq_bare_symbol_swp_scan	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:471	list_scan	stage-3 C12: observed-generic swp eq used by jit dispatch
+circular_list_error	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:481	list_scan	stage-3 C12: error constructor moved with the walks that raise it
+listp_error	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:488	list_scan	stage-3 C12: error constructor used by xfaces/tree_walk/tier_i walkers
+builtin_assq_values	fn	pub(crate)	crates/neovm-value/src/list_scan.rs:565	list_scan	stage-3 C12: hot assq entry; edit-layer casing reaches it below the lisp builtins
+assq_exact	fn	private	crates/neovm-value/src/list_scan.rs:616	list_scan	stage-3 C12: exact fallback kept reachable for the fixed-arity regression wrapper
+assq_swp_exact	fn	private	crates/neovm-value/src/list_scan.rs:669	list_scan	stage-3 C12: swp exact fallback kept reachable for the fixed-arity regression wrapper

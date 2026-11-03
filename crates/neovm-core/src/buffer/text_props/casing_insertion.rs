@@ -116,7 +116,7 @@ fn property(
 }
 
 fn assq(list: Value, name: Value, equality: CasingPropertyEquality) -> Result<Option<Value>, Flow> {
-    let pair = crate::emacs_core::builtins::builtin_assq_values(
+    let pair = crate::list_scan::builtin_assq_values(
         name,
         list,
         matches!(
@@ -131,7 +131,7 @@ fn member(name: Value, set: Value, equality: CasingPropertyEquality) -> Result<b
     if !set.is_cons() {
         return Ok(!set.is_nil());
     }
-    crate::emacs_core::builtins::builtin_memq_values(
+    crate::list_scan::builtin_memq_values(
         name,
         set,
         matches!(

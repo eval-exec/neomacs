@@ -22,10 +22,8 @@ never	buffer/buffer.rs	<SavedLabeledRestrictions as Drop>::drop	run_loop
 never	buffer/buffer.rs	BufferManager::save_current_restriction_state	run_loop
 never	emacs_core/lisp/native/builtins/collections.rs	builtin_aref_values	run_loop
 never	emacs_core/lisp/native/builtins/collections.rs	builtin_aset_args	run_loop
-never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_assq_values	run_loop
 never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_length_value	run_loop
 never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_member_values	run_loop
-never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_memq_values	run_loop
 never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_nconc_slice_values	run_loop
 never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcar_values	run_loop
 never	emacs_core/lisp/native/builtins/cons_list.rs	builtin_setcdr_values	run_loop

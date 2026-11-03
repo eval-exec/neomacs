@@ -28,6 +28,10 @@ pub(crate) use neovm_value::tls_scope;
 // The process PRNG substrate (GNU sysdep.c) moved with the stage-3 split
 // (C12): the buffer substrate generates unique names below the lisp layer.
 pub(crate) use neovm_value::random;
+// The list-scan substrate (GNU fns.c memq/assq + lisp.h FOR_EACH_TAIL) moved
+// with the stage-3 split (C12): edit-layer text-property casing and the lisp
+// subrs share the same scans below the evaluator.
+pub(crate) use neovm_value::list_scan;
 pub mod window;
 
 // Curated facade: the front door for consumers of the Lisp engine. The
