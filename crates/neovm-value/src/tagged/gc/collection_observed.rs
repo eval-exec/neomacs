@@ -49,7 +49,8 @@ static HAS_NONCONS_MARKS: AtomicBool = AtomicBool::new(false);
 static OBSERVATION_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
-pub(crate) fn collection_observation_epoch() -> u64 {
+#[doc(hidden)]
+pub fn collection_observation_epoch() -> u64 {
     OBSERVATION_EPOCH.load(Ordering::Acquire)
 }
 
@@ -106,7 +107,8 @@ fn cons_address_bit(address: usize) -> (usize, usize, u64) {
 /// must not retain this process-specific pointer.
 #[cold]
 #[inline(never)]
-pub(crate) fn cons_collection_observed_word(bits: usize) -> (&'static AtomicU64, u64) {
+#[doc(hidden)]
+pub fn cons_collection_observed_word(bits: usize) -> (&'static AtomicU64, u64) {
     debug_assert_eq!(bits & TAG_MASK, TAG_CONS);
     let address = bits & !TAG_MASK;
     debug_assert_ne!(address, 0);

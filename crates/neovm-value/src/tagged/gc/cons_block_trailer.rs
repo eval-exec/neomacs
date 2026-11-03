@@ -26,7 +26,8 @@ const fn cell_count() -> usize {
     cells
 }
 
-pub(crate) const CONS_BLOCK_SIZE: usize = cell_count();
+#[doc(hidden)]
+pub const CONS_BLOCK_SIZE: usize = cell_count();
 #[doc(hidden)]
 pub const CONS_MARK_WORDS: usize = cons_mark_words(CONS_BLOCK_SIZE);
 pub(super) const CONS_CELLS_BYTES: usize = CONS_BLOCK_SIZE * size_of::<ConsCell>();

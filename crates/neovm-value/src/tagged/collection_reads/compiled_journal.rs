@@ -13,7 +13,8 @@ pub enum CompiledJournalMode {
 }
 
 #[inline]
-pub(crate) fn compiled_journal_mode() -> CompiledJournalMode {
+#[doc(hidden)]
+pub fn compiled_journal_mode() -> CompiledJournalMode {
     #[cfg(test)]
     if let Some(mode) = TEST_MODE.with(std::cell::Cell::get) {
         return mode;

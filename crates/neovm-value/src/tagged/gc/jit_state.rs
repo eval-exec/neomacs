@@ -32,7 +32,8 @@ use super::*;
 /// Only the executing mutator publishes these Cells; Context installation
 /// re-derives the window from that mutator's persistent collection history.
 #[repr(C)]
-pub(crate) struct JitHeapState {
+#[doc(hidden)]
+pub struct JitHeapState {
     pub(crate) cons_cur: Cell<usize>,
     pub(crate) cons_lim: Cell<usize>,
     pub(crate) float_cur: Cell<usize>,

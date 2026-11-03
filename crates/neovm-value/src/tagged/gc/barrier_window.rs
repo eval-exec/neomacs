@@ -118,7 +118,8 @@ const _: () = {
 /// An owner-address range tested with one wrapping subtraction and unsigned
 /// compare. A compiled observation range may wrap, excluding one empty gap.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct BarrierWindow {
+#[doc(hidden)]
+pub struct BarrierWindow {
     lo: usize,
     len: usize,
 }
@@ -130,7 +131,8 @@ pub(crate) struct BarrierWindow {
 /// Contexts and certificates remain mutator-local; shared marks are atomic,
 /// while only the installed mutator publishes its JitHeapState Cells.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CompiledObservationGate {
+#[doc(hidden)]
+pub struct CompiledObservationGate {
     pub(crate) observed: [BarrierWindow; 2],
     pub(crate) excluded: Option<BarrierWindow>,
     pub(crate) single_cons: usize,

@@ -12,6 +12,7 @@ BC_FLAG_HAS_INTERACTIVE	const	pub(crate)	crates/neovm-value/src/tagged/pdump_ima
 BC_FLAG_HAS_REST	const	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:125	tagged::pdump_image	bulk
 BC_FLAG_LEXICAL	const	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:123	tagged::pdump_image	bulk
 BC_FLAG_OPS_SEALED	const	pub(crate)	crates/neovm-value/src/tagged/pdump_image.rs:124	tagged::pdump_image	bulk
+BarrierWindow	struct	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:122	tagged::gc	pc1-d DATA: privacy ledger 17f6ac250b (no execution authority; fields not promoted)
 BlvCacheHit	struct	pub(crate)	crates/neovm-value/src/symbol/mod.rs:488	emacs_core::symbol	bulk
 BlvPtr	struct	pub(crate)	crates/neovm-value/src/symbol/cell.rs:298	emacs_core::symbol	bulk
 BoolVectorView	use	pub(crate)	crates/neovm-value/src/boolvec/mod.rs:256	emacs_core::boolvec	bulk
@@ -27,6 +28,7 @@ CErrorMessage	struct	pub(crate)	crates/neovm-value/src/errors/native_message.rs:
 CHUNK_SUMMARY_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/card_table.rs:45	tagged::gc	bulk
 CONS_AGE_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/cons_block_trailer.rs:34	tagged::gc	bulk
 CONS_BLOCK_BYTES	const	pub(crate)	crates/neovm-value/src/tagged/gc/cons_block_trailer.rs:7	tagged::gc	bulk
+CONS_BLOCK_SIZE	const	pub(crate)	crates/neovm-value/src/tagged/gc/cons_block_trailer.rs:30	tagged::gc	pc1-d DATA: privacy ledger 17f6ac250b (numeric data; unchanged signature)
 CONS_MARKS_OFFSET	const	pub(crate)	crates/neovm-value/src/tagged/gc/cons_block_trailer.rs:31	tagged::gc	bulk
 CONS_MARK_WORDS	const	pub(crate)	crates/neovm-value/src/tagged/gc/cons_block_trailer.rs:29	tagged::gc	bulk
 CacheRootScan	enum	pub(crate)	crates/neovm-value/src/tagged/gc/cache_root_scan.rs:7	tagged::gc	bulk
@@ -34,6 +36,7 @@ CallSites	struct	pub(crate)	crates/neovm-value/src/value/jit_runtime/feedback.rs
 CanonicalWrite	enum	pub(crate)	crates/neovm-value/src/symbol/mod.rs:48	emacs_core::symbol	bulk
 CharTableExtras	use	pub(crate)	crates/neovm-value/src/alloc/mod.rs:83	emacs_core::alloc	bulk
 CompiledJournalMode	enum	pub(crate)	crates/neovm-value/src/tagged/collection_reads/compiled_journal.rs:8	tagged::collection_reads	bulk
+CompiledObservationGate	struct	pub(crate)	crates/neovm-value/src/tagged/gc/barrier_window.rs:135	tagged::gc	pc1-d DATA: privacy ledger 17f6ac250b (no execution authority; fields not promoted)
 ConcealOutcome	enum	pub(crate)	crates/neovm-value/src/symbol/projection.rs:256	emacs_core::symbol	bulk
 CondVarObj	struct	pub(crate)	crates/neovm-value/src/tagged/header.rs:2247	tagged::header	bulk
 CondVarPayload	struct	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:519	heap_types::threading	bulk
@@ -92,6 +95,7 @@ IntervalDeletionQuery	struct	pub(crate)	crates/neovm-value/src/heap_types/overla
 IntervalIntersectionQuery	struct	pub(crate)	crates/neovm-value/src/heap_types/overlay_storage/mod.rs:164	heap_types::overlay_storage	bulk
 IntoConditionSym	trait	pub(crate)	crates/neovm-value/src/error/mod.rs:952	emacs_core::error	bulk
 IterativeArgRange	struct	pub(crate)	crates/neovm-value/src/tagged/bytecode/chunk.rs:79	tagged::bytecode::chunk	bulk
+JitHeapState	struct	pub(crate)	crates/neovm-value/src/tagged/gc/jit_state.rs:36	tagged::gc	pc1-d DATA: privacy ledger 17f6ac250b (no execution authority; fields not promoted)
 JoinObservation	enum	pub(crate)	crates/neovm-value/src/heap_types/threading.rs:227	heap_types::threading	bulk
 KeeperWorldDesignator	use	pub(crate)	crates/neovm-value/src/symbol/parallel.rs:5	emacs_core::symbol::parallel	bulk
 KeyboardBindingOwner	struct	pub(crate)	crates/neovm-value/src/forward/mod.rs:974	emacs_core::forward	bulk
@@ -203,9 +207,12 @@ case_fold_match_len	use	pub(crate)	crates/neovm-value/src/emacs_char/mod.rs:1391
 char_table_write_tick	fn	pub(crate)	crates/neovm-value/src/value/mod.rs:104	emacs_core::value	bulk
 collect_in_flight_registry_gc_roots	fn	pub(crate)	crates/neovm-value/src/error/mod.rs:811	emacs_core::error	bulk
 collect_shared_root_gc_roots	fn	pub(crate)	crates/neovm-value/src/tagged/transport/root_table.rs:400	tagged::transport	bulk
+collection_observation_epoch	fn	pub(crate)	crates/neovm-value/src/tagged/gc/collection_observed.rs:53	tagged::gc	pc1-d DATA: privacy ledger 17f6ac250b (numeric data; unchanged signature)
+compiled_journal_mode	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads/compiled_journal.rs:17	tagged::collection_reads	pc1-d DATA: privacy ledger 17f6ac250b (unchanged signature)
 compiled_observation_gate	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:852	tagged::collection_reads	bulk
 compiled_observation_window	fn	pub(crate)	crates/neovm-value/src/tagged/collection_reads.rs:836	tagged::collection_reads	bulk
 concurrent_hash_snapshot	fn	pub(crate)	crates/neovm-value/src/tagged/gc/concurrent.rs:1122	tagged::gc	bulk
+cons_collection_observed_word	fn	pub(crate)	crates/neovm-value/src/tagged/gc/collection_observed.rs:111	tagged::gc	pc1-d DATA: privacy ledger 17f6ac250b (numeric data; unchanged signature)
 current_write_tracking_enabled	fn	pub(crate)	crates/neovm-value/src/tagged/gc.rs:242	tagged::gc	bulk
 debug_assert_no_heap_mut_closure	fn	pub(crate)	crates/neovm-value/src/tagged/mutate.rs:104	tagged::mutate	bulk
 emacs_hash_char_array	fn	pub(crate)	crates/neovm-value/src/hashtab/mod.rs:155	emacs_core::hashtab	bulk
