@@ -67,6 +67,9 @@ mod oracle_face_theme;
 #[path = "oracle_fill_column_stipple.rs"]
 mod oracle_fill_column_stipple;
 
+#[path = "oracle_find_file_directory.rs"]
+mod oracle_find_file_directory;
+
 #[path = "oracle_font_coverage.rs"]
 mod oracle_font_coverage;
 
