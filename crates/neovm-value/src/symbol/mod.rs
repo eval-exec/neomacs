@@ -28,7 +28,7 @@
 mod canonical_access;
 mod cell;
 mod fn_stamps;
-mod function_cell_observer;
+pub(crate) mod function_cell_observer;
 #[cfg(debug_assertions)]
 pub(crate) mod leaf_activity;
 pub(crate) mod parallel;
@@ -65,10 +65,7 @@ pub use cell::{
 pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(test)]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
-#[doc(hidden)]
-pub use function_cell_observer::{
-    FunctionCellObserver, install_function_cell_observer, install_function_epoch_move_sink,
-};
+pub use function_cell_observer::FunctionCellObserver;
 pub(crate) use function_cell_observer::{function_cell_observer, note_function_epoch_move};
 #[doc(hidden)]
 pub use projection::{

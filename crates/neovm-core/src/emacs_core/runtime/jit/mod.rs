@@ -1766,14 +1766,25 @@ impl RuntimeStateTieringExt for RuntimeState {
 /// function-cell write takes the typed no-op path.
 #[cfg(feature = "jit")]
 pub(crate) fn install_function_cell_observer() {
-    crate::emacs_core::symbol::install_function_cell_observer(
-        crate::emacs_core::symbol::FunctionCellObserver {
-            epoch_bump: stats::note_function_epoch_bump,
-            cell_unchanged: stats::note_function_cell_unchanged,
-            evict_inline_dependents: cache::evict_inline_dependents,
-            pin_redefined: cache::pin_redefined_function,
-        },
+    static OBSERVER: neovm_value::FunctionCellObserver = neovm_value::FunctionCellObserver::new(
+        stats::note_function_epoch_bump,
+        stats::note_function_cell_unchanged,
+        cache::evict_inline_dependents,
+        cache::pin_redefined_function,
     );
+    // SAFETY: only Context::new_inner and Context::from_dump call this
+    // adapter, before exposing the constructed or restored Context. OBSERVER
+    // is the same process-lifetime table at both seams and its callbacks use
+    // the existing JIT metering and cache state.
+    match unsafe { neovm_value::install_function_cell_observer(&OBSERVER) } {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(neovm_value::HookInstallError::DifferentTable) => {
+            panic!("Context construction or restore: conflicting function-cell observer table")
+        }
+    }
 }
 
 #[cfg(test)]

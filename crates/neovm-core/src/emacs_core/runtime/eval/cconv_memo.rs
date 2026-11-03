@@ -617,6 +617,25 @@ pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId
     });
 }
 
+/// Install the evaluator's process-lifetime function-epoch observation sink.
+pub(super) fn install_function_epoch_move_sink() {
+    static SINK: neovm_value::FunctionEpochMoveSink =
+        neovm_value::FunctionEpochMoveSink::new(note_function_epoch_move);
+    // SAFETY: only Context::new_inner and Context::from_dump call this
+    // adapter, before exposing the constructed or restored Context. SINK is
+    // the same process-lifetime table at both seams, and its callback records
+    // only in the current thread's existing observed-function-write log.
+    match unsafe { neovm_value::install_function_epoch_move_sink(&SINK) } {
+        Ok(
+            neovm_value::HookInstallStatus::Installed
+            | neovm_value::HookInstallStatus::AlreadyInstalled,
+        ) => {}
+        Err(neovm_value::HookInstallError::DifferentTable) => {
+            panic!("Context construction or restore: conflicting function-epoch move sink table")
+        }
+    }
+}
+
 /// Push every Lisp value RESULT holds as a specpdl root.
 fn push_result_roots(ctx: &mut Context, result: &EvalResult) {
     match result.kinded_ref() {

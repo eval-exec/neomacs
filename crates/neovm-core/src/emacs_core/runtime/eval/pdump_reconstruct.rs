@@ -83,9 +83,7 @@ impl Context {
         // The evaluator's observed-run log of function-epoch moves is plain
         // process state too; install it unconditionally so non-JIT builds
         // keep the verify-run mismatch report.
-        crate::emacs_core::symbol::install_function_epoch_move_sink(
-            crate::emacs_core::eval::note_function_epoch_move,
-        );
+        super::cconv_memo::install_function_epoch_move_sink();
         let dumped_function_surface = obarray.clone();
         let mut obarray = obarray;
         let core_eval_symbols = install_core_eval_symbols(&mut obarray, false);

@@ -20,28 +20,70 @@
 use super::FunctionEpochBump;
 use crate::intern::SymId;
 use crate::value::Value;
+use crate::value::hook_publication::{self, HookInstallError, HookInstallStatus};
 use std::sync::OnceLock;
 
 /// The JIT's observations of function-cell writes.
 #[derive(Clone, Copy)]
-#[doc(hidden)]
 pub struct FunctionCellObserver {
     /// Count one function-epoch bump; `None` for a bump without a symbol.
-    pub epoch_bump: fn(FunctionEpochBump, Option<SymId>),
+    pub(super) epoch_bump: fn(FunctionEpochBump, Option<SymId>),
     /// Count one write that stored the value already there (no bump).
-    pub cell_unchanged: fn(),
+    pub(super) cell_unchanged: fn(),
     /// Retire compiled leaves that inlined `sym` as a callee.
-    pub evict_inline_dependents: fn(SymId),
+    pub(super) evict_inline_dependents: fn(SymId),
     /// Keep the previous byte-code value alive while compiled frames may run it.
-    pub pin_redefined: fn(SymId, Value),
+    pub(super) pin_redefined: fn(SymId, Value),
 }
 
-static FUNCTION_CELL_OBSERVER: OnceLock<FunctionCellObserver> = OnceLock::new();
+impl FunctionCellObserver {
+    /// Build an inert descriptor. Only the unsafe installer publishes it.
+    pub const fn new(
+        epoch_bump: fn(FunctionEpochBump, Option<SymId>),
+        cell_unchanged: fn(),
+        evict_inline_dependents: fn(SymId),
+        pin_redefined: fn(SymId, Value),
+    ) -> Self {
+        Self {
+            epoch_bump,
+            cell_unchanged,
+            evict_inline_dependents,
+            pin_redefined,
+        }
+    }
+}
 
-/// Install the observer table. Idempotent: every `Context` construction calls
-/// it and whichever runs first wins with the same function table.
-pub(crate) fn install_function_cell_observer(observer: FunctionCellObserver) {
-    let _ = FUNCTION_CELL_OBSERVER.set(observer);
+// Readers keep their original callback-only payload; descriptor identity is
+// consulted only by the cold installer.
+static FUNCTION_CELL_OBSERVER: OnceLock<FunctionCellObserver> = OnceLock::new();
+static FUNCTION_CELL_OBSERVER_IDENTITY: OnceLock<&'static FunctionCellObserver> = OnceLock::new();
+
+const _: () = {
+    assert!(size_of::<FunctionCellObserver>() == 4 * size_of::<fn()>());
+    assert!(align_of::<FunctionCellObserver>() == align_of::<fn()>());
+};
+
+/// Publish the canonical observer, accepting repeated installation of that
+/// exact table and refusing any different table without replacing the first.
+///
+/// # Safety
+/// The table must be the core JIT adapter's process-lifetime canonical table:
+/// it meters function epochs, evicts inline dependents and retains redefined
+/// byte code using the calling mutator's existing JIT state. Only that adapter
+/// may call this installer, and only `Context::new_inner` and
+/// `Context::from_dump` may call the adapter, before compiled code can run.
+/// A refusal must be surfaced at the construction or image-restore seam.
+#[must_use = "handle a conflicting function-cell observer publication"]
+#[cold]
+#[inline(never)]
+pub unsafe fn install_function_cell_observer(
+    observer: &'static FunctionCellObserver,
+) -> Result<HookInstallStatus, HookInstallError> {
+    hook_publication::publish(
+        &FUNCTION_CELL_OBSERVER,
+        &FUNCTION_CELL_OBSERVER_IDENTITY,
+        observer,
+    )
 }
 
 /// The installed observer, or `None` before the first `Context` exists (a
@@ -55,11 +97,49 @@ pub(crate) fn function_cell_observer() -> Option<&'static FunctionCellObserver> 
 /// (`eval/cconv_memo`). Beside the cell observer and installed at the same
 /// two one-time hooks; a typed no-op until then, so the function-cell write
 /// paths never name the evaluator.
-static FUNCTION_EPOCH_MOVE: OnceLock<fn(FunctionEpochBump, Option<SymId>)> = OnceLock::new();
+pub struct FunctionEpochMoveSink {
+    callback: fn(FunctionEpochBump, Option<SymId>),
+}
 
-/// Install the evaluator's move log. Idempotent like the observer table.
-pub(crate) fn install_function_epoch_move_sink(sink: fn(FunctionEpochBump, Option<SymId>)) {
-    let _ = FUNCTION_EPOCH_MOVE.set(sink);
+impl FunctionEpochMoveSink {
+    /// Build inert callback metadata; this does not install or invoke it.
+    pub const fn new(callback: fn(FunctionEpochBump, Option<SymId>)) -> Self {
+        Self { callback }
+    }
+}
+
+// The descriptor's callback field is nonzero-sized immutable data. Its data
+// address gives the canonical table's identity without comparing code
+// addresses or changing the existing callback-only reader payload.
+static FUNCTION_EPOCH_MOVE: OnceLock<fn(FunctionEpochBump, Option<SymId>)> = OnceLock::new();
+static FUNCTION_EPOCH_MOVE_IDENTITY: OnceLock<&'static fn(FunctionEpochBump, Option<SymId>)> =
+    OnceLock::new();
+
+const _: () = {
+    assert!(size_of::<FunctionEpochMoveSink>() == size_of::<fn()>());
+    assert!(align_of::<FunctionEpochMoveSink>() == align_of::<fn()>());
+};
+
+/// Publish the evaluator's canonical move-log table, accepting the same table
+/// again and returning a typed refusal for a different one.
+///
+/// # Safety
+/// The sink must be the core cconv adapter's process-lifetime canonical table,
+/// routing to the existing calling-thread function-write log. Only that
+/// adapter may call this installer, and only `Context::new_inner` and
+/// `Context::from_dump` may call the adapter, before Lisp execution or restored
+/// compiled code. A refusal must be surfaced at the corresponding seam.
+#[must_use = "handle a conflicting function-epoch move sink publication"]
+#[cold]
+#[inline(never)]
+pub unsafe fn install_function_epoch_move_sink(
+    sink: &'static FunctionEpochMoveSink,
+) -> Result<HookInstallStatus, HookInstallError> {
+    hook_publication::publish(
+        &FUNCTION_EPOCH_MOVE,
+        &FUNCTION_EPOCH_MOVE_IDENTITY,
+        &sink.callback,
+    )
 }
 
 /// Report one function-epoch move to the evaluator's observed-run log when
