@@ -8044,29 +8044,31 @@ fn delete_parent_frame_cascades_to_gui_child_overlays() {
 }
 
 #[test]
-fn x_create_frame_applies_early_init_default_frame_alist_bars() {
+fn make_frame_applies_early_init_default_frame_alist_bars() {
     // #600: an early-init file setting these in `default-frame-alist' must
-    // reach the opening frame. `make-frame' merges `default-frame-alist' into
-    // the parameter list it hands to `frame-creation-function', which is the
-    // `x-create-frame' call modeled here.
+    // reach the opening frame through the real `make-frame' merge path.
     crate::test_utils::init_test_tracing();
-    let mut ev = Context::new();
+    let mut ev = runtime_startup_context();
     let buf = ev.buffers.create_buffer("*scratch*");
     ev.buffers.set_current(buf);
-    ev.frames.create_frame("F1", 800, 600, buf);
+    let base = ev.frames.create_frame("F1", 800, 600, buf);
+    ev.frames
+        .get_mut(base)
+        .expect("base frame")
+        .set_window_system(Some(Value::symbol("neo")));
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
 
     let out = ev.eval_str_each(
         r#"(let ((default-frame-alist '((menu-bar-lines . 0)
                                         (tool-bar-lines . 0)
                                         (vertical-scroll-bars))))
-             (x-create-frame default-frame-alist))"#,
+             (make-frame nil))"#,
     );
-    let frame_value = out[0].as_ref().expect("x-create-frame should succeed");
+    let frame_value = out[0].as_ref().expect("make-frame should succeed");
     let fid = crate::window::FrameId(
         frame_value
             .as_frame_id()
-            .expect("x-create-frame returns a frame"),
+            .expect("make-frame returns a frame"),
     );
     let frame = ev.frames.get(fid).expect("created frame");
 
