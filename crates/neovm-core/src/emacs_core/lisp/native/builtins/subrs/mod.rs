@@ -4253,12 +4253,16 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "group-gid",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::editfns::builtin_group_gid(args)),
+        NativeFn::ContextVec(
+            |_ctx, args| crate::emacs_core::identity_commands::builtin_group_gid(args)
+        ),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "group-real-gid",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::editfns::builtin_group_real_gid(args)),
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::identity_commands::builtin_group_real_gid(args)
+        }),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
@@ -7471,12 +7475,16 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // -- User / editfns --
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "user-uid",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::editfns::builtin_user_uid(args)),
+        NativeFn::ContextVec(
+            |_ctx, args| crate::emacs_core::identity_commands::builtin_user_uid(args)
+        ),
         SubrArity::new(0, Some(0)),
     )));
     ctx.register_subr(crate::emacs_core::subr::world_subr!(SubrSpec::new(
         "user-real-uid",
-        NativeFn::ContextVec(|_ctx, args| crate::emacs_core::editfns::builtin_user_real_uid(args)),
+        NativeFn::ContextVec(|_ctx, args| {
+            crate::emacs_core::identity_commands::builtin_user_real_uid(args)
+        }),
         SubrArity::new(0, Some(0)),
     )));
 

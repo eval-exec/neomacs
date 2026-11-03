@@ -19,6 +19,8 @@ pub mod abbrev;
 pub mod buffer_ops;
 #[path = "commands/command_observation/mod.rs"]
 pub(crate) mod command_observation;
+#[path = "commands/identity_commands/mod.rs"]
+pub mod identity_commands;
 #[path = "commands/interactive/mod.rs"]
 pub mod interactive;
 #[path = "commands/kbd/mod.rs"]

@@ -18,7 +18,6 @@ use crate::buffer::{
 use crate::emacs_core::edit_host::{EditHost, EditVariableRead};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use crate::emacs_core::runtime_identity::{CredentialScope, process_group_id, process_user_id};
 use crate::emacs_core::value::ValueKind;
 use crate::heap_types::LispString;
 #[cfg(unix)]
@@ -1992,55 +1991,11 @@ pub(crate) fn builtin_preceding_char(
 // Pure builtins (no evaluator needed)
 // ---------------------------------------------------------------------------
 
-/// `(user-uid)` — return effective user ID.
-pub(crate) fn builtin_user_uid(args: Vec<Value>) -> EvalResult {
-    expect_args("user-uid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_user_id(
-        CredentialScope::Effective,
-    ))))
-}
-
 /// `(file-user-uid)` — return the UID used for file ownership.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_file_user_uid(args: Vec<Value>) -> EvalResult {
-    expect_args("file-user-uid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_user_id(
-        CredentialScope::Effective,
-    ))))
-}
-
-/// `(user-real-uid)` — return real user ID.
-pub(crate) fn builtin_user_real_uid(args: Vec<Value>) -> EvalResult {
-    expect_args("user-real-uid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_user_id(
-        CredentialScope::Real,
-    ))))
-}
-
-/// `(group-gid)` — return the effective group ID.
-pub(crate) fn builtin_group_gid(args: Vec<Value>) -> EvalResult {
-    expect_args("group-gid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_group_id(
-        CredentialScope::Effective,
-    ))))
-}
 
 /// `(file-group-gid)` — return the GID used for file ownership.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_file_group_gid(args: Vec<Value>) -> EvalResult {
-    expect_args("file-group-gid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_group_id(
-        CredentialScope::Effective,
-    ))))
-}
-
-/// `(group-real-gid)` — return the real group ID.
-pub(crate) fn builtin_group_real_gid(args: Vec<Value>) -> EvalResult {
-    expect_args("group-real-gid", &args, 0)?;
-    Ok(Value::fixnum(i64::from(process_group_id(
-        CredentialScope::Real,
-    ))))
-}
 
 /// `(group-name GID)` — return the group name for numeric GID.
 pub(crate) fn builtin_group_name(args: Vec<Value>) -> EvalResult {
