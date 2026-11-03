@@ -203,7 +203,6 @@ fn equal_compares_bignums_by_numeric_value() {
     });
 }
 
-
 #[test]
 fn internal_equal_compares_char_table_and_sub_char_table_storage() {
     crate::test_utils::init_test_tracing();
@@ -229,7 +228,6 @@ fn internal_equal_compares_char_table_and_sub_char_table_storage() {
         assert!(!equal_value(&left, &right, 0));
     });
 }
-
 
 #[test]
 fn equal_hash_keys_preserve_structural_pseudovector_types() {
@@ -356,7 +354,6 @@ fn equal_structural() {
         assert!(!eq_value(&a, &b));
     });
 }
-
 
 #[test]
 fn string_equality() {
@@ -740,7 +737,6 @@ fn type_predicates() {
         assert!(Value::char('x').is_char());
     });
 }
-
 
 /// Build a byte-code object the way the VM and `make-closure` do, so the
 /// probes below can reach states `make-byte-code` cannot: a captured

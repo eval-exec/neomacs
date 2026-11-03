@@ -52,7 +52,6 @@ fn immutable_symbol_name_resolution_reads_the_registry_once_per_thread() {
     assert_eq!(resolve_sym_lisp_string_registry_reads(), 1);
 }
 
-
 #[test]
 fn atom_only_symbol_names_are_cached_and_rooted_per_heap_identity() {
     crate::test_utils::init_test_tracing();

@@ -234,7 +234,6 @@ fn storage_lookups_by_value_agree_with_lookups_by_key() {
     }
 }
 
-
 /// Small `eq`/`eql` tables answer fixnum and symbol lookups by scanning
 /// slots for the key's bits (`small_identity_scan`). Across every table size
 /// up to and past the scan limit, with removals leaving holes and mixed key
@@ -296,7 +295,6 @@ fn small_table_identity_scans_agree_with_hashed_lookups() {
     }
     assert!(checked > 4000, "checked {checked}");
 }
-
 
 /// `retain_entries` (the weak-table sweep) leaves exactly what removing each
 /// rejected entry by key in `iter` order left: the same survivors in the same

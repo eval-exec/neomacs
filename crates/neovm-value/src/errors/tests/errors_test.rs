@@ -1,12 +1,6 @@
 use super::*;
 use crate::intern::intern;
 
-
-
-
-
-
-
 // =======================================================================
 // ErrorRegistry (standalone HashMap-based) tests
 // =======================================================================
@@ -81,8 +75,6 @@ fn registry_define_error_multiple_parents() {
     assert!(reg.signal_matches_condition("hybrid-error", "arith-error"));
     assert!(reg.signal_matches_condition("hybrid-error", "error"));
 }
-
-
 
 #[test]
 fn registry_conditions_for() {
@@ -198,8 +190,6 @@ fn registry_module_load_failed_family() {
         assert_eq!(reg.conditions_for(cond), vec![cond, "error"]);
     }
 }
-
-
 
 // =======================================================================
 // Obarray-based hierarchy tests
@@ -534,87 +524,9 @@ fn obarray_unknown_signal_no_conditions() {
 // define-error runtime tests (via bootstrapped GNU Lisp)
 // =======================================================================
 
-
-
-
-
-
-
-
-
-
-
-
-
 // =======================================================================
 // Builtin tests
 // =======================================================================
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 // =======================================================================
 // Edge case / integration tests
