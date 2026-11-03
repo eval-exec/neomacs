@@ -8056,6 +8056,7 @@ fn make_frame_applies_early_init_default_frame_alist_bars() {
         .get_mut(base)
         .expect("base frame")
         .set_window_system(Some(Value::symbol("neo")));
+    ev.frames.select_frame(base);
     ev.set_display_host(Box::new(RecordingDisplayHost::new()));
 
     let out = ev.eval_str_each(
