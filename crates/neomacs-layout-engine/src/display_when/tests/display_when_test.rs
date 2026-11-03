@@ -421,6 +421,70 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
     );
 }
 
+/// GNU takes FORM as true without evaluating it only when it is `t' itself
+/// (`EQ (form, Qt)', src/xdisp.c:6143-6145).  An uninterned `#:t' is an
+/// unbound variable: the scan must record it for evaluation, so its clause
+/// fails, and under `(disable-eval …)' it is nil like any other FORM.
+#[test]
+fn an_uninterned_symbol_named_t_is_a_form_like_any_other() {
+    let mut eval = Context::new();
+    let buf_id = eval.buffers.current_buffer_id().expect("buffer");
+    let plain = eval
+        .eval_str("(cons 'when (cons (make-symbol \"t\") \"SHOWN\"))")
+        .expect("plain");
+    let disabled = eval
+        .eval_str("(list 'disable-eval (cons 'when (cons (make-symbol \"t\") \"SHOWN\")))")
+        .expect("disabled");
+    {
+        let buffer = eval.buffers.get_mut(buf_id).expect("buffer");
+        buffer.insert("abcdef\n");
+        for (from, to, value) in [(0, 2, plain), (3, 5, disabled)] {
+            let start = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(from));
+            let end = buffer.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(to));
+            buffer.text_props_put_property_in_emacs_byte_range(
+                EmacsByteRange::new(start, end),
+                Value::symbol("display"),
+                value,
+            );
+        }
+    }
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        CharPos0::new(7),
+        crate::display_property::DisplayPropertyTarget::Graphical,
+    );
+    assert_eq!(
+        conditions.verdict_any(when_form(plain, 0)),
+        DisplayWhenVerdict::Fails,
+        "#:t was evaluated (void-variable counts as nil), not taken as t"
+    );
+    assert_eq!(
+        conditions.verdict_any(when_form(disabled, 0)),
+        DisplayWhenVerdict::Unseen,
+        "a disable-eval #:t is not evaluated"
+    );
+    for value in [plain, disabled] {
+        assert!(
+            crate::display_property::classify_display_property(
+                value,
+                &conditions,
+                crate::display_property::DisplayPropertyObject::Buffer,
+                crate::display_property::DisplayPropertyTarget::Graphical
+            )
+            .replacement()
+            .is_none(),
+            "a #:t clause replaces nothing"
+        );
+    }
+    assert_eq!(
+        DisplayWhenConditions::structural().verdict_any(Value::T),
+        DisplayWhenVerdict::Holds
+    );
+}
+
 #[test]
 fn forms_are_evaluated_with_the_window_buffer_current() {
     // GNU selects the window's buffer before the iterator runs

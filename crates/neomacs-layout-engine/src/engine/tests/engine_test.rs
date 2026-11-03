@@ -198,7 +198,8 @@ use neovm_core::buffer::{
 };
 use neovm_core::emacs_core::eval::{
     DisplayHost, GuiFrameHostRequest, ResolvedSurface, ResolvedVideo, ResolvedWebKit,
-    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
+    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, VideoResolveSource,
+    WebKitResolveRequest,
 };
 use neovm_core::emacs_core::image_catalog::{
     AxisSize, ImageCatalog, ImageLookup, ImageResolveRequest, ImageSizeLimit, ImageSizeSpec,
@@ -207,7 +208,7 @@ use neovm_core::emacs_core::image_catalog::{
 use neovm_core::emacs_core::load::{
     apply_runtime_startup_state, create_bootstrap_evaluator_cached_with_features,
 };
-use neovm_core::emacs_core::value::StringTextPropertyRun;
+use neovm_core::emacs_core::value::{StringTextPropertyRun, list_to_vec};
 use neovm_core::emacs_core::{Context, Value};
 use neovm_core::face::FaceTable;
 use neovm_core::heap_types::LispString;
@@ -16278,6 +16279,270 @@ fn layout_frame_rust_emits_inline_webkit_glyphs_for_display_webkit_specs() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].width, 80);
     assert_eq!(requests[0].height, 45);
+}
+
+/// What redisplay of a decoded `text/enriched` document asked the display
+/// host for, and the text rows it drew.
+struct EnrichedMediaLayout {
+    /// `"disable-eval"` or `"unwrapped"`, per decoded `display` property.
+    decoded_display_wrappers: Vec<String>,
+    image_requests: usize,
+    video_requests: Vec<VideoResolveRequest>,
+    webkit_requests: Vec<WebKitResolveRequest>,
+    surface_requests: Vec<SurfaceResolveRequest>,
+    rows: Vec<String>,
+    /// The left-margin text of each row of `rows`.
+    left_margin_rows: Vec<String>,
+}
+
+/// Decode an attacker-shaped `text/enriched` document the way Gnus decodes a
+/// `text/enriched` MIME part (`mm-inline-text` calls `enriched-decode`), then
+/// lay it out on a graphical frame whose display host records every media
+/// request. Each `<x-display>` annotation carries one neomacs media spec in a
+/// different display-property shape (single spec, vector, margin prefix,
+/// literal `when`, list of specs) plus a GNU `(image …)` spec. The last two
+/// annotations hide a media spec one level down, in the `display` property of
+/// a propertized replacement string, displayed in the text and in the left
+/// margin.
+///
+/// The media specs nested in a vector, a `when` or a list of specs carry no
+/// `:height`: once their head is not a display spec, the layout classifier
+/// reads a nested `(HEAD … :height N)` as a neomacs keyword-plist height
+/// modifier (GNU ignores it), and a 20x line would push the later rows out of
+/// the window, leaving their specs unwalked.
+fn layout_decoded_enriched_media_document(allow_eval: bool) -> EnrichedMediaLayout {
+    let mut eval =
+        create_bootstrap_evaluator_cached_with_features(&["x", "neomacs"]).expect("bootstrap");
+    apply_runtime_startup_state(&mut eval).expect("runtime startup state");
+    let host = RecordingImageDisplayHost::default();
+    let image_requests = Arc::clone(&host.requests);
+    let video_requests = Arc::clone(&host.video_requests);
+    let webkit_requests = Arc::clone(&host.webkit_requests);
+    let surface_requests = Arc::clone(&host.surface_requests);
+    eval.set_display_host(Box::new(host));
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    eval.store_variable_by_name("h1-allow-eval", Value::bool(allow_eval));
+    let wrappers = eval
+        .eval_str(
+            r#"
+          (progn
+            (require 'enriched)
+            (erase-buffer)
+            (insert "Content-Type: text/enriched\nText-Width: 70\n\n"
+                    "a<x-display><param>(video :uri \"http://127.0.0.1:9/inline.mp4\" :autoplay t :width 40 :height 20)</param>V</x-display>b\n\n"
+                    "c<x-display><param>[(webkit :uri \"http://127.0.0.1:9/page.html\" :width 40)]</param>W</x-display>d\n\n"
+                    "e<x-display><param>((margin nil) (surface :shader \"fn mainImage() {}\" :width 40 :height 20))</param>S</x-display>f\n\n"
+                    "g<x-display><param>(when t surface :glsl \"void mainImage() {}\" :width 40 :channel0 (video :uri \"http://127.0.0.1:9/channel0.mp4\"))</param>C</x-display>h\n\n"
+                    "i<x-display><param>((raise 0.2) (video :file \"/tmp/neomacs-h1-local.mp4\" :width 40))</param>F</x-display>j\n\n"
+                    "k<x-display><param>(image :type png :file \"/tmp/neomacs-h1.png\")</param>I</x-display>l\n\n"
+                    "m<x-display><param>#(\"N\" 0 1 (display (video :uri \"http://127.0.0.1:9/nested.mp4\")))</param>X</x-display>n\n\n"
+                    "o<x-display><param>((margin left-margin) #(\"M\" 0 1 (display (video :uri \"http://127.0.0.1:9/nested-margin.mp4\"))))</param>Y</x-display>p\n")
+            (let ((enriched-allow-eval-in-display-props h1-allow-eval))
+              (enriched-decode (point-min) (point-max)))
+            (goto-char (point-min))
+            (let ((pos (point-min)) wrappers)
+              (while (setq pos (next-single-property-change pos 'display))
+                (let ((display (get-text-property pos 'display)))
+                  (when display
+                    (push (if (eq (car-safe display) 'disable-eval)
+                              "disable-eval"
+                            "unwrapped")
+                          wrappers))))
+              (nreverse wrappers)))
+        "#,
+        )
+        .expect("decode enriched document");
+    let decoded_display_wrappers = list_to_vec(&wrappers)
+        .expect("display wrappers")
+        .into_iter()
+        .map(|wrapper| wrapper.as_utf8_str().expect("wrapper name").to_owned())
+        .collect();
+
+    let frame_id = eval
+        .frame_manager_mut()
+        // Tall enough for the trusted control's default-sized media rows.
+        .create_frame("layout-enriched-media", 960, 1200, buf_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
+    // Media specs are resolved only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+    assert!(eval.frame_manager_mut().select_frame(frame_id));
+    eval.eval_str("(set-window-margins nil 2)")
+        .expect("reserve a left margin for the margin annotation");
+
+    let mut engine = crate::font::metrics::test_catalog::layout_engine();
+    engine.layout_frame_rust(&mut eval, frame_id);
+
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("frame display state");
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window
+        .0 as i64;
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window)
+        .expect("selected window matrix");
+    let rows = enabled_window_row_texts(entry);
+    let left_margin_rows = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled)
+        .map(|row| {
+            row.glyphs[GlyphArea::LeftMargin.index()]
+                .iter()
+                .filter_map(|glyph| match &glyph.glyph_type {
+                    GlyphType::Char { ch } => Some(*ch),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+
+    EnrichedMediaLayout {
+        decoded_display_wrappers,
+        image_requests: image_requests.lock().expect("image requests").len(),
+        video_requests: video_requests.lock().expect("video requests").clone(),
+        webkit_requests: webkit_requests.lock().expect("webkit requests").clone(),
+        surface_requests: surface_requests.lock().expect("surface requests").clone(),
+        rows,
+        left_margin_rows,
+    }
+}
+
+/// H1. GNU wraps every `display` property decoded from a `text/enriched`
+/// document in `(disable-eval SPEC)` (enriched.el,
+/// `enriched-decode-display-prop`), and promises that nothing in SPEC is run
+/// while every other display feature keeps working (lispref, "display
+/// property, unsafe evaluation"). The neomacs media specs open attacker
+/// chosen URLs and files in native demuxers and decoders, load web pages and
+/// compile GPU shaders, so under that wrapper they must resolve nothing --
+/// whatever shape carries them -- while a GNU `(image …)` spec still loads.
+#[test]
+fn layout_frame_rust_resolves_no_media_from_a_decoded_enriched_document() {
+    let layout = layout_decoded_enriched_media_document(false);
+    assert_eq!(
+        layout.decoded_display_wrappers,
+        vec!["disable-eval"; 8],
+        "enriched.el must wrap each decoded display property"
+    );
+    assert!(
+        layout.video_requests.is_empty()
+            && layout.webkit_requests.is_empty()
+            && layout.surface_requests.is_empty(),
+        "untrusted enriched text resolved media:\n  video: {:?}\n  webkit: {:?}\n  surface: {:?}",
+        layout.video_requests,
+        layout.webkit_requests,
+        layout.surface_requests
+    );
+    // GNU's own specs keep working under `disable-eval`.
+    assert!(
+        layout.image_requests > 0,
+        "the (image …) spec must still be resolved, rows={:?}",
+        layout.rows
+    );
+    // Every annotated line was laid out, so every spec above was walked. GNU
+    // has no `video' head: it reads `(video :uri URL …)' as a LIST of specs,
+    // whose only displayable element, the URL string, replaces the text
+    // (src/xdisp.c, handle_display_spec). The other media specs, none of
+    // which carries `:height' or `:raise' (see the helper), display nothing
+    // and leave their text alone.
+    assert_eq!(
+        layout.rows.get(..5),
+        Some(
+            &[
+                "ahttp://127.0.0.1:9/inline.mp4b",
+                "cWd",
+                "eSf",
+                "gCh",
+                "iFj"
+            ]
+            .map(String::from)[..]
+        ),
+        "expected GNU's reading of each line, rows={:?}",
+        layout.rows
+    );
+    assert!(
+        layout.rows.get(5).is_some_and(|row| row.starts_with('k')),
+        "the (image …) line must be laid out, rows={:?}",
+        layout.rows
+    );
+    // The propertized strings replace their text, in the text area and in the
+    // left margin, and their own `(video …)' property resolves nothing above.
+    assert_eq!(
+        layout.rows.get(6..8),
+        Some(&["mNn", "op"].map(String::from)[..]),
+        "rows={:?}",
+        layout.rows
+    );
+    assert!(
+        layout
+            .left_margin_rows
+            .get(7)
+            .is_some_and(|margin| margin.contains('M')),
+        "the margin string must be displayed, margins={:?}",
+        layout.left_margin_rows
+    );
+}
+
+/// The opt-in GNU documents for trusted enriched documents
+/// (`enriched-allow-eval-in-display-props`) leaves the property unwrapped, so
+/// the media specs resolve as any trusted Lisp's would. This is also the
+/// control showing the document above does reach every media resolver.
+#[test]
+fn layout_frame_rust_resolves_media_from_an_enriched_document_trusted_to_eval() {
+    let layout = layout_decoded_enriched_media_document(true);
+    assert_eq!(
+        layout.decoded_display_wrappers,
+        vec!["unwrapped"; 8],
+        "the opt-in must leave the decoded properties unwrapped"
+    );
+    let video_sources: Vec<String> = layout
+        .video_requests
+        .iter()
+        .map(|request| match &request.source {
+            VideoResolveSource::Uri(uri) => format!("uri {}", uri.as_utf8_str().unwrap_or("")),
+            VideoResolveSource::File(file) => {
+                format!("file {}", file.as_utf8_str().unwrap_or(""))
+            }
+        })
+        .collect();
+    for expected in [
+        "uri http://127.0.0.1:9/inline.mp4",
+        "uri http://127.0.0.1:9/channel0.mp4",
+        "file /tmp/neomacs-h1-local.mp4",
+    ] {
+        assert!(
+            video_sources.iter().any(|source| source == expected),
+            "missing video request {expected:?} in {video_sources:?}"
+        );
+    }
+    // Even trusted, a string displayed through a `display' property cannot
+    // replace its own text (GNU ignores replacing specs there, src/xdisp.c,
+    // handle_single_display_spec), so the nested `(video …)' specs stay inert.
+    assert!(
+        !video_sources.iter().any(|source| source.contains("nested")),
+        "a nested display string resolved a video: {video_sources:?}"
+    );
+    assert!(!layout.webkit_requests.is_empty(), "webkit spec unresolved");
+    assert!(
+        layout.surface_requests.len() >= 2,
+        "both shader specs must resolve: {:?}",
+        layout.surface_requests
+    );
+    assert!(layout.image_requests > 0, "image spec unresolved");
 }
 
 /// Lay out a buffer whose second character is replaced by an xwidget of

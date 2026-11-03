@@ -16,6 +16,31 @@ fn nil_and_t_are_taken_literally_without_evaluation() {
     );
 }
 
+/// GNU takes FORM as true without evaluating it only when it is `t' itself
+/// (`EQ (form, Qt)', src/xdisp.c:6143-6145).  An uninterned symbol named `t'
+/// is an ordinary variable: it is evaluated, and its value decides.
+#[test]
+fn an_uninterned_symbol_named_t_is_evaluated_not_taken_as_t() {
+    let mut eval = Context::new();
+    let buffer = Value::make_buffer(eval.buffers.current_buffer_id().expect("buffer"));
+    let unbound = eval.eval_str("(make-symbol \"t\")").expect("make-symbol");
+    assert!(
+        !eval
+            .display_when_form_holds(unbound, buffer, 1, 1)
+            .expect("no flow"),
+        "an unbound #:t signals void-variable, which counts as nil"
+    );
+    let bound_to_nil = eval
+        .eval_str("(let ((s (make-symbol \"t\"))) (set s nil) s)")
+        .expect("bound #:t");
+    assert!(
+        !eval
+            .display_when_form_holds(bound_to_nil, buffer, 1, 1)
+            .expect("no flow"),
+        "a #:t whose value is nil does not hold"
+    );
+}
+
 #[test]
 fn form_sees_object_position_and_buffer_position_bound_dynamically() {
     let mut eval = Context::new();
@@ -124,7 +149,7 @@ fn sites_are_evaluated_once_per_site_with_the_buffer_current_and_survive_gc() {
         },
     ];
     let results = eval
-        .evaluate_display_when_sites(other, None, &sites, |spec| spec.is_string())
+        .evaluate_display_when_sites(other, None, &sites, |spec, _| spec.is_string())
         .expect("no flow");
     assert_eq!(
         results.get(&DisplayWhenSiteKey::at(collecting, &sites[0])),
@@ -181,7 +206,7 @@ fn one_form_on_two_sites_is_evaluated_at_each_with_its_own_bindings() {
         },
     ];
     let results = eval
-        .evaluate_display_when_sites(buf_id, None, &sites, |spec| spec.is_string())
+        .evaluate_display_when_sites(buf_id, None, &sites, |spec, _| spec.is_string())
         .expect("no flow");
     assert_eq!(results.len(), 2);
     assert_eq!(
@@ -221,7 +246,7 @@ fn a_form_cannot_collect_its_detached_replacement_before_classification() {
         buffer_position: 1,
     }];
     let mut classified = false;
-    eval.evaluate_display_when_sites(buf_id, None, &sites, |spec| {
+    eval.evaluate_display_when_sites(buf_id, None, &sites, |spec, _| {
         assert_eq!(
             spec.cons_car(),
             Value::symbol("space"),
@@ -261,7 +286,7 @@ fn a_later_form_roots_the_replacement_installed_by_an_earlier_form() {
         buffer_position: 1,
     }];
     let mut classified = false;
-    eval.evaluate_display_when_sites(buf_id, None, &sites, |spec| {
+    eval.evaluate_display_when_sites(buf_id, None, &sites, |spec, _| {
         assert_eq!(
             spec.cons_car(),
             Value::symbol("space"),
