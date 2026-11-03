@@ -86,7 +86,7 @@ pub fn reserve_projection_scope() -> Result<(), ProjectionPlanError> {
 /// TABLE is the World's, inside the shared World allocation that owns the
 /// obarray of GENERATION, and the World leaves the scope
 /// ([`leave_projection_scope`]) before it drops.
-pub(crate) unsafe fn enter_projection_scope(
+pub unsafe fn enter_projection_scope(
     generation: u64,
     table: &RefCell<ThreadProjectionTable>,
     void: &'static ThreadProjectionDescriptor,
@@ -247,7 +247,7 @@ pub enum AdmissionPlanCell {
 /// one conceal.
 #[must_use = "a revealed projection must be concealed again"]
 #[derive(Debug)]
-pub(crate) struct RevealedProjection {
+pub struct RevealedProjection {
     id: SymId,
     projection: &'static ThreadProjectionDescriptor,
 }

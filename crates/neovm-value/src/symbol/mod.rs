@@ -55,26 +55,26 @@ pub enum CanonicalWrite {
 }
 #[cfg(test)]
 pub(crate) use cell::plist_epoch;
+pub(crate) use cell::store_plist_head;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
 #[doc(hidden)]
 pub use cell::{
     BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
-    store_plist_head,
 };
 pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(test)]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
 #[doc(hidden)]
 pub use function_cell_observer::{
-    FunctionCellObserver, function_cell_observer, install_function_cell_observer,
-    install_function_epoch_move_sink, note_function_epoch_move,
+    FunctionCellObserver, install_function_cell_observer, install_function_epoch_move_sink,
 };
+pub(crate) use function_cell_observer::{function_cell_observer, note_function_epoch_move};
 #[doc(hidden)]
 pub use projection::{
-    AdmissionPlanCell, ConcealOutcome, RevealedProjection, enter_projection_scope,
-    leave_projection_scope, reserve_projection_scope,
+    AdmissionPlanCell, ConcealOutcome, leave_projection_scope, reserve_projection_scope,
 };
+pub use projection::{RevealedProjection, enter_projection_scope};
 pub use property_revision::SymbolPropertyRevision;
 
 use crate::intern::{
