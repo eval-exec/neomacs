@@ -99,7 +99,12 @@ cranelift-native = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 whoami = "2.1.2"
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = [
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify.workspace = true

@@ -27,4 +27,9 @@ crate::emacs_core::subr::define_subrs! {
         w32_get_codepage_charset,
         FixedMin1::One,
     )),
+    crate::emacs_core::subr::world_subr!(SubrSpec::new(
+        "w32-shell-execute",
+        NativeFn::ContextVec(w32_shell_execute),
+        SubrArity::new(2, Some(4)),
+    )),
 }

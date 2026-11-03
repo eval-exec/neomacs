@@ -10,6 +10,9 @@
 pub(crate) mod filesystem;
 #[cfg(windows)]
 pub(crate) mod security;
+mod shell;
+#[cfg(windows)]
+pub(crate) use shell::w32_shell_execute;
 #[cfg(windows)]
 mod subrs;
 #[cfg(all(test, windows))]
