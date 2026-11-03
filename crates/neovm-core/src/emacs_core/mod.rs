@@ -25,6 +25,8 @@ pub mod kbd;
 pub mod keyboard;
 #[path = "commands/keymap/mod.rs"]
 pub mod keymap;
+#[path = "commands/kill_buffer/mod.rs"]
+pub mod kill_buffer;
 #[path = "commands/kmacro/mod.rs"]
 pub mod kmacro;
 #[path = "commands/minibuffer/mod.rs"]
