@@ -8080,10 +8080,10 @@ fn x_create_frame_applies_early_init_default_frame_alist_bars() {
         Some(Value::fixnum(0)),
         "tool-bar-lines from default-frame-alist must reach the frame"
     );
-    let scroll_bars = frame.parameter("vertical-scroll-bars");
-    assert!(
-        scroll_bars.is_none_or(|value| value.is_nil()),
-        "the bare (vertical-scroll-bars) entry means nil, got {scroll_bars:?}"
+    assert_eq!(
+        frame.parameter("vertical-scroll-bars"),
+        Some(Value::NIL),
+        "the bare (vertical-scroll-bars) entry must be stored as an explicit nil"
     );
     assert_eq!(frame.menu_bar_height, 0);
     assert_eq!(frame.tool_bar_height, 0);
