@@ -12,6 +12,7 @@ default = []
 neo-term = []
 
 [dependencies]
+neovm-display-identity.workspace = true
 static_assertions.workspace = true
 rustc-hash.workspace = true
 bitflags.workspace = true

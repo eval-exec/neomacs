@@ -3,49 +3,13 @@
 use std::num::NonZeroU64;
 use std::ops::{Add, Sub};
 
-macro_rules! display_id_type {
-    ($name:ident, $raw:ty) => {
-        #[repr(transparent)]
-        #[derive(
-            Debug,
-            Clone,
-            Copy,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Hash,
-            Default,
-            serde::Serialize,
-            serde::Deserialize,
-        )]
-        pub struct $name($raw);
+use neovm_display_identity::display_id_type;
 
-        impl $name {
-            #[must_use]
-            pub const fn new(raw: $raw) -> Self {
-                Self(raw)
-            }
-
-            #[must_use]
-            pub const fn get(self) -> $raw {
-                self.0
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                self.0.fmt(f)
-            }
-        }
-    };
-}
+pub use neovm_display_identity::{VideoId, WebViewId};
 
 display_id_type!(DisplayFrameId, u64);
 display_id_type!(DisplayWindowId, i64);
 display_id_type!(ImageId, u32);
-display_id_type!(VideoId, u32);
-display_id_type!(WebViewId, u32);
 display_id_type!(XwidgetId, u32);
 // Shader surface: a compositor-rendered texture created from Elisp
 // (`docs/display-engine/SHADER_SURFACES.md`).

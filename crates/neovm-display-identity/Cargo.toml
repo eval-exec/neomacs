@@ -1,0 +1,11 @@
+[package]
+name = "neovm-display-identity"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Display identity vocabulary shared by the value layer and the display protocol"
+
+[dependencies]
+serde.workspace = true

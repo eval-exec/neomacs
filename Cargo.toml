@@ -23,6 +23,7 @@ members = [
     "crates/neomacs-video-model",
     "crates/neomacs-webview",
     "crates/neovm-core",
+    "crates/neovm-display-identity",
     "crates/neovm-host-abi",
     "crates/neovm-oracle-tests",
     "crates/neovm-value",
@@ -93,6 +94,7 @@ zip = { version = "9.1", default-features = false, features = ["deflate"] }
 neomacs-terminfo = { path = "crates/neomacs-terminfo" }
 neomacs-allocator = { path = "crates/neomacs-allocator" }
 neovm-core = { path = "crates/neovm-core", default-features = false }
+neovm-display-identity = { path = "crates/neovm-display-identity" }
 neovm-host-abi = { path = "crates/neovm-host-abi" }
 neovm-oracle-tests = { path = "crates/neovm-oracle-tests" }
 neovm-value = { path = "crates/neovm-value" }
