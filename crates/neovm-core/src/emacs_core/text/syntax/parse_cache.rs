@@ -12,12 +12,12 @@
 //! This file holds the cache and its invalidation. Every change to what a scan
 //! reads reaches it:
 //!
-//! * text: the four measured mutators note the edit's first byte
-//!   ([`SyntaxParseCache::note_edit`]); wholesale replacements, multibyte and
-//!   backend conversions clear it;
+//! * text: the four measured mutators note the edit's first byte in the
+//!   buffer substrate's [`SyntaxMutationNotes`](crate::buffer::syntax_cache::SyntaxMutationNotes);
+//!   wholesale replacements, multibyte and backend conversions clear it;
 //! * `syntax-table` / `category` properties: every property-table mutation that
-//!   moves the table's syntax tick notes the first character it can touch
-//!   ([`SyntaxParseCache::note_prop_change`]); a swapped-in table clears it;
+//!   moves the table's syntax tick notes the first character it can touch in
+//!   the same notes; a swapped-in table clears it;
 //! * everything else a scan reads (the syntax table and its char-table write
 //!   tick, BEGV, `parse-sexp-lookup-properties`, `comment-end-can-be-escaped`,
 //!   multibyteness) is part of each query's key.
@@ -26,10 +26,12 @@
 //! further than the notes account for (a mutation path that bypassed them)
 //! clears everything, so a missed hook costs hits, never answers.
 //!
-//! The cache lives in `BufferTextStorage`, outside the copy-on-write text, and
-//! a snapshot clone starts empty (P3.0 §3.9). It holds positions and parse
-//! states, and descriptor conses as bits (below): no `Value` it keeps alive,
-//! nothing to trace.
+//! The recorded runs live in this module's registry, keyed by the
+//! `SyntaxCacheId` the buffer storage issues (stage-3 C7): the substrate owns
+//! the identity and the invalidation notes, the text layer owns the runs.  A
+//! snapshot clone gets a fresh id and starts empty (P3.0 §3.9).  The cache
+//! holds positions and parse states, and descriptor conses as bits (below): no
+//! `Value` it keeps alive, nothing to trace.
 //!
 //! # L1: runs, snapshots and exact answers
 //!
@@ -78,14 +80,15 @@
 //!
 //! # Mutator ownership
 //!
-//! Runs belong to the buffer text's existing mutator-confined storage, with
-//! cache access serialized by that storage's borrow. Cache borrows end before
-//! a scan. Future mutators sharing one text storage must additionally serialize
-//! text/property, syntax-table and descriptor access across validation, scanning
-//! and publication; the
-//! RefCell cache borrow does not itself synchronize other threads. Process-wide
-//! knobs contain only scalar policy, and relaxed publication carries no Lisp
-//! state. Existing thread-local counters are diagnostics, not cached answers.
+//! Runs are keyed by the buffer text storage's `SyntaxCacheId` and live in the
+//! text layer's registry, whose shard lock serializes access; the storage's
+//! drop forgets its entry.  Cache borrows end before a scan. Future mutators
+//! sharing one text storage must additionally serialize text/property,
+//! syntax-table and descriptor access across validation, scanning and
+//! publication; the shard lock does not itself synchronize other threads.
+//! Process-wide knobs contain only scalar policy, and relaxed publication
+//! carries no Lisp state. Existing thread-local counters are diagnostics, not
+//! cached answers.
 
 use super::parse_loop::{
     Entry, LoopState, LoopTop, Plain, ScanEnd, ScanFinish, ScanMode, TopAction, run_parse_loop,
@@ -162,18 +165,7 @@ pub(crate) fn parse_parse_cache_knob(value: Option<&str>) -> ParseCacheMode {
     }
 }
 
-/// What changed since the cache was last used.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Invalidation {
-    /// Nothing a scan reads.
-    Nothing,
-    /// Text at or after `byte`, or syntax-relevant properties at or after
-    /// `char` (either may be `usize::MAX`): everything a scan read before both
-    /// is unchanged, and so are its coordinates.
-    From { byte: usize, char: usize },
-    /// Anything.
-    All,
-}
+pub(crate) use crate::buffer::syntax_cache::Invalidation;
 
 /// Per-storage syntax parse cache. See the module documentation.
 #[derive(Debug, Default)]
@@ -187,19 +179,6 @@ pub(crate) struct SyntaxParseCache {
     from_filter: u64,
     /// LRU clock.
     clock: u64,
-    /// Lowest Emacs byte position whose text changed since the last drain.
-    dirty_byte: Option<usize>,
-    /// Lowest char position whose syntax-relevant properties changed since
-    /// the last drain.
-    dirty_char: Option<usize>,
-    /// A wholesale change since the last drain.
-    cleared: bool,
-    /// The text epoch and the property table's syntax tick at the last drain.
-    seen_epoch: u64,
-    seen_prop_tick: u64,
-    /// How far the notes since the last drain account for each of them.
-    noted_edits: u64,
-    noted_prop_ticks: u64,
 }
 
 impl SyntaxParseCache {
@@ -219,33 +198,11 @@ impl SyntaxParseCache {
             .fold(0, |mask, run| mask | from_filter_bit(run.key.from_char));
     }
 
-    /// A text edit whose first changed byte is `at_byte` (every later byte may
-    /// have moved). Called once per content-epoch bump.
-    #[inline]
-    pub(crate) fn note_edit(&mut self, at_byte: usize) {
-        self.dirty_byte = Some(self.dirty_byte.map_or(at_byte, |dirty| dirty.min(at_byte)));
-        self.noted_edits = self.noted_edits.wrapping_add(1);
-    }
-
-    /// A property mutation that moved the syntax tick by `ticks` and can
-    /// change syntax-relevant properties only at or after `at_char`.
-    #[inline]
-    pub(crate) fn note_prop_change(&mut self, at_char: usize, ticks: u64) {
-        self.dirty_char = Some(self.dirty_char.map_or(at_char, |dirty| dirty.min(at_char)));
-        self.noted_prop_ticks = self.noted_prop_ticks.wrapping_add(ticks);
-    }
-
-    /// Everything goes: a change with no known extent.
-    #[inline]
-    pub(crate) fn clear(&mut self) {
-        self.cleared = true;
-    }
-
-    /// Apply what changed since the last drain, given the storage's current
-    /// text epoch and syntax tick, and reset the notes.
-    pub(crate) fn drain(&mut self, epoch: u64, prop_tick: u64) -> Invalidation {
-        let outcome = self.take_invalidation(epoch, prop_tick);
-        match outcome {
+    /// Apply the substrate's invalidation notes to the recorded runs. The
+    /// notes themselves live in the buffer text storage; what arrives here is
+    /// the plain outcome (stage-3 C7).
+    pub(crate) fn apply_invalidation(&mut self, invalidation: Invalidation) {
+        match invalidation {
             Invalidation::Nothing => {}
             Invalidation::All => {
                 self.runs.clear();
@@ -266,38 +223,101 @@ impl SyntaxParseCache {
                 }
             }
         }
-        outcome
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The text-layer cache registry (stage-3 C7)
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
+/// Recorded runs per buffer text, keyed by the substrate-issued cache id.
+///
+/// The substrate owns the identity and the invalidation notes; the runs live
+/// here because their keys and states are syntax data.  Cache access is
+/// serialized per shard, and only the owning (thread-confined) storage's id
+/// can reach an entry; a storage's drop forgets it.
+const CACHE_SHARDS: usize = 16;
+
+static CACHES: LazyLock<[Mutex<HashMap<u64, SyntaxParseCache>>; CACHE_SHARDS]> =
+    LazyLock::new(|| std::array::from_fn(|_| Mutex::new(HashMap::new())));
+
+#[inline]
+fn cache_shard(id: u64) -> &'static Mutex<HashMap<u64, SyntaxParseCache>> {
+    &CACHES[(id as usize) % CACHE_SHARDS]
+}
+
+fn take_cache(id: u64) -> SyntaxParseCache {
+    cache_shard(id)
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(&id)
+        .unwrap_or_default()
+}
+
+fn put_cache(id: u64, cache: SyntaxParseCache) {
+    cache_shard(id)
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(id, cache);
+}
+
+fn forget_cache(id: u64) {
+    cache_shard(id)
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .remove(&id);
+}
+
+fn ensure_forget_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| crate::buffer::syntax_cache::install_forget_hook(forget_cache));
+}
+
+/// The text layer's handle on a buffer text's syntax parse cache (stage-3 C7).
+///
+/// Taking the cache out of the registry while a caller holds it keeps the
+/// shard lock off the callback; a re-entrant lookup sees a fresh cache and
+/// the outer call replaces the entry afterwards.  Losing an entry to a panic
+/// only costs the next lookups their hits: the cache never answers from a
+/// state it did not validate after the substrate's invalidation.
+pub(crate) trait BufferSyntaxParseCache {
+    /// Run `f` with the cache and what changed since its last use.
+    fn with_syntax_parse_cache<R>(
+        &self,
+        f: impl FnOnce(&mut SyntaxParseCache, Invalidation) -> R,
+    ) -> R;
+
+    /// Whether a syntax-cache run could share this FROM. This reads numeric
+    /// keys only and leaves invalidation pending. Invalidation can remove
+    /// runs, never create a missing FROM; actual lookup must still drain it.
+    fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool;
+}
+
+impl BufferSyntaxParseCache for Buffer {
+    fn with_syntax_parse_cache<R>(
+        &self,
+        f: impl FnOnce(&mut SyntaxParseCache, Invalidation) -> R,
+    ) -> R {
+        ensure_forget_hook();
+        let id = self.syntax_cache_id().get();
+        let invalidation = self.take_syntax_invalidation();
+        let mut cache = take_cache(id);
+        cache.apply_invalidation(invalidation);
+        let out = f(&mut cache, invalidation);
+        put_cache(id, cache);
+        out
     }
 
-    fn take_invalidation(&mut self, epoch: u64, prop_tick: u64) -> Invalidation {
-        let unaccounted_text = epoch.wrapping_sub(self.seen_epoch) != self.noted_edits;
-        let unaccounted_props =
-            prop_tick.wrapping_sub(self.seen_prop_tick) != self.noted_prop_ticks;
-        let outcome = if self.cleared || unaccounted_text || unaccounted_props {
-            if !self.cleared && (unaccounted_text || unaccounted_props) {
-                tracing::trace!(
-                    unaccounted_text,
-                    unaccounted_props,
-                    "syntax parse cache: a change bypassed the notes; clearing"
-                );
-            }
-            Invalidation::All
-        } else if self.dirty_byte.is_none() && self.dirty_char.is_none() {
-            Invalidation::Nothing
-        } else {
-            Invalidation::From {
-                byte: self.dirty_byte.unwrap_or(usize::MAX),
-                char: self.dirty_char.unwrap_or(usize::MAX),
-            }
-        };
-        self.dirty_byte = None;
-        self.dirty_char = None;
-        self.cleared = false;
-        self.seen_epoch = epoch;
-        self.seen_prop_tick = prop_tick;
-        self.noted_edits = 0;
-        self.noted_prop_ticks = 0;
-        outcome
+    fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool {
+        let id = self.syntax_cache_id().get();
+        let map = cache_shard(id)
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        map.get(&id)
+            .is_some_and(|cache| cache.has_run_from(from_char))
     }
 }
 

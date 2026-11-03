@@ -4,6 +4,8 @@ pub mod buffer;
 pub(crate) mod buffer_text;
 pub(crate) mod composition;
 mod edit_transaction;
+pub(crate) mod storage_string;
+pub(crate) mod syntax_cache;
 pub(crate) use edit_transaction::{CasifyExpansion, CasifyStorageShape};
 pub(crate) mod gap_buffer;
 mod marker_data;

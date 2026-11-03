@@ -53,6 +53,7 @@ use super::position::{
     CharLen, CharPos0, CharRange, EmacsByteLen, EmacsBytePos, EmacsByteRange, TextPositionAnchor,
     TextPositionBounds,
 };
+use super::syntax_cache::{Invalidation, SyntaxCacheState};
 use super::text::backend::TextBackend;
 use super::text::{
     BufferTextBackendKind, BufferTextBytesSnapshot, GapCompatState,
@@ -63,7 +64,6 @@ use super::text::{
 use super::text::{GapDebugLayout, TextBackendDebugLayout};
 use super::text_index::TextLineIndex;
 use super::text_props::{ObjectIntervalRun, PropertyInterval, TextPropertyTable};
-use crate::emacs_core::syntax::parse_cache::{Invalidation, SyntaxParseCache};
 
 mod line_index;
 use line_index::LineIndexRole;
@@ -346,9 +346,11 @@ struct BufferTextStorage {
     /// live text and its snapshots; created only while the knob is on.
     text_index_demand: OnceCell<Rc<Cell<bool>>>,
     line_index_role: LineIndexRole,
-    /// `parse-partial-sexp` loop states of earlier scans (P3.4). Outside the
-    /// copy-on-write backend: a snapshot starts without it (P3.0 §3.9).
-    syntax_parse_cache: RefCell<SyntaxParseCache>,
+    /// Identity of and invalidation notes for the syntax parse cache whose
+    /// recorded runs live in the text layer (P3.4, stage-3 C7). Outside the
+    /// copy-on-write backend: a snapshot starts with a fresh identity and no
+    /// notes (P3.0 §3.9).
+    syntax_cache: SyntaxCacheState,
     /// Per-buffer GNU clip_changed witness. Indirect buffers share this heap
     /// allocation but retain distinct restrictions. No Buffer/JIT layout change.
     /// Kept after existing fields to avoid intentionally displacing hot fields.
@@ -522,7 +524,7 @@ impl Clone for BufferTextStorage {
             text_index,
             text_index_demand,
             line_index_role: LineIndexRole::Snapshot,
-            syntax_parse_cache: RefCell::new(SyntaxParseCache::default()),
+            syntax_cache: SyntaxCacheState::fresh(),
             mode_line_clipped: self.mode_line_clipped.clone(),
         }
     }
@@ -602,7 +604,7 @@ impl BufferText {
                 text_index: RefCell::new(None),
                 text_index_demand: OnceCell::new(),
                 line_index_role: LineIndexRole::Live,
-                syntax_parse_cache: RefCell::new(SyntaxParseCache::default()),
+                syntax_cache: SyntaxCacheState::fresh(),
                 mode_line_clipped: HashSet::new(),
             })),
         }
@@ -622,7 +624,7 @@ impl BufferText {
         Self::refresh_backend_metrics(storage);
         storage.content_epoch = storage.content_epoch.wrapping_add(1).max(1);
         Self::invalidate_position_caches(storage);
-        storage.syntax_parse_cache.get_mut().clear();
+        storage.syntax_cache.clear();
     }
 
     /// Like [`Self::finish_backend_content_mutation`], but for a mutation whose
@@ -643,10 +645,7 @@ impl BufferText {
         Self::refresh_backend_metrics(storage);
         storage.content_epoch = storage.content_epoch.wrapping_add(1).max(1);
         let epoch = storage.content_epoch;
-        storage
-            .syntax_parse_cache
-            .get_mut()
-            .note_edit(edit.at_byte.get());
+        storage.syntax_cache.note_edit(edit.at_byte.get());
         storage
             .single_byte_span
             .set(SingleBytePositionSpan::default());
@@ -688,7 +687,7 @@ impl BufferText {
     fn finish_backend_shape_change(storage: &mut BufferTextStorage) {
         Self::refresh_backend_metrics(storage);
         Self::invalidate_position_caches(storage);
-        storage.syntax_parse_cache.get_mut().clear();
+        storage.syntax_cache.clear();
     }
 
     fn virtual_gap_consume_bytes(storage: &mut BufferTextStorage, bytes: EmacsByteLen) {
@@ -1641,7 +1640,7 @@ impl BufferText {
         *storage.syntax_char_run_memo.borrow_mut() = [SyntaxCharRunMemoEntry::default(); 4];
         // Same reason: the new table's syntax tick is not comparable.
         *storage.syntax_safe_positions.borrow_mut() = SyntaxSafePositions::default();
-        storage.syntax_parse_cache.get_mut().clear();
+        storage.syntax_cache.clear();
     }
 
     /// Mutate the text-property table. When the mutation moves the table's
@@ -1660,33 +1659,28 @@ impl BufferText {
         let moved = storage.text_props.syntax_prop_tick().wrapping_sub(tick);
         if moved != 0 {
             storage
-                .syntax_parse_cache
-                .get_mut()
+                .syntax_cache
                 .note_prop_change(syntax_from.get(), moved);
         }
         out
     }
 
-    /// Whether a syntax-cache run could share this FROM. This reads numeric
-    /// keys only and leaves invalidation pending. Invalidation can remove
-    /// runs, never create a missing FROM; actual lookup must still drain it.
+    /// The identity of this storage's syntax parse cache (stage-3 C7).
     #[inline]
-    pub(crate) fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool {
-        let storage = self.storage.borrow();
-        let cache = storage.syntax_parse_cache.borrow();
-        cache.has_run_from(from_char)
+    pub(crate) fn syntax_cache_id(&self) -> super::syntax_cache::SyntaxCacheId {
+        self.storage.borrow().syntax_cache.id()
     }
 
-    /// The syntax parse cache, with what changed since its last use (P3.4).
-    pub(crate) fn with_syntax_parse_cache<R>(
-        &self,
-        f: impl FnOnce(&mut SyntaxParseCache, Invalidation) -> R,
-    ) -> R {
+    /// What changed since the syntax parse cache last consumed the notes.
+    ///
+    /// The text layer keys its recorded runs by [`Self::syntax_cache_id`] and
+    /// applies this invalidation before answering from them; the substrate
+    /// never names a syntax type.
+    pub(crate) fn take_syntax_invalidation(&self) -> Invalidation {
         let storage = self.storage.borrow();
-        let mut cache = storage.syntax_parse_cache.borrow_mut();
-        let invalidation =
-            cache.drain(storage.content_epoch, storage.text_props.syntax_prop_tick());
-        f(&mut cache, invalidation)
+        storage
+            .syntax_cache
+            .take_invalidation(storage.content_epoch, storage.text_props.syntax_prop_tick())
     }
 
     /// The content epoch and the text-property table's syntax tick: the
@@ -1707,8 +1701,7 @@ impl BufferText {
     }
 
     pub fn replace_storage(&self, text: &str, multibyte: bool, text_props: TextPropertyTable) {
-        let bytes =
-            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, multibyte);
+        let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(text, multibyte);
         let string = if multibyte {
             crate::heap_types::LispString::from_emacs_bytes(bytes)
         } else {

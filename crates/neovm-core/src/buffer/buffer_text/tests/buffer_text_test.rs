@@ -43,7 +43,7 @@ fn insert_storage_string(text: &mut BufferText, pos: EmacsBytePos, value: &str) 
         return;
     }
     let multibyte = text.is_multibyte();
-    let bytes = crate::emacs_core::string_escape::storage_string_to_buffer_bytes(value, multibyte);
+    let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(value, multibyte);
     let extent = TextExtent::from_emacs_bytes(&bytes, multibyte);
     text.insert_measured_emacs_bytes(pos, &bytes, extent);
 }
@@ -1222,7 +1222,7 @@ fn backward_position_walks_count_chunks_like_the_per_byte_walk() {
         content.push_str(unit);
     }
     insert_storage_string(&mut text, EmacsBytePos::ZERO, &content);
-    let bytes = crate::emacs_core::string_escape::storage_string_to_buffer_bytes(&content, true);
+    let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(&content, true);
     let is_start = |i: usize| i >= bytes.len() || (bytes[i] & 0xC0) != 0x80;
     // Naive references over the raw bytes.
     let naive_char_of_byte = |target: usize| -> usize {
@@ -1344,25 +1344,19 @@ mod cow_snapshot_test;
 mod line_index_test;
 
 /// A layout snapshot starts without the syntax parse cache (P3.4 S3, P3.0
-/// §3.9): the clone's cache has seen nothing and reports everything changed,
-/// while the live text's cache keeps its own account.
+/// §3.9): the clone gets a fresh cache identity and its own invalidation
+/// account that has seen nothing and reports everything changed, while the
+/// live text's account keeps its own state.  The recorded runs live in the
+/// text layer, keyed by this substrate identity (stage-3 C7).
 #[test]
 fn a_text_clone_starts_without_the_syntax_parse_cache() {
-    use crate::emacs_core::syntax::parse_cache::Invalidation;
+    use crate::buffer::syntax_cache::Invalidation;
     crate::test_utils::init_test_tracing();
     let text = BufferText::from_str("(a b) ; c");
-    let _ = text.with_syntax_parse_cache(|_, i| i);
-    assert_eq!(
-        text.with_syntax_parse_cache(|_, i| i),
-        Invalidation::Nothing
-    );
+    let _ = text.take_syntax_invalidation();
+    assert_eq!(text.take_syntax_invalidation(), Invalidation::Nothing);
     let snapshot = text.clone();
-    assert_eq!(
-        snapshot.with_syntax_parse_cache(|_, i| i),
-        Invalidation::All
-    );
-    assert_eq!(
-        text.with_syntax_parse_cache(|_, i| i),
-        Invalidation::Nothing
-    );
+    assert_ne!(snapshot.syntax_cache_id(), text.syntax_cache_id());
+    assert_eq!(snapshot.take_syntax_invalidation(), Invalidation::All);
+    assert_eq!(text.take_syntax_invalidation(), Invalidation::Nothing);
 }

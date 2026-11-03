@@ -17,8 +17,8 @@ impl StorageStringBufferBytes {
 }
 
 pub(in crate::buffer) fn storage_string_to_emacs_buffer_bytes(s: &str) -> StorageStringBufferBytes {
-    let multibyte = !crate::emacs_core::string_escape::storage_string_contains_unibyte_bytes(s);
-    let bytes = crate::emacs_core::string_escape::storage_string_to_buffer_bytes(s, multibyte);
+    let multibyte = !crate::buffer::storage_string::storage_string_contains_unibyte_bytes(s);
+    let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(s, multibyte);
     StorageStringBufferBytes { bytes, multibyte }
 }
 

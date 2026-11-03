@@ -112,8 +112,7 @@ fn rope_char_code_at(rope: &RopeTextBackend, byte_pos: usize) -> Option<u32> {
 }
 
 fn insert_rope_str(rope: &mut RopeTextBackend, byte_pos: usize, text: &str) {
-    let bytes =
-        crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, rope.multibyte);
+    let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(text, rope.multibyte);
     let extent = TextExtent::from_emacs_bytes(&bytes, rope.multibyte);
     rope.insert_measured_emacs_bytes(EmacsBytePos::new(byte_pos), &bytes, extent);
 }
@@ -175,7 +174,7 @@ fn replacement_bytes_for_len(len: usize, seed: u8) -> Option<Vec<u8>> {
     let matches: Vec<Vec<u8>> = candidates
         .iter()
         .map(|candidate| {
-            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(candidate, true)
+            crate::buffer::storage_string::storage_string_to_buffer_bytes(candidate, true)
         })
         .filter(|bytes| bytes.len() == len)
         .collect();

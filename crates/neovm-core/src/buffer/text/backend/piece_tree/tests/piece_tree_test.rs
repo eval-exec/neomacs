@@ -106,7 +106,7 @@ fn replacement_bytes_for_len(len: usize, seed: u8) -> Option<Vec<u8>> {
     let matches: Vec<Vec<u8>> = candidates
         .iter()
         .map(|candidate| {
-            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(candidate, true)
+            crate::buffer::storage_string::storage_string_to_buffer_bytes(candidate, true)
         })
         .filter(|bytes| bytes.len() == len)
         .collect();
@@ -155,7 +155,7 @@ fn copy_piece_bytes(piece: &PieceTreeTextBackend, start: usize, end: usize, out:
 
 fn insert_piece_str(piece: &mut PieceTreeTextBackend, byte_pos: usize, text: &str) {
     let bytes =
-        crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, piece.multibyte);
+        crate::buffer::storage_string::storage_string_to_buffer_bytes(text, piece.multibyte);
     let extent = TextExtent::from_emacs_bytes(&bytes, piece.multibyte);
     piece.insert_measured_emacs_bytes(EmacsBytePos::new(byte_pos), &bytes, extent);
 }

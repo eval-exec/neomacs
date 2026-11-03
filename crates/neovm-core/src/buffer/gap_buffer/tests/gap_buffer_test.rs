@@ -592,7 +592,7 @@ fn byte_to_char_emoji() {
 fn byte_char_conversion_unibyte_storage_sentinels() {
     crate::test_utils::init_test_tracing();
     let storage =
-        crate::emacs_core::string_escape::bytes_to_unibyte_storage_string(&[0x80, b'A', 0xFF]);
+        crate::buffer::storage_string::bytes_to_unibyte_storage_string(&[0x80, b'A', 0xFF]);
     let buf = GapBuffer::from_str(&storage);
     assert_eq!(buf.char_count(), 3);
     assert_eq!(char_to_byte(&buf, 0), 0);
@@ -609,7 +609,7 @@ fn byte_char_conversion_unibyte_storage_sentinels() {
 fn byte_char_conversion_unibyte_storage_sentinels_after_gap_move() {
     crate::test_utils::init_test_tracing();
     let storage =
-        crate::emacs_core::string_escape::bytes_to_unibyte_storage_string(&[0x80, b'A', 0xFF]);
+        crate::buffer::storage_string::bytes_to_unibyte_storage_string(&[0x80, b'A', 0xFF]);
     let mut buf = GapBuffer::from_str(&storage);
     buf.move_gap_to(2);
     assert_eq!(buf.char_count(), 3);
@@ -802,9 +802,8 @@ fn copy_bytes_to_empty_range() {
 #[test]
 fn copy_emacs_bytes_to_unibyte_storage_sentinels() {
     crate::test_utils::init_test_tracing();
-    let storage = crate::emacs_core::string_escape::bytes_to_unibyte_storage_string(&[
-        0xFF, b'\n', 0x80, b'A',
-    ]);
+    let storage =
+        crate::buffer::storage_string::bytes_to_unibyte_storage_string(&[0xFF, b'\n', 0x80, b'A']);
     let mut gb = GapBuffer::from_str(&storage);
     gb.move_gap_to(2);
 

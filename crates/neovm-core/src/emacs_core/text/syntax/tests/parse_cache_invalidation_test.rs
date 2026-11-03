@@ -4,6 +4,7 @@
 //! that bypassed the notes as "everything" too.
 
 use super::*;
+use crate::buffer::syntax_cache::SyntaxMutationNotes;
 
 #[test]
 fn the_knob_is_on_unless_switched_off() {
@@ -26,41 +27,47 @@ fn the_knob_is_on_unless_switched_off() {
 
 #[test]
 fn notes_are_drained_as_the_lowest_changed_position() {
-    let mut cache = SyntaxParseCache::default();
-    assert_eq!(cache.drain(7, 3), Invalidation::All, "first sight");
-    assert_eq!(cache.drain(7, 3), Invalidation::Nothing);
-    cache.note_edit(40);
-    cache.note_edit(12);
+    // The notes are the substrate's plain invalidation account (stage-3 C7);
+    // the cache consumes its outcome before answering from its runs.
+    let mut notes = SyntaxMutationNotes::default();
     assert_eq!(
-        cache.drain(9, 3),
+        notes.take_invalidation(7, 3),
+        Invalidation::All,
+        "first sight"
+    );
+    assert_eq!(notes.take_invalidation(7, 3), Invalidation::Nothing);
+    notes.note_edit(40);
+    notes.note_edit(12);
+    assert_eq!(
+        notes.take_invalidation(9, 3),
         Invalidation::From {
             byte: 12,
             char: usize::MAX
         }
     );
-    cache.note_prop_change(30, 1);
-    cache.note_prop_change(50, 2);
+    notes.note_prop_change(30, 1);
+    notes.note_prop_change(50, 2);
     assert_eq!(
-        cache.drain(9, 6),
+        notes.take_invalidation(9, 6),
         Invalidation::From {
             byte: usize::MAX,
             char: 30
         }
     );
     // A tick or epoch the notes do not account for.
-    cache.note_prop_change(30, 1);
-    assert_eq!(cache.drain(9, 8), Invalidation::All);
-    assert_eq!(cache.drain(10, 8), Invalidation::All);
-    cache.clear();
-    assert_eq!(cache.drain(10, 8), Invalidation::All);
-    assert_eq!(cache.drain(10, 8), Invalidation::Nothing);
+    notes.note_prop_change(30, 1);
+    assert_eq!(notes.take_invalidation(9, 8), Invalidation::All);
+    assert_eq!(notes.take_invalidation(10, 8), Invalidation::All);
+    notes.clear();
+    assert_eq!(notes.take_invalidation(10, 8), Invalidation::All);
+    assert_eq!(notes.take_invalidation(10, 8), Invalidation::Nothing);
 }
 
 fn drain(eval: &crate::emacs_core::eval::Context) -> Invalidation {
     eval.buffers
         .current_buffer()
         .expect("current buffer")
-        .with_syntax_parse_cache(|_, invalidation| invalidation)
+        .take_syntax_invalidation()
 }
 
 #[test]

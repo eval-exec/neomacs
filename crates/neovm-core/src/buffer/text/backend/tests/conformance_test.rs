@@ -175,7 +175,7 @@ fn extent_for_bytes(bytes: &[u8], multibyte: bool) -> TextExtent {
 }
 
 fn buffer_bytes_for_text(text: &str, multibyte: bool) -> Vec<u8> {
-    crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, multibyte)
+    crate::buffer::storage_string::storage_string_to_buffer_bytes(text, multibyte)
 }
 
 fn insert_text(backend: &mut TextBackend, byte_pos: EmacsBytePos, text: &str) {

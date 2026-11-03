@@ -65,8 +65,7 @@ impl Buffer {
             return TextInsertion::at_anchor(self.point_anchor(), TextExtent::ZERO);
         }
         let multibyte = self.get_multibyte();
-        let bytes =
-            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, multibyte);
+        let bytes = crate::buffer::storage_string::storage_string_to_buffer_bytes(text, multibyte);
         let plan = InsertTextPlan::for_bytes(
             &bytes,
             multibyte,

@@ -3519,21 +3519,16 @@ impl Buffer {
         self.text.syntax_content_key()
     }
 
-    /// See [`crate::buffer::buffer_text::BufferText::syntax_parse_cache_has_run_from`].
+    /// The identity of this buffer text's syntax parse cache (stage-3 C7).
     #[inline]
-    pub(crate) fn syntax_parse_cache_has_run_from(&self, from_char: usize) -> bool {
-        self.text.syntax_parse_cache_has_run_from(from_char)
+    pub(crate) fn syntax_cache_id(&self) -> super::syntax_cache::SyntaxCacheId {
+        self.text.syntax_cache_id()
     }
 
-    /// See [`crate::buffer::buffer_text::BufferText::with_syntax_parse_cache`].
-    pub(crate) fn with_syntax_parse_cache<R>(
-        &self,
-        f: impl FnOnce(
-            &mut crate::emacs_core::syntax::parse_cache::SyntaxParseCache,
-            crate::emacs_core::syntax::parse_cache::Invalidation,
-        ) -> R,
-    ) -> R {
-        self.text.with_syntax_parse_cache(f)
+    /// What changed since the syntax parse cache last consumed the notes.
+    #[inline]
+    pub(crate) fn take_syntax_invalidation(&self) -> super::syntax_cache::Invalidation {
+        self.text.take_syntax_invalidation()
     }
 
     /// See [`crate::buffer::buffer_text::SyntaxSafePositions`].

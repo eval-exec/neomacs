@@ -589,7 +589,7 @@ impl GapBuffer {
             return;
         }
         let bytes =
-            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(s, self.multibyte);
+            crate::buffer::storage_string::storage_string_to_buffer_bytes(s, self.multibyte);
         self.insert_emacs_bytes_at_emacs_byte_pos(pos, &bytes);
     }
 
