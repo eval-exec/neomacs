@@ -78,7 +78,9 @@ fn shell_execute_requires_a_string_document() {
     use crate::emacs_core::error::FlowKind;
 
     let mut eval = Context::new();
-    let error = w32_shell_execute(&mut eval, vec![Value::fixnum(1), Value::NIL])
+    // (OPERATION DOCUMENT ...): DOCUMENT is the second argument and is the
+    // only one GNU type-checks.
+    let error = w32_shell_execute(&mut eval, vec![Value::string("open"), Value::fixnum(1)])
         .expect_err("a non-string document must signal");
     match error.into_kind() {
         FlowKind::Signal(signal) => {
@@ -105,6 +107,44 @@ fn shell_execute_missing_local_file_signals_gnu_error() {
         &mut eval,
         vec![
             Value::string("open"),
+            Value::string(missing.to_string_lossy().to_string()),
+        ],
+    )
+    .expect_err("a missing document must signal");
+    match error.into_kind() {
+        FlowKind::Signal(signal) => {
+            assert_eq!(signal.symbol_name(), "error");
+            let message = signal.data[0]
+                .as_utf8_str()
+                .expect("error message is a string");
+            assert!(
+                message.starts_with("ShellExecute failed: "),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("expected Flow::Signal, got {other:?}"),
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn shell_execute_reads_operation_from_the_first_argument() {
+    use crate::emacs_core::error::FlowKind;
+
+    let missing = std::env::temp_dir().join(format!(
+        "neomacs-w32-shell-execute-op-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&missing);
+
+    let mut eval = Context::new();
+    // OPERATION is not type-checked; only DOCUMENT is. A non-string first
+    // argument must therefore reach ShellExecute instead of signalling
+    // wrong-type-argument, proving the first slot is read as OPERATION.
+    let error = w32_shell_execute(
+        &mut eval,
+        vec![
+            Value::fixnum(1),
             Value::string(missing.to_string_lossy().to_string()),
         ],
     )

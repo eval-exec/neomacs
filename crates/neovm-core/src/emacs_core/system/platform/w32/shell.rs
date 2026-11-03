@@ -37,6 +37,7 @@ pub(crate) fn rewrite_file_url_document(document: &str) -> &str {
 
 /// `w32-shell-execute`, GNU `src/w32fns.c:8682`.
 ///
+/// Arguments are `(OPERATION DOCUMENT &optional PARAMETERS SHOW-FLAG)`.
 /// Returns `t` on success and signals `(error "ShellExecute failed: ...")`
 /// on failure, matching the C implementation (GNU's docstring claims a nil
 /// return for success, but the code returns `Qt`; observable behavior wins).
@@ -48,8 +49,10 @@ pub(crate) fn w32_shell_execute(ctx: &mut Context, args: Vec<Value>) -> EvalResu
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWDEFAULT;
 
-    let document = args.first().copied().unwrap_or(Value::NIL);
-    let operation = args.get(1).copied().unwrap_or(Value::NIL);
+    // GNU's argument order is (OPERATION DOCUMENT &optional PARAMETERS
+    // SHOW-FLAG); every in-tree caller passes the verb first.
+    let operation = args.first().copied().unwrap_or(Value::NIL);
+    let document = args.get(1).copied().unwrap_or(Value::NIL);
     let parameters = args.get(2).copied().unwrap_or(Value::NIL);
     let show_flag = args.get(3).copied().unwrap_or(Value::NIL);
 
