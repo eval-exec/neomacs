@@ -13,7 +13,7 @@ use std::ffi::{CStr, CString};
 use std::fs;
 use std::io::{ErrorKind, Seek, SeekFrom, Write};
 #[cfg(unix)]
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -467,34 +467,9 @@ fn user_homedir(user: &str) -> Option<String> {
 
 /// Convert a Lisp file-name string to an OS path at the real filesystem boundary.
 ///
-/// GNU keeps file names as Lisp strings until ENCODE_FILE / platform I/O.
-/// On Unix, preserve the original bytes exactly so raw unibyte file names
-/// survive intact.
-pub(crate) fn lisp_file_name_to_path_buf(filename: &crate::heap_types::LispString) -> PathBuf {
-    #[cfg(unix)]
-    {
-        PathBuf::from(std::ffi::OsString::from_vec(filename.as_bytes().to_vec()))
-    }
-
-    #[cfg(not(unix))]
-    {
-        let name = crate::emacs_core::emacs_char::to_utf8_lossy(filename.as_bytes());
-        PathBuf::from(lisp_file_name_to_host_path_string(&name))
-    }
-}
-
-#[cfg(not(unix))]
-fn lisp_file_name_to_host_path_string(filename: &str) -> String {
-    #[cfg(windows)]
-    {
-        filename.replace('/', "\\")
-    }
-
-    #[cfg(not(windows))]
-    {
-        filename.to_string()
-    }
-}
+/// The implementation lives in the edit layer, which owns the value-layer
+/// string type this conversion binds; the system layer re-exports it.
+pub(crate) use crate::emacs_core::file_name::lisp_file_name_to_path_buf;
 
 #[cfg(windows)]
 fn host_path_to_lisp_file_name_string_inner(path: &Path) -> String {

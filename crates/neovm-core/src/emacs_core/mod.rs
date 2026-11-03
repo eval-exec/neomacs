@@ -103,6 +103,8 @@ pub mod case_encoding;
 pub mod dired;
 #[path = "editing/editfns/mod.rs"]
 pub mod editfns;
+#[path = "editing/file_name.rs"]
+pub(crate) mod file_name;
 #[path = "editing/indent/mod.rs"]
 pub mod indent;
 #[path = "editing/marker/mod.rs"]

@@ -861,7 +861,7 @@ pub(crate) fn builtin_bookmark_save(
     let configured_default = active_bookmark_default_file(eval);
     if bookmark_timestamp_file(eval).is_none()
         && eval.bookmarks.all_names().is_empty()
-        && super::fileio::lisp_file_name_to_path_buf(&configured_default).is_file()
+        && super::file_name::lisp_file_name_to_path_buf(&configured_default).is_file()
     {
         let _ = builtin_bookmark_load(
             eval,
@@ -889,7 +889,7 @@ pub(crate) fn builtin_bookmark_save(
     };
 
     let data = eval.bookmarks.save_to_string();
-    let os_path = super::fileio::lisp_file_name_to_path_buf(&path);
+    let os_path = super::file_name::lisp_file_name_to_path_buf(&path);
     if let Some(parent) = os_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -939,7 +939,7 @@ pub(crate) fn builtin_bookmark_load(
     };
     let file_display = crate::emacs_core::emacs_char::to_utf8_lossy(file.as_bytes());
 
-    let data = match fs::read_to_string(super::fileio::lisp_file_name_to_path_buf(&file)) {
+    let data = match fs::read_to_string(super::file_name::lisp_file_name_to_path_buf(&file)) {
         Ok(data) => data,
         Err(_) => {
             return Err(signal(

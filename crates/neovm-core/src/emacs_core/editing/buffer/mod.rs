@@ -473,7 +473,7 @@ pub(crate) fn builtin_get_file_buffer(
         &eval.buffers,
         expect_lisp_string(&args[0])?,
     );
-    let resolved_path = super::fileio::lisp_file_name_to_path_buf(&resolved);
+    let resolved_path = super::file_name::lisp_file_name_to_path_buf(&resolved);
     let resolved_true = canonicalize_or_self(&resolved_path);
 
     for id in eval.buffers.buffer_list() {
@@ -493,7 +493,7 @@ pub(crate) fn builtin_get_file_buffer(
         if candidate == resolved {
             return Ok(Value::make_buffer(id));
         }
-        let candidate_path = super::fileio::lisp_file_name_to_path_buf(&candidate);
+        let candidate_path = super::file_name::lisp_file_name_to_path_buf(&candidate);
         if canonicalize_or_self(&candidate_path) == resolved_true {
             return Ok(Value::make_buffer(id));
         }
