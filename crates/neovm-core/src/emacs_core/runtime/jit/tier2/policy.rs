@@ -64,7 +64,7 @@ impl Version {
             retreat: (0..ops_len)
                 .map(|pc| {
                     source
-                        .site_retreat
+                        .site_retreat()
                         .get(pc)
                         .map_or(0, |s| s.bits().fold(0, |bits, b| bits | b as u16))
                 })
@@ -501,7 +501,7 @@ pub(crate) fn revert_if_t2(
     }
     let source = func.jit_runtime();
     if let Some(pc) = pc {
-        if let Some(s) = source.site_retreat.site(pc, func.executable_ops().len()) {
+        if let Some(s) = source.site_retreat().site(pc, func.executable_ops().len()) {
             s.set(RetreatBit::Invalidated);
         }
     }

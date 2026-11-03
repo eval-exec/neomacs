@@ -232,6 +232,13 @@ pub struct Runtime {
 }
 
 impl RuntimeState {
+    /// This source's persistent per-site retreat observations.
+    #[doc(hidden)]
+    #[inline]
+    pub fn site_retreat(&self) -> &retreat::SiteRetreatTable {
+        &self.site_retreat
+    }
+
     /// A fresh source state: every counter cold, no feedback, no retreat, no
     /// armed leaf. Constructing the owned cells directly keeps this a `const
     /// fn` and keeps the lower layer free of upper constructor calls.

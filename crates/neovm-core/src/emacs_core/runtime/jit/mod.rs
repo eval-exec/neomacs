@@ -1708,7 +1708,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// Forbid splicing, MIR-inlining or intrinsifying the call site at `pc`.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn mark_call_site_no_inline(&self, pc: usize, ops_len: usize) {
-        if let Some(site) = self.site_retreat.site(pc, ops_len) {
+        if let Some(site) = self.site_retreat().site(pc, ops_len) {
             site.set(retreat::RetreatBit::NoInline);
         }
     }
@@ -1722,7 +1722,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// Whether a deopt forbade inlining the call site at `pc`.
     #[inline]
     fn call_site_no_inline(&self, pc: usize) -> bool {
-        self.site_retreat.has(pc, retreat::RetreatBit::NoInline)
+        self.site_retreat().has(pc, retreat::RetreatBit::NoInline)
     }
 
     /// Count one precise deopt at `pc` in this source's persistent deopt
@@ -1730,7 +1730,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     /// pc outside the body the table was sized for).
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8 {
-        self.site_retreat
+        self.site_retreat()
             .site(pc, ops_len)
             .map_or(0, retreat::SiteRetreat::note_deopt)
     }
@@ -1743,7 +1743,7 @@ impl RuntimeStateTieringExt for RuntimeState {
     )]
     #[inline]
     fn deopt_history(&self, pc: usize) -> u8 {
-        self.site_retreat
+        self.site_retreat()
             .get(pc)
             .map_or(0, retreat::SiteRetreat::count)
     }

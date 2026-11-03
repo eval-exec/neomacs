@@ -28,11 +28,13 @@ pub enum RetreatBit {
 /// The retreat word of one pc: [`RetreatBit`]s in the low byte, a
 /// saturating deopt count in the high byte.
 #[derive(Default)]
-pub(crate) struct SiteRetreat(pub(crate) AtomicU16);
+#[doc(hidden)]
+pub struct SiteRetreat(pub(crate) AtomicU16);
 
 /// One source's retreat words, one per pc, allocated on the first mark.
 #[derive(Default, Debug)]
-pub(crate) struct SiteRetreatTable(pub(crate) OnceLock<Box<[SiteRetreat]>>);
+#[doc(hidden)]
+pub struct SiteRetreatTable(pub(crate) OnceLock<Box<[SiteRetreat]>>);
 
 impl RetreatBit {
     /// Every bit, in bit order.
@@ -60,7 +62,8 @@ impl SiteRetreat {
     pub(crate) const COUNT_SHIFT: u32 = 8;
 
     /// Turn `bit` on.
-    pub(crate) fn set(&self, bit: RetreatBit) {
+    #[doc(hidden)]
+    pub fn set(&self, bit: RetreatBit) {
         self.0.fetch_or(bit as u16, Ordering::Relaxed);
     }
 
@@ -72,14 +75,16 @@ impl SiteRetreat {
 
     /// Deopts counted at this pc: the high byte, saturating at 255. Written
     /// by [`Self::note_deopt`] (P2.1's deopt history).
-    pub(crate) fn count(&self) -> u8 {
+    #[doc(hidden)]
+    pub fn count(&self) -> u8 {
         (self.0.load(Ordering::Relaxed) >> Self::COUNT_SHIFT) as u8
     }
 
     /// Count one precise deopt at this pc (saturating) and return the new
     /// count. The history outlives every leaf of the source: a leaf's own
     /// `LeafObs` counts go with the leaf when it is replaced.
-    pub(crate) fn note_deopt(&self) -> u8 {
+    #[doc(hidden)]
+    pub fn note_deopt(&self) -> u8 {
         let word = self.0.load(Ordering::Relaxed);
         let count = (word >> Self::COUNT_SHIFT) as u8;
         if count == u8::MAX {
@@ -92,7 +97,8 @@ impl SiteRetreat {
     }
 
     /// The bits that are on, in [`RetreatBit::ALL`] order.
-    pub(crate) fn bits(&self) -> impl Iterator<Item = RetreatBit> {
+    #[doc(hidden)]
+    pub fn bits(&self) -> impl Iterator<Item = RetreatBit> {
         let word = self.0.load(Ordering::Relaxed) & Self::BITS_MASK;
         RetreatBit::ALL
             .into_iter()
@@ -119,7 +125,8 @@ impl SiteRetreatTable {
     /// The word of `pc`, allocating the table for a body of `ops_len` ops on
     /// first use. `None` when `pc` is outside the body the table was first
     /// sized for.
-    pub(crate) fn site(&self, pc: usize, ops_len: usize) -> Option<&SiteRetreat> {
+    #[doc(hidden)]
+    pub fn site(&self, pc: usize, ops_len: usize) -> Option<&SiteRetreat> {
         self.0
             .get_or_init(|| (0..ops_len).map(|_| SiteRetreat::default()).collect())
             .get(pc)
@@ -127,13 +134,15 @@ impl SiteRetreatTable {
 
     /// The word of `pc` if the table exists: a read never allocates.
     #[inline]
-    pub(crate) fn get(&self, pc: usize) -> Option<&SiteRetreat> {
+    #[doc(hidden)]
+    pub fn get(&self, pc: usize) -> Option<&SiteRetreat> {
         self.0.get().and_then(|sites| sites.get(pc))
     }
 
     /// Whether `bit` is on at `pc` (false before any mark).
     #[inline]
-    pub(crate) fn has(&self, pc: usize, bit: RetreatBit) -> bool {
+    #[doc(hidden)]
+    pub fn has(&self, pc: usize, bit: RetreatBit) -> bool {
         self.get(pc).is_some_and(|site| site.has(bit))
     }
 }
