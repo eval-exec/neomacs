@@ -83,7 +83,8 @@ std::thread_local! {
 #[cfg(debug_assertions)]
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
-pub(crate) struct HeapMutClosureGuard {
+#[doc(hidden)]
+pub struct HeapMutClosureGuard {
     _scope: crate::tls_scope::TlsScope<bool, std::cell::Cell<bool>>,
 }
 #[cfg(debug_assertions)]
@@ -101,7 +102,8 @@ impl HeapMutClosureGuard {
 
 #[cfg(debug_assertions)]
 #[inline]
-pub(crate) fn debug_assert_no_heap_mut_closure() {
+#[doc(hidden)]
+pub fn debug_assert_no_heap_mut_closure() {
     IN_HEAP_MUT_CLOSURE.with(|active| {
         assert!(
             !active.get(),
@@ -235,7 +237,8 @@ pub(crate) unsafe fn finish_slot_store_in_store(
 /// cross-mutator journal. Ordinary tracking and GEN1 retain the full setter.
 #[cfg(feature = "jit")]
 #[inline]
-pub(crate) fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
+#[doc(hidden)]
+pub fn set_compiled_cons_cdr(cell: TaggedValue, value: TaggedValue) -> bool {
     use super::collection_reads::{CompiledJournalMode, compiled_journal_mode, is_observed};
     if compiled_journal_mode() != CompiledJournalMode::Observed
         || super::gc::current_heap_generational_enabled()

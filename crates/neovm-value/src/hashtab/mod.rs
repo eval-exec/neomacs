@@ -23,7 +23,8 @@ use std::hash::{Hash, Hasher};
 /// independent mutators never share it. Normalized scalar settings preserve
 /// the entry countdown without holding Lisp values across callbacks.
 #[derive(Clone, Copy)]
-pub(crate) struct HashTestGcInhibitAccounting {
+#[doc(hidden)]
+pub struct HashTestGcInhibitAccounting {
     pub(crate) bytes_at_start: usize,
     pub(crate) charged_bytes_at_start: usize,
     pub(crate) collector_threshold_at_start: usize,
@@ -47,7 +48,8 @@ static HASH_TEST_PARITY: std::sync::LazyLock<bool> = std::sync::LazyLock::new(||
     !std::env::var("NEOVM_HASH_TEST_PARITY").is_ok_and(|value| value == "off")
 });
 
-pub(crate) fn hash_test_parity_enabled() -> bool {
+#[doc(hidden)]
+pub fn hash_test_parity_enabled() -> bool {
     *HASH_TEST_PARITY
 }
 
@@ -55,11 +57,13 @@ mod user_test_guard;
 pub(crate) use user_test_guard::{gc_threshold_integer_fallback, inhibited_user_test_since_gc};
 
 const SXHASH_MAX_DEPTH: usize = 3;
-pub(crate) const SXHASH_MAX_LEN: usize = 7;
+#[doc(hidden)]
+pub const SXHASH_MAX_LEN: usize = 7;
 const SXHASH_FIXNUM_SHIFT: u32 = 2;
 const SXHASH_FIXNUM_BITS: u32 = 62;
 const SXHASH_INTMASK: u64 = (1_u64 << SXHASH_FIXNUM_BITS) - 1;
-pub(crate) const SXHASH_FALLBACK_NONNEG_MASK: u64 = (1_u64 << (SXHASH_FIXNUM_BITS - 1)) - 1;
+#[doc(hidden)]
+pub const SXHASH_FALLBACK_NONNEG_MASK: u64 = (1_u64 << (SXHASH_FIXNUM_BITS - 1)) - 1;
 const LISP_TYPE_INT0: u64 = 2;
 const LISP_TYPE_INT1: u64 = 6;
 const KNUTH_ALPHA: u32 = 2_654_435_769;
@@ -98,14 +102,16 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
     }
 }
 
-pub(crate) fn hash_key_to_visible_value(table: &LispHashTable, key: &HashKey) -> Value {
+#[doc(hidden)]
+pub fn hash_key_to_visible_value(table: &LispHashTable, key: &HashKey) -> Value {
     table
         .key_snapshot(key)
         .cloned()
         .unwrap_or_else(|| hash_key_to_value(key))
 }
 
-pub(crate) fn sxhash_combine(x: u64, y: u64) -> u64 {
+#[doc(hidden)]
+pub fn sxhash_combine(x: u64, y: u64) -> u64 {
     x.rotate_left(4).wrapping_add(y)
 }
 
@@ -152,7 +158,8 @@ fn read_u64_ne(bytes: &[u8]) -> u64 {
     u64::from_ne_bytes(arr)
 }
 
-pub(crate) fn emacs_hash_char_array(bytes: &[u8]) -> u64 {
+#[doc(hidden)]
+pub fn emacs_hash_char_array(bytes: &[u8]) -> u64 {
     let mut hash = bytes.len() as u64;
     let word_bytes = std::mem::size_of::<u64>();
     if bytes.len() >= word_bytes {
@@ -197,11 +204,8 @@ fn fallback_sxhash_emacs_uint(value: &Value, test: HashTableTest, symbol_mode: S
     hasher.finish() & SXHASH_FALLBACK_NONNEG_MASK
 }
 
-pub(crate) fn emacs_sxhash_obj_with_fallback(
-    value: &Value,
-    depth: usize,
-    symbol_mode: SymbolMode,
-) -> u64 {
+#[doc(hidden)]
+pub fn emacs_sxhash_obj_with_fallback(value: &Value, depth: usize, symbol_mode: SymbolMode) -> u64 {
     emacs_sxhash_obj(value, depth, symbol_mode)
         .unwrap_or_else(|| fallback_sxhash_emacs_uint(value, HashTableTest::Equal, symbol_mode))
 }
@@ -359,7 +363,8 @@ fn reduce_emacs_uint_to_fixnum(x: u64) -> i64 {
     }
 }
 
-pub(crate) fn reduce_emacs_uint_to_hash_hash(x: u64) -> u32 {
+#[doc(hidden)]
+pub fn reduce_emacs_uint_to_hash_hash(x: u64) -> u32 {
     (x ^ (x >> 32)) as u32
 }
 
@@ -374,7 +379,8 @@ fn sxhash_eq_fixnum_uint(raw: u64) -> u64 {
     raw ^ xtype
 }
 
-pub(crate) fn knuth_hash_index(hash: u32, bits: u32) -> usize {
+#[doc(hidden)]
+pub fn knuth_hash_index(hash: u32, bits: u32) -> usize {
     if bits == 0 {
         return 0;
     }
@@ -631,7 +637,8 @@ where
 // ---------------------------------------------------------------------------
 
 /// (hash-table-test TABLE) -> symbol
-pub(crate) fn builtin_hash_table_test(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_hash_table_test(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-test", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -650,7 +657,8 @@ pub(crate) fn builtin_hash_table_test(args: Vec<Value>) -> EvalResult {
 }
 
 /// (hash-table-size TABLE) -> integer
-pub(crate) fn builtin_hash_table_size(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_hash_table_size(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-size", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -665,7 +673,8 @@ pub(crate) fn builtin_hash_table_size(args: Vec<Value>) -> EvalResult {
 }
 
 /// (hash-table-rehash-size TABLE) -> float
-pub(crate) fn builtin_hash_table_rehash_size(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_hash_table_rehash_size(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-rehash-size", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -680,7 +689,8 @@ pub(crate) fn builtin_hash_table_rehash_size(args: Vec<Value>) -> EvalResult {
 }
 
 /// (hash-table-rehash-threshold TABLE) -> float
-pub(crate) fn builtin_hash_table_rehash_threshold(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_hash_table_rehash_threshold(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-rehash-threshold", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -695,7 +705,8 @@ pub(crate) fn builtin_hash_table_rehash_threshold(args: Vec<Value>) -> EvalResul
 }
 
 /// (hash-table-weakness TABLE) -> nil | symbol
-pub(crate) fn builtin_hash_table_weakness(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_hash_table_weakness(args: Vec<Value>) -> EvalResult {
     expect_args("hash-table-weakness", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -779,7 +790,8 @@ pub(crate) fn builtin_hash_table_values(args: Vec<Value>) -> EvalResult {
 }
 
 /// `(sxhash-eq OBJECT)` -- hash OBJECT according to `eq` semantics.
-pub(crate) fn builtin_sxhash_eq_with_mode(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_sxhash_eq_with_mode(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("sxhash-eq", &args, 1)?;
     Ok(Value::fixnum(sxhash_for(
         &args[0],
@@ -789,10 +801,8 @@ pub(crate) fn builtin_sxhash_eq_with_mode(args: Vec<Value>, symbol_mode: SymbolM
 }
 
 /// `(sxhash-eql OBJECT)` -- hash OBJECT according to `eql` semantics.
-pub(crate) fn builtin_sxhash_eql_with_mode(
-    args: Vec<Value>,
-    symbol_mode: SymbolMode,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_sxhash_eql_with_mode(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("sxhash-eql", &args, 1)?;
     Ok(Value::fixnum(sxhash_for(
         &args[0],
@@ -802,10 +812,8 @@ pub(crate) fn builtin_sxhash_eql_with_mode(
 }
 
 /// `(sxhash-equal OBJECT)` -- hash OBJECT according to `equal` semantics.
-pub(crate) fn builtin_sxhash_equal_with_mode(
-    args: Vec<Value>,
-    symbol_mode: SymbolMode,
-) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_sxhash_equal_with_mode(args: Vec<Value>, symbol_mode: SymbolMode) -> EvalResult {
     expect_args("sxhash-equal", &args, 1)?;
     Ok(Value::fixnum(sxhash_for(
         &args[0],
@@ -817,7 +825,8 @@ pub(crate) fn builtin_sxhash_equal_with_mode(
 /// `(sxhash-equal-including-properties OBJECT)` -- hash OBJECT like
 /// `equal-including-properties`. NeoVM currently has no text properties, so
 /// this matches `sxhash-equal`.
-pub(crate) fn builtin_sxhash_equal_including_properties_with_mode(
+#[doc(hidden)]
+pub fn builtin_sxhash_equal_including_properties_with_mode(
     args: Vec<Value>,
     symbol_mode: SymbolMode,
 ) -> EvalResult {
@@ -849,7 +858,8 @@ pub(crate) fn builtin_sxhash_equal_including_properties(args: Vec<Value>) -> Eva
 }
 
 /// `(internal--hash-table-index-size TABLE)` -- report hash index width.
-pub(crate) fn builtin_internal_hash_table_index_size(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_internal_hash_table_index_size(args: Vec<Value>) -> EvalResult {
     expect_args("internal--hash-table-index-size", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -869,7 +879,8 @@ pub(crate) fn builtin_internal_hash_table_index_size(args: Vec<Value>) -> EvalRe
 ///
 /// `sort_key` orders a bucket by a caller-provided stable key: the Lisp
 /// builtin passes the printer, so this value-layer module never names it.
-pub(crate) fn builtin_internal_hash_table_buckets<K>(args: Vec<Value>, sort_key: K) -> EvalResult
+#[doc(hidden)]
+pub fn builtin_internal_hash_table_buckets<K>(args: Vec<Value>, sort_key: K) -> EvalResult
 where
     K: Fn(&Value) -> String,
 {
@@ -902,7 +913,8 @@ where
 
 /// `(internal--hash-table-histogram TABLE)` -- return (bucket-size . count)
 /// alist for non-empty buckets.
-pub(crate) fn builtin_internal_hash_table_histogram(args: Vec<Value>) -> EvalResult {
+#[doc(hidden)]
+pub fn builtin_internal_hash_table_histogram(args: Vec<Value>) -> EvalResult {
     expect_args("internal--hash-table-histogram", &args, 1)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::HashTable) => {
@@ -935,7 +947,8 @@ pub(crate) fn builtin_internal_hash_table_histogram(args: Vec<Value>) -> EvalRes
 // Eval-dependent builtins
 // ---------------------------------------------------------------------------
 
-pub(crate) fn validate_maphash_args(args: &[Value]) -> Result<(Value, Value), Flow> {
+#[doc(hidden)]
+pub fn validate_maphash_args(args: &[Value]) -> Result<(Value, Value), Flow> {
     expect_args("maphash", args, 2)?;
     if !args[1].is_hash_table() {
         return Err(signal(
@@ -946,14 +959,16 @@ pub(crate) fn validate_maphash_args(args: &[Value]) -> Result<(Value, Value), Fl
     Ok((args[0], args[1]))
 }
 
-pub(crate) fn maphash_slot_len(table: Value) -> usize {
+#[doc(hidden)]
+pub fn maphash_slot_len(table: Value) -> usize {
     table
         .as_hash_table()
         .map(LispHashTable::entry_slot_count)
         .unwrap_or(0)
 }
 
-pub(crate) fn maphash_entry_at_slot(table: Value, slot: usize) -> Option<(Value, Value)> {
+#[doc(hidden)]
+pub fn maphash_entry_at_slot(table: Value, slot: usize) -> Option<(Value, Value)> {
     let table = table.as_hash_table()?;
     let entry = table.entry_at(slot)?;
     Some((entry.key, entry.value))

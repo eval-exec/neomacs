@@ -11,7 +11,8 @@ use std::sync::OnceLock;
 
 /// The sqlite module's object finalizer.
 #[derive(Clone, Copy)]
-pub(crate) struct SqliteObjFinalizer {
+#[doc(hidden)]
+pub struct SqliteObjFinalizer {
     pub finalize: fn(&SqliteObj),
 }
 
@@ -24,7 +25,8 @@ pub(crate) fn install_sqlite_obj_finalizer(finalizer: SqliteObjFinalizer) {
 
 /// Whether the finalizer hook has been installed (test-only observation).
 #[cfg(test)]
-pub(crate) fn sqlite_obj_finalizer_installed() -> bool {
+#[doc(hidden)]
+pub fn sqlite_obj_finalizer_installed() -> bool {
     SQLITE_OBJ_FINALIZER.get().is_some()
 }
 

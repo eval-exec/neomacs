@@ -1388,10 +1388,12 @@ fn chars_in_multibyte_by_decode(bytes: &[u8]) -> usize {
 
 // Definitions are private here; the old core paths retain their visibility.
 mod data;
-pub(crate) use data::case_fold_match_len;
+#[doc(hidden)]
+pub use data::case_fold_match_len;
 pub(crate) use data::decode_declared_multibyte_char;
 pub(crate) use data::decode_file_multibyte_char;
-pub(crate) use data::unibyte_case_fold_match_len;
+#[doc(hidden)]
+pub use data::unibyte_case_fold_match_len;
 
 #[cfg(test)]
 thread_local! {

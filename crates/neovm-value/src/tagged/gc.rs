@@ -49,7 +49,8 @@ pub(crate) mod function_write_hooks;
 pub(crate) mod symbol_table;
 
 mod cache_root_scan;
-pub(crate) use cache_root_scan::CacheRootScan;
+#[doc(hidden)]
+pub use cache_root_scan::CacheRootScan;
 
 /// Optional heap-write observation, used by tests/introspection to inspect which
 /// owners (and optionally which individual writes) were mutated since the last
@@ -120,7 +121,8 @@ pub struct HeapWriteRecord {
 pub(crate) const MEMORY_USE_COUNT_LEN: usize = 7;
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum MemoryUseCountSlot {
+#[doc(hidden)]
+pub enum MemoryUseCountSlot {
     ConsCells = 0,
     Floats = 1,
     VectorCells = 2,
@@ -239,7 +241,8 @@ thread_local! {
 /// or Lisp identity is cached or dereferenced, and each mutator owns its mode.
 #[cfg(feature = "jit")]
 #[inline]
-pub(crate) fn current_write_tracking_enabled() -> bool {
+#[doc(hidden)]
+pub fn current_write_tracking_enabled() -> bool {
     TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get() != WriteTrackingMode::Disabled)
 }
 
@@ -1012,7 +1015,8 @@ static_assertions::assert_not_impl_any!(TaggedHeap: Send, Sync);
 /// Outcome of [`TaggedHeap::note_image_object`]: whether the object now carries
 /// the loader's image-residency stamp.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ImageStamp {
+#[doc(hidden)]
+pub enum ImageStamp {
     /// The header now carries `HeaderFlags::image_resident`.
     Stamped,
     /// The object cannot carry the stamp: a cons (no header), a mapped image
@@ -2680,7 +2684,8 @@ mod generational;
 mod old_sweep;
 mod pacing;
 pub use concurrent::MarkFinishError;
-pub(crate) use concurrent::MarkPhase;
+#[doc(hidden)]
+pub use concurrent::MarkPhase;
 mod heap_identity;
 pub use heap_identity::HeapIdentity;
 mod mark_word;
@@ -2696,11 +2701,13 @@ use mapped_veclike_scan::MappedVeclikeScanSnapshot;
 #[cfg(test)]
 #[path = "gc/tests/shutdown_tests.rs"]
 mod shutdown_tests;
-pub(crate) use concurrent::{concurrent_hash_snapshot, prepare_concurrent_hash_write};
+#[doc(hidden)]
+pub use concurrent::{concurrent_hash_snapshot, prepare_concurrent_hash_write};
 pub(crate) mod concurrent_hash;
 
 mod rows_observation;
-pub(crate) use rows_observation::RowsOwnedDomain;
+#[doc(hidden)]
+pub use rows_observation::RowsOwnedDomain;
 
 mod incremental;
 mod reclamation;
@@ -2708,7 +2715,8 @@ use reclamation::ReclamationMode;
 
 mod card_table;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
-pub(crate) use card_table::{
+#[doc(hidden)]
+pub use card_table::{
     CARD_CHUNK_SHIFT, CARD_DIRTY, CARD_INDEX_MASK, CARD_SHIFT, CHUNK_SUMMARY_OFFSET,
     HEAP_JIT_CARD_TABLE,
 };
@@ -2716,7 +2724,8 @@ use card_table::{CardSlots, CardTable, ChunkCards};
 mod cons_block_trailer;
 use cons_block_trailer::*;
 mod collection_observed;
-pub(crate) use collection_observed::{
+#[doc(hidden)]
+pub use collection_observed::{
     advance_collection_observation_epoch, clear_noncons_collection_observed_metadata,
     collection_observation_epoch, collection_observed, collection_observed_metadata,
     cons_collection_observed_word, has_collection_observations, mark_collection_observed,
@@ -2730,7 +2739,8 @@ use cons_allocator::{ConsAllocatorOwner, ConsBlockBase};
 mod cons_blocks;
 /// The cons-block trailer's shape, for `jit_layout::heap`.
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
-pub(crate) use cons_block_trailer::{
+#[doc(hidden)]
+pub use cons_block_trailer::{
     CONS_AGE_OFFSET, CONS_BLOCK_BYTES, CONS_BLOCK_SIZE as CONS_BLOCK_CELLS, CONS_MARK_WORDS,
     CONS_MARKS_OFFSET, ConsAge,
 };
@@ -2738,12 +2748,14 @@ use cons_blocks::*;
 
 mod aliasable;
 mod collector_reads;
-pub(crate) use aliasable::AliasableBox;
+#[doc(hidden)]
+pub use aliasable::AliasableBox;
 #[cfg(test)]
 #[path = "gc/tests/test_heap.rs"]
 mod test_heap;
 #[cfg(test)]
-pub(crate) use test_heap::{SyntheticConcurrentBarrier, TestHeap};
+#[doc(hidden)]
+pub use test_heap::{SyntheticConcurrentBarrier, TestHeap};
 
 mod arena_pages;
 pub(crate) use arena_pages::*;
@@ -2753,8 +2765,10 @@ pub use gc_thread::*;
 
 mod barrier_window;
 #[cfg(feature = "jit")]
-pub(crate) use barrier_window::neovm_jit_unobserved_collection_owner;
-pub(crate) use barrier_window::{
+#[doc(hidden)]
+pub use barrier_window::neovm_jit_unobserved_collection_owner;
+#[doc(hidden)]
+pub use barrier_window::{
     BarrierWindow, CompiledObservationGate, HEAP_JIT_EXCLUSION_LEN, HEAP_JIT_EXCLUSION_LO,
     HEAP_JIT_SINGLE_CONS, HEAP_JIT_SLOT_BARRIER_LEN, HEAP_JIT_SLOT_BARRIER_LO,
     current_collection_dump_window, publish_collection_observation_window,
@@ -2816,7 +2830,8 @@ use alloc_region::{RegionBook, RegionStats};
 #[cfg(test)]
 pub(crate) use barrier_window::published_barrier_window;
 #[cfg_attr(not(feature = "jit"), allow(unused_imports))]
-pub(crate) use jit_state::{
+#[doc(hidden)]
+pub use jit_state::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM, JitHeapState,
 };

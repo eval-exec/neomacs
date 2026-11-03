@@ -32,12 +32,14 @@ fn note_symbol_with_pos_plist_comparison() {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_symbol_with_pos_plist_comparisons() {
+#[doc(hidden)]
+pub fn reset_symbol_with_pos_plist_comparisons() {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-pub(crate) fn symbol_with_pos_plist_comparisons() -> usize {
+#[doc(hidden)]
+pub fn symbol_with_pos_plist_comparisons() -> usize {
     SYMBOL_WITH_POS_PLIST_COMPARISONS.with(std::cell::Cell::get)
 }
 
@@ -47,12 +49,14 @@ fn note_plist_get_walk() {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_plist_get_walks() {
+#[doc(hidden)]
+pub fn reset_plist_get_walks() {
     PLIST_GET_WALKS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-pub(crate) fn plist_get_walks() -> usize {
+#[doc(hidden)]
+pub fn plist_get_walks() -> usize {
     PLIST_GET_WALKS.with(std::cell::Cell::get)
 }
 
@@ -128,7 +132,8 @@ fn plist_entry(prop: Value, value: Value, tail: Value) -> Value {
 /// same tail after the same number of steps. `q` is GNU's `unsigned short`
 /// (it keeps the low 16 bits of `max` and wraps); a wider counter stops the
 /// tortoise once `max` reaches 2^17 and never finds a late cycle.
-pub(crate) struct TailCycleCheck {
+#[doc(hidden)]
+pub struct TailCycleCheck {
     tortoise: Value,
     max: i64,
     n: i64,
@@ -175,7 +180,8 @@ impl TailCycleCheck {
     }
 }
 
-pub(crate) struct SafeTailGuard {
+#[doc(hidden)]
+pub struct SafeTailGuard {
     tortoise: Value,
     power: usize,
     distance: usize,

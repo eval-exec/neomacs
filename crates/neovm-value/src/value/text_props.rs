@@ -2409,7 +2409,8 @@ fn plists_equal_values_equal(left: &[(Value, Value)], right: &[(Value, Value)]) 
 /// This makes GNU's two distinct ordering policies explicit at call sites,
 /// instead of encoding them as an easy-to-reverse iterator convention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PropertyPlistApplication {
+#[doc(hidden)]
+pub enum PropertyPlistApplication {
     /// Apply pairs in plist order, as GNU `Fadd_text_properties` does.
     ///
     /// Each newly added pair is prepended, so a fresh destination observes the
@@ -2427,7 +2428,8 @@ pub(crate) enum PropertyPlistApplication {
 /// The offset is a character length, not an untyped byte/character integer:
 /// interval storage and GNU's string-property positions are character based
 /// even when the destination string is multibyte.
-pub(crate) struct ShiftedTextPropertySource {
+#[doc(hidden)]
+pub struct ShiftedTextPropertySource {
     table: TextPropertyTable,
     char_offset: CharLen,
 }

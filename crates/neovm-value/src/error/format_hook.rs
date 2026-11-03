@@ -13,7 +13,8 @@ use std::sync::OnceLock;
 
 /// The evaluator's `EvalError` formatting algorithm.
 #[derive(Clone, Copy)]
-pub(crate) struct EvalErrorFormatter {
+#[doc(hidden)]
+pub struct EvalErrorFormatter {
     pub fmt: fn(&EvalError, &mut Formatter<'_>) -> fmt::Result,
 }
 
@@ -27,7 +28,8 @@ pub(crate) fn install_eval_error_formatter(formatter: EvalErrorFormatter) {
 
 /// Whether the formatter hook has been installed (test-only observation).
 #[cfg(test)]
-pub(crate) fn eval_error_formatter_installed() -> bool {
+#[doc(hidden)]
+pub fn eval_error_formatter_installed() -> bool {
     EVAL_ERROR_FORMATTER.get().is_some()
 }
 

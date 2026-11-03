@@ -623,7 +623,8 @@ const _: () = assert!(std::mem::offset_of!(GcHeader, next) == 8);
 /// `tenured` and `remembered` are adjacent bytes: compiled code tests both
 /// with one 16-bit load (see [`GcHeader::NEEDS_REMEMBERING_U16`]).
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const GC_HEADER_TENURED_OFFSET: usize = std::mem::offset_of!(GcHeader, tenured);
+#[doc(hidden)]
+pub const GC_HEADER_TENURED_OFFSET: usize = std::mem::offset_of!(GcHeader, tenured);
 /// The sticky collection observation byte used by compiled string stores.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const GC_HEADER_COLLECTION_OBSERVED_OFFSET: usize =
@@ -841,7 +842,8 @@ pub struct FloatObj {
 /// `pub(crate)` so the JIT lowering unboxes a float against the SAME layout
 /// the runtime boxes it with, rather than hardcoding a header size that a
 /// change to [`GcHeader`] would silently invalidate.
-pub(crate) const FLOAT_VALUE_OFFSET: i32 = std::mem::offset_of!(FloatObj, value) as i32;
+#[doc(hidden)]
+pub const FLOAT_VALUE_OFFSET: i32 = std::mem::offset_of!(FloatObj, value) as i32;
 
 // ---------------------------------------------------------------------------
 // Vectorlike — catch-all for complex heap types
@@ -2204,7 +2206,8 @@ impl BoolVectorObj {
 
 /// A thread owns its state independently of the live-thread registry.
 #[repr(C)]
-pub(crate) struct ThreadObj {
+#[doc(hidden)]
+pub struct ThreadObj {
     pub(crate) header: VecLikeHeader,
     pub(crate) payload: crate::heap_types::threading::ThreadPayload,
 }
@@ -2224,7 +2227,8 @@ impl ThreadObj {
 
 /// A mutex owns its name and recursive native ownership state.
 #[repr(C)]
-pub(crate) struct MutexObj {
+#[doc(hidden)]
+pub struct MutexObj {
     pub(crate) header: VecLikeHeader,
     pub(crate) payload: crate::heap_types::threading::MutexPayload,
 }
@@ -2244,7 +2248,8 @@ impl MutexObj {
 
 /// A condition owns an ordinary traced edge to its associated mutex.
 #[repr(C)]
-pub(crate) struct CondVarObj {
+#[doc(hidden)]
+pub struct CondVarObj {
     pub(crate) header: VecLikeHeader,
     pub(crate) payload: crate::heap_types::threading::CondVarPayload,
 }

@@ -18,7 +18,8 @@
 
 mod native_message;
 use crate::tagged::SymbolMode;
-pub(crate) use native_message::CErrorMessage;
+#[doc(hidden)]
+pub use native_message::CErrorMessage;
 
 use crate::error::{Flow, signal_with_data, signal_with_data_id};
 use crate::intern::{SymId, T_SYM_ID, intern, resolve_sym};
@@ -684,7 +685,8 @@ fn register_simple(obarray: &mut Obarray, name: &str, message: &str, parents: &[
 // Signal flow constructors
 // ---------------------------------------------------------------------------
 
-pub(crate) fn build_signal_flow(symbol_name: &str, data: Value) -> Flow {
+#[doc(hidden)]
+pub fn build_signal_flow(symbol_name: &str, data: Value) -> Flow {
     signal_with_data(symbol_name, data)
 }
 

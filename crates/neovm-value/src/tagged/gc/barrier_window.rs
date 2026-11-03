@@ -38,16 +38,21 @@ use super::*;
 /// Unaligned native-endian protocol words in the heap's trailing byte Cells.
 /// No pre-existing JitHeapState field or baked offset is extended here.
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const HEAP_JIT_EXCLUSION_LO: usize =
+#[doc(hidden)]
+pub const HEAP_JIT_EXCLUSION_LO: usize =
     std::mem::offset_of!(TaggedHeap, compiled_observation_exclusion_00);
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const HEAP_JIT_EXCLUSION_LEN: usize = HEAP_JIT_EXCLUSION_LO + size_of::<usize>();
+#[doc(hidden)]
+pub const HEAP_JIT_EXCLUSION_LEN: usize = HEAP_JIT_EXCLUSION_LO + size_of::<usize>();
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const HEAP_JIT_SINGLE_CONS: usize = HEAP_JIT_EXCLUSION_LO + 2 * size_of::<usize>();
+#[doc(hidden)]
+pub const HEAP_JIT_SINGLE_CONS: usize = HEAP_JIT_EXCLUSION_LO + 2 * size_of::<usize>();
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const HEAP_JIT_SLOT_BARRIER_LO: usize = HEAP_JIT_EXCLUSION_LO + 3 * size_of::<usize>();
+#[doc(hidden)]
+pub const HEAP_JIT_SLOT_BARRIER_LO: usize = HEAP_JIT_EXCLUSION_LO + 3 * size_of::<usize>();
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const HEAP_JIT_SLOT_BARRIER_LEN: usize = HEAP_JIT_EXCLUSION_LO + 4 * size_of::<usize>();
+#[doc(hidden)]
+pub const HEAP_JIT_SLOT_BARRIER_LEN: usize = HEAP_JIT_EXCLUSION_LO + 4 * size_of::<usize>();
 
 // Each byte is independently within its own UnsafeCell. The executing mutator
 // sets them individually; native word loads use the whole heap's provenance.
@@ -482,7 +487,8 @@ pub(crate) fn publish_collection_observation_window(observed: CompiledObservatio
 #[cfg(feature = "jit")]
 #[cold]
 #[inline(never)]
-pub(crate) extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
+#[doc(hidden)]
+pub extern "C" fn neovm_jit_unobserved_collection_owner(owner_bits: i64) -> i8 {
     use super::super::collection_reads::{CompiledJournalMode, compiled_journal_mode};
     let bits = owner_bits as usize;
     let owner = TaggedValue::from_bits(bits);

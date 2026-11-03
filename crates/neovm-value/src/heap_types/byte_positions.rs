@@ -15,7 +15,8 @@ pub struct EmacsByteLen(usize);
 /// Signed change in logical Emacs bytes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub(crate) struct EmacsByteDelta(isize);
+#[doc(hidden)]
+pub struct EmacsByteDelta(isize);
 
 /// 1-based Lisp byte position (first byte = 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -145,7 +146,8 @@ impl EmacsByteDelta {
     }
 }
 
-pub(crate) fn apply_signed_delta(value: usize, delta: isize) -> usize {
+#[doc(hidden)]
+pub fn apply_signed_delta(value: usize, delta: isize) -> usize {
     if delta >= 0 {
         value
             .checked_add(delta as usize)

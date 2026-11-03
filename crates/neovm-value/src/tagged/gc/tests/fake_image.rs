@@ -13,7 +13,8 @@ use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj}
 
 /// The image's objects, adjacent in memory.
 #[repr(C)]
-pub(crate) struct FakeImage {
+#[doc(hidden)]
+pub struct FakeImage {
     cons: [ConsCell; 1],
     vector: VectorObj,
     /// Backing for a vector whose slots are mapped storage (a store must

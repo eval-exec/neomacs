@@ -2,7 +2,8 @@
 #![allow(dead_code)]
 
 mod keeper;
-pub(crate) use keeper::KeeperWorldDesignator;
+#[doc(hidden)]
+pub use keeper::KeeperWorldDesignator;
 mod functions;
 mod roots;
 mod table;

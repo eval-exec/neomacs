@@ -9,7 +9,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU16, Ordering};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
-pub(crate) enum RetreatBit {
+#[doc(hidden)]
+pub enum RetreatBit {
     /// Do not splice, MIR-inline or intrinsify the call at this pc (P0.4).
     NoInline = 1 << 0,
     /// Do not hoist this site's guards above it (P2.1 entry guards, P2.2

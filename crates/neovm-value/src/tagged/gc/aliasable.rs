@@ -41,7 +41,8 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
-pub(crate) struct AliasableBox<T> {
+#[doc(hidden)]
+pub struct AliasableBox<T> {
     /// The single provenance root of the allocation, from `Box::into_raw`.
     ptr: NonNull<T>,
     /// `NonNull` alone would let `AliasableBox<T>` auto-derive `Send`/`Sync`

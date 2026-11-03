@@ -11,7 +11,8 @@ use std::ptr::NonNull;
 /// A consistent no-worker SATB scope for native/Lisp store probes. Automatic
 /// collection must remain inhibited; the probe must not force an explicit GC.
 /// The Context loan and thread marker keep restoration on the installing owner.
-pub(crate) struct SyntheticConcurrentBarrier<'a> {
+#[doc(hidden)]
+pub struct SyntheticConcurrentBarrier<'a> {
     context: &'a mut crate::emacs_core::eval::Context,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }

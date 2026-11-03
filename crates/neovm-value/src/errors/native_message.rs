@@ -3,7 +3,8 @@
 /// A native error template, before GNU `doprnt` quote substitution.
 /// This immutable borrow is call-local and contains no mutator state.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct CErrorMessage<'a>(&'a str);
+#[doc(hidden)]
+pub struct CErrorMessage<'a>(&'a str);
 
 static_assertions::assert_impl_all!(CErrorMessage<'static>: Send, Sync);
 

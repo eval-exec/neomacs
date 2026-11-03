@@ -295,7 +295,8 @@ impl SymbolFlags {
 /// the handle is a copyable address, and only the obarray that owns the
 /// record can say it is alive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct BlvPtr(NonNull<LispBufferLocalValue>);
+#[doc(hidden)]
+pub struct BlvPtr(NonNull<LispBufferLocalValue>);
 
 impl BlvPtr {
     /// Leak RECORD for the obarray's BLV pool, which must free it with
@@ -326,7 +327,8 @@ impl BlvPtr {
 /// it selects (GNU `SYMBOL_VAL` / `SYMBOL_ALIAS` / `SYMBOL_BLV` /
 /// `SYMBOL_FWD`). [`LispSymbol::value_cell`] is the only producer.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum ValueCell {
+#[doc(hidden)]
+pub enum ValueCell {
     /// GNU `SYMBOL_PLAINVAL`: the value itself, [`Value::UNBOUND`] when void.
     Plain(Value),
     /// GNU `SYMBOL_VARALIAS`: the symbol whose cell this one is.
@@ -494,17 +496,21 @@ pub struct LispSymbol {
 }
 
 /// Size of one obarray slot.
-pub(crate) const LISP_SYMBOL_SIZE: usize = std::mem::size_of::<LispSymbol>();
+#[doc(hidden)]
+pub const LISP_SYMBOL_SIZE: usize = std::mem::size_of::<LispSymbol>();
 /// Byte offset of a symbol's packed flags; its low bits are the redirect.
-pub(crate) const LISP_SYMBOL_FLAGS_OFFSET: usize = std::mem::offset_of!(LispSymbol, flags);
+#[doc(hidden)]
+pub const LISP_SYMBOL_FLAGS_OFFSET: usize = std::mem::offset_of!(LispSymbol, flags);
 /// Byte offset of a symbol's value-cell word (the value itself for
 /// `Plainval`).
-pub(crate) const LISP_SYMBOL_VAL_OFFSET: usize = std::mem::offset_of!(LispSymbol, val);
+#[doc(hidden)]
+pub const LISP_SYMBOL_VAL_OFFSET: usize = std::mem::offset_of!(LispSymbol, val);
 /// Byte offset of a symbol's `interned_global` flag: the byte right after the
 /// flags byte (const-asserted in the obarray module), so compiled code and the
 /// cached variable tiers read `flags | interned_global << 8` as one 16-bit
 /// window.
-pub(crate) const LISP_SYMBOL_INTERNED_GLOBAL_OFFSET: usize =
+#[doc(hidden)]
+pub const LISP_SYMBOL_INTERNED_GLOBAL_OFFSET: usize =
     std::mem::offset_of!(LispSymbol, interned_global);
 
 // The slot layout compiled code and the AOT cache bake (`jit_layout`), pinned
@@ -567,7 +573,8 @@ impl Clone for LispSymbol {
 
 /// The non-redirect flags a portable dump records for a symbol.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct DumpedSymbolFlags {
+#[doc(hidden)]
+pub struct DumpedSymbolFlags {
     pub(crate) trapped_write: SymbolTrappedWrite,
     pub(crate) interned: SymbolInterned,
     pub(crate) declared_special: bool,
@@ -579,7 +586,8 @@ pub(crate) struct DumpedSymbolFlags {
 /// makes those transitions on the live obarray; until then such a symbol
 /// holds `Plain` with the value the loader will rebuild from.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum DumpedCell {
+#[doc(hidden)]
+pub enum DumpedCell {
     Plain(Value),
     Alias(SymId),
 }

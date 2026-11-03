@@ -63,7 +63,8 @@ pub(crate) unsafe fn install_string_bytes_changed_hook(
 /// the hook a later mutation could not invalidate the entry. Once set, the
 /// hook never goes away.
 #[inline]
-pub(crate) fn string_bytes_changed_hook_installed() -> bool {
+#[doc(hidden)]
+pub fn string_bytes_changed_hook_installed() -> bool {
     NOTE_STRING_BYTES_CHANGED.get().is_some()
 }
 
@@ -136,7 +137,8 @@ const CLEAR_STRING_RETAIN_BYTES: usize = 4096;
 /// string and an empty multibyte string are different Lisp objects even though
 /// both have zero bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LispStringStorageKind {
+#[doc(hidden)]
+pub enum LispStringStorageKind {
     Unibyte,
     Multibyte,
 }
@@ -153,7 +155,8 @@ static_assertions::assert_not_impl_any!(TextPropertyTable: Send, Sync);
 /// payload scan. Computed permits normal syntax-property fast paths. Immutable
 /// numeric metadata has no Lisp state and may cross mutator threads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum StringCharacterCountKind {
+#[doc(hidden)]
+pub enum StringCharacterCountKind {
     Computed,
     Supplied,
 }
@@ -243,11 +246,13 @@ fn lookup_static_rodata(key: u64, len: usize) -> Option<*const u8> {
 /// allocated string. Threading: this is immutable numeric metadata with no
 /// Lisp state, and may cross mutator threads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct GnuDeclaredCharacterCount(usize);
+#[doc(hidden)]
+pub struct GnuDeclaredCharacterCount(usize);
 
 /// A supplied GNU count that cannot be represented by an allocated string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum GnuDeclaredCharacterCountError {
+#[doc(hidden)]
+pub enum GnuDeclaredCharacterCountError {
     #[error("Negative symbol-name character count")]
     Negative,
     #[error("Symbol-name character count is too large")]
@@ -282,10 +287,12 @@ const _: () =
 /// backward byte conversion negative even while all payload bytes are ASCII.
 /// Threading: immutable numeric metadata, safe to move between mutator threads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub(crate) struct GnuStringCharPos(i64);
+#[doc(hidden)]
+pub struct GnuStringCharPos(i64);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub(crate) enum GnuStringCharPosError {
+#[doc(hidden)]
+pub enum GnuStringCharPosError {
     #[error("Negative GNU string character coordinate")]
     Negative,
     #[error("String character coordinate is too large")]

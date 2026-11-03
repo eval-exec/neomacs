@@ -20,7 +20,8 @@
 /// depth check above still decides every hit. All admitted switches share
 /// that fixed depth, including when a mutated table reuses another target.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct StackProof {
+#[doc(hidden)]
+pub struct StackProof {
     pub(crate) switch_depth: Option<usize>,
     pub(crate) switch_targets: Box<[(i64, u32)]>,
     pub(crate) depths: Vec<u32>,

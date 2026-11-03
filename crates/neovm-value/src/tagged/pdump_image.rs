@@ -19,7 +19,8 @@ use super::value::TaggedValue;
 /// practice) stay descriptor-driven.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct BytecodeExtras {
+#[doc(hidden)]
+pub struct BytecodeExtras {
     pub max_stack: u64,
     pub n_required: u64,
     pub n_optional: u64,
@@ -120,15 +121,24 @@ pub(crate) unsafe fn for_each_stub_bytecode_child(
     }
 }
 
-pub(crate) const BC_FLAG_LEXICAL: u16 = 1;
-pub(crate) const BC_FLAG_OPS_SEALED: u16 = 2;
-pub(crate) const BC_FLAG_HAS_REST: u16 = 4;
-pub(crate) const BC_FLAG_HAS_DOCSTRING: u16 = 8;
-pub(crate) const BC_FLAG_HAS_ARGLIST: u16 = 16;
-pub(crate) const BC_FLAG_HAS_ENV: u16 = 32;
-pub(crate) const BC_FLAG_HAS_DOC_FORM: u16 = 64;
-pub(crate) const BC_FLAG_HAS_INTERACTIVE: u16 = 128;
+#[doc(hidden)]
+pub const BC_FLAG_LEXICAL: u16 = 1;
+#[doc(hidden)]
+pub const BC_FLAG_OPS_SEALED: u16 = 2;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_REST: u16 = 4;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_DOCSTRING: u16 = 8;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_ARGLIST: u16 = 16;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_ENV: u16 = 32;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_DOC_FORM: u16 = 64;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_INTERACTIVE: u16 = 128;
 /// v14: the function carries a GNU byte region (`gnu_rel`/`gnu_len` valid).
 /// Replaces the ambiguous `gnu_len > 0 || gnu_offset > 0` presence test — a
 /// zero-length region at offset zero was indistinguishable from absence.
-pub(crate) const BC_FLAG_HAS_GNU: u16 = 256;
+#[doc(hidden)]
+pub const BC_FLAG_HAS_GNU: u16 = 256;

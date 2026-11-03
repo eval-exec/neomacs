@@ -71,7 +71,8 @@ fn projection_scopes() -> std::sync::MutexGuard<'static, Vec<ProjectionScope>> {
 pub(crate) struct ProjectionPlanError;
 
 /// Make room to enter one projection scope without allocating.
-pub(crate) fn reserve_projection_scope() -> Result<(), ProjectionPlanError> {
+#[doc(hidden)]
+pub fn reserve_projection_scope() -> Result<(), ProjectionPlanError> {
     projection_scopes()
         .try_reserve(1)
         .map_err(|_| ProjectionPlanError)
@@ -103,7 +104,8 @@ pub(crate) unsafe fn enter_projection_scope(
 }
 
 /// Leave GENERATION's projection scope, if it has one.
-pub(crate) fn leave_projection_scope(generation: u64) {
+#[doc(hidden)]
+pub fn leave_projection_scope(generation: u64) {
     if PROJECTION_SCOPES_LIVE.load(Ordering::Relaxed) == 0 {
         return;
     }
@@ -231,7 +233,8 @@ pub(super) fn store_projected_canonical(
 
 /// What admission does with one cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AdmissionPlanCell {
+#[doc(hidden)]
+pub enum AdmissionPlanCell {
     /// Storage of its own: a value, a buffer-local record, a builtin, or the
     /// host-projection bit. It gets its own descriptor and index.
     Owned,
@@ -253,7 +256,8 @@ static_assertions::assert_not_impl_any!(RevealedProjection: Copy, Clone, Send, S
 
 /// What concealing a revealed cell found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ConcealOutcome {
+#[doc(hidden)]
+pub enum ConcealOutcome {
     /// The cell is projected again over its (possibly changed) logical arm.
     Concealed,
     /// The operation made the variable an alias (`defvaralias`): an alias

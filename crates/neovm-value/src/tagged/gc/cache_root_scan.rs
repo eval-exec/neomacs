@@ -4,7 +4,8 @@
 /// Only a scan whose roots will be seeded can certify cache coverage of the
 /// running collection. Diagnostic snapshots must not advance that stamp.
 #[derive(Clone, Copy)]
-pub(crate) enum CacheRootScan {
+#[doc(hidden)]
+pub enum CacheRootScan {
     Collection,
     /// Copy the current owner's cache roots without certifying coverage of a
     /// future collection. Green's held facade epoch keeps the collector idle.

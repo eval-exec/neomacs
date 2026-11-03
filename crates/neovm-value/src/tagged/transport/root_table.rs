@@ -397,7 +397,8 @@ pub(crate) fn root_table_is_alive_for_test(heap: HeapIdentity) -> bool {
 
 /// Append every live shared root of `heap` to `out`, for the collector's root
 /// walk on that heap's mutator.
-pub(crate) fn collect_shared_root_gc_roots(heap: &TaggedHeap, out: &mut Vec<TaggedValue>) {
+#[doc(hidden)]
+pub fn collect_shared_root_gc_roots(heap: &TaggedHeap, out: &mut Vec<TaggedValue>) {
     // Completed admission precedes this heap's world-stopped root capture;
     // its table registration keeps the count nonzero. A concurrent admission
     // after this observation is governed by the same start-root/SATB/birth

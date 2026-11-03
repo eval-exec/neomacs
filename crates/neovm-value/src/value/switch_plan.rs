@@ -68,7 +68,8 @@ const NO_ENTRY: u16 = u16::MAX;
 /// from the start of its `HashTableObj` (the untagged pointer of a hash table
 /// value): JIT code reads it to check that a jump table is still the one it
 /// was compiled against.
-pub(crate) const SWITCH_EPOCH_OFFSET: usize =
+#[doc(hidden)]
+pub const SWITCH_EPOCH_OFFSET: usize =
     core::mem::offset_of!(crate::tagged::header::HashTableObj, table.data.switch_epoch);
 
 /// The low-3-bit value tags some key can match: bit `t` is set when a key can
@@ -145,7 +146,8 @@ impl SwitchPlanCache {
 /// plan's own programs, restricted to nodes a compare answers without a
 /// call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InlineKeyNode {
+#[doc(hidden)]
+pub enum InlineKeyNode {
     /// The value's bits are exactly these: nil, t, a fixnum or a bare
     /// symbol -- an immediate, never a heap address.
     Imm(usize),

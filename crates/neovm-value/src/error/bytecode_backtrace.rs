@@ -11,7 +11,8 @@ use crate::value::Value;
 /// payload need not name the byte-code module; the VM/JIT classify their own
 /// `Op` into these eight cases at the call site.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InlineErrorOp {
+#[doc(hidden)]
+pub enum InlineErrorOp {
     Car,
     Cdr,
     Nth,

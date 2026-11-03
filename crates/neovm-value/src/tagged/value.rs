@@ -37,10 +37,12 @@ use crate::intern::{
 /// This immutable scalar contains no heap state and is safe between mutators.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct Fixnum(i64);
+#[doc(hidden)]
+pub struct Fixnum(i64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum FixnumRangeError {
+#[doc(hidden)]
+pub enum FixnumRangeError {
     #[error("integer {0} is outside the fixnum range")]
     OutOfRange(i64),
 }
@@ -106,7 +108,8 @@ use super::header::{
 /// Clear the old subr registry on the tagged heap — no-op now that subrs use
 /// the static global table, but kept to avoid breaking pdump callers until
 /// the tagged heap's subr fields are fully removed.
-pub(crate) fn reset_current_subrs() {
+#[doc(hidden)]
+pub fn reset_current_subrs() {
     // No-op: the old per-heap subr registry is no longer used.
 }
 
@@ -114,15 +117,21 @@ pub(crate) fn reset_current_subrs() {
 // Tag constants
 // ---------------------------------------------------------------------------
 
-pub(crate) const TAG_BITS: usize = 3;
-pub(crate) const TAG_MASK: usize = 0b111;
+#[doc(hidden)]
+pub const TAG_BITS: usize = 3;
+#[doc(hidden)]
+pub const TAG_MASK: usize = 0b111;
 
 // pub(crate) so the JIT backend can lower type predicates against the same tag
 // layout instead of hardcoding it.
-pub(crate) const TAG_SYMBOL: usize = 0b000;
-pub(crate) const TAG_CONS: usize = 0b011;
-pub(crate) const TAG_STRING: usize = 0b100;
-pub(crate) const TAG_VECLIKE: usize = 0b101;
+#[doc(hidden)]
+pub const TAG_SYMBOL: usize = 0b000;
+#[doc(hidden)]
+pub const TAG_CONS: usize = 0b011;
+#[doc(hidden)]
+pub const TAG_STRING: usize = 0b100;
+#[doc(hidden)]
+pub const TAG_VECLIKE: usize = 0b101;
 pub(crate) const TAG_FLOAT: usize = 0b111;
 
 // Fixnum uses two tags: 010 and 110. Both have (v & 3) == 2.
@@ -148,9 +157,11 @@ thread_local! {
 #[cfg(feature = "jit")]
 mod subr_entry_sync;
 #[cfg(feature = "jit")]
-pub(crate) use subr_entry_sync::with_static_subr_entry_read;
+#[doc(hidden)]
+pub use subr_entry_sync::with_static_subr_entry_read;
 #[cfg(all(test, feature = "jit"))]
-pub(crate) use subr_entry_sync::with_static_subr_entry_write;
+#[doc(hidden)]
+pub use subr_entry_sync::with_static_subr_entry_write;
 /// How a static subr entry registration writes its metadata.
 ///
 /// The upper registration owner decides from its immutable compiler policy
@@ -332,7 +343,8 @@ pub fn mint_static_subr_objects<F: CanonicalSubrFactory>(ids: impl IntoIterator<
 }
 
 /// This thread's canonical subr objects (leaked, never collected).
-pub(crate) fn snapshot_static_subr_objects() -> Vec<Option<TaggedValue>> {
+#[doc(hidden)]
+pub fn snapshot_static_subr_objects() -> Vec<Option<TaggedValue>> {
     STATIC_SUBR_OBJECTS.with(|objects| objects.borrow().clone())
 }
 
@@ -1457,14 +1469,16 @@ mod gc_tls_ownership_tests;
 mod fixnum_boundary_tests;
 
 /// Carrier park: drop subr-object caches (they hold heap Values).
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     STATIC_SUBR_OBJECTS.with(|table| table.borrow_mut().clear());
     SUBR_BY_SYM.with(|table| *table.borrow_mut() = (u64::MAX, Vec::new()));
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(
         h,
         STATIC_SUBR_OBJECTS.with(|slot| slot.borrow().len() as u64),

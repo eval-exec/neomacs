@@ -45,7 +45,8 @@ pub(crate) use property_revision::{
 /// Where an owner-routed canonical write went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use]
-pub(crate) enum CanonicalWrite {
+#[doc(hidden)]
+pub enum CanonicalWrite {
     /// Canonical storage took it, or kept its value as the plain write does
     /// (a per-buffer slot, a constant).
     Done,
@@ -55,7 +56,8 @@ pub(crate) enum CanonicalWrite {
 #[cfg(test)]
 pub(crate) use cell::plist_epoch;
 use cell::{ArmMut, CellWrite, MarkGate, RevealedCell, read_symbol_children};
-pub(crate) use cell::{
+#[doc(hidden)]
+pub use cell::{
     BlvPtr, DumpedCell, DumpedSymbolFlags, LISP_SYMBOL_FLAGS_OFFSET,
     LISP_SYMBOL_INTERNED_GLOBAL_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET, ValueCell,
     store_plist_head,
@@ -63,11 +65,13 @@ pub(crate) use cell::{
 pub use cell::{LispSymbol, SymbolFlags};
 #[cfg(test)]
 pub(crate) use fn_stamps::force_fn_stamps_for_test;
-pub(crate) use function_cell_observer::{
+#[doc(hidden)]
+pub use function_cell_observer::{
     FunctionCellObserver, function_cell_observer, install_function_cell_observer,
     install_function_epoch_move_sink, note_function_epoch_move,
 };
-pub(crate) use projection::{
+#[doc(hidden)]
+pub use projection::{
     AdmissionPlanCell, ConcealOutcome, RevealedProjection, enter_projection_scope,
     leave_projection_scope, reserve_projection_scope,
 };
@@ -105,7 +109,8 @@ use crate::value::buffer_vocab::{BufferLocalView, slot_meta};
 /// `Lisp_Fwd_*` tag is process-lifetime state, so an image carries only the
 /// kind; the dump loader maps its wire tag into this layer's vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LocalizedForwarderKind {
+#[doc(hidden)]
+pub enum LocalizedForwarderKind {
     /// GNU `Lisp_Fwd_Bool`.
     Bool,
     /// GNU `Lisp_Fwd_Int`.
@@ -160,17 +165,20 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_function_cell_lookup_count() {
+#[doc(hidden)]
+pub fn reset_function_cell_lookup_count() {
     FUNCTION_CELL_LOOKUP_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-pub(crate) fn reset_plain_value_slot_visits() {
+#[doc(hidden)]
+pub fn reset_plain_value_slot_visits() {
     PLAIN_VALUE_SLOT_VISITS.with(|count| count.set(0));
 }
 
 #[cfg(test)]
-pub(crate) fn plain_value_slot_visits() -> usize {
+#[doc(hidden)]
+pub fn plain_value_slot_visits() -> usize {
     PLAIN_VALUE_SLOT_VISITS.with(Cell::get)
 }
 
@@ -180,7 +188,8 @@ fn note_plain_value_slot_visit() {
 }
 
 #[cfg(test)]
-pub(crate) fn function_cell_lookup_count() -> usize {
+#[doc(hidden)]
+pub fn function_cell_lookup_count() -> usize {
     FUNCTION_CELL_LOOKUP_COUNT.with(Cell::get)
 }
 
@@ -408,7 +417,8 @@ pub struct LispBufferLocalValue {
 }
 
 /// [`LispBufferLocalValue::where_buf_id`] when `where_buf` is not a buffer.
-pub(crate) const NO_WHERE_BUF: u64 = u64::MAX;
+#[doc(hidden)]
+pub const NO_WHERE_BUF: u64 = u64::MAX;
 
 impl LispBufferLocalValue {
     /// Point the cache at `buf` (a buffer, or `Value::NIL` for the global
@@ -442,7 +452,8 @@ static BLV_ALIST_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 
 /// Current structural epoch (see [`BLV_ALIST_EPOCH`]).
 #[inline]
-pub(crate) fn blv_alist_epoch() -> u64 {
+#[doc(hidden)]
+pub fn blv_alist_epoch() -> u64 {
     BLV_ALIST_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -450,7 +461,8 @@ pub(crate) fn blv_alist_epoch() -> u64 {
 /// (never AOT) reads the current epoch from when it tests a buffer-local
 /// variable's cache inline (P1.4 Stage B).
 #[inline]
-pub(crate) fn blv_alist_epoch_addr() -> usize {
+#[doc(hidden)]
+pub fn blv_alist_epoch_addr() -> usize {
     std::ptr::from_ref(&BLV_ALIST_EPOCH) as usize
 }
 
@@ -458,7 +470,8 @@ const _: () = assert!(std::mem::size_of::<std::sync::atomic::AtomicU64>() == 8);
 
 /// Record a structural `local_var_alist` mutation (see [`BLV_ALIST_EPOCH`]).
 #[inline]
-pub(crate) fn note_blv_alist_structural_mutation() {
+#[doc(hidden)]
+pub fn note_blv_alist_structural_mutation() {
     BLV_ALIST_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
@@ -485,7 +498,8 @@ pub(crate) const SYMBOL_NAME_SENTINEL: NameId = NameId(u32::MAX);
 /// `set_internal_localized_with` each apply before trusting the cache.
 /// Copied out by value, so no borrow of the BLV record outlives the read.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BlvCacheHit {
+#[doc(hidden)]
+pub struct BlvCacheHit {
     /// The `(SYMBOL . VALUE)` cell loaded for the buffer: its local binding
     /// when `found`, otherwise normally `defcell`.
     pub(crate) valcell: Value,
@@ -581,7 +595,8 @@ fn assq(key: Value, mut alist: Value) -> Value {
 /// `LocalVariableBindings::retain_bindings` instead, which splices and
 /// invalidates on a single path.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SetInternalAlist(Value);
+#[doc(hidden)]
+pub struct SetInternalAlist(Value);
 
 impl SetInternalAlist {
     /// The alist head, for storing into a buffer.
@@ -595,7 +610,8 @@ impl SetInternalAlist {
 /// arm the cell is in now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "the value was not stored; re-dispatch on the cell's current arm"]
-pub(crate) struct NotPlain;
+#[doc(hidden)]
+pub struct NotPlain;
 
 /// `bindflag` argument for [`Obarray::set_internal_localized`].
 /// Mirrors GNU `enum Set_Internal_Bind` (`src/lisp.h:3590-3596`).
@@ -769,7 +785,8 @@ fn note_function_cell_unchanged() {
 /// Zero and restored dump values retain their current valid meaning.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-pub(crate) struct FunctionEpoch(u64);
+#[doc(hidden)]
+pub struct FunctionEpoch(u64);
 
 impl From<FunctionEpoch> for u64 {
     #[inline(always)]
@@ -1023,7 +1040,8 @@ fn next_obarray_generation() -> u64 {
 /// callers from re-reading the symbol slot to recover information discarded by
 /// an `Option<Value>`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FunctionCellSnapshot {
+#[doc(hidden)]
+pub enum FunctionCellSnapshot {
     ExplicitlyUnbound,
     Empty,
     Bound(Value),
@@ -1036,7 +1054,8 @@ pub(crate) enum FunctionCellSnapshot {
 /// avoid entering the general cycle-safe list walker while preserving the
 /// verbatim value exposed by `symbol-plist`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SymbolPlistSnapshot {
+#[doc(hidden)]
+pub enum SymbolPlistSnapshot {
     NoEntries,
     Entries(Value),
 }
@@ -1112,11 +1131,12 @@ impl Drop for SymbolChunks {
 /// [`OBARRAY_JIT_SPINE_OFFSET`] holds one pointer per chunk, and slot `idx`
 /// lives at `spine[idx >> OBARRAY_CHUNK_BITS] + (idx & (OBARRAY_CHUNK - 1)) *
 /// LISP_SYMBOL_SIZE`. An empty slot reads as a `Plainval` unbound cell.
-pub(crate) const OBARRAY_JIT_SPINE_OFFSET: usize =
+#[doc(hidden)]
+pub const OBARRAY_JIT_SPINE_OFFSET: usize =
     std::mem::offset_of!(Obarray, symbols) + std::mem::offset_of!(SymbolChunks, spine_addr);
 /// Where the stable allocation root reaches the complete canonical pair.
-pub(crate) const OBARRAY_DISPATCH_CELLS_OFFSET: usize =
-    std::mem::offset_of!(Obarray, dispatch_cells);
+#[doc(hidden)]
+pub const OBARRAY_DISPATCH_CELLS_OFFSET: usize = std::mem::offset_of!(Obarray, dispatch_cells);
 /// Where compiled code reads the obarray's function epoch (a `u64`), which
 /// every function-cell write moves: an armed call site compares it inline.
 pub(crate) const OBARRAY_FUNCTION_EPOCH_OFFSET: usize =
@@ -1131,28 +1151,35 @@ const _: () = {
 /// Where compiled code reads the memoized `debug-on-next-call` descriptor
 /// pointer (never null: a stand-in until resolved; see
 /// `CanonicalDispatchCells::debug_on_next_call_fwd`).
-pub(crate) const OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET: usize =
+#[doc(hidden)]
+pub const OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET: usize =
     OBARRAY_DISPATCH_CELLS_OFFSET + DISPATCH_DEBUG_FWD_OFFSET;
 /// See [`OBARRAY_JIT_SPINE_OFFSET`].
-pub(crate) const OBARRAY_JIT_LEN_OFFSET: usize =
+#[doc(hidden)]
+pub const OBARRAY_JIT_LEN_OFFSET: usize =
     std::mem::offset_of!(Obarray, symbols) + std::mem::offset_of!(SymbolChunks, len);
 /// See [`OBARRAY_JIT_SPINE_OFFSET`].
-pub(crate) const OBARRAY_CHUNK_BITS: u32 = 12;
+#[doc(hidden)]
+pub const OBARRAY_CHUNK_BITS: u32 = 12;
 /// See [`OBARRAY_JIT_SPINE_OFFSET`].
-pub(crate) const OBARRAY_CHUNK_SLOTS: usize = OBARRAY_CHUNK;
+#[doc(hidden)]
+pub const OBARRAY_CHUNK_SLOTS: usize = OBARRAY_CHUNK;
 /// Mask of the redirect bits in the flags byte; `Plainval` is zero.
-pub(crate) const SYMBOL_FLAGS_REDIRECT_MASK: u8 = SymbolFlags::REDIRECT_MASK;
+#[doc(hidden)]
+pub const SYMBOL_FLAGS_REDIRECT_MASK: u8 = SymbolFlags::REDIRECT_MASK;
 /// The aligned 4-byte word of a symbol that holds its write-relevant bytes:
 /// the flags byte and `interned_global` today, and the watch byte P1.3 plans.
 /// One aligned word, so a JIT guard reads them all with one load and a
 /// concurrent reader never sees two of them torn across words.
-pub(crate) const LISP_SYMBOL_WRITE_WINDOW_OFFSET: usize = LISP_SYMBOL_FLAGS_OFFSET & !3;
+#[doc(hidden)]
+pub const LISP_SYMBOL_WRITE_WINDOW_OFFSET: usize = LISP_SYMBOL_FLAGS_OFFSET & !3;
 
 /// The bits of a symbol's [`LispSymbol::write_window`] every inline or
 /// cached symbol-cell write tests: the redirect, the trapped-write state, the
 /// host-projection bit, and the whole `interned_global` byte. P1.3's watch
 /// byte joins the mask in the commit that adds it.
-pub(crate) const SYMCELL_INLINE_WRITE_MASK: u16 = (SymbolFlags::REDIRECT_MASK
+#[doc(hidden)]
+pub const SYMCELL_INLINE_WRITE_MASK: u16 = (SymbolFlags::REDIRECT_MASK
     | SymbolFlags::TRAPPED_WRITE_MASK
     | SymbolFlags::RUNTIME_PROJECTED_BIT) as u16
     | 0xFF00;
@@ -1164,7 +1191,8 @@ pub(crate) const SYMCELL_INLINE_WRITE_VALUE: u16 = 1 << 8;
 
 /// [`SYMCELL_INLINE_WRITE_VALUE`] for a cell of REDIRECT.
 #[inline(always)]
-pub(crate) const fn symcell_inline_write_value(redirect: SymbolRedirect) -> u16 {
+#[doc(hidden)]
+pub const fn symcell_inline_write_value(redirect: SymbolRedirect) -> u16 {
     SYMCELL_INLINE_WRITE_VALUE | redirect as u16
 }
 
@@ -5015,7 +5043,8 @@ thread_local! {
 /// full-collection seeds, which require the complete obarray scan.
 #[must_use = "the thread-local extent ends when this guard drops"]
 #[derive(Debug)]
-pub(crate) struct ObarraySymbolCellSkipGuard {
+#[doc(hidden)]
+pub struct ObarraySymbolCellSkipGuard {
     _scope: SeedSkipCellsScope,
 }
 
@@ -5144,13 +5173,15 @@ impl Obarray {
 }
 
 /// Carrier park: clear the obarray-seed skip latch (fresh-thread value).
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     SEED_SKIP_OBARRAY_SYMBOL_CELLS.with(|slot| slot.set(false));
 }
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(
         h,
         SEED_SKIP_OBARRAY_SYMBOL_CELLS.with(|slot| slot.get() as u64),

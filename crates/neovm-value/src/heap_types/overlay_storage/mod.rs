@@ -21,7 +21,8 @@ use std::sync::{Arc, Weak};
 /// order.  Making that distinction explicit prevents a linear rebuild from
 /// silently reversing equal-start overlays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OverlayBatchOrder {
+#[doc(hidden)]
+pub enum OverlayBatchOrder {
     AttachmentSequence,
     AscendingQueryOrder,
 }
@@ -32,7 +33,8 @@ pub(crate) enum OverlayBatchOrder {
 /// Keeping the raw tagged bits behind a distinct key type makes those two
 /// domains impossible to mix at map/set call sites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct OverlayIdentity(usize);
+#[doc(hidden)]
+pub struct OverlayIdentity(usize);
 
 impl OverlayIdentity {
     pub(crate) fn of(overlay: Value) -> Self {
@@ -41,7 +43,8 @@ impl OverlayIdentity {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum EndpointKind {
+#[doc(hidden)]
+pub enum EndpointKind {
     Start,
     End,
 }
@@ -52,7 +55,8 @@ pub(crate) enum EndpointKind {
 /// The weak store reference cannot keep a dead buffer alive, while the typed
 /// identity prevents Lisp `equal` from being confused with overlay `eq`.
 #[derive(Clone, Debug)]
-pub(crate) struct OverlayPositionHandle {
+#[doc(hidden)]
+pub struct OverlayPositionHandle {
     intervals: Weak<RwLock<IntervalBPlusTree>>,
     identity: OverlayIdentity,
 }
@@ -135,7 +139,8 @@ impl OrderedShiftRecord for IntervalRecord {
 /// structural rank is assigned in the same restore pass as contracted starts.
 /// This call-local query remains separate from ordinary hot point coverage.
 #[derive(Clone, Copy)]
-pub(crate) struct IntervalDeletionQuery(pub(crate) EmacsByteRange);
+#[doc(hidden)]
+pub struct IntervalDeletionQuery(pub(crate) EmacsByteRange);
 
 impl OrderedTreeQuery<IntervalRecord> for IntervalDeletionQuery {
     fn subtree_may_match(
@@ -161,7 +166,8 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalDeletionQuery {
 /// Query coordinates/cursor are local to the owning buffer's read borrow;
 /// this independent query leaves ordinary point-coverage dispatch unchanged.
 #[derive(Clone, Copy)]
-pub(crate) struct IntervalIntersectionQuery(pub(crate) EmacsByteRange);
+#[doc(hidden)]
+pub struct IntervalIntersectionQuery(pub(crate) EmacsByteRange);
 
 impl OrderedTreeQuery<IntervalRecord> for IntervalIntersectionQuery {
     fn subtree_may_match(
@@ -185,7 +191,8 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalIntersectionQuery {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum IntervalBPlusQuery {
+#[doc(hidden)]
+pub enum IntervalBPlusQuery {
     Point(EmacsBytePos),
     ClosedPoint(EmacsBytePos),
     Region {
@@ -256,7 +263,8 @@ impl OrderedTreeQuery<IntervalRecord> for IntervalBPlusQuery {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct IntervalBPlusTree {
+#[doc(hidden)]
+pub struct IntervalBPlusTree {
     pub(crate) records: OrderedShiftTree<IntervalRecord>,
     next_attachment_order: u64,
 }

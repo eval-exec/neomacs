@@ -12,7 +12,8 @@ mod mark_phase_tests;
 /// The coordinator's view of the existing phase flags, not an admission proof.
 /// Eager STW collection still relies on its exclusive driver/collector loan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MarkPhase {
+#[doc(hidden)]
+pub enum MarkPhase {
     Idle,
     ConcurrentRunning,
     /// Marking remains after a worker join or an unpublished capture. The
@@ -1119,7 +1120,8 @@ impl TaggedHeap {
 /// installed mutator's Tier-H TLS gate; this activation does not reload it.
 #[cold]
 #[inline(never)]
-pub(crate) fn concurrent_hash_snapshot(
+#[doc(hidden)]
+pub fn concurrent_hash_snapshot(
     owner: TaggedValue,
 ) -> Option<std::sync::Arc<concurrent_hash::HashTableScanSnapshot>> {
     with_tagged_heap(|heap| {

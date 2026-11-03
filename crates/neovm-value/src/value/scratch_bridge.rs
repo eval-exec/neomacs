@@ -12,7 +12,8 @@ use std::sync::OnceLock;
 
 /// The evaluator's scratch-root stack operations.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ScratchRootHooks {
+#[doc(hidden)]
+pub struct ScratchRootHooks {
     pub save: fn() -> usize,
     pub push: fn(Value),
     pub restore: fn(usize),

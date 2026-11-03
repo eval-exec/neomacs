@@ -53,7 +53,8 @@ use crate::tagged::value::{TAG_BITS, TAG_MASK, TaggedValue};
 pub type Value = TaggedValue;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub(crate) enum FunctionSourceIdentity {
+#[doc(hidden)]
+pub enum FunctionSourceIdentity {
     ByteCode(u64),
 }
 
@@ -72,7 +73,8 @@ pub use crate::tagged::header::VecLikeType;
 /// equal to every other detached marker regardless of its stale position.
 /// Reading the raw fields here keeps the bottom layer free of the editing
 /// layer's marker helpers; `editing::marker` delegates to this.
-pub(crate) fn marker_equal_logical_fields(value: &Value) -> Option<(Option<u64>, usize)> {
+#[doc(hidden)]
+pub fn marker_equal_logical_fields(value: &Value) -> Option<(Option<u64>, usize)> {
     let data = value.as_marker_data()?;
     let bytepos = if data.buffer_id().is_some() {
         data.bytepos.get()
@@ -83,7 +85,8 @@ pub(crate) fn marker_equal_logical_fields(value: &Value) -> Option<(Option<u64>,
 }
 
 /// [`HashKey`] for a marker, derived from the same logical fields.
-pub(crate) fn marker_equal_hash_key_value(value: &Value) -> HashKey {
+#[doc(hidden)]
+pub fn marker_equal_hash_key_value(value: &Value) -> HashKey {
     match marker_equal_logical_fields(value) {
         Some(parts) => HashKey::Marker(Box::new(parts)),
         None => HashKey::Ptr(value.bits()),
@@ -101,12 +104,14 @@ pub(crate) fn marker_equal_hash_key_value(value: &Value) -> HashKey {
 static CHAR_TABLE_WRITE_TICK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[inline]
-pub(crate) fn char_table_write_tick() -> u64 {
+#[doc(hidden)]
+pub fn char_table_write_tick() -> u64 {
     CHAR_TABLE_WRITE_TICK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 #[inline]
-pub(crate) fn bump_char_table_write_tick() {
+#[doc(hidden)]
+pub fn bump_char_table_write_tick() {
     CHAR_TABLE_WRITE_TICK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 pub use crate::tagged::value::ValueKind;
@@ -335,19 +340,22 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_bytecode_data_access_count() {
+#[doc(hidden)]
+pub fn reset_bytecode_data_access_count() {
     BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(0));
 }
 
 /// See [`TaggedValue::bytecode_interactive_probe`].
-pub(crate) struct BytecodeInteractiveProbe {
+#[doc(hidden)]
+pub struct BytecodeInteractiveProbe {
     pub(crate) slot_count: usize,
     pub(crate) interactive: Option<Value>,
     pub(crate) doc_form: Option<Value>,
 }
 
 #[cfg(test)]
-pub(crate) fn bytecode_data_access_count() -> usize {
+#[doc(hidden)]
+pub fn bytecode_data_access_count() -> usize {
     BYTECODE_DATA_ACCESS_COUNT.with(Cell::get)
 }
 
@@ -355,7 +363,8 @@ pub(crate) fn bytecode_data_access_count() -> usize {
 /// themselves live in `bytecode::value_api`; the counter stays with the
 /// module's test accessors so tests that reset/read it keep one home.
 #[cfg(test)]
-pub(crate) fn note_bytecode_data_access() {
+#[doc(hidden)]
+pub fn note_bytecode_data_access() {
     BYTECODE_DATA_ACCESS_COUNT.with(|count| count.set(count.get() + 1));
 }
 
@@ -1929,7 +1938,8 @@ impl HashTableWeakness {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString, IntoStaticStr)]
 #[strum(prefix = ":", serialize_all = "kebab-case")]
-pub(crate) enum HashTableMakeKeyword {
+#[doc(hidden)]
+pub enum HashTableMakeKeyword {
     Test,
     Size,
     Purecopy,
@@ -2419,7 +2429,8 @@ impl ByteCodeKeyPart {
 /// representation (`ByteCodeFunction`, `Op`, `ByteCodeStructuralPart`) lives
 /// in the byte-code module above this layer. Every entry is used only on a
 /// byte-code value's arm; the ordinary value paths never load these pointers.
-pub(crate) struct BytecodeSemantics {
+#[doc(hidden)]
+pub struct BytecodeSemantics {
     pub(crate) to_equal_key: fn(Value, usize, &mut Vec<usize>, bool) -> HashKey,
     pub(crate) equal:
         fn(&Value, &Value, usize, &mut Option<HashSet<EqualSeenPair>>, bool, EqualKind) -> bool,
@@ -4551,13 +4562,15 @@ pub fn try_equal_value_including_properties_swp(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum EqualKind {
+#[doc(hidden)]
+pub enum EqualKind {
     Plain,
     IncludingProperties,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct EqualSeenPair {
+#[doc(hidden)]
+pub struct EqualSeenPair {
     left_bits: usize,
     right_bits: usize,
 }
@@ -4659,7 +4672,8 @@ impl StructuralPseudovectorView<'_> {
     }
 }
 
-pub(crate) fn equal_value_inner(
+#[doc(hidden)]
+pub fn equal_value_inner(
     left: &Value,
     right: &Value,
     depth: usize,
@@ -4933,7 +4947,8 @@ fn equal_value_cycle(
     Ok(false)
 }
 
-pub(crate) fn try_equal_value_inner(
+#[doc(hidden)]
+pub fn try_equal_value_inner(
     left: &Value,
     right: &Value,
     depth: usize,
@@ -5903,12 +5918,14 @@ mod heap_mut_closure_guard;
 /// every Lisp thread sees one value, as in GNU. (N-mutator mode needs shared
 /// storage instead: a recorded obligation.)
 #[cold]
-pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
+#[doc(hidden)]
+pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     Box::new([0_u64; MEMORY_USE_COUNT_LEN])
 }
 
 #[cold]
-pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
+#[doc(hidden)]
+pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     let slot = slot
         .downcast_mut::<[u64; MEMORY_USE_COUNT_LEN]>()
         .expect("carried World state");

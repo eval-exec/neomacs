@@ -13,7 +13,8 @@ use super::TaggedHeap;
 /// this admission from its stop-all/writer capability, rather than assuming that
 /// an ordinary heap borrow excludes writers reaching the heap through TLS.
 #[must_use = "the admission keeps the heap exclusively borrowed during capture"]
-pub(crate) struct SingleMutatorWorld<'h> {
+#[doc(hidden)]
+pub struct SingleMutatorWorld<'h> {
     heap: &'h mut TaggedHeap,
     _thread: PhantomData<Rc<()>>,
 }

@@ -253,15 +253,20 @@ fn binop_driver(a: Value, b: Value, dest: Value, op: BinOp) -> EvalResult {
 
 // Definitions are private here; the old core paths retain their visibility.
 mod data;
-pub(crate) use data::BoolVectorView;
+#[doc(hidden)]
+pub use data::BoolVectorView;
 pub(crate) use data::bool_vector_elements;
 pub(crate) use data::bool_vector_equal_key_u128;
 pub(crate) use data::bool_vector_fill;
-pub(crate) use data::bool_vector_from_bits;
-pub(crate) use data::bool_vector_from_bytes;
+#[doc(hidden)]
+pub use data::bool_vector_from_bits;
+#[doc(hidden)]
+pub use data::bool_vector_from_bytes;
 pub(crate) use data::bool_vector_from_u128;
-pub(crate) use data::bool_vector_length;
-pub(crate) use data::bool_vector_ref_value;
+#[doc(hidden)]
+pub use data::bool_vector_length;
+#[doc(hidden)]
+pub use data::bool_vector_ref_value;
 pub(crate) use data::bool_vector_set;
 pub(crate) use data::bool_vector_u128;
 pub(crate) use data::builtin_bool_vector;
@@ -276,8 +281,10 @@ pub(crate) use data::builtin_bool_vector_subsetp;
 pub(crate) use data::builtin_bool_vector_union;
 pub(crate) use data::builtin_make_bool_vector;
 pub(crate) use data::copy_bool_vector;
-pub(crate) use data::is_bool_vector;
-pub(crate) use data::make_bool_vector;
+#[doc(hidden)]
+pub use data::is_bool_vector;
+#[doc(hidden)]
+pub use data::make_bool_vector;
 pub(crate) use data::nreverse_bool_vector;
 pub(crate) use data::reverse_bool_vector;
 

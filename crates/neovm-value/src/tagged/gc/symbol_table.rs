@@ -21,7 +21,8 @@ pub(crate) enum TableError {
 /// A structural symbol-table position, distinct from a slot count or authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(transparent)]
-pub(crate) struct SymbolSlotIndex(usize);
+#[doc(hidden)]
+pub struct SymbolSlotIndex(usize);
 impl SymbolSlotIndex {
     pub(crate) const fn new(index: usize) -> Self {
         Self(index)

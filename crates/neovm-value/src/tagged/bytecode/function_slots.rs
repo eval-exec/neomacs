@@ -33,13 +33,15 @@ pub enum ParamShapeError {
 /// SymIds from the immutable global registry, never Lisp heap pointers or
 /// mutator-local state, so all evaluators may read it concurrently.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FormalMarkers {
+#[doc(hidden)]
+pub struct FormalMarkers {
     pub(crate) optional: SymId,
     pub(crate) rest: SymId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FormalRole {
+#[doc(hidden)]
+pub enum FormalRole {
     Variable,
     OptionalMarker,
     RestMarker,
@@ -51,21 +53,24 @@ pub(crate) enum FormalRole {
 pub struct DynamicArglist(pub(crate) Value);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FormalBinding {
+#[doc(hidden)]
+pub enum FormalBinding {
     Required(SymId),
     Optional(SymId),
     Rest(SymId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FormalStep {
+#[doc(hidden)]
+pub enum FormalStep {
     Marker,
     Binding(FormalBinding),
     End,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum FormalListError {
+#[doc(hidden)]
+pub enum FormalListError {
     #[error("argument list contains a non-symbol formal: {0:?}")]
     NonSymbol(Value),
     #[error("argument list contains an invalid marker order")]

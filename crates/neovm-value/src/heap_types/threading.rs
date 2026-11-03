@@ -39,7 +39,8 @@ native_id!(CondVarId);
 
 /// Exhaustion never wraps a native identity onto an earlier object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum NativeIdExhausted {
+#[doc(hidden)]
+pub enum NativeIdExhausted {
     #[error("thread identity space exhausted")]
     Thread,
     #[error("mutex identity space exhausted")]
@@ -175,7 +176,8 @@ impl ThreadIds {
 
 /// A checked string-or-nil name retaining the original Lisp object identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ThreadName(TaggedValue);
+#[doc(hidden)]
+pub struct ThreadName(TaggedValue);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct InvalidThreadName;
@@ -201,7 +203,8 @@ impl ThreadName {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RunState {
+#[doc(hidden)]
+pub enum RunState {
     Running,
     Blocked,
 }
@@ -209,14 +212,16 @@ pub(crate) enum RunState {
 /// The terminal category; values remain in the payload's canonical result,
 /// last-error and signal slots, never in a second untraced copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThreadOutcome {
+#[doc(hidden)]
+pub enum ThreadOutcome {
     Returned,
     InternalError,
     Signaled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThreadPhase {
+#[doc(hidden)]
+pub enum ThreadPhase {
     New,
     Active(RunState),
     Completing(ThreadOutcome),
@@ -224,7 +229,8 @@ pub(crate) enum ThreadPhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum JoinObservation {
+#[doc(hidden)]
+pub enum JoinObservation {
     Unobserved,
     Observed,
 }
@@ -232,7 +238,8 @@ pub(crate) enum JoinObservation {
 /// An event after its same-heap transport handoff. These are ordinary heap
 /// edges, not independently registered roots, so mailbox cycles can die.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StoredThreadEvent {
+#[doc(hidden)]
+pub struct StoredThreadEvent {
     sender: TaggedValue,
     error_symbol: TaggedValue,
     data: TaggedValue,
@@ -275,7 +282,8 @@ impl StoredThreadEvent {
 /// Scalar runtime state that carries no Lisp children or owned storage. Its
 /// mutable view cannot change heap identity or introduce an unbarriered edge.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ThreadNativeState {
+#[doc(hidden)]
+pub struct ThreadNativeState {
     pub(crate) phase: ThreadPhase,
     pub(crate) join_observation: JoinObservation,
     pub(crate) current_buffer: Option<BufferId>,
@@ -294,7 +302,8 @@ impl ThreadNativeState {
 /// All Lisp child words and their directly owned storage. Only this view is
 /// exposed by the pre-store SATB/remembered-owner mutation wrapper.
 #[derive(Debug)]
-pub(crate) struct ThreadChildren {
+#[doc(hidden)]
+pub struct ThreadChildren {
     pub(crate) name: ThreadName,
     pub(crate) function: TaggedValue,
     pub(crate) result: TaggedValue,
@@ -310,7 +319,8 @@ pub(crate) struct ThreadChildren {
 /// Thread-owned state. Access and mutation require the runtime's rooted,
 /// same-heap authority; no reference to either view may cross GC or yield.
 #[derive(Debug)]
-pub(crate) struct ThreadPayload {
+#[doc(hidden)]
+pub struct ThreadPayload {
     id: ThreadId,
     pub(crate) native: ThreadNativeState,
     pub(crate) children: ThreadChildren,
@@ -417,7 +427,8 @@ impl ThreadChildren {
 
 /// A locked mutex always has a positive recursive depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RecursionDepth(NonZeroU32);
+#[doc(hidden)]
+pub struct RecursionDepth(NonZeroU32);
 
 impl RecursionDepth {
     pub(crate) const ONE: Self = Self(NonZeroU32::MIN);
@@ -439,7 +450,8 @@ impl RecursionDepth {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MutexOwnership {
+#[doc(hidden)]
+pub enum MutexOwnership {
     Unlocked,
     Locked {
         owner: ThreadId,
@@ -448,7 +460,8 @@ pub(crate) enum MutexOwnership {
 }
 
 #[derive(Debug)]
-pub(crate) struct MutexPayload {
+#[doc(hidden)]
+pub struct MutexPayload {
     pub(crate) id: MutexId,
     pub(crate) name: Option<LispString>,
     pub(crate) ownership: MutexOwnership,
@@ -485,7 +498,8 @@ impl MutexPayload {
 /// A condition's mutex identity and Lisp edge are validated together and can
 /// never be mutated independently.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct MutexReference {
+#[doc(hidden)]
+pub struct MutexReference {
     id: MutexId,
     value: TaggedValue,
 }
@@ -516,7 +530,8 @@ impl MutexReference {
 }
 
 #[derive(Debug)]
-pub(crate) struct CondVarPayload {
+#[doc(hidden)]
+pub struct CondVarPayload {
     pub(crate) id: CondVarId,
     pub(crate) name: Option<LispString>,
     association: MutexReference,

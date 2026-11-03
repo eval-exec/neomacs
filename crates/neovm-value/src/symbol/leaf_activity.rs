@@ -35,7 +35,8 @@ pub(crate) fn assert_no_leaf_active(site: &'static str) {
 /// drop (best effort during teardown, like the caller-side TLS scopes).
 #[must_use = "the leaf-active extent ends when this guard drops"]
 #[derive(Debug)]
-pub(crate) struct LeafActiveScope {
+#[doc(hidden)]
+pub struct LeafActiveScope {
     previous: u32,
 }
 

@@ -28,11 +28,13 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// log2 of the card size: 512 bytes, 32 cons cells.
-pub(crate) const CARD_SHIFT: u32 = 9;
+#[doc(hidden)]
+pub const CARD_SHIFT: u32 = 9;
 pub(crate) const CARD_BYTES: usize = 1 << CARD_SHIFT;
 /// Index bits: 2^23 one-byte cards, an aliasing period of 4 GiB.
 pub(crate) const CARD_INDEX_BITS: u32 = 23;
-pub(crate) const CARD_INDEX_MASK: usize = (1 << CARD_INDEX_BITS) - 1;
+#[doc(hidden)]
+pub const CARD_INDEX_MASK: usize = (1 << CARD_INDEX_BITS) - 1;
 pub(crate) const CARD_TABLE_BYTES: usize = 1 << CARD_INDEX_BITS;
 /// Cons blocks and arena pages are 64 KiB-aligned chunks of 128 cards.
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
@@ -40,20 +42,23 @@ pub(crate) const CHUNK_CARDS: usize = CHUNK_BYTES / CARD_BYTES;
 const CHUNK_CARD_WORDS: usize = CHUNK_CARDS / size_of::<u64>();
 /// log2 of the cards per chunk: a card index shifted down by this names its
 /// chunk's summary byte.
-pub(crate) const CARD_CHUNK_SHIFT: u32 = CHUNK_CARDS.trailing_zeros();
+#[doc(hidden)]
+pub const CARD_CHUNK_SHIFT: u32 = CHUNK_CARDS.trailing_zeros();
 /// The chunk summary bytes start right after the cards.
-pub(crate) const CHUNK_SUMMARY_OFFSET: usize = CARD_TABLE_BYTES;
+#[doc(hidden)]
+pub const CHUNK_SUMMARY_OFFSET: usize = CARD_TABLE_BYTES;
 const CHUNK_SUMMARY_BYTES: usize = CARD_TABLE_BYTES >> CARD_CHUNK_SHIFT;
 const _: () = assert!(CHUNK_SUMMARY_BYTES == 1 << u16::BITS);
 const _: () = assert!(CHUNK_SUMMARY_OFFSET % 64 == 0);
 pub(crate) const CARD_CLEAN: u8 = 0;
-pub(crate) const CARD_DIRTY: u8 = 1;
+#[doc(hidden)]
+pub const CARD_DIRTY: u8 = 1;
 
 /// Byte offset, from a `*const TaggedHeap`, of the published card-table base
 /// (one unaligned native-endian word in byte Cells after the exclusion words).
 #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-pub(crate) const HEAP_JIT_CARD_TABLE: usize =
-    std::mem::offset_of!(super::TaggedHeap, card_table_base_0);
+#[doc(hidden)]
+pub const HEAP_JIT_CARD_TABLE: usize = std::mem::offset_of!(super::TaggedHeap, card_table_base_0);
 
 const _: () = {
     let offsets = [

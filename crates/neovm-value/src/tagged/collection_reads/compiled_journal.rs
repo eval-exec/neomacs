@@ -5,7 +5,8 @@
 //! State: certificates are !Send and survive Context switches on that mutator.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompiledJournalMode {
+#[doc(hidden)]
+pub enum CompiledJournalMode {
     Off,
     Observed,
     Eager,
@@ -53,6 +54,7 @@ pub(crate) fn force_compiled_journal_for_test(mode: Option<CompiledJournalMode>)
 /// A non-observing query. A non-cons address must still name retained storage;
 /// Cons bits are keys into metadata, and never dereferenced by the query.
 #[inline]
-pub(crate) fn is_observed(bits: usize) -> bool {
+#[doc(hidden)]
+pub fn is_observed(bits: usize) -> bool {
     crate::tagged::gc::collection_observed(bits)
 }

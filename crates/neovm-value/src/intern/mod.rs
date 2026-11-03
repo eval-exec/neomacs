@@ -418,7 +418,8 @@ impl From<&str> for SymbolNameCharacterCount {
 /// stay confined to the borrowing mutator; no callback/GC point may outlive
 /// their source borrow. They own no Lisp references and add no TLS state.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SymbolNameQuery<'a> {
+#[doc(hidden)]
+pub struct SymbolNameQuery<'a> {
     bytes: &'a [u8],
     chars: SymbolNameCharacterCount,
     _mutator: std::marker::PhantomData<*const ()>,
@@ -1506,7 +1507,8 @@ fn global_symbol_registry() -> &'static RwLock<SymbolRegistry> {
 /// under the same write guard, including a partially failed restore.
 /// Caches outside this module, including `TaggedValue::subr_from_sym_id`'s memo,
 /// can use the same invalidation.
-pub(crate) fn symbol_registry_epoch_value() -> u64 {
+#[doc(hidden)]
+pub fn symbol_registry_epoch_value() -> u64 {
     symbol_registry_epoch().load(Ordering::Acquire)
 }
 
@@ -1520,7 +1522,8 @@ pub(crate) fn dump_runtime_interner() -> DumpedSymbolTable {
     registry.dump_symbol_table()
 }
 
-pub(crate) fn restore_runtime_interner(
+#[doc(hidden)]
+pub fn restore_runtime_interner(
     names: &[LispString],
     symbol_names: &[u32],
     canonical: Option<&[bool]>,
@@ -2172,18 +2175,21 @@ pub(crate) fn resolve_sym_lisp_string_registry_reads() -> usize {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_intern_calls() {
+#[doc(hidden)]
+pub fn reset_intern_calls() {
     INTERN_CALLS.set(0);
     INTERN_CALL_NAMES.with(|names| names.borrow_mut().clear());
 }
 
 #[cfg(test)]
-pub(crate) fn intern_calls() -> usize {
+#[doc(hidden)]
+pub fn intern_calls() -> usize {
     INTERN_CALLS.get()
 }
 
 #[cfg(test)]
-pub(crate) fn intern_call_names() -> Vec<String> {
+#[doc(hidden)]
+pub fn intern_call_names() -> Vec<String> {
     INTERN_CALL_NAMES.with(|names| names.borrow().clone())
 }
 
@@ -2234,7 +2240,8 @@ fn symbol_cache_target(span: usize) -> usize {
 /// grows it lazily. The sparse name-keyed `INTERN_STR_CACHE` is likewise left
 /// to its lazy growth: its size follows the distinct spellings an owner
 /// interns, not the `SymId` span.
-pub(crate) fn prepare_thread_symbol_caches() {
+#[doc(hidden)]
+pub fn prepare_thread_symbol_caches() {
     let symbol_span = global_symbol_registry().read().symbol_span();
     let target = symbol_cache_target(symbol_span);
     SYMBOL_CACHE.with(|cache| {
@@ -2471,7 +2478,8 @@ mod ascii_reader_name_tests;
 
 /// Carrier park: drop the heap-keyed visible symbol-name cache. The intern
 /// epoch caches are carrier-intrinsic and keep their capacity.
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     VISIBLE_SYMBOL_NAME_CACHE.with(|cache| {
         *cache.borrow_mut() = VisibleSymbolNameCache::default();
     });
@@ -2479,7 +2487,8 @@ pub(crate) fn reset_carrier_tls() {
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(
         h,
         VISIBLE_SYMBOL_NAME_CACHE.with(|c| {

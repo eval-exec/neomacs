@@ -17,7 +17,8 @@ use strum::IntoStaticStr;
 mod bytecode_backtrace;
 pub(crate) mod format_hook;
 use bytecode_backtrace::BytecodeErrorBacktrace;
-pub(crate) use bytecode_backtrace::InlineErrorOp;
+#[doc(hidden)]
+pub use bytecode_backtrace::InlineErrorOp;
 
 /// Public-facing evaluation error.
 ///
@@ -134,7 +135,8 @@ impl Error for EvalError {}
 /// copies — which is how `kill-emacs` used to get lost. Deliberately a
 /// function and not a `From` impl: a second `From<_> for Flow` makes the error
 /// type ambiguous at every `?` in the crate.
-pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
+#[doc(hidden)]
+pub fn flow_from_eval_error(err: EvalError) -> Flow {
     match err {
         EvalError::Signal {
             symbol,
@@ -479,7 +481,8 @@ impl MemorySignalBinding {
 /// policy travels with its signal; the memory-exhaustion variant retains
 /// mutator-bound Values whose lifetime is covered by SignalData's pin.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum SignalDelivery {
+#[doc(hidden)]
+pub enum SignalDelivery {
     Ordinary,
     HookSuppressed,
     MemoryExhausted(MemorySignalBinding),
@@ -699,7 +702,8 @@ pub struct InFlightRoots {
 /// in-flight payload construction contract remains sealed to this module.
 #[derive(Debug)]
 #[must_use = "dropping this handle ends retention of its Lisp value"]
-pub(crate) struct RetainedLispValue {
+#[doc(hidden)]
+pub struct RetainedLispValue {
     value: Value,
     _pin: InFlightRoots,
 }
@@ -808,7 +812,8 @@ impl std::fmt::Debug for InFlightRoots {
 }
 
 /// Collect the owning Context's pins, independent of the active TLS view.
-pub(crate) fn collect_in_flight_registry_gc_roots(
+#[doc(hidden)]
+pub fn collect_in_flight_registry_gc_roots(
     out: &mut Vec<Value>,
     registry: &InFlightRegistryHandle,
     heap_id: usize,
@@ -836,7 +841,8 @@ pub(crate) fn collect_in_flight_flow_gc_roots(out: &mut Vec<Value>, heap_id: usi
     });
 }
 
-pub(crate) type EvalResult = Result<Value, Flow>;
+#[doc(hidden)]
+pub type EvalResult = Result<Value, Flow>;
 
 /// Standard error conditions defined by the GNU C core (`define_error`
 /// in data.c, eval.c, and friends). Signaling through the enum instead
@@ -844,7 +850,8 @@ pub(crate) type EvalResult = Result<Value, Flow>;
 /// time; user-defined conditions (`define-error` from Lisp) still
 /// signal by name through the `&str` impl of [`IntoConditionSym`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, IntoStaticStr)]
-pub(crate) enum LispCondition {
+#[doc(hidden)]
+pub enum LispCondition {
     #[strum(serialize = "args-out-of-range")]
     ArgsOutOfRange,
     #[strum(serialize = "arith-error")]
@@ -949,7 +956,8 @@ impl LispCondition {
 
 /// A condition designator accepted by the signal constructors: a typed
 /// standard condition, or any symbol name for user-defined conditions.
-pub(crate) trait IntoConditionSym {
+#[doc(hidden)]
+pub trait IntoConditionSym {
     fn condition_sym(self) -> SymId;
 }
 
@@ -983,14 +991,16 @@ impl IntoConditionSym for &str {
 }
 
 /// Create a signal flow.
-pub(crate) fn signal(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
+#[doc(hidden)]
+pub fn signal(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, false)
 }
 
 /// GNU alloc.c:7474-7477's bootstrap memory exhaustion condition.
 /// Context-aware allocation paths use the live `memory-signal-data` instead.
 #[cold]
-pub(crate) fn memory_exhausted_error() -> Flow {
+#[doc(hidden)]
+pub fn memory_exhausted_error() -> Flow {
     let symbol = LispCondition::Error.condition_sym();
     let data = vec![Value::string(
         "Memory exhausted--use M-x save-some-buffers then exit and restart Emacs",
@@ -1006,7 +1016,8 @@ pub(crate) fn memory_exhausted_error() -> Flow {
 }
 
 /// Create a signal flow without running `signal-hook-function`.
-pub(crate) fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
+#[doc(hidden)]
+pub fn signal_suppressed(symbol: impl IntoConditionSym, data: Vec<Value>) -> Flow {
     signal_internal_id(symbol.condition_sym(), data, None, true)
 }
 
@@ -1034,7 +1045,8 @@ pub(crate) fn signal_internal_id(
 /// Create a signal where DATA is used as the raw cdr payload.
 ///
 /// This preserves dotted signal data shapes such as `(foo . 1)`.
-pub(crate) fn signal_with_data(symbol: impl IntoConditionSym, data: Value) -> Flow {
+#[doc(hidden)]
+pub fn signal_with_data(symbol: impl IntoConditionSym, data: Value) -> Flow {
     signal_with_data_internal(symbol, data, false)
 }
 
@@ -1044,7 +1056,8 @@ pub(crate) fn signal_with_data(symbol: impl IntoConditionSym, data: Value) -> Fl
 /// ARG is a single datum.  GNU's `signal_error` is used by special forms that
 /// pass a malformed subform (for example `let`'s multi-value binding), and the
 /// flattened data is observable through `condition-case`'s error object.
-pub(crate) fn signal_error_with_arg(message: &str, arg: Value) -> Flow {
+#[doc(hidden)]
+pub fn signal_error_with_arg(message: &str, arg: Value) -> Flow {
     let mut data = vec![Value::string(message)];
     match crate::value::list_to_vec(&arg) {
         Some(items) => data.extend(items),
@@ -1074,7 +1087,8 @@ pub(crate) fn signal_with_data_id(symbol: SymId, data: Value) -> Flow {
 }
 
 /// Build the binding value for condition-case variable: (symbol . data)
-pub(crate) fn make_signal_binding_value(sig: &SignalData) -> Value {
+#[doc(hidden)]
+pub fn make_signal_binding_value(sig: &SignalData) -> Value {
     match sig.delivery {
         SignalDelivery::MemoryExhausted(binding) => return binding.original(),
         SignalDelivery::Ordinary | SignalDelivery::HookSuppressed => {}
@@ -1103,7 +1117,8 @@ pub(crate) fn signal_from_binding_value(value: Value) -> Option<Flow> {
 /// Deliver GNU alloc.c:4142's live memory-signal-data, keeping its original
 /// error object (including a dotted cdr) and the OOM delivery policy together.
 #[cold]
-pub(crate) fn memory_signal_from_binding_value(value: Value, symbol_mode: SymbolMode) -> Flow {
+#[doc(hidden)]
+pub fn memory_signal_from_binding_value(value: Value, symbol_mode: SymbolMode) -> Flow {
     let binding = match MemorySignalBinding::try_from((value, symbol_mode)) {
         Ok(binding) => binding,
         // Fsignal turns a nil error symbol and non-cons data into an
@@ -1158,7 +1173,8 @@ fn wrong_number_of_arguments(name: &str, nargs: usize) -> Flow {
 
 /// Signal wrong-number-of-arguments unless `args` has exactly `n` items.
 #[inline]
-pub(crate) fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Flow> {
     if args.len() != n {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1168,7 +1184,8 @@ pub(crate) fn expect_args(name: &str, args: &[Value], n: usize) -> Result<(), Fl
 
 /// Signal wrong-number-of-arguments unless `args` has at least `min` items.
 #[inline]
-pub(crate) fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<(), Flow> {
     if args.len() < min {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1178,7 +1195,8 @@ pub(crate) fn expect_min_args(name: &str, args: &[Value], min: usize) -> Result<
 
 /// Signal wrong-number-of-arguments unless `args` has at most `max` items.
 #[inline]
-pub(crate) fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<(), Flow> {
     if args.len() > max {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1188,12 +1206,8 @@ pub(crate) fn expect_max_args(name: &str, args: &[Value], max: usize) -> Result<
 
 /// Signal wrong-number-of-arguments unless `min <= args.len() <= max`.
 #[inline]
-pub(crate) fn expect_args_range(
-    name: &str,
-    args: &[Value],
-    min: usize,
-    max: usize,
-) -> Result<(), Flow> {
+#[doc(hidden)]
+pub fn expect_args_range(name: &str, args: &[Value], min: usize, max: usize) -> Result<(), Flow> {
     if args.len() < min || args.len() > max {
         Err(wrong_number_of_arguments(name, args.len()))
     } else {
@@ -1210,7 +1224,8 @@ pub(crate) fn expect_args_range(
 /// iteration. Splitting the cold arm out is the same shape the JIT already
 /// uses for `retier_heat_init` and `direct_call_cold`.
 #[inline]
-pub(crate) fn expect_fixnum(val: &Value) -> Result<i64, Flow> {
+#[doc(hidden)]
+pub fn expect_fixnum(val: &Value) -> Result<i64, Flow> {
     match val.kind() {
         ValueKind::Fixnum(n) => Ok(n),
         _other => Err(expect_fixnum_failed(val)),
@@ -1219,7 +1234,8 @@ pub(crate) fn expect_fixnum(val: &Value) -> Result<i64, Flow> {
 
 #[cold]
 #[inline(never)]
-pub(crate) fn expect_fixnum_failed(val: &Value) -> Flow {
+#[doc(hidden)]
+pub fn expect_fixnum_failed(val: &Value) -> Flow {
     signal(
         LispCondition::WrongTypeArgument,
         vec![Value::symbol("fixnump"), *val],
@@ -1249,7 +1265,8 @@ mod issue554_throw_roundtrip_tests;
 /// Carrier park: forget the owner's in-flight root registry handle. The
 /// handle points into a Context-owned root table, not into the heap, but the
 /// next owner installs its own handle, so the parked carrier keeps nothing.
-pub(crate) fn park_carrier_tls() {
+#[doc(hidden)]
+pub fn park_carrier_tls() {
     IN_FLIGHT_ROOTS.with(|slot| *slot.borrow_mut() = None);
 }
 
@@ -1257,7 +1274,8 @@ pub(crate) fn park_carrier_tls() {
 /// `FORMAT_OBJECT_STACK` moved to the print error-format module; its probe
 /// rides along `print::carrier_tls_fingerprint`.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(
         h,
         IN_FLIGHT_ROOTS.with(|slot| slot.borrow().is_some() as u64),

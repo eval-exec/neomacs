@@ -25,7 +25,8 @@ use super::Runtime;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug)]
-pub(crate) struct DecodedGnuCode {
+#[doc(hidden)]
+pub struct DecodedGnuCode {
     pub(crate) ops: Vec<Op>,
     pub(crate) byte_offset_map: Vec<GnuByteOffsetMapEntry>,
     /// Result of `verify_stack_effects` for these instructions, proven once
@@ -76,7 +77,8 @@ impl LazyGnuCode {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct IterativeArgRange {
+#[doc(hidden)]
+pub struct IterativeArgRange {
     pub(crate) required: u16,
     pub(crate) nonrest: u16,
 }

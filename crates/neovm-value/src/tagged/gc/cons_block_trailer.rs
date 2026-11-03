@@ -4,7 +4,8 @@
 use super::{ConsCell, size_of};
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-pub(crate) const CONS_BLOCK_BYTES: usize = 64 * 1024;
+#[doc(hidden)]
+pub const CONS_BLOCK_BYTES: usize = 64 * 1024;
 pub(super) const CONS_MARK_BITS_PER_WORD: usize = usize::BITS as usize;
 
 pub(super) const fn cons_mark_words(cells: usize) -> usize {
@@ -26,13 +27,15 @@ const fn cell_count() -> usize {
 }
 
 pub(crate) const CONS_BLOCK_SIZE: usize = cell_count();
-pub(crate) const CONS_MARK_WORDS: usize = cons_mark_words(CONS_BLOCK_SIZE);
+#[doc(hidden)]
+pub const CONS_MARK_WORDS: usize = cons_mark_words(CONS_BLOCK_SIZE);
 pub(super) const CONS_CELLS_BYTES: usize = CONS_BLOCK_SIZE * size_of::<ConsCell>();
-pub(crate) const CONS_MARKS_OFFSET: usize = CONS_CELLS_BYTES;
+#[doc(hidden)]
+pub const CONS_MARKS_OFFSET: usize = CONS_CELLS_BYTES;
 pub(super) const CONS_OLD_OFFSET: usize =
     CONS_MARKS_OFFSET + CONS_MARK_WORDS * size_of::<AtomicUsize>();
-pub(crate) const CONS_AGE_OFFSET: usize =
-    CONS_OLD_OFFSET + CONS_MARK_WORDS * size_of::<AtomicU64>();
+#[doc(hidden)]
+pub const CONS_AGE_OFFSET: usize = CONS_OLD_OFFSET + CONS_MARK_WORDS * size_of::<AtomicU64>();
 const CONS_AGE_BYTES: usize = CONS_MARK_WORDS * CONS_MARK_BITS_PER_WORD;
 /// Age bytes written as one word, eight cells at a time.
 const AGE_LANE_CELLS: usize = size_of::<u64>();
@@ -43,7 +46,8 @@ const AGE_LANES_PER_WORD: usize = CONS_MARK_BITS_PER_WORD / AGE_LANE_CELLS;
 /// old-bitmap words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum ConsAge {
+#[doc(hidden)]
+pub enum ConsAge {
     Young = 0,
     Old = 1,
 }

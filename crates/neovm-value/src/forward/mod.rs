@@ -695,7 +695,8 @@ pub struct LispIntFwd {
 
 /// Byte offset of a [`LispIntFwd`]'s slot (a Lisp integer), for JIT code's
 /// inline read and fixnum store (P1.4 Stage B).
-pub(crate) const LISP_INT_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispIntFwd, value);
+#[doc(hidden)]
+pub const LISP_INT_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispIntFwd, value);
 
 static_assertions::assert_impl_all!(LispIntFwd: std::fmt::Debug);
 static_assertions::assert_not_impl_any!(LispIntFwd: Copy, Clone, Send, Sync);
@@ -824,7 +825,8 @@ pub struct LispObjFwd {
 
 /// Byte offset of a [`LispObjFwd`]'s slot, for JIT code's inline read and
 /// store (P1.4 Stage B).
-pub(crate) const LISP_OBJ_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispObjFwd, value);
+#[doc(hidden)]
+pub const LISP_OBJ_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispObjFwd, value);
 
 static_assertions::assert_impl_all!(LispObjFwd: std::fmt::Debug);
 static_assertions::assert_not_impl_any!(LispObjFwd: Copy, Clone, Send, Sync);
@@ -971,7 +973,8 @@ pub struct LispKboardObjFwd {
 
 /// A particular keyboard lifetime, not just a terminal number that can be reused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct KeyboardBindingOwner {
+#[doc(hidden)]
+pub struct KeyboardBindingOwner {
     terminal: u64,
     generation: u64,
 }

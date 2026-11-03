@@ -77,20 +77,34 @@ pub fn register_bootstrap_vars(obarray: &mut Obarray) {
 
 // Definitions are private here; the old core paths retain their visibility.
 mod data;
-pub(crate) use data::AllocLen;
-pub(crate) use data::AllocationFailure;
-pub(crate) use data::BufferByteLen;
-pub(crate) use data::CharTableExtras;
-pub(crate) use data::HashTableHint;
-pub(crate) use data::HashTableSize;
-pub(crate) use data::ObarrayBits;
-pub(crate) use data::RecordLen;
-pub(crate) use data::RepeatCount;
-pub(crate) use data::RepeatCountError;
-pub(crate) use data::StringByteLen;
-pub(crate) use data::buffer_overflow;
-pub(crate) use data::memory_exhausted;
-pub(crate) use data::reserved_values;
+#[doc(hidden)]
+pub use data::AllocLen;
+#[doc(hidden)]
+pub use data::AllocationFailure;
+#[doc(hidden)]
+pub use data::BufferByteLen;
+#[doc(hidden)]
+pub use data::CharTableExtras;
+#[doc(hidden)]
+pub use data::HashTableHint;
+#[doc(hidden)]
+pub use data::HashTableSize;
+#[doc(hidden)]
+pub use data::ObarrayBits;
+#[doc(hidden)]
+pub use data::RecordLen;
+#[doc(hidden)]
+pub use data::RepeatCount;
+#[doc(hidden)]
+pub use data::RepeatCountError;
+#[doc(hidden)]
+pub use data::StringByteLen;
+#[doc(hidden)]
+pub use data::buffer_overflow;
+#[doc(hidden)]
+pub use data::memory_exhausted;
+#[doc(hidden)]
+pub use data::reserved_values;
 
 #[cfg(test)]
 #[path = "tests/alloc_test.rs"]

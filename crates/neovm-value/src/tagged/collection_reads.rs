@@ -71,7 +71,8 @@ pub(super) fn initialize() {
 
 #[cfg(test)]
 #[inline]
-pub(crate) fn hoist_reads() -> bool {
+#[doc(hidden)]
+pub fn hoist_reads() -> bool {
     CAPTURE_SCOPES.load(Ordering::Relaxed) & ReadPolicyBit::ObservedTraversal as usize == 0
 }
 
@@ -80,7 +81,8 @@ pub(crate) fn hoist_reads() -> bool {
 /// mutator holds a scope. Scope contribution and immutable policy share one
 /// coherent atomic word, so the default inactive arm needs only one load.
 #[inline]
-pub(crate) fn reads_need_observation() -> bool {
+#[doc(hidden)]
+pub fn reads_need_observation() -> bool {
     let policy = CAPTURE_SCOPES.load(Ordering::Relaxed);
     if policy == 0 {
         return false;
@@ -89,7 +91,8 @@ pub(crate) fn reads_need_observation() -> bool {
 }
 
 #[inline]
-pub(crate) fn is_active() -> bool {
+#[doc(hidden)]
+pub fn is_active() -> bool {
     CAPTURE_SCOPES.load(Ordering::Relaxed) & !POLICY_MASK != 0 && ACTIVE.with(Cell::get)
 }
 
@@ -725,7 +728,8 @@ fn observe_store_projection_active(value: TaggedValue) {
 /// Cons tag check observes nothing; veclike setters observe every veclike header
 /// before rejecting a subtype. This is deliberately narrower than heap objects.
 #[derive(Clone, Copy)]
-pub(crate) enum WriteProjection {
+#[doc(hidden)]
+pub enum WriteProjection {
     Cons,
     VecLike,
 }
@@ -745,7 +749,8 @@ pub(super) fn record_projected_write(value: TaggedValue, projection: WriteProjec
 }
 
 #[inline(always)]
-pub(crate) fn record_projected_write_in_store(
+#[doc(hidden)]
+pub fn record_projected_write_in_store(
     store: &StoreState,
     value: TaggedValue,
     projection: WriteProjection,
@@ -829,11 +834,13 @@ mod compiled_journal;
 mod observed_envelope;
 #[cfg(test)]
 pub(crate) use compiled_journal::force_compiled_journal_for_test;
-pub(crate) use compiled_journal::{CompiledJournalMode, compiled_journal_mode, is_observed};
+#[doc(hidden)]
+pub use compiled_journal::{CompiledJournalMode, compiled_journal_mode, is_observed};
 
 /// Snapshot only the current mutator's existing journal metadata. Installation
 /// of a Context is exclusive on that mutator and republishes this envelope.
-pub(crate) fn compiled_observation_window() -> (usize, usize) {
+#[doc(hidden)]
+pub fn compiled_observation_window() -> (usize, usize) {
     if compiled_journal_mode() != CompiledJournalMode::Observed
         || !super::gc::has_collection_observations()
     {
@@ -849,7 +856,8 @@ pub(crate) fn compiled_observation_window() -> (usize, usize) {
 /// Non-dump owner ranges and an exact empty gap for this actual heap's dump
 /// span. Callers pass the new span explicitly when installing or republishing
 /// a heap; the ordinary TLS barrier mirror may still describe its prior state.
-pub(crate) fn compiled_observation_gate(
+#[doc(hidden)]
+pub fn compiled_observation_gate(
     dump: super::gc::BarrierWindow,
 ) -> super::gc::CompiledObservationGate {
     compiled_observation_gate_for_world(&ObservationWorld::current(), dump)
@@ -1065,12 +1073,14 @@ mod recent_clear_tests;
 /// cleared instead: it only ever answers again. (N-mutator mode needs shared
 /// storage instead: a recorded obligation.)
 #[cold]
-pub(crate) fn world_state_placeholder() -> Box<dyn std::any::Any> {
+#[doc(hidden)]
+pub fn world_state_placeholder() -> Box<dyn std::any::Any> {
     store_state::carried_placeholder()
 }
 
 #[cold]
-pub(crate) fn swap_world_state(slot: &mut dyn std::any::Any) {
+#[doc(hidden)]
+pub fn swap_world_state(slot: &mut dyn std::any::Any) {
     store_state::swap_carried(slot);
 }
 
@@ -1100,7 +1110,8 @@ mod observed_reused_subtype_tests;
 
 /// Carrier park: clear this thread's read-observation scope and recent-read
 /// cache. `STATE` is World-carried by the swap protocol and is not touched.
-pub(crate) fn reset_carrier_tls() {
+#[doc(hidden)]
+pub fn reset_carrier_tls() {
     ACTIVE.with(|slot| slot.set(false));
     // Epoch 0 is the fresh-thread value (`RecentReads::new`), so the snapshot
     // probe can compare a parked carrier with a fresh one; any later lookup
@@ -1110,7 +1121,8 @@ pub(crate) fn reset_carrier_tls() {
 
 /// Debug-only carrier TLS fingerprint for this module's classified records.
 #[cfg(debug_assertions)]
-pub(crate) fn carrier_tls_fingerprint(h: &mut u64) {
+#[doc(hidden)]
+pub fn carrier_tls_fingerprint(h: &mut u64) {
     crate::tls_fingerprint::mix(h, ACTIVE.with(|slot| slot.get() as u64));
     crate::tls_fingerprint::mix(
         h,

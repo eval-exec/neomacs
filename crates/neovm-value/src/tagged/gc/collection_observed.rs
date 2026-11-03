@@ -77,7 +77,8 @@ fn publish_has_marks(flag: &AtomicBool) {
 /// publishes its envelope; its subsequent Acquire query cannot miss that mark.
 /// Another mutator's true result only causes a conservative local lookup.
 #[inline]
-pub(crate) fn has_collection_observations() -> bool {
+#[doc(hidden)]
+pub fn has_collection_observations() -> bool {
     HAS_CONS_MARKS.load(Ordering::Acquire) || HAS_NONCONS_MARKS.load(Ordering::Acquire)
 }
 

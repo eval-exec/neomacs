@@ -4,7 +4,8 @@ use super::*;
 /// Counts refer to the existing append-only-until-sweep class directories.
 /// This record is attempt-local. No epoch, TLS slot or edit-time write is added.
 #[derive(Debug)]
-pub(crate) struct RowsOwnedDomain {
+#[doc(hidden)]
+pub struct RowsOwnedDomain {
     start_count: [usize; CHUNK_CLASS_COUNT],
 }
 

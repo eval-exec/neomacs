@@ -24,7 +24,8 @@ use std::sync::OnceLock;
 
 /// The JIT's observations of function-cell writes.
 #[derive(Clone, Copy)]
-pub(crate) struct FunctionCellObserver {
+#[doc(hidden)]
+pub struct FunctionCellObserver {
     /// Count one function-epoch bump; `None` for a bump without a symbol.
     pub epoch_bump: fn(FunctionEpochBump, Option<SymId>),
     /// Count one write that stored the value already there (no bump).

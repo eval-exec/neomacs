@@ -21,18 +21,21 @@ pub(crate) struct SourceFeedback {
 }
 
 /// Most sources a site tells apart before it goes megamorphic.
-pub(crate) const POLY: usize = 4;
+#[doc(hidden)]
+pub const POLY: usize = 4;
 
 /// Executions after which a site's lattice transition counts as LATE in the
 /// census: the window a later tier would have compiled against
 /// (`T2_WINDOW`, design §3.4). F-1's stability premise (R3) is that few
 /// counted sites transition after it.
-pub(crate) const STABLE_WINDOW: u32 = 15_000;
+#[doc(hidden)]
+pub const STABLE_WINDOW: u32 = 15_000;
 
 /// What a call site records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub(crate) enum SiteShape {
+#[doc(hidden)]
+pub enum SiteShape {
     /// The called value itself (the callee is not a constant: a variable,
     /// a closure, an argument).
     Callee = 0,
@@ -70,7 +73,8 @@ pub(crate) struct CallSiteFeedback {
 /// A source's call sites: one [`CallSiteFeedback`] per call whose target is
 /// not a constant the compile can read (see [`SiteShape`]).
 #[derive(Debug)]
-pub(crate) struct CallSites {
+#[doc(hidden)]
+pub struct CallSites {
     /// Per op: 0 = no recorded site at this pc, else the site's index + 1.
     pub(crate) index: Box<[u16]>,
     pub(crate) sites: Box<[CallSiteFeedback]>,
