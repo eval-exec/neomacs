@@ -45,11 +45,6 @@ impl Fixture {
         )
         .expect("write explicit evaluator-template declarations");
         fs::write(
-            manifest.join("src/emacs_core/runtime/bytecode/opcode.rs"),
-            "pub enum Op { Fixture }\nworld_registry!(Op);\n",
-        )
-        .expect("write explicit opcode registry");
-        fs::write(
             manifest.join("src/emacs_core/runtime/eval/tier_i/compile.rs"),
             "pub(super) enum Op { FixtureCall, FixtureBranch { target: usize } }\nworld_registry!(Op);\n",
         )
@@ -64,21 +59,90 @@ impl Fixture {
             "(defalias 'fixture-alias #'fixture-target)\n",
         )
         .expect("write alias source fixture");
-        Self {
+        let fixture = Self {
             _directory: directory,
             manifest,
             project,
             output,
-        }
+        };
+        // The opcode enum lives below emacs_core at its production site; its
+        // World marker stays at the upper module that imports it.
+        fixture.replace_definition("pub enum Op { Fixture }\n");
+        fixture.replace_registry(&registry_input());
+        fixture
     }
 
     fn generate(&self) -> Result<(), String> {
-        generator::generate_fixture(&self.manifest, &self.project, &self.output)
+        self.generate_with(generator::REGISTRY_SITES)
+    }
+
+    fn generate_with(&self, sites: generator::RegistrySites) -> Result<(), String> {
+        generator::generate_fixture(&self.manifest, &self.project, &self.output, sites)
     }
 
     fn replace_input(&self, input: &str) {
         fs::write(self.manifest.join("src/fixture.rs"), input).expect("mutate one fixture line");
     }
+
+    fn definition_path(&self) -> PathBuf {
+        opcode_site().0.file(&self.manifest, &self.project)
+    }
+
+    fn registry_path(&self) -> PathBuf {
+        self.manifest.join(opcode_site().1)
+    }
+
+    fn replace_definition(&self, input: &str) {
+        let path = self.definition_path();
+        fs::create_dir_all(path.parent().expect("definition directory"))
+            .expect("create the opcode definition directory");
+        fs::write(path, input).expect("write the lowered opcode definition");
+    }
+
+    fn replace_registry(&self, input: &str) {
+        fs::write(self.registry_path(), input).expect("write the opcode registry site");
+    }
+
+    fn entries(&self) -> Vec<serde_json::Value> {
+        let inventory: serde_json::Value = serde_json::from_slice(
+            &fs::read(self.output.join("pentry-inventory.json")).expect("read generated inventory"),
+        )
+        .expect("parse generated inventory");
+        inventory["entries"]
+            .as_array()
+            .expect("inventory entries")
+            .clone()
+    }
+}
+
+/// The production opcode sites. Fixtures follow them, so moving the
+/// definition into another crate changes `REGISTRY_SITES` and nothing here.
+fn opcode_site() -> (generator::CrateSource, &'static str) {
+    match generator::REGISTRY_SITES.opcode {
+        generator::RegistrySite::Lowered {
+            definition,
+            registry,
+        } => (definition, registry),
+        generator::RegistrySite::Colocated(source) => {
+            panic!("the split lowered the opcode registry, but {source} is colocated")
+        }
+    }
+}
+
+/// The module path a registry-site `use` names the opcode definition by.
+fn opcode_module() -> Vec<String> {
+    opcode_site()
+        .0
+        .module()
+        .expect("opcode definition module path")
+}
+
+/// The registry site as production writes it: the marker and the import.
+fn registry_input() -> String {
+    format!(
+        "world_registry!(Op);\npub use {}::Op;\n",
+        opcode_module().join("::")
+    )
 }
 
 #[test]
@@ -194,6 +258,163 @@ fn pentry_inventory_generator_covers_private_tier_i_enum_without_exposing_it() {
         .expect("read generated Rust sidecar");
     assert!(generated.contains("static TIER_I_OPCODES"));
     assert!(!generated.contains("tier_i::compile::Op"));
+}
+
+#[test]
+fn pentry_inventory_generator_reads_lowered_variants_with_the_upper_registry_marker() {
+    let fixture = Fixture::new("");
+    fixture.replace_definition("pub enum Op { Lowered, Moved(u16) }\n");
+    fixture
+        .generate()
+        .expect("a lowered enum classified at its importing registry site must generate");
+    // Entries name the module their variants come from, not the marker site.
+    let definition = opcode_site().0.name();
+    let opcodes = fixture
+        .entries()
+        .into_iter()
+        .filter(|entry| entry["kind"] == "Opcode")
+        .map(|entry| {
+            (
+                entry["name"].as_str().expect("opcode name").to_string(),
+                entry["source"].as_str().expect("opcode source").to_string(),
+                entry["authority"]
+                    .as_str()
+                    .expect("opcode authority")
+                    .to_string(),
+            )
+        })
+        .filter(|(name, _, _)| !name.starts_with("TierI::"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        opcodes,
+        [
+            ("Lowered".into(), definition.clone(), "World".into()),
+            ("Moved".into(), definition, "World".into()),
+        ]
+    );
+    let generated = fs::read_to_string(fixture.output.join("pentry_inventory.rs"))
+        .expect("read generated Rust sidecar");
+    assert!(!generated.contains(opcode_site().1));
+    assert!(generated.contains("crate::emacs_core::bytecode::Op::Moved(..) =>"));
+}
+
+#[test]
+fn pentry_inventory_generator_reads_a_definition_lowered_into_another_workspace_crate() {
+    let fixture = Fixture::new("");
+    let definition = "crates/fixture-value/src/bytecode/opcode.rs";
+    fs::create_dir_all(fixture.project.join("crates/fixture-value/src/bytecode"))
+        .expect("create the lower fixture crate");
+    fs::write(fixture.project.join(definition), "pub enum Op { Moved }\n")
+        .expect("write the lower crate's opcode definition");
+    let sites = generator::RegistrySites {
+        opcode: generator::RegistrySite::Lowered {
+            definition: generator::CrateSource {
+                owner: generator::SourceCrate::Workspace {
+                    library: "fixture_value",
+                    manifest: "crates/fixture-value",
+                },
+                path: "src/bytecode/opcode.rs",
+            },
+            registry: opcode_site().1,
+        },
+        ..generator::REGISTRY_SITES
+    };
+    // The production import no longer names the moved enum.
+    assert_eq!(
+        fixture
+            .generate_with(sites)
+            .expect_err("the registry must import the enum from its new crate"),
+        format!(
+            "{}: registry site does not import the Op defined in {definition}; expected `use fixture_value::bytecode::opcode::Op;`",
+            fixture.registry_path().display()
+        )
+    );
+    fixture
+        .replace_registry("world_registry!(Op);\npub use fixture_value::bytecode::opcode::Op;\n");
+    fixture
+        .generate_with(sites)
+        .expect("a cross-crate import of the defining enum must generate");
+    let opcodes = fixture
+        .entries()
+        .into_iter()
+        .filter(|entry| entry["kind"] == "Opcode")
+        .map(|entry| {
+            (
+                entry["name"].as_str().expect("opcode name").to_string(),
+                entry["source"].as_str().expect("opcode source").to_string(),
+            )
+        })
+        .filter(|(name, _)| !name.starts_with("TierI::"))
+        .collect::<Vec<_>>();
+    assert_eq!(opcodes, [("Moved".to_string(), definition.to_string())]);
+}
+
+#[test]
+fn pentry_inventory_generator_rejects_lowered_registry_without_the_definition_import() {
+    let fixture = Fixture::new("");
+    let module = opcode_module();
+    let path = module.join("::");
+    let parent = module[..module.len() - 1].join("::");
+    let expected = format!(
+        "{}: registry site does not import the Op defined in {}; expected `use {path}::Op;`",
+        fixture.registry_path().display(),
+        opcode_site().0.name()
+    );
+    for registry in [
+        "world_registry!(Op);\n".to_string(),
+        format!("world_registry!(Op);\npub use {parent}::Op;\n"),
+        format!("world_registry!(Op);\npub use {path}::*;\n"),
+        format!("world_registry!(Op);\npub use {path}::Other as Op;\n"),
+        format!("world_registry!(Op);\n#[cfg(test)]\npub use {path}::Op;\n"),
+    ] {
+        fixture.replace_registry(&registry);
+        assert_eq!(
+            fixture
+                .generate()
+                .expect_err("a marker must name the enum whose variants it classifies"),
+            expected,
+            "registry site input: {registry:?}"
+        );
+    }
+    fixture.replace_registry(&format!("world_registry!(Op);\npub use {path}::{{Op}};\n"));
+    fixture
+        .generate()
+        .expect("one import of the defining enum must generate successfully");
+}
+
+#[test]
+fn pentry_inventory_generator_leaves_lowered_registry_without_marker_unclassified() {
+    let fixture = Fixture::new("");
+    fixture.replace_registry(&format!("pub use {}::Op;\n", opcode_module().join("::")));
+    assert_eq!(
+        fixture
+            .generate()
+            .expect_err("an unmarked lowered registry must fail the source scanner"),
+        format!(
+            "primitive inventory: missing authority classification: Fixture ({})",
+            opcode_site().0.name()
+        )
+    );
+    fixture.replace_registry(&registry_input());
+    fixture
+        .generate()
+        .expect("one registry-site marker must generate successfully");
+}
+
+#[test]
+fn pentry_inventory_generator_rejects_world_marker_at_lowered_definition_site() {
+    let fixture = Fixture::new("");
+    fixture.replace_definition("pub enum Op { Fixture }\nworld_registry!(Op);\n");
+    assert_eq!(
+        fixture
+            .generate()
+            .expect_err("a lowered definition cannot carry the emacs_core marker"),
+        format!(
+            "{}: world_registry!(Op) belongs at its registry site {}",
+            fixture.definition_path().display(),
+            opcode_site().1
+        )
+    );
 }
 
 #[test]

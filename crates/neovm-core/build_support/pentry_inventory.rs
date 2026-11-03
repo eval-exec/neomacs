@@ -465,18 +465,222 @@ fn source_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String
     Ok(())
 }
 
-fn enum_variants(path: &Path, expected: &str) -> Result<(Vec<Variant>, DeclarationMark), String> {
+/// The workspace crate that owns a registry source file.
+#[derive(Clone, Copy)]
+pub enum SourceCrate {
+    /// The crate whose sources this inventory scans (neovm-core). Its files
+    /// are named relative to its manifest and imported through `crate::`.
+    Scanned,
+    /// Another workspace crate. Its files are named relative to the
+    /// workspace root and imported through its library name.
+    #[allow(dead_code)] // Fixture-tested; the neovm-value move names the first production one.
+    Workspace {
+        /// The library name a `use` path starts with, e.g. `neovm_value`.
+        library: &'static str,
+        /// The crate's manifest directory relative to the workspace root.
+        manifest: &'static str,
+    },
+}
+
+/// A source file named by its owning crate and its path inside that crate.
+#[derive(Clone, Copy)]
+pub struct CrateSource {
+    pub owner: SourceCrate,
+    /// Relative to the owning crate's manifest directory, e.g. `src/lib.rs`.
+    pub path: &'static str,
+}
+
+impl CrateSource {
+    pub const fn scanned(path: &'static str) -> Self {
+        Self {
+            owner: SourceCrate::Scanned,
+            path,
+        }
+    }
+
+    pub fn file(self, manifest: &Path, project_root: &Path) -> PathBuf {
+        match self.owner {
+            SourceCrate::Scanned => manifest.join(self.path),
+            SourceCrate::Workspace {
+                manifest: crate_manifest,
+                ..
+            } => project_root.join(crate_manifest).join(self.path),
+        }
+    }
+
+    /// The inventory's `source`: manifest-relative inside the scanned crate,
+    /// workspace-relative for every other crate.
+    pub fn name(self) -> String {
+        match self.owner {
+            SourceCrate::Scanned => self.path.to_string(),
+            SourceCrate::Workspace { manifest, .. } => format!("{manifest}/{}", self.path),
+        }
+    }
+
+    /// The module path a `use` in the scanned crate names this file by.
+    pub fn module(self) -> Result<Vec<String>, String> {
+        let relative = self
+            .path
+            .strip_prefix("src/")
+            .and_then(|relative| relative.strip_suffix(".rs"))
+            .ok_or_else(|| {
+                format!(
+                    "{}: registry definition is not a crate source file",
+                    self.name()
+                )
+            })?;
+        let root = match self.owner {
+            SourceCrate::Scanned => "crate",
+            SourceCrate::Workspace { library, .. } => library,
+        };
+        let mut segments = vec![root.to_string()];
+        if relative != "lib" {
+            segments.extend(relative.split('/').map(str::to_string));
+        }
+        if segments.last().is_some_and(|segment| segment == "mod") {
+            segments.pop();
+        }
+        Ok(segments)
+    }
+}
+
+/// Where a closed registry enum's variants are defined and where its
+/// `world_registry!` classification is declared.
+#[derive(Clone, Copy)]
+pub enum RegistrySite {
+    /// The enum and its classification marker share one module of the
+    /// scanned crate.
+    Colocated(&'static str),
+    /// The neovm-core split moved the enum below `emacs_core`, possibly into
+    /// another crate, where the `emacs_core` marker may not follow it. The
+    /// marker stays in the scanned crate's upper module that imports the
+    /// enum, so that registry site must name exactly the defining enum.
+    Lowered {
+        definition: CrateSource,
+        registry: &'static str,
+    },
+}
+
+impl RegistrySite {
+    /// The module whose variants become catalog entries.
+    fn definition(self) -> CrateSource {
+        match self {
+            RegistrySite::Colocated(path) => CrateSource::scanned(path),
+            RegistrySite::Lowered { definition, .. } => definition,
+        }
+    }
+}
+
+/// The closed registries the inventory enumerates.
+#[derive(Clone, Copy)]
+pub struct RegistrySites {
+    pub opcode: RegistrySite,
+    pub tier_i: RegistrySite,
+    pub leaf: RegistrySite,
+}
+
+/// neovm-core's registry sites. A definition that moves into another
+/// workspace crate becomes a `SourceCrate::Workspace` source, and its
+/// registry site imports it through that crate's library name.
+pub const REGISTRY_SITES: RegistrySites = RegistrySites {
+    opcode: RegistrySite::Lowered {
+        definition: CrateSource::scanned("src/tagged/bytecode/opcode.rs"),
+        registry: "src/emacs_core/runtime/bytecode/opcode.rs",
+    },
+    tier_i: RegistrySite::Colocated("src/emacs_core/runtime/eval/tier_i/compile.rs"),
+    leaf: RegistrySite::Colocated("src/emacs_core/lisp/native/subr/leaf.rs"),
+};
+
+fn parse_source(path: &Path) -> Result<syn::File, String> {
     let source =
         fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    let file = syn::parse_file(&source).map_err(|error| format!("{}: {error}", path.display()))?;
-    let declaration = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Enum(item) if item.ident == expected => Some(item),
-            _ => None,
-        })
-        .ok_or_else(|| format!("{}: missing enum {expected}", path.display()))?;
+    syn::parse_file(&source).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// Whether `tree` imports `module::name` under its own name.
+fn use_tree_imports(
+    tree: &syn::UseTree,
+    prefix: &mut Vec<String>,
+    module: &[String],
+    name: &str,
+) -> bool {
+    match tree {
+        syn::UseTree::Path(path) => {
+            prefix.push(path.ident.to_string());
+            let imports = use_tree_imports(&path.tree, prefix, module, name);
+            prefix.pop();
+            imports
+        }
+        syn::UseTree::Name(leaf) => leaf.ident == name && prefix.as_slice() == module,
+        syn::UseTree::Rename(leaf) => {
+            leaf.ident == name && leaf.rename == name && prefix.as_slice() == module
+        }
+        syn::UseTree::Group(group) => group
+            .items
+            .iter()
+            .any(|tree| use_tree_imports(tree, prefix, module, name)),
+        // A glob does not name the registry it would classify.
+        syn::UseTree::Glob(_) => false,
+    }
+}
+
+fn registry_variants(
+    manifest: &Path,
+    project_root: &Path,
+    site: RegistrySite,
+    expected: &str,
+) -> Result<(Vec<Variant>, DeclarationMark), String> {
+    match site {
+        RegistrySite::Colocated(source) => {
+            let path = manifest.join(source);
+            let file = parse_source(&path)?;
+            Ok((
+                enum_variants(&path, &file, expected)?,
+                registry_mark(&path, &file, expected)?,
+            ))
+        }
+        RegistrySite::Lowered {
+            definition,
+            registry,
+        } => {
+            let definition_path = definition.file(manifest, project_root);
+            let definition_file = parse_source(&definition_path)?;
+            let variants = enum_variants(&definition_path, &definition_file, expected)?;
+            match registry_mark(&definition_path, &definition_file, expected)? {
+                DeclarationMark::Unmarked => {}
+                DeclarationMark::World => {
+                    return Err(format!(
+                        "{}: world_registry!({expected}) belongs at its registry site {registry}",
+                        definition_path.display()
+                    ));
+                }
+            }
+            let registry_path = manifest.join(registry);
+            let registry_file = parse_source(&registry_path)?;
+            let module = definition.module()?;
+            let imported = registry_file.items.iter().any(|item| match item {
+                Item::Use(item) if item.leading_colon.is_none() && !test_only(&item.attrs) => {
+                    use_tree_imports(&item.tree, &mut Vec::new(), &module, expected)
+                }
+                _ => false,
+            });
+            if !imported {
+                return Err(format!(
+                    "{}: registry site does not import the {expected} defined in {}; expected `use {}::{expected};`",
+                    registry_path.display(),
+                    definition.name(),
+                    module.join("::")
+                ));
+            }
+            Ok((
+                variants,
+                registry_mark(&registry_path, &registry_file, expected)?,
+            ))
+        }
+    }
+}
+
+fn registry_mark(path: &Path, file: &syn::File, expected: &str) -> Result<DeclarationMark, String> {
     let mut mark = DeclarationMark::Unmarked;
     for item in &file.items {
         if let Item::Macro(item) = item
@@ -498,7 +702,19 @@ fn enum_variants(path: &Path, expected: &str) -> Result<(Vec<Variant>, Declarati
             }
         }
     }
-    let variants = declaration
+    Ok(mark)
+}
+
+fn enum_variants(path: &Path, file: &syn::File, expected: &str) -> Result<Vec<Variant>, String> {
+    let declaration = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Enum(item) if item.ident == expected => Some(item),
+            _ => None,
+        })
+        .ok_or_else(|| format!("{}: missing enum {expected}", path.display()))?;
+    Ok(declaration
         .variants
         .iter()
         .map(|variant| {
@@ -510,8 +726,7 @@ fn enum_variants(path: &Path, expected: &str) -> Result<(Vec<Variant>, Declarati
             };
             Variant { name, pattern }
         })
-        .collect();
-    Ok((variants, mark))
+        .collect())
 }
 
 fn kind_name(kind: CatalogKind) -> &'static str {
@@ -813,13 +1028,24 @@ enum ParallelGate {
 }
 
 pub fn generate(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), String> {
-    generate_inner(manifest, project_root, out, ParallelGate::Canonical)
+    generate_inner(
+        manifest,
+        project_root,
+        out,
+        ParallelGate::Canonical,
+        REGISTRY_SITES,
+    )
 }
 
 /// Mock-syntax fixtures validate their registration grammar only.
 #[allow(dead_code)]
-pub fn generate_fixture(manifest: &Path, project_root: &Path, out: &Path) -> Result<(), String> {
-    generate_inner(manifest, project_root, out, ParallelGate::Syntactic)
+pub fn generate_fixture(
+    manifest: &Path,
+    project_root: &Path,
+    out: &Path,
+    sites: RegistrySites,
+) -> Result<(), String> {
+    generate_inner(manifest, project_root, out, ParallelGate::Syntactic, sites)
 }
 
 fn generate_inner(
@@ -827,6 +1053,7 @@ fn generate_inner(
     project_root: &Path,
     out: &Path,
     parallel_gate: ParallelGate,
+    sites: RegistrySites,
 ) -> Result<(), String> {
     let mut files = Vec::new();
     source_files(&manifest.join("src"), &mut files)?;
@@ -865,16 +1092,15 @@ fn generate_inner(
             return Err(scanner.errors.join("\n"));
         }
     }
-    let opcode_source = "src/emacs_core/runtime/bytecode/opcode.rs";
-    let tier_i_source = "src/emacs_core/runtime/eval/tier_i/compile.rs";
-    let leaf_source = "src/emacs_core/lisp/native/subr/leaf.rs";
-    let (opcodes, opcode_mark) = enum_variants(&manifest.join(opcode_source), "Op")?;
-    let (tier_i_opcodes, tier_i_mark) = enum_variants(&manifest.join(tier_i_source), "Op")?;
-    let (leaves, leaf_mark) = enum_variants(&manifest.join(leaf_source), "LeafId")?;
-    for (kind, source, variants, mark) in [
-        (CatalogKind::Opcode, opcode_source, &opcodes, opcode_mark),
-        (CatalogKind::Leaf, leaf_source, &leaves, leaf_mark),
+    let (opcodes, opcode_mark) = registry_variants(manifest, project_root, sites.opcode, "Op")?;
+    let (tier_i_opcodes, tier_i_mark) =
+        registry_variants(manifest, project_root, sites.tier_i, "Op")?;
+    let (leaves, leaf_mark) = registry_variants(manifest, project_root, sites.leaf, "LeafId")?;
+    for (kind, site, variants, mark) in [
+        (CatalogKind::Opcode, sites.opcode, &opcodes, opcode_mark),
+        (CatalogKind::Leaf, sites.leaf, &leaves, leaf_mark),
     ] {
+        let source = site.definition().name();
         let classification = match mark {
             DeclarationMark::Unmarked => Classification::Unclassified,
             DeclarationMark::World => Classification::Classified(Authority::World),
@@ -883,7 +1109,7 @@ fn generate_inner(
             records.push(Record {
                 kind,
                 name: variant.name.clone(),
-                source: source.into(),
+                source: source.clone(),
                 classification,
                 class: ParallelClass::World,
                 variant: None,
@@ -900,7 +1126,7 @@ fn generate_inner(
         records.push(Record {
             kind: CatalogKind::Opcode,
             name: format!("TierI::{}", variant.name),
-            source: tier_i_source.into(),
+            source: sites.tier_i.definition().name(),
             classification: tier_i_classification,
             class: ParallelClass::World,
             variant: None,
