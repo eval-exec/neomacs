@@ -9049,15 +9049,59 @@ fn modify_frame_parameters_font_reopens_the_initial_frame_font() {
     assert_eq!(frame.char_width, 13.0);
     assert_eq!(frame.char_height, 31.0);
     assert_eq!(frame.font_pixel_size, 22.0);
-    assert_ne!(
+    let opened = frame
+        .parameter("font-parameter")
+        .expect("the opened font object is stored on the frame");
+    assert!(
+        crate::emacs_core::font::is_font_object(&opened),
+        "font-parameter must hold the opened font object, got {opened:?}"
+    );
+    assert_eq!(
         frame.known_parameter(crate::window::FrameParam::Font),
-        Some(Value::string("Initial-11")),
-        "the frame parameter must describe the opened font"
+        Some(crate::emacs_core::font::public_frame_font_parameter_value(
+            opened
+        )),
+        "the frame parameter must be the opened font's public name"
     );
     assert_eq!(
         resized.borrow().len(),
         1,
         "a live frame font change must request the implied resize"
+    );
+}
+
+#[test]
+fn modify_frame_parameters_font_signals_like_gui_set_font_on_failure() {
+    // GNU `gui_set_font' signals `Font NAME is not defined' for a string
+    // that cannot be opened and `Invalid font' for any other non-font value;
+    // the previous parameter is restored in both cases.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    ev.set_display_host(Box::new(RecordingDisplayHost::new()));
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+    let fid = ev.frames.create_frame("F1", 800, 600, buf);
+    {
+        let frame = ev.frames.get_mut(fid).expect("frame");
+        frame.set_window_system(Some(Value::symbol("neo")));
+        frame.char_width = 8.0;
+        frame.char_height = 16.0;
+        frame.set_known_parameter(crate::window::FrameParam::Font, Value::string("Initial-11"));
+    }
+
+    let out = ev.eval_str_each(
+        r#"(list
+            (condition-case err
+                (progn (modify-frame-parameters nil '((font . "No Such Font"))) 'ok)
+              (error (car (cdr err))))
+            (condition-case err
+                (progn (modify-frame-parameters nil '((font . monospace))) 'ok)
+              (error (car (cdr err))))
+            (frame-parameter nil 'font))"#,
+    );
+    assert_eq!(
+        format_eval_result(&out[0]),
+        r#"OK ("Font `No Such Font' is not defined" "Invalid font" "Initial-11")"#
     );
 }
 

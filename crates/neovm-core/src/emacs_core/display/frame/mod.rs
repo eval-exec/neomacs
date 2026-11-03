@@ -1837,17 +1837,26 @@ pub(crate) fn builtin_modify_frame_parameters(
                                 let resolution = super::font::resolve_live_frame_font_request(
                                     eval, fid, &pair_cdr,
                                 );
-                                if pair_cdr.is_string()
-                                    && resolution.font_value == pair_cdr
+                                if resolution.font_value == pair_cdr
                                     && !super::font::is_font_object(&resolution.font_value)
                                 {
-                                    let name =
-                                        super::font::font_value_text(&pair_cdr).unwrap_or_default();
+                                    // GNU `gui_set_font' has two failure
+                                    // shapes: a font-name string that cannot
+                                    // be opened, and any other value that is
+                                    // not a font object.
+                                    if pair_cdr.is_string() {
+                                        let name = super::font::font_value_text(&pair_cdr)
+                                            .unwrap_or_default();
+                                        return Err(signal(
+                                            "error",
+                                            vec![Value::string(format!(
+                                                "Font `{name}' is not defined"
+                                            ))],
+                                        ));
+                                    }
                                     return Err(signal(
                                         "error",
-                                        vec![Value::string(format!(
-                                            "Font `{name}' is not defined"
-                                        ))],
+                                        vec![Value::string("Invalid font")],
                                     ));
                                 }
                                 super::font::sync_live_frame_font_state(eval, fid, &resolution)?;
