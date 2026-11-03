@@ -2,7 +2,7 @@
 //! These isolate mutator logging; the coordinator owns real-cycle P-all tests.
 
 use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::emacs_core::eval::{
     push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots,
 };
@@ -105,7 +105,7 @@ fn marker() -> LispMarker {
     LispMarker::new(
         crate::heap_types::MarkerBuffer::DETACHED,
         crate::value::positions::CharPos0::new(0),
-        crate::buffer::EmacsBytePos::new(0),
+        crate::heap_types::byte_positions::EmacsBytePos::new(0),
         false,
         false,
     )

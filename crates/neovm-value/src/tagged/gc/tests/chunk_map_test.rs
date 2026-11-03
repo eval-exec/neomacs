@@ -8,7 +8,7 @@
 use super::fake_image::FakeImage;
 use super::knobs::set_chunk_map_for_test;
 use super::*;
-use crate::emacs_core::bytecode::ByteCodeFunction;
+use crate::tagged::bytecode::chunk::ByteCodeFunction;
 use crate::heap_types::LispMarker;
 use crate::value::{HashTableTest, LambdaParams, LispHashTable};
 
@@ -34,7 +34,7 @@ fn marker(heap: &mut TaggedHeap, id: u64) -> TaggedValue {
     heap.alloc_marker(LispMarker::new(
         crate::heap_types::MarkerBuffer::DETACHED,
         crate::value::positions::CharPos0::new(0),
-        crate::buffer::EmacsBytePos::new(0),
+        crate::heap_types::byte_positions::EmacsBytePos::new(0),
         false,
         true,
     ))
