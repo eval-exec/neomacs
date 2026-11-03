@@ -1,14 +1,11 @@
 buffer builtins 6
 buffer chartable 1
-buffer composite 13
 buffer emacs_char 34
 buffer error 12
 buffer eval 4
 buffer intern 10
 buffer plist 4
-buffer string_escape 5
 buffer symbol 8
-buffer syntax 3
 buffer textprop 2
 buffer value 51
 code_conversion_workspace error 1

@@ -1,5 +1,10 @@
 //! Shared Lisp string escaping helpers.
 
+// The historical `emacs_core::string_escape` path keeps every moved item
+// nameable (stage-3 C7).  The buffer substrate calls the decode cluster
+// directly; in a library build the remaining names are reached from tests and
+// from the text layer's own callers, so most are unused here.
+#[allow(unused_imports)]
 pub(crate) use crate::buffer::storage_string::{
     StorageUnit, bytes_to_unibyte_storage_string, decode_storage_char_codes,
     decode_storage_char_codes_auto, decode_storage_units, encode_nonunicode_char_for_storage,

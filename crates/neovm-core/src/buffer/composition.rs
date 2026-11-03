@@ -11,8 +11,8 @@
 
 use std::sync::OnceLock;
 
-use crate::emacs_core::value::Value;
 use crate::tagged::SymbolMode;
+use neovm_value::value::Value;
 
 use super::{Buffer, CharPos0, CharRange};
 
