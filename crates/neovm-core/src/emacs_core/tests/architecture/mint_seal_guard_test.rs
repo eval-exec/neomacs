@@ -145,21 +145,27 @@ fn n13_carried_world_state_pairs_are_referenced_only_from_carried() {
         .and_then(|rest| rest.split("];").next())
         .expect("CARRIERS table");
 
-    // Every carried piece's placeholder and swap names, including the named
-    // variants (`selection_`, `property_revision_`, `display_`).
-    let mut names: Vec<&str> = carriers_table
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|token| {
-            token.ends_with("_world_state_placeholder")
-                || (token.starts_with("swap_") && token.ends_with("_world_state"))
-        })
+    // Every carried piece's placeholder and swap, as the table spells them:
+    // full `crate::…` paths, one pair per row. The bare trailing segments
+    // (`world_state_placeholder`, `swap_world_state`) repeat across rows, so
+    // names are the deduplicated last segments — well below the row count —
+    // while the pair count is the path count halved.
+    let mut paths: Vec<&str> = carriers_table
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+        .filter(|token| token.starts_with("crate::"))
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    assert!(
+        paths.len() >= 26 && paths.len() % 2 == 0,
+        "CARRIERS extraction lost pairs: {paths:?}"
+    );
+    let mut names: Vec<&str> = paths
+        .iter()
+        .map(|path| path.rsplit("::").next().expect("path segment"))
         .collect();
     names.sort_unstable();
     names.dedup();
-    assert!(
-        names.len() >= 20,
-        "CARRIERS extraction lost pairs: {names:?}"
-    );
 
     // Each name may appear in production only in carried.rs and in the
     // files that define it (each defining module owns its own pair).
