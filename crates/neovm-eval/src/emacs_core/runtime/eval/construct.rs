@@ -959,8 +959,10 @@ impl Context {
         obarray.seed_value("command-history", Value::NIL);
         obarray.make_special("command-history");
         obarray.seed_value("extended-command-history", Value::NIL);
-        obarray.seed_value("read-file-name-completion-ignore-case", Value::NIL);
-        obarray.make_special("read-file-name-completion-ignore-case");
+        // `read-file-name-completion-ignore-case` is deliberately absent:
+        // GNU has no C DEFVAR for it. Its defcustom in minibuffer.el picks
+        // the platform default (t on darwin/windows-nt/ms-dos/cygwin), and
+        // pre-binding the name here shadowed that initializer (#667).
         obarray.seed_value("completion-regexp-list", Value::NIL);
         obarray.make_special("completion-regexp-list");
         obarray.seed_value("completion--all-sorted-completions-location", Value::NIL);
