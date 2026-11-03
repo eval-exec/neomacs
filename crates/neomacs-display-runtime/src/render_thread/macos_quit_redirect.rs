@@ -64,6 +64,11 @@ fn queue_quit(input_tx: &Sender<InputEvent>) {
 ///
 /// Called from `about_to_wait`, which runs after every event batch and never
 /// blocks the AppKit main thread.
+/// Whether a Cmd-Q request is still waiting for input-queue space.
+pub(super) fn quit_is_pending() -> bool {
+    PENDING_QUIT.load(Ordering::Acquire)
+}
+
 pub(super) fn deliver_pending_quit(input_tx: &Sender<InputEvent>) {
     if !PENDING_QUIT.swap(false, Ordering::AcqRel) {
         return;
